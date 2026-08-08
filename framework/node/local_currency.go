@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -345,6 +344,21 @@ func (n *localNode) guardEffectiveCurrencyChange(
 	return n.guardCurrencyCandidates(ctx, accounts)
 }
 
+type currencyChangeCandidatesBlockedError struct {
+	offenders []domain.AccountID
+}
+
+func (e currencyChangeCandidatesBlockedError) Error() string {
+	return fmt.Sprintf(
+		"%d account(s) carry state that prevents a currency change: %s",
+		len(e.offenders), domain.ErrConflict,
+	)
+}
+
+func (e currencyChangeCandidatesBlockedError) Unwrap() error {
+	return domain.ErrConflict
+}
+
 func (n *localNode) guardCurrencyCandidates(
 	ctx context.Context,
 	accounts []domain.AccountID,
@@ -359,15 +373,25 @@ func (n *localNode) guardCurrencyCandidates(
 	if len(offenders) == 0 {
 		return nil
 	}
-	parts := make([]string, 0, len(offenders))
-	for _, offender := range offenders {
-		parts = append(parts, offender.String())
+	return currencyChangeCandidatesBlockedError{offenders: offenders}
+}
+
+func (n *localNode) guardGroupDeleteCurrencyChange(
+	ctx context.Context, accounts []domain.Account,
+) error {
+	candidates := make([]domain.AccountID, 0, len(accounts))
+	for _, account := range accounts {
+		if account.Currency != "" {
+			continue
+		}
+		nextEffective, _ := domain.ResolveCurrencyCascade(
+			"", "", account.DefaultCurrency,
+		)
+		if account.EffectiveCurrency != nextEffective {
+			candidates = append(candidates, account.Code)
+		}
 	}
-	return fmt.Errorf(
-		"account(s) %s carry state that prevents a currency change: %w",
-		strings.Join(parts, ", "),
-		domain.ErrConflict,
-	)
+	return n.guardCurrencyCandidates(ctx, candidates)
 }
 
 func currencyDetail(prefix, target, before, after string) string {

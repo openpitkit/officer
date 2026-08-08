@@ -671,11 +671,12 @@ func (n *localNode) UpdateAccount(
 		Detail:       detail,
 	}}
 	if prev.Code != updated.Code {
+		entries[0].Detail += " (record under new code)"
 		entries = append([]store.AuditEntry{{
 			Action:       domain.AuditActionUpdateAccount,
 			Account:      prev.Code,
 			AccountTitle: prev.Title,
-			Detail:       detail,
+			Detail:       detail + " (record under old code)",
 		}}, entries...)
 	}
 	if err := n.auditBatch(context.WithoutCancel(ctx), caller, entries); err != nil {

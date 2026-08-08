@@ -15,6 +15,7 @@
     "network": "Could not reach the service.",
     "signing": "The signing operation was rejected."
   },
+  "pageNotFound": "Page not found",
   "http": "request to {{path}} failed with HTTP {{status}}",
   "network": "network error contacting {{path}}: {{detail}}",
   "invalidJson": "response from {{path}} was not valid JSON"

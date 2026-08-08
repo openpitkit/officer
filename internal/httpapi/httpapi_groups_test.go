@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -504,18 +505,7 @@ func TestSetGroupCurrency_ServiceInvalid(t *testing.T) {
 }
 
 func TestSetGroupCurrency_EconomicStateConflict(t *testing.T) {
-	svc := &fakeService{
-		groups: []domain.AccountGroup{{Code: "grp-1"}},
-		groupErr: domain.NewCurrencyChangeBlockedError(
-			domain.ScopeAccountGroup,
-			"grp-1",
-			fmt.Errorf("account(s) acc-1 hold non-zero positions: %w", domain.ErrConflict),
-		),
-	}
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := newCurrencyChangeBlockedRouter(t, "grp-1")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
@@ -530,7 +520,8 @@ func TestSetGroupCurrency_EconomicStateConflict(t *testing.T) {
 	if errObj["code"] != "currency_change_blocked" ||
 		errObj["field"] != "currency" ||
 		errObj["path"] != "groups.grp-1.currency" ||
-		errObj["constraint"] != "all_members_economically_empty" {
+		errObj["constraint"] != "all_members_economically_empty" ||
+		errObj["message"] != "1 account(s) carry state that prevents a currency change: conflict" {
 		t.Fatalf("unexpected currency guard error: %v", errObj)
 	}
 }
@@ -578,15 +569,7 @@ func TestSetDefaultGroupCurrency_ServiceInvalid(t *testing.T) {
 }
 
 func TestSetDefaultGroupCurrency_EconomicStateConflict(t *testing.T) {
-	svc := &fakeService{groupErr: domain.NewCurrencyChangeBlockedError(
-		domain.ScopeAccountGroup,
-		"-",
-		fmt.Errorf("account(s) acc-1 hold non-zero P&L: %w", domain.ErrConflict),
-	)}
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := newCurrencyChangeBlockedRouter(t, "")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
@@ -600,9 +583,33 @@ func TestSetDefaultGroupCurrency_EconomicStateConflict(t *testing.T) {
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "currency_change_blocked" ||
 		errObj["path"] != "groups.-.currency" ||
-		errObj["constraint"] != "all_members_economically_empty" {
+		errObj["constraint"] != "all_members_economically_empty" ||
+		errObj["message"] != "1 account(s) carry state that prevents a currency change: conflict" {
 		t.Fatalf("unexpected currency guard error: %v", errObj)
 	}
+}
+
+func newCurrencyChangeBlockedRouter(t *testing.T, group string) http.Handler {
+	t.Helper()
+	handler, realm := newRealServiceRouter(t)
+	ctx := context.Background()
+	if group != "" {
+		if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: group}); err != nil {
+			t.Fatalf("CreateGroup(%q): %v", group, err)
+		}
+	}
+	if _, err := realm.CreateAccount(ctx, domain.Account{Code: "acc-1", GroupCode: group}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := realm.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	if err := realm.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL", Available: "1",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	return handler
 }
 
 func TestSetGroupCurrency_AllowsLiteralDefaultGroupCode(t *testing.T) {
@@ -886,6 +893,42 @@ func TestDeleteGroup(t *testing.T) {
 	if rec.Body.Len() != 0 {
 		t.Fatalf("want empty body, got %q", rec.Body.String())
 	}
+	if svc.deleteGroupForce {
+		t.Fatal("DeleteGroup force = true, want false")
+	}
+}
+
+func TestDeleteGroup_Force(t *testing.T) {
+	svc := &fakeService{
+		groups: []domain.AccountGroup{{Code: "grp-1"}},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete,
+		"/api/v1/groups/grp-1?force=true", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d", rec.Code)
+	}
+	if !svc.deleteGroupForce {
+		t.Fatal("DeleteGroup force = false, want true")
+	}
+}
+
+func TestDeleteGroup_HasDependents(t *testing.T) {
+	svc := &fakeService{groupErr: domain.NewHasDependentsError([]domain.DependentCount{
+		{Kind: "limit_spot_funds_pnl_bound", Count: 1},
+	})}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete,
+		"/api/v1/groups/grp-1", nil))
+	assertHasDependents409(t, rec, "limit_spot_funds_pnl_bound", 1)
 }
 
 func TestDeleteGroup_NotFound(t *testing.T) {

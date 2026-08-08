@@ -63,6 +63,7 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{6, string(domain.OrderEventConfirmed)},
 			{7, string(domain.OrderEventFill)},
 			{8, string(domain.OrderEventCancelled)},
+			{9, string(domain.OrderEventCommission)},
 		}},
 		{OrderSideTable, []EnumCodeSeed{
 			{1, string(domain.OrderSideBuy)},

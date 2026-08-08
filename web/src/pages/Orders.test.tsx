@@ -717,6 +717,40 @@ describe("Orders submit mode", () => {
     expect(signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("allows volume for modes that settle immediately", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+    await user.type(within(dialog).getByLabelText("Amount"), "1000");
+    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
+    await user.click(
+      within(dialog).getByRole("radio", { name: /volume/i }),
+    );
+    await user.click(
+      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+    );
+
+    expect(
+      within(dialog).getByRole("button", { name: /add order/i }),
+    ).toBeEnabled();
+    expect(createOrderMock).not.toHaveBeenCalled();
+
+    await user.click(
+      within(dialog).getByRole("radio", { name: /^drop copy/i }),
+    );
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required for drop-copy)"),
+      "10",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: /submit drop-copy/i }),
+    ).toBeEnabled();
+  });
+
   it("requires confirmation for the exclusive drop-copy mode", async () => {
     const user = userEvent.setup();
     createOrderMock.mockResolvedValueOnce({

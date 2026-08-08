@@ -48,17 +48,24 @@ func TestLocalNode_UpdateAccountAuditFilesRenameUnderBothCodes(t *testing.T) {
 		t.Fatalf("UpdateAccount: %v", err)
 	}
 
-	const wantDetail = "update account account-old -> account-new"
-	for _, want := range []struct {
-		code  domain.AccountID
-		title string
+	wants := []struct {
+		code   domain.AccountID
+		title  string
+		detail string
 	}{
-		{code: "account-old", title: "Before"},
-		{code: "account-new", title: "After"},
-	} {
+		{
+			code: "account-old", title: "Before",
+			detail: "update account account-old -> account-new (record under old code)",
+		},
+		{
+			code: "account-new", title: "After",
+			detail: "update account account-old -> account-new (record under new code)",
+		},
+	}
+	for _, want := range wants {
 		rows := accountUpdateAuditRows(t, ctx, realm, want.code)
 		if len(rows) != 1 || rows[0].Account != want.code ||
-			rows[0].AccountTitle != want.title || rows[0].Detail != wantDetail {
+			rows[0].AccountTitle != want.title || rows[0].Detail != want.detail {
 			t.Fatalf("update rows under %q = %+v", want.code, rows)
 		}
 	}
@@ -66,10 +73,10 @@ func TestLocalNode_UpdateAccountAuditFilesRenameUnderBothCodes(t *testing.T) {
 	if err := realm.DeleteAccount(ctx, updated.Code, true); err != nil {
 		t.Fatalf("DeleteAccount: %v", err)
 	}
-	for _, code := range []domain.AccountID{"account-old", "account-new"} {
-		rows := accountUpdateAuditRows(t, ctx, realm, code)
-		if len(rows) != 1 || rows[0].Detail != wantDetail {
-			t.Fatalf("surviving update rows under %q = %+v", code, rows)
+	for _, want := range wants {
+		rows := accountUpdateAuditRows(t, ctx, realm, want.code)
+		if len(rows) != 1 || rows[0].Detail != want.detail {
+			t.Fatalf("surviving update rows under %q = %+v", want.code, rows)
 		}
 	}
 }

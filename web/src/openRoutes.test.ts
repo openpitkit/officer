@@ -19,8 +19,13 @@ import { describe, expect, it } from "vitest";
 
 import { createAppRouteManifest } from "./openRoutes";
 
+// The Vite plugin serving /app-route-manifest.json and the officer-test
+// Playwright harness both read this factory's value, so its inventory and entry
+// shape are pinned here. The plugin's own serialization is deliberately not
+// asserted: repeating JSON.stringify in the test would pin the test's copy of
+// the format rather than the emitted document.
 describe("app route manifest", () => {
-  it("lists canonical operator pages and compatibility redirects", () => {
+  it("lists every open route in the cross-repository shape", () => {
     expect(createAppRouteManifest()).toEqual({
       routes: [
         { id: "dashboard", path: "/", kind: "canonical" },

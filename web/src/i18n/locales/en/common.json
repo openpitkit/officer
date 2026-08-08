@@ -459,6 +459,7 @@
   },
   "states": {
     "loadError": "Could not load data",
+    "loading": "Loading",
     "copyableSnippet": "Copyable snippet"
   },
   "topBar": {

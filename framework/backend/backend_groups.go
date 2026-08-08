@@ -199,8 +199,9 @@ func (s *Service) SetGroupBlocked(
 	return n.SetGroupBlocked(ctx, code, blocked, reason, auth.CallerFromContext(ctx))
 }
 
-// DeleteGroup validates the code and removes the group and its member accounts.
-func (s *Service) DeleteGroup(ctx context.Context, code string) error {
+// DeleteGroup validates the code and removes the group. Destructive
+// group-owned cascades require force.
+func (s *Service) DeleteGroup(ctx context.Context, code string, force bool) error {
 	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
@@ -208,7 +209,7 @@ func (s *Service) DeleteGroup(ctx context.Context, code string) error {
 	if err != nil {
 		return err
 	}
-	return n.DeleteGroup(ctx, code, auth.CallerFromContext(ctx))
+	return n.DeleteGroup(ctx, code, force, auth.CallerFromContext(ctx))
 }
 
 func validateOptionalCurrency(currency string) error {

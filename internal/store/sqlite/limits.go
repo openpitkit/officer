@@ -85,7 +85,10 @@ LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id`
 func (r *realmStore) ListPolicyRows(
 	ctx context.Context, filter fwstore.PolicyListFilter,
 ) (fwstore.PolicyListPage, error) {
-	where, args := policyListWhere(filter)
+	where, args, err := policyListWhere(filter)
+	if err != nil {
+		return fwstore.PolicyListPage{}, err
+	}
 	from := ` FROM (` + policyUnion + `) AS policies` + where
 
 	db, err := r.db()
@@ -129,13 +132,21 @@ func (r *realmStore) ListPolicyRows(
 	return fwstore.PolicyListPage{Rows: result, Total: total}, nil
 }
 
-func policyListWhere(filter fwstore.PolicyListFilter) (string, []any) {
+func policyListWhere(filter fwstore.PolicyListFilter) (string, []any, error) {
 	clauses := make([]string, 0, 5)
 	args := make([]any, 0, 5)
 	appendMatcher(&clauses, &args, "account_code", filter.Account)
 	appendMatcher(&clauses, &args, "account_group_code", filter.AccountGroup)
 	appendMatcher(&clauses, &args, "asset_code", filter.Asset)
 	if filter.Scope != "" {
+		switch filter.Scope {
+		case domain.ScopeBroker, domain.ScopeGlobal, domain.ScopeAsset,
+			domain.ScopeAccount, domain.ScopeAccountGroup, domain.ScopeAccountAsset:
+		default:
+			return "", nil, fmt.Errorf(
+				"invalid policy scope %q: %w", filter.Scope, domain.ErrInvalid,
+			)
+		}
 		clauses = append(clauses, "scope = ?")
 		args = append(args, filter.Scope)
 	}
@@ -144,9 +155,9 @@ func policyListWhere(filter fwstore.PolicyListFilter) (string, []any) {
 		args = append(args, string(*filter.Kind))
 	}
 	if len(clauses) == 0 {
-		return "", args
+		return "", args, nil
 	}
-	return " WHERE " + strings.Join(clauses, " AND "), args
+	return " WHERE " + strings.Join(clauses, " AND "), args, nil
 }
 
 func policyListOrderBy(sort fwstore.SortSpec) string {

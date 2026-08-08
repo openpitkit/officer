@@ -58,6 +58,9 @@ export const openRoutes = [
   { id: "service", path: "/service", order: 120 },
 ] as const satisfies readonly OpenRouteDefinition[];
 
+// This shape is a cross-repository contract: the officer-test Playwright
+// harness fetches it from /app-route-manifest.json. Its consumer is outside
+// this repository, so it must not be removed as an apparently orphaned asset.
 export function createAppRouteManifest(): {
   routes: AppRouteManifestEntry[];
 } {

@@ -1012,10 +1012,6 @@ func (l accountLane) ApplyExecutionReport(
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
-	reservedQuantity, err := executionReservedQuantityFrom(in, outcomes)
-	if err != nil {
-		return ExecutionReportResult{}, err
-	}
 	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
 		accountID,
 		result.AccountPnls,
@@ -1030,7 +1026,6 @@ func (l accountLane) ApplyExecutionReport(
 		accountPnl,
 		accountPnlHaltReason,
 	)
-	persistence.ReservedQuantity = reservedQuantity
 	return ExecutionReportResult{
 		Persistence: &persistence,
 		Blocks:      blocks,

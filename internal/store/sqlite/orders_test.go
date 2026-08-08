@@ -1099,7 +1099,7 @@ func TestOrderCommissionSubtotalsFeeOnlyReportAgreesAcrossReads(t *testing.T) {
 			Order:       feeOnlyID,
 			OrderStatus: domain.OrderStatusAccepted,
 		})
-	addReportEvent(feeOnlyID, domain.OrderEventFill,
+	addReportEvent(feeOnlyID, domain.OrderEventCommission,
 		&domain.ExecutionReportRequest{
 			Commission:     &domain.Commission{Amount: "-0.20", Currency: "BNB"},
 			Order:          feeOnlyID,
@@ -2118,20 +2118,19 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 
 	order := sampleOrder()
 	order.Leaves = "7"
-	order.ReservedQuantity = "8"
 	created, err := rs.CreateOrder(ctx, order)
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-	if created.Leaves != "7" || created.ReservedQuantity != "8" {
-		t.Fatalf("created quantities = %+v, want leaves 7 and reserve 8", created)
+	if created.Leaves != "7" {
+		t.Fatalf("created leaves = %q, want 7", created.Leaves)
 	}
 	detail, err := rs.GetOrder(ctx, created.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
-	if detail.Order.Leaves != "7" || detail.Order.ReservedQuantity != "8" {
-		t.Fatalf("stored quantities = %+v, want leaves 7 and reserve 8", detail.Order)
+	if detail.Order.Leaves != "7" {
+		t.Fatalf("stored leaves = %q, want 7", detail.Order.Leaves)
 	}
 
 	// An empty Leaves leaves the column unchanged; the status advance still
@@ -2145,8 +2144,8 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 		t.Fatalf("RecordOrderSettlement(no leaves): %v", err)
 	}
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
-	if detail.Order.Leaves != "7" || detail.Order.ReservedQuantity != "8" {
-		t.Fatalf("quantities after empty settlement = %+v, want unchanged", detail.Order)
+	if detail.Order.Leaves != "7" {
+		t.Fatalf("leaves after empty settlement = %q, want unchanged", detail.Order.Leaves)
 	}
 
 	// A non-empty Leaves rewrites the column.
@@ -2160,17 +2159,16 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 		t.Fatalf("RecordOrderSettlement(leaves): %v", err)
 	}
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
-	if detail.Order.Leaves != "4" || detail.Order.ReservedQuantity != "8" {
-		t.Fatalf("partial quantities = %+v, want leaves 4 and reserve 8", detail.Order)
+	if detail.Order.Leaves != "4" {
+		t.Fatalf("leaves after partial settlement = %q, want 4", detail.Order.Leaves)
 	}
 
 	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
-		Order:            created.ExternalID,
-		Account:          "acc-1",
-		OrderStatus:      domain.OrderStatusFilled,
-		AllowedFrom:      []domain.OrderStatus{domain.OrderStatusSubmitted},
-		Leaves:           "99",
-		ReservedQuantity: "0",
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusFilled,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusSubmitted},
+		Leaves:      "99",
 		Trade: &domain.Trade{
 			Order: created.ExternalID, Account: "acc-1",
 			BaseAsset: order.BaseAsset, QuoteAsset: order.QuoteAsset,
@@ -2181,24 +2179,61 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 	}
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
 	if detail.Order.Status != domain.OrderStatusPartiallyFilled ||
-		detail.Order.Leaves != "4" || detail.Order.ReservedQuantity != "8" ||
-		len(detail.Trades) != 0 {
+		detail.Order.Leaves != "4" || len(detail.Trades) != 0 {
 		t.Fatalf("conflicting settlement did not roll back atomically: %+v", detail)
 	}
 
 	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
-		Order:            created.ExternalID,
-		Account:          "acc-1",
-		OrderStatus:      domain.OrderStatusCancelled,
-		AllowedFrom:      []domain.OrderStatus{domain.OrderStatusPartiallyFilled},
-		Leaves:           "1.00",
-		ReservedQuantity: "0",
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusCancelled,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusPartiallyFilled},
+		Leaves:      "0",
 	}); err != nil {
 		t.Fatalf("RecordOrderSettlement(terminal): %v", err)
 	}
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
-	if detail.Order.Leaves != "1.00" || detail.Order.ReservedQuantity != "0" {
-		t.Fatalf("terminal quantities = %+v, want raw leaves 1.00 and zero reserve", detail.Order)
+	if detail.Order.Leaves != "0" {
+		t.Fatalf("terminal leaves = %q, want caller-supplied zero", detail.Order.Leaves)
+	}
+}
+
+// TestRecordOrderSettlementTerminalEmptyLeavesKeepsQuantity pins that an empty
+// leaves value does not overwrite the recorded quantity at a terminal status.
+func TestRecordOrderSettlementTerminalEmptyLeavesKeepsQuantity(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	order := sampleOrder()
+	order.Leaves = "7"
+	created, err := rs.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusCancelled,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusSubmitted},
+		Blocks: []domain.ExecutionAccountBlock{{
+			Account: "acc-1",
+			Code:    "pnl_bound_breached",
+			Reason:  "kill switch [code=pnl_bound_breached]",
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement(terminal empty leaves): %v", err)
+	}
+
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != domain.OrderStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", detail.Order.Status)
+	}
+	if detail.Order.Leaves != "7" {
+		t.Fatalf("terminal empty leaves = %q, want the recorded 7 kept",
+			detail.Order.Leaves)
 	}
 }
 

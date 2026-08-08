@@ -200,18 +200,19 @@ func TestLocalNode_AccountGroupCRUDRebuildsForCascadeDelete(t *testing.T) {
 	next.enforceResolver = true
 	next.sink = &identityGateSink{}
 	prepareGroupDeleteRebuild(n, probe, next)
-	if err := n.DeleteGroup(ctx, updatedGroup.Code, testCaller); err != nil {
+	if err := n.DeleteGroup(ctx, updatedGroup.Code, false, testCaller); err != nil {
 		t.Fatalf("DeleteGroup: %v", err)
 	}
 
-	if _, ok, err := n.realm.GetAccount(ctx, updatedAccount.Code); err != nil || ok {
-		t.Fatalf("GetAccount after group delete: ok=%v err=%v, want absent", ok, err)
+	detached, ok, err := n.realm.GetAccount(ctx, updatedAccount.Code)
+	if err != nil || !ok || detached.GroupCode != "" {
+		t.Fatalf("GetAccount after group delete: %+v ok=%v err=%v", detached, ok, err)
 	}
-	if len(probe.last.Accounts) != 0 || slices.ContainsFunc(
+	if len(probe.last.Accounts) != 1 || probe.last.Accounts[0].GroupCode != "" || slices.ContainsFunc(
 		probe.last.Groups,
 		func(group domain.AccountGroup) bool { return group.Code == updatedGroup.Code },
 	) {
-		t.Fatalf("cascade rebuild snapshot = %+v, want no deleted group or member", probe.last)
+		t.Fatalf("detach rebuild snapshot = %+v", probe.last)
 	}
 	if probe.builds != 2 {
 		t.Fatalf("engine builds = %d, want initial plus cascade rebuild", probe.builds)
@@ -370,7 +371,7 @@ func TestLocalNode_ClearAccountCurrencyRevealsCurrentGroupCurrency(t *testing.T)
 	}
 }
 
-func TestLocalNode_DeleteGroupClearsCascadedSpotFundsBarrierOnline(t *testing.T) {
+func TestLocalNode_ForcedDeleteGroupAuditsDetachedAccounts(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.enforceResolver = true
@@ -382,28 +383,84 @@ func TestLocalNode_DeleteGroupClearsCascadedSpotFundsBarrierOnline(t *testing.T)
 	}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
+	// Each member owns its currency, so detaching them changes no effective
+	// currency: the currency invariant is not what this cascade is about, and it
+	// holds regardless of force.
+	for _, code := range []domain.AccountID{"member-a", "member-b"} {
+		if _, err := n.CreateAccount(ctx, domain.Account{
+			Code: code, GroupCode: "desk", Currency: "USD",
+		}, testCaller); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", code, err)
+		}
+	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", LowerBound: "-10",
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	for _, limit := range []domain.LimitSpotFundsPnlBounds{
+		{Scope: domain.ScopeGlobal, LowerBound: "-20"},
+		{Scope: domain.ScopeAccount, Account: "member-a", UpperBound: "20"},
+	} {
+		if _, err := n.PutSpotFundsPnlBoundsLimit(
+			ctx, limit, domain.MissingAccountCreate, testCaller,
+		); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit(%+v): %v", limit, err)
+		}
 	}
 	eng.configureCalls = nil
 	next := newFakeEngine()
 	next.enforceResolver = true
 	prepareGroupDeleteRebuild(n, probe, next)
 
-	if err := n.DeleteGroup(ctx, "desk", testCaller); err != nil {
+	if err := n.DeleteGroup(ctx, "desk", true, testCaller); err != nil {
 		t.Fatalf("DeleteGroup: %v", err)
 	}
-	if len(probe.last.SpotFundsPnlBoundsLimits) != 0 {
-		t.Fatalf("cascade rebuild barriers = %+v, want none", probe.last.SpotFundsPnlBoundsLimits)
+	if len(probe.last.SpotFundsPnlBoundsLimits) != 2 {
+		t.Fatalf(
+			"cascade rebuild barriers = %+v, want retained global and account bounds",
+			probe.last.SpotFundsPnlBoundsLimits,
+		)
 	}
 	limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
 		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
 	}
-	if len(limits) != 0 {
-		t.Fatalf("stored SpotFunds barriers after delete = %+v, want none", limits)
+	retained := map[domain.LimitScope]domain.AccountID{}
+	for _, limit := range limits {
+		retained[limit.Scope] = limit.Account
+	}
+	if len(limits) != 2 || len(retained) != 2 ||
+		retained[domain.ScopeGlobal] != "" ||
+		retained[domain.ScopeAccount] != "member-a" {
+		t.Fatalf(
+			"stored SpotFunds barriers after delete = %+v, want retained global and account bounds",
+			limits,
+		)
+	}
+	auditRows, err := n.realm.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	const wantDetail = "delete group desk; detachedAccounts=2 destroyedSpotFundsPnlBounds=1"
+	auditFound := false
+	accountAudits := map[domain.AccountID]bool{}
+	for _, row := range auditRows {
+		if row.Action == domain.AuditActionDeleteGroup && row.Group == "desk" &&
+			row.Detail == wantDetail {
+			auditFound = true
+		}
+		if row.Action == domain.AuditActionDeleteGroup && row.Group == "desk" &&
+			row.Account != "" {
+			accountAudits[row.Account] = true
+		}
+	}
+	if !auditFound || !accountAudits["member-a"] || !accountAudits["member-b"] {
+		t.Fatalf(
+			"group delete audit = %+v, want summary %q and both account links",
+			auditRows,
+			wantDetail,
+		)
 	}
 	if probe.builds != 2 || eng.running || n.currentEngine() != next {
 		t.Fatalf(
@@ -434,7 +491,7 @@ func TestLocalNode_DeleteGroupBuildFailureLeavesStoreAndEngineUntouched(t *testi
 		return nil, buildErr
 	}
 
-	err := n.DeleteGroup(ctx, "desk", testCaller)
+	err := n.DeleteGroup(ctx, "desk", true, testCaller)
 	if !errors.Is(err, buildErr) {
 		t.Fatalf("DeleteGroup error = %v, want build failure", err)
 	}

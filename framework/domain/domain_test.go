@@ -31,12 +31,13 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
-func TestExecutionReportRequestFromInputOmitsOpaqueLock(t *testing.T) {
+func TestExecutionReportRequestFromInputOmitsInternalSettlementContext(t *testing.T) {
 	t.Parallel()
 
 	request := domain.ExecutionReportRequestFromInput(domain.ExecutionReportInput{
-		LockPrice: "100.25",
-		Lock:      []byte{0x00, 0x7f, 0xff},
+		LockPrice:       "100.25",
+		Lock:            []byte{0x00, 0x7f, 0xff},
+		ReleaseQuantity: "2",
 	})
 	encoded, err := json.Marshal(request)
 	if err != nil {
@@ -44,6 +45,9 @@ func TestExecutionReportRequestFromInputOmitsOpaqueLock(t *testing.T) {
 	}
 	if bytes.Contains(encoded, []byte(`"lock":`)) {
 		t.Fatalf("execution-report audit snapshot exposed opaque lock: %s", encoded)
+	}
+	if bytes.Contains(encoded, []byte(`releaseQuantity`)) {
+		t.Fatalf("execution-report audit snapshot exposed settlement context: %s", encoded)
 	}
 	if !bytes.Contains(encoded, []byte(`"lockPrice":"100.25"`)) {
 		t.Fatalf("execution-report audit snapshot lost display price: %s", encoded)
@@ -712,9 +716,9 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			},
 		},
 		{
-			name: "workflow with leaves stays DB-only",
+			name: "workflow keeps oddly scaled leaves DB-only",
 			in: domain.ExecutionReportInput{
-				LeavesQuantity: "1.5",
+				LeavesQuantity: "1.23000",
 				OrderStatus:    domain.OrderStatusCommitted,
 			},
 		},
@@ -731,7 +735,6 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 		{
 			name: "fee-only fill status routes through engine",
 			in: domain.ExecutionReportInput{
-				LeavesQuantity: "1",
 				Commission: &domain.Commission{
 					Amount:   "1",
 					Currency: "USD",
@@ -741,11 +744,54 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			requiresEngine: true,
 		},
 		{
+			name: "workflow commission does not require leaves",
+			in: domain.ExecutionReportInput{
+				Commission: &domain.Commission{
+					Amount:   "-1",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "fee-only filled status routes through engine",
+			in: domain.ExecutionReportInput{
+				Commission: &domain.Commission{
+					Amount:   "-1",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusFilled,
+			},
+			requiresEngine: true,
+		},
+		{
 			name: "terminal without fill",
 			in: domain.ExecutionReportInput{
 				LeavesQuantity: "2",
 				LockPrice:      "100",
 				OrderStatus:    domain.OrderStatusCancelled,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "terminal cancellation without leaves",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "terminal rejected defers leaves to the node",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusRejected,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "terminal rolled back defers leaves to the node",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusRolledBack,
 			},
 			requiresEngine: true,
 		},
@@ -851,6 +897,71 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			},
 		},
 		{
+			name: "terminal filled report with fill without leaves",
+			in: domain.ExecutionReportInput{
+				FillQuantity: "1",
+				FillPrice:    "100",
+				OrderStatus:  domain.OrderStatusFilled,
+			},
+		},
+		{
+			name: "partial fill without leaves",
+			in: domain.ExecutionReportInput{
+				FillQuantity: "1",
+				FillPrice:    "100",
+				OrderStatus:  domain.OrderStatusPartiallyFilled,
+			},
+		},
+		{
+			name: "cancelled report with fill",
+			in: domain.ExecutionReportInput{
+				FillQuantity:   "1",
+				FillPrice:      "100",
+				LeavesQuantity: "0",
+				OrderStatus:    domain.OrderStatusCancelled,
+			},
+		},
+		{
+			name: "rejected report with fill",
+			in: domain.ExecutionReportInput{
+				FillQuantity:   "1",
+				FillPrice:      "100",
+				LeavesQuantity: "0",
+				OrderStatus:    domain.OrderStatusRejected,
+			},
+		},
+		{
+			name: "rolled back report with fill",
+			in: domain.ExecutionReportInput{
+				FillQuantity:   "1",
+				FillPrice:      "100",
+				LeavesQuantity: "0",
+				OrderStatus:    domain.OrderStatusRolledBack,
+			},
+		},
+		{
+			name: "fee-only fill status with leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1",
+				Commission: &domain.Commission{
+					Amount:   "1",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusPartiallyFilled,
+			},
+		},
+		{
+			name: "fee-only terminal fill status with leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1",
+				Commission: &domain.Commission{
+					Amount:   "1",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusFilled,
+			},
+		},
+		{
 			name: "workflow with lock price",
 			in: domain.ExecutionReportInput{
 				LockPrice:   "100",
@@ -887,30 +998,6 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			},
 		},
 		{
-			name: "fill without leaves",
-			in: domain.ExecutionReportInput{
-				FillQuantity: "1",
-				FillPrice:    "100",
-				OrderStatus:  domain.OrderStatusFilled,
-			},
-		},
-		{
-			name: "commission without leaves",
-			in: domain.ExecutionReportInput{
-				Commission: &domain.Commission{
-					Amount:   "-1",
-					Currency: "USD",
-				},
-				OrderStatus: domain.OrderStatusAccepted,
-			},
-		},
-		{
-			name: "terminal without leaves",
-			in: domain.ExecutionReportInput{
-				OrderStatus: domain.OrderStatusCancelled,
-			},
-		},
-		{
 			name: "workflow with malformed leaves",
 			in: domain.ExecutionReportInput{
 				LeavesQuantity: "not-a-number",
@@ -921,7 +1008,21 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			name: "workflow with negative leaves",
 			in: domain.ExecutionReportInput{
 				LeavesQuantity: "-1",
-				OrderStatus:    domain.OrderStatusAccepted,
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "workflow with exponent leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1e3",
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "workflow with padded leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: " 1 ",
+				OrderStatus:    domain.OrderStatusCommitted,
 			},
 		},
 	}
@@ -941,6 +1042,63 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 	if !errors.Is(err, domain.ErrInvalid) ||
 		!strings.Contains(err.Error(), "commission amount and currency") {
 		t.Fatalf("one-sided commission error = %v, want commission error", err)
+	}
+}
+
+// TestOrderStatusTerminal pins the single membership test that decides both the
+// order's final lifecycle state and the release of its remaining reservation.
+func TestOrderStatusTerminal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		status domain.OrderStatus
+		want   bool
+	}{
+		{status: domain.OrderStatusCancelled, want: true},
+		{status: domain.OrderStatusRejected, want: true},
+		{status: domain.OrderStatusRolledBack, want: true},
+		{status: domain.OrderStatusFilled, want: true},
+		{status: domain.OrderStatusSubmitted},
+		{status: domain.OrderStatusAccepted},
+		{status: domain.OrderStatusCommitted},
+		{status: domain.OrderStatusPartiallyFilled},
+	} {
+		t.Run(string(tc.status), func(t *testing.T) {
+			t.Parallel()
+			if got := domain.OrderStatusTerminal(tc.status); got != tc.want {
+				t.Fatalf(
+					"OrderStatusTerminal(%q) = %t, want %t",
+					tc.status,
+					got,
+					tc.want,
+				)
+			}
+		})
+	}
+}
+
+// TestParseOpenQuantity pins the source split: one syntax check serves caller
+// input and Officer's own stored state, and only the caller-facing wrapper
+// blames the caller with ErrInvalid.
+func TestParseOpenQuantity(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"1e5", " 1 ", "-1", "abc", ""} {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+			if _, err := domain.ParseOpenQuantity(value); err == nil {
+				t.Fatalf("ParseOpenQuantity(%q) succeeded", value)
+			} else if errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ParseOpenQuantity(%q) = %v, want no caller fault", value, err)
+			}
+			if err := domain.ValidateLeavesQuantity(value); !errors.Is(
+				err, domain.ErrInvalid,
+			) {
+				t.Fatalf("ValidateLeavesQuantity(%q) = %v, want ErrInvalid", value, err)
+			}
+		})
+	}
+	parsed, err := domain.ParseOpenQuantity("1.50")
+	if err != nil || parsed.String() != "1.5" {
+		t.Fatalf("ParseOpenQuantity(1.50) = %v, %v", parsed, err)
 	}
 }
 

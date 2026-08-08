@@ -45,7 +45,7 @@ func handleListAccounts(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := accountListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationErrMsg(w, err.Error())
 			return
 		}
 		accounts, err := svc.ListAccountRows(r.Context(), filter)
@@ -100,7 +100,7 @@ func handleGetAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		account, limits, err := svc.GetAccountState(r.Context(), id)
@@ -126,7 +126,7 @@ func handleUpdateAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {
@@ -154,7 +154,7 @@ func handleBlockAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		missing, err := missingAccountQuery(r, id)
@@ -182,7 +182,7 @@ func handleUnblockAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		missing, err := missingAccountQuery(r, id)
@@ -203,7 +203,7 @@ func handleDeleteAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if err := svc.DeleteAccount(r.Context(), id, forceQuery(r)); err != nil {
@@ -272,7 +272,7 @@ func handleSetAccountGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		missing, err := missingAccountQuery(r, id)
@@ -299,7 +299,7 @@ func handleSetAccountCurrency(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {
@@ -321,7 +321,7 @@ func handleSetAccountNotes(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {

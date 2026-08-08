@@ -709,16 +709,6 @@ func validatePositiveDecimal(s string) error {
 	return nil
 }
 
-// validateNonNegativeDecimal returns an error when s is not a non-negative
-// decimal.
-func validateNonNegativeDecimal(s string) error {
-	d, err := decimal.NewFromString(s)
-	if err != nil || d.IsNegative() {
-		return fmt.Errorf("%q is not a non-negative decimal: %w", s, ErrInvalid)
-	}
-	return nil
-}
-
 // Adjustment field formats (asset, amount mode/value, bounds) are validated by
 // the engine seam: NewAsset rejects an empty asset, param.NewPositionSizeFromString
 // rejects a non-decimal amount or bound, and an unrecognised amount mode is

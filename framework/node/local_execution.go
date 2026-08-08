@@ -20,7 +20,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -123,7 +122,10 @@ func (n *localNode) applyExecutionReport(
 		if len(in.Lock) == 0 && len(detail.Order.Lock) > 0 {
 			in.Lock = detail.Order.Lock
 		}
-		reserveFromLeaves := attachExecutionReservation(&in, detail)
+		if err := attachExecutionEngineLeaves(&in, detail); err != nil {
+			return err
+		}
+		overFilled := executionReportOverFilled(in, detail)
 
 		applied, err := lane.ApplyExecutionReport(ctx, in)
 		if err != nil {
@@ -145,7 +147,6 @@ func (n *localNode) applyExecutionReport(
 			AccountPnl:           persistence.AccountPnl,
 			AccountPnlHaltReason: persistence.AccountPnlHaltReason,
 			Leaves:               persistence.Leaves,
-			ReservedQuantity:     persistence.ReservedQuantity,
 			Balances:             persistence.Balances,
 			Events:               persistence.Events,
 			Trade:                persistence.Trade,
@@ -170,11 +171,11 @@ func (n *localNode) applyExecutionReport(
 		}
 
 		detailText := executionReportDetail(in, status, len(result.Blocks))
+		if overFilled {
+			detailText += " overfill=true"
+		}
 		if forcedTerminalBypass {
 			detailText += " forced=true"
-		}
-		if reserveFromLeaves {
-			detailText += " reserveFromLeaves=true"
 		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionExecutionReport,
@@ -194,31 +195,59 @@ func (n *localNode) applyExecutionReport(
 	return result, nil
 }
 
-// attachExecutionReservation copies Officer's own reserve remainder for the
-// order onto the report and reports whether a terminal report had to substitute
-// the venue leaves for an unrecorded reserve. Only terminal reports substitute:
-// a non-terminal report releases nothing, so an unknown reserve stays unknown
-// rather than being seeded from a venue value Officer never reserved.
-func attachExecutionReservation(
+// attachExecutionEngineLeaves selects leaves using their source before the
+// report changes the stored order. A fill sends the caller's exact value. A
+// terminal no-fill report sends the previously recorded order value, regardless
+// of whether the caller supplied a replacement for persistence. Other reports
+// do not send leaves to the engine.
+func attachExecutionEngineLeaves(
 	in *domain.ExecutionReportInput, detail domain.OrderDetail,
+) error {
+	in.ReleaseQuantity = ""
+	if in.FillQuantity != "" && in.FillPrice != "" {
+		in.ReleaseQuantity = in.LeavesQuantity
+		return nil
+	}
+	if in.OrderStatus != domain.OrderStatusCancelled &&
+		in.OrderStatus != domain.OrderStatusRejected &&
+		in.OrderStatus != domain.OrderStatusRolledBack {
+		return nil
+	}
+	if detail.Order.Leaves == "" {
+		return nil
+	}
+	// Officer wrote the recorded value itself, so a corrupt one is an internal
+	// fault and must not answer the caller as invalid input. Only the syntax is
+	// checked: the stored string, not a reparsed one, is what the engine gets.
+	if _, err := domain.ParseOpenQuantity(detail.Order.Leaves); err != nil {
+		return fmt.Errorf("stored order leaves: %w", err)
+	}
+	in.ReleaseQuantity = detail.Order.Leaves
+	return nil
+}
+
+// executionReportOverFilled reports that a terminal report's own fill exceeds
+// the open quantity Officer has on record. Nothing is adjusted because of it -
+// the caller's account of the fill stands and every quantity is forwarded and
+// stored verbatim - but the audit row is the only place the disagreement can be
+// seen by whoever reconciles the reservation. A value neither side can parse is
+// no evidence of a mismatch, so it stays silent.
+func executionReportOverFilled(
+	in domain.ExecutionReportInput, detail domain.OrderDetail,
 ) bool {
-	in.ReservedQuantity = detail.Order.ReservedQuantity
-	if !domain.OrderStatusTerminal(in.OrderStatus) {
+	if !domain.OrderStatusTerminal(in.OrderStatus) ||
+		in.FillQuantity == "" || detail.Order.Leaves == "" {
 		return false
 	}
-	quantity, substituted := domain.ResolveTerminalReserveQuantity(
-		in.ReservedQuantity, in.LeavesQuantity,
-	)
-	in.ReservedQuantity = quantity
-	if substituted {
-		slog.Warn(
-			"release terminal reserve from venue leaves qty",
-			"order", in.Order,
-			"leaves", in.LeavesQuantity,
-			"reason", "order carries no recorded reserve",
-		)
+	filled, err := domain.ParseOpenQuantity(in.FillQuantity)
+	if err != nil {
+		return false
 	}
-	return substituted
+	recorded, err := domain.ParseOpenQuantity(detail.Order.Leaves)
+	if err != nil {
+		return false
+	}
+	return filled.GreaterThan(recorded)
 }
 
 func (n *localNode) recordWorkflowExecutionReport(

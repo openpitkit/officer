@@ -17,7 +17,11 @@
 
 package httpapi
 
-import "net/http"
+import (
+	"net/http"
+
+	"go.openpit.dev/officer/framework/auth"
+)
 
 const runtimeRouteManifestPath = "/route-manifest.json"
 
@@ -30,16 +34,21 @@ type runtimeRouteManifestEntry struct {
 	Path   string `json:"path"`
 }
 
-func newRuntimeRouteManifestHandler(routes []Route) http.Handler {
-	entries := make([]runtimeRouteManifestEntry, 0, len(routes))
-	for _, route := range routes {
-		entries = append(entries, runtimeRouteManifestEntry{
-			Method: route.Method,
-			Path:   route.Pattern,
-		})
-	}
-	manifest := runtimeRouteManifest{Routes: entries}
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		WriteJSON(w, http.StatusOK, manifest)
+func newRuntimeRouteManifestHandler(routes []Route, authorizer Authorizer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caller := auth.CallerFromContext(r.Context())
+		entries := make([]runtimeRouteManifestEntry, 0, len(routes))
+		for _, route := range routes {
+			if err := authorizer.Authorize(
+				r.Context(), caller, route.Permission,
+			); err != nil {
+				continue
+			}
+			entries = append(entries, runtimeRouteManifestEntry{
+				Method: route.Method,
+				Path:   route.Pattern,
+			})
+		}
+		WriteJSON(w, http.StatusOK, runtimeRouteManifest{Routes: entries})
 	})
 }

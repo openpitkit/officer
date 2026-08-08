@@ -715,7 +715,7 @@ func TestCancelHappyPath(t *testing.T) {
 
 	res := callCancel(t, src, cancelInput{
 		OrderExternalID: testOrderEID, Token: " tok-xyz ",
-		LeavesQuantity: "17.5", Reason: "operator",
+		LeavesQuantity: "+17.500", Reason: "operator",
 	})
 
 	if res.IsError {
@@ -740,8 +740,8 @@ func TestCancelHappyPath(t *testing.T) {
 	if c.reason != "operator" {
 		t.Errorf("reason: want operator got %q", c.reason)
 	}
-	if c.leavesQuantity != "17.5" {
-		t.Errorf("leavesQuantity: want 17.5 got %q", c.leavesQuantity)
+	if c.leavesQuantity != "+17.500" {
+		t.Errorf("leavesQuantity: want +17.500 got %q", c.leavesQuantity)
 	}
 	if c.token != "tok-xyz" {
 		t.Errorf("token: want tok-xyz got %q", c.token)
@@ -773,24 +773,36 @@ func TestCancelMissingOrderID(t *testing.T) {
 	}
 }
 
-// TestCancelMissingLeavesQuantity: the cancellation is settled by the engine,
-// which has no reject channel, so a report without leaves must be refused
-// before it reaches the source.
-func TestCancelMissingLeavesQuantity(t *testing.T) {
-	src := &approvalFakeSource{}
+// TestCancelOptionalLeavesQuantity verifies omission stays empty and whitespace
+// is forwarded as supplied data for the normal report validator.
+func TestCancelOptionalLeavesQuantity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		leaves string
+	}{
+		{name: "omitted"},
+		{name: "whitespace", leaves: "  "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &approvalFakeSource{cancelOrder: domain.Order{
+				ExternalID: mustExternalID(t, testOrderEID),
+				Status:     domain.OrderStatusCancelled,
+			}}
 
-	res := callCancel(t, src, cancelInput{
-		OrderExternalID: testOrderEID, Token: "tok", LeavesQuantity: "  ",
-	})
+			res := callCancel(t, src, cancelInput{
+				OrderExternalID: testOrderEID,
+				Token:           "tok",
+				LeavesQuantity:  tc.leaves,
+			})
 
-	if !res.IsError {
-		t.Fatalf("want IsError=true for missing leavesQuantity")
-	}
-	if got := textContent(res.Content); got != "leavesQuantity is required" {
-		t.Errorf("unexpected error text: %q", got)
-	}
-	if len(src.cancelCalls) != 0 {
-		t.Fatalf("cancel must not be called without leaves; got %d calls", len(src.cancelCalls))
+			if res.IsError {
+				t.Fatalf("unexpected error: %v", res.Content)
+			}
+			if len(src.cancelCalls) != 1 ||
+				src.cancelCalls[0].leavesQuantity != tc.leaves {
+				t.Fatalf("cancel calls = %+v, want raw leaves %q", src.cancelCalls, tc.leaves)
+			}
+		})
 	}
 }
 

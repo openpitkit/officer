@@ -459,6 +459,7 @@
   },
   "states": {
     "loadError": "Не удалось загрузить данные",
+    "loading": "Загрузка",
     "copyableSnippet": "Копируемый фрагмент"
   },
   "topBar": {

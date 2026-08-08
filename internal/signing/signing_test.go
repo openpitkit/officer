@@ -485,6 +485,48 @@ func TestCanonicalBytesLegacyPayloadWithoutPrincipalRemainStable(t *testing.T) {
 	}
 }
 
+func TestCanonicalBytesLegacyRejectWithoutRejectListRemainStable(t *testing.T) {
+	payload := domain.ApprovalPayload{
+		Version:       1,
+		ApprovalID:    "legacy-reject",
+		Mode:          "hold",
+		Instrument:    "AAPL/USD",
+		Side:          "buy",
+		Quantity:      "1",
+		AmountKind:    "quantity",
+		OrderType:     "limit",
+		LimitPrice:    "10",
+		PriceCurrency: "USD",
+		AccountID:     "acc-1",
+		Verdict:       "reject",
+		PolicySummary: "rejected",
+		IssuedAt:      "2026-01-02T03:04:05Z",
+		Nonce:         "legacy-nonce",
+		RejectCode:    "insufficient_funds",
+		RejectScope:   "account",
+		RejectPolicy:  "spot_funds",
+		RejectReason:  "available funds below required amount",
+		RejectDetails: "available=5,required=10",
+	}
+	got, err := CanonicalBytes(payload)
+	if err != nil {
+		t.Fatalf("CanonicalBytes: %v", err)
+	}
+	const want = `{"version":1,"approvalId":"legacy-reject","mode":"hold",` +
+		`"instrument":"AAPL/USD","side":"buy","quantity":"1",` +
+		`"amountKind":"quantity","orderType":"limit","limitPrice":"10",` +
+		`"priceCurrency":"USD","timeInForce":"","accountId":"acc-1",` +
+		`"verdict":"reject","policySummary":"rejected","estimatePrice":"",` +
+		`"issuedAt":"2026-01-02T03:04:05Z","nonce":"legacy-nonce",` +
+		`"keyId":"","alg":"","rejectCode":"insufficient_funds",` +
+		`"rejectScope":"account","rejectPolicy":"spot_funds",` +
+		`"rejectReason":"available funds below required amount",` +
+		`"rejectDetails":"available=5,required=10"}`
+	if string(got) != want {
+		t.Fatalf("legacy reject canonical bytes changed:\n got %s\nwant %s", got, want)
+	}
+}
+
 func TestVerifyRejectsNoneAlgWhenESignEnabled(t *testing.T) {
 	svc, _ := newServiceWithKey(t)
 	p := samplePayload()

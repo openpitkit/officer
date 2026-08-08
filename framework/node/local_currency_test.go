@@ -70,10 +70,170 @@ func TestLocalNode_SetAccountCurrencyAuditsAndGuardsOpenBalances(t *testing.T) {
 	}
 	err = n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
-		!strings.Contains(err.Error(), "acc-1") ||
 		!strings.Contains(err.Error(), "carry state that prevents a currency change") {
-		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict with account", err)
+		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict", err)
 	}
+}
+
+func TestLocalNode_UpdateAssetRenameUsesPlainStoreUpdate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := newMemoryStore("asset-update-rename.db")
+	t.Cleanup(func() { _ = base.Close() })
+	probe := &assetUpdateProbeRealm{}
+	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
+		probe.RealmStore = realm
+		return probe
+	})
+	eng := newFakeEngine()
+	n := newTestNodeWithStore(t, st, eng)
+	createCurrencyAssets(t, n.realm, "AAPL", "USD")
+
+	if _, err := n.realm.CreateGroup(ctx, domain.AccountGroup{
+		Code: "desk", Currency: "USD",
+	}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	const accountID domain.AccountID = "account-1"
+	if _, err := n.realm.CreateAccount(ctx, domain.Account{
+		Code: accountID, GroupCode: "desk",
+	}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := n.realm.UpsertBalance(ctx, domain.Balance{
+		Account: accountID, Asset: "USD", Available: "1",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	order, err := n.realm.CreateOrder(ctx, domain.Order{
+		Account:     accountID,
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Leaves:      "2",
+		Price:       "400",
+		Status:      domain.OrderStatusCommitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	instance, err := n.realm.CreateMarketDataInstance(
+		ctx,
+		domain.MarketDataInstance{
+			Provider: domain.MarketDataProviderBYO,
+			Label:    "manual",
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if err := n.realm.UpsertMarketDataInstrument(
+		ctx,
+		domain.MarketDataInstrument{
+			Instance:       instance.ExternalID,
+			ExternalSymbol: "AAPLUSD",
+			BaseAsset:      "AAPL",
+			QuoteAsset:     "USD",
+		},
+	); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
+	auditsBefore, err := n.realm.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit before rename: %v", err)
+	}
+
+	buildCalls := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		buildCalls++
+		return nil, errors.New("asset update must not rebuild the engine")
+	}
+	updated, err := n.UpdateAsset(
+		ctx, "USD", domain.Asset{Code: "USDX"}, testCaller,
+	)
+	if err != nil || updated.Code != "USDX" {
+		t.Fatalf("UpdateAsset = %+v, %v", updated, err)
+	}
+	if probe.updateCalls != 1 {
+		t.Fatalf("store UpdateAsset calls = %d, want 1", probe.updateCalls)
+	}
+	rows, err := n.realm.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(rows) != len(auditsBefore)+1 ||
+		rows[0].Action != domain.AuditActionUpdateAsset ||
+		rows[0].Asset != "USDX" ||
+		rows[0].Detail != "update asset USD -> USDX" {
+		t.Fatalf("asset rename audit = %+v", rows)
+	}
+	if buildCalls != 0 || n.currentEngine() != eng || !eng.running {
+		t.Fatalf(
+			"asset rename build calls=%d current-original=%v original-running=%v",
+			buildCalls,
+			n.currentEngine() == eng,
+			eng.running,
+		)
+	}
+	account, ok, err := n.realm.GetAccount(ctx, accountID)
+	if err != nil || !ok || account.EffectiveCurrency != "USDX" {
+		t.Fatalf("account after rename = %+v ok=%v err=%v", account, ok, err)
+	}
+	detail, err := n.realm.GetOrder(ctx, order.ExternalID)
+	if err != nil || detail.Order.QuoteAsset != "USDX" {
+		t.Fatalf("order after rename = %+v err=%v", detail.Order, err)
+	}
+	instruments, err := n.realm.ListMarketDataInstruments(ctx, instance.ExternalID)
+	if err != nil || len(instruments) != 1 || instruments[0].QuoteAsset != "USDX" {
+		t.Fatalf("market-data instruments after rename = %+v err=%v", instruments, err)
+	}
+}
+
+func TestLocalNode_UpdateAssetSameCodeAuditsPlainDetail(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "USD")
+	auditsBefore, err := st.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit before update: %v", err)
+	}
+
+	updated, err := n.UpdateAsset(
+		ctx,
+		"USD",
+		domain.Asset{Code: "USD", Title: "US Dollar"},
+		testCaller,
+	)
+	if err != nil || updated.Title != "US Dollar" {
+		t.Fatalf("UpdateAsset = %+v, %v", updated, err)
+	}
+	rows, err := st.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(rows) != len(auditsBefore)+1 ||
+		rows[0].Action != domain.AuditActionUpdateAsset ||
+		rows[0].Asset != "USD" ||
+		rows[0].Detail != "update asset USD" {
+		t.Fatalf("same-code asset update audit = %+v", rows)
+	}
+}
+
+type assetUpdateProbeRealm struct {
+	store.RealmStore
+	updateCalls int
+}
+
+func (r *assetUpdateProbeRealm) UpdateAsset(
+	ctx context.Context, oldCode string, asset domain.Asset,
+) (domain.Asset, error) {
+	r.updateCalls++
+	return r.RealmStore.UpdateAsset(ctx, oldCode, asset)
 }
 
 func TestLocalNode_SetAccountCurrencyGuardsRealizedPnlRows(t *testing.T) {
@@ -99,9 +259,8 @@ func TestLocalNode_SetAccountCurrencyGuardsRealizedPnlRows(t *testing.T) {
 
 	err := n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
-		!strings.Contains(err.Error(), "acc-1") ||
 		!strings.Contains(err.Error(), "state that prevents a currency change") {
-		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict with account", err)
+		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict", err)
 	}
 }
 
@@ -338,8 +497,7 @@ func TestLocalNode_GroupCurrencyIgnoresOwnCurrencyActiveOrder(t *testing.T) {
 	if !errors.Is(err, domain.ErrConflict) || !errors.As(err, &blocked) ||
 		blocked.Scope != domain.ScopeAccountGroup ||
 		blocked.TargetID != "desk" ||
-		!strings.Contains(err.Error(), "inheriting") ||
-		strings.Contains(err.Error(), "own-currency") {
+		!strings.Contains(err.Error(), "1 account(s)") {
 		t.Fatalf("SetGroupCurrency = %#v, want inheriting active-order refusal", err)
 	}
 	group, ok, getErr := st.GetGroup(ctx, "desk")
@@ -664,9 +822,8 @@ func TestLocalNode_SetAccountCurrencyGuardsHaltedAccountHoldingPositions(t *test
 
 	err := n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
-		!strings.Contains(err.Error(), "acc-1") ||
 		!strings.Contains(err.Error(), "state that prevents a currency change") {
-		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict with account", err)
+		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict", err)
 	}
 }
 
@@ -795,11 +952,12 @@ func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
 
 		next := newFakeEngine()
 		prepareGroupDeleteRebuild(n, probe, next)
-		if err := n.DeleteGroup(ctx, "desk-eur", testCaller); err != nil {
-			t.Fatalf("DeleteGroup with account pnl: %v", err)
-		}
-		if _, ok, err := st.GetAccount(ctx, "account"); err != nil || ok {
-			t.Fatalf("member after group deletion: ok=%v err=%v, want absent", ok, err)
+		assertAccountPnlCurrencyGuard(
+			t, n.DeleteGroup(ctx, "desk-eur", false, testCaller), "account",
+		)
+		account, ok, err := st.GetAccount(ctx, "account")
+		if err != nil || !ok || account.GroupCode != "desk-eur" {
+			t.Fatalf("member after refused group deletion: %+v ok=%v err=%v", account, ok, err)
 		}
 	})
 }
@@ -824,10 +982,11 @@ func assertNoNewAudit(
 	}
 }
 
-func assertAccountPnlCurrencyGuard(t *testing.T, err error, account string) {
+func assertAccountPnlCurrencyGuard(t *testing.T, err error, _ string) {
 	t.Helper()
-	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), account) {
-		t.Fatalf("currency change error = %v, want ErrConflict for %s", err, account)
+	if !errors.Is(err, domain.ErrConflict) ||
+		!strings.Contains(err.Error(), "state that prevents a currency change") {
+		t.Fatalf("currency change error = %v, want ErrConflict", err)
 	}
 }
 
@@ -991,7 +1150,7 @@ func TestLocalNode_GroupCurrencyGuardsOnlyEffectiveCurrencyChanges(t *testing.T)
 	}
 	err := n.SetGroupCurrency(ctx, "desk-a", "EUR", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
-		!strings.Contains(err.Error(), "inheriting") {
+		!strings.Contains(err.Error(), "1 account(s)") {
 		t.Fatalf("SetGroupCurrency with inheriting member = %v, want blocker", err)
 	}
 
@@ -1074,7 +1233,7 @@ func TestLocalNode_GroupCurrencyClearAllowsUnchangedEffectiveCurrency(t *testing
 	}
 }
 
-func TestLocalNode_DeleteGroupCascadesMembersRegardlessOfCurrencyState(t *testing.T) {
+func TestLocalNode_DeleteGroupDetachesMembersWithCurrencyGuard(t *testing.T) {
 	t.Parallel()
 
 	t.Run("with open balances", func(t *testing.T) {
@@ -1110,14 +1269,14 @@ func TestLocalNode_DeleteGroupCascadesMembersRegardlessOfCurrencyState(t *testin
 
 		next := newFakeEngine()
 		prepareGroupDeleteRebuild(n, probe, next)
-		if err := n.DeleteGroup(ctx, "desk-a", testCaller); err != nil {
-			t.Fatalf("DeleteGroup with open balance: %v", err)
+		if err := n.DeleteGroup(ctx, "desk-a", false, testCaller); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("DeleteGroup with open balance = %v, want ErrConflict", err)
 		}
-		if _, ok, err := st.GetGroup(ctx, "desk-a"); err != nil || ok {
-			t.Fatalf("group after cascade delete: ok=%v err=%v, want absent", ok, err)
+		if _, ok, err := st.GetGroup(ctx, "desk-a"); err != nil || !ok {
+			t.Fatalf("group after refused delete: ok=%v err=%v, want present", ok, err)
 		}
-		if _, ok, err := st.GetAccount(ctx, "blocked"); err != nil || ok {
-			t.Fatalf("member after cascade delete: ok=%v err=%v, want absent", ok, err)
+		if account, ok, err := st.GetAccount(ctx, "blocked"); err != nil || !ok || account.GroupCode != "desk-a" {
+			t.Fatalf("member after refused delete: %+v ok=%v err=%v", account, ok, err)
 		}
 	})
 
@@ -1153,11 +1312,12 @@ func TestLocalNode_DeleteGroupCascadesMembersRegardlessOfCurrencyState(t *testin
 
 		next := newFakeEngine()
 		prepareGroupDeleteRebuild(n, probe, next)
-		if err := n.DeleteGroup(ctx, "desk-a", testCaller); err != nil {
+		if err := n.DeleteGroup(ctx, "desk-a", false, testCaller); err != nil {
 			t.Fatalf("DeleteGroup without balances: %v", err)
 		}
-		if _, ok, err := st.GetAccount(ctx, "clear"); err != nil || ok {
-			t.Fatalf("member after cascade delete: ok=%v err=%v, want absent", ok, err)
+		account, ok, err := st.GetAccount(ctx, "clear")
+		if err != nil || !ok || account.GroupCode != "" || account.EffectiveCurrency != "USD" {
+			t.Fatalf("member after detach: %+v ok=%v err=%v", account, ok, err)
 		}
 	})
 
@@ -1195,11 +1355,12 @@ func TestLocalNode_DeleteGroupCascadesMembersRegardlessOfCurrencyState(t *testin
 
 		next := newFakeEngine()
 		prepareGroupDeleteRebuild(n, probe, next)
-		if err := n.DeleteGroup(ctx, "desk-a", testCaller); err != nil {
+		if err := n.DeleteGroup(ctx, "desk-a", false, testCaller); err != nil {
 			t.Fatalf("DeleteGroup with own currency: %v", err)
 		}
-		if _, ok, err := st.GetAccount(ctx, "own-currency"); err != nil || ok {
-			t.Fatalf("member after cascade delete: ok=%v err=%v, want absent", ok, err)
+		account, ok, err := st.GetAccount(ctx, "own-currency")
+		if err != nil || !ok || account.GroupCode != "" || account.EffectiveCurrency != "JPY" {
+			t.Fatalf("member after detach: %+v ok=%v err=%v", account, ok, err)
 		}
 	})
 }
@@ -1238,9 +1399,7 @@ func TestLocalNode_DefaultGroupCurrencyGuardsOnlyDefaultResolvedAccounts(t *test
 
 	err := n.SetDefaultGroupCurrency(ctx, "EUR", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
-		!strings.Contains(err.Error(), "through-default") ||
-		strings.Contains(err.Error(), "own-currency") ||
-		strings.Contains(err.Error(), "group-currency") {
+		!strings.Contains(err.Error(), "1 account(s)") {
 		t.Fatalf("SetDefaultGroupCurrency guarded = %v, want only through-default", err)
 	}
 	if err := st.DeleteBalance(ctx, "through-default", "USD"); err != nil {
@@ -1259,7 +1418,7 @@ func TestLocalNode_DefaultGroupCurrencyGuardsOnlyDefaultResolvedAccounts(t *test
 	}
 	err = n.SetDefaultGroupCurrency(ctx, "", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
-		!strings.Contains(err.Error(), "through-default") {
+		!strings.Contains(err.Error(), "1 account(s)") {
 		t.Fatalf("Clear default group currency guarded = %v, want through-default", err)
 	}
 }

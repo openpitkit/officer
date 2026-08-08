@@ -19,12 +19,15 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { TableSkeleton } from "@/components/PageStates";
+import i18n from "@/i18n";
 
 describe("TableSkeleton", () => {
   it("announces a stable busy loading status", () => {
     render(<TableSkeleton />);
 
-    expect(screen.getByRole("status", { name: "Loading" })).toHaveAttribute(
+    expect(
+      screen.getByRole("status", { name: i18n.t("states.loading") }),
+    ).toHaveAttribute(
       "aria-busy",
       "true",
     );

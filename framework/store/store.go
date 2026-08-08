@@ -694,11 +694,11 @@ type RealmStore interface {
 	// group. Returns domain.ErrNotFound when absent.
 	SetGroupBlocked(ctx context.Context, code string, blocked bool, reason string) error
 
-	// DeleteGroup removes the group. The group foreign key cascades every member
-	// account and each account-owned operational row; durable audit snapshots
-	// survive with their nullable account links cleared. Returns
-	// domain.ErrNotFound when absent.
-	DeleteGroup(ctx context.Context, code string) error
+	// DeleteGroup removes the group and clears its members' group links. Accounts
+	// and their operational and compliance history survive. Group-owned
+	// cascade-destroying dependents require force; otherwise it returns
+	// domain.ErrHasDependents. Returns domain.ErrNotFound when absent.
+	DeleteGroup(ctx context.Context, code string, force bool) error
 
 	// ListGroupAccounts returns every account whose group is code, ordered by
 	// account code.

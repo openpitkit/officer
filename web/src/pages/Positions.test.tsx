@@ -303,6 +303,18 @@ describe("Positions adjustment panel", () => {
 
     await openPanel();
     panel = screen.getByRole("region", { name: "Adjustment" });
+    const bounds = within(panel).getByRole("button", {
+      name: /bounds \(optional\)/i,
+    });
+    await user.click(bounds);
+    bounds.focus();
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("region", { name: "Adjustment" }),
+    ).not.toBeInTheDocument();
+
+    await openPanel();
+    panel = screen.getByRole("region", { name: "Adjustment" });
     await user.click(within(panel).getByRole("button", { name: "Cancel" }));
     expect(
       screen.queryByRole("region", { name: "Adjustment" }),

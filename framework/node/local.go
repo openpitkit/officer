@@ -254,11 +254,12 @@ func (n *localNode) fatalPostCommitAudit(
 
 // fatalPostEngineAuditByCode routes a post-engine audit-write failure into the
 // fatal-shutdown hook, identifying the subject by its operator-facing code
-// (subjectKind is "account" or "group") rather than the engine surrogate. The
-// admin block/group/set-group paths use it so the diagnostic never resolves or
-// emits the DB/engine account id; the audit row itself already stores code and
-// title only. Like fatalPostEnginePersistence this is the straight-to-fatal P7
-// cascade: the engine mutation committed and its audit trail is now lost.
+// (subjectKind is "account", "asset", "group", or "policy") rather than the
+// engine surrogate. The admin block, group, asset, and limit paths use it so
+// the diagnostic never resolves or emits the DB/engine account id; the audit row
+// itself already stores code and title only. Like fatalPostEnginePersistence
+// this is the straight-to-fatal P7 cascade: the engine mutation committed and
+// its audit trail is now lost.
 func (n *localNode) fatalPostEngineAuditByCode(
 	operation, subjectKind, code string, err error,
 ) error {

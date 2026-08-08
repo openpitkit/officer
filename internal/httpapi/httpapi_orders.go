@@ -95,7 +95,7 @@ func handleListOrders(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := orderListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationErrMsg(w, err.Error())
 			return
 		}
 		orders, err := svc.ListOrderRows(r.Context(), filter)
@@ -170,12 +170,12 @@ func handleGetOrderEventReproduction(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		eventID, err := httpx.PathOrderEventID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		// Reproduction-permission seam: a future controller/reproduction capability
@@ -447,7 +447,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {

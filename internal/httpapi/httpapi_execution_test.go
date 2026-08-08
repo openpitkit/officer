@@ -164,7 +164,7 @@ func TestCheckOrder_ValidationError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/check", body))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d", rec.Code)
+		t.Fatalf("want 422, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
@@ -298,7 +298,7 @@ func TestSubmitDropCopyOrder_ValidationErrorPreservesEngineMessage(t *testing.T)
 		http.MethodPost, "/api/v1/orders/drop-copy/submit?missingAccount=create", body,
 	))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("want 422, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
@@ -406,7 +406,7 @@ func TestSubmitOrderToken_ValidationError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d", rec.Code)
+		t.Fatalf("want 422, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
@@ -494,7 +494,7 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"id":"report-1","quantity":"1","price":"100","leavesQuantity":"0","status":"cancelled","force":true,` +
+		`{"id":"report-1","quantity":"1","price":"100","leavesQuantity":"0","status":"filled","force":true,` +
 			`"commission":{"amount":"-0.12","currency":"USD"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
@@ -517,7 +517,7 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 		svc.execReportIn.Commission.Currency != "USD" {
 		t.Fatalf("commission not forwarded: %+v", svc.execReportIn.Commission)
 	}
-	if svc.execReportIn.OrderStatus != domain.OrderStatusCancelled {
+	if svc.execReportIn.OrderStatus != domain.OrderStatusFilled {
 		t.Fatalf("status not forwarded: %q", svc.execReportIn.OrderStatus)
 	}
 	if svc.execReportIn.ExternalID != "report-1" {
@@ -649,32 +649,32 @@ func TestApplyExecutionReport_DuplicateIDReturnsConflict(t *testing.T) {
 	}
 }
 
-// TestApplyExecutionReport_MissingLeavesQuantity checks the handler rejects a
-// fill body that omits leavesQuantity with 400 validation, locking in the
-// engine's hard requirement that every settled report carries leaves before it
-// reaches the service.
-func TestApplyExecutionReport_MissingLeavesQuantity(t *testing.T) {
-	svc := &fakeService{orderDetail: domain.OrderDetail{
-		Order: domain.Order{
-			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
-			QuoteAsset: "USD", Side: domain.OrderSideBuy,
-		},
-	}}
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","status":"filled"}`)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d", rec.Code)
-	}
-	m := bodyMap(t, rec.Result())
-	errObj, _ := m["error"].(map[string]any)
-	if errObj["code"] != "validation" {
-		t.Fatalf("want code=validation, got %v", errObj["code"])
+// TestApplyExecutionReport_FillRequiresLeaves verifies both fill statuses reject
+// an actual fill without non-empty caller leaves.
+func TestApplyExecutionReport_FillRequiresLeaves(t *testing.T) {
+	for _, status := range []string{"filled", "partially_filled"} {
+		t.Run(status, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := bytes.NewBufferString(
+				`{"quantity":"1","price":"100","status":"` + status + `"}`,
+			)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+				body,
+			))
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if !svc.execReportIn.Order.IsZero() {
+				t.Fatalf("fill without leaves reached service: %+v", svc.execReportIn)
+			}
+		})
 	}
 }
 
@@ -721,7 +721,7 @@ func TestApplyExecutionReport_NonFillForwardsOptionalLeaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"status":"committed","leavesQuantity":"1.5"}`,
+		`{"status":"committed","leavesQuantity":"+1.5"}`,
 	)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
@@ -733,8 +733,38 @@ func TestApplyExecutionReport_NonFillForwardsOptionalLeaves(t *testing.T) {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if svc.execReportIn.OrderStatus != domain.OrderStatusCommitted ||
-		svc.execReportIn.LeavesQuantity != "1.5" {
+		svc.execReportIn.LeavesQuantity != "+1.5" {
 		t.Fatalf("optional workflow leaves not forwarded: %+v", svc.execReportIn)
+	}
+}
+
+func TestApplyExecutionReport_EmptyCommissionDoesNotRequireLeaves(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "null", body: `{"status":"accepted","commission":null}`},
+		{name: "empty pair", body: `{"status":"accepted","commission":{"amount":"","currency":""}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+				bytes.NewBufferString(tc.body),
+			))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if svc.execReportIn.LeavesQuantity != "" || svc.execReportIn.Commission != nil {
+				t.Fatalf("empty commission was not normalized: %+v", svc.execReportIn)
+			}
+		})
 	}
 }
 
@@ -761,7 +791,7 @@ func TestApplyExecutionReport_WorkflowRejectsInvalidSettlementFields(t *testing.
 				bytes.NewBufferString(tc.body),
 			))
 			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("want 400, got %d; body=%s", rec.Code, rec.Body.String())
+				t.Fatalf("want 422, got %d; body=%s", rec.Code, rec.Body.String())
 			}
 			if !svc.execReportIn.Order.IsZero() {
 				t.Fatalf("invalid workflow report reached service: %+v", svc.execReportIn)
@@ -785,41 +815,13 @@ func TestApplyExecutionReport_RejectsInvalidWorkflowLeaves(t *testing.T) {
 			name: "negative",
 			body: `{"status":"committed","leavesQuantity":"-1"}`,
 		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{}
-			r, err := newRouter(svc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, httptest.NewRequest(
-				http.MethodPost,
-				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
-				bytes.NewBufferString(tc.body),
-			))
-			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
-			}
-			if !svc.execReportIn.Order.IsZero() {
-				t.Fatalf("invalid workflow report reached service: %+v", svc.execReportIn)
-			}
-		})
-	}
-}
-
-// The engine's post-trade path has no reject channel, so an engine-settled
-// report without leaves must be refused at the boundary instead of blocking the
-// account downstream.
-func TestApplyExecutionReport_EngineSettledMissingLeavesRejected(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		body string
-	}{
-		{name: "terminal", body: `{"status":"cancelled"}`},
 		{
-			name: "commission",
-			body: `{"status":"accepted","commission":{"amount":"-1","currency":"USD"}}`,
+			name: "exponent",
+			body: `{"status":"accepted","leavesQuantity":"1e3"}`,
+		},
+		{
+			name: "surrounding whitespace",
+			body: `{"status":"accepted","leavesQuantity":" 1 "}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -835,19 +837,62 @@ func TestApplyExecutionReport_EngineSettledMissingLeavesRejected(t *testing.T) {
 				bytes.NewBufferString(tc.body),
 			))
 			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+				t.Fatalf("want 422, got %d: %s", rec.Code, rec.Body.String())
 			}
 			if !svc.execReportIn.Order.IsZero() {
-				t.Fatalf("report without leaves reached service: %+v", svc.execReportIn)
+				t.Fatalf("invalid workflow report reached service: %+v", svc.execReportIn)
 			}
 		})
 	}
 }
 
-// TestApplyExecutionReport_TerminalForwardsReleaseQuantity checks a terminal
-// no-trade report carries the remaining quantity through to engine settlement
-// so the engine can release it before Officer records zero persisted leaves.
-func TestApplyExecutionReport_TerminalForwardsReleaseQuantity(t *testing.T) {
+// Commission routing does not make leaves required for a workflow report.
+func TestApplyExecutionReport_CommissionOnlyWorkflowOmitsLeaves(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+		bytes.NewBufferString(
+			`{"status":"accepted","commission":{"amount":"-1","currency":"USD"}}`,
+		),
+	))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.execReportIn.LeavesQuantity != "" || svc.execReportIn.Commission == nil {
+		t.Fatalf("commission-only workflow report changed leaves: %+v", svc.execReportIn)
+	}
+}
+
+func TestApplyExecutionReport_CancelledMayOmitLeaves(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+		bytes.NewBufferString(`{"status":"cancelled"}`),
+	))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.execReportIn.OrderStatus != domain.OrderStatusCancelled ||
+		svc.execReportIn.LeavesQuantity != "" {
+		t.Fatalf("cancelled report changed omitted leaves: %+v", svc.execReportIn)
+	}
+}
+
+// TestApplyExecutionReport_TerminalRecordsOptionalLeaves checks a terminal
+// no-fill report preserves caller-reported leaves as request state.
+func TestApplyExecutionReport_TerminalRecordsOptionalLeaves(t *testing.T) {
 	svc := &fakeService{orderDetail: domain.OrderDetail{
 		Order: domain.Order{
 			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
@@ -873,13 +918,12 @@ func TestApplyExecutionReport_TerminalForwardsReleaseQuantity(t *testing.T) {
 	}
 }
 
-// TestApplyExecutionReport_RejectsFillWithNonTerminalWorkflowStatus checks a
-// fill (quantity+price) paired with a non-terminal workflow status
-// (submitted/accepted/committed) is rejected with 400 validation before it
-// reaches the service: such a report would settle through the engine while
-// persisting an inconsistent lifecycle status.
-func TestApplyExecutionReport_RejectsFillWithNonTerminalWorkflowStatus(t *testing.T) {
-	for _, status := range []string{"submitted", "accepted", "committed"} {
+// TestApplyExecutionReport_RejectsFillWithNonFillStatus checks every status
+// other than filled and partially_filled rejects quantity and price.
+func TestApplyExecutionReport_RejectsFillWithNonFillStatus(t *testing.T) {
+	for _, status := range []string{
+		"submitted", "accepted", "rejected", "committed", "rolled_back", "cancelled",
+	} {
 		t.Run(status, func(t *testing.T) {
 			svc := &fakeService{}
 			r, err := newRouter(svc)
@@ -892,7 +936,7 @@ func TestApplyExecutionReport_RejectsFillWithNonTerminalWorkflowStatus(t *testin
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
 			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("want 400, got %d", rec.Code)
+				t.Fatalf("want 422, got %d", rec.Code)
 			}
 			m := bodyMap(t, rec.Result())
 			errObj, _ := m["error"].(map[string]any)
@@ -900,8 +944,7 @@ func TestApplyExecutionReport_RejectsFillWithNonTerminalWorkflowStatus(t *testin
 				t.Fatalf("want code=validation, got %v", errObj["code"])
 			}
 			if svc.execReportIn.Order != "" {
-				t.Fatalf("fill with non-terminal workflow status reached service: %+v",
-					svc.execReportIn)
+				t.Fatalf("fill with non-fill status reached service: %+v", svc.execReportIn)
 			}
 		})
 	}
@@ -924,7 +967,7 @@ func TestApplyExecutionReport_InvalidStatus(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d", rec.Code)
+		t.Fatalf("want 422, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
@@ -953,7 +996,7 @@ func TestApplyExecutionReport_MissingStatus(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d", rec.Code)
+		t.Fatalf("want 422, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)

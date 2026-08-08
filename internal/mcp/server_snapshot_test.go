@@ -132,10 +132,9 @@ func TestServerToolSnapshot(t *testing.T) {
 		{
 			name: "cancel",
 			description: "Cancel an untouched workflow order by presenting its " +
-				"approval token and the venue-reported open base leavesQuantity. Officer " +
-				"stores it verbatim and never derives or substitutes it; reserve release " +
-				"comes from the persisted reserve ledger. After execution-" +
-				"report activity, submit an explicit report. Protected and disabled by default.",
+				"approval token. Optional caller-reported leavesQuantity is recorded " +
+				"when supplied. After execution-report " +
+				"activity, submit an explicit report. Protected and disabled by default.",
 		},
 	}
 	if len(list.Tools) != len(want) {
@@ -181,6 +180,23 @@ func TestServerToolSnapshot(t *testing.T) {
 				for _, required := range shape.Required {
 					if required == "id" {
 						t.Fatalf("drop-copy input schema requires optional id: %s", wire)
+					}
+				}
+			}
+			if name == "cancel" && schemaName == "input" {
+				var shape struct {
+					Properties map[string]json.RawMessage `json:"properties"`
+					Required   []string                   `json:"required"`
+				}
+				if err := json.Unmarshal(raw, &shape); err != nil {
+					t.Fatalf("decode cancel input schema: %v", err)
+				}
+				if _, ok := shape.Properties["leavesQuantity"]; !ok {
+					t.Fatalf("cancel input schema has no leavesQuantity: %s", wire)
+				}
+				for _, required := range shape.Required {
+					if required == "leavesQuantity" {
+						t.Fatalf("cancel input schema requires optional leavesQuantity: %s", wire)
 					}
 				}
 			}

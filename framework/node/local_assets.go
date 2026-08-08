@@ -67,10 +67,8 @@ func (n *localNode) CreateAsset(
 	return asset, nil
 }
 
-// UpdateAsset replaces the asset's public code and mutable fields (title, asset
-// class) and audits the action. The asset is not part of the engine resolver, so
-// a code rename has no engine side-effect and no rebuild; dependent rows
-// reference the asset by its surrogate id.
+// UpdateAsset replaces the asset's public code and mutable fields and audits the
+// action.
 func (n *localNode) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
 ) (domain.Asset, error) {
@@ -86,11 +84,20 @@ func (n *localNode) UpdateAsset(
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionUpdateAsset,
 		Asset:  updated.Code,
-		Detail: fmt.Sprintf("update asset %s -> %s", oldCode, updated.Code),
+		Detail: updateAssetDetail(oldCode, updated.Code),
 	}); err != nil {
 		return domain.Asset{}, fmt.Errorf("audit update asset: %w", err)
 	}
 	return updated, nil
+}
+
+// updateAssetDetail renders one asset update. Both codes are named only when
+// the update renames the asset; a same-code update has no arrow to render.
+func updateAssetDetail(previous string, next string) string {
+	if previous == next {
+		return fmt.Sprintf("update asset %s", next)
+	}
+	return fmt.Sprintf("update asset %s -> %s", previous, next)
 }
 
 // DeleteAsset removes the asset, cascading its dependent rows when force is set,

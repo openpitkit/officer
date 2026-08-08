@@ -35,17 +35,17 @@ func testOrder(t *testing.T, st store.RealmStore, id domain.AccountID) domain.Or
 	t.Helper()
 	seedTestAccount(t, st, id)
 	order, err := st.CreateOrder(context.Background(), domain.Order{
-		Account:          id,
-		Source:           domain.SourceAPI,
-		Principal:        "operator",
-		BaseAsset:        "AAPL",
-		QuoteAsset:       "USD",
-		Side:             domain.OrderSideBuy,
-		AmountKind:       domain.OrderAmountKindQuantity,
-		AmountValue:      "2",
-		Price:            "400",
-		ReservedQuantity: "2",
-		Status:           domain.OrderStatusCommitted,
+		Account:     id,
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Leaves:      "2",
+		Price:       "400",
+		Status:      domain.OrderStatusCommitted,
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
@@ -544,9 +544,9 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if len(detail.Events) != 1 {
 		t.Fatalf("events = %d, want 1 fill event", len(detail.Events))
 	}
-	if detail.Order.ReservedQuantity != "2" || len(detail.Trades) != 1 {
+	if detail.Order.Leaves != "0" || len(detail.Trades) != 1 {
 		t.Fatalf(
-			"blocked non-mutating settlement = %+v, want trade with reserve 2",
+			"blocked settlement = %+v, want trade with caller leaves 0",
 			detail,
 		)
 	}
@@ -636,10 +636,76 @@ func TestLocalNode_ApplyExecutionReportForce(t *testing.T) {
 	}
 }
 
-func TestLocalNode_RepeatedForcedTerminalUsesZeroReservation(t *testing.T) {
+// A forced terminal no-fill report may target an order that never recorded
+// leaves. The engine receives no leaves; a later caller value is persistence
+// state and still does not become engine input for that report.
+func TestLocalNode_ForcedRejectedReportWithNoStoredLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.execReportReservedQuantity = "0"
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	const id domain.AccountID = "acc-1"
+	seedTestAccount(t, st, id)
+	order, err := st.CreateOrder(ctx, domain.Order{
+		Account:     id,
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "400",
+		Status:      domain.OrderStatusRejected,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	report := domain.ExecutionReportInput{
+		Order:       order.ExternalID,
+		Force:       true,
+		OrderStatus: domain.OrderStatusRejected,
+	}
+	_, err = n.ApplyExecutionReport(
+		ctx, testKey(id), report, testCaller,
+	)
+	if err != nil {
+		t.Fatalf("forced rejected report without leaves: %v", err)
+	}
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	if input := eng.execReportCalls[0]; input.LeavesQuantity != "" ||
+		input.ReleaseQuantity != "" {
+		t.Fatalf("engine leaves = %+v, want both absent", input)
+	}
+
+	report.LeavesQuantity = "0"
+	if _, err := n.ApplyExecutionReport(
+		ctx, testKey(id), report, testCaller,
+	); err != nil {
+		t.Fatalf("forced rejected report with leaves: %v", err)
+	}
+	if len(eng.execReportCalls) != 2 {
+		t.Fatalf("engine calls = %+v, want two", eng.execReportCalls)
+	}
+	input := eng.execReportCalls[1]
+	if input.LeavesQuantity != "0" || input.ReleaseQuantity != "" {
+		t.Fatalf("engine leaves = %+v, want request zero and engine leaves absent", input)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "0" {
+		t.Fatalf("order leaves = %q, want caller leaves 0", detail.Order.Leaves)
+	}
+}
+
+func TestLocalNode_RepeatedForcedCancellationUsesPreReportLeaves(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 	order := testOrder(t, st, "acc-1")
@@ -663,16 +729,248 @@ func TestLocalNode_RepeatedForcedTerminalUsesZeroReservation(t *testing.T) {
 	if len(eng.execReportCalls) != 2 {
 		t.Fatalf("engine calls = %+v, want two", eng.execReportCalls)
 	}
-	if eng.execReportCalls[0].ReservedQuantity != "2" ||
-		eng.execReportCalls[1].ReservedQuantity != "0" {
-		t.Fatalf("reservation contexts = %+v, want 2 then 0", eng.execReportCalls)
+	if eng.execReportCalls[0].ReleaseQuantity != "2" ||
+		eng.execReportCalls[1].ReleaseQuantity != "3" {
+		t.Fatalf("release contexts = %+v, want pre-report leaves 2 then 3", eng.execReportCalls)
 	}
 	detail, err := st.GetOrder(ctx, order.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
-	if detail.Order.Leaves != "3" || detail.Order.ReservedQuantity != "0" {
-		t.Fatalf("terminal order = %+v, want raw leaves 3 and zero reserve", detail.Order)
+	if detail.Order.Leaves != "3" {
+		t.Fatalf("terminal order = %+v, want caller leaves 3", detail.Order)
+	}
+}
+
+func TestLocalNode_TerminalNoFillStatusesRejectFill(t *testing.T) {
+	t.Parallel()
+	for _, status := range []domain.OrderStatus{
+		domain.OrderStatusCancelled,
+		domain.OrderStatusRejected,
+		domain.OrderStatusRolledBack,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			order := testOrder(t, st, "acc-1")
+			_, err := n.ApplyExecutionReport(
+				context.Background(),
+				testKey("acc-1"),
+				domain.ExecutionReportInput{
+					Order:          order.ExternalID,
+					FillQuantity:   "0.5",
+					FillPrice:      "400",
+					LeavesQuantity: "1.25",
+					OrderStatus:    status,
+				},
+				testCaller,
+			)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ApplyExecutionReport = %v, want ErrInvalid", err)
+			}
+			if len(eng.execReportCalls) != 0 {
+				t.Fatalf("invalid fill reached engine: %+v", eng.execReportCalls)
+			}
+		})
+	}
+}
+
+// A terminal no-fill report with no previously recorded leaves sends no leaves
+// to the engine while still persisting the caller replacement exactly.
+func TestLocalNode_TerminalNoFillWithNoStoredLeavesSendsNone(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	const id domain.AccountID = "acc-1"
+	seedTestAccount(t, st, id)
+	order, err := st.CreateOrder(ctx, domain.Order{
+		Account:     id,
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "10",
+		Price:       "400",
+		Status:      domain.OrderStatusCommitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		LeavesQuantity: "4",
+		OrderStatus:    domain.OrderStatusCancelled,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	if got := eng.execReportCalls[0].ReleaseQuantity; got != "" {
+		t.Fatalf("release quantity = %q, want absent", got)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "4" {
+		t.Fatalf("order leaves = %q, want caller leaves 4", detail.Order.Leaves)
+	}
+}
+
+// An over-fill leaves every quantity the caller sent untouched and is recorded
+// only as a marker: the audit row is the sole trace that the reported fill and
+// the recorded open quantity disagree.
+func TestLocalNode_TerminalOverFillForwardsReportedLeavesAndMarksAudit(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		FillQuantity:   "6",
+		FillPrice:      "400",
+		LeavesQuantity: "6",
+		OrderStatus:    domain.OrderStatusFilled,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	if got := eng.execReportCalls[0].ReleaseQuantity; got != "6" {
+		t.Fatalf("over-fill release = %q, want reported leaves 6", got)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "6" {
+		t.Fatalf("over-fill leaves = %q, want caller leaves 6", detail.Order.Leaves)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "releaseQty=6") ||
+		!strings.Contains(rows[0].Detail, "overfill=true") {
+		t.Fatalf("audit rows = %+v, want an over-fill marker", rows)
+	}
+	if strings.Contains(rows[0].Detail, "releaseQty=0") {
+		t.Fatalf("audit rows = %+v, want no derived release", rows)
+	}
+}
+
+// A terminal fill within the recorded open quantity carries no marker, so the
+// marker identifies a real mismatch rather than every terminal fill.
+func TestLocalNode_TerminalFillWithinRecordedLeavesHasNoOverFillMarker(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		FillQuantity:   "2",
+		FillPrice:      "400",
+		LeavesQuantity: "0",
+		OrderStatus:    domain.OrderStatusFilled,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || strings.Contains(rows[0].Detail, "overfill=") {
+		t.Fatalf("audit rows = %+v, want no over-fill marker", rows)
+	}
+}
+
+// The node forwards stored leaves verbatim when a terminal no-fill report omits
+// request leaves: the string that was stored is the string the engine receives,
+// trailing zeros and all.
+func TestLocalNode_TerminalReportForwardsStoredLeavesVerbatim(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+	if _, err := st.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Account:     "acc-1",
+		Order:       order.ExternalID,
+		OrderStatus: domain.OrderStatusPartiallyFilled,
+		Leaves:      "1.500",
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:       order.ExternalID,
+		OrderStatus: domain.OrderStatusCancelled,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(eng.execReportCalls) != 1 ||
+		eng.execReportCalls[0].ReleaseQuantity != "1.500" {
+		t.Fatalf("terminal report = %+v, want stored leaves 1.500", eng.execReportCalls)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "1.500" {
+		t.Fatalf("order leaves = %q, want the recorded 1.500 untouched", detail.Order.Leaves)
+	}
+}
+
+// A stored leaves value Officer wrote itself is never the caller's fault: a
+// corrupt one must surface as an internal error, not as a 400-shaped rejection,
+// and must not reach the engine as a different number than the one stored.
+func TestLocalNode_CorruptStoredLeavesIsInternal(t *testing.T) {
+	t.Parallel()
+	for _, stored := range []string{"1e3", "-1", "not-a-number", " 1 "} {
+		t.Run(stored, func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+			order := testOrder(t, st, "acc-1")
+			if _, err := st.RecordOrderSettlement(ctx, domain.OrderSettlement{
+				Account:     "acc-1",
+				Order:       order.ExternalID,
+				OrderStatus: domain.OrderStatusPartiallyFilled,
+				Leaves:      stored,
+			}); err != nil {
+				t.Fatalf("RecordOrderSettlement: %v", err)
+			}
+
+			_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+				Order:       order.ExternalID,
+				OrderStatus: domain.OrderStatusCancelled,
+			}, testCaller)
+			if err == nil {
+				t.Fatal("ApplyExecutionReport succeeded with corrupt stored leaves")
+			}
+			if errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("stored leaves error = %v, want an internal error", err)
+			}
+			if len(eng.execReportCalls) != 0 {
+				t.Fatalf("corrupt stored leaves reached engine: %+v", eng.execReportCalls)
+			}
+		})
 	}
 }
 
@@ -926,16 +1224,12 @@ func TestLocalNode_ApplyExecutionReportUsesAccountSyncLane(t *testing.T) {
 }
 
 // TestLocalNode_ApplyExecutionReportRoutesFillableStatusesThroughEngine verifies
-// a report carrying a fill routes through the engine for every status that
-// legally accepts one: the fill statuses and the terminal statuses.
+// a report carrying a fill routes through the engine only for fill statuses.
 func TestLocalNode_ApplyExecutionReportRoutesFillableStatusesThroughEngine(t *testing.T) {
 	t.Parallel()
 	cases := []domain.OrderStatus{
-		domain.OrderStatusRejected,
-		domain.OrderStatusRolledBack,
 		domain.OrderStatusFilled,
 		domain.OrderStatusPartiallyFilled,
-		domain.OrderStatusCancelled,
 	}
 	for _, status := range cases {
 		t.Run(string(status), func(t *testing.T) {
@@ -962,11 +1256,9 @@ func TestLocalNode_ApplyExecutionReportRoutesFillableStatusesThroughEngine(t *te
 			if err != nil {
 				t.Fatalf("GetOrder: %v", err)
 			}
-			// Every status, terminal included, records the leaves the report
-			// carried: the report is filed as it arrived.
 			if detail.Order.Leaves != "1" {
 				t.Fatalf(
-					"order leaves = %q, want reported 1 for status %q",
+					"order leaves = %q, want caller leaves 1 for status %q",
 					detail.Order.Leaves,
 					status,
 				)
@@ -975,23 +1267,23 @@ func TestLocalNode_ApplyExecutionReportRoutesFillableStatusesThroughEngine(t *te
 	}
 }
 
-// TestLocalNode_ApplyExecutionReportRejectsFillWithNonTerminalWorkflowStatus
-// verifies a report carrying a fill is rejected before it reaches the engine
-// when paired with a non-terminal workflow status: settling such a report
-// through the engine while persisting an inconsistent lifecycle status would
-// desync the order from its balances.
-func TestLocalNode_ApplyExecutionReportRejectsFillWithNonTerminalWorkflowStatus(t *testing.T) {
+// TestLocalNode_ApplyExecutionReportRejectsFillWithNonFillStatus verifies a
+// report carrying a fill is rejected before it reaches the engine unless its
+// status is filled or partially_filled.
+func TestLocalNode_ApplyExecutionReportRejectsFillWithNonFillStatus(t *testing.T) {
 	t.Parallel()
 	cases := []domain.OrderStatus{
 		domain.OrderStatusSubmitted,
 		domain.OrderStatusAccepted,
 		domain.OrderStatusCommitted,
+		domain.OrderStatusCancelled,
+		domain.OrderStatusRejected,
+		domain.OrderStatusRolledBack,
 	}
 	for _, status := range cases {
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 			eng := newFakeEngine()
-			eng.execReportReservedQuantity = "0"
 			n, st := newTestNode(t, eng)
 			ctx := context.Background()
 
@@ -1017,13 +1309,36 @@ func TestLocalNode_ApplyExecutionReportRejectsFillWithNonTerminalWorkflowStatus(
 
 func TestLocalNode_ApplyExecutionReportRoutesTerminalReportsThroughEngine(t *testing.T) {
 	t.Parallel()
-	cases := []domain.OrderStatus{
-		domain.OrderStatusRejected,
-		domain.OrderStatusRolledBack,
-		domain.OrderStatusCancelled,
+	cases := []struct {
+		name       string
+		status     domain.OrderStatus
+		leaves     string
+		release    string
+		wantStored string
+	}{
+		// Caller leaves deliberately differs from the order's recorded 2. It is
+		// persisted, while the engine always receives the pre-report value 2.
+		{
+			name: "rejected", status: domain.OrderStatusRejected,
+			leaves: "1", release: "2", wantStored: "1",
+		},
+		{
+			name: "rolled back", status: domain.OrderStatusRolledBack,
+			leaves: "1", release: "2", wantStored: "1",
+		},
+		{
+			name: "cancelled", status: domain.OrderStatusCancelled,
+			leaves: "0.5", release: "2", wantStored: "0.5",
+		},
+		// A report that supplies no leaves falls back to the recorded quantity
+		// and writes nothing over it.
+		{
+			name: "cancelled without leaves", status: domain.OrderStatusCancelled,
+			release: "2", wantStored: "2",
+		},
 	}
-	for _, status := range cases {
-		t.Run(string(status), func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			eng := newFakeEngine()
 			n, st := newTestNode(t, eng)
@@ -1031,12 +1346,17 @@ func TestLocalNode_ApplyExecutionReportRoutesTerminalReportsThroughEngine(t *tes
 
 			const id domain.AccountID = "acc-1"
 			order := testOrder(t, st, id)
+			if err := st.UpdateOrderStatus(
+				ctx, order.ExternalID, domain.OrderStatusAccepted,
+			); err != nil {
+				t.Fatalf("UpdateOrderStatus: %v", err)
+			}
 			commission := &domain.Commission{Amount: "-0.25", Currency: "USD"}
 			if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
 				Order:          order.ExternalID,
-				LeavesQuantity: "2",
+				LeavesQuantity: tc.leaves,
 				Commission:     commission,
-				OrderStatus:    status,
+				OrderStatus:    tc.status,
 			}, testCaller); err != nil {
 				t.Fatalf("ApplyExecutionReport: %v", err)
 			}
@@ -1044,25 +1364,27 @@ func TestLocalNode_ApplyExecutionReportRoutesTerminalReportsThroughEngine(t *tes
 				t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 			}
 			input := eng.execReportCalls[0]
-			if input.LeavesQuantity != "2" || input.ReservedQuantity != "2" {
-				t.Fatalf("engine reservation context = %+v", input)
+			if input.LeavesQuantity != tc.leaves || input.ReleaseQuantity != tc.release {
+				t.Fatalf("engine terminal context = %+v", input)
 			}
 			detail, err := st.GetOrder(ctx, order.ExternalID)
 			if err != nil {
 				t.Fatalf("GetOrder: %v", err)
 			}
-			// The fake reports no applied base delta, so terminal status alone does
-			// not consume the persisted reserve. Leaves still stays venue-reported.
-			if detail.Order.Status != status || detail.Order.Leaves != "2" ||
-				detail.Order.ReservedQuantity != "2" {
-				t.Fatalf("order = %+v, want %s with reported leaves and reserve 2", detail.Order, status)
+			if detail.Order.Status != tc.status || detail.Order.Leaves != tc.wantStored {
+				t.Fatalf("order = %+v, want %s with reported leaves", detail.Order, tc.status)
 			}
-			if len(detail.Events) != 1 {
-				t.Fatalf("events = %+v, want one terminal event", detail.Events)
+			if len(detail.Events) != 2 {
+				t.Fatalf("events = %+v, want commission and terminal events", detail.Events)
 			}
-			payload := detail.Events[0].Payload
-			if payload.LeavesQuantity != "2" {
-				t.Fatalf("event leaves = %q, want original 2", payload.LeavesQuantity)
+			var payload domain.OrderEventPayload
+			for _, event := range detail.Events {
+				if event.Type != domain.OrderEventCommission {
+					payload = event.Payload
+				}
+			}
+			if payload.LeavesQuantity != tc.leaves {
+				t.Fatalf("event leaves = %q, want original %q", payload.LeavesQuantity, tc.leaves)
 			}
 			if payload.Commission == nil || payload.Commission.Amount != "-0.25" ||
 				payload.Commission.Currency != "USD" {
@@ -1233,8 +1555,8 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 			if detail.Order.Status != tc.status {
 				t.Fatalf("order status = %q, want %q", detail.Order.Status, tc.status)
 			}
-			if detail.Order.Leaves != "" {
-				t.Fatalf("leaves = %q, want unchanged empty", detail.Order.Leaves)
+			if detail.Order.Leaves != "2" {
+				t.Fatalf("leaves = %q, want unchanged 2", detail.Order.Leaves)
 			}
 			if len(detail.Events) != 1 || detail.Events[0].Type != tc.event {
 				t.Fatalf("events = %+v, want [%s]", detail.Events, tc.event)
@@ -1293,7 +1615,21 @@ func TestLocalNode_ApplyExecutionReportRejectsInvalidWorkflowReport(t *testing.T
 			name: "negative leaves",
 			in: domain.ExecutionReportInput{
 				LeavesQuantity: "-1",
-				OrderStatus:    domain.OrderStatusAccepted,
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "exponent leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1e3",
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "padded leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: " 1 ",
+				OrderStatus:    domain.OrderStatusCommitted,
 			},
 		},
 	}
@@ -1328,7 +1664,10 @@ func TestLocalNode_ApplyExecutionReportRejectsInvalidWorkflowReport(t *testing.T
 	}
 }
 
-func TestLocalNode_ApplyExecutionReportWorkflowLeavesStaysDBOnly(t *testing.T) {
+// A workflow report never reaches the engine, but it is still a caller report:
+// its leaves is written onto the order verbatim, exactly as the engine-settled
+// path writes it, and never left behind at the previous recorded value.
+func TestLocalNode_ApplyExecutionReportWorkflowLeavesRecordsCallerValue(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
@@ -1337,7 +1676,7 @@ func TestLocalNode_ApplyExecutionReportWorkflowLeavesStaysDBOnly(t *testing.T) {
 
 	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
 		Order:          order.ExternalID,
-		LeavesQuantity: "2",
+		LeavesQuantity: "1.23000",
 		OrderStatus:    domain.OrderStatusAccepted,
 	}, testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
@@ -1349,46 +1688,27 @@ func TestLocalNode_ApplyExecutionReportWorkflowLeavesStaysDBOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
-	if detail.Order.Leaves != "2" {
-		t.Fatalf("order leaves = %q, want reported 2", detail.Order.Leaves)
+	if detail.Order.Leaves != "1.23000" {
+		t.Fatalf("order leaves = %q, want caller leaves 1.23000", detail.Order.Leaves)
 	}
-	if len(detail.Events) != 1 || detail.Events[0].Payload.LeavesQuantity != "2" {
-		t.Fatalf("events = %+v, want reported leaves 2", detail.Events)
+	if len(detail.Events) != 1 ||
+		detail.Events[0].Payload.LeavesQuantity != "1.23000" {
+		t.Fatalf("events = %+v, want reported leaves 1.23000", detail.Events)
 	}
 }
 
-// The engine's post-trade path has no reject channel, so a report settled by
-// the engine without leaves must be refused before the account pipeline.
-func TestLocalNode_ApplyExecutionReportRequiresLeavesForEngineReports(t *testing.T) {
+// Commission routes a workflow report through the adapter but activates no
+// leaves rule. Optional request leaves is persisted and never selected as
+// Engine leaves.
+func TestLocalNode_ApplyExecutionReportWorkflowCommissionLeaves(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		in   domain.ExecutionReportInput
+		name       string
+		leaves     string
+		wantStored string
 	}{
-		{
-			name: "terminal",
-			in: domain.ExecutionReportInput{
-				OrderStatus: domain.OrderStatusCancelled,
-			},
-		},
-		{
-			name: "fill",
-			in: domain.ExecutionReportInput{
-				FillQuantity: "1",
-				FillPrice:    "100",
-				OrderStatus:  domain.OrderStatusFilled,
-			},
-		},
-		{
-			name: "commission",
-			in: domain.ExecutionReportInput{
-				Commission: &domain.Commission{
-					Amount:   "-1",
-					Currency: "USD",
-				},
-				OrderStatus: domain.OrderStatusAccepted,
-			},
-		},
+		{name: "absent", wantStored: "2"},
+		{name: "supplied", leaves: "1.23000", wantStored: "1.23000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1396,20 +1716,32 @@ func TestLocalNode_ApplyExecutionReportRequiresLeavesForEngineReports(t *testing
 			n, st := newTestNode(t, eng)
 			ctx := context.Background()
 			order := testOrder(t, st, "acc-1")
-			in := tc.in
-			in.Order = order.ExternalID
-
-			if _, err := n.ApplyExecutionReport(
-				ctx, testKey("acc-1"), in, testCaller,
-			); !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("ApplyExecutionReport error = %v, want ErrInvalid", err)
+			if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"),
+				domain.ExecutionReportInput{
+					Order:          order.ExternalID,
+					LeavesQuantity: tc.leaves,
+					Commission: &domain.Commission{
+						Amount:   "-1",
+						Currency: "USD",
+					},
+					OrderStatus: domain.OrderStatusAccepted,
+				}, testCaller,
+			); err != nil {
+				t.Fatalf("ApplyExecutionReport: %v", err)
 			}
-			if len(eng.execReportCalls) != 0 || len(eng.accountSyncCalls) != 0 {
-				t.Fatalf(
-					"report without leaves reached account pipeline: engine=%+v sync=%+v",
-					eng.execReportCalls,
-					eng.accountSyncCalls,
-				)
+			if len(eng.execReportCalls) != 1 {
+				t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+			}
+			input := eng.execReportCalls[0]
+			if input.LeavesQuantity != tc.leaves || input.ReleaseQuantity != "" {
+				t.Fatalf("adapter leaves = %+v, want request %q and Engine absent", input, tc.leaves)
+			}
+			detail, err := st.GetOrder(ctx, order.ExternalID)
+			if err != nil {
+				t.Fatalf("GetOrder: %v", err)
+			}
+			if detail.Order.Leaves != tc.wantStored {
+				t.Fatalf("order leaves = %q, want %q", detail.Order.Leaves, tc.wantStored)
 			}
 		})
 	}
@@ -1452,10 +1784,10 @@ func TestLocalNode_ApplyExecutionReportNilPersistenceErrors(t *testing.T) {
 	}
 }
 
-// TestLocalNode_ApplyExecutionReportLeavesFollowsFills verifies the persisted
-// remaining open quantity starts from the stored order request value, follows a
-// partial fill's reported leaves, and reaches "0" on the final fill.
-func TestLocalNode_ApplyExecutionReportLeavesFollowsFills(t *testing.T) {
+// TestLocalNode_PartialFillCancellationUsesPreReportLeaves verifies that a
+// terminal cancellation sends the partial fill's stored leaves, then persists
+// the cancellation's replacement.
+func TestLocalNode_PartialFillCancellationUsesPreReportLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
@@ -1466,11 +1798,10 @@ func TestLocalNode_ApplyExecutionReportLeavesFollowsFills(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	order := testOrder(t, st, id)
-	if order.Leaves != "" {
-		t.Fatalf("initial leaves = %q, want request value", order.Leaves)
+	if order.Leaves != "2" {
+		t.Fatalf("initial leaves = %q, want 2", order.Leaves)
 	}
 
-	eng.execReportReservedQuantity = "1"
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
@@ -1493,42 +1824,29 @@ func TestLocalNode_ApplyExecutionReportLeavesFollowsFills(t *testing.T) {
 	if partial.Order.Leaves != "1" {
 		t.Fatalf("leaves after partial = %q, want 1", partial.Order.Leaves)
 	}
-	if partial.Order.ReservedQuantity != "1" {
-		t.Fatalf("reserve after partial = %q, want applied remainder 1", partial.Order.ReservedQuantity)
-	}
-
-	eng.execReportReservedQuantity = "0"
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
 		Order:          order.ExternalID,
-		BaseAsset:      "AAPL",
-		QuoteAsset:     "USD",
-		Side:           domain.OrderSideBuy,
-		FillQuantity:   "1",
-		FillPrice:      "400",
 		LeavesQuantity: "0",
-		OrderStatus:    domain.OrderStatusFilled,
+		OrderStatus:    domain.OrderStatusCancelled,
 	}, testCaller); err != nil {
-		t.Fatalf("final fill: %v", err)
+		t.Fatalf("cancellation: %v", err)
 	}
-	filled, err := st.GetOrder(ctx, order.ExternalID)
+	cancelled, err := st.GetOrder(ctx, order.ExternalID)
 	if err != nil {
-		t.Fatalf("GetOrder final: %v", err)
+		t.Fatalf("GetOrder cancellation: %v", err)
 	}
-	if filled.Order.Status != domain.OrderStatusFilled {
-		t.Fatalf("status = %q, want filled", filled.Order.Status)
+	if cancelled.Order.Status != domain.OrderStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", cancelled.Order.Status)
 	}
-	if filled.Order.Leaves != "0" {
-		t.Fatalf("leaves after final = %q, want 0", filled.Order.Leaves)
-	}
-	if filled.Order.ReservedQuantity != "0" {
-		t.Fatalf("reserve after final = %q, want 0", filled.Order.ReservedQuantity)
+	if cancelled.Order.Leaves != "0" {
+		t.Fatalf("leaves after cancellation = %q, want 0", cancelled.Order.Leaves)
 	}
 	if len(eng.execReportCalls) != 2 {
 		t.Fatalf("engine calls = %+v, want two", eng.execReportCalls)
 	}
 	terminal := eng.execReportCalls[1]
-	if terminal.ReservedQuantity != "1" {
-		t.Fatalf("terminal reservation context = %+v", terminal)
+	if terminal.ReleaseQuantity != "1" {
+		t.Fatalf("terminal release context = %+v", terminal)
 	}
 }
 
@@ -1590,7 +1908,7 @@ func TestLocalNode_ApplyExecutionReportRejectsFillOnWorkflowStatus(t *testing.T)
 	}
 }
 
-func TestLocalNode_ApplyExecutionReportRoutesTerminalFillThroughEngine(t *testing.T) {
+func TestLocalNode_TerminalFillForwardsReportedLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
@@ -1602,8 +1920,8 @@ func TestLocalNode_ApplyExecutionReportRoutesTerminalFillThroughEngine(t *testin
 		Order:          order.ExternalID,
 		FillQuantity:   "1",
 		FillPrice:      "400",
-		LeavesQuantity: "1",
-		OrderStatus:    domain.OrderStatusCancelled,
+		LeavesQuantity: "0",
+		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport terminal fill: %v", err)
@@ -1611,14 +1929,45 @@ func TestLocalNode_ApplyExecutionReportRoutesTerminalFillThroughEngine(t *testin
 	if len(eng.execReportCalls) != 1 {
 		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 	}
+	if got := eng.execReportCalls[0].ReleaseQuantity; got != "0" {
+		t.Fatalf("terminal fill release quantity = %q, want reported leaves 0", got)
+	}
 	detail, err := st.GetOrder(ctx, order.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
-	if len(detail.Events) != 2 ||
-		detail.Events[0].Type != domain.OrderEventFill ||
-		detail.Events[1].Type != domain.OrderEventCancelled {
-		t.Fatalf("events = %+v, want [fill cancelled]", detail.Events)
+	if len(detail.Events) != 1 || detail.Events[0].Type != domain.OrderEventFill {
+		t.Fatalf("events = %+v, want [fill]", detail.Events)
+	}
+}
+
+// Every fill requires request leaves, including terminal filled reports. The
+// recorded order value cannot satisfy that caller contract.
+func TestLocalNode_TerminalFillWithoutLeavesIsRejected(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	order := testOrder(t, st, id)
+	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+		Order:        order.ExternalID,
+		FillQuantity: "1",
+		FillPrice:    "400",
+		OrderStatus:  domain.OrderStatusFilled,
+	}, testCaller); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyExecutionReport terminal fill without leaves = %v, want ErrInvalid", err)
+	}
+	if len(eng.execReportCalls) != 0 {
+		t.Fatalf("invalid fill reached engine: %+v", eng.execReportCalls)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != order.Status || detail.Order.Leaves != order.Leaves {
+		t.Fatalf("order = %+v, want unchanged from %+v", detail.Order, order)
 	}
 }
 

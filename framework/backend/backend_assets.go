@@ -71,8 +71,7 @@ func (s *Service) CreateAsset(
 }
 
 // UpdateAsset validates the old and new asset metadata and updates the asset,
-// renaming its public code when it differs. Dependent rows reference the asset
-// by its surrogate id, so a code rename is safe, mirroring UpdateGroup.
+// renaming its public code when it differs.
 func (s *Service) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset,
 ) (domain.Asset, error) {

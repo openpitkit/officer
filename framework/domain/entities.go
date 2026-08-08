@@ -23,6 +23,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/shopspring/decimal"
 )
 
 // Source identifies the channel through which a mutation was initiated.
@@ -139,11 +141,12 @@ type AccountGroup struct {
 	Blocked bool
 }
 
-// Asset is a dictionary entity naming one tradable asset, addressed by its
-// immutable Code (e.g. "AAPL", "USD"), displayed under a mutable Title, and
-// optionally classified by AssetClass. The surrogate key never appears here.
+// Asset is a dictionary entity naming one tradable asset, addressed by its Code
+// (e.g. "AAPL", "USD"), displayed under a Title, and optionally classified by
+// AssetClass. All three fields are operator-editable. The surrogate key never
+// appears here.
 type Asset struct {
-	// Code is the immutable, operator-chosen asset code, unique per realm.
+	// Code is the operator-chosen asset code, unique per realm and mutable.
 	Code string
 	// Title is the mutable human-readable display name; may be empty.
 	Title string
@@ -721,8 +724,9 @@ func OrderStatusesEligibleForFill() []OrderStatus {
 }
 
 // ExecutionReportStatusChangeEvent maps an execution-report target status to a
-// lifecycle event. Fill statuses have no entry here: they emit OrderEventFill
-// from the settlement path instead. The bool is false for an unmapped status.
+// lifecycle event. Fill statuses have no entry here: settlement emits a fill or
+// a dedicated fee-only commission event instead. The bool is false for an
+// unmapped status.
 func ExecutionReportStatusChangeEvent(status OrderStatus) (OrderEventType, bool) {
 	switch status {
 	case OrderStatusSubmitted:
@@ -756,18 +760,19 @@ func invalidExecutionReport(message string) error {
 }
 
 // executionReportCarriesEnginePayload reports whether an execution report has
-// a fill or commission owned by the engine. Leaves matters only for a terminal
-// report, which routes by status.
+// a fill or commission owned by the engine. Terminal reports route by status
+// even when they carry neither.
 func executionReportCarriesEnginePayload(in ExecutionReportInput) bool {
 	return in.FillQuantity != "" || in.Commission != nil
 }
 
 // ExecutionReportRequiresEngine validates an execution report's routing shape
-// and reports whether it needs engine settlement. A report settled by the engine
-// (a fill, a commission, or a terminal status) must carry LeavesQuantity; it is
-// optional only for pure workflow status updates. Non-terminal workflow reports
-// without engine-owned payload are recorded directly. A workflow status still
-// cannot carry fill or caller-supplied settlement-lock fields.
+// and reports whether it needs engine settlement. Every fill requires caller
+// leaves and targets a fill status. Workflow and terminal no-fill reports may
+// carry leaves as state only; commission does not change their leaves rules.
+// Non-terminal workflow reports without engine-owned payload are recorded
+// directly. A workflow status still cannot carry caller-supplied
+// settlement-lock fields.
 func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 	status := in.OrderStatus
 	if !OrderStatusSupported(status) {
@@ -780,19 +785,28 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 			"quantity and price must be provided together",
 		)
 	}
-	if !hasQuantity && in.Commission == nil && (status == OrderStatusFilled ||
-		status == OrderStatusPartiallyFilled) {
+	isFillStatus := status == OrderStatusFilled || status == OrderStatusPartiallyFilled
+	if hasQuantity && !isFillStatus {
 		return false, invalidExecutionReport(
-			"quantity and price are required for fill statuses",
+			"quantity and price are only allowed for filled or partially_filled statuses",
 		)
 	}
-	if _, isWorkflow := ExecutionReportStatusChangeEvent(status); hasQuantity &&
-		isWorkflow && !OrderStatusTerminal(status) {
+	if !hasQuantity && in.Commission == nil && status == OrderStatusFilled {
 		return false, invalidExecutionReport(
-			"quantity and price are only allowed for fill or terminal statuses",
+			"quantity and price are required for a filled status without a commission",
+		)
+	}
+	if !hasQuantity && in.Commission == nil && status == OrderStatusPartiallyFilled {
+		return false, invalidExecutionReport(
+			"quantity and price are required for a partially-filled status without a commission",
 		)
 	}
 	requiresEngine := OrderStatusTerminal(status) || executionReportCarriesEnginePayload(in)
+	if in.LeavesQuantity != "" {
+		if err := ValidateLeavesQuantity(in.LeavesQuantity); err != nil {
+			return false, err
+		}
+	}
 	if in.Commission != nil {
 		hasAmount := in.Commission.Amount != ""
 		hasCurrency := in.Commission.Currency != ""
@@ -807,27 +821,15 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 			)
 		}
 	}
-	// A non-terminal fill hands the caller's leaves to the engine, whose
-	// post-trade path has no reject channel: a report that reaches settlement
-	// without leaves is not refused, it latches an account block and applies
-	// nothing. Presence must therefore be enforced before the engine call. Value
-	// and range checks stay engine-owned on that path. A terminal report never
-	// reaches the engine with this value - Officer supplies the release quantity
-	// from its own reserve ledger - so requiring it there is Officer's own policy:
-	// the venue's account of the order is the record's only account of it.
-	if requiresEngine && in.LeavesQuantity == "" {
+	if hasQuantity && in.LeavesQuantity == "" {
 		return false, invalidExecutionReport(
-			"leavesQuantity is required for reports settled by the engine",
+			"leavesQuantity is required for reports with a fill",
 		)
 	}
-	// Pure workflow reports bypass the engine seam, so Officer must still guard
-	// the quantity shape before putting the caller's exact value into the store.
-	if !requiresEngine && in.LeavesQuantity != "" {
-		if err := validateNonNegativeDecimal(in.LeavesQuantity); err != nil {
-			return false, invalidExecutionReport(
-				fmt.Sprintf("invalid leavesQuantity: %v", err),
-			)
-		}
+	if !hasQuantity && isFillStatus && in.LeavesQuantity != "" {
+		return false, invalidExecutionReport(
+			"leavesQuantity is not allowed for a fill status without a fill",
+		)
 	}
 	_, isWorkflowStatus := ExecutionReportStatusChangeEvent(status)
 	// A non-terminal workflow report cannot carry caller-supplied settlement
@@ -840,6 +842,38 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 		)
 	}
 	return requiresEngine, nil
+}
+
+// ValidateLeavesQuantity checks a caller-supplied leaves value. The error
+// blames the caller: use ParseOpenQuantity for a value Officer stored itself,
+// where the same syntax failure is an internal fault instead.
+func ValidateLeavesQuantity(value string) error {
+	if _, err := ParseOpenQuantity(value); err != nil {
+		return invalidExecutionReport(
+			fmt.Sprintf("invalid leavesQuantity: %v", err),
+		)
+	}
+	return nil
+}
+
+// ParseOpenQuantity parses an open base quantity - caller-reported leaves or
+// Officer's recorded value - as a non-negative plain decimal.
+// Scientific notation and surrounding space are refused so the string that was
+// stored and signed is the string the engine later receives. The error carries
+// no caller-fault sentinel: each caller decides whether the value came from a
+// request or from stored state.
+func ParseOpenQuantity(value string) (decimal.Decimal, error) {
+	if value != strings.TrimSpace(value) || strings.ContainsAny(value, "eE") {
+		return decimal.Decimal{}, fmt.Errorf("%q is not a plain decimal", value)
+	}
+	parsed, err := decimal.NewFromString(value)
+	if err != nil {
+		return decimal.Decimal{}, fmt.Errorf("%q: %w", value, err)
+	}
+	if parsed.IsNegative() {
+		return decimal.Decimal{}, fmt.Errorf("%q must not be negative", value)
+	}
+	return parsed, nil
 }
 
 // OrderStatusTerminal reports whether the status is a final lifecycle state.
@@ -876,15 +910,11 @@ type Order struct {
 	ExternalID ExternalID
 	// AmountValue is the size of the order (exact decimal string).
 	AmountValue string
-	// Leaves is the exact decimal string carried by the last accepted execution
-	// report. Officer stores it unchanged and never substitutes it.
+	// Leaves is the current recorded open base quantity. A submitted order records
+	// the engine-reported base delta, zero included; every later execution report
+	// writes its caller's leaves verbatim, at terminal status too, and a report
+	// that supplies none leaves the recorded value untouched.
 	Leaves string
-	// ReservedQuantity is the base quantity the engine reserved at submit.
-	// Archives always serialize it: a legacy missing field decodes as empty,
-	// while an explicit "0" remains distinguishable. The two are not equivalent
-	// on a terminal report: "0" releases nothing, while empty is an unknown
-	// reserve that ResolveTerminalReserveQuantity fills from the venue leaves.
-	ReservedQuantity string
 	// Price is the limit price (exact decimal string); empty for market orders.
 	Price string
 	// Principal is the code of the principal who submitted the order; empty when
@@ -975,6 +1005,7 @@ const (
 	OrderEventRolledBack       OrderEventType = "rolled_back"
 	OrderEventConfirmed        OrderEventType = "confirmed"
 	OrderEventFill             OrderEventType = "fill"
+	OrderEventCommission       OrderEventType = "commission"
 	OrderEventCancelled        OrderEventType = "cancelled"
 )
 
@@ -1127,15 +1158,16 @@ type ExecutionReportInput struct {
 	FillQuantity string
 	// FillPrice is the fill price (exact decimal string).
 	FillPrice string
-	// LeavesQuantity is the venue-reported open base quantity. Officer stores it
-	// unchanged, including on terminal reports; the engine release quantity comes
-	// from the order's persisted reservation state. It is required whenever the
-	// report is settled by the engine - a fill, a commission, or a terminal status
-	// - and optional only for pure workflow status updates.
+	// LeavesQuantity is the caller-reported open base quantity. When present,
+	// Officer writes it verbatim onto the order, into the report event, and into
+	// the signed attestation. Every fill requires it. Workflow and terminal
+	// no-fill reports may omit it, leaving the recorded order value unchanged.
 	LeavesQuantity string
-	// ReservedQuantity is internal settlement context. It never enters the
-	// persisted venue request or its public representations.
-	ReservedQuantity string `json:"-"`
+	// ReleaseQuantity is the leaves Officer forwards to the engine. For a fill it
+	// is the caller value. For a terminal no-fill report it is the order's value
+	// captured before the report. Workflow and commission-only reports send none.
+	// It never enters persisted requests or public representations.
+	ReleaseQuantity string `json:"-"`
 	// LockPrice is the reference price for the fill's PnL lock; empty when the
 	// originating order carried no lock.
 	LockPrice string
@@ -1160,24 +1192,6 @@ type ExecutionReportInput struct {
 	// Force bypasses Officer's finalized-order safety check; when omitted or
 	// false, an execution report on a terminal order returns 409 terminal_order.
 	Force bool
-}
-
-// ResolveTerminalReserveQuantity returns the reserve a terminal report releases
-// and whether the venue-reported leaves stood in for an unrecorded one. An empty
-// stored reserve means "unknown" - an order archived before Officer tracked the
-// field - and not "nothing reserved": the engine skips the release entirely for a
-// zero quantity, so reading unknown as zero would strand the reservation with no
-// way left to free it. The venue's own open quantity is then the only remaining
-// account of what the engine still holds. An explicit "0" is a recorded fact and
-// takes no substitute. Callers must record a substitution; it is a guess, not a
-// ledger entry.
-func ResolveTerminalReserveQuantity(
-	reserved, leaves string,
-) (quantity string, substituted bool) {
-	if reserved != "" {
-		return reserved, false
-	}
-	return leaves, true
 }
 
 // ExecutionReportRequest is the immutable, audit-safe snapshot of the public
@@ -1290,12 +1304,9 @@ type OrderSettlement struct {
 	// former decimal-array lock: display prices are derived from the deserialized
 	// SDK lock, not stored as an array.
 	Lock []byte
-	// Leaves is the order's venue-reported open base quantity to persist (exact
-	// decimal string); empty leaves the stored value unchanged.
+	// Leaves is the exact open base quantity supplied with this settlement.
+	// Empty leaves the stored value unchanged; terminal status does not alter it.
 	Leaves string
-	// ReservedQuantity replaces the stored per-order reserve quantity when
-	// non-empty. Terminal settlements write zero in the same transaction.
-	ReservedQuantity string
 	// Order is the opaque public handle of the order being settled.
 	Order ExternalID
 	// AllowedFrom is an optional status WHERE-guard: when non-empty the order
@@ -1357,8 +1368,12 @@ type AttestationResult struct {
 	// when absent. Emitted as null when absent so the canonical signed bytes stay
 	// deterministic.
 	Commission *Commission `json:"commission"`
-	// LeavesQuantity is the order's remaining open base quantity after the
-	// request; empty when not applicable.
+	// LeavesQuantity is the open base quantity this request bound. An execution
+	// report and the cancel shortcut bind the leaves their own request carried;
+	// an immediate submit's settling event binds the leaves of the report the
+	// engine adapter built for it. A submit or confirm lifecycle event binds the
+	// order's own recorded open quantity instead, because it attests the order's
+	// state and not a report. Empty only when the bound source had no value.
 	LeavesQuantity string `json:"leavesQuantity"`
 	// OrderStatus is the order's lifecycle status after the request.
 	OrderStatus string `json:"orderStatus"`

@@ -599,19 +599,20 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 	})
 }
 
-// TestAuditTrailPreservedOnAccountDelete is the central §6 invariant: deleting an
-// account must NOT cascade-delete its audit rows; the rows survive with the
-// account reference cleared (ON DELETE SET NULL), and ListAudit still returns
-// them. The same holds for a deleted actor principal.
+// TestAuditTrailPreservedOnAccountDelete verifies an account delete neither
+// updates nor deletes its immutable audit snapshots, which remain selectable by
+// the recorded account code. The same holds for a deleted actor principal.
 func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 
 	if err := rs.AppendAudit(ctx, AuditEntry{
-		Actor:   "operator",
-		Action:  domain.AuditActionBlock,
-		Account: "acc-1",
-		Detail:  "blocked then deleted",
-		Source:  domain.SourcePanel,
+		Actor:        "operator",
+		ActorTitle:   "Snapshot Operator",
+		Action:       domain.AuditActionBlock,
+		Account:      "acc-1",
+		AccountTitle: "Snapshot Account",
+		Detail:       "blocked then deleted",
+		Source:       domain.SourcePanel,
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
@@ -623,7 +624,7 @@ func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 	}
 	originalXID := before[0].ExternalID
 
-	// Delete the account: its audit row must survive with the account snapshot.
+	// Deleting the account leaves the audit row untouched.
 	deleteAccountRaw(t, ctx, rs, "acc-1")
 	after, err := rs.ListAudit(ctx, 10)
 	if err != nil {
@@ -635,16 +636,29 @@ func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 	if after[0].ExternalID != originalXID {
 		t.Fatalf("audit row external id changed after delete: %v != %v", after[0].ExternalID, originalXID)
 	}
-	if after[0].Account != "acc-1" {
-		t.Fatalf("account after delete = %q, want snapshot acc-1", after[0].Account)
+	if after[0].Account != "acc-1" || after[0].AccountTitle != "Snapshot Account" {
+		t.Fatalf("account snapshot after delete = (%q, %q), want (acc-1, Snapshot Account)",
+			after[0].Account, after[0].AccountTitle)
 	}
 	// The actor is still present (only the account was deleted).
 	if after[0].Actor != "operator" {
 		t.Fatalf("actor after account delete = %q, want operator", after[0].Actor)
 	}
 	// The action and detail are untouched — the compliance content survives.
-	if after[0].Action != domain.AuditActionBlock || after[0].Detail != "blocked then deleted" {
+	if after[0].Action != domain.AuditActionBlock ||
+		after[0].Detail != "blocked then deleted" ||
+		after[0].Source != domain.SourcePanel {
 		t.Fatalf("audit content after delete = %+v", after[0])
+	}
+	filtered, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
+		Account: fwstore.ExactTextMatcher("acc-1"),
+		Page:    fwstore.PageSpec{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows(recorded account): %v", err)
+	}
+	if len(filtered.Rows) != 1 || filtered.Rows[0].ExternalID != originalXID {
+		t.Fatalf("recorded-account audit rows = %+v, want original row", filtered.Rows)
 	}
 
 	// Now delete the actor principal: the row must still survive with the actor
@@ -659,8 +673,9 @@ func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 	if len(final) != 1 {
 		t.Fatalf("audit row count after principal delete = %d, want 1 (trail preserved)", len(final))
 	}
-	if final[0].Actor != "operator" {
-		t.Fatalf("actor after principal delete = %q, want snapshot operator", final[0].Actor)
+	if final[0].Actor != "operator" || final[0].ActorTitle != "Snapshot Operator" {
+		t.Fatalf("actor snapshot after principal delete = (%q, %q), want (operator, Snapshot Operator)",
+			final[0].Actor, final[0].ActorTitle)
 	}
 	if final[0].Action != domain.AuditActionBlock {
 		t.Fatalf("audit action after principal delete = %q, want block", final[0].Action)

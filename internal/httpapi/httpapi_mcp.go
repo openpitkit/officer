@@ -46,7 +46,7 @@ func handleSetMcpAccess(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		command, err := httpx.PathCommand(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {
@@ -56,9 +56,7 @@ func handleSetMcpAccess(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Enabled == nil {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "enabled is required",
-			)
+			httpx.WriteValidationProblem(w, "enabled is required", "/enabled", "required")
 			return
 		}
 		if err := svc.SetMcpAccess(r.Context(), command, *req.Enabled); err != nil {

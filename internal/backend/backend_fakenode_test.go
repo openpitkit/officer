@@ -628,7 +628,7 @@ func (n *fakeNode) SetGroupBlocked(
 	return nil
 }
 
-func (n *fakeNode) DeleteGroup(context.Context, string, domain.Caller) error {
+func (n *fakeNode) DeleteGroup(context.Context, string, bool, domain.Caller) error {
 	return nil
 }
 
@@ -1057,8 +1057,8 @@ func (n *fakeNode) ApplyExecutionReport(
 	n.execReports = append(n.execReports, in)
 	request := domain.ExecutionReportRequestFromInput(in)
 	// Model the node's event emission so the backend's attestation path finds the
-	// event it binds to: a fill event when the report carried a fill, else the
-	// mapped status-change event for the report's target status.
+	// event it binds to: a fill event when the report carried a fill, a commission
+	// event for a fee-only fill status, or the mapped lifecycle event.
 	var events []domain.OrderEvent
 	if in.FillQuantity != "" && in.FillPrice != "" {
 		payload := domain.OrderEventPayload{
@@ -1075,6 +1075,18 @@ func (n *fakeNode) ApplyExecutionReport(
 			Order:   in.Order,
 			Type:    domain.OrderEventFill,
 			Payload: payload,
+		})
+	} else if in.Commission != nil && (in.OrderStatus == domain.OrderStatusFilled ||
+		in.OrderStatus == domain.OrderStatusPartiallyFilled) {
+		payload := domain.OrderEventPayload{
+			LeavesQuantity:  in.LeavesQuantity,
+			OrderStatus:     string(in.OrderStatus),
+			Commission:      in.Commission,
+			ExecutionReport: request,
+		}
+		n.appendEvent(in.Order, domain.OrderEventCommission, payload)
+		events = append(events, domain.OrderEvent{
+			Order: in.Order, Type: domain.OrderEventCommission, Payload: payload,
 		})
 	}
 	if typ, ok := domain.ExecutionReportStatusChangeEvent(in.OrderStatus); ok {

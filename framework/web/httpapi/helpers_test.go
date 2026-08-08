@@ -123,6 +123,50 @@ func TestDecodeBodyRejectsNestedUnknownFieldWithFullPointer(t *testing.T) {
 	}
 }
 
+func TestDecodeBodyOmitsAmbiguousUnknownFieldPointer(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut, "/",
+		bytes.NewBufferString(`{"left":{"ignored":1},"right":{"ignored":2}}`),
+	)
+	var dst struct {
+		Left  struct{} `json:"left"`
+		Right struct{} `json:"right"`
+	}
+	if DecodeBody(rec, req, &dst) {
+		t.Fatal("DecodeBody accepted ambiguous unknown fields")
+	}
+	var problem ProblemDetails
+	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if len(problem.Errors) != 1 || problem.Errors[0].Pointer != "" {
+		t.Fatalf("problem = %+v, want no ambiguous pointer", problem)
+	}
+}
+
+func TestDecodeBodyBoundsMapKeyInUnknownFieldPointer(t *testing.T) {
+	t.Parallel()
+	longKey := string(bytes.Repeat([]byte("x"), 1100))
+	body := fmt.Sprintf(`{"items":{"%s":{"ignored":1}}}`, longKey)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/", bytes.NewBufferString(body))
+	var dst struct {
+		Items map[string]struct{} `json:"items"`
+	}
+	if DecodeBody(rec, req, &dst) {
+		t.Fatal("DecodeBody accepted nested unknown field")
+	}
+	var problem ProblemDetails
+	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if len(problem.Errors) != 1 || problem.Errors[0].Pointer != "" {
+		t.Fatalf("problem = %+v, want bounded empty pointer", problem)
+	}
+}
+
 func TestDecodeBodyRejectsMemberTypeWithPointer(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()

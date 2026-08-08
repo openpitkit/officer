@@ -307,7 +307,7 @@ func balanceListWhere(filter fwstore.BalanceListFilter) (string, []any) {
 		&clauses, &args, "b.realized_pnl", balanceAccountCurrency,
 		filter.RealizedPnl,
 	)
-	if filter.Sort.Column == "realizedPnl" {
+	if filter.Sort.Column == "realizedPnl" && filter.RealizedPnl.Empty() {
 		clauses = append(clauses, balanceAccountCurrency+" = ?")
 		args = append(args, filter.RealizedPnl.Currency)
 	}
@@ -341,7 +341,7 @@ func balanceListOrderBy(sort fwstore.SortSpec) string {
 	prefix := ""
 	if sort.Column == "realizedPnl" {
 		prefix = "CASE WHEN b.realized_pnl IS NULL OR b.realized_pnl = '' " +
-			"THEN 0 ELSE 1 END ASC, "
+			"THEN 1 ELSE 0 END ASC, "
 	}
 	return "\nORDER BY " + prefix + column + " " + direction +
 		", a.code " + tieDirection + ", ast.code " + tieDirection

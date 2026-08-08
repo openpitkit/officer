@@ -52,7 +52,7 @@ import (
 const orderSelect = `
 SELECT o.external_id, a.code, ba.code, qa.code, p.code,
        o.at, o.source_id, o.side_id, o.amount_kind_id, o.amount_value,
-       o.leaves_quantity, o.reserved_quantity, o.price,
+       o.leaves_quantity, o.price,
        o.status_id, o.drop_copy, o.lock
 FROM order_record o
 JOIN account a       ON a.id = o.account_id
@@ -67,7 +67,7 @@ LEFT JOIN principal p ON p.id = o.principal_id`
 const orderListSelect = `
 SELECT o.external_id, a.code, ba.code, qa.code, p.code,
        o.at, o.source_id, o.side_id, o.amount_kind_id, o.amount_value,
-       o.leaves_quantity, o.reserved_quantity, o.price,
+       o.leaves_quantity, o.price,
        o.status_id, o.drop_copy, o.lock,
        EXISTS (
            SELECT 1 FROM order_event e
@@ -153,11 +153,11 @@ func createOrderTx(
 		`INSERT INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
 		  at, source_id, side_id, amount_kind_id, amount_value,
-		  leaves_quantity, reserved_quantity, price, status_id, drop_copy, lock)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  leaves_quantity, price, status_id, drop_copy, lock)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), accountID, baseID, quoteID, principalID,
 		at, sourceID, sideID, amountKindID,
-		o.AmountValue, o.Leaves, o.ReservedQuantity, o.Price,
+		o.AmountValue, o.Leaves, o.Price,
 		statusID, o.DropCopy, nullableBlob(o.Lock),
 	); err != nil {
 		if isSQLiteUnique(err) {
@@ -257,9 +257,6 @@ func (r *realmStore) recordOrderSubmission(
 	order.Lock = settlement.Lock
 	if settlement.Leaves != "" {
 		order.Leaves = settlement.Leaves
-	}
-	if settlement.ReservedQuantity != "" {
-		order.ReservedQuantity = settlement.ReservedQuantity
 	}
 	if settlement.ReportID != nil {
 		*settlement.ReportID = reportID
@@ -632,6 +629,9 @@ func (r *realmStore) activeOrderStatusIDs(ctx context.Context) ([]any, error) {
 		}
 		statusIDs = append(statusIDs, id)
 	}
+	if len(statusIDs) == 0 {
+		return nil, errors.New("store: active order status set is empty")
+	}
 	return statusIDs, nil
 }
 
@@ -740,19 +740,19 @@ func scanOrderInto(
 	o *domain.Order,
 ) error {
 	var (
-		extID                                        []byte
-		principal                                    sql.NullString
-		at                                           string
-		sourceID, sideID, amountKindID               int64
-		statusID                                     int64
-		amountValue, leaves, reservedQuantity, price string
-		dropCopy                                     bool
-		lock                                         []byte
+		extID                          []byte
+		principal                      sql.NullString
+		at                             string
+		sourceID, sideID, amountKindID int64
+		statusID                       int64
+		amountValue, leaves, price     string
+		dropCopy                       bool
+		lock                           []byte
 	)
 	if err := scan(
 		&extID, &o.Account, &o.BaseAsset, &o.QuoteAsset, &principal,
 		&at, &sourceID, &sideID, &amountKindID, &amountValue,
-		&leaves, &reservedQuantity, &price, &statusID, &dropCopy, &lock,
+		&leaves, &price, &statusID, &dropCopy, &lock,
 	); err != nil {
 		return err
 	}
@@ -790,7 +790,6 @@ func scanOrderInto(
 	o.AmountKind = domain.OrderAmountKind(amountKind)
 	o.AmountValue = amountValue
 	o.Leaves = leaves
-	o.ReservedQuantity = reservedQuantity
 	o.Price = price
 	o.Status = domain.OrderStatus(status)
 	o.DropCopy = dropCopy
@@ -1575,12 +1574,12 @@ func (rollup *commissionRollup) subtotals(
 
 // feeOnlyExecutionReportCommission returns the commission of an execution
 // report that no trade row represents. A report without a fill writes no trade,
-// so its lifecycle event is the only record of the fee and dropping it would
+// so its event is the only record of the fee and dropping it would
 // lose the fee outright. Reports carrying a fill are accounted from their trade
 // instead: the same report may persist both a fill event and a terminal-status
-// event, so reading commission from those events would count it two or three
-// times. Of the events one report writes, only its canonical status-change
-// event contributes.
+// event, so reading commission from those events would count it twice. Of the
+// events one report writes, only its lifecycle or dedicated commission event
+// contributes.
 func feeOnlyExecutionReportCommission(
 	eventType domain.OrderEventType,
 	payload domain.OrderEventPayload,
@@ -1593,7 +1592,7 @@ func feeOnlyExecutionReportCommission(
 	canonicalEvent, ok := domain.ExecutionReportStatusChangeEvent(report.OrderStatus)
 	if !ok && (report.OrderStatus == domain.OrderStatusFilled ||
 		report.OrderStatus == domain.OrderStatusPartiallyFilled) {
-		canonicalEvent = domain.OrderEventFill
+		canonicalEvent = domain.OrderEventCommission
 		ok = true
 	}
 	if !ok || eventType != canonicalEvent {
@@ -1954,8 +1953,9 @@ func (r *realmStore) recordOrderSettlementTx(
 		}
 	}
 
-	// Remaining open quantity: the caller carries the report's LeavesQty; an
-	// empty value leaves the column untouched.
+	// Remaining open quantity: an empty value leaves the column untouched at
+	// any status. A settlement stores a supplied value verbatim; terminal status
+	// and engine blocks do not change that rule.
 	if st.Leaves != "" {
 		if _, err := tx.ExecContext(
 			ctx,
@@ -1963,16 +1963,6 @@ func (r *realmStore) recordOrderSettlementTx(
 			st.Leaves, orderID,
 		); err != nil {
 			return "", fmt.Errorf("store: settlement leaves: %w", err)
-		}
-	}
-
-	if st.ReservedQuantity != "" {
-		if _, err := tx.ExecContext(
-			ctx,
-			`UPDATE order_record SET reserved_quantity = ? WHERE id = ?`,
-			st.ReservedQuantity, orderID,
-		); err != nil {
-			return "", fmt.Errorf("store: settlement reserved quantity: %w", err)
 		}
 	}
 

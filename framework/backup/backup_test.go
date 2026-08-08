@@ -68,6 +68,11 @@ func TestFixtureArchiveDecodes(t *testing.T) {
 	if len(data.Orders) != 1 {
 		t.Fatalf("orders = %d, want 1", len(data.Orders))
 	}
+	if data.Orders[0].Order.Account != "acc-1" ||
+		data.Orders[0].Order.AmountValue != "10" {
+		t.Fatalf("order fields lost by JSON decoding: %+v",
+			data.Orders[0].Order)
+	}
 	// The order is addressed by a 22-char external id, and its event/trade link
 	// back to it by the same external id.
 	orderXID := data.Orders[0].Order.ExternalID
@@ -280,51 +285,6 @@ func TestNewArchiveOmitsVersionAndCarriesRealmLabel(t *testing.T) {
 	if got := int(manifest["formatVersion"].(float64)); got != FormatVersion {
 		t.Fatalf("json formatVersion = %d, want %d", got, FormatVersion)
 	}
-}
-
-func TestOrderReservedQuantityArchiveJSONPresence(t *testing.T) {
-	t.Parallel()
-
-	t.Run("empty value is serialized", func(t *testing.T) {
-		t.Parallel()
-		raw, err := json.Marshal(OrderRecord{Order: domain.Order{}})
-		if err != nil {
-			t.Fatalf("marshal order record: %v", err)
-		}
-		var envelope map[string]map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &envelope); err != nil {
-			t.Fatalf("decode order record JSON: %v", err)
-		}
-		value, ok := envelope["order"]["ReservedQuantity"]
-		if !ok || string(value) != `""` {
-			t.Fatalf("ReservedQuantity JSON = %s present=%t, want empty field", value, ok)
-		}
-	})
-
-	t.Run("missing legacy field stays empty", func(t *testing.T) {
-		t.Parallel()
-		var record OrderRecord
-		if err := json.Unmarshal([]byte(`{"Order":{}}`), &record); err != nil {
-			t.Fatalf("unmarshal missing reserve: %v", err)
-		}
-		if record.Order.ReservedQuantity != "" {
-			t.Fatalf("missing reserve = %q, want empty", record.Order.ReservedQuantity)
-		}
-	})
-
-	t.Run("legacy lower camel zero stays explicit", func(t *testing.T) {
-		t.Parallel()
-		var record OrderRecord
-		if err := json.Unmarshal(
-			[]byte(`{"Order":{"reservedQuantity":"0"}}`),
-			&record,
-		); err != nil {
-			t.Fatalf("unmarshal explicit zero reserve: %v", err)
-		}
-		if record.Order.ReservedQuantity != "0" {
-			t.Fatalf("explicit reserve = %q, want 0", record.Order.ReservedQuantity)
-		}
-	})
 }
 
 func TestNewArchiveExcludesBalanceAccountCurrency(t *testing.T) {

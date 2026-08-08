@@ -459,6 +459,7 @@
   },
   "states": {
     "loadError": "数据加载失败",
+    "loading": "正在加载",
     "copyableSnippet": "可复制片段"
   },
   "topBar": {

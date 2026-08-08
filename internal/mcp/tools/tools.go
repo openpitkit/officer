@@ -91,10 +91,9 @@ const confirmExecutionToolDescription = "Record confirmation history for a " +
 
 const cancelToolName = "cancel"
 const cancelToolDescription = "Cancel an untouched workflow order by presenting " +
-	"its approval token and the venue-reported open base leavesQuantity. Officer " +
-	"stores it verbatim and never derives or substitutes it; reserve release " +
-	"comes from the persisted reserve ledger. After execution-" +
-	"report activity, submit an explicit report. Protected and disabled by default."
+	"its approval token. Optional caller-reported leavesQuantity is recorded " +
+	"when supplied. After execution-report " +
+	"activity, submit an explicit report. Protected and disabled by default."
 
 // RegisterTools registers the open Pit Officer MCP tools and catalog entries.
 func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
@@ -428,7 +427,7 @@ type confirmExecutionOutput struct {
 type cancelInput struct {
 	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
 	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
-	LeavesQuantity  string `json:"leavesQuantity" jsonschema:"Required venue-reported open base quantity; Officer stores it verbatim while reserve release comes from the persisted reserve ledger"`
+	LeavesQuantity  string `json:"leavesQuantity,omitempty" jsonschema:"Optional caller-reported open base quantity recorded when supplied; whitespace is supplied data and is validated by the report contract"`
 	Reason          string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
 }
 
@@ -492,6 +491,7 @@ type auditDTO struct {
 	Actor   string    `json:"actor"`
 	Action  string    `json:"action"`
 	Account string    `json:"account"`
+	Asset   string    `json:"asset"`
 	// Group is the structured group handle of a group action, so an agent
 	// selects a group's rows by identity instead of matching the free-form
 	// detail text, where one group's code can appear inside another's.
@@ -643,6 +643,7 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 		Actor:      row.Actor,
 		Action:     string(row.Action),
 		Account:    string(row.Account),
+		Asset:      row.Asset,
 		Group:      row.Group,
 		Detail:     row.Detail,
 	}
@@ -1173,15 +1174,11 @@ func cancelHandler(
 		if token == "" {
 			return "", cancelOutput{}, fmt.Errorf("token is required")
 		}
-		leavesQuantity := strings.TrimSpace(in.LeavesQuantity)
-		if leavesQuantity == "" {
-			return "", cancelOutput{}, fmt.Errorf("leavesQuantity is required")
-		}
 		order, att, err := src.CancelOrder(
 			ctx,
 			orderExternalID,
 			token,
-			leavesQuantity,
+			in.LeavesQuantity,
 			strings.TrimSpace(in.Reason),
 		)
 		if err != nil {

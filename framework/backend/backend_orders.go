@@ -137,7 +137,8 @@ func (s *Service) ApplyExecutionReport(
 	attest := eventAttestor(
 		signer, off, signingKeyID, domain.AttestationRequestExecutionReport,
 		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
-			if event.Type != domain.OrderEventFill {
+			if event.Type != domain.OrderEventFill &&
+				event.Type != domain.OrderEventCommission {
 				eventType, ok := domain.ExecutionReportStatusChangeEvent(
 					domain.OrderStatus(event.Payload.OrderStatus))
 				if !ok || event.Type != eventType {
@@ -148,15 +149,15 @@ func (s *Service) ApplyExecutionReport(
 					return domain.ApprovalPayload{}, false, nil
 				}
 			}
-			if event.Payload.OrderStatus == "" && event.Type != domain.OrderEventFill {
+			if event.Payload.OrderStatus == "" &&
+				event.Type != domain.OrderEventFill &&
+				event.Type != domain.OrderEventCommission {
 				return domain.ApprovalPayload{}, false, nil
 			}
 			persistence := engine.ExecutionReportPersistence{
 				OrderStatus: domain.OrderStatus(event.Payload.OrderStatus),
 				Commission:  event.Payload.Commission,
-				// The signed attestation must bind the report as it arrived: the
-				// leaves the report carried, never one derived from its status.
-				Leaves: event.Payload.LeavesQuantity,
+				Leaves:      event.Payload.LeavesQuantity,
 			}
 			if persistence.OrderStatus == "" {
 				persistence.OrderStatus = targetStatus
@@ -223,8 +224,7 @@ func (s *Service) buildExecutionReportEventPayload(
 ) (domain.ApprovalPayload, error) {
 	if event.Payload.ExecutionReport == nil {
 		return domain.ApprovalPayload{}, fmt.Errorf(
-			"backend: execution-report event has no request snapshot: %w",
-			domain.ErrInvalid,
+			"backend: execution-report event has no request snapshot",
 		)
 	}
 	payload, err := s.buildExecutionReportPayload(order, persistence)

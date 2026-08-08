@@ -31,7 +31,7 @@ func handleListLimits(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := policyListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationErrMsg(w, err.Error())
 			return
 		}
 		page, err := svc.ListPolicyRows(r.Context(), filter)

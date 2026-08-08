@@ -98,8 +98,8 @@ func setAccountGroupDetail(id domain.AccountID, prevGroupCode, groupCode string)
 }
 
 // updateAccountDetail renders an account update. A renamed account is filed
-// under both codes, so the line names both; a title-only update has no
-// transition to state.
+// under both codes, so callers mark which filing each detail belongs to; a
+// title-only update has no transition to state.
 func updateAccountDetail(prevCode, code domain.AccountID) string {
 	if prevCode == code {
 		return fmt.Sprintf("update account %s", code)
@@ -169,8 +169,17 @@ func submitOrderDetail(order domain.Order, accepted bool) string {
 func executionReportDetail(
 	in domain.ExecutionReportInput, status domain.OrderStatus, blocks int,
 ) string {
-	return fmt.Sprintf("execution report order %s account %s %s/%s qty=%s %s blocks=%d",
-		in.Order, in.Account, in.BaseAsset, in.QuoteAsset, in.FillQuantity, status, blocks)
+	return fmt.Sprintf(
+		"execution report order %s account %s %s/%s qty=%s releaseQty=%s %s blocks=%d",
+		in.Order,
+		in.Account,
+		in.BaseAsset,
+		in.QuoteAsset,
+		in.FillQuantity,
+		in.ReleaseQuantity,
+		status,
+		blocks,
+	)
 }
 
 // blockDetail renders one operator-initiated account block. The reason is the

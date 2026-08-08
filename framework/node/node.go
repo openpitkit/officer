@@ -161,8 +161,7 @@ type Node interface {
 	CreateAsset(ctx context.Context, asset domain.Asset, caller domain.Caller) (domain.Asset, error)
 
 	// UpdateAsset replaces the asset's public code and mutable fields and audits
-	// the action. A code rename is safe because dependent rows reference the asset
-	// by its surrogate id.
+	// the action.
 	UpdateAsset(
 		ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
 	) (domain.Asset, error)
@@ -335,9 +334,12 @@ type Node interface {
 		ctx context.Context, code string, blocked bool, reason string, caller domain.Caller,
 	) error
 
-	// DeleteGroup removes the group and its member accounts, rebuilds the live
-	// engine from the surviving rows, and audits the action.
-	DeleteGroup(ctx context.Context, code string, caller domain.Caller) error
+	// DeleteGroup removes the group, detaches its member accounts, rebuilds the
+	// live engine from the surviving rows, and audits the action. Destructive
+	// group-owned cascades require force.
+	DeleteGroup(
+		ctx context.Context, code string, force bool, caller domain.Caller,
+	) error
 
 	// ApplyAdjustment applies one spot-funds adjustment through the engine,
 	// persists the resulting balance snapshot and adjustment record, and audits
@@ -412,11 +414,10 @@ type Node interface {
 		ctx context.Context, order domain.ExternalID, caller domain.Caller,
 	) (domain.Order, error)
 
-	// CancelOrder forwards a caller-supplied terminal cancellation report for an
-	// untouched workflow order using its stored lock. The caller's leaves is
-	// stored verbatim and never derived; the quantity the engine releases comes
-	// from the order's own reserve ledger instead. Once any execution report has
-	// been recorded it returns domain.ErrExecutionReportRequired.
+	// CancelOrder synthesizes a cancellation report for an untouched workflow
+	// order using its stored lock. Caller leaves is optional and recorded when
+	// supplied. Once any execution report has been recorded it returns
+	// domain.ErrExecutionReportRequired.
 	CancelOrder(
 		ctx context.Context,
 		order domain.ExternalID,
@@ -424,10 +425,8 @@ type Node interface {
 		caller domain.Caller,
 	) (domain.Order, engine.ExecutionReportResult, error)
 
-	// ApplyExecutionReport serializes reports on the account pipeline. Reports
-	// carrying a fill, targeting a terminal status, or carrying a commission are
-	// applied through the engine; all other non-terminal reports write their
-	// workflow transition directly to the store. The action is audited.
+	// ApplyExecutionReport serializes reports on the account pipeline, records the
+	// resulting order state, and audits the action.
 	ApplyExecutionReport(
 		ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
 	) (engine.ExecutionReportResult, error)

@@ -1644,6 +1644,7 @@ function AdjustmentPanel({
         const target = event.target;
         if (
           target instanceof HTMLElement &&
+          target.getAttribute("role") === "combobox" &&
           target.getAttribute("aria-expanded") === "true"
         ) {
           return;

@@ -155,7 +155,7 @@ type ControlPlane interface {
 	SetGroupCurrency(ctx context.Context, code, currency string) error
 	SetDefaultGroupCurrency(ctx context.Context, currency string) error
 	SetGroupBlocked(ctx context.Context, code string, blocked bool, reason string) error
-	DeleteGroup(ctx context.Context, code string) error
+	DeleteGroup(ctx context.Context, code string, force bool) error
 	ApplyAdjustment(
 		ctx context.Context,
 		account domain.AccountID,

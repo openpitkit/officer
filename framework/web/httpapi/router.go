@@ -78,7 +78,7 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 		cfg.Authorizer,
 		domain.SourceAPI,
 		cfg.BodyLimit,
-		newRuntimeRouteManifestHandler(routes),
+		newRuntimeRouteManifestHandler(routes, cfg.Authorizer),
 	)
 	mountV1(
 		router,

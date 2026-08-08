@@ -42,7 +42,7 @@ beforeEach(() => {
 });
 
 describe("Dashboard first load", () => {
-  it("does not expose ready widgets while the overview is loading", () => {
+  it("keeps the independent audit widget while the overview is loading", () => {
     useOverviewMock.mockReturnValue({
       load: { state: "loading", data: null, error: null },
       reload: vi.fn(),
@@ -51,10 +51,10 @@ describe("Dashboard first load", () => {
     render(<Dashboard />);
 
     expect(screen.getByTestId("table-skeleton")).toBeInTheDocument();
-    expect(screen.queryByText("audit-strip")).not.toBeInTheDocument();
+    expect(screen.getByText("audit-strip")).toBeInTheDocument();
   });
 
-  it("does not expose ready widgets when the initial overview fails", () => {
+  it("keeps the independent audit widget when the overview fails", () => {
     useOverviewMock.mockReturnValue({
       load: { state: "error", data: null, error: "offline" },
       reload: vi.fn(),
@@ -63,7 +63,7 @@ describe("Dashboard first load", () => {
     render(<Dashboard />);
 
     expect(screen.getByTestId("error-state")).toBeInTheDocument();
-    expect(screen.queryByText("audit-strip")).not.toBeInTheDocument();
+    expect(screen.getByText("audit-strip")).toBeInTheDocument();
   });
 
   it("renders the audit widget with the ready overview", () => {

@@ -899,12 +899,12 @@ func TestBalanceListRowsSortsRealizedPnlWithinCurrency(t *testing.T) {
 	}
 
 	if got := list(false); !slices.Equal(got, []domain.AccountID{
-		"acc-empty", "acc-negative", "acc-nine", "acc-large",
+		"acc-negative", "acc-nine", "acc-large", "acc-empty",
 	}) {
 		t.Fatalf("ascending rows = %v", got)
 	}
 	if got := list(true); !slices.Equal(got, []domain.AccountID{
-		"acc-empty", "acc-large", "acc-nine", "acc-negative",
+		"acc-large", "acc-nine", "acc-negative", "acc-empty",
 	}) {
 		t.Fatalf("descending rows = %v", got)
 	}

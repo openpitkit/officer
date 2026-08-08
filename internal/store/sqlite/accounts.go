@@ -20,8 +20,8 @@
 // addressed by their public code; the surrogate key never crosses the
 // interface boundary. Accounts and groups carry a connector-assigned engine id,
 // returned (populated) on the create path so the engine layer can build its
-// tree. A group owns its member accounts, so its foreign key cascades them and
-// their operational rows when the group is deleted.
+// tree. Deleting a group detaches its member accounts, preserving their
+// operational rows under the remaining account dictionaries.
 
 package sqlite
 
@@ -178,8 +178,8 @@ func assetListOrderBy(sort fwstore.SortSpec) string {
 
 // UpdateAsset replaces the public code and mutable fields of the identified
 // asset. Balances and other rows reference the asset by its surrogate id, so a
-// code rename is safe, mirroring UpdateGroup. The optional class code is resolved
-// to its surrogate id (an empty code clears the link).
+// rename preserves their links. The optional class code is resolved to its
+// surrogate id (an empty code clears the link).
 func (r *realmStore) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset,
 ) (domain.Asset, error) {
@@ -187,14 +187,27 @@ func (r *realmStore) UpdateAsset(
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	classID, err := optionalClassID(ctx, db, asset.AssetClass)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Asset{}, fmt.Errorf("store: begin update asset: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	assetID, err := resolveAssetID(ctx, tx, oldCode)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalid) {
+			return domain.Asset{}, fmt.Errorf("asset %q: %w", oldCode, domain.ErrNotFound)
+		}
+		return domain.Asset{}, err
+	}
+	classID, err := optionalClassID(ctx, tx, asset.AssetClass)
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	res, err := db.ExecContext(
+	res, err := tx.ExecContext(
 		ctx,
-		`UPDATE asset SET code = ?, title = ?, class_id = ? WHERE code = ?`,
-		asset.Code, asset.Title, classID, oldCode,
+		`UPDATE asset SET code = ?, title = ?, class_id = ? WHERE id = ?`,
+		asset.Code, asset.Title, classID, assetID,
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -205,6 +218,9 @@ func (r *realmStore) UpdateAsset(
 	}
 	if err := notFoundIfNoRows(res, "asset", oldCode); err != nil {
 		return domain.Asset{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.Asset{}, fmt.Errorf("store: commit update asset: %w", err)
 	}
 	updated, ok, err := r.GetAsset(ctx, asset.Code)
 	if err != nil {
@@ -962,21 +978,48 @@ func (r *realmStore) SetGroupBlocked(
 	return notFoundIfNoRows(res, "group", code)
 }
 
-// DeleteGroup removes the group. SQLite cascades member accounts and every
-// account-owned operational row through the schema foreign keys while durable
-// audit rows survive with their nullable account links cleared.
-func (r *realmStore) DeleteGroup(ctx context.Context, code string) error {
+// DeleteGroup removes the group and, when forced, cascades its group-owned
+// dependents. Member accounts are detached by their ON DELETE SET NULL link.
+func (r *realmStore) DeleteGroup(
+	ctx context.Context, code string, force bool,
+) error {
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	res, err := db.ExecContext(
-		ctx, `DELETE FROM account_group WHERE code = ?`, code,
-	)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin delete group: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	groupID, err := resolveGroupID(ctx, tx, code)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalid) {
+			return fmt.Errorf("group %q: %w", code, domain.ErrNotFound)
+		}
+		return err
+	}
+	if !force {
+		deps, err := groupDependents(ctx, tx, groupID)
+		if err != nil {
+			return err
+		}
+		if len(deps) > 0 {
+			return domain.NewHasDependentsError(deps)
+		}
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM account_group WHERE id = ?`, groupID)
 	if err != nil {
 		return fmt.Errorf("store: delete group: %w", err)
 	}
-	return notFoundIfNoRows(res, "group", code)
+	if err := notFoundIfNoRows(res, "group", code); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit delete group: %w", err)
+	}
+	return nil
 }
 
 // ListGroupAccounts returns every account whose group is code.
@@ -1844,6 +1887,16 @@ func accountDependents(
 		 FROM limit_spot_funds_pnl_bound WHERE account_id = ?`},
 	}
 	return collectDependents(ctx, q, checks, accountID)
+}
+
+func groupDependents(
+	ctx context.Context, q sqlQueryer, groupID int64,
+) ([]domain.DependentCount, error) {
+	checks := []dependentQuery{
+		{"limit_spot_funds_pnl_bound", `SELECT COUNT(*)
+		 FROM limit_spot_funds_pnl_bound WHERE account_group_id = ?`},
+	}
+	return collectDependents(ctx, q, checks, groupID)
 }
 
 func assetDependents(

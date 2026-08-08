@@ -188,18 +188,31 @@ func unknownJSONPointer(raw []byte, dst any, field string) string {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return jsonPointer(field)
 	}
-	segments, ok := findUnknownJSONField(
-		value, reflect.TypeOf(dst), field, nil,
-	)
-	if !ok {
+	matches := make([][]string, 0, 2)
+	findUnknownJSONFields(value, reflect.TypeOf(dst), field, nil, &matches)
+	if len(matches) == 0 {
 		return jsonPointer(field)
 	}
-	return jsonPointerSegments(segments)
+	if len(matches) != 1 {
+		return ""
+	}
+	pointer := jsonPointerSegments(matches[0])
+	if len(pointer) > 1024 {
+		return ""
+	}
+	return pointer
 }
 
-func findUnknownJSONField(
-	value any, target reflect.Type, field string, path []string,
-) ([]string, bool) {
+func findUnknownJSONFields(
+	value any,
+	target reflect.Type,
+	field string,
+	path []string,
+	matches *[][]string,
+) {
+	if len(*matches) > 1 || len(path) >= 32 {
+		return
+	}
 	for target.Kind() == reflect.Pointer {
 		target = target.Elem()
 	}
@@ -207,50 +220,43 @@ func findUnknownJSONField(
 	case reflect.Struct:
 		object, ok := value.(map[string]any)
 		if !ok {
-			return nil, false
+			return
 		}
 		fields := jsonStructFields(target)
 		for name, child := range object {
 			fieldType, exists := fields[name]
 			if !exists {
 				if name == field {
-					return appendPath(path, name), true
+					*matches = append(*matches, appendPath(path, name))
 				}
 				continue
 			}
-			if found, ok := findUnknownJSONField(
-				child, fieldType, field, appendPath(path, name),
-			); ok {
-				return found, true
-			}
+			findUnknownJSONFields(
+				child, fieldType, field, appendPath(path, name), matches,
+			)
 		}
 	case reflect.Slice, reflect.Array:
 		array, ok := value.([]any)
 		if !ok {
-			return nil, false
+			return
 		}
 		for index, child := range array {
-			if found, ok := findUnknownJSONField(
+			findUnknownJSONFields(
 				child, target.Elem(), field,
-				appendPath(path, strconv.Itoa(index)),
-			); ok {
-				return found, true
-			}
+				appendPath(path, strconv.Itoa(index)), matches,
+			)
 		}
 	case reflect.Map:
 		object, ok := value.(map[string]any)
 		if !ok {
-			return nil, false
+			return
 		}
 		for name, child := range object {
-			if found, ok := findUnknownJSONField(
-				child, target.Elem(), field, appendPath(path, name),
-			); ok {
-				return found, true
-			}
+			findUnknownJSONFields(
+				child, target.Elem(), field, appendPath(path, name), matches,
+			)
 		}
 	}
-	return nil, false
 }
 
 func jsonStructFields(target reflect.Type) map[string]reflect.Type {
@@ -535,33 +541,35 @@ func writeCurrencyChangeBlockedErr(w http.ResponseWriter, err error) {
 		return
 	}
 	errorBody := map[string]any{
-		"code":       "currency_change_blocked",
-		"message":    err.Error(),
-		"field":      "currency",
-		"path":       "groups." + typed.TargetID + ".currency",
-		"constraint": "all_members_economically_empty",
+		"code":    "currency_change_blocked",
+		"message": err.Error(),
 	}
-	if typed.Scope == domain.ScopeAccount {
+	switch typed.Scope {
+	case domain.ScopeAccount:
+		errorBody["field"] = "currency"
 		errorBody["account"] = typed.TargetID
 		errorBody["path"] = "accounts." + typed.TargetID + ".currency"
 		errorBody["constraint"] = "economically_empty"
+	case domain.ScopeAccountGroup:
+		errorBody["field"] = "currency"
+		errorBody["group"] = typed.TargetID
+		errorBody["path"] = "groups." + typed.TargetID + ".currency"
+		errorBody["constraint"] = "all_members_economically_empty"
+	default:
+		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
+		return
 	}
 	WriteJSON(w, http.StatusConflict, map[string]any{"error": errorBody})
 }
 
-// WriteErrMsg writes the legacy error envelope for non-validation errors.
-// Existing validation call sites are normalized onto RFC 9457: malformed URL
-// encoding remains 400, while every syntactically valid constraint failure is
-// 422.
+// WriteValidationErrMsg writes a syntactically valid request constraint failure.
+func WriteValidationErrMsg(w http.ResponseWriter, message string) {
+	WriteValidationProblem(w, message, "", "")
+}
+
+// WriteErrMsg writes the legacy error envelope for non-validation errors. It
+// always honors the status and code chosen by the caller.
 func WriteErrMsg(w http.ResponseWriter, status int, code, message string) {
-	if status == http.StatusBadRequest && code == "validation" {
-		if strings.HasPrefix(message, "invalid URL encoding") {
-			WriteBadRequestProblem(w, message, "url_encoding")
-			return
-		}
-		WriteValidationProblem(w, message, "", "")
-		return
-	}
 	WriteJSON(w, status, map[string]any{
 		"error": map[string]string{
 			"code":    code,

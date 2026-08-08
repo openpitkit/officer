@@ -61,7 +61,7 @@ func handleSetBalanceRealizedPnl(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		missing, err := missingAccountQuery(r, id)
@@ -97,7 +97,7 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		missing, err := missingAccountQuery(r, id)
@@ -141,12 +141,12 @@ func handleListAccountAdjustments(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationErrMsg(w, err.Error())
 			return
 		}
 		recs, err := svc.ListAdjustments(r.Context(), id,
@@ -165,7 +165,7 @@ func handleListAdjustments(svc Service) http.HandlerFunc {
 		q := r.URL.Query()
 		filter, err := adjustmentListFilterFromQuery(q)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationErrMsg(w, err.Error())
 			return
 		}
 		page, err := svc.ListAdjustmentRows(r.Context(), filter)

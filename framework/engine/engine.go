@@ -188,9 +188,6 @@ type ImmediateResult struct {
 	SettlementLockPrice string
 	// FillQuantity is the request's base quantity settled by the immediate fill.
 	FillQuantity string
-	// LeavesQuantity is the authoritative terminal leaves quantity carried by
-	// the execution report the engine accepted for this immediate fill.
-	LeavesQuantity string
 	// TradePrice is the fill price recorded for the immediate order. It is the
 	// request limit price, or the engine lock price for a market order.
 	TradePrice string
@@ -201,9 +198,10 @@ type ImmediateResult struct {
 }
 
 // ExecutionReportPersistence is the Officer write set produced after the engine
-// applies an execution report. Report-owned order, commission, trade, event,
-// and leaves fields are copied from the original report; engine-owned account
-// effects are limited to Balances and Blocks.
+// applies an execution report. Report-owned order, commission, trade, and event
+// fields are copied from the original report; engine-owned account effects are
+// limited to Balances and Blocks. Leaves is the caller-reported open quantity
+// that the order records verbatim.
 type ExecutionReportPersistence struct {
 	// Trade is the optional trade row to persist.
 	Trade *domain.Trade
@@ -218,12 +216,14 @@ type ExecutionReportPersistence struct {
 	// AccountPnlHaltReason is the engine-reported reason account P&L was not
 	// calculated. Empty with a non-empty AccountPnl clears a prior halt.
 	AccountPnlHaltReason domain.PnlHaltReason
-	// Leaves is the report's remaining open quantity, copied verbatim. Empty
-	// leaves the stored value unchanged.
+	// Leaves is the caller-reported open quantity to persist on the order.
 	Leaves string
-	// ReservedQuantity is the absolute reserve remaining after the engine-applied
-	// base-asset delta. Empty leaves the stored reserve unchanged.
-	ReservedQuantity string
+	// ReleaseQuantity echoes the terminal leaves that was forwarded to the
+	// engine and is empty for a non-terminal report. It is not persisted: the
+	// order records Leaves instead. Its one reader is the immediate-submit
+	// audit, where the adapter builds the report itself and the persisted
+	// request omits this field, so the write set is the only way back to it.
+	ReleaseQuantity string
 	// Balances are the per-asset balance outcomes returned by the engine.
 	Balances []domain.BalanceSettlement
 	// Events are the order lifecycle events to append.

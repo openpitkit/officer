@@ -569,6 +569,41 @@ func TestAssetRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUpdateAssetAllowsCurrencyRenameWithReferences(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	if err := store.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset USD: %v", err)
+	}
+	if _, err := store.CreateAccount(ctx, domain.Account{
+		Code: "direct", Currency: "USD",
+	}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := store.CreateGroup(ctx, domain.AccountGroup{
+		Code: "desk", Currency: "USD",
+	}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if _, err := store.UpdateAsset(
+		ctx, "USD", domain.Asset{Code: "USDX"},
+	); err != nil {
+		t.Fatalf("UpdateAsset currency rename: %v", err)
+	}
+	account, ok, err := store.GetAccount(ctx, "direct")
+	if err != nil || !ok || account.Currency != "USDX" ||
+		account.EffectiveCurrency != "USDX" {
+		t.Fatalf("direct account after rename = %+v ok=%v err=%v", account, ok, err)
+	}
+	group, ok, err := store.GetGroup(ctx, "desk")
+	if err != nil || !ok || group.Currency != "USDX" {
+		t.Fatalf("group after rename = %+v ok=%v err=%v", group, ok, err)
+	}
+	if err := store.DeleteAsset(ctx, "USDX", true); !errors.Is(err, domain.ErrHasDependents) {
+		t.Fatalf("DeleteAsset(currency) = %v, want ErrHasDependents", err)
+	}
+}
+
 func TestAssetClassRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -1019,7 +1054,7 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 	}
 }
 
-func TestDeleteGroupCascadesMemberAccount(t *testing.T) {
+func TestDeleteGroupDetachesMemberAccount(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1030,14 +1065,15 @@ func TestDeleteGroupCascadesMemberAccount(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := rs.DeleteGroup(ctx, "alpha"); err != nil {
+	if err := rs.DeleteGroup(ctx, "alpha", false); err != nil {
 		t.Fatalf("DeleteGroup: %v", err)
 	}
-	if _, ok, err := rs.GetAccount(ctx, "acc-1"); err != nil || ok {
-		t.Fatalf("account after group delete: ok=%v err=%v, want absent", ok, err)
+	account, ok, err := rs.GetAccount(ctx, "acc-1")
+	if err != nil || !ok || account.GroupCode != "" {
+		t.Fatalf("account after group delete: %+v ok=%v err=%v", account, ok, err)
 	}
 
-	if err := rs.DeleteGroup(ctx, "alpha"); !errors.Is(err, domain.ErrNotFound) {
+	if err := rs.DeleteGroup(ctx, "alpha", false); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("DeleteGroup(missing) error = %v, want ErrNotFound", err)
 	}
 }

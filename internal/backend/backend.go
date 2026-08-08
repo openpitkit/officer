@@ -180,7 +180,7 @@ func defaultMCPCatalog() catalog.Catalog {
 		{
 			Name:             "cancel",
 			Title:            "Cancel",
-			AgentDescription: "Cancel an untouched workflow order through a derived execution report.",
+			AgentDescription: "Cancel an untouched workflow order through a terminal execution report.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,

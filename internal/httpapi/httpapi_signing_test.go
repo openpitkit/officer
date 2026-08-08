@@ -659,10 +659,12 @@ func TestCancelOrder_MissingToken(t *testing.T) {
 	}
 }
 
-// TestCancelOrder_MissingLeavesQuantity verifies that a cancellation rejected
-// by the public contract never reaches the signing service or an account lane.
-func TestCancelOrder_MissingLeavesQuantity(t *testing.T) {
-	svc := &fakeService{}
+// TestCancelOrder_OmittedLeavesQuantity verifies that the shortcut forwards an
+// omitted leavesQuantity as the empty string.
+func TestCancelOrder_OmittedLeavesQuantity(t *testing.T) {
+	svc := &fakeService{submitOrder: domain.Order{
+		ExternalID: extID("order-1"), Status: domain.OrderStatusRejected,
+	}}
 	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -672,17 +674,21 @@ func TestCancelOrder_MissingLeavesQuantity(t *testing.T) {
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
 			bytes.NewReader(body)))
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if svc.cancelCalls != 0 {
-		t.Fatalf("cancel reached service %d time(s)", svc.cancelCalls)
+	if svc.cancelCalls != 1 || svc.cancelLeavesQuantity != "" {
+		t.Fatalf(
+			"cancel calls = %d leaves = %q, want one call with empty leaves",
+			svc.cancelCalls,
+			svc.cancelLeavesQuantity,
+		)
 	}
 }
 
-// TestCancelOrder_TrimsLeavesQuantity verifies the boundary forwards the same
-// trimmed value it validated, so HTTP and MCP callers reach the engine alike.
-func TestCancelOrder_TrimsLeavesQuantity(t *testing.T) {
+// TestCancelOrder_PreservesLeavesQuantity verifies the HTTP boundary does not
+// normalize caller-reported leaves before the normal report validator sees it.
+func TestCancelOrder_PreservesLeavesQuantity(t *testing.T) {
 	svc := &fakeService{
 		submitOrder: domain.Order{
 			ExternalID: extID("order-1"), Status: domain.OrderStatusRejected,
@@ -702,15 +708,17 @@ func TestCancelOrder_TrimsLeavesQuantity(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if svc.cancelLeavesQuantity != "3.5" {
-		t.Fatalf("forwarded leaves = %q, want 3.5", svc.cancelLeavesQuantity)
+	if svc.cancelLeavesQuantity != "  3.5  " {
+		t.Fatalf("forwarded leaves = %q, want raw value", svc.cancelLeavesQuantity)
 	}
 }
 
-// TestCancelOrder_BlankLeavesQuantity verifies a whitespace-only value is
-// refused at the boundary rather than forwarded as an empty report field.
+// TestCancelOrder_BlankLeavesQuantity verifies whitespace is supplied malformed
+// data, not an omission synthesized by the HTTP boundary.
 func TestCancelOrder_BlankLeavesQuantity(t *testing.T) {
-	svc := &fakeService{}
+	svc := &fakeService{submitOrder: domain.Order{
+		ExternalID: extID("order-1"), Status: domain.OrderStatusRejected,
+	}}
 	body, _ := json.Marshal(map[string]any{
 		"token": "mytoken", "leavesQuantity": "   ",
 	})
@@ -722,11 +730,15 @@ func TestCancelOrder_BlankLeavesQuantity(t *testing.T) {
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
 			bytes.NewReader(body)))
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if svc.cancelCalls != 0 {
-		t.Fatalf("cancel reached service %d time(s)", svc.cancelCalls)
+	if svc.cancelCalls != 1 || svc.cancelLeavesQuantity != "   " {
+		t.Fatalf(
+			"cancel calls = %d leaves = %q, want raw whitespace",
+			svc.cancelCalls,
+			svc.cancelLeavesQuantity,
+		)
 	}
 }
 

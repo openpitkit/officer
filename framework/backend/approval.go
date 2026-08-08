@@ -550,22 +550,17 @@ func (s *Service) submitOrderToken(
 						}
 						p.Mode = SubmitModeImmediate
 						return p, true, nil
-					case domain.OrderEventFill:
-						if immediate.Persistence == nil {
-							return domain.ApprovalPayload{}, false, fmt.Errorf(
-								"backend: immediate execution report persistence missing: %w",
-								domain.ErrInvalid,
-							)
-						}
-						filled := eventOrder
-						filled.Status = domain.OrderStatusFilled
-						p, err := s.buildExecutionReportEventPayload(
-							filled, event, *immediate.Persistence,
+					// A settling event must never travel unattested. The commission
+					// variant is defensive: no immediate path populates a commission
+					// today, but one that settled the account without a fill would
+					// have to be signed exactly like a fill.
+					case domain.OrderEventFill, domain.OrderEventCommission:
+						p, err := s.buildImmediateSettlementPayload(
+							eventOrder, event, immediate.Persistence,
 						)
 						if err != nil {
 							return domain.ApprovalPayload{}, false, err
 						}
-						p.RequestType = string(domain.AttestationRequestExecutionReport)
 						return p, true, nil
 					default:
 						return domain.ApprovalPayload{}, false, nil
@@ -755,9 +750,8 @@ func (s *Service) ConfirmExecution(
 }
 
 // CancelOrder verifies the submit token, then forwards a caller-supplied
-// terminal cancellation report for the untouched stored order. Officer requires
-// leaves and stores it verbatim; a cancel is always terminal, so the engine
-// never sees that value - it releases what the order's reserve ledger records.
+// terminal cancellation report for the untouched stored order. Officer stores
+// and signs caller leaves verbatim, while forwarding that value to the engine.
 // If any execution report was already recorded, the shortcut fails and the
 // caller must provide an explicit report instead.
 func (s *Service) CancelOrder(
@@ -825,9 +819,7 @@ func (s *Service) CancelOrder(
 			persistence := engine.ExecutionReportPersistence{
 				OrderStatus: status,
 				Commission:  event.Payload.Commission,
-				// The signed attestation must bind the report as it arrived: the
-				// leaves the report carried, never one derived from its status.
-				Leaves: event.Payload.LeavesQuantity,
+				Leaves:      event.Payload.LeavesQuantity,
 			}
 			if event.Payload.RejectCode != "" || event.Payload.RejectReason != "" {
 				persistence.Blocks = []domain.ExecutionAccountBlock{{
@@ -1073,6 +1065,31 @@ func baseAttestationPayload(
 	}
 }
 
+// buildImmediateSettlementPayload assembles the attestation payload for a
+// settling event of an immediate submit.
+func (s *Service) buildImmediateSettlementPayload(
+	order domain.Order,
+	event domain.OrderEvent,
+	persistence *engine.ExecutionReportPersistence,
+) (domain.ApprovalPayload, error) {
+	if persistence == nil {
+		return domain.ApprovalPayload{}, fmt.Errorf(
+			"backend: immediate execution report persistence missing",
+		)
+	}
+	settled := order
+	settled.Status = persistence.OrderStatus
+	if settled.Status == "" {
+		settled.Status = domain.OrderStatusFilled
+	}
+	payload, err := s.buildExecutionReportEventPayload(settled, event, *persistence)
+	if err != nil {
+		return domain.ApprovalPayload{}, err
+	}
+	payload.RequestType = string(domain.AttestationRequestExecutionReport)
+	return payload, nil
+}
+
 // buildExecutionReportPayload assembles the attestation payload for an execution
 // report: the bound order params plus its recorded persistence section
 // (optional fill and commission, leaves, target status, and any account block
@@ -1129,9 +1146,11 @@ func (s *Service) buildExecutionReportPayload(
 }
 
 // buildLifecyclePayload assembles the attestation payload for a recorded
-// lifecycle event. It binds the resulting order status and, when approvalRef is
-// present, links a workflow shortcut to the submit approval it acts on. reason,
-// when present, is bound onto RejectReason.
+// lifecycle event. It binds the resulting order status and the order's own
+// durable open quantity: a lifecycle event records the order's state at that
+// moment, not an execution report, so report-side caller leaves has no place here.
+// When approvalRef is present it links a workflow shortcut to the submit
+// approval it acts on. reason, when present, is bound onto RejectReason.
 func (s *Service) buildLifecyclePayload(
 	order domain.Order,
 	requestType domain.AttestationRequestType,

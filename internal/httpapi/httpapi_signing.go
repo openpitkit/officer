@@ -19,7 +19,6 @@ package httpapi
 
 import (
 	"net/http"
-	"strings"
 
 	"go.openpit.dev/officer/framework/domain"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
@@ -111,7 +110,7 @@ func handleGetSigningKeyPublic(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		keyID, err := httpx.PathSigningKeyID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		format := signingKeyFormatOrDefault(r)
@@ -178,9 +177,7 @@ func handleSetSigningConfig(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.NoESign == nil {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "noESign is required",
-			)
+			httpx.WriteValidationProblem(w, "noESign is required", "/noESign", "required")
 			return
 		}
 		if err := svc.SetNoESign(r.Context(), *req.NoESign); err != nil {
@@ -310,7 +307,7 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req confirmExecutionRequestDTO
@@ -341,13 +338,12 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 }
 
 // handleCancelOrder handles POST /api/v1/orders/{id}/cancel. The body carries
-// the approval token, the caller-supplied leaves the engine-settled
-// cancellation requires, and an optional reason for the shortcut.
+// the approval token, optional caller-reported leaves, and an optional reason.
 func handleCancelOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req cancelOrderRequestDTO
@@ -358,15 +354,8 @@ func handleCancelOrder(svc Service) http.HandlerFunc {
 			httpx.WriteValidationProblem(w, "token is required", "/token", "required")
 			return
 		}
-		leavesQuantity := strings.TrimSpace(req.LeavesQuantity)
-		if leavesQuantity == "" {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "leavesQuantity is required",
-			)
-			return
-		}
 		order, att, err := svc.CancelOrder(
-			r.Context(), orderID, req.Token, leavesQuantity, req.Reason)
+			r.Context(), orderID, req.Token, req.LeavesQuantity, req.Reason)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return

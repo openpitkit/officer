@@ -3097,17 +3097,25 @@ async function fetchPublicKeyById(client: ApiClient,
   return { keyId, alg: "ed25519", format, key: "" };
 }
 
+/** Empty commission members are equivalent to an omitted commission. */
+export type ExecutionReportCommissionBody =
+  | Commission
+  | { amount?: ""; currency?: "" }
+  | null;
+
 export interface ExecutionReportBody {
   id?: string;
-  /** Fill fields route the report through engine settlement. */
+  /** A fill is allowed only for `filled` or `partially_filled`. */
   quantity?: string;
   price?: string;
-  /** Venue-reported open base quantity, stored verbatim and never derived or
-   *  substituted. Reserve release comes from the persisted reserve ledger.
-   *  Required for fills, terminal statuses, and reports carrying commission. */
+  /** Caller-reported open base quantity. Required with a fill, forbidden for a
+   *  commission-only fill status, and otherwise optional. A supplied value is
+   *  recorded verbatim. */
   leavesQuantity?: string;
   lockPrice?: string;
-  commission?: Commission;
+  /** A null or empty pair means no commission. Otherwise amount and currency
+   *  must both be non-empty. Commission does not change leaves requirements. */
+  commission?: ExecutionReportCommissionBody;
   status: string;
   force?: boolean;
 }
@@ -3185,14 +3193,13 @@ export interface ConfirmOrderBody {
   token: string;
 }
 
-/** POST /orders/{id}/cancel body: the approval token from the workflow, the
- *  caller-supplied leaves, and an optional reason. */
+/** POST /orders/{id}/cancel body: the approval token from the workflow, optional
+ *  caller-reported leaves, and an optional reason. */
 export interface CancelOrderBody {
   token: string;
-  /** Venue-reported open base quantity, stored verbatim and never derived or
-   *  substituted. Reserve release comes from the persisted reserve ledger.
-   *  Required because cancellation is engine-settled. */
-  leavesQuantity: string;
+  /** A supplied value is recorded verbatim. Omitted or empty means absent;
+   *  whitespace is supplied malformed data. */
+  leavesQuantity?: string;
   reason?: string;
 }
 
@@ -3223,7 +3230,7 @@ async function confirmOrder(client: ApiClient,
   return orderMutationResponseOrThrow(v);
 }
 
-/** POST /orders/{id}/cancel. Verifies the approval token and forwards
+/** POST /orders/{id}/cancel. Verifies the approval token and records
  *  the untouched-order cancellation shortcut. */
 async function cancelOrder(client: ApiClient,
   id: string,

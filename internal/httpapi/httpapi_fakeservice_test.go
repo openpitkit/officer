@@ -102,6 +102,7 @@ type fakeService struct {
 	updateAssetClassErr   error
 	deleteAssetClassErr   error
 	deleteAssetClassForce bool
+	deleteGroupForce      bool
 	assetClassErr         error
 	createErr             error
 	blockErr              error
@@ -637,7 +638,8 @@ func (f *fakeService) SetGroupNotes(_ context.Context, _, _ string) error {
 func (f *fakeService) SetGroupBlocked(_ context.Context, _ string, _ bool, _ string) error {
 	return f.groupErr
 }
-func (f *fakeService) DeleteGroup(_ context.Context, _ string) error {
+func (f *fakeService) DeleteGroup(_ context.Context, _ string, force bool) error {
+	f.deleteGroupForce = force
 	return f.groupErr
 }
 func (f *fakeService) ApplyAdjustment(

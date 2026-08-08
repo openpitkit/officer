@@ -64,17 +64,15 @@ export function Dashboard() {
         <ErrorState message={load.error} onRetry={reload} />
       )}
       {load.state === "ready" && (
-        <>
-          <DashboardWidgets<DashboardReadyWidgetProps>
-            ids={READY_WIDGET_IDS}
-            props={{
-              counts: load.data.counts,
-              activity: load.data.activity,
-            }}
-          />
-          <DashboardWidgets ids={AUDIT_WIDGET_IDS} />
-        </>
+        <DashboardWidgets<DashboardReadyWidgetProps>
+          ids={READY_WIDGET_IDS}
+          props={{
+            counts: load.data.counts,
+            activity: load.data.activity,
+          }}
+        />
       )}
+      <DashboardWidgets ids={AUDIT_WIDGET_IDS} />
     </Page>
   );
 }

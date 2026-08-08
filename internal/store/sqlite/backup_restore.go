@@ -907,12 +907,12 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 			`UPDATE order_record
 			 SET account_id = ?, base_asset_id = ?, quote_asset_id = ?, principal_id = ?,
 			     at = ?, source_id = ?, side_id = ?, amount_kind_id = ?, amount_value = ?,
-			     leaves_quantity = ?, reserved_quantity = ?, price = ?,
+			     leaves_quantity = ?, price = ?,
 			     status_id = ?, drop_copy = ?, lock = ?
 			 WHERE external_id = ?`,
 			accountID, baseID, quoteID, principalID, atOrNow(o.At), sourceID,
 			sideID, amountKindID, o.AmountValue,
-			o.Leaves, o.ReservedQuantity, o.Price,
+			o.Leaves, o.Price,
 			statusID, o.DropCopy, nullableBlob(o.Lock), o.ExternalID.Bytes(),
 		); err != nil {
 			return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
@@ -922,11 +922,11 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 		`INSERT OR REPLACE INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
 		  at, source_id, side_id, amount_kind_id, amount_value,
-		  leaves_quantity, reserved_quantity, price, status_id, drop_copy, lock)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  leaves_quantity, price, status_id, drop_copy, lock)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		o.ExternalID.Bytes(), accountID, baseID, quoteID, principalID,
 		atOrNow(o.At), sourceID, sideID, amountKindID,
-		o.AmountValue, o.Leaves, o.ReservedQuantity, o.Price,
+		o.AmountValue, o.Leaves, o.Price,
 		statusID, o.DropCopy, nullableBlob(o.Lock),
 	); err != nil {
 		return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
@@ -1256,10 +1256,6 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 		if rt.skipMachine(backup.SectionAuditLog, exists) {
 			continue
 		}
-		accountID, err := lookupID(ctx, rt.tx, "account", row.Account.String())
-		if err != nil {
-			return err
-		}
 		source := row.Source
 		if source == "" {
 			source = domain.SourceSystem
@@ -1275,10 +1271,10 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 		if _, err := rt.tx.ExecContext(
 			ctx,
 			`INSERT OR REPLACE INTO audit
-			 (external_id, account_id, account_code, account_title, asset_code,
+			 (external_id, account_code, account_title, asset_code,
 			  group_code, actor_code, actor_title, at, action_id, source_id, detail)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			row.ExternalID.Bytes(), accountID, row.Account.String(),
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.ExternalID.Bytes(), row.Account.String(),
 			row.AccountTitle, row.Asset, row.Group, row.Actor, row.ActorTitle,
 			atOrNow(row.At), actionID, sourceID, row.Detail,
 		); err != nil {

@@ -66,7 +66,9 @@ func (n *localNode) CreateGroup(
 		return domain.AccountGroup{}, fmt.Errorf("create group: %w", err)
 	}
 	if err := resolver.AddGroupResolverEntry(created); err != nil {
-		rollbackErr := n.realm.DeleteGroup(context.WithoutCancel(ctx), created.Code)
+		rollbackErr := n.realm.DeleteGroup(
+			context.WithoutCancel(ctx), created.Code, false,
+		)
 		resultErr := errors.Join(
 			fmt.Errorf("publish group resolver entry: %w", err),
 			optionalOperationError("rollback created group", rollbackErr),
@@ -95,7 +97,7 @@ func (n *localNode) CreateGroup(
 		if err != nil {
 			mutationCtx := context.WithoutCancel(ctx)
 			resolverErr := resolver.RemoveGroupResolverEntry(created)
-			rollbackErr := n.realm.DeleteGroup(mutationCtx, created.Code)
+			rollbackErr := n.realm.DeleteGroup(mutationCtx, created.Code, false)
 			// A failed SDK call may have mutated before returning. Rebuild even
 			// when resolver/store compensation succeeded so no inaccessible group
 			// block state survives on the old engine.
@@ -374,7 +376,9 @@ func (n *localNode) ensureGroupRegisteredLocked(
 		return domain.AccountGroup{}, false, err
 	}
 	if err := resolver.AddGroupResolverEntry(group); err != nil {
-		rollbackErr := n.realm.DeleteGroup(context.WithoutCancel(ctx), group.Code)
+		rollbackErr := n.realm.DeleteGroup(
+			context.WithoutCancel(ctx), group.Code, false,
+		)
 		resultErr := errors.Join(
 			fmt.Errorf("publish group resolver entry: %w", err),
 			optionalOperationError("rollback ensured group", rollbackErr),
@@ -402,12 +406,11 @@ func (n *localNode) applyGroupBlock(
 	return lane.UnblockGroup(ctx, code)
 }
 
-// DeleteGroup removes the group and its member accounts from the store, rebuilds
-// the engine from the surviving rows, and audits the action. SQLite owns the
-// durable cascade; the prepared snapshot makes the engine transition atomic
-// with that single database delete.
+// DeleteGroup removes the group, detaches its member accounts, rebuilds the
+// engine from the resulting snapshot, and audits the action. Account-owned
+// trading and compliance history remains intact.
 func (n *localNode) DeleteGroup(
-	ctx context.Context, code string, caller domain.Caller,
+	ctx context.Context, code string, force bool, caller domain.Caller,
 ) error {
 	if err := n.beginEngineRestart(); err != nil {
 		return err
@@ -425,12 +428,26 @@ func (n *localNode) DeleteGroup(
 	if err != nil {
 		return fmt.Errorf("list group accounts for delete: %w", err)
 	}
+	if err := n.guardGroupDeleteCurrencyChange(ctx, members); err != nil {
+		if !errors.Is(err, domain.ErrConflict) {
+			return err
+		}
+		return domain.NewCurrencyChangeBlockedError(
+			domain.ScopeAccountGroup, code, err,
+		)
+	}
 
 	snapshot, _, err := n.loadSnapshot(ctx)
 	if err != nil {
 		return fmt.Errorf("load snapshot for group delete: %w", err)
 	}
-	snapshot = snapshotWithoutGroup(snapshot, code, members)
+	destroyedPnlBounds := 0
+	for _, limit := range snapshot.SpotFundsPnlBoundsLimits {
+		if isGroupSpotFundsPnlBoundsLimit(limit, code) {
+			destroyedPnlBounds++
+		}
+	}
+	snapshot = snapshotWithoutGroup(snapshot, code)
 	previousEngine := n.currentEngine()
 	next, err := n.build(snapshot)
 	if err != nil {
@@ -455,7 +472,7 @@ func (n *localNode) DeleteGroup(
 
 	durableCtx := context.WithoutCancel(ctx)
 	prev, err := n.commitMarketDataTransitionWithHook(transition, next, func() error {
-		if err := n.realm.DeleteGroup(durableCtx, code); err != nil {
+		if err := n.realm.DeleteGroup(durableCtx, code, force); err != nil {
 			return fmt.Errorf("delete group: %w", err)
 		}
 		return nil
@@ -474,11 +491,21 @@ func (n *localNode) DeleteGroup(
 			fmt.Errorf("mirror group delete seed blocks: %w", err),
 		)
 	}
-	if err := n.audit(durableCtx, caller, store.AuditEntry{
+	// The group row carries counts rather than one unbounded identifier list;
+	// the per-account rows carry the identities in their structured field.
+	summary := store.AuditEntry{
 		Action: domain.AuditActionDeleteGroup,
 		Group:  code,
-		Detail: fmt.Sprintf("delete group %s", code),
-	}); err != nil {
+		Detail: fmt.Sprintf(
+			"delete group %s; detachedAccounts=%d destroyedSpotFundsPnlBounds=%d",
+			code,
+			len(members),
+			destroyedPnlBounds,
+		),
+	}
+	if err := n.auditGroupDelete(
+		durableCtx, caller, summary, code, members,
+	); err != nil {
 		return n.fatalPostEngineAuditByCode(
 			"audit delete group", "group", code,
 			fmt.Errorf("audit delete group: %w", err),
@@ -487,13 +514,68 @@ func (n *localNode) DeleteGroup(
 	return nil
 }
 
+// auditGroupDeleteChunk bounds one group-delete audit transaction. Membership
+// has no upper bound, so a single batch would grow one store write transaction
+// with the size of the largest group. It buys nothing on the exclusive restart
+// gate: DeleteGroup holds that gate across every batch. Dropping the
+// per-account rows past a cap is not an option instead: the structured account
+// field is what keeps an account-filtered audit read complete.
+const auditGroupDeleteChunk = 256
+
+// auditGroupDelete files the deletion under every detached account and then,
+// last, under the group. Each batch is atomic on its own, so a failure part way
+// through leaves account rows without the summary that counts them - never a
+// durable summary claiming detachments that were never filed. The caller
+// escalates that failure, which is the same fatal path a single failed batch
+// takes.
+func (n *localNode) auditGroupDelete(
+	ctx context.Context,
+	caller domain.Caller,
+	summary store.AuditEntry,
+	code string,
+	members []domain.Account,
+) error {
+	entries := make([]store.AuditEntry, 0, auditGroupDeleteChunk)
+	for _, member := range members {
+		entries = append(entries, store.AuditEntry{
+			Action:  domain.AuditActionDeleteGroup,
+			Account: member.Code,
+			Group:   code,
+			Detail: fmt.Sprintf(
+				"delete group %s; detach account %s",
+				code,
+				member.Code,
+			),
+		})
+		if len(entries) < auditGroupDeleteChunk {
+			continue
+		}
+		if err := n.auditBatch(ctx, caller, entries); err != nil {
+			return err
+		}
+		entries = entries[:0]
+	}
+	// The summary counts the per-account rows, so it lands after them: its
+	// presence means the rows it counts are already durable.
+	entries = append(entries, summary)
+	return n.auditBatch(ctx, caller, entries)
+}
+
 func snapshotWithoutGroup(
 	snapshot engine.Snapshot,
 	group string,
-	members []domain.Account,
 ) engine.Snapshot {
-	for _, account := range members {
-		snapshot = snapshotWithoutAccount(snapshot, account.Code)
+	for index := range snapshot.Accounts {
+		account := &snapshot.Accounts[index]
+		if account.GroupCode != group {
+			continue
+		}
+		account.GroupCode = ""
+		account.GroupCurrency = ""
+		account.EffectiveCurrency, account.CurrencyOrigin =
+			domain.ResolveCurrencyCascade(
+				account.Currency, "", account.DefaultCurrency,
+			)
 	}
 	snapshot.Groups = slices.DeleteFunc(
 		snapshot.Groups,
@@ -502,8 +584,14 @@ func snapshotWithoutGroup(
 	snapshot.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
 		snapshot.SpotFundsPnlBoundsLimits,
 		func(row domain.LimitSpotFundsPnlBounds) bool {
-			return row.AccountGroup == group
+			return isGroupSpotFundsPnlBoundsLimit(row, group)
 		},
 	)
 	return snapshot
+}
+
+func isGroupSpotFundsPnlBoundsLimit(
+	limit domain.LimitSpotFundsPnlBounds, group string,
+) bool {
+	return limit.Scope == domain.ScopeAccountGroup && limit.AccountGroup == group
 }

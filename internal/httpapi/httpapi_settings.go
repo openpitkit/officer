@@ -53,8 +53,8 @@ func handleSetUserSettings(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.WelcomeSeen == nil {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "welcomeSeen is required",
+			httpx.WriteValidationProblem(
+				w, "welcomeSeen is required", "/welcomeSeen", "required",
 			)
 			return
 		}

@@ -1315,21 +1315,24 @@ func TestApplyExecutionReport_PartialCommission(t *testing.T) {
 }
 
 func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
-	for _, status := range []domain.OrderStatus{
-		domain.OrderStatusAccepted,
-		domain.OrderStatusPartiallyFilled,
-		domain.OrderStatusCancelled,
+	for _, tc := range []struct {
+		status domain.OrderStatus
+		leaves string
+	}{
+		{status: domain.OrderStatusAccepted, leaves: "1"},
+		{status: domain.OrderStatusFilled},
+		{status: domain.OrderStatusPartiallyFilled},
+		{status: domain.OrderStatusCancelled, leaves: "1"},
 	} {
-		t.Run(string(status), func(t *testing.T) {
+		t.Run(string(tc.status), func(t *testing.T) {
 			svc := &fakeService{}
 			r, err := newRouter(svc)
 			if err != nil {
 				t.Fatal(err)
 			}
-			body := bytes.NewBufferString(
-				`{"leavesQuantity":"1","status":"` + string(status) + `",` +
-					`"commission":{"amount":"-0.12","currency":"USD"}}`,
-			)
+			body := bytes.NewBufferString(`{"status":"` + string(tc.status) + `",` +
+				`"leavesQuantity":"` + tc.leaves + `",` +
+				`"commission":{"amount":"-0.12","currency":"USD"}}`)
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(
 				http.MethodPost,
@@ -1346,6 +1349,40 @@ func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
 				svc.execReportIn.Commission.Amount != "-0.12" ||
 				svc.execReportIn.Commission.Currency != "USD" {
 				t.Fatalf("commission not forwarded: %+v", svc.execReportIn.Commission)
+			}
+			if svc.execReportIn.LeavesQuantity != tc.leaves {
+				t.Fatalf("leaves = %q, want %q", svc.execReportIn.LeavesQuantity, tc.leaves)
+			}
+		})
+	}
+}
+
+func TestApplyExecutionReport_CommissionOnlyFillRejectsLeaves(t *testing.T) {
+	for _, status := range []domain.OrderStatus{
+		domain.OrderStatusFilled,
+		domain.OrderStatusPartiallyFilled,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := bytes.NewBufferString(
+				`{"status":"` + string(status) + `","leavesQuantity":"1",` +
+					`"commission":{"amount":"-0.12","currency":"USD"}}`,
+			)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+				body,
+			))
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if !svc.execReportIn.Order.IsZero() {
+				t.Fatalf("commission-only fill with leaves reached service: %+v", svc.execReportIn)
 			}
 		})
 	}

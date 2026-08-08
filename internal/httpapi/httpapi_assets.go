@@ -28,7 +28,7 @@ func handleListAssets(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := assetListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationErrMsg(w, err.Error())
 			return
 		}
 		page, err := svc.ListAssetRows(r.Context(), filter)
@@ -75,13 +75,12 @@ func handleCreateAsset(svc Service) http.HandlerFunc {
 
 // handleUpdateAsset handles PUT /api/v1/assets/{code}. The path code identifies
 // the asset; the body carries the replacement public code, title and
-// classification, so an asset can be renamed. Dependent rows reference the asset
-// by its surrogate id, mirroring the group rename.
+// classification.
 func handleUpdateAsset(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {
@@ -110,7 +109,7 @@ func handleListAssetClasses(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := assetClassListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationErrMsg(w, err.Error())
 			return
 		}
 		page, err := svc.ListAssetClassRows(r.Context(), filter)
@@ -161,7 +160,7 @@ func handleUpdateAssetClass(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {
@@ -190,7 +189,7 @@ func handleDeleteAssetClass(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if err := svc.DeleteAssetClass(r.Context(), code, forceQuery(r)); err != nil {
@@ -206,7 +205,7 @@ func handleDeleteAsset(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if err := svc.DeleteAsset(r.Context(), code, forceQuery(r)); err != nil {

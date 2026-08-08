@@ -25,11 +25,12 @@ import { cn } from "@/lib/utils";
 
 /** A skeleton table body shown while the first page load is in flight. */
 export function TableSkeleton({ rows = 5, cols = 4 }: { rows?: number; cols?: number }) {
+  const { t } = useTranslation();
   return (
     <Card
       role="status"
       aria-busy="true"
-      aria-label="Loading"
+      aria-label={t("states.loading")}
       className="animate-pulse"
     >
       <CardContent className="space-y-3 py-5">

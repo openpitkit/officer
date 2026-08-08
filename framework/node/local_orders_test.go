@@ -53,6 +53,58 @@ func TestOrderRejectedSettlementPreservesOrderedRejects(t *testing.T) {
 	}
 }
 
+// A pre-trade reject reserved nothing, so the submit records a zero open
+// quantity rather than an empty one. The empty value would read as "unknown"
+// and make a later forced terminal report demand a leaves the order never had.
+func TestLocalNode_SubmitOrderRejectedRecordsZeroLeaves(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitReject = &domain.OrderReject{
+		Code: "limit", Scope: "account", Policy: "order-size",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "20",
+		Price:       "100",
+	}, domain.MissingAccountCreate, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if order.Status != domain.OrderStatusRejected {
+		t.Fatalf("order status = %q, want rejected", order.Status)
+	}
+	if order.Leaves != "0" {
+		t.Fatalf("rejected order leaves = %q, want a recorded zero", order.Leaves)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "0" {
+		t.Fatalf("stored leaves = %q, want a recorded zero", detail.Order.Leaves)
+	}
+
+	// The recorded zero preserves the engine's answer. A later forced terminal
+	// no-fill report sends that pre-report value back without caller leaves.
+	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:       order.ExternalID,
+		Force:       true,
+		OrderStatus: domain.OrderStatusCancelled,
+	}, testCaller); err != nil {
+		t.Fatalf("forced terminal report after reject: %v", err)
+	}
+	if len(eng.execReportCalls) != 1 ||
+		eng.execReportCalls[0].ReleaseQuantity != "0" {
+		t.Fatalf("engine terminal context = %+v, want recorded zero", eng.execReportCalls)
+	}
+}
+
 // TestLocalNode_SubmitOrderPersistsPreTradeBalances verifies the direct submit
 // path mirrors the engine's balance effects into the snapshot, so held funds
 // and incoming quantity show up before any fill settles.
@@ -102,11 +154,8 @@ func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 	if order.Status != domain.OrderStatusCommitted {
 		t.Fatalf("order status = %q, want committed", order.Status)
 	}
-	if order.Leaves != "" {
-		t.Fatalf("order leaves = %q, want empty before the first report", order.Leaves)
-	}
-	if order.ReservedQuantity != "20" {
-		t.Fatalf("reserved quantity = %q, want engine delta 20", order.ReservedQuantity)
+	if order.Leaves != "20" {
+		t.Fatalf("order leaves = %q, want engine delta 20", order.Leaves)
 	}
 
 	quote, ok, err := st.GetBalance(ctx, "acc-1", "USD")
@@ -125,13 +174,14 @@ func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 	}
 }
 
-func TestReservedQuantityFromOutcomesUsesEngineBaseDelta(t *testing.T) {
+func TestOpeningLeavesComeFromEngineBaseDelta(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
 		side     domain.OrderSide
 		outcomes []engine.BalanceOutcome
 		want     string
+		wantErr  bool
 	}{
 		{
 			name: "buy incoming", side: domain.OrderSideBuy,
@@ -160,28 +210,87 @@ func TestReservedQuantityFromOutcomesUsesEngineBaseDelta(t *testing.T) {
 			want: "2",
 		},
 		{name: "missing base delta", side: domain.OrderSideBuy, want: "0"},
+		{
+			name: "unsupported side", side: domain.OrderSide("swap"),
+			outcomes: []engine.BalanceOutcome{{
+				Asset:   "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "2"},
+			}},
+			wantErr: true,
+		},
+		{
+			name: "several base deltas", side: domain.OrderSideBuy,
+			outcomes: []engine.BalanceOutcome{
+				{
+					Asset:   "AAPL",
+					Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "2"},
+				},
+				{
+					Asset:   "AAPL",
+					Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "3"},
+				},
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := reservedQuantityFromOutcomes(domain.Order{
+			got, err := openingLeavesFromOutcomes(domain.Order{
 				BaseAsset: "AAPL",
 				Side:      tt.side,
 			}, tt.outcomes)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("openingLeavesFromOutcomes accepted an unusable engine outcome")
+				}
+				if errors.Is(err, domain.ErrInvalid) {
+					t.Fatalf("engine outcome error = %v, want internal error", err)
+				}
+				return
+			}
 			if err != nil {
-				t.Fatalf("reservedQuantityFromOutcomes: %v", err)
+				t.Fatalf("openingLeavesFromOutcomes: %v", err)
 			}
 			if got != tt.want {
-				t.Fatalf("reserved quantity = %q, want %q", got, tt.want)
+				t.Fatalf("opening leaves = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-// An order has no reported leaves at submit, so the field stays empty until the
-// first execution report supplies it. Officer is a registrar here: it records
-// the caller's value without inventing one from the submitted amount.
-func TestLocalNode_VolumeOrderLeavesComeFromFirstExecutionReport(t *testing.T) {
+func TestLocalNode_SubmitImmediateNilPersistenceIsInternal(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.emptyImmediatePersistence = true
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, domain.MissingAccountCreate, testCaller)
+	if err == nil {
+		t.Fatal("SubmitImmediate succeeded with no persistence write set")
+	}
+	if errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitImmediate error = %v, want internal error", err)
+	}
+	if len(eng.submitCalls) != 1 {
+		t.Fatalf("submit calls = %+v, want one engine apply", eng.submitCalls)
+	}
+}
+
+// An accepted engine delta sets opening leaves; execution reports later replace
+// them with the venue's reported value unchanged.
+func TestLocalNode_VolumeOrderRecordsEngineOpeningLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.submitLock = []byte("stored-lock")
@@ -202,11 +311,8 @@ func TestLocalNode_VolumeOrderLeavesComeFromFirstExecutionReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if order.Leaves != "" {
-		t.Fatalf("volume order leaves = %q, want empty", order.Leaves)
-	}
-	if order.ReservedQuantity != "5" {
-		t.Fatalf("volume reserve = %q, want engine delta 5", order.ReservedQuantity)
+	if order.Leaves != "5" {
+		t.Fatalf("volume order leaves = %q, want engine delta 5", order.Leaves)
 	}
 
 	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"),
@@ -222,6 +328,81 @@ func TestLocalNode_VolumeOrderLeavesComeFromFirstExecutionReport(t *testing.T) {
 	}
 	if detail.Order.Leaves != "3" {
 		t.Fatalf("reported leaves = %q, want 3", detail.Order.Leaves)
+	}
+}
+
+func TestLocalNode_CancelVolumeOrderUsesPreReportLeaves(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitLock = []byte("stored-lock")
+	eng.submitOutcomes = []engine.BalanceOutcome{{
+		Asset:   "AAPL",
+		Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "5"},
+	}}
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindVolume, AmountValue: "500", Price: "100",
+	}, domain.MissingAccountCreate, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if order.Leaves != "5" {
+		t.Fatalf("volume order leaves = %q, want engine delta 5", order.Leaves)
+	}
+
+	if _, _, err := n.CancelOrder(ctx, order.ExternalID, "0", testCaller); err != nil {
+		t.Fatalf("CancelOrder: %v", err)
+	}
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	if got := eng.execReportCalls[0].ReleaseQuantity; got != "5" {
+		t.Fatalf("cancellation release quantity = %q, want stored leaves 5", got)
+	}
+}
+
+// An engine block does not make Officer derive, withhold, or annotate a
+// different pre-report cancellation release quantity.
+func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.execReportBlocks = []domain.ExecutionAccountBlock{
+		{Account: "acc-1", Code: "test_block", Reason: "account block triggered"},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+
+	if _, _, err := n.CancelOrder(
+		ctx, order.ExternalID, "0", testCaller,
+	); err != nil {
+		t.Fatalf("CancelOrder: %v", err)
+	}
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	if got := eng.execReportCalls[0].ReleaseQuantity; got != "2" {
+		t.Fatalf("cancellation release = %q, want stored leaves 2", got)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered(execution report): %v", err)
+	}
+	if len(rows) != 1 ||
+		!strings.Contains(rows[0].Detail, "releaseQty=2") ||
+		strings.Contains(rows[0].Detail, "releaseApplied=") {
+		t.Fatalf(
+			"blocked cancellation audit = %+v, want no local release marker",
+			rows,
+		)
 	}
 }
 
@@ -259,7 +440,6 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 	eng := newFakeEngine()
 	eng.submitTradePrice = "99"
 	eng.submitSettlementLockPrice = "101"
-	eng.submitReservedQuantity = "0"
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
@@ -276,8 +456,7 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 	if result.TradePrice != "99" || result.SettlementLockPrice != "101" {
 		t.Fatalf("immediate result = %+v, want trade 99 and lock 101", result)
 	}
-	if order.Status != domain.OrderStatusFilled || order.Leaves != "0" ||
-		order.ReservedQuantity != "0" {
+	if order.Status != domain.OrderStatusFilled || order.Leaves != "0" {
 		t.Fatalf("immediate order = %+v, want filled with zero leaves", order)
 	}
 	detail, err := st.GetOrder(ctx, order.ExternalID)
@@ -288,8 +467,7 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 		detail.Trades[0].LockPrice != "101" {
 		t.Fatalf("trades = %+v, want price 99 and lock price 101", detail.Trades)
 	}
-	if detail.Order.Status != domain.OrderStatusFilled || detail.Order.Leaves != "0" ||
-		detail.Order.ReservedQuantity != "0" {
+	if detail.Order.Status != domain.OrderStatusFilled || detail.Order.Leaves != "0" {
 		t.Fatalf("stored immediate order = %+v, want filled with zero leaves", detail.Order)
 	}
 	if result.ExecutionReport == nil || result.ExecutionReport.ExternalID.IsZero() {
@@ -320,38 +498,11 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered(execution report): %v", err)
 	}
+	// The immediate report settles its own fill, so the audited release is the
+	// zero the engine recorded, not an empty field.
 	if len(audit) != 1 || audit[0].Account != "acc-1" ||
-		!strings.Contains(audit[0].Detail, "qty=2 filled") {
+		!strings.Contains(audit[0].Detail, "qty=2 releaseQty=0 filled") {
 		t.Fatalf("immediate execution-report audit = %+v", audit)
-	}
-}
-
-func TestLocalNode_SubmitImmediatePersistsAuthoritativeRemainingReserve(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	eng.submitReservedQuantity = "2"
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
-	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-
-	order, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
-		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
-		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "2", Price: "99",
-	}, domain.MissingAccountCreate, testCaller)
-	if err != nil {
-		t.Fatalf("SubmitImmediate: %v", err)
-	}
-	if order.ReservedQuantity != "2" {
-		t.Fatalf("immediate reserve = %q, want 2", order.ReservedQuantity)
-	}
-	detail, err := st.GetOrder(ctx, order.ExternalID)
-	if err != nil {
-		t.Fatalf("GetOrder: %v", err)
-	}
-	if detail.Order.ReservedQuantity != "2" {
-		t.Fatalf("stored immediate reserve = %q, want 2", detail.Order.ReservedQuantity)
 	}
 }
 

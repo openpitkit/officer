@@ -27,8 +27,10 @@ import (
 func TestSPAHandlerServesAppRouteManifestAsset(t *testing.T) {
 	const manifest = `{"routes":[{"id":"dashboard","path":"/","kind":"canonical"}]}`
 	handler, err := newSPAHandler(fstest.MapFS{
-		"index.html":              {Data: []byte("<html>shell</html>")},
-		"app-route-manifest.json": {Data: []byte(manifest)},
+		"index.html": {Data: []byte("<html>shell</html>")},
+		"app-route-manifest.json": {
+			Data: []byte(manifest),
+		},
 	})
 	if err != nil {
 		t.Fatalf("newSPAHandler: %v", err)

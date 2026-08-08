@@ -168,6 +168,172 @@ func TestMarketDataSink_SourceFreshnessPreservesExpiredQuote(t *testing.T) {
 	}
 }
 
+// TestMarketDataSink_PushKeepsInstrumentContinuouslyQuoted pins that a publish
+// never clears a live quote to make room for its successor: a concurrent
+// account-lane reader must always find a quote, because SpotFunds still values
+// positions off the last one even once it expires. Clearing before the push
+// reopens that window, and this read loop lands in it.
+func TestMarketDataSink_PushKeepsInstrumentContinuouslyQuoted(t *testing.T) {
+	t.Parallel()
+	const publishes = 200
+	sink, service := newTestSink(t)
+
+	if err := sink.Push(marketdata.QuoteUpdate{
+		AsOf: time.Now(), Base: "EUR", Quote: "USD", Mark: "1.10",
+	}); err != nil {
+		t.Fatalf("seed Push: %v", err)
+	}
+	instrument, err := instrumentFrom("EUR", "USD")
+	if err != nil {
+		t.Fatalf("instrumentFrom: %v", err)
+	}
+	id, ok := service.Resolve(instrument)
+	if !ok {
+		t.Fatal("Resolve: instrument not registered")
+	}
+
+	published := make(chan error, 1)
+	go func() {
+		var err error
+		for i := 0; i < publishes && err == nil; i++ {
+			err = sink.Push(marketdata.QuoteUpdate{
+				AsOf: time.Now(), Base: "EUR", Quote: "USD", Mark: "1.11",
+			})
+		}
+		published <- err
+	}()
+
+	// Never fail inside the loop: the publisher still holds the service, which
+	// t.Cleanup closes as soon as this goroutine leaves.
+	var readErr error
+	for {
+		select {
+		case err := <-published:
+			if err != nil {
+				t.Fatalf("concurrent Push: %v", err)
+			}
+			if readErr != nil {
+				t.Fatalf("read during publish: %v, want a quote throughout", readErr)
+			}
+			return
+		default:
+		}
+		if _, err := service.Get(
+			id,
+			param.NewAccountIDFromUint64(1),
+			noGroupAccountInfo{},
+			bindmd.QuoteResolutionAccountThenGroupThenDefault,
+		); err != nil && readErr == nil {
+			readErr = err
+		}
+	}
+}
+
+// TestMarketDataSink_PushNeverServesAgedQuoteAsFresh covers the other half of
+// the publish order. The quote and its lifetime move in separate SDK calls, so
+// one is always visible before the other, and the engine service is
+// synchronous: an account lane really does read inside that window. A
+// source-aged quote that becomes readable under the lifetime of its successor
+// is a stale price served as a live one, which is what the read loop hunts for.
+// The publisher alternates an already-expired source quote with a current one,
+// so every publish moves the lifetime in one direction or the other; the loop
+// is a probe and only fails when it lands in a bad window, so the deterministic
+// end states are asserted first.
+func TestMarketDataSink_PushNeverServesAgedQuoteAsFresh(t *testing.T) {
+	t.Parallel()
+	const (
+		publishes = 200
+		agedMark  = "1"
+		freshMark = "2"
+	)
+	sink, service := newTestSink(t)
+	agedUpdate := func() marketdata.QuoteUpdate {
+		return marketdata.QuoteUpdate{
+			AsOf: time.Now().Add(-2 * MarketDataFreshnessTTL),
+			Base: "EUR", Quote: "USD", Mark: agedMark,
+		}
+	}
+	freshUpdate := func() marketdata.QuoteUpdate {
+		return marketdata.QuoteUpdate{
+			AsOf: time.Now(), Base: "EUR", Quote: "USD", Mark: freshMark,
+		}
+	}
+
+	if err := sink.Push(agedUpdate()); err != nil {
+		t.Fatalf("seed aged Push: %v", err)
+	}
+	instrument, err := instrumentFrom("EUR", "USD")
+	if err != nil {
+		t.Fatalf("instrumentFrom: %v", err)
+	}
+	id, ok := service.Resolve(instrument)
+	if !ok {
+		t.Fatal("Resolve: instrument not registered")
+	}
+	read := func() (string, error) {
+		quote, err := service.Get(
+			id,
+			param.NewAccountIDFromUint64(1),
+			noGroupAccountInfo{},
+			bindmd.QuoteResolutionAccountThenGroupThenDefault,
+		)
+		if err != nil {
+			return "", err
+		}
+		mark, ok := quote.Mark().Get()
+		if !ok {
+			return "", errors.New("quote has no mark")
+		}
+		return mark.String(), nil
+	}
+
+	if _, err := read(); !errors.Is(err, bindmd.ErrQuoteExpired) {
+		t.Fatalf("aged seed read error = %v, want ErrQuoteExpired", err)
+	}
+	if err := sink.Push(freshUpdate()); err != nil {
+		t.Fatalf("fresh Push: %v", err)
+	}
+	if mark, err := read(); err != nil || mark != freshMark {
+		t.Fatalf("fresh read = (%q, %v), want (%q, nil)", mark, err, freshMark)
+	}
+
+	published := make(chan error, 1)
+	go func() {
+		var err error
+		for i := 0; i < publishes && err == nil; i++ {
+			if i%2 == 0 {
+				err = sink.Push(agedUpdate())
+				continue
+			}
+			err = sink.Push(freshUpdate())
+		}
+		published <- err
+	}()
+
+	// Never fail inside the loop: the publisher still holds the service, which
+	// t.Cleanup closes as soon as this goroutine leaves.
+	served := ""
+	for {
+		select {
+		case err := <-published:
+			if err != nil {
+				t.Fatalf("concurrent Push: %v", err)
+			}
+			if served != "" {
+				t.Fatalf(
+					"read during publish served mark %q as fresh, want only %q",
+					served, freshMark,
+				)
+			}
+			return
+		default:
+		}
+		if mark, err := read(); err == nil && mark != freshMark && served == "" {
+			served = mark
+		}
+	}
+}
+
 func TestQuoteSourceTTL(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
@@ -178,7 +344,10 @@ func TestQuoteSourceTTL(t *testing.T) {
 		wantBound bool
 	}{
 		{name: "missing source time uses default"},
-		{name: "future source time uses default", asOf: now.Add(time.Second)},
+		{
+			name: "future source time is clamped to full source lifetime",
+			asOf: now.Add(time.Second), want: MarketDataFreshnessTTL, wantBound: true,
+		},
 		{
 			name: "fresh source keeps only its remaining lifetime",
 			asOf: now.Add(-MarketDataFreshnessTTL + time.Second),

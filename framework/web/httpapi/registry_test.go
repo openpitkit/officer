@@ -157,6 +157,38 @@ func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
+	var registry RouteRegistry
+	registry.Register(Route{
+		ID: "public", Method: http.MethodGet, Pattern: "/public",
+		Handler: http.NotFoundHandler(), Permission: "read",
+	})
+	registry.Register(Route{
+		ID: "secret", Method: http.MethodPost, Pattern: "/secret",
+		Handler: http.NotFoundHandler(), Permission: "admin",
+	})
+	router, err := NewRouter(RouterConfig{
+		Routes: &registry, Authorizer: denyPermission("admin"),
+		SPA:       fstest.MapFS{"index.html": {Data: []byte("<html></html>")}},
+		BodyLimit: BodyLimitPolicy(1024, nil),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/route-manifest.json", nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d, want 200", rec.Code)
+	}
+	want := "{\"routes\":[{\"method\":\"GET\",\"path\":\"/public\"}]}\n"
+	if rec.Body.String() != want {
+		t.Fatalf("manifest = %q, want %q", rec.Body.String(), want)
+	}
+}
+
 func TestNewRouterCustomAuthorizer(t *testing.T) {
 	var registry RouteRegistry
 	registry.Register(Route{

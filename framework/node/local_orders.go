@@ -90,8 +90,8 @@ func recordOrderSettlementWithAttestation(
 
 // SubmitOrder runs the pre-trade submit on the account lane and persists the
 // order, submitted event, and engine outcome in one store transaction. On accept
-// it records pre_trade_accepted and committed, persists the lock, request
-// leaves for quantity orders, balance outcomes, and committed status; on reject it records
+// it records pre_trade_accepted and committed, persists the lock, engine opening
+// leaves, balance outcomes, and committed status; on reject it records
 // pre_trade_rejected and rejected status. missing decides whether an order for
 // an account Officer does not know yet registers that account or is rejected.
 func (n *localNode) SubmitOrder(
@@ -222,7 +222,7 @@ func (n *localNode) submitOrder(
 func orderAcceptedSettlement(
 	key Key, order domain.Order, result engine.OrderResult, caller domain.Caller,
 ) (domain.OrderSettlement, error) {
-	reservedQuantity, err := reservedQuantityFromOutcomes(order, result.Outcomes)
+	openingLeaves, err := openingLeavesFromOutcomes(order, result.Outcomes)
 	if err != nil {
 		return domain.OrderSettlement{}, err
 	}
@@ -230,22 +230,24 @@ func orderAcceptedSettlement(
 		Account:     key.Account,
 		Order:       order.ExternalID,
 		OrderStatus: domain.OrderStatusCommitted,
+		Leaves:      openingLeaves,
 		Balances:    balanceSettlementsFrom(result.Outcomes),
 		Blocks:      result.Blocks,
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
 			fillSettlementEvent(order.ExternalID, domain.OrderEventCommitted, caller, domain.OrderEventPayload{}),
 		},
-		Lock:             result.Lock,
-		ReservedQuantity: reservedQuantity,
-		SetLock:          true,
+		Lock:    result.Lock,
+		SetLock: true,
 	}, nil
 }
 
-func reservedQuantityFromOutcomes(
+// openingLeavesFromOutcomes returns the accepted engine's applied base-asset
+// delta. An engine answer without one records zero.
+func openingLeavesFromOutcomes(
 	order domain.Order, outcomes []engine.BalanceOutcome,
 ) (string, error) {
-	reservedQuantity := ""
+	openingLeaves := ""
 	for _, outcome := range outcomes {
 		if outcome.Asset != order.BaseAsset {
 			continue
@@ -258,27 +260,25 @@ func reservedQuantityFromOutcomes(
 			candidate = outcome.Outcome.HeldDelta
 		default:
 			return "", fmt.Errorf(
-				"reservation quantity for side %q: %w",
+				"engine accepted order with unsupported side %q",
 				order.Side,
-				domain.ErrInvalid,
 			)
 		}
 		if candidate == "" {
 			continue
 		}
-		if reservedQuantity != "" {
+		if openingLeaves != "" {
 			return "", fmt.Errorf(
-				"reservation returned several quantity deltas for asset %q: %w",
+				"engine accepted order with several base-asset deltas for asset %q",
 				order.BaseAsset,
-				domain.ErrInvalid,
 			)
 		}
-		reservedQuantity = candidate
+		openingLeaves = candidate
 	}
-	if reservedQuantity == "" {
+	if openingLeaves == "" {
 		return "0", nil
 	}
-	return reservedQuantity, nil
+	return openingLeaves, nil
 }
 
 func orderRejectedSettlement(
@@ -296,10 +296,14 @@ func orderRejectedSettlement(
 		payload.RejectDetails = r.Details
 	}
 	return domain.OrderSettlement{
-		Account:          key.Account,
-		Order:            order.ExternalID,
-		OrderStatus:      domain.OrderStatusRejected,
-		ReservedQuantity: "0",
+		Account:     key.Account,
+		Order:       order.ExternalID,
+		OrderStatus: domain.OrderStatusRejected,
+		// A pre-trade reject is the engine's answer that nothing was reserved,
+		// recorded exactly as the accepted path records the engine's delta.
+		// Leaving it empty would misrepresent that engine-authored zero as
+		// unknown.
+		Leaves: "0",
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeRejected, caller, payload),
 		},
@@ -340,7 +344,7 @@ func (n *localNode) submitImmediate(
 	// Resolve the account and register both order assets pre-lane (see
 	// SubmitOrder).
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, missing, "submit order", caller,
+		ctx, key.Account, missing, "submit immediate", caller,
 		o.BaseAsset, o.QuoteAsset,
 	); err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
@@ -419,14 +423,21 @@ func (n *localNode) submitImmediate(
 				return n.fatalPostEnginePersistence(
 					"audit immediate execution report",
 					accountID,
-					fmt.Errorf("immediate execution report missing: %w", domain.ErrInvalid),
+					fmt.Errorf("immediate execution report missing"),
 				)
+			}
+			// The persisted request omits the release quantity, so the audit reads
+			// it back from the write set. It is the leaves of the report Officer
+			// built for this immediate fill, not a quantity the engine chose.
+			reported := executionReportInputFromRequest(*result.ExecutionReport)
+			if result.Persistence != nil {
+				reported.ReleaseQuantity = result.Persistence.ReleaseQuantity
 			}
 			if err := n.audit(ctx, caller, store.AuditEntry{
 				Action:  domain.AuditActionExecutionReport,
 				Account: key.Account,
 				Detail: executionReportDetail(
-					executionReportInputFromRequest(*result.ExecutionReport),
+					reported,
 					domain.OrderStatusFilled,
 					len(result.Blocks),
 				),
@@ -530,7 +541,8 @@ func (n *localNode) confirmOrder(
 }
 
 // CancelOrder forwards a terminal execution report for an untouched workflow
-// order. The caller supplies leaves and the stored engine lock is restored.
+// order. Caller leaves update history when supplied; the engine receives the
+// order's previously recorded leaves. The stored engine lock is restored.
 func (n *localNode) CancelOrder(
 	ctx context.Context,
 	order domain.ExternalID,
@@ -605,9 +617,11 @@ func (n *localNode) cancelOrder(
 				Lock:           append([]byte(nil), detail.Order.Lock...),
 				OrderStatus:    domain.OrderStatusCancelled,
 			}
-			reserveFromLeaves := attachExecutionReservation(&in, detail)
 			if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
 				return fmt.Errorf("build cancellation execution report: %w", err)
+			}
+			if err := attachExecutionEngineLeaves(&in, detail); err != nil {
+				return fmt.Errorf("build cancellation release: %w", err)
 			}
 			request := domain.ExecutionReportRequestFromInput(in)
 			result, err = lane.ApplyExecutionReport(ctx, in)
@@ -616,23 +630,21 @@ func (n *localNode) cancelOrder(
 			}
 			if result.Persistence == nil {
 				return fmt.Errorf(
-					"apply cancellation execution report returned no persistence write set: %w",
-					domain.ErrInvalid,
+					"apply cancellation execution report returned no persistence write set",
 				)
 			}
 			persistence := stampExecutionReportPersistence(
 				*result.Persistence, caller, request,
 			)
 			settlement := domain.OrderSettlement{
-				Account:          in.Account,
-				Order:            order,
-				OrderStatus:      persistence.OrderStatus,
-				Leaves:           persistence.Leaves,
-				ReservedQuantity: persistence.ReservedQuantity,
-				Balances:         persistence.Balances,
-				Events:           persistence.Events,
-				Trade:            persistence.Trade,
-				Blocks:           persistence.Blocks,
+				Account:     in.Account,
+				Order:       order,
+				OrderStatus: persistence.OrderStatus,
+				Leaves:      persistence.Leaves,
+				Balances:    persistence.Balances,
+				Events:      persistence.Events,
+				Trade:       persistence.Trade,
+				Blocks:      persistence.Blocks,
 			}
 			if _, err := recordOrderSettlementWithAttestation(
 				ctx, n.realm, settlement, attest,
@@ -653,9 +665,6 @@ func (n *localNode) cancelOrder(
 			detailText := executionReportDetail(
 				in, domain.OrderStatusCancelled, len(result.Blocks),
 			)
-			if reserveFromLeaves {
-				detailText += " reserveFromLeaves=true"
-			}
 			if err := n.audit(ctx, caller, store.AuditEntry{
 				Action:  domain.AuditActionExecutionReport,
 				Account: in.Account,
@@ -671,9 +680,6 @@ func (n *localNode) cancelOrder(
 			cancelled.Status = persistence.OrderStatus
 			if persistence.Leaves != "" {
 				cancelled.Leaves = persistence.Leaves
-			}
-			if persistence.ReservedQuantity != "" {
-				cancelled.ReservedQuantity = persistence.ReservedQuantity
 			}
 			return nil
 		},
@@ -728,8 +734,7 @@ func immediateAcceptedSettlement(
 ) (domain.OrderSettlement, error) {
 	if result.Persistence == nil || result.ExecutionReport == nil {
 		return domain.OrderSettlement{}, fmt.Errorf(
-			"immediate execution report persistence is incomplete: %w",
-			domain.ErrInvalid,
+			"immediate execution report persistence is incomplete",
 		)
 	}
 	persistence := stampExecutionReportPersistence(
@@ -757,7 +762,6 @@ func immediateAcceptedSettlement(
 		ReportID:             &result.ExecutionReport.ExternalID,
 		OrderStatus:          persistence.OrderStatus,
 		Leaves:               persistence.Leaves,
-		ReservedQuantity:     persistence.ReservedQuantity,
 		AccountPnl:           persistence.AccountPnl,
 		AccountPnlHaltReason: persistence.AccountPnlHaltReason,
 		AllowedFrom:          domain.OrderStatusesEligibleForFill(),

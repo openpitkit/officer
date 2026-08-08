@@ -511,6 +511,15 @@ func TestListPolicyRowsScopeFilter(t *testing.T) {
 	}
 }
 
+func TestListPolicyRowsRejectsUnknownScope(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+
+	_, err := rs.ListPolicyRows(ctx, PolicyListFilter{Scope: "unknown"})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ListPolicyRows unknown scope = %v, want ErrInvalid", err)
+	}
+}
+
 func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)

@@ -170,6 +170,10 @@ func assertAccountRenameAudit(
 	title string,
 ) {
 	t.Helper()
+	detail := "update account account-old -> account-new (record under new code)"
+	if code == "account-old" {
+		detail = "update account account-old -> account-new (record under old code)"
+	}
 	page, err := realm.ListAuditRows(ctx, store.AuditListFilter{
 		Account: store.ExactTextMatcher(code.String()),
 		Actions: []domain.AuditAction{domain.AuditActionUpdateAccount},
@@ -179,7 +183,7 @@ func assertAccountRenameAudit(
 	}
 	if len(page.Rows) != 1 || page.Rows[0].Account != code ||
 		page.Rows[0].AccountTitle != title ||
-		page.Rows[0].Detail != "update account account-old -> account-new" {
+		page.Rows[0].Detail != detail {
 		t.Fatalf("rename audit under %q = %+v", code, page.Rows)
 	}
 }

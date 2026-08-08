@@ -134,7 +134,7 @@ func TestLocalNode_ConfirmOrderIsHistoryOnlyAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
+func TestLocalNode_CancelOrderUsesPreReportLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, realm := newTestNode(t, eng)
@@ -146,20 +146,22 @@ func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
 			HeldResult:    "0",
 		},
 	}}
-	eng.execReportReservedQuantity = "0"
 	ctx := context.Background()
+	if order.Leaves != "20" {
+		t.Fatalf("submitted leaves = %q, want 20", order.Leaves)
+	}
 
 	if _, err := n.ConfirmOrder(ctx, order.ExternalID, testCaller); err != nil {
 		t.Fatalf("ConfirmOrder before cancel: %v", err)
 	}
 	cancelled, result, err := n.CancelOrder(
-		ctx, order.ExternalID, "7.5", testCaller,
+		ctx, order.ExternalID, "0", testCaller,
 	)
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
-	if cancelled.Status != domain.OrderStatusCancelled || cancelled.Leaves != "7.5" {
-		t.Fatalf("cancelled order = %+v, want reported leaves 7.5", cancelled)
+	if cancelled.Status != domain.OrderStatusCancelled || cancelled.Leaves != "0" {
+		t.Fatalf("cancelled order = %+v, want reported leaves 0", cancelled)
 	}
 	if result.Persistence == nil {
 		t.Fatal("CancelOrder result has no persistence")
@@ -169,7 +171,7 @@ func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
 	}
 	input := eng.execReportCalls[0]
 	if input.Order != order.ExternalID || input.OrderStatus != domain.OrderStatusCancelled ||
-		input.LeavesQuantity != "7.5" || input.ReservedQuantity != "20" ||
+		input.LeavesQuantity != "0" || input.ReleaseQuantity != "20" ||
 		!bytes.Equal(input.Lock, []byte("stored-lock")) ||
 		input.FillQuantity != "" || input.FillPrice != "" {
 		t.Fatalf("synthetic cancellation input = %+v", input)
@@ -179,15 +181,12 @@ func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
-	if detail.Order.ReservedQuantity != "0" {
-		t.Fatalf("stored reserve = %q, want zero", detail.Order.ReservedQuantity)
-	}
 	foundReport := false
 	for _, event := range detail.Events {
 		request := event.Payload.ExecutionReport
 		if event.Type == domain.OrderEventCancelled && request != nil {
 			foundReport = request.OrderStatus == domain.OrderStatusCancelled &&
-				request.LeavesQuantity == "7.5"
+				request.LeavesQuantity == "0"
 		}
 	}
 	if !foundReport {
@@ -199,6 +198,34 @@ func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
 	}
 	if balance.Available != "10000" || balance.Held != "0" {
 		t.Fatalf("cancel balance = %+v, want available=10000 held=0", balance)
+	}
+}
+
+func TestLocalNode_CancelOrderRejectsInvalidVenueLeaves(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		leaves string
+	}{
+		{name: "negative", leaves: "-1"},
+		{name: "exponent", leaves: "1e2"},
+		{name: "padded", leaves: " 1 "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			n, realm := newTestNode(t, eng)
+			order := submitShortcutOrder(t, n, realm, eng)
+
+			_, _, err := n.CancelOrder(
+				context.Background(), order.ExternalID, tc.leaves, testCaller,
+			)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("CancelOrder error = %v, want ErrInvalid", err)
+			}
+			if len(eng.execReportCalls) != 0 {
+				t.Fatalf("invalid cancel reached engine: %+v", eng.execReportCalls)
+			}
+		})
 	}
 }
 

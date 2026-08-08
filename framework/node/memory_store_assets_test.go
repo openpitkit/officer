@@ -106,6 +106,77 @@ func (r *memoryRealm) UpdateAsset(
 			return domain.Asset{}, domain.ErrAlreadyExists
 		}
 		delete(r.assets, oldCode)
+		for code, group := range r.groups {
+			if group.Currency == oldCode {
+				group.Currency = asset.Code
+				r.groups[code] = group
+			}
+		}
+		for code, account := range r.accounts {
+			if account.Currency == oldCode {
+				account.Currency = asset.Code
+				r.accounts[code] = account
+			}
+		}
+		for key, balance := range r.balances {
+			if balance.Asset != oldCode {
+				continue
+			}
+			delete(r.balances, key)
+			balance.Asset = asset.Code
+			r.balances[balanceKey(balance.Account, balance.Asset)] = balance
+		}
+		for key, limit := range r.rateLimits {
+			if limit.Asset != oldCode {
+				continue
+			}
+			delete(r.rateLimits, key)
+			limit.Asset = asset.Code
+			r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+		}
+		for key, limit := range r.orderSizeLimits {
+			if limit.Asset != oldCode {
+				continue
+			}
+			delete(r.orderSizeLimits, key)
+			limit.Asset = asset.Code
+			r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+		}
+		for id, order := range r.orders {
+			if order.BaseAsset == oldCode {
+				order.BaseAsset = asset.Code
+			}
+			if order.QuoteAsset == oldCode {
+				order.QuoteAsset = asset.Code
+			}
+			r.orders[id] = order
+		}
+		for i := range r.trades {
+			if r.trades[i].BaseAsset == oldCode {
+				r.trades[i].BaseAsset = asset.Code
+			}
+			if r.trades[i].QuoteAsset == oldCode {
+				r.trades[i].QuoteAsset = asset.Code
+			}
+		}
+		for key, instrument := range r.instruments {
+			if instrument.BaseAsset == oldCode {
+				instrument.BaseAsset = asset.Code
+			}
+			if instrument.QuoteAsset == oldCode {
+				instrument.QuoteAsset = asset.Code
+			}
+			r.instruments[key] = instrument
+		}
+		for key, quote := range r.quotes {
+			if quote.BaseAsset == oldCode {
+				quote.BaseAsset = asset.Code
+			}
+			if quote.QuoteAsset == oldCode {
+				quote.QuoteAsset = asset.Code
+			}
+			r.quotes[key] = quote
+		}
 	}
 	r.assets[asset.Code] = asset
 	return asset, nil

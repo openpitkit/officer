@@ -48,8 +48,9 @@ func handleExportBackup(svc Service) http.HandlerFunc {
 			return
 		}
 		if !validBackupScope(req.Scope) {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-				"backup scope must include all or at least one section")
+			httpx.WriteValidationErrMsg(
+				w, "backup scope must include all or at least one section",
+			)
 			return
 		}
 		archive, filename, err := svc.ExportBackup(r.Context(), req.Scope)
@@ -141,23 +142,21 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Mode == "" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-				"restore mode is required")
+			httpx.WriteValidationErrMsg(w, "restore mode is required")
 			return
 		}
 		if !validRestoreMode(req.Mode) {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-				"unknown restore mode")
+			httpx.WriteValidationErrMsg(w, "unknown restore mode")
 			return
 		}
 		if !validBackupScope(req.Scope) {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-				"restore scope must include all or at least one section")
+			httpx.WriteValidationErrMsg(
+				w, "restore scope must include all or at least one section",
+			)
 			return
 		}
 		if req.ArchiveFile == "" && len(req.Archive.Manifest.Sections) == 0 {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-				"backup archive is required")
+			httpx.WriteValidationErrMsg(w, "backup archive is required")
 			return
 		}
 		archive := req.Archive
@@ -165,7 +164,7 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 			parsed, err := parseBackupArchiveFile(req.ArchiveFilename,
 				req.ArchiveFile)
 			if err != nil {
-				httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+				httpx.WriteValidationErrMsg(w, err.Error())
 				return
 			}
 			archive = parsed
@@ -190,8 +189,9 @@ func handleResetDatabase(svc Service) http.HandlerFunc {
 			return
 		}
 		if !req.Confirm {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-				"database reset confirmation is required")
+			httpx.WriteValidationErrMsg(
+				w, "database reset confirmation is required",
+			)
 			return
 		}
 		if err := svc.ResetDatabase(r.Context()); err != nil {

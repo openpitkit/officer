@@ -1351,7 +1351,7 @@ export function Service() {
         <div
           role="status"
           aria-busy="true"
-          aria-label="Loading"
+          aria-label={tc("states.loading")}
           className="space-y-4"
         >
           {[0, 1, 2].map((i) => (

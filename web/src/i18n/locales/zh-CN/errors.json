@@ -15,6 +15,7 @@
     "network": "无法连接到服务。",
     "signing": "签名操作被拒绝。"
   },
+  "pageNotFound": "页面未找到",
   "http": "请求 {{path}} 失败，HTTP 状态码 {{status}}",
   "network": "连接 {{path}} 时发生网络错误：{{detail}}",
   "invalidJson": "来自 {{path}} 的响应不是有效的 JSON"

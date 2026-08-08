@@ -56,16 +56,19 @@ func writeReservedGroupErr(w http.ResponseWriter) {
 // refuseReservedGroupCode answers a request that would give a group the
 // reserved sentinel as its literal code and reports that it did. The sentinel
 // addresses the realm default group in every group route, so a group carrying
-// it would be created but then unreachable. It is a malformed value, hence
-// 400, not the categorical 403 the sentinel path itself returns.
+// it would be created but then unreachable. It is a schema-valid but forbidden
+// value, hence a 422 validation problem rather than the categorical 403 the
+// sentinel path itself returns.
 func refuseReservedGroupCode(w http.ResponseWriter, code string) bool {
 	if code != domain.ReservedGroupCode {
 		return false
 	}
-	httpx.WriteErrMsg(
-		w, http.StatusBadRequest, "validation",
+	httpx.WriteValidationProblem(
+		w,
 		"group code "+domain.ReservedGroupCode+" is reserved for addressing the "+
 			"realm default group",
+		"/code",
+		"reserved",
 	)
 	return true
 }
@@ -84,7 +87,7 @@ func handleListGroups(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := groupListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationErrMsg(w, err.Error())
 			return
 		}
 		groups, err := svc.ListGroupRows(r.Context(), filter)
@@ -139,7 +142,7 @@ func handleGetGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if refuseReservedGroup(w, code) {
@@ -169,7 +172,7 @@ func handleUpdateGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if refuseReservedGroup(w, code) {
@@ -202,7 +205,7 @@ func handleSetGroupCurrency(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if refuseReservedGroup(w, code) {
@@ -249,7 +252,7 @@ func handleSetGroupNotes(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if refuseReservedGroup(w, code) {
@@ -274,7 +277,7 @@ func handleBlockGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if refuseReservedGroup(w, code) {
@@ -299,7 +302,7 @@ func handleUnblockGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if refuseReservedGroup(w, code) {
@@ -318,13 +321,13 @@ func handleDeleteGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if refuseReservedGroup(w, code) {
 			return
 		}
-		if err := svc.DeleteGroup(r.Context(), code); err != nil {
+		if err := svc.DeleteGroup(r.Context(), code, forceQuery(r)); err != nil {
 			writeGroupErr(w, err)
 			return
 		}

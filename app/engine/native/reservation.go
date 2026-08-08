@@ -90,33 +90,9 @@ func (l accountLane) SubmitImmediate(
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
-	fillQuantity, err := immediateFillQuantity(o, tradePrice)
-	if err != nil {
-		reservation.RollbackAndClose()
-		return ImmediateResult{}, err
-	}
-	// The report goes straight back to the engine, so it carries the lock the
-	// engine produced for this very reservation. A lock is an opaque engine
-	// artifact; the LockPrice fallback would rebuild a single-entry
-	// default-policy-group lock and drop every other group's leg.
-	reportInput := domain.ExecutionReportInput{
-		BaseAsset:      o.BaseAsset,
-		QuoteAsset:     o.QuoteAsset,
-		FillQuantity:   fillQuantity,
-		FillPrice:      tradePrice,
-		LeavesQuantity: "0",
-		LockPrice:      settlement,
-		Lock:           lockBytes,
-		Account:        o.Account,
-		Side:           o.Side,
-		Order:          o.ExternalID,
-		OrderStatus:    domain.OrderStatusFilled,
-	}
-
-	// Persist the reservation outcomes before the post-trade outcomes. A final
-	// execution report may omit an unchanged available balance after releasing a
-	// reservation, so the persisted snapshot still needs the reservation's
-	// available/held transition.
+	// The engine has now applied the reservation and reports its base delta.
+	// Read it before constructing the post-trade report so a volume order never
+	// needs Officer to derive a base quantity from a price.
 	adjustments, err := reservation.AccountAdjustments()
 	if err != nil {
 		reservation.RollbackAndClose()
@@ -127,14 +103,32 @@ func (l accountLane) SubmitImmediate(
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
-	reservedQuantity, err := immediateReservedQuantityFrom(
-		"0", reportInput, reservationOutcomes,
-	)
+	fillQuantity, err := immediateFillQuantity(o, reservationOutcomes)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
-	reportInput.ReservedQuantity = reservedQuantity
+	// The report goes straight back to the engine, so it carries the lock the
+	// engine produced for this very reservation. A lock is an opaque engine
+	// artifact; the LockPrice fallback would rebuild a single-entry
+	// default-policy-group lock and drop every other group's leg.
+	// The zero leaves is the request's own terms - an immediate order fills in
+	// full - not a terminal zero Officer derived from an engine answer.
+	reportInput := domain.ExecutionReportInput{
+		BaseAsset:       o.BaseAsset,
+		QuoteAsset:      o.QuoteAsset,
+		FillQuantity:    fillQuantity,
+		FillPrice:       tradePrice,
+		LeavesQuantity:  "0",
+		ReleaseQuantity: "0",
+		LockPrice:       settlement,
+		Lock:            lockBytes,
+		Account:         o.Account,
+		Side:            o.Side,
+		Order:           o.ExternalID,
+		OrderStatus:     domain.OrderStatusFilled,
+	}
+
 	report, err := executionReportFromAccount(reportInput, accountID)
 	if err != nil {
 		reservation.RollbackAndClose()
@@ -209,25 +203,8 @@ func (l accountLane) submitImmediateDropCopy(
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
-			fillQuantity, err := immediateFillQuantity(o, tradePrice)
-			if err != nil {
-				return preparedImmediateDropCopy{}, err
-			}
-			// Hand back the lock this operation produced, not a reconstruction
-			// from one display price.
-			reportInput := domain.ExecutionReportInput{
-				BaseAsset:      o.BaseAsset,
-				QuoteAsset:     o.QuoteAsset,
-				FillQuantity:   fillQuantity,
-				FillPrice:      tradePrice,
-				LeavesQuantity: "0",
-				LockPrice:      settlement,
-				Lock:           lockBytes,
-				Account:        o.Account,
-				Side:           o.Side,
-				Order:          o.ExternalID,
-				OrderStatus:    domain.OrderStatusFilled,
-			}
+			// The applied drop-copy operation is the source of a volume order's
+			// base quantity. Read its outcomes before building the fill report.
 			adjustments, err := operation.AccountAdjustments()
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
@@ -236,13 +213,28 @@ func (l accountLane) submitImmediateDropCopy(
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
-			reservedQuantity, err := immediateReservedQuantityFrom(
-				"0", reportInput, outcomes,
-			)
+			fillQuantity, err := immediateFillQuantity(o, outcomes)
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
-			reportInput.ReservedQuantity = reservedQuantity
+			// Hand back the lock this operation produced, not a reconstruction
+			// from one display price. The zero leaves is the request's own terms
+			// - an immediate order fills in full - not a terminal zero Officer
+			// derived from an engine answer.
+			reportInput := domain.ExecutionReportInput{
+				BaseAsset:       o.BaseAsset,
+				QuoteAsset:      o.QuoteAsset,
+				FillQuantity:    fillQuantity,
+				FillPrice:       tradePrice,
+				LeavesQuantity:  "0",
+				ReleaseQuantity: "0",
+				LockPrice:       settlement,
+				Lock:            lockBytes,
+				Account:         o.Account,
+				Side:            o.Side,
+				Order:           o.ExternalID,
+				OrderStatus:     domain.OrderStatusFilled,
+			}
 			report, err := executionReportFromAccount(reportInput, accountID)
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
@@ -304,16 +296,6 @@ func (l accountLane) settleImmediateApplied(
 			o, state, "the ordered outcomes cannot be combined", err,
 		)
 	}
-	reservedQuantity, err := immediateReservedQuantityFrom(
-		reportInput.ReservedQuantity,
-		reportInput,
-		finalOutcomes,
-	)
-	if err != nil {
-		return ImmediateResult{}, immediateReconciliationError(
-			o, state, "the remaining reservation is unmappable", err,
-		)
-	}
 	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
 		accountID,
 		postTrade.AccountPnls,
@@ -338,7 +320,6 @@ func (l accountLane) settleImmediateApplied(
 		accountPnl,
 		accountPnlHaltReason,
 	)
-	persistence.ReservedQuantity = reservedQuantity
 	return ImmediateResult{
 		Accepted:             true,
 		Persistence:          &persistence,
@@ -350,7 +331,6 @@ func (l accountLane) settleImmediateApplied(
 		AccountPnlHaltReason: accountPnlHaltReason,
 		SettlementLockPrice:  reportInput.LockPrice,
 		FillQuantity:         reportInput.FillQuantity,
-		LeavesQuantity:       reportInput.LeavesQuantity,
 		TradePrice:           reportInput.FillPrice,
 	}, nil
 }

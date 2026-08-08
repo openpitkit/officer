@@ -29,7 +29,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -113,10 +112,6 @@ func appendAudit(
 	if actorTitle == "" && entry.Actor != "" {
 		actorTitle = lookupTitle(ctx, q, "principal", entry.Actor)
 	}
-	accountID, err := lookupID(ctx, q, "account", entry.Account.String())
-	if err != nil {
-		return err
-	}
 	source := entry.Source
 	if source == "" {
 		source = domain.SourceSystem
@@ -132,10 +127,10 @@ func appendAudit(
 	if _, err := q.ExecContext(
 		ctx,
 		`INSERT INTO audit
-		 (external_id, account_id, account_code, account_title, asset_code,
+		 (external_id, account_code, account_title, asset_code,
 		  group_code, actor_code, actor_title, at, action_id, source_id, detail)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		xid.Bytes(), accountID, entry.Account.String(), accountTitle, entry.Asset,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		xid.Bytes(), entry.Account.String(), accountTitle, entry.Asset,
 		entry.Group, entry.Actor, actorTitle, nowStr(), actionID, sourceID,
 		entry.Detail,
 	); err != nil {
@@ -306,7 +301,7 @@ func auditListClauses(
 		clauses = append(clauses, "au.external_id = ?")
 		args = append(args, filter.ExternalID.Bytes())
 	}
-	appendAuditAccountMatcher(&clauses, &args, filter.Account)
+	appendMatcher(&clauses, &args, "au.account_code", filter.Account)
 	appendMatcher(&clauses, &args, "au.asset_code", filter.Asset)
 	appendMatcher(&clauses, &args, "au.group_code", filter.Group)
 	appendMatcher(&clauses, &args, "au.actor_code", filter.Actor)
@@ -364,12 +359,6 @@ func appendAuditCategoryFilter(
 		*args = append(*args, submitID, executionID)
 	}
 	return nil
-}
-
-func appendAuditAccountMatcher(
-	clauses *[]string, args *[]any, matcher fwstore.TextMatcher,
-) {
-	appendMatcher(clauses, args, "au.account_code", matcher)
 }
 
 func scanAuditListRow(
@@ -473,21 +462,4 @@ func lookupTitle(ctx context.Context, q sqlQueryer, table, code string) string {
 		return ""
 	}
 	return title
-}
-
-func lookupID(
-	ctx context.Context, q sqlQueryer, table, code string,
-) (any, error) {
-	if code == "" {
-		return nil, nil
-	}
-	var id int64
-	query := fmt.Sprintf(`SELECT id FROM %s WHERE code = ?`, table)
-	if err := q.QueryRowContext(ctx, query, code).Scan(&id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("store: lookup %s id for %q: %w", table, code, err)
-	}
-	return id, nil
 }

@@ -55,6 +55,19 @@ tags:
 
 paths:
 
+  /route-manifest.json:
+    get:
+      operationId: getRouteManifest
+      summary: List REST routes available to the current caller
+      tags: [health]
+      responses:
+        "200":
+          description: Caller-filtered route manifest.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeRouteManifest"
+
   # ---------------------------------------------------------------------------
   # Health / status
   # ---------------------------------------------------------------------------
@@ -187,6 +200,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -257,6 +272,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -332,7 +349,7 @@ paths:
               properties:
                 code:
                   type: string
-                  description: Asset public code (its immutable handle).
+                  description: Operator-chosen asset public code.
                 title:
                   type: string
                   maxLength: 256
@@ -385,8 +402,8 @@ paths:
                 code:
                   type: string
                   description: >
-                    Replacement asset public code. Dependent rows reference the
-                    asset by its internal id, so renaming the code is safe.
+                    Replacement asset public code. Renaming updates the stored
+                    asset and records the change in the audit log.
                 title:
                   type: string
                   maxLength: 256
@@ -412,8 +429,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
-        "409":
-          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -793,6 +810,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/HasDependentsError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -881,8 +900,11 @@ paths:
       summary: Set (or clear) account group membership
       description: >
         Assigns the account to a group. Pass an empty string to clear group
-        membership. The request is rejected when changing membership would alter
-        the account's effective currency while it has balance or P&L rows.
+        membership. The move returns 409 `currency_change_blocked` when it would
+        alter the account's effective currency while the account has any
+        non-zero balance, position, cost-basis, or P&L value. An account with a
+        currency of its own resolves through no group tier, so its membership
+        moves freely.
       tags: [accounts]
       parameters:
         - $ref: "#/components/parameters/MissingAccount"
@@ -915,6 +937,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/AccountMissingOrNotFoundError"
+        "409":
+          $ref: "#/components/responses/CurrencyChangeBlockedError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1285,10 +1309,15 @@ paths:
       operationId: deleteGroup
       summary: Delete a group
       description: >
-        Deletes a group. The request is rejected when deleting the group would
-        alter member accounts' effective currency while they have balance or P&L
-        rows.
+        Deletes a group and clears the group assignment of its member accounts.
+        Accounts and their trading and compliance history remain intact. The
+        request is rejected when detaching members would alter their effective
+        currency while they carry protected state. A group-scoped Spot Funds
+        P&L bound is a dependent row: deletion returns `has_dependents` until
+        the caller explicitly passes `force=true`.
       tags: [groups]
+      parameters:
+        - $ref: "#/components/parameters/ForceCascade"
       responses:
         "204":
           description: Group deleted.
@@ -1300,6 +1329,16 @@ paths:
           $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: Currency-change or dependent-row deletion refusal.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/CurrencyChangeBlockedError"
+                  - $ref: "#/components/schemas/HasDependentsError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -2096,12 +2135,12 @@ paths:
         Advances the parent order to a target lifecycle status. The instrument,
         account, and side are taken from the parent order.
 
-        Reports are serialized on the account pipeline. Reports carrying a fill
-        or commission, and reports targeting a terminal status, are settled
-        through the engine. Non-terminal reports without a fill or commission
-        record workflow state directly. Reports for ordinary orders are signed
-        and attested fail-closed. Reports for drop-copy orders remain unsigned
-        and unattested because drop-copy did not enforce a pre-trade verdict.
+        Reports are serialized on the account pipeline. A commission is always
+        processed through the engine. Caller-reported `leavesQuantity` is
+        independent of processing and is recorded when supplied. Reports for
+        ordinary orders are signed and attested fail-closed. Reports for
+        drop-copy orders remain unsigned and unattested because drop-copy did
+        not enforce a pre-trade verdict.
       tags: [orders]
       requestBody:
         required: true
@@ -2112,53 +2151,75 @@ paths:
               additionalProperties: false
               required: [status]
               description: >
-                `quantity` and `price` must be provided together, and are only
-                accepted for fill statuses (`filled`, `partially_filled`) or
-                terminal statuses (`rejected`, `rolled_back`, `cancelled`); a
-                non-terminal workflow status (`submitted`, `accepted`,
-                `committed`) must not carry fill or lock fields. Reports carrying
-                a fill or commission, and reports targeting a terminal status,
-                are routed through the engine and must carry `leavesQuantity`.
-                The value is the venue-reported open base quantity; Officer
-                stores it verbatim and never derives or substitutes it. On a
-                non-terminal fill the engine receives that value, and its
-                post-trade path has no reject channel, so an incomplete report
-                cannot be refused there. On a terminal report Officer supplies
-                the release quantity itself, determined independently, from the
-                persisted reserve ledger; requiring the field there is Officer's
-                own policy, so the venue's own account of the order survives in
-                the record. The field remains optional only for a workflow
-                status update with no fill or commission.
-              dependentRequired:
-                quantity: [price, leavesQuantity]
-                price: [quantity, leavesQuantity]
-                commission: [leavesQuantity]
+                `quantity` and `price` form one fill and must be provided
+                together. A fill is accepted only for `filled` or
+                `partially_filled` and requires non-empty `leavesQuantity`.
+                Either fill status may instead carry only a commission; that
+                shape must leave `leavesQuantity` omitted or empty. All other
+                statuses reject fill fields and accept optional
+                `leavesQuantity`. A supplied leaves value is recorded verbatim
+                on the order, report event, and attestation. Commission is
+                independent: it is always processed through the engine but
+                never changes leaves requirements. A null
+                or empty commission pair means no commission; otherwise amount
+                and currency must both be non-empty. An empty string is an
+                unsupplied member everywhere in this body.
               allOf:
+                # `quantity` and `price` are one unit: both carry a value or
+                # neither does. Stated on the values because Officer reads an
+                # empty member as unsupplied, not as a fill of zero.
+                - anyOf:
+                    - $ref: "#/components/schemas/ExecutionReportFillSupplied"
+                    - $ref: "#/components/schemas/ExecutionReportFillOmitted"
+                - if:
+                    properties:
+                      status:
+                        enum:
+                          [submitted, accepted, rejected, committed, rolled_back,
+                           cancelled]
+                    required: [status]
+                  then:
+                    properties:
+                      quantity:
+                        const: ""
+                      price:
+                        const: ""
                 - if:
                     properties:
                       status:
                         enum: [filled, partially_filled]
                     required: [status]
                   then:
-                    required: [quantity, price, leavesQuantity]
+                    anyOf:
+                      - $ref: "#/components/schemas/ExecutionReportFillSupplied"
+                      - $ref: "#/components/schemas/ExecutionReportCommissionSupplied"
                 - if:
-                    properties:
-                      status:
-                        enum: [rejected, rolled_back, cancelled]
-                    required: [status]
+                    $ref: "#/components/schemas/ExecutionReportFillSupplied"
                   then:
                     required: [leavesQuantity]
+                    properties:
+                      leavesQuantity:
+                        minLength: 1
+                - if:
+                    allOf:
+                      - properties:
+                          status:
+                            enum: [filled, partially_filled]
+                        required: [status]
+                      - $ref: "#/components/schemas/ExecutionReportFillOmitted"
+                  then:
+                    properties:
+                      leavesQuantity:
+                        const: ""
                 - if:
                     properties:
                       status:
                         enum: [submitted, accepted, committed]
                     required: [status]
                   then:
-                    not:
-                      anyOf:
-                        - required: [quantity]
-                        - required: [price]
-                        - required: [lockPrice]
+                    properties:
+                      lockPrice:
+                        const: ""
               properties:
                 id:
                   $ref: "#/components/schemas/Id"
@@ -2176,51 +2237,63 @@ paths:
                 quantity:
                   type: string
                   description: >
-                    Fill quantity - exact decimal string. Only permitted with a
-                    fill or terminal status. When present with `price`, routes
-                    the report through engine settlement.
+                    Fill quantity - exact decimal string. Only permitted for
+                    `filled` or `partially_filled` and paired with `price`.
                 price:
                   type: string
                   description: >
-                    Fill price - exact decimal string. Only permitted with a
-                    fill or terminal status. When present with `quantity`,
-                    routes the report through engine settlement.
+                    Fill price - exact decimal string. Only permitted for
+                    `filled` or `partially_filled` and paired with `quantity`.
                 leavesQuantity:
-                  type: string
+                  allOf:
+                    - $ref: "#/components/schemas/OpenQuantity"
                   description: >
-                    Venue-reported open base quantity. Officer stores it verbatim
-                    and never derives or substitutes it; reserve release comes
-                    from the persisted reserve ledger. Required for every
-                    engine-settled report - a fill, a commission, or a terminal
-                    status. On a non-terminal fill the engine receives this value
-                    and cannot reject an incomplete report; on a terminal report
-                    Officer supplies the release quantity itself and requires the
-                    field as its own policy.
+                    Caller-reported open base quantity. Required and non-empty
+                    with an actual fill; omitted or empty for a commission-only
+                    `filled` or `partially_filled` report; otherwise optional.
+                    Officer records a supplied value verbatim on the order, in
+                    the report event, and in the attestation. Empty means absent.
                 lockPrice:
                   type: string
                   description: >
                     Lock price used for engine settlement - exact decimal
                     string. Not accepted on non-terminal workflow reports.
                 commission:
-                  type: object
                   description: >
                     Optional report commission. `amount` and `currency` must be
                     provided together; Officer forwards them to the SDK as one
                     structured value and does not convert currencies. It is
-                    independent of `quantity` and `price`, so any report may
-                    carry a commission without a trade. A commission makes an
-                    otherwise workflow-only report engine-settled, which also
-                    requires `leavesQuantity`.
-                  required: [amount, currency]
-                  properties:
-                    amount:
-                      type: string
-                      description: >
-                        Fee (positive) or rebate (negative) - exact decimal
-                        string.
-                    currency:
-                      type: string
-                      description: Commission currency code.
+                    independent of `quantity`, `price`, and leaves requirements,
+                    so any report may carry a commission without a trade. It is
+                    always processed through the engine.
+                  oneOf:
+                    - type: object
+                      additionalProperties: false
+                      anyOf:
+                        # Both members carry a value...
+                        - required: [amount, currency]
+                          properties:
+                            amount:
+                              minLength: 1
+                            currency:
+                              minLength: 1
+                        # ...or neither does: an omitted member and an empty one
+                        # both leave the report without a commission.
+                        - properties:
+                            amount:
+                              const: ""
+                            currency:
+                              const: ""
+                      properties:
+                        amount:
+                          type: string
+                          description: >
+                            Fee (positive) or rebate (negative) - exact decimal
+                            string.
+                        currency:
+                          type: string
+                          description: Commission currency code.
+                    - type: "null"
                 force:
                   type: boolean
                   description: >
@@ -2234,7 +2307,8 @@ paths:
             reports return an empty attestation and `signed: false`. Engine-settled
             reports may create a trade, update balances, release a pre-trade
             lock, or block an account; non-terminal reports without a fill or
-            commission record the lifecycle transition only. For ordinary orders,
+            commission record the lifecycle transition and the reported open
+            quantity, and move no balance. For ordinary orders,
             `attestationToken` proves which result Officer recorded, and signing
             or attestation persistence failures fail before the report is recorded.
           content:
@@ -3236,15 +3310,13 @@ paths:
       operationId: cancelOrder
       summary: Cancel an untouched order with its approval token
       description: >
-        Verifies the approval token and forwards a terminal cancellation report
-        for an order with no prior execution-report activity. The report is
-        settled by the engine, and Officer requires the venue-reported
-        `leavesQuantity` so the venue's own account of the order survives in the
-        record. Officer stores it verbatim and never derives or substitutes it;
-        a cancel is always terminal, so the engine never sees that value -
-        reserve release comes from the persisted reserve ledger. If activity
-        already exists, the caller must submit an explicit execution report
-        instead.
+        Verifies the approval token and records a terminal cancellation report
+        for an order with no prior execution-report activity. Optional
+        caller-reported `leavesQuantity` is recorded in the order, report event,
+        and attestation when supplied. Omitted or empty `leavesQuantity` remains
+        absent.
+        If activity already exists, the caller must submit an explicit execution
+        report instead.
       tags: [signing]
       requestBody:
         required: true
@@ -3253,19 +3325,17 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [token, leavesQuantity]
+              required: [token]
               properties:
                 token:
                   type: string
                   description: Approval token issued by submit.
                 leavesQuantity:
-                  type: string
+                  allOf:
+                    - $ref: "#/components/schemas/OpenQuantity"
                   description: >
-                    Venue-reported open base quantity, stored verbatim by
-                    Officer. It is never derived or substituted; reserve release
-                    comes from the persisted reserve ledger. Required by Officer
-                    so the venue's own account of the order survives in the
-                    record.
+                    Optional caller-reported open base quantity. A supplied value
+                    is recorded verbatim; omitted or empty means absent.
                 reason:
                   type: string
                   description: Optional human-readable cancellation reason.
@@ -4006,7 +4076,9 @@ components:
             $ref: "#/components/schemas/Error"
 
     ConflictError:
-      description: Resource already exists.
+      description: >-
+        Resource conflict, including an existing code, protected runtime state,
+        or a configured dependency that prevents the mutation.
       content:
         application/json:
           schema:
@@ -4116,12 +4188,81 @@ components:
 
   schemas:
 
+    RuntimeRouteManifest:
+      type: object
+      required: [routes]
+      properties:
+        routes:
+          type: array
+          items:
+            type: object
+            required: [method, path]
+            properties:
+              method:
+                type: string
+              path:
+                type: string
+
     # Shared identity
 
     Id:
       type: string
       description: >
         Opaque public handle. No surrogate or engine id is ever exposed.
+
+    OpenQuantity:
+      type: string
+      pattern: '^(\+?(\d+(\.\d*)?|\.\d+)|-(0+(\.0*)?|\.0+))?$'
+      description: >
+        Plain non-negative decimal. Exponent notation and surrounding whitespace
+        are refused. A leading `+` is accepted; a leading `-` is accepted only
+        for zero magnitude (`-0`). The empty string represents an omitted value
+        only where the enclosing request permits it.
+
+    # Execution-report member-presence fragments. Officer reads an empty member
+    # as unsupplied, so every "provided together" rule is stated on the values
+    # rather than on key presence. Each rule lives here once and is referenced
+    # by every branch that needs it.
+
+    ExecutionReportFillSupplied:
+      type: object
+      description: >
+        Matches an execution report that supplies a fill: `quantity` and `price`
+        are both present and both carry a value.
+      required: [quantity, price]
+      properties:
+        quantity:
+          minLength: 1
+        price:
+          minLength: 1
+
+    ExecutionReportFillOmitted:
+      type: object
+      description: >
+        Matches an execution report that supplies no fill. An omitted member and
+        an empty one are the same thing to Officer.
+      properties:
+        quantity:
+          const: ""
+        price:
+          const: ""
+
+    ExecutionReportCommissionSupplied:
+      type: object
+      description: >
+        Matches an execution report that supplies a commission: the object is
+        present and both of its members carry a value. Officer reads no other
+        shape - `null`, an absent object, or an empty member - as a commission.
+      required: [commission]
+      properties:
+        commission:
+          type: object
+          required: [amount, currency]
+          properties:
+            amount:
+              minLength: 1
+            currency:
+              minLength: 1
 
     # Errors
 
@@ -4132,7 +4273,10 @@ components:
       properties:
         type:
           type: string
-          enum: [about:blank]
+          description: >
+            RFC 9457 problem type URI. Officer uses `about:blank` for generic
+            HTTP errors.
+          enum: ["about:blank"]
         title:
           type: string
           description: Canonical HTTP status title.
@@ -4188,6 +4332,9 @@ components:
     CurrencyChangeBlockedError:
       type: object
       required: [error]
+      description: >
+        A refused currency change. Exactly one scope key is present and it names
+        the target the caller addressed: `account` or `group`.
       properties:
         error:
           type: object
@@ -4201,15 +4348,24 @@ components:
             account:
               type: string
               description: Account code for an account-scoped currency change.
+            group:
+              type: string
+              description: Group code for a group-scoped currency change.
             field:
               type: string
+              description: >
+                Refused currency member of the addressed target.
               enum: [currency]
             path:
               type: string
-              description: Stable dotted path to the guarded currency field.
+              description: >
+                Stable dotted path to the refused member, where `<code>` is the
+                target the request addressed: `accounts.<code>.currency` or
+                `groups.<code>.currency`.
             constraint:
               type: string
-              enum: [economically_empty, all_members_economically_empty]
+              enum:
+                [economically_empty, all_members_economically_empty]
 
     DependentCount:
       type: object
@@ -4619,7 +4775,8 @@ components:
       properties:
         code:
           type: string
-          description: Asset public code (its immutable handle).
+          description: >
+            Operator-chosen public code, renameable through asset update.
         title:
           type: string
           description: Mutable display title.
@@ -5076,9 +5233,15 @@ components:
         leavesQuantity:
           type: string
           description: >
-            Exact decimal string carried by the last accepted execution report,
-            or an empty string before any such report supplies one. Officer
-            stores it unchanged and never substitutes a value.
+            Recorded open base quantity as an exact decimal string, or an empty
+            string while nothing has recorded one. An accepted order records the
+            base-asset delta the engine applied, zero included; a pre-trade
+            reject records `0`, the engine's answer that nothing was reserved.
+            Every later execution report that supplies a value replaces it
+            verbatim, at terminal status too, and a report that supplies none
+            leaves the record as it was. Officer derives nothing here: no
+            subtraction for a fill, no zero for terminal status, no blank-out
+            for an engine block.
         price:
           type: string
           description: Exact decimal string.
@@ -5158,6 +5321,11 @@ components:
           format: date-time
         type:
           type: string
+          description: >
+            Lifecycle event kind. Any commission-carrying report with no fill
+            records `commission`, not a synthetic `fill`, whatever status it
+            targets. A status that has its own lifecycle event records that
+            event as well, so one report can produce two entries.
         source:
           type: string
           enum: [panel, api, mcp, system]
@@ -5190,6 +5358,11 @@ components:
         rejectDetails:
           type: string
           description: Present on rejected events and account-blocking fill events.
+        rejects:
+          type: array
+          description: Complete ordered engine reject list when the event was rejected.
+          items:
+            $ref: "#/components/schemas/OrderReject"
         fillQuantity:
           type: string
           description: Exact decimal string; present on fill events.
@@ -6413,6 +6586,14 @@ components:
             - type: "null"
         leavesQuantity:
           type: string
+          description: >
+            The open base quantity this request bound. An execution report and
+            the cancellation shortcut bind the leaves their own request carried;
+            an immediate submit's settling event binds the leaves of the report
+            the engine adapter built for it. A submit or confirmation lifecycle
+            event binds the order's own recorded open quantity instead, because
+            it attests the order's state and not a report. Empty only when the
+            bound source had no value.
         orderStatus:
           type: string
         blocks:

@@ -67,9 +67,7 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Enabled == nil {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "enabled is required",
-			)
+			httpx.WriteValidationProblem(w, "enabled is required", "/enabled", "required")
 			return
 		}
 		instance := domain.MarketDataInstance{
@@ -107,7 +105,7 @@ func handleUpdateMarketDataInstanceSettings(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req marketDataUpdateInstanceSettingsRequestDTO
@@ -135,7 +133,7 @@ func handleSetMarketDataInstanceEnabled(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		instanceID, err := domain.ParseExternalID(id)
@@ -150,9 +148,7 @@ func handleSetMarketDataInstanceEnabled(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Enabled == nil {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "enabled is required",
-			)
+			httpx.WriteValidationProblem(w, "enabled is required", "/enabled", "required")
 			return
 		}
 		if err := svc.SetMarketDataInstanceEnabled(r.Context(), id, *req.Enabled); err != nil {
@@ -180,7 +176,7 @@ func handleDeleteMarketDataInstance(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		if err := svc.DeleteMarketDataInstance(r.Context(), id); err != nil {
@@ -199,7 +195,7 @@ func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req marketDataUpsertInstrumentRequestDTO
@@ -207,15 +203,13 @@ func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.ManualPrice == nil {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "manualPrice is required",
+			httpx.WriteValidationProblem(
+				w, "manualPrice is required", "/manualPrice", "required",
 			)
 			return
 		}
 		if req.Enabled == nil {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "enabled is required",
-			)
+			httpx.WriteValidationProblem(w, "enabled is required", "/enabled", "required")
 			return
 		}
 		instanceID, err := domain.ParseExternalID(id)
@@ -250,7 +244,7 @@ func handleSetMarketDataInstrumentEnabled(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {
@@ -261,9 +255,7 @@ func handleSetMarketDataInstrumentEnabled(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Enabled == nil {
-			httpx.WriteErrMsg(
-				w, http.StatusBadRequest, "validation", "enabled is required",
-			)
+			httpx.WriteValidationProblem(w, "enabled is required", "/enabled", "required")
 			return
 		}
 		if err := svc.SetMarketDataInstrumentEnabled(
@@ -280,7 +272,7 @@ func handleDeleteMarketDataInstrument(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		symbol := r.URL.Query().Get("externalSymbol")
@@ -301,7 +293,7 @@ func handleVerifyMarketDataSymbol(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {
@@ -331,7 +323,7 @@ func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		var req struct {
@@ -347,7 +339,7 @@ func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
 			return
 		}
 		if strings.TrimSpace(req.Query) == "" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "query is required")
+			httpx.WriteValidationErrMsg(w, "query is required")
 			return
 		}
 		// The strike is an optional, caller-supplied decimal criterion. Validate it

@@ -136,9 +136,20 @@ func (r *memoryRealm) ListOrders(
 func (r *memoryRealm) ListOrderRows(
 	ctx context.Context, filter store.OrderListFilter,
 ) (store.OrderListPage, error) {
-	orders, err := r.ListAllOrders(ctx, filter.Account, filter.Source)
+	all, err := r.ListAllOrders(ctx, filter.Account, filter.Source)
 	if err != nil {
 		return store.OrderListPage{}, err
+	}
+	orders := make([]domain.Order, 0, len(all))
+	for _, order := range all {
+		if !textMatches(filter.BaseAsset, order.BaseAsset) ||
+			!textMatches(filter.QuoteAsset, order.QuoteAsset) {
+			continue
+		}
+		if len(filter.Status) > 0 && !slices.Contains(filter.Status, order.Status) {
+			continue
+		}
+		orders = append(orders, order)
 	}
 	rows := make([]store.OrderListRow, 0, len(orders))
 	for _, order := range orders {
@@ -243,9 +254,6 @@ func (r *memoryRealm) RecordOrderSettlement(
 		}
 		if st.Leaves != "" {
 			order.Leaves = st.Leaves
-		}
-		if st.ReservedQuantity != "" {
-			order.ReservedQuantity = st.ReservedQuantity
 		}
 		r.orders[st.Order] = order
 	}
@@ -391,9 +399,6 @@ func (r *memoryRealm) RecordOrderSubmission(
 	}
 	if settlement.Leaves != "" {
 		order.Leaves = settlement.Leaves
-	}
-	if settlement.ReservedQuantity != "" {
-		order.ReservedQuantity = settlement.ReservedQuantity
 	}
 	return order, nil
 }

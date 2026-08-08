@@ -101,8 +101,8 @@ type currencyCascadeDTO struct {
 	Default string `json:"default"`
 }
 
-// assetDTO is the wire shape of a single asset dictionary record. An asset's
-// public handle is the immutable code; the store surrogate id is never
+// assetDTO is the wire shape of a single asset dictionary record. Its public
+// code is operator-chosen and renameable; the store surrogate id is never
 // serialized.
 type assetDTO struct {
 	Code       string `json:"code"`
