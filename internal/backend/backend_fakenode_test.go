@@ -848,9 +848,6 @@ func completeFakeImmediateResult(
 			result.TradePrice = result.SettlementLockPrice
 		}
 	}
-	if result.LeavesQuantity == "" {
-		result.LeavesQuantity = "0"
-	}
 	if result.ExecutionReport == nil {
 		result.ExecutionReport = domain.ExecutionReportRequestFromInput(
 			domain.ExecutionReportInput{
@@ -859,7 +856,7 @@ func completeFakeImmediateResult(
 				QuoteAsset:     order.QuoteAsset,
 				FillQuantity:   result.FillQuantity,
 				FillPrice:      result.TradePrice,
-				LeavesQuantity: result.LeavesQuantity,
+				LeavesQuantity: "0",
 				LockPrice:      result.SettlementLockPrice,
 				Order:          order.ExternalID,
 				Account:        order.Account,
@@ -881,7 +878,7 @@ func completeFakeImmediateResult(
 				LockPrice:  result.SettlementLockPrice,
 			},
 			OrderStatus: domain.OrderStatusFilled,
-			Leaves:      result.LeavesQuantity,
+			Leaves:      "0",
 			Blocks:      result.Blocks,
 		}
 	}
@@ -908,7 +905,7 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 			FillQuantity:    result.FillQuantity,
 			FillPrice:       result.TradePrice,
 			FillLockPrice:   result.SettlementLockPrice,
-			LeavesQuantity:  result.LeavesQuantity,
+			LeavesQuantity:  "0",
 			OrderStatus:     string(domain.OrderStatusFilled),
 			ExecutionReport: result.ExecutionReport,
 		})

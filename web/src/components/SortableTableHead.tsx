@@ -47,11 +47,7 @@ export function SortableTableHead({
     <TableHead
       className={className}
       aria-sort={
-        active
-          ? activeOrder === "desc"
-            ? "descending"
-            : "ascending"
-          : "none"
+        active ? (activeOrder === "desc" ? "descending" : "ascending") : "none"
       }
     >
       <button

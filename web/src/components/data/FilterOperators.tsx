@@ -106,12 +106,7 @@ export interface SegmentedProps {
 }
 
 /** Inline segmented control for short facets. */
-export function Segmented({
-  options,
-  value,
-  onChange,
-  style,
-}: SegmentedProps) {
+export function Segmented({ options, value, onChange, style }: SegmentedProps) {
   return (
     <div
       className="inline-flex h-8 overflow-hidden rounded-card border border-border bg-bg"
@@ -299,7 +294,9 @@ export function NumberRangeFilter({
           inputClassName={inputClass}
           style={fluid ? undefined : { width: 90 }}
           onChange={(value) => onMaxChange?.(value)}
-          onClear={onMaxChange === undefined ? undefined : () => onMaxChange("")}
+          onClear={
+            onMaxChange === undefined ? undefined : () => onMaxChange("")
+          }
           clearLabel={clearLabel}
           customValidity={rangeValidity}
         />
@@ -425,7 +422,9 @@ export function TimeRangeFilter({
           className={fluid ? "flex-1" : undefined}
           style={fluid ? undefined : { width: 172 }}
           onChange={onFromChange}
-          onClear={onFromChange === undefined ? undefined : () => onFromChange("")}
+          onClear={
+            onFromChange === undefined ? undefined : () => onFromChange("")
+          }
           clearLabel={clearLabel}
           customValidity={rangeValidity}
         />
@@ -435,7 +434,9 @@ export function TimeRangeFilter({
             className={fluid ? "flex-1" : undefined}
             style={fluid ? undefined : { width: 172 }}
             onChange={onToChange}
-            onClear={onToChange === undefined ? undefined : () => onToChange("")}
+            onClear={
+              onToChange === undefined ? undefined : () => onToChange("")
+            }
             clearLabel={clearLabel}
             customValidity={rangeValidity}
           />

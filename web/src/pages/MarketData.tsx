@@ -49,7 +49,11 @@ import type {
 import { useMarketData } from "@/api/useMarketData";
 import { validateAsset } from "@/api/validate";
 import { Page } from "@/components/Page";
-import { ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
+import {
+  ErrorBanner,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,10 +75,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatCompactDuration, formatDateTime } from "@/i18n/format";
-import {
-  useOfficerApi,
-  type MarketDataSymbolSearchInput,
-} from "@/framework";
+import { useOfficerApi, type MarketDataSymbolSearchInput } from "@/framework";
 import {
   isDecimalString,
   isOptionalPositiveDecimalString,
@@ -211,7 +212,11 @@ const IB_SEC_TYPE_DEFAULTS: Record<string, Partial<IBContract>> = {
   OPT: { exchange: "", right: "" },
 };
 
-const emptyIBContract: IBContract = { secType: "STK", exchange: "SMART", currency: "USD" };
+const emptyIBContract: IBContract = {
+  secType: "STK",
+  exchange: "SMART",
+  currency: "USD",
+};
 
 // Provider type whose instruments carry an operator-set manual mark price. Only
 // this (bring-your-own / manual) provider exposes the price input; streaming
@@ -229,7 +234,8 @@ const FINNHUB_PROVIDER = "finnhub";
 const MOCK_PROVIDER = "mock";
 
 const IB_SITE_URL = "https://www.interactivebrokers.com";
-const IB_DOCS_URL = "https://interactivebrokers.github.io/tws-api/md_request.html";
+const IB_DOCS_URL =
+  "https://interactivebrokers.github.io/tws-api/md_request.html";
 const BINANCE_DOCS_URL =
   "https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams";
 const BINANCE_SYMBOLS_URL =
@@ -249,7 +255,8 @@ const ALPACA_DOCS_URL =
   "https://docs.alpaca.markets/docs/real-time-stock-pricing-data";
 const ALPACA_SYMBOLS_URL =
   "https://docs.alpaca.markets/us/docs/working-with-assets";
-const ALPACA_DASHBOARD_URL = "https://app.alpaca.markets/user/profile#manage-accounts";
+const ALPACA_DASHBOARD_URL =
+  "https://app.alpaca.markets/user/profile#manage-accounts";
 const OKX_SITE_URL = "https://www.okx.com";
 const OKX_DOCS_URL =
   "https://www.okx.com/docs-v5/en/#websocket-api-public-channel-tickers-channel";
@@ -426,7 +433,10 @@ function initialSettingsDraft(
   return {};
 }
 
-function hasSecret(instance: MarketDataInstance | undefined, key: string): boolean {
+function hasSecret(
+  instance: MarketDataInstance | undefined,
+  key: string,
+): boolean {
   return instance?.secrets?.[key] === true;
 }
 
@@ -541,8 +551,14 @@ function IBKRIcon({ className }: { className?: string }) {
       fill="none"
     >
       <rect width="24" height="24" rx="4" fill="#050608" />
-      <path d="M2.8 3.2h5.8L4.1 13.4l4.7 7.4H3.1L0 16.4V8.3L2.8 3.2Z" fill="#d10f1f" />
-      <path d="M8.6 3.2h3.8L7.9 12l4.5 8.8H8.6L4 13.4 8.6 3.2Z" fill="#ef1b2d" />
+      <path
+        d="M2.8 3.2h5.8L4.1 13.4l4.7 7.4H3.1L0 16.4V8.3L2.8 3.2Z"
+        fill="#d10f1f"
+      />
+      <path
+        d="M8.6 3.2h3.8L7.9 12l4.5 8.8H8.6L4 13.4 8.6 3.2Z"
+        fill="#ef1b2d"
+      />
       <circle cx="15.8" cy="11.4" r="3.6" fill="#ef1b2d" />
     </svg>
   );
@@ -614,13 +630,17 @@ function AlpacaIcon({ className }: { className?: string }) {
         d="M10.1 20V9.8c0-2.8 2.2-5 5-5 2.6 0 4.8 2.1 4.8 4.8V20h-3.2V9.7c0-.9-.7-1.7-1.7-1.7s-1.7.8-1.7 1.7V20h-3.2Z"
         fill="#fff"
       />
-      <path
-        d="M4.2 11.8c.5-2.4 2.5-4.1 5.1-4.1h3v4.1H4.2Z"
-        fill="#fff"
-      />
+      <path d="M4.2 11.8c.5-2.4 2.5-4.1 5.1-4.1h3v4.1H4.2Z" fill="#fff" />
       <path d="M13.7 4.4 15.1 2l.9 2.8-1.1 1-1.2-1.4Z" fill="#fff" />
       <path d="M16.1 4.8 17.7 2.8l.5 2.9-1.3.9-.8-1.8Z" fill="#fff" />
-      <rect x="8.9" y="9.4" width="1.8" height="0.75" rx="0.35" fill="#d8d8d8" />
+      <rect
+        x="8.9"
+        y="9.4"
+        width="1.8"
+        height="0.75"
+        rx="0.35"
+        fill="#d8d8d8"
+      />
     </svg>
   );
 }
@@ -665,7 +685,14 @@ function BybitIcon({ className }: { className?: string }) {
       >
         BYB
       </text>
-      <rect x="14.8" y="7.25" width="1.35" height="9.5" rx="0.15" fill="#f7a600" />
+      <rect
+        x="14.8"
+        y="7.25"
+        width="1.35"
+        height="9.5"
+        rx="0.15"
+        fill="#f7a600"
+      />
       <text
         x="18.65"
         y="13.9"
@@ -726,7 +753,13 @@ function FinnhubIcon({ className }: { className?: string }) {
   );
 }
 
-function ProviderIcon({ type, className }: { type: string; className?: string }) {
+function ProviderIcon({
+  type,
+  className,
+}: {
+  type: string;
+  className?: string;
+}) {
   if (type === IB_PROVIDER) {
     return <IBKRIcon className={className} />;
   }
@@ -863,12 +896,12 @@ function displayedPriceLabel(
 ): string {
   const received = bestPriceLabel(instrument.quote);
   if (!received || !instrument.syntheticInverse) return received;
-  return syntheticPriceLabel(instrument.quote, instrument.inverseQuote) || received;
+  return (
+    syntheticPriceLabel(instrument.quote, instrument.inverseQuote) || received
+  );
 }
 
-function diagnosticLevelVariant(
-  level: string,
-): "danger" | "warn" | "neutral" {
+function diagnosticLevelVariant(level: string): "danger" | "warn" | "neutral" {
   if (level === "error") return "danger";
   if (level === "warn") return "warn";
   return "neutral";
@@ -1036,7 +1069,8 @@ function instrumentMetadata(
   externalSymbol: string,
 ): string {
   if (instance.provider === IB_PROVIDER) {
-    const contract = readIBContractsFromInstance(instance)[externalSymbol] ?? {};
+    const contract =
+      readIBContractsFromInstance(instance)[externalSymbol] ?? {};
     return ibContractMetadata(contract);
   }
   if (instance.provider === FINNHUB_PROVIDER) {
@@ -1256,7 +1290,9 @@ function IBContractFields({
         <Label>{t("settings.secType")}</Label>
         <Select
           value={contract.secType ?? "STK"}
-          onValueChange={(value) => onChange(ibSecTypePatch(value, contract.currency))}
+          onValueChange={(value) =>
+            onChange(ibSecTypePatch(value, contract.currency))
+          }
           disabled={busy}
         >
           <SelectTrigger aria-label={t("settings.secType")}>
@@ -1609,7 +1645,9 @@ function ProviderSettingsFields({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="spot">{t("settings.categories.spot")}</SelectItem>
+            <SelectItem value="spot">
+              {t("settings.categories.spot")}
+            </SelectItem>
             <SelectItem value="linear">
               {t("settings.categories.linear")}
             </SelectItem>
@@ -1792,8 +1830,7 @@ export function CreateInstanceDialog({
   const labelTaken =
     normalizedLabel !== "" &&
     existingLabels.some(
-      (label) =>
-        label.trim().toLowerCase() === normalizedLabel.toLowerCase(),
+      (label) => label.trim().toLowerCase() === normalizedLabel.toLowerCase(),
     );
 
   const open = provider !== null;
@@ -1844,17 +1881,17 @@ export function CreateInstanceDialog({
           <DialogTitle>
             {provider
               ? t("create.title", {
-                provider: t(`providers.${provider.type}.title`, {
-                  defaultValue: provider.title,
-                }),
-              })
+                  provider: t(`providers.${provider.type}.title`, {
+                    defaultValue: provider.title,
+                  }),
+                })
               : t("actions.addInstance")}
           </DialogTitle>
           <DialogDescription>
             {provider
               ? t(`providers.${provider.type}.createHint`, {
-                defaultValue: t("create.defaultHint"),
-              })
+                  defaultValue: t("create.defaultHint"),
+                })
               : t("create.defaultHint")}
           </DialogDescription>
         </DialogHeader>
@@ -1901,7 +1938,12 @@ export function CreateInstanceDialog({
           )}
         </div>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={close} disabled={busy}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={close}
+            disabled={busy}
+          >
             {t("actions.cancel")}
           </Button>
           <Button
@@ -2147,10 +2189,7 @@ function diagnosticActions(items: MarketDataDiagnostic[]): DiagnosticAction[] {
   const actions: DiagnosticAction[] = [];
   for (const item of items) {
     for (const action of item.actions) {
-      if (
-        action.type === "remove_instrument" &&
-        action.target === undefined
-      ) {
+      if (action.type === "remove_instrument" && action.target === undefined) {
         continue;
       }
       const key = diagnosticActionKey(action);
@@ -2404,9 +2443,7 @@ function PairUsageWarning({ usages }: { usages: PairUsage[] }) {
   const title = t("instrument.pairAlreadyUsed", { feeds });
   return (
     <span title={title} aria-label={title} className="inline-flex">
-      <TriangleAlert
-      className="h-4 w-4 shrink-0 text-[var(--warn)]"
-      />
+      <TriangleAlert className="h-4 w-4 shrink-0 text-[var(--warn)]" />
     </span>
   );
 }
@@ -2422,7 +2459,10 @@ export function InstanceSettingsDialog({
   busy: boolean;
   existingLabels: string[];
   onOpenChange: (open: boolean) => void;
-  onSave: (instance: MarketDataInstance, form: SettingsForm) => Promise<boolean>;
+  onSave: (
+    instance: MarketDataInstance,
+    form: SettingsForm,
+  ) => Promise<boolean>;
 }) {
   const { t } = useTranslation("marketData");
   const [draft, setDraft] = useState({
@@ -2517,7 +2557,12 @@ export function InstanceSettingsDialog({
           </div>
         )}
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={close} disabled={busy}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={close}
+            disabled={busy}
+          >
             {t("actions.cancel")}
           </Button>
           <Button
@@ -2586,7 +2631,10 @@ export function InstanceCard({
     externalSymbol: string,
     enabled: boolean,
   ) => void;
-  onDeleteInstrument: (instance: MarketDataInstance, externalSymbol: string) => void;
+  onDeleteInstrument: (
+    instance: MarketDataInstance,
+    externalSymbol: string,
+  ) => void;
   onDeleteIBInstrument: (
     instance: MarketDataInstance,
     externalSymbol: string,
@@ -2624,10 +2672,13 @@ export function InstanceCard({
   // IB instruments carry a structured contract editor alongside the plain
   // feed-scoped resolver.
   const isIB = instance.provider === IB_PROVIDER;
-  const usesInstrumentDialog = providerUsesCustomInstrumentDialog(instance.provider);
+  const usesInstrumentDialog = providerUsesCustomInstrumentDialog(
+    instance.provider,
+  );
   const canSearch = instance.searchesSymbols;
   const siteUrl = providerSiteUrl(instance.provider);
-  const docsUrl = instance.references?.docsUrl || providerDocsUrl(instance.provider);
+  const docsUrl =
+    instance.references?.docsUrl || providerDocsUrl(instance.provider);
   const symbolsUrl =
     instance.references?.symbolsUrl || providerSymbolsUrl(instance.provider);
   const draftPairUsages = pairUsages(
@@ -2802,9 +2853,13 @@ export function InstanceCard({
             className="mt-0.5 h-5 w-5 shrink-0 text-accent"
           />
           <div className="min-w-0">
-            <CardTitle className="truncate">{providerTitle(instance)}</CardTitle>
+            <CardTitle className="truncate">
+              {providerTitle(instance)}
+            </CardTitle>
             <p className="mt-1 max-w-3xl text-xs text-muted">
-              {t(`providers.${instance.provider}.description`, { defaultValue: "" })}
+              {t(`providers.${instance.provider}.description`, {
+                defaultValue: "",
+              })}
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <Badge variant="neutral">{instance.provider}</Badge>
@@ -2969,7 +3024,9 @@ export function InstanceCard({
             </div>
             <Input
               value={draft.baseAsset}
-              onChange={(e) => setDraft((d) => ({ ...d, baseAsset: e.target.value }))}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, baseAsset: e.target.value }))
+              }
               placeholder={t("instrument.baseAsset")}
               disabled={busy}
             />
@@ -3218,186 +3275,189 @@ export function InstanceCard({
                         <PairUsageWarning usages={duplicatePairUsages} />
                       </div>
                     </td>
-                  {isManual && (
-                    <td className="py-2 pr-3">
-                      <div className="flex min-w-40 gap-2">
-                        <Input
-                          value={manualPriceValue(
-                            instrument.externalSymbol,
-                            instrument.manualPrice,
-                          )}
-                          inputMode="decimal"
-                          aria-label={t("instrument.manualPriceFor", {
-                            symbol: instrument.externalSymbol,
-                          })}
-                          onChange={(e) =>
-                            setManualPriceDraft(
+                    {isManual && (
+                      <td className="py-2 pr-3">
+                        <div className="flex min-w-40 gap-2">
+                          <Input
+                            value={manualPriceValue(
                               instrument.externalSymbol,
-                              e.target.value,
-                            )
+                              instrument.manualPrice,
+                            )}
+                            inputMode="decimal"
+                            aria-label={t("instrument.manualPriceFor", {
+                              symbol: instrument.externalSymbol,
+                            })}
+                            onChange={(e) =>
+                              setManualPriceDraft(
+                                instrument.externalSymbol,
+                                e.target.value,
+                              )
+                            }
+                            disabled={busy}
+                            className="nums h-8"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            aria-label={t("actions.sendPrice")}
+                            title={t("actions.sendPrice")}
+                            disabled={
+                              busy ||
+                              !isOptionalDecimal(
+                                manualPriceValue(
+                                  instrument.externalSymbol,
+                                  instrument.manualPrice,
+                                ),
+                              )
+                            }
+                            onClick={() => {
+                              void submitManualPrice(instrument);
+                            }}
+                          >
+                            <Send />
+                          </Button>
+                        </div>
+                      </td>
+                    )}
+                    <td className="nums py-2 pr-3 text-text">
+                      {displayedPriceLabel(instrument) || "—"}
+                    </td>
+                    <td className="nums py-2 pr-3 text-muted">
+                      {instrument.quote ? (
+                        <span>
+                          {formatDateTime(instrument.quote.asOf)}{" "}
+                          {instrument.updateIntervalMs ? (
+                            <span
+                              className="text-xs"
+                              title={t("table.updateIntervalTooltip")}
+                            >
+                              {formatCompactDuration(
+                                instrument.updateIntervalMs,
+                              )}
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge
+                          variant={
+                            instrument.enabled && instance.enabled
+                              ? "ok"
+                              : "neutral"
                           }
-                          disabled={busy}
-                          className="nums h-8"
+                        >
+                          {!instrument.enabled
+                            ? t("state.disabled")
+                            : instance.enabled
+                              ? t("state.enabled")
+                              : t("state.feedDisabled")}
+                        </Badge>
+                        {instance.enabled && instrument.stale && !isManual && (
+                          <Badge variant="warn" title={t("state.staleTooltip")}>
+                            {t("state.stale")}
+                          </Badge>
+                        )}
+                        <VerifyResult
+                          result={rowVerify[instrument.externalSymbol] ?? null}
                         />
+                      </div>
+                    </td>
+                    <td className="py-2 pr-0">
+                      <div className="flex justify-end gap-2">
                         <Button
                           type="button"
                           variant="outline"
-                          size="icon"
-                          aria-label={t("actions.sendPrice")}
-                          title={t("actions.sendPrice")}
-                          disabled={
-                            busy ||
-                            !isOptionalDecimal(
-                              manualPriceValue(
-                                instrument.externalSymbol,
-                                instrument.manualPrice,
-                              ),
+                          size="sm"
+                          onClick={() =>
+                            onToggleInstrument(
+                              instance,
+                              instrument.externalSymbol,
+                              !instrument.enabled,
                             )
                           }
-                          onClick={() => {
-                            void submitManualPrice(instrument);
-                          }}
+                          disabled={busy}
                         >
-                          <Send />
+                          {instrument.enabled
+                            ? t("actions.disable")
+                            : t("actions.enable")}
                         </Button>
-                      </div>
-                    </td>
-                  )}
-                  <td className="nums py-2 pr-3 text-text">
-                    {displayedPriceLabel(instrument) || "—"}
-                  </td>
-                  <td className="nums py-2 pr-3 text-muted">
-                    {instrument.quote ? (
-                      <span>
-                        {formatDateTime(instrument.quote.asOf)}{" "}
-                        {instrument.updateIntervalMs ? (
-                          <span
-                            className="text-xs"
-                            title={t("table.updateIntervalTooltip")}
+                        {canVerify && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            aria-label={t("verify.action")}
+                            onClick={() => {
+                              void verifyRow(instrument.externalSymbol);
+                            }}
+                            disabled={
+                              busy || verifying === instrument.externalSymbol
+                            }
                           >
-                            {formatCompactDuration(instrument.updateIntervalMs)}
-                          </span>
-                        ) : null}
-                      </span>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="py-2 pr-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant={
-                          instrument.enabled && instance.enabled
-                            ? "ok"
-                            : "neutral"
-                        }
-                      >
-                        {!instrument.enabled
-                          ? t("state.disabled")
-                          : instance.enabled
-                            ? t("state.enabled")
-                            : t("state.feedDisabled")}
-                      </Badge>
-                      {instance.enabled && instrument.stale && !isManual && (
-                        <Badge variant="warn" title={t("state.staleTooltip")}>
-                          {t("state.stale")}
-                        </Badge>
-                      )}
-                      <VerifyResult
-                        result={rowVerify[instrument.externalSymbol] ?? null}
-                      />
-                    </div>
-                  </td>
-                  <td className="py-2 pr-0">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          onToggleInstrument(
-                            instance,
-                            instrument.externalSymbol,
-                            !instrument.enabled,
-                          )
-                        }
-                        disabled={busy}
-                      >
-                        {instrument.enabled
-                          ? t("actions.disable")
-                          : t("actions.enable")}
-                      </Button>
-                      {canVerify && (
+                            <SearchCheck />
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          aria-label={t("verify.action")}
-                          onClick={() => {
-                            void verifyRow(instrument.externalSymbol);
-                          }}
-                          disabled={
-                            busy || verifying === instrument.externalSymbol
+                          aria-label={t("actions.deleteInstrument")}
+                          onClick={() =>
+                            isIB
+                              ? onDeleteIBInstrument(
+                                  instance,
+                                  instrument.externalSymbol,
+                                )
+                              : onDeleteInstrument(
+                                  instance,
+                                  instrument.externalSymbol,
+                                )
                           }
+                          disabled={busy}
                         >
-                          <SearchCheck />
+                          <Trash2 />
                         </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        aria-label={t("actions.deleteInstrument")}
-                        onClick={() =>
-                          isIB
-                            ? onDeleteIBInstrument(
-                              instance,
-                              instrument.externalSymbol,
-                            )
-                            : onDeleteInstrument(
-                              instance,
-                              instrument.externalSymbol,
-                            )
-                        }
-                        disabled={busy}
-                      >
-                        <Trash2 />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
+                      </div>
+                    </td>
+                  </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
 
-        {instance.diagnostics.length > 0 && (() => {
-          const configGroup = instance.diagnostics.filter(
-            (d) => d.kind === "config",
-          );
-          const providerGroup = instance.diagnostics.filter(
-            (d) => d.kind === "environment" || d.kind === "provider",
-          );
-          return (
-            <DiagnosticPanel
-              items={instance.diagnostics}
-              instance={instance}
-              busy={busy}
-              onRestart={onRestart}
-              onDeleteInstrument={onDeleteInstrument}
-            >
-              <DiagnosticGroup
-                title={t("diagnostics.groupActionNeeded")}
-                items={configGroup}
-              />
-              <DiagnosticGroup
-                title={t("diagnostics.groupProvider")}
-                items={providerGroup}
-              />
-            </DiagnosticPanel>
-          );
-        })()}
+        {instance.diagnostics.length > 0 &&
+          (() => {
+            const configGroup = instance.diagnostics.filter(
+              (d) => d.kind === "config",
+            );
+            const providerGroup = instance.diagnostics.filter(
+              (d) => d.kind === "environment" || d.kind === "provider",
+            );
+            return (
+              <DiagnosticPanel
+                items={instance.diagnostics}
+                instance={instance}
+                busy={busy}
+                onRestart={onRestart}
+                onDeleteInstrument={onDeleteInstrument}
+              >
+                <DiagnosticGroup
+                  title={t("diagnostics.groupActionNeeded")}
+                  items={configGroup}
+                />
+                <DiagnosticGroup
+                  title={t("diagnostics.groupProvider")}
+                  items={providerGroup}
+                />
+              </DiagnosticPanel>
+            );
+          })()}
       </CardContent>
     </Card>
   );
@@ -3427,7 +3487,11 @@ function DeleteInstanceDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
             {t("deleteInstance.cancel")}
           </Button>
           <Button
@@ -3468,7 +3532,11 @@ function DeleteInstrumentDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
             {t("deleteInstrument.cancel")}
           </Button>
           <Button
@@ -3652,16 +3720,24 @@ export function MarketData() {
           deleteInstrumentTarget.instance.id,
           deleteInstrumentTarget.externalSymbol,
         );
-        const contracts = readIBContractsFromInstance(deleteInstrumentTarget.instance);
+        const contracts = readIBContractsFromInstance(
+          deleteInstrumentTarget.instance,
+        );
         delete contracts[deleteInstrumentTarget.externalSymbol];
-        await updateMarketDataInstanceSettings(deleteInstrumentTarget.instance.id, {
-          label: deleteInstrumentTarget.instance.label,
-          credentials: buildProviderCredentials(
-            IB_PROVIDER,
-            initialSettingsDraft(IB_PROVIDER, deleteInstrumentTarget.instance),
-            { contracts },
-          ),
-        });
+        await updateMarketDataInstanceSettings(
+          deleteInstrumentTarget.instance.id,
+          {
+            label: deleteInstrumentTarget.instance.label,
+            credentials: buildProviderCredentials(
+              IB_PROVIDER,
+              initialSettingsDraft(
+                IB_PROVIDER,
+                deleteInstrumentTarget.instance,
+              ),
+              { contracts },
+            ),
+          },
+        );
       } else {
         await deleteMarketDataInstrument(
           deleteInstrumentTarget.instance.id,
@@ -3785,7 +3861,7 @@ export function MarketData() {
               onUpsertInstrument={(target, draft, options) =>
                 run(
                   () =>
-                    upsertMarketDataInstrument(target.id, draft).then(() => { }),
+                    upsertMarketDataInstrument(target.id, draft).then(() => {}),
                   options,
                 )
               }

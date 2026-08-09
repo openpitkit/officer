@@ -52,7 +52,9 @@ vi.mock("@/api/useMarketData", () => ({
 }));
 vi.mock("react-router-dom", async () => {
   const actual =
-    await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+    await vi.importActual<typeof import("react-router-dom")>(
+      "react-router-dom",
+    );
   return { ...actual, useNavigate: () => navigateMock };
 });
 
@@ -95,11 +97,20 @@ const assets: Asset[] = [
 ];
 
 const assetClasses: AssetClass[] = [
-  { code: "crypto", title: "Cryptocurrencies", notes: "Digital assets", assetCount: 1 },
+  {
+    code: "crypto",
+    title: "Cryptocurrencies",
+    notes: "Digital assets",
+    assetCount: 1,
+  },
   { code: "equity", title: "Equities", notes: "", assetCount: 1 },
 ];
 
-function matchesText(value: string, filter: string | undefined, mode: TextMatchMode = "contains") {
+function matchesText(
+  value: string,
+  filter: string | undefined,
+  mode: TextMatchMode = "contains",
+) {
   if (filter === undefined || filter.trim() === "") {
     return true;
   }
@@ -139,8 +150,7 @@ function pageResult<T>(
   const start = filters.offset ?? 0;
   const limit = filters.limit;
   return {
-    items:
-      limit === undefined ? items : items.slice(start, start + limit),
+    items: limit === undefined ? items : items.slice(start, start + limit),
     total: items.length,
   };
 }
@@ -171,8 +181,12 @@ function renderAssets(initialPath = "/assets") {
         deleteAssetClass: deleteAssetClassMock,
         fetchAssets: async (filters?: AssetListFilters | AbortSignal) =>
           filterAssets(filters instanceof AbortSignal ? undefined : filters),
-        fetchAssetClasses: async (filters?: AssetClassListFilters | AbortSignal) =>
-          filterAssetClasses(filters instanceof AbortSignal ? undefined : filters),
+        fetchAssetClasses: async (
+          filters?: AssetClassListFilters | AbortSignal,
+        ) =>
+          filterAssetClasses(
+            filters instanceof AbortSignal ? undefined : filters,
+          ),
       },
     },
   );
@@ -286,7 +300,9 @@ describe("Assets", () => {
     const confirm = await screen.findByRole("alertdialog", {
       name: /delete asset/i,
     });
-    await user.click(within(confirm).getByRole("button", { name: /^delete$/i }));
+    await user.click(
+      within(confirm).getByRole("button", { name: /^delete$/i }),
+    );
 
     await waitFor(() => expect(deleteAssetMock).toHaveBeenCalledWith("AAPL"));
     expect(reloadMock).toHaveBeenCalled();
@@ -356,7 +372,9 @@ describe("Assets", () => {
       within(row as HTMLElement).getByRole("button", { name: /^trades$/i }),
     );
 
-    expect(navigateMock).toHaveBeenCalledWith("/orders?tab=trades&baseAsset=BTC");
+    expect(navigateMock).toHaveBeenCalledWith(
+      "/orders?tab=trades&baseAsset=BTC",
+    );
   });
 
   it("seeds the class filter from the ?class= deep link", () => {
@@ -458,7 +476,10 @@ describe("Assets classes tab", () => {
       name: /create asset class/i,
     });
     await user.type(within(dialog).getByLabelText(/class code/i), "fx");
-    await user.type(within(dialog).getByLabelText(/^title$/i), "Foreign exchange");
+    await user.type(
+      within(dialog).getByLabelText(/^title$/i),
+      "Foreign exchange",
+    );
     await user.click(within(dialog).getByRole("button", { name: /^create$/i }));
 
     await waitFor(() =>
@@ -513,12 +534,16 @@ describe("Assets classes tab", () => {
     const row = screen.getByText("Equities").closest("tr");
     expect(row).not.toBeNull();
     await user.click(
-      within(row as HTMLElement).getByRole("button", { name: /delete equity/i }),
+      within(row as HTMLElement).getByRole("button", {
+        name: /delete equity/i,
+      }),
     );
     const confirm = await screen.findByRole("alertdialog", {
       name: /delete asset class/i,
     });
-    await user.click(within(confirm).getByRole("button", { name: /^delete$/i }));
+    await user.click(
+      within(confirm).getByRole("button", { name: /^delete$/i }),
+    );
 
     // The equity class has one linked asset, so deletion forces detachment.
     await waitFor(() =>

@@ -48,7 +48,12 @@ import { useAccountsPage } from "@/api/useAccounts";
 import { useGroupsPage } from "@/api/useGroups";
 import { validateAccountID } from "@/api/validate";
 import { Autocomplete } from "@/components/Autocomplete";
-import { EmptyState, ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
+import {
+  EmptyState,
+  ErrorBanner,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import { StatusDot } from "@/components/StatusDot";
@@ -242,13 +247,20 @@ function statusFromParams(params: URLSearchParams): StatusListFilter {
 }
 
 /** Read the shared `sort`/`order` params into a sort state object. */
-function sortFromParams(params: URLSearchParams, allowed: Set<string>): {
+function sortFromParams(
+  params: URLSearchParams,
+  allowed: Set<string>,
+): {
   sort?: string;
   order?: SortOrder;
 } {
   const sort = params.get("sort");
   const order = params.get("order");
-  if (sort !== null && allowed.has(sort) && (order === "asc" || order === "desc")) {
+  if (
+    sort !== null &&
+    allowed.has(sort) &&
+    (order === "asc" || order === "desc")
+  ) {
     return { sort, order };
   }
   return {};
@@ -346,7 +358,9 @@ function appendAdvancedParams(
   }
 }
 
-function positionCountQuery(filters: AdvancedListFilters): Pick<
+function positionCountQuery(
+  filters: AdvancedListFilters,
+): Pick<
   AccountListFilters,
   "positionCountMode" | "positionCountMin" | "positionCountMax"
 > {
@@ -386,7 +400,9 @@ function positionCountQuery(filters: AdvancedListFilters): Pick<
   }
 }
 
-function accountCountQuery(filters: AdvancedListFilters): Pick<
+function accountCountQuery(
+  filters: AdvancedListFilters,
+): Pick<
   GroupListFilters,
   "accountCountMode" | "accountCountMin" | "accountCountMax"
 > {
@@ -443,7 +459,9 @@ function matchLabelKey(mode: TextMatchMode): string {
   }
 }
 
-function countModeFromNumberOperator(operator: string): PositionCountFilterMode {
+function countModeFromNumberOperator(
+  operator: string,
+): PositionCountFilterMode {
   switch (operator) {
     case "eq":
     case "neq":
@@ -541,8 +559,7 @@ function advancedFilterSummary(
   const accountMin = trimmedOrUndefined(filters.accountMin);
   const accountMax = trimmedOrUndefined(filters.accountMax);
   if (
-    (filters.accountMode === "gt" ||
-      filters.accountMode === "greater_than") &&
+    (filters.accountMode === "gt" || filters.accountMode === "greater_than") &&
     accountMin !== undefined
   ) {
     out.push({
@@ -775,60 +792,60 @@ function ListFilters({
         </>
       }
     >
-        {accountGroupFilter && (
+      {accountGroupFilter && (
+        <AutocompleteFilterField
+          label={t("accounts.filters.groupLabel")}
+          value={groupSearch}
+          placeholder={t("accounts.filters.groupPlaceholder")}
+          suggestions={groupSuggestions}
+          loading={groupLoading}
+          searchingLabel={tc("filters.onlineLoading", {
+            field: t("accounts.filters.groupLabel"),
+          })}
+          onChange={onGroupSearch}
+          onClear={() => onGroupSearch("")}
+          clearLabel={tc("filters.clearField")}
+          width={180}
+        />
+      )}
+      <div className="grid gap-1.5">
+        <FieldLabel>{t(`${entity}.filters.codeLabel`)}</FieldLabel>
+        <div className="flex items-center gap-2">
           <AutocompleteFilterField
-            label={t("accounts.filters.groupLabel")}
-            value={groupSearch}
-            placeholder={t("accounts.filters.groupPlaceholder")}
-            suggestions={groupSuggestions}
-            loading={groupLoading}
+            value={code}
+            placeholder={t(`${entity}.filters.codePlaceholder`)}
+            title={maskHelp}
+            ariaLabel={t(`${entity}.filters.codeLabel`)}
+            suggestions={codeSuggestions}
+            loading={codeLoading}
             searchingLabel={tc("filters.onlineLoading", {
-              field: t("accounts.filters.groupLabel"),
+              field: t(`${entity}.filters.codeLabel`),
             })}
-            onChange={onGroupSearch}
-            onClear={() => onGroupSearch("")}
+            width={220}
+            onChange={onCode}
+            onClear={() => onCode("")}
             clearLabel={tc("filters.clearField")}
-            width={180}
+            globalToggle={
+              entity === "accounts" ? accountGlobalToggle : undefined
+            }
           />
-        )}
-        <div className="grid gap-1.5">
-          <FieldLabel>{t(`${entity}.filters.codeLabel`)}</FieldLabel>
-          <div className="flex items-center gap-2">
-            <AutocompleteFilterField
-              value={code}
-              placeholder={t(`${entity}.filters.codePlaceholder`)}
-              title={maskHelp}
-              ariaLabel={t(`${entity}.filters.codeLabel`)}
-              suggestions={codeSuggestions}
-              loading={codeLoading}
-              searchingLabel={tc("filters.onlineLoading", {
-                field: t(`${entity}.filters.codeLabel`),
-              })}
-              width={220}
-              onChange={onCode}
-              onClear={() => onCode("")}
-              clearLabel={tc("filters.clearField")}
-              globalToggle={
-                entity === "accounts" ? accountGlobalToggle : undefined
+          <FilterOperatorSelect
+            value={codeMatch}
+            options={operatorOptions(t, "text")}
+            ariaLabel={
+              entity === "groups"
+                ? `${tc("fields.group")} ${tc("filters.operator")}`
+                : `${tc("fields.account")} ${tc("filters.operator")}`
+            }
+            onChange={(value) => {
+              if (isTextMatchMode(value)) {
+                onCodeMatch(value);
               }
-            />
-            <FilterOperatorSelect
-              value={codeMatch}
-              options={operatorOptions(t, "text")}
-              ariaLabel={
-                entity === "groups"
-                  ? `${tc("fields.group")} ${tc("filters.operator")}`
-                  : `${tc("fields.account")} ${tc("filters.operator")}`
-              }
-              onChange={(value) => {
-                if (isTextMatchMode(value)) {
-                  onCodeMatch(value);
-                }
-              }}
-              width={140}
-            />
-          </div>
+            }}
+            width={140}
+          />
         </div>
+      </div>
     </FilterBar>
   );
 }
@@ -856,10 +873,7 @@ function AdvancedFilterDialog({
   ) => onDraftChange({ ...draft, [key]: value });
   const updatePositionCount = (
     patch: Partial<
-      Pick<
-        AdvancedListFilters,
-        "positionMode" | "positionMin" | "positionMax"
-      >
+      Pick<AdvancedListFilters, "positionMode" | "positionMin" | "positionMax">
     >,
   ) =>
     onDraftChange({
@@ -937,8 +951,12 @@ function AdvancedFilterDialog({
                 onOperatorChange={(value) =>
                   update("positionMode", countModeFromNumberOperator(value))
                 }
-                onMinChange={(value) => updatePositionCount({ positionMin: value })}
-                onMaxChange={(value) => updatePositionCount({ positionMax: value })}
+                onMinChange={(value) =>
+                  updatePositionCount({ positionMin: value })
+                }
+                onMaxChange={(value) =>
+                  updatePositionCount({ positionMax: value })
+                }
               />
             </div>
           </div>
@@ -957,8 +975,12 @@ function AdvancedFilterDialog({
                   onOperatorChange={(value) =>
                     update("accountMode", countModeFromNumberOperator(value))
                   }
-                  onMinChange={(value) => updateAccountCount({ accountMin: value })}
-                  onMaxChange={(value) => updateAccountCount({ accountMax: value })}
+                  onMinChange={(value) =>
+                    updateAccountCount({ accountMin: value })
+                  }
+                  onMaxChange={(value) =>
+                    updateAccountCount({ accountMax: value })
+                  }
                 />
               </div>
             </div>
@@ -1103,7 +1125,9 @@ export function CreateAccountDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="account-code">{ta("createAccount.codeLabel")}</Label>
+            <Label htmlFor="account-code">
+              {ta("createAccount.codeLabel")}
+            </Label>
             <ClearableInput
               id="account-code"
               value={code}
@@ -1129,7 +1153,9 @@ export function CreateAccountDialog({
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="create-account-group">{ta("createAccount.groupLabel")}</Label>
+            <Label htmlFor="create-account-group">
+              {ta("createAccount.groupLabel")}
+            </Label>
             <Autocomplete
               id="create-account-group"
               value={group}
@@ -1164,7 +1190,9 @@ export function CreateAccountDialog({
             </p>
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -1326,7 +1354,9 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
             </p>
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -1406,11 +1436,11 @@ function BlockAccountDialog({
             <span className="nums text-accent">{account?.code}</span>
           </DialogTitle>
         </DialogHeader>
-        <p className="text-xs text-muted-lt">
-          {t("blockAccount.description")}
-        </p>
+        <p className="text-xs text-muted-lt">{t("blockAccount.description")}</p>
         <div className="space-y-2">
-          <Label htmlFor="block-account-reason">{t("blockAccount.reasonLabel")}</Label>
+          <Label htmlFor="block-account-reason">
+            {t("blockAccount.reasonLabel")}
+          </Label>
           <Textarea
             id="block-account-reason"
             value={reason}
@@ -1419,7 +1449,9 @@ function BlockAccountDialog({
             onChange={(e) => setReason(e.target.value)}
           />
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -1495,9 +1527,13 @@ function UnblockAccountConfirm({
             )}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{t("unblockAccount.cancel")}</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>
+            {t("unblockAccount.cancel")}
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -1570,11 +1606,11 @@ function BlockGroupDialog({
             <span className="nums text-accent">{group?.code}</span>
           </DialogTitle>
         </DialogHeader>
-        <p className="text-xs text-muted-lt">
-          {t("blockGroup.description")}
-        </p>
+        <p className="text-xs text-muted-lt">{t("blockGroup.description")}</p>
         <div className="space-y-2">
-          <Label htmlFor="block-group-reason">{t("blockGroup.reasonLabel")}</Label>
+          <Label htmlFor="block-group-reason">
+            {t("blockGroup.reasonLabel")}
+          </Label>
           <Textarea
             id="block-group-reason"
             value={reason}
@@ -1583,7 +1619,9 @@ function BlockGroupDialog({
             onChange={(e) => setReason(e.target.value)}
           />
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -1649,9 +1687,13 @@ function UnblockGroupConfirm({
             {t("unblockGroup.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{t("unblockGroup.cancel")}</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>
+            {t("unblockGroup.cancel")}
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -1713,9 +1755,13 @@ function DeleteGroupConfirm({
             {t("deleteGroup.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{t("deleteGroup.cancel")}</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>
+            {t("deleteGroup.cancel")}
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -1812,9 +1858,13 @@ function DeleteAccountConfirm({
             </ul>
           </div>
         )}
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{t("deleteAccount.cancel")}</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>
+            {t("deleteAccount.cancel")}
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -1945,7 +1995,9 @@ function EditAccountMetadataDialog({
             />
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -2065,7 +2117,9 @@ function EditGroupMetadataDialog({
             />
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -2152,7 +2206,9 @@ function EditGroupNotesDialog({
           {t("editGroupNotes.description")}
         </p>
         <div className="space-y-2">
-          <Label htmlFor="group-notes-edit">{t("editGroupNotes.notesLabel")}</Label>
+          <Label htmlFor="group-notes-edit">
+            {t("editGroupNotes.notesLabel")}
+          </Label>
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_2rem]">
             <Textarea
               id="group-notes-edit"
@@ -2168,7 +2224,9 @@ function EditGroupNotesDialog({
             />
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -2269,9 +2327,7 @@ function AssignGroupDialog({
             <span className="nums text-accent">{account?.code}</span>
           </DialogTitle>
         </DialogHeader>
-        <p className="text-xs text-muted-lt">
-          {t("assignGroup.description")}
-        </p>
+        <p className="text-xs text-muted-lt">{t("assignGroup.description")}</p>
         <div className="space-y-2">
           <Label htmlFor="assign-group">{t("assignGroup.groupLabel")}</Label>
           <Autocomplete
@@ -2287,7 +2343,9 @@ function AssignGroupDialog({
             clearLabel={t("filters.clearField")}
           />
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -2299,7 +2357,9 @@ function AssignGroupDialog({
           </Button>
           <Button size="sm" onClick={() => void submit()} disabled={busy}>
             <Folder className="h-3.5 w-3.5" />
-            {group.trim().length > 0 ? t("assignGroup.assign") : t("assignGroup.clear")}
+            {group.trim().length > 0
+              ? t("assignGroup.assign")
+              : t("assignGroup.clear")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2350,14 +2410,20 @@ function AccountCurrencyDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="rounded-card border border-border bg-surface-2 p-3 text-xs">
-            <p className="font-medium text-text">{t("editCurrency.cascadeTitle")}</p>
+            <p className="font-medium text-text">
+              {t("editCurrency.cascadeTitle")}
+            </p>
             <dl className="mt-2 grid grid-cols-[7rem_1fr] gap-1 text-muted-lt">
               <dt>{t("editCurrency.accountTier")}</dt>
               <dd className="nums">{currencyText(account.currency ?? "")}</dd>
               <dt>{t("editCurrency.groupTier")}</dt>
-              <dd className="nums">{currencyText(account.currencyCascade?.group ?? "")}</dd>
+              <dd className="nums">
+                {currencyText(account.currencyCascade?.group ?? "")}
+              </dd>
               <dt>{t("editCurrency.defaultTier")}</dt>
-              <dd className="nums">{currencyText(account.currencyCascade?.default ?? "")}</dd>
+              <dd className="nums">
+                {currencyText(account.currencyCascade?.default ?? "")}
+              </dd>
               <dt>{t("editCurrency.effective")}</dt>
               <dd className="nums">
                 {currencyText(account.effectiveCurrency ?? "")}
@@ -2373,7 +2439,9 @@ function AccountCurrencyDialog({
             </p>
           )}
           <div className="space-y-2">
-            <Label htmlFor="account-currency">{t("editCurrency.currencyLabel")}</Label>
+            <Label htmlFor="account-currency">
+              {t("editCurrency.currencyLabel")}
+            </Label>
             <Autocomplete
               id="account-currency"
               value={currency}
@@ -2390,9 +2458,16 @@ function AccountCurrencyDialog({
             </p>
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
             {t("editCurrency.cancel")}
           </Button>
           <Button size="sm" onClick={() => void submit()} disabled={busy}>
@@ -2457,7 +2532,9 @@ function GroupCurrencyDialog({
             </p>
           )}
           <div className="space-y-2">
-            <Label htmlFor="group-currency">{t("editGroupCurrency.currencyLabel")}</Label>
+            <Label htmlFor="group-currency">
+              {t("editGroupCurrency.currencyLabel")}
+            </Label>
             <Autocomplete
               id="group-currency"
               value={currency}
@@ -2471,9 +2548,16 @@ function GroupCurrencyDialog({
             />
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
             {t("editGroupCurrency.cancel")}
           </Button>
           <Button size="sm" onClick={() => void submit()} disabled={busy}>
@@ -2549,7 +2633,9 @@ function EditAccountNotesDialog({
           {t("editAccountNotes.description")}
         </p>
         <div className="space-y-2">
-          <Label htmlFor="account-notes">{t("editAccountNotes.notesLabel")}</Label>
+          <Label htmlFor="account-notes">
+            {t("editAccountNotes.notesLabel")}
+          </Label>
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_2rem]">
             <Textarea
               id="account-notes"
@@ -2565,7 +2651,9 @@ function EditAccountNotesDialog({
             />
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -2737,9 +2825,7 @@ function BlockedDetailsDialog({
               {target === null ? "" : blockedDetailsCode(target)}
             </span>
           </DialogTitle>
-          <DialogDescription>
-            {t("blockDetails.description")}
-          </DialogDescription>
+          <DialogDescription>{t("blockDetails.description")}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -2837,11 +2923,7 @@ function BlockedDetailsDialog({
         )}
 
         <DialogFooter>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => changeOpen(false)}
-          >
+          <Button variant="outline" size="sm" onClick={() => changeOpen(false)}>
             {t("blockDetails.close")}
           </Button>
           <Button
@@ -2877,8 +2959,7 @@ function BlockedDetailsDialog({
 
 // Sentinel code used internally to represent the "Default group" row.
 const DEFAULT_GROUP_CODE = "";
-const STATUS_COLUMN_CLASS =
-  "accounts-status-cell w-px whitespace-nowrap";
+const STATUS_COLUMN_CLASS = "accounts-status-cell w-px whitespace-nowrap";
 
 // Notes wrap to a few lines when the density mode leaves vertical room, and
 // stay single-line (truncated) in the terminal/dense mode.
@@ -2908,7 +2989,12 @@ function NotesText({ text }: { text: string }) {
 }
 
 type GroupRow =
-  | { kind: "default"; group: Group; memberCount: number; positionCount: number }
+  | {
+      kind: "default";
+      group: Group;
+      memberCount: number;
+      positionCount: number;
+    }
   | { kind: "real"; group: Group; memberCount: number; positionCount: number };
 type RealGroupRow = Extract<GroupRow, { kind: "real" }>;
 
@@ -2979,8 +3065,6 @@ function pnlHaltText(t: TFunction, reason: string): string | null {
       return t("accounts.pnlHalt.missingCostBasis");
     case "arithmetic_overflow":
       return t("accounts.pnlHalt.arithmeticOverflow");
-    case "stale_denomination":
-      return t("accounts.pnlHalt.staleDenomination");
     default:
       return t("accounts.pnlHalt.unknown");
   }
@@ -3043,18 +3127,12 @@ function CurrencyCell({
 function AccountCurrencyOriginIcon({ origin }: { origin?: string }) {
   if (origin === "group") {
     return (
-      <Users
-        aria-hidden="true"
-        className="h-3.5 w-3.5 shrink-0 text-muted"
-      />
+      <Users aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted" />
     );
   }
   if (origin === "default") {
     return (
-      <Globe2
-        aria-hidden="true"
-        className="h-3.5 w-3.5 shrink-0 text-muted"
-      />
+      <Globe2 aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted" />
     );
   }
   return null;
@@ -3093,277 +3171,280 @@ function GroupsPanel({
   const { t: tc } = useTranslation("common");
   return (
     <Table className="min-w-[58rem]">
-        <colgroup>
-          <col className="w-[14rem]" />
-          <col className="w-[5rem]" />
-          <col className="w-[2.5rem]" />
-          <col className="w-[7rem]" />
-          <col className={STATUS_COLUMN_CLASS} />
-          <col />
-          <col className="w-[8.5rem]" />
-        </colgroup>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[14rem]">
-              <SortableHeader
-                field="code"
-                label={t("groups.columns.group")}
-                description={t("groups.columnDescriptions.group")}
-                direction={sortDirection(activeSort, activeOrder, "code")}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className="w-[5rem]">
-              <ColumnHeader description={t("groups.columnDescriptions.accounts")}>
-                {t("groups.columns.accounts")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className="w-[2.5rem]">
-              <ColumnHeader description={t("groups.columnDescriptions.positions")}>
-                {t("groups.columns.positions")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className="w-[7rem]">
-              <ColumnHeader description={t("groups.columnDescriptions.currency")}>
-                {t("groups.columns.currency")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className={STATUS_COLUMN_CLASS}>
-              <SortableHeader
-                field="status"
-                label={t("groups.columns.status")}
-                description={t("groups.columnDescriptions.status")}
-                direction={sortDirection(activeSort, activeOrder, "status")}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead>
-              <ColumnHeader description={t("groups.columnDescriptions.notes")}>
-                {t("groups.columns.notes")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className="w-[8.5rem] text-right">
-              <ColumnHeader
-                align="right"
-                description={t("groups.columnDescriptions.actions")}
-              >
-                {t("groups.columns.actions")}
-              </ColumnHeader>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {groupRows.map((row) => {
-            const code = row.kind === "default" ? DEFAULT_GROUP_CODE : row.group.code;
-            const isSelected = selectedGroupCode === code;
-            const isBlocked = row.kind === "real" && row.group.blocked;
-            const title = row.kind === "real" ? groupDisplayTitle(row.group) : "";
-            return (
-              <TableRow
-                key={code === DEFAULT_GROUP_CODE ? "__default__" : code}
-                className={cn(
-                  isBlocked && "bg-accent-dim",
-                  isSelected && "ring-1 ring-inset ring-ring",
-                )}
-              >
-                <TableCell className="w-[14rem] font-medium">
-                  {row.kind === "default" ? (
-                    <span className="text-muted-lt italic">{t("groups.defaultGroup")}</span>
-                  ) : (
-                    <div className="flex items-start gap-1">
-                      <span className="flex min-w-0 flex-col">
-                        {title !== "" && (
-                          <span className="nums truncate">{title}</span>
-                        )}
-                        {title !== "" && (
-                          <IdCell
-                            value={row.group.code}
-                            copyTitle={tc("rowActions.copyIdTitle", {
-                              entity: row.group.code,
-                            })}
-                            copiedTitle={tc("rowActions.copiedId")}
-                            gap={4}
-                          >
-                            <span className="text-[0.6875rem] text-accent">
-                              {row.group.code}
-                            </span>
-                          </IdCell>
-                        )}
-                        {title === "" && (
-                          <IdCell
-                            value={row.group.code}
-                            copyTitle={tc("rowActions.copyIdTitle", {
-                              entity: row.group.code,
-                            })}
-                            copiedTitle={tc("rowActions.copiedId")}
-                            gap={4}
-                          />
-                        )}
-                      </span>
-                      <span className="ml-auto flex shrink-0 items-center">
-                        <EditButton
-                          size={28}
-                          onClick={() => onEdit(row.group)}
-                          title={t("groups.actions.editTitle")}
+      <colgroup>
+        <col className="w-[14rem]" />
+        <col className="w-[5rem]" />
+        <col className="w-[2.5rem]" />
+        <col className="w-[7rem]" />
+        <col className={STATUS_COLUMN_CLASS} />
+        <col />
+        <col className="w-[8.5rem]" />
+      </colgroup>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="w-[14rem]">
+            <SortableHeader
+              field="code"
+              label={t("groups.columns.group")}
+              description={t("groups.columnDescriptions.group")}
+              direction={sortDirection(activeSort, activeOrder, "code")}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className="w-[5rem]">
+            <ColumnHeader description={t("groups.columnDescriptions.accounts")}>
+              {t("groups.columns.accounts")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className="w-[2.5rem]">
+            <ColumnHeader
+              description={t("groups.columnDescriptions.positions")}
+            >
+              {t("groups.columns.positions")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className="w-[7rem]">
+            <ColumnHeader description={t("groups.columnDescriptions.currency")}>
+              {t("groups.columns.currency")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className={STATUS_COLUMN_CLASS}>
+            <SortableHeader
+              field="status"
+              label={t("groups.columns.status")}
+              description={t("groups.columnDescriptions.status")}
+              direction={sortDirection(activeSort, activeOrder, "status")}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead>
+            <ColumnHeader description={t("groups.columnDescriptions.notes")}>
+              {t("groups.columns.notes")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className="w-[8.5rem] text-right">
+            <ColumnHeader
+              align="right"
+              description={t("groups.columnDescriptions.actions")}
+            >
+              {t("groups.columns.actions")}
+            </ColumnHeader>
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {groupRows.map((row) => {
+          const code =
+            row.kind === "default" ? DEFAULT_GROUP_CODE : row.group.code;
+          const isSelected = selectedGroupCode === code;
+          const isBlocked = row.kind === "real" && row.group.blocked;
+          const title = row.kind === "real" ? groupDisplayTitle(row.group) : "";
+          return (
+            <TableRow
+              key={code === DEFAULT_GROUP_CODE ? "__default__" : code}
+              className={cn(
+                isBlocked && "bg-accent-dim",
+                isSelected && "ring-1 ring-inset ring-ring",
+              )}
+            >
+              <TableCell className="w-[14rem] font-medium">
+                {row.kind === "default" ? (
+                  <span className="text-muted-lt italic">
+                    {t("groups.defaultGroup")}
+                  </span>
+                ) : (
+                  <div className="flex items-start gap-1">
+                    <span className="flex min-w-0 flex-col">
+                      {title !== "" && (
+                        <span className="nums truncate">{title}</span>
+                      )}
+                      {title !== "" && (
+                        <IdCell
+                          value={row.group.code}
+                          copyTitle={tc("rowActions.copyIdTitle", {
+                            entity: row.group.code,
+                          })}
+                          copiedTitle={tc("rowActions.copiedId")}
+                          gap={4}
+                        >
+                          <span className="text-[0.6875rem] text-accent">
+                            {row.group.code}
+                          </span>
+                        </IdCell>
+                      )}
+                      {title === "" && (
+                        <IdCell
+                          value={row.group.code}
+                          copyTitle={tc("rowActions.copyIdTitle", {
+                            entity: row.group.code,
+                          })}
+                          copiedTitle={tc("rowActions.copiedId")}
+                          gap={4}
                         />
-                      </span>
-                    </div>
-                  )}
-                </TableCell>
-
-                <TableCell className="w-[5rem] text-xs text-muted-lt">
-                  {row.memberCount}
-                </TableCell>
-
-                <TableCell className="w-[2.5rem] text-xs text-muted-lt">
-                  <span className="nums">{row.positionCount}</span>
-                </TableCell>
-
-                <TableCell className="w-[7rem]">
-                  <CurrencyCell
-                    currency={row.group.currency ?? ""}
-                    title={t("groups.currencyCell.title")}
-                    editTitle={t("groups.actions.editCurrencyTitle")}
-                    onEdit={() => onEditCurrency(row.group)}
-                  />
-                </TableCell>
-
-                <TableCell
-                  className={STATUS_COLUMN_CLASS}
-                  title={
-                    row.kind === "real"
-                      ? row.group.blockReason || undefined
-                      : undefined
-                  }
-                >
-                  <div className="flex items-center gap-1">
-                    {row.kind === "real" && row.group.blocked ? (
-                      <Badge variant="danger" className="shrink-0">
-                        <StatusDot tone="danger" />
-                        {t("groups.status.blocked")}
-                      </Badge>
-                    ) : (
-                      <Badge variant="ok" className="shrink-0">
-                        <StatusDot tone="ok" />
-                        {t("groups.status.active")}
-                      </Badge>
-                    )}
-                    {row.kind === "real" && (
-                      <div className="accounts-status-action-area">
-                        {row.group.blocked && (
-                          <ActionButton
-                            icon="view"
-                            size={28}
-                            title={t("groups.actions.viewBlockDetails")}
-                            onClick={() => onShowBlockDetails(row.group)}
-                          />
-                        )}
-                        <ActionButton
-                          icon={row.group.blocked ? "check" : "block"}
-                          size={28}
-                          title={
-                            row.group.blocked
-                              ? t("groups.actions.unblock")
-                              : t("groups.actions.block")
-                          }
-                          onClick={() => {
-                            if (row.group.blocked) {
-                              onUnblock(row.group);
-                            } else {
-                              onBlock(row.group);
-                            }
-                          }}
-                          danger={!row.group.blocked}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </TableCell>
-
-                <TableCell
-                  className="text-xs text-muted-lt"
-                  title={
-                    row.kind === "real" ? (row.group.notes || undefined) : undefined
-                  }
-                >
-                  {row.kind === "real" ? (
-                    <div className="flex min-w-0 items-start gap-1">
-                      <NotesText text={row.group.notes || "—"} />
+                      )}
+                    </span>
+                    <span className="ml-auto flex shrink-0 items-center">
                       <EditButton
                         size={28}
-                        style={{ marginLeft: "auto" }}
-                        onClick={() => onEditNotes(row.group)}
-                        title={t("groups.actions.editNotesTitle")}
+                        onClick={() => onEdit(row.group)}
+                        title={t("groups.actions.editTitle")}
+                      />
+                    </span>
+                  </div>
+                )}
+              </TableCell>
+
+              <TableCell className="w-[5rem] text-xs text-muted-lt">
+                {row.memberCount}
+              </TableCell>
+
+              <TableCell className="w-[2.5rem] text-xs text-muted-lt">
+                <span className="nums">{row.positionCount}</span>
+              </TableCell>
+
+              <TableCell className="w-[7rem]">
+                <CurrencyCell
+                  currency={row.group.currency ?? ""}
+                  title={t("groups.currencyCell.title")}
+                  editTitle={t("groups.actions.editCurrencyTitle")}
+                  onEdit={() => onEditCurrency(row.group)}
+                />
+              </TableCell>
+
+              <TableCell
+                className={STATUS_COLUMN_CLASS}
+                title={
+                  row.kind === "real"
+                    ? row.group.blockReason || undefined
+                    : undefined
+                }
+              >
+                <div className="flex items-center gap-1">
+                  {row.kind === "real" && row.group.blocked ? (
+                    <Badge variant="danger" className="shrink-0">
+                      <StatusDot tone="danger" />
+                      {t("groups.status.blocked")}
+                    </Badge>
+                  ) : (
+                    <Badge variant="ok" className="shrink-0">
+                      <StatusDot tone="ok" />
+                      {t("groups.status.active")}
+                    </Badge>
+                  )}
+                  {row.kind === "real" && (
+                    <div className="accounts-status-action-area">
+                      {row.group.blocked && (
+                        <ActionButton
+                          icon="view"
+                          size={28}
+                          title={t("groups.actions.viewBlockDetails")}
+                          onClick={() => onShowBlockDetails(row.group)}
+                        />
+                      )}
+                      <ActionButton
+                        icon={row.group.blocked ? "check" : "block"}
+                        size={28}
+                        title={
+                          row.group.blocked
+                            ? t("groups.actions.unblock")
+                            : t("groups.actions.block")
+                        }
+                        onClick={() => {
+                          if (row.group.blocked) {
+                            onUnblock(row.group);
+                          } else {
+                            onBlock(row.group);
+                          }
+                        }}
+                        danger={!row.group.blocked}
                       />
                     </div>
-                  ) : (
-                    <span className="italic">
-                      {t("groups.defaultGroupNote")}
-                    </span>
                   )}
-                </TableCell>
+                </div>
+              </TableCell>
 
-                <TableCell className="w-[8.5rem] text-right">
-                  {row.kind === "default" ? (
-                    <RowActions>
-                      <FilterByButton
-                        title={tc("rowActions.filterByTitle", {
-                          field: t("groups.defaultGroup"),
-                        })}
-                        href={absoluteAppUrl("/accounts?group=")}
-                        onClick={() => onSelect(DEFAULT_GROUP_CODE)}
-                      />
-                      <ShareLinkButton
-                        href={absoluteAppUrl("/accounts?group=")}
-                        title={tc("rowActions.shareTitle", {
-                          entity: t("groups.defaultGroup"),
-                        })}
-                        copiedTitle={tc("rowActions.copiedLink")}
-                      />
-                    </RowActions>
-                  ) : (
-                    <RowActions>
-                      <FilterByButton
-                        title={tc("rowActions.filterByTitle", {
-                          field: row.group.code,
-                        })}
-                        href={absoluteAppUrl(
-                          `/accounts?group=${encodeURIComponent(row.group.code)}`,
-                        )}
-                        onClick={() => onSelect(code)}
-                      />
-                      <ShareLinkButton
-                        href={absoluteAppUrl(
-                          `/accounts?group=${encodeURIComponent(row.group.code)}`,
-                        )}
-                        title={tc("rowActions.shareTitle", {
-                          entity: row.group.code,
-                        })}
-                        copiedTitle={tc("rowActions.copiedLink")}
-                      />
-                      <DeleteButton
-                        title={tc("rowActions.deleteTitle", {
-                          entity: row.group.code,
-                        })}
-                        onClick={() => onDelete(row.group)}
-                      />
-                    </RowActions>
-                  )}
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
+              <TableCell
+                className="text-xs text-muted-lt"
+                title={
+                  row.kind === "real" ? row.group.notes || undefined : undefined
+                }
+              >
+                {row.kind === "real" ? (
+                  <div className="flex min-w-0 items-start gap-1">
+                    <NotesText text={row.group.notes || "—"} />
+                    <EditButton
+                      size={28}
+                      style={{ marginLeft: "auto" }}
+                      onClick={() => onEditNotes(row.group)}
+                      title={t("groups.actions.editNotesTitle")}
+                    />
+                  </div>
+                ) : (
+                  <span className="italic">{t("groups.defaultGroupNote")}</span>
+                )}
+              </TableCell>
+
+              <TableCell className="w-[8.5rem] text-right">
+                {row.kind === "default" ? (
+                  <RowActions>
+                    <FilterByButton
+                      title={tc("rowActions.filterByTitle", {
+                        field: t("groups.defaultGroup"),
+                      })}
+                      href={absoluteAppUrl("/accounts?group=")}
+                      onClick={() => onSelect(DEFAULT_GROUP_CODE)}
+                    />
+                    <ShareLinkButton
+                      href={absoluteAppUrl("/accounts?group=")}
+                      title={tc("rowActions.shareTitle", {
+                        entity: t("groups.defaultGroup"),
+                      })}
+                      copiedTitle={tc("rowActions.copiedLink")}
+                    />
+                  </RowActions>
+                ) : (
+                  <RowActions>
+                    <FilterByButton
+                      title={tc("rowActions.filterByTitle", {
+                        field: row.group.code,
+                      })}
+                      href={absoluteAppUrl(
+                        `/accounts?group=${encodeURIComponent(row.group.code)}`,
+                      )}
+                      onClick={() => onSelect(code)}
+                    />
+                    <ShareLinkButton
+                      href={absoluteAppUrl(
+                        `/accounts?group=${encodeURIComponent(row.group.code)}`,
+                      )}
+                      title={tc("rowActions.shareTitle", {
+                        entity: row.group.code,
+                      })}
+                      copiedTitle={tc("rowActions.copiedLink")}
+                    />
+                    <DeleteButton
+                      title={tc("rowActions.deleteTitle", {
+                        entity: row.group.code,
+                      })}
+                      onClick={() => onDelete(row.group)}
+                    />
+                  </RowActions>
+                )}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
     </Table>
   );
 }
@@ -3429,338 +3510,340 @@ function AccountsTable({
 
   return (
     <Table className="min-w-[68rem]">
-        <colgroup>
-          <col className="w-[13rem]" />
-          <col className="w-[9rem]" />
-          <col className="w-[7rem]" />
-          <col className="w-[6rem]" />
-          <col className="w-[2.5rem]" />
-          <col className={STATUS_COLUMN_CLASS} />
-          <col />
-          <col className="w-[12.5rem]" />
-        </colgroup>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[13rem]">
-              <SortableHeader
-                field="code"
-                label={t("accounts.columns.account")}
-                description={t("accounts.columnDescriptions.account")}
-                direction={sortDirection(activeSort, activeOrder, "code")}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className="w-[9rem]">
-              <SortableHeader
-                field="group"
-                label={t("accounts.columns.group")}
-                description={t("accounts.columnDescriptions.group")}
-                direction={sortDirection(activeSort, activeOrder, "group")}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className="w-[7rem]">
-              <ColumnHeader description={t("accounts.columnDescriptions.currency")}>
-                {t("accounts.columns.currency")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className="w-[6rem] text-right">
-              <ColumnHeader
-                align="right"
-                description={t("accounts.columnDescriptions.pnl")}
-              >
-                {t("accounts.columns.pnl")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className="w-[2.5rem]">
-              <SortableHeader
-                field="positionCount"
-                label={t("accounts.columns.positions")}
-                description={t("accounts.columnDescriptions.positions")}
-                direction={sortDirection(
-                  activeSort,
-                  activeOrder,
-                  "positionCount",
-                )}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className={STATUS_COLUMN_CLASS}>
-              <SortableHeader
-                field="status"
-                label={t("accounts.columns.status")}
-                description={t("accounts.columnDescriptions.status")}
-                direction={sortDirection(activeSort, activeOrder, "status")}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead>
-              <ColumnHeader description={t("accounts.columnDescriptions.notes")}>
-                {t("accounts.columns.notes")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className="w-[12.5rem] text-right">
-              <ColumnHeader
-                align="right"
-                description={t("accounts.columnDescriptions.actions")}
-              >
-                {t("accounts.columns.actions")}
-              </ColumnHeader>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {accounts.map((account) => {
-            const title = account.title;
-            const haltText = pnlHaltText(t, account.pnlHaltReason);
-            return (
-              <TableRow
-                key={account.code}
-                className={cn(account.blocked && "bg-accent-dim")}
-              >
-                <TableCell className="w-[13rem] font-medium">
-                  <div className="flex items-start gap-1">
-                    <span className="flex min-w-0 flex-col">
-                      <span className="nums truncate">{title}</span>
-                      {title !== account.code && (
-                        <IdCell
-                          value={account.code}
-                          copyTitle={tc("rowActions.copyIdTitle", {
-                            entity: account.code,
-                          })}
-                          copiedTitle={tc("rowActions.copiedId")}
-                          gap={4}
-                        >
-                          <span className="text-[0.6875rem] text-accent">
-                            {account.code}
-                          </span>
-                        </IdCell>
-                      )}
-                      {title === account.code && (
-                        <IdCell
-                          value={account.code}
-                          copyTitle={tc("rowActions.copyIdTitle", {
-                            entity: account.code,
-                          })}
-                          copiedTitle={tc("rowActions.copiedId")}
-                          gap={4}
-                        />
-                      )}
-                    </span>
-                    <span className="ml-auto flex shrink-0 items-center">
-                      <EditButton
-                        size={28}
-                        onClick={() => onEditAccount(account)}
-                        title={t("accounts.actions.editTitle")}
-                      />
-                    </span>
-                  </div>
-                </TableCell>
-
-                <TableCell className="w-[9rem]">
-                  <div className="flex min-w-0 items-center gap-1">
-                    <span
-                      className={cn(
-                        "nums min-w-0 truncate text-xs",
-                        selectedGroupCode === account.group
-                          ? "text-accent"
-                          : "text-muted-lt",
-                      )}
-                    >
-                      {account.group ? (
-                        account.group
-                      ) : (
-                        <span className="italic">
-                          {t("accounts.groupCell.noGroup")}
+      <colgroup>
+        <col className="w-[13rem]" />
+        <col className="w-[9rem]" />
+        <col className="w-[7rem]" />
+        <col className="w-[6rem]" />
+        <col className="w-[2.5rem]" />
+        <col className={STATUS_COLUMN_CLASS} />
+        <col />
+        <col className="w-[12.5rem]" />
+      </colgroup>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="w-[13rem]">
+            <SortableHeader
+              field="code"
+              label={t("accounts.columns.account")}
+              description={t("accounts.columnDescriptions.account")}
+              direction={sortDirection(activeSort, activeOrder, "code")}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className="w-[9rem]">
+            <SortableHeader
+              field="group"
+              label={t("accounts.columns.group")}
+              description={t("accounts.columnDescriptions.group")}
+              direction={sortDirection(activeSort, activeOrder, "group")}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className="w-[7rem]">
+            <ColumnHeader
+              description={t("accounts.columnDescriptions.currency")}
+            >
+              {t("accounts.columns.currency")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className="w-[6rem] text-right">
+            <ColumnHeader
+              align="right"
+              description={t("accounts.columnDescriptions.pnl")}
+            >
+              {t("accounts.columns.pnl")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className="w-[2.5rem]">
+            <SortableHeader
+              field="positionCount"
+              label={t("accounts.columns.positions")}
+              description={t("accounts.columnDescriptions.positions")}
+              direction={sortDirection(
+                activeSort,
+                activeOrder,
+                "positionCount",
+              )}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className={STATUS_COLUMN_CLASS}>
+            <SortableHeader
+              field="status"
+              label={t("accounts.columns.status")}
+              description={t("accounts.columnDescriptions.status")}
+              direction={sortDirection(activeSort, activeOrder, "status")}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead>
+            <ColumnHeader description={t("accounts.columnDescriptions.notes")}>
+              {t("accounts.columns.notes")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className="w-[12.5rem] text-right">
+            <ColumnHeader
+              align="right"
+              description={t("accounts.columnDescriptions.actions")}
+            >
+              {t("accounts.columns.actions")}
+            </ColumnHeader>
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {accounts.map((account) => {
+          const title = account.title;
+          const haltText = pnlHaltText(t, account.pnlHaltReason);
+          return (
+            <TableRow
+              key={account.code}
+              className={cn(account.blocked && "bg-accent-dim")}
+            >
+              <TableCell className="w-[13rem] font-medium">
+                <div className="flex items-start gap-1">
+                  <span className="flex min-w-0 flex-col">
+                    <span className="nums truncate">{title}</span>
+                    {title !== account.code && (
+                      <IdCell
+                        value={account.code}
+                        copyTitle={tc("rowActions.copyIdTitle", {
+                          entity: account.code,
+                        })}
+                        copiedTitle={tc("rowActions.copiedId")}
+                        gap={4}
+                      >
+                        <span className="text-[0.6875rem] text-accent">
+                          {account.code}
                         </span>
-                      )}
-                    </span>
-                    <span className="ml-auto flex shrink-0 items-center">
-                      {account.group && selectedGroupCode !== account.group && (
-                        <FilterByButton
-                          size={28}
-                          title={tc("rowActions.filterByTitle", {
-                            field: account.group,
-                          })}
-                          href={absoluteAppUrl(
-                            `/accounts?group=${encodeURIComponent(account.group)}`,
-                          )}
-                          onClick={() => onFilterGroup(account.group)}
-                        />
-                      )}
-                      <EditButton
-                        size={28}
-                        onClick={() => onAssignGroup(account)}
-                        title={t("accounts.groupCell.editTitle")}
-                      />
-                    </span>
-                  </div>
-                </TableCell>
-
-                <TableCell className="w-[7rem]">
-                  <CurrencyCell
-                    currency={account.effectiveCurrency ?? ""}
-                    title={t("accounts.currencyCell.title")}
-                    origin={account.currencyOrigin}
-                    originTitle={currencyOriginTitle(account)}
-                    editTitle={t("accounts.actions.editCurrencyTitle")}
-                    noneLabel={t("accounts.currencyCell.none")}
-                    onEdit={() => onEditCurrency(account)}
-                  />
-                </TableCell>
-
-                <TableCell
-                  className={cn(
-                    "w-[6rem] nums text-right text-xs",
-                    pnlClass(account.pnl),
-                  )}
-                >
-                  {haltText ? (
-                    <span
-                      className="inline-flex text-[var(--warn)]"
-                      title={haltText}
-                      aria-label={haltText}
-                      role="note"
-                      tabIndex={0}
-                    >
-                      <CircleAlert className="size-4" aria-hidden="true" />
-                    </span>
-                  ) : (
-                    pnlText(account.pnl)
-                  )}
-                </TableCell>
-
-                <TableCell className="w-[2.5rem] text-xs text-muted-lt">
-                  <span className="nums">{account.positionCount ?? 0}</span>
-                </TableCell>
-
-                <TableCell
-                  className={STATUS_COLUMN_CLASS}
-                  title={account.blockReason || undefined}
-                >
-                  <div className="flex items-center gap-1">
-                    {/* The badge reports the effective state - what the engine
-                        does with the account's orders right now. */}
-                    {account.blocked ? (
-                      <Badge variant="danger" className="shrink-0">
-                        <StatusDot tone="danger" />
-                        {t("accounts.status.blocked")}
-                      </Badge>
-                    ) : (
-                      <Badge variant="ok" className="shrink-0">
-                        <StatusDot tone="ok" />
-                        {t("accounts.status.active")}
-                      </Badge>
+                      </IdCell>
                     )}
-                    <div className="accounts-status-action-area">
-                      {account.blocked && (
-                        <ActionButton
-                          icon="view"
-                          size={28}
-                          onClick={() => onShowBlockDetails(account)}
-                          title={t("accounts.actions.viewBlockDetails")}
-                        />
-                      )}
-                      {/* The tiers are independent, so the action follows
-                          the account's own block: an account held down only
-                          by its group still needs a Block of its own. */}
-                      {account.accountBlocked ? (
-                        <ActionButton
-                          icon="check"
-                          size={28}
-                          onClick={() => onUnblock(account)}
-                          title={t("accounts.actions.unblock")}
-                        />
-                      ) : (
-                        <ActionButton
-                          icon="block"
-                          size={28}
-                          onClick={() => onBlock(account)}
-                          title={t("accounts.actions.block")}
-                          danger
-                        />
-                      )}
-                    </div>
-                  </div>
-                </TableCell>
-
-                <TableCell
-                  className="text-xs text-muted-lt"
-                  title={account.notes || undefined}
-                >
-                  <div className="flex min-w-0 items-start gap-1">
-                    <NotesText text={account.notes || "—"} />
+                    {title === account.code && (
+                      <IdCell
+                        value={account.code}
+                        copyTitle={tc("rowActions.copyIdTitle", {
+                          entity: account.code,
+                        })}
+                        copiedTitle={tc("rowActions.copiedId")}
+                        gap={4}
+                      />
+                    )}
+                  </span>
+                  <span className="ml-auto flex shrink-0 items-center">
                     <EditButton
                       size={28}
-                      style={{ marginLeft: "auto" }}
-                      onClick={() => onEditNotes(account)}
-                      title={t("accounts.actions.editNotesTitle")}
+                      onClick={() => onEditAccount(account)}
+                      title={t("accounts.actions.editTitle")}
                     />
-                  </div>
-                </TableCell>
+                  </span>
+                </div>
+              </TableCell>
 
-                <TableCell className="w-[12.5rem] text-right">
-                  <RowActions>
-                    <PositionsButton
-                      title={t("accounts.links.positions")}
-                      href={absoluteAppUrl(
-                        `/positions?account=${encodeURIComponent(account.code)}`,
-                      )}
-                      onClick={() => onOpenPositions(account)}
+              <TableCell className="w-[9rem]">
+                <div className="flex min-w-0 items-center gap-1">
+                  <span
+                    className={cn(
+                      "nums min-w-0 truncate text-xs",
+                      selectedGroupCode === account.group
+                        ? "text-accent"
+                        : "text-muted-lt",
+                    )}
+                  >
+                    {account.group ? (
+                      account.group
+                    ) : (
+                      <span className="italic">
+                        {t("accounts.groupCell.noGroup")}
+                      </span>
+                    )}
+                  </span>
+                  <span className="ml-auto flex shrink-0 items-center">
+                    {account.group && selectedGroupCode !== account.group && (
+                      <FilterByButton
+                        size={28}
+                        title={tc("rowActions.filterByTitle", {
+                          field: account.group,
+                        })}
+                        href={absoluteAppUrl(
+                          `/accounts?group=${encodeURIComponent(account.group)}`,
+                        )}
+                        onClick={() => onFilterGroup(account.group)}
+                      />
+                    )}
+                    <EditButton
+                      size={28}
+                      onClick={() => onAssignGroup(account)}
+                      title={t("accounts.groupCell.editTitle")}
                     />
-                    <TradingButton
-                      title={t("accounts.links.trading")}
-                      href={absoluteAppUrl(
-                        `/trading?account=${encodeURIComponent(account.code)}`,
-                      )}
-                      onClick={() => onOpenTrading(account)}
-                    />
-                    <PoliciesButton
-                      title={t("accounts.links.policies")}
-                      href={absoluteAppUrl(
-                        `/policies?account=${encodeURIComponent(account.code)}`,
-                      )}
-                      onClick={() => onOpenPolicies(account)}
-                    />
-                    <HistoryButton
-                      title={t("accounts.links.audit")}
-                      href={absoluteAppUrl(
-                        `/audit?account=${encodeURIComponent(account.code)}`,
-                      )}
-                      onClick={() => onOpenHistory(account)}
-                    />
-                    <DeleteButton
-                      title={tc("rowActions.deleteTitle", {
-                        entity: account.code,
-                      })}
-                      onClick={() => onDelete(account)}
-                    />
-                  </RowActions>
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
+                  </span>
+                </div>
+              </TableCell>
+
+              <TableCell className="w-[7rem]">
+                <CurrencyCell
+                  currency={account.effectiveCurrency ?? ""}
+                  title={t("accounts.currencyCell.title")}
+                  origin={account.currencyOrigin}
+                  originTitle={currencyOriginTitle(account)}
+                  editTitle={t("accounts.actions.editCurrencyTitle")}
+                  noneLabel={t("accounts.currencyCell.none")}
+                  onEdit={() => onEditCurrency(account)}
+                />
+              </TableCell>
+
+              <TableCell
+                className={cn(
+                  "w-[6rem] nums text-right text-xs",
+                  pnlClass(account.pnl),
+                )}
+              >
+                {haltText ? (
+                  <span
+                    className="inline-flex text-[var(--warn)]"
+                    title={haltText}
+                    aria-label={haltText}
+                    role="note"
+                    tabIndex={0}
+                  >
+                    <CircleAlert className="size-4" aria-hidden="true" />
+                  </span>
+                ) : (
+                  pnlText(account.pnl)
+                )}
+              </TableCell>
+
+              <TableCell className="w-[2.5rem] text-xs text-muted-lt">
+                <span className="nums">{account.positionCount ?? 0}</span>
+              </TableCell>
+
+              <TableCell
+                className={STATUS_COLUMN_CLASS}
+                title={account.blockReason || undefined}
+              >
+                <div className="flex items-center gap-1">
+                  {/* The badge reports the effective state - what the engine
+                        does with the account's orders right now. */}
+                  {account.blocked ? (
+                    <Badge variant="danger" className="shrink-0">
+                      <StatusDot tone="danger" />
+                      {t("accounts.status.blocked")}
+                    </Badge>
+                  ) : (
+                    <Badge variant="ok" className="shrink-0">
+                      <StatusDot tone="ok" />
+                      {t("accounts.status.active")}
+                    </Badge>
+                  )}
+                  <div className="accounts-status-action-area">
+                    {account.blocked && (
+                      <ActionButton
+                        icon="view"
+                        size={28}
+                        onClick={() => onShowBlockDetails(account)}
+                        title={t("accounts.actions.viewBlockDetails")}
+                      />
+                    )}
+                    {/* The tiers are independent, so the action follows
+                          the account's own block: an account held down only
+                          by its group still needs a Block of its own. */}
+                    {account.accountBlocked ? (
+                      <ActionButton
+                        icon="check"
+                        size={28}
+                        onClick={() => onUnblock(account)}
+                        title={t("accounts.actions.unblock")}
+                      />
+                    ) : (
+                      <ActionButton
+                        icon="block"
+                        size={28}
+                        onClick={() => onBlock(account)}
+                        title={t("accounts.actions.block")}
+                        danger
+                      />
+                    )}
+                  </div>
+                </div>
+              </TableCell>
+
+              <TableCell
+                className="text-xs text-muted-lt"
+                title={account.notes || undefined}
+              >
+                <div className="flex min-w-0 items-start gap-1">
+                  <NotesText text={account.notes || "—"} />
+                  <EditButton
+                    size={28}
+                    style={{ marginLeft: "auto" }}
+                    onClick={() => onEditNotes(account)}
+                    title={t("accounts.actions.editNotesTitle")}
+                  />
+                </div>
+              </TableCell>
+
+              <TableCell className="w-[12.5rem] text-right">
+                <RowActions>
+                  <PositionsButton
+                    title={t("accounts.links.positions")}
+                    href={absoluteAppUrl(
+                      `/positions?account=${encodeURIComponent(account.code)}`,
+                    )}
+                    onClick={() => onOpenPositions(account)}
+                  />
+                  <TradingButton
+                    title={t("accounts.links.trading")}
+                    href={absoluteAppUrl(
+                      `/trading?account=${encodeURIComponent(account.code)}`,
+                    )}
+                    onClick={() => onOpenTrading(account)}
+                  />
+                  <PoliciesButton
+                    title={t("accounts.links.policies")}
+                    href={absoluteAppUrl(
+                      `/policies?account=${encodeURIComponent(account.code)}`,
+                    )}
+                    onClick={() => onOpenPolicies(account)}
+                  />
+                  <HistoryButton
+                    title={t("accounts.links.audit")}
+                    href={absoluteAppUrl(
+                      `/audit?account=${encodeURIComponent(account.code)}`,
+                    )}
+                    onClick={() => onOpenHistory(account)}
+                  />
+                  <DeleteButton
+                    title={tc("rowActions.deleteTitle", {
+                      entity: account.code,
+                    })}
+                    onClick={() => onDelete(account)}
+                  />
+                </RowActions>
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
     </Table>
   );
 }
@@ -3787,18 +3870,22 @@ export function Accounts() {
     () => (seedAccounts ? searchParams.get("group") : null),
   );
   const [accountCode, setAccountCode] = useState(
-    seedAccounts ? (globalAccountFilter.account || searchParams.get("code") || "") : "",
+    seedAccounts
+      ? globalAccountFilter.account || searchParams.get("code") || ""
+      : "",
   );
-  const [accountCodeMatch, setAccountCodeMatch] = useState<TextMatchMode>(
-    () => (seedAccounts ? textMatchFromParams(searchParams) : "contains"),
+  const [accountCodeMatch, setAccountCodeMatch] = useState<TextMatchMode>(() =>
+    seedAccounts ? textMatchFromParams(searchParams) : "contains",
   );
-  const [accountStatus, setAccountStatus] = useState<StatusListFilter>(
-    () => (seedAccounts ? statusFromParams(searchParams) : "all"),
+  const [accountStatus, setAccountStatus] = useState<StatusListFilter>(() =>
+    seedAccounts ? statusFromParams(searchParams) : "all",
   );
   const [accountSort, setAccountSort] = useState<{
     sort?: string;
     order?: SortOrder;
-  }>(() => (seedAccounts ? sortFromParams(searchParams, ACCOUNT_SORT_KEYS) : {}));
+  }>(() =>
+    seedAccounts ? sortFromParams(searchParams, ACCOUNT_SORT_KEYS) : {},
+  );
   const initialAccountAdvanced = useMemo(
     () =>
       seedAccounts
@@ -3808,21 +3895,20 @@ export function Accounts() {
   );
   const [accountAdvancedDraft, setAccountAdvancedDraft] =
     useState<AdvancedListFilters>(initialAccountAdvanced);
-  const [accountAdvanced, setAccountAdvanced] =
-    useState<AdvancedListFilters>(initialAccountAdvanced);
-  const [accountAdvancedOpen, setAccountAdvancedOpen] = useState(false);
-  const [accountGroupSearch, setAccountGroupSearch] = useState(
-    "",
+  const [accountAdvanced, setAccountAdvanced] = useState<AdvancedListFilters>(
+    initialAccountAdvanced,
   );
+  const [accountAdvancedOpen, setAccountAdvancedOpen] = useState(false);
+  const [accountGroupSearch, setAccountGroupSearch] = useState("");
   const accountGroupSearchRef = useRef(accountGroupSearch);
   const [groupCode, setGroupCode] = useState(
     seedGroups ? (searchParams.get("code") ?? "") : "",
   );
-  const [groupCodeMatch, setGroupCodeMatch] = useState<TextMatchMode>(
-    () => (seedGroups ? textMatchFromParams(searchParams) : "contains"),
+  const [groupCodeMatch, setGroupCodeMatch] = useState<TextMatchMode>(() =>
+    seedGroups ? textMatchFromParams(searchParams) : "contains",
   );
-  const [groupStatus, setGroupStatus] = useState<StatusListFilter>(
-    () => (seedGroups ? statusFromParams(searchParams) : "all"),
+  const [groupStatus, setGroupStatus] = useState<StatusListFilter>(() =>
+    seedGroups ? statusFromParams(searchParams) : "all",
   );
   const [groupSort, setGroupSort] = useState<{
     sort?: string;
@@ -3850,12 +3936,15 @@ export function Accounts() {
     groupCode,
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
-  const [accountCodeSuggestions, setAccountCodeSuggestions] =
-    useState<string[]>([]);
-  const [accountGroupSuggestions, setAccountGroupSuggestions] =
-    useState<string[]>([]);
-  const [groupCodeSuggestions, setGroupCodeSuggestions] =
-    useState<string[]>([]);
+  const [accountCodeSuggestions, setAccountCodeSuggestions] = useState<
+    string[]
+  >([]);
+  const [accountGroupSuggestions, setAccountGroupSuggestions] = useState<
+    string[]
+  >([]);
+  const [groupCodeSuggestions, setGroupCodeSuggestions] = useState<string[]>(
+    [],
+  );
   const visibleAccountCodeSuggestions =
     debouncedAccountCode.trim() === "" ? [] : accountCodeSuggestions;
   const visibleAccountGroupSuggestions =
@@ -3997,12 +4086,7 @@ export function Accounts() {
       filters.blockReasonMatch = groupAdvanced.blockReasonMatch;
     }
     return filters;
-  }, [
-    debouncedGroupCode,
-    groupAdvanced,
-    groupCodeMatch,
-    groupStatus,
-  ]);
+  }, [debouncedGroupCode, groupAdvanced, groupCodeMatch, groupStatus]);
   const [accountPage, setAccountPage] = useState(0);
   const [accountSize, setAccountSize] = usePersistentPageSize(
     "pit-officer-accounts-page-size",
@@ -4052,17 +4136,25 @@ export function Accounts() {
     () => ({
       ...accountFilters,
       sort:
-        accountSort.sort !== undefined && ACCOUNT_SORT_KEYS.has(accountSort.sort)
+        accountSort.sort !== undefined &&
+        ACCOUNT_SORT_KEYS.has(accountSort.sort)
           ? accountSort.sort
           : undefined,
       order:
-        accountSort.sort !== undefined && ACCOUNT_SORT_KEYS.has(accountSort.sort)
+        accountSort.sort !== undefined &&
+        ACCOUNT_SORT_KEYS.has(accountSort.sort)
           ? accountSort.order
           : undefined,
       limit: accountSize,
       offset: accountPage * accountSize,
     }),
-    [accountFilters, accountPage, accountSize, accountSort.order, accountSort.sort],
+    [
+      accountFilters,
+      accountPage,
+      accountSize,
+      accountSort.order,
+      accountSort.sort,
+    ],
   );
   const groupListFilters = useMemo<GroupListFilters>(
     () => ({
@@ -4120,7 +4212,10 @@ export function Accounts() {
       query.set("group", selectedGroupCode);
     }
     appendAdvancedParams(query, accountAdvanced, "accounts");
-    if (accountSort.sort !== undefined && ACCOUNT_SORT_KEYS.has(accountSort.sort)) {
+    if (
+      accountSort.sort !== undefined &&
+      ACCOUNT_SORT_KEYS.has(accountSort.sort)
+    ) {
       query.set("sort", accountSort.sort);
       if (accountSort.order !== undefined) {
         query.set("order", accountSort.order);
@@ -4211,29 +4306,45 @@ export function Accounts() {
         : null;
 
   const groupSuggestions: string[] =
-    groups?.map((g) => g.code).filter((code) => code !== DEFAULT_GROUP_CODE) ?? [];
+    groups?.map((g) => g.code).filter((code) => code !== DEFAULT_GROUP_CODE) ??
+    [];
 
   // Which group row is highlighted; null = show all accounts.
   const [tab, setTab] = useState<AccountsTab>(initialTab);
 
   // Account dialog targets.
-  const [editAccountTarget, setEditAccountTarget] = useState<Account | null>(null);
-  const [blockAccountTarget, setBlockAccountTarget] = useState<Account | null>(null);
-  const [unblockAccountTarget, setUnblockAccountTarget] = useState<Account | null>(null);
+  const [editAccountTarget, setEditAccountTarget] = useState<Account | null>(
+    null,
+  );
+  const [blockAccountTarget, setBlockAccountTarget] = useState<Account | null>(
+    null,
+  );
+  const [unblockAccountTarget, setUnblockAccountTarget] =
+    useState<Account | null>(null);
   const [groupTarget, setGroupTarget] = useState<Account | null>(null);
-  const [currencyAccountTarget, setCurrencyAccountTarget] = useState<Account | null>(null);
-  const [notesAccountTarget, setNotesAccountTarget] = useState<Account | null>(null);
-  const [deleteAccountTarget, setDeleteAccountTarget] = useState<Account | null>(null);
+  const [currencyAccountTarget, setCurrencyAccountTarget] =
+    useState<Account | null>(null);
+  const [notesAccountTarget, setNotesAccountTarget] = useState<Account | null>(
+    null,
+  );
+  const [deleteAccountTarget, setDeleteAccountTarget] =
+    useState<Account | null>(null);
   const [blockedDetailsTarget, setBlockedDetailsTarget] =
     useState<BlockedDetailsTarget | null>(null);
 
   // Group dialog targets.
   const [editGroupTarget, setEditGroupTarget] = useState<Group | null>(null);
-  const [groupCurrencyTarget, setGroupCurrencyTarget] = useState<Group | null>(null);
+  const [groupCurrencyTarget, setGroupCurrencyTarget] = useState<Group | null>(
+    null,
+  );
   const [groupNotesTarget, setGroupNotesTarget] = useState<Group | null>(null);
   const [blockGroupTarget, setBlockGroupTarget] = useState<Group | null>(null);
-  const [unblockGroupTarget, setUnblockGroupTarget] = useState<Group | null>(null);
-  const [deleteGroupTarget, setDeleteGroupTarget] = useState<Group | null>(null);
+  const [unblockGroupTarget, setUnblockGroupTarget] = useState<Group | null>(
+    null,
+  );
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<Group | null>(
+    null,
+  );
 
   function removeAccount(code: string) {
     setLocalAccounts((prev) => {
@@ -4263,24 +4374,25 @@ export function Accounts() {
   const recordRows: RealGroupRow[] = (groups ?? [])
     .filter((g) => g.code !== DEFAULT_GROUP_CODE)
     .map((g) => ({
-    kind: "real" as const,
-    group: g,
-    memberCount: g.accountCount ?? 0,
-    positionCount: g.positionCount ?? 0,
-  }));
+      kind: "real" as const,
+      group: g,
+      memberCount: g.accountCount ?? 0,
+      positionCount: g.positionCount ?? 0,
+    }));
 
   // Server returns real groups already sorted + paged; preserve that order.
   const allRealRows = recordRows;
   const groupRows: GroupRow[] = [...defaultRows, ...allRealRows];
 
   const pagedAccounts = accounts;
-  const groupsByCode = new Map((groups ?? []).map((group) => [group.code, group]));
+  const groupsByCode = new Map(
+    (groups ?? []).map((group) => [group.code, group]),
+  );
   const visibleAccountCount =
     accountsLoad.state === "ready" ? accountsLoad.data.total : 0;
   // Server already paged the real groups (Default pinned first on page 0);
   // render the returned rows directly. `total` counts real groups only.
-  const groupsTotal =
-    groupsLoad.state === "ready" ? groupsLoad.data.total : 0;
+  const groupsTotal = groupsLoad.state === "ready" ? groupsLoad.data.total : 0;
   const pagedGroups = groupRows;
   const hasMoreAccounts =
     accountsLoad.state === "ready" &&
@@ -4378,9 +4490,7 @@ export function Accounts() {
         </>
       }
     >
-      <p className="text-xs text-muted-lt">
-        {t("page.description")}
-      </p>
+      <p className="text-xs text-muted-lt">{t("page.description")}</p>
 
       <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
         {(["accounts", "groups"] as AccountsTab[]).map((tabId) => (
@@ -4491,7 +4601,9 @@ export function Accounts() {
               accountsLoad.state === "loading" && accountCode.trim() !== ""
             }
             groupSearch={
-              selectedGroupCode !== null ? selectedGroupCode : accountGroupSearch
+              selectedGroupCode !== null
+                ? selectedGroupCode
+                : accountGroupSearch
             }
             groupSuggestions={visibleAccountGroupSuggestions}
             groupLoading={
@@ -4587,13 +4699,19 @@ export function Accounts() {
                   setBlockedDetailsTarget({ kind: "account", account })
                 }
                 onOpenPositions={(account) =>
-                  navigate(`/positions?account=${encodeURIComponent(account.code)}`)
+                  navigate(
+                    `/positions?account=${encodeURIComponent(account.code)}`,
+                  )
                 }
                 onOpenTrading={(account) =>
-                  navigate(`/trading?account=${encodeURIComponent(account.code)}`)
+                  navigate(
+                    `/trading?account=${encodeURIComponent(account.code)}`,
+                  )
                 }
                 onOpenPolicies={(account) =>
-                  navigate(`/policies?account=${encodeURIComponent(account.code)}`)
+                  navigate(
+                    `/policies?account=${encodeURIComponent(account.code)}`,
+                  )
                 }
                 onOpenHistory={(account) =>
                   navigate(`/audit?account=${encodeURIComponent(account.code)}`)

@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -67,11 +68,16 @@ func (n *localNode) CreateAsset(
 	return asset, nil
 }
 
-// UpdateAsset replaces the asset's public code and mutable fields and audits the
-// action.
+// UpdateAsset replaces the asset's public code and mutable fields and
+// audits the action. A code rename rebuilds the live engine from the
+// renamed store snapshot and can report ErrEngineRestarting while another
+// rebuild is in progress.
 func (n *localNode) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
 ) (domain.Asset, error) {
+	if oldCode != asset.Code {
+		return n.renameAsset(ctx, oldCode, asset, caller)
+	}
 	if err := n.beginMutation(); err != nil {
 		return domain.Asset{}, err
 	}
@@ -87,6 +93,119 @@ func (n *localNode) UpdateAsset(
 		Detail: updateAssetDetail(oldCode, updated.Code),
 	}); err != nil {
 		return domain.Asset{}, fmt.Errorf("audit update asset: %w", err)
+	}
+	return updated, nil
+}
+
+// renameAsset writes the new code first and rebuilds from the renamed store,
+// unlike the delete paths that mutate inside the transition commit hook. The
+// rename cascades through every row that names the asset, so the snapshot
+// cannot be rewritten in memory; a failed rebuild restores the old code
+// instead. The window this leaves is a process death between the store write
+// and its restore: the rename survives without its audit entry, and the next
+// start builds the engine from that renamed store. The state stays consistent,
+// the audit trail loses one entry.
+func (n *localNode) renameAsset(
+	ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
+) (domain.Asset, error) {
+	if err := n.beginEngineRestart(); err != nil {
+		return domain.Asset{}, err
+	}
+	defer n.endEngineRestart()
+
+	previous, ok, err := n.realm.GetAsset(ctx, oldCode)
+	if err != nil {
+		return domain.Asset{}, fmt.Errorf("read asset for rename: %w", err)
+	}
+	if !ok {
+		return domain.Asset{}, fmt.Errorf("asset %q: %w", oldCode, domain.ErrNotFound)
+	}
+
+	durableCtx := context.WithoutCancel(ctx)
+	updated, err := n.realm.UpdateAsset(durableCtx, oldCode, asset)
+	if err != nil {
+		return domain.Asset{}, fmt.Errorf("update asset: %w", err)
+	}
+	rollback := func(cause error) (domain.Asset, error) {
+		if _, rollbackErr := n.realm.UpdateAsset(
+			durableCtx, updated.Code, previous,
+		); rollbackErr != nil {
+			return domain.Asset{}, n.fatalReconciliation(
+				"rollback asset rename",
+				errors.Join(
+					cause,
+					fmt.Errorf("restore asset %q: %w", oldCode, rollbackErr),
+				),
+			)
+		}
+		return domain.Asset{}, cause
+	}
+
+	snapshot, _, err := n.loadSnapshot(durableCtx)
+	if err != nil {
+		return rollback(fmt.Errorf("load snapshot for asset rename: %w", err))
+	}
+	previousEngine := n.currentEngine()
+	next, err := n.build(snapshot)
+	if err != nil {
+		return rollback(fmt.Errorf("build engine for asset rename: %w", err))
+	}
+	if next == nil {
+		return rollback(fmt.Errorf("build engine for asset rename returned nil"))
+	}
+	if next == previousEngine {
+		return rollback(fmt.Errorf(
+			"build engine for asset rename returned current engine",
+		))
+	}
+	transition, err := n.beginMarketDataTransition(next)
+	if err != nil {
+		next.Stop()
+		return rollback(fmt.Errorf("prepare asset rename market data: %w", err))
+	}
+	if err := n.replayMarketDataInto(durableCtx, next); err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return rollback(fmt.Errorf("replay market data for asset rename: %w", err))
+	}
+	prev, err := n.commitMarketDataTransition(transition, next)
+	if err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return rollback(fmt.Errorf("commit asset rename engine transition: %w", err))
+	}
+	if prev != nil && prev != next {
+		prev.Stop()
+	}
+	if err := n.mirrorSeedAccountBlocks(durableCtx, next); err != nil {
+		return domain.Asset{}, n.fatalPostEngineAuditByCode(
+			"mirror asset rename seed blocks",
+			"asset",
+			updated.Code,
+			fmt.Errorf("mirror asset rename seed blocks: %w", err),
+		)
+	}
+	detail := updateAssetDetail(oldCode, updated.Code)
+	entries := []store.AuditEntry{{
+		Action: domain.AuditActionUpdateAsset,
+		Asset:  updated.Code,
+		Detail: detail,
+	}}
+	if oldCode != updated.Code {
+		entries[0].Detail += " (record under new code)"
+		entries = append([]store.AuditEntry{{
+			Action: domain.AuditActionUpdateAsset,
+			Asset:  oldCode,
+			Detail: detail + " (record under old code)",
+		}}, entries...)
+	}
+	if err := n.auditBatch(durableCtx, caller, entries); err != nil {
+		return domain.Asset{}, n.fatalPostEngineAuditByCode(
+			"audit asset rename",
+			"asset",
+			updated.Code,
+			fmt.Errorf("audit update asset: %w", err),
+		)
 	}
 	return updated, nil
 }

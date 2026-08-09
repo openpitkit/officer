@@ -27,9 +27,6 @@ describe("TableSkeleton", () => {
 
     expect(
       screen.getByRole("status", { name: i18n.t("states.loading") }),
-    ).toHaveAttribute(
-      "aria-busy",
-      "true",
-    );
+    ).toHaveAttribute("aria-busy", "true");
   });
 });

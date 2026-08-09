@@ -24,7 +24,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 /** A skeleton table body shown while the first page load is in flight. */
-export function TableSkeleton({ rows = 5, cols = 4 }: { rows?: number; cols?: number }) {
+export function TableSkeleton({
+  rows = 5,
+  cols = 4,
+}: {
+  rows?: number;
+  cols?: number;
+}) {
   const { t } = useTranslation();
   return (
     <Card
@@ -62,7 +68,9 @@ export function ErrorState({
       <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
         <AlertTriangle className="h-8 w-8 text-[var(--danger)]" />
         <div className="space-y-1">
-          <p className="text-sm font-bold text-text">{title ?? t("states.loadError")}</p>
+          <p className="text-sm font-bold text-text">
+            {title ?? t("states.loadError")}
+          </p>
           <p className="max-w-md text-xs text-muted-lt">{message}</p>
         </div>
         <Button variant="outline" size="sm" onClick={onRetry}>

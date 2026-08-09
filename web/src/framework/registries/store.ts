@@ -54,4 +54,3 @@ export function createOrderedRegistry<Entry extends OrderedEntry>() {
     },
   };
 }
-

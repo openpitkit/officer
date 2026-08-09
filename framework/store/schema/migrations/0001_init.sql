@@ -277,11 +277,12 @@ CREATE INDEX idx_adjustments_status ON adjustment (status_id, at DESC, id DESC);
 -- Orders recorded by Officer (including rejected ones). amount_value and price
 -- are exact {{DECIMAL}} values; their indexes order numerically. leaves_quantity
 -- holds the recorded open base quantity: an accepted order records the
--- engine-reported base-asset delta, a pre-trade reject records '0' - the
+-- engine-reported opening quantity, a pre-trade reject records '0' - the
 -- engine's answer that nothing was reserved - and every later settlement stores
--- the value supplied with it verbatim, an empty one leaving the column as it
--- was. Terminal status and engine blocks do not change that rule; the column
--- holds what was reported, never a quantity Officer worked out for itself.
+-- the caller-supplied value verbatim, with an empty value leaving the column
+-- unchanged. Terminal status and engine blocks do not change that rule; SDK
+-- leaves travel separately, and the column holds what was reported, never a
+-- quantity Officer worked out for itself.
 -- lock is the SDK-serialized pretrade.Lock blob, persisted verbatim; the store
 -- never decodes it. price is empty for market orders. Signed attestations, when
 -- present, live per-event in the event_attestation companion, not inline here.

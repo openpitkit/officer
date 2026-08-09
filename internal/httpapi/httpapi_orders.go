@@ -463,27 +463,12 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if req.Status == "" {
-			httpx.WriteValidationProblem(
-				w, "status is required", "/status", "required",
-			)
-			return
-		}
 		status := domain.OrderStatus(req.Status)
 		var commission *domain.Commission
 		if req.Commission != nil {
 			hasAmount := req.Commission.Amount != ""
 			hasCurrency := req.Commission.Currency != ""
-			if hasAmount != hasCurrency {
-				httpx.WriteValidationProblem(
-					w,
-					"commission amount and currency must be provided together",
-					"/commission",
-					"paired_fields",
-				)
-				return
-			}
-			if hasAmount {
+			if hasAmount || hasCurrency {
 				commission = &domain.Commission{
 					Amount:   req.Commission.Amount,
 					Currency: req.Commission.Currency,
@@ -508,12 +493,17 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			in.ExternalID = reportID
 		}
 		if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
-			httpx.WriteValidationProblem(w, err.Error(), "", "execution_report")
+			httpx.WriteValidationProblem(
+				w,
+				err.Error(),
+				domain.ExecutionReportValidationPointer(err),
+				domain.ExecutionReportValidationConstraint(err),
+			)
 			return
 		}
 		orderID, err := domain.ParseExternalID(id)
 		if err != nil {
-			httpx.WriteValidationProblem(w, err.Error(), "/id", "format")
+			httpx.WriteErr(w, err)
 			return
 		}
 		in.Order = orderID

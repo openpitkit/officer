@@ -126,7 +126,12 @@ function validateDurationString(s: string): string | null {
   const n = Number(parts.amount);
   if (!Number.isFinite(n) || n <= 0) return "duration.mustBePositive";
   // Convert to ms for the 24h ceiling check.
-  const toMs: Record<DurationUnit, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
+  const toMs: Record<DurationUnit, number> = {
+    ms: 1,
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+  };
   if (n * toMs[parts.unit] > 86_400_000) return "duration.mustNotExceed24h";
   return null;
 }
@@ -146,7 +151,10 @@ function DurationPicker({
 }) {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
-  const initial = parseDuration(value) ?? { amount: "", unit: "s" as DurationUnit };
+  const initial = parseDuration(value) ?? {
+    amount: "",
+    unit: "s" as DurationUnit,
+  };
   const [parts, setParts] = useState<DurationParts>(initial);
 
   // Sync inward when the value changes externally (dialog reopen).
@@ -166,7 +174,9 @@ function DurationPicker({
     onChange(assembleDuration(next));
   };
 
-  const durationError = parts.amount ? validateDurationString(assembleDuration(parts)) : null;
+  const durationError = parts.amount
+    ? validateDurationString(assembleDuration(parts))
+    : null;
 
   return (
     <div className="space-y-1.5">
@@ -200,7 +210,9 @@ function DurationPicker({
         </Select>
       </div>
       {durationError && (
-        <p className="text-[0.6875rem] text-[var(--danger)]">{t(durationError)}</p>
+        <p className="text-[0.6875rem] text-[var(--danger)]">
+          {t(durationError)}
+        </p>
       )}
     </div>
   );
@@ -296,10 +308,8 @@ export function LimitDialog({
     useState<string[]>([]);
 
   const isEdit = editing !== null;
-  const isSpotFundsPnl =
-    form.policy === "spot_funds_pnl_bounds_kill_switch";
-  const hasAccountGroupAxis =
-    isSpotFundsPnl && form.scope === "account_group";
+  const isSpotFundsPnl = form.policy === "spot_funds_pnl_bounds_kill_switch";
+  const hasAccountGroupAxis = isSpotFundsPnl && form.scope === "account_group";
   const accountSearch = useDebouncedValue(
     form.account.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -413,9 +423,7 @@ export function LimitDialog({
     )
       .then((groups) => {
         if (!controller.signal.aborted) {
-          setDialogAccountGroupSuggestions(
-            groups.map((group) => group.code),
-          );
+          setDialogAccountGroupSuggestions(groups.map((group) => group.code));
         }
       })
       .catch(() => {
@@ -463,9 +471,7 @@ export function LimitDialog({
       account: scopeHasAccount(form.scope) ? form.account.trim() : "",
       accountGroup: hasAccountGroupAxis ? form.accountGroup.trim() : "",
       asset:
-        !isSpotFundsPnl && scopeHasAsset(form.scope)
-          ? form.asset.trim()
-          : "",
+        !isSpotFundsPnl && scopeHasAsset(form.scope) ? form.asset.trim() : "",
       values,
     };
   }, [form, hasAccountGroupAxis, isSpotFundsPnl, kinds]);
@@ -544,284 +550,288 @@ export function LimitDialog({
 
   return (
     <>
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            {isEdit ? t("dialog.editTitle") : t("dialog.addTitle")}
-          </DialogTitle>
-          {catalogEntry && (
-            <DialogDescription>
-              {policyCatalogDescription(t, catalogEntry.id)}{" "}
-              <a
-                href={catalogEntry.wikiUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-0.5 text-accent hover:underline"
-              >
-                {t("wikiDetails")}
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            </DialogDescription>
-          )}
-        </DialogHeader>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {isEdit ? t("dialog.editTitle") : t("dialog.addTitle")}
+            </DialogTitle>
+            {catalogEntry && (
+              <DialogDescription>
+                {policyCatalogDescription(t, catalogEntry.id)}{" "}
+                <a
+                  href={catalogEntry.wikiUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-0.5 text-accent hover:underline"
+                >
+                  {t("wikiDetails")}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </DialogDescription>
+            )}
+          </DialogHeader>
 
-        <div className="space-y-4">
-          {isSpotFundsPnl && (
-            <p className="text-xs text-muted-lt">
-              {t("dialog.fxFailSafeNote")}
-            </p>
-          )}
+          <div className="space-y-4">
+            {isSpotFundsPnl && (
+              <p className="text-xs text-muted-lt">
+                {t("dialog.fxFailSafeNote")}
+              </p>
+            )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>{t("dialog.policy")}</Label>
-              <Select
-                value={form.policy}
-                onValueChange={setPolicy}
-                disabled={isEdit}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {getPolicies().map((p) => (
-                    <SelectItem key={p} value={p}>
-                      {policyLabel(tc, p)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>{t("dialog.scope")}</Label>
-              <Select
-                value={form.scope}
-                onValueChange={setScope}
-                disabled={isEdit}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {allowedScopes.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {scopeLabel(tc, s)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {(scopeHasAccount(form.scope) ||
-            hasAccountGroupAxis ||
-            scopeHasAsset(form.scope)) && (
             <div className="grid grid-cols-2 gap-3">
-              {scopeHasAccount(form.scope) && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="limit-account">{t("dialog.account")}</Label>
-                  <Autocomplete
-                    id="limit-account"
-                    value={form.account}
-                    spellCheck={false}
-                    placeholder={t("dialog.accountPlaceholder")}
-                    disabled={isEdit}
-                    suggestions={searchableAccountSuggestions}
-                    onChange={(v) =>
-                      setForm((prev) => ({ ...prev, account: v }))
-                    }
-                    onSuggestionSelect={(account) =>
-                      setForm((prev) => ({ ...prev, account }))
-                    }
-                    onClear={() =>
-                      setForm((prev) => ({ ...prev, account: "" }))
-                    }
-                    clearLabel={tc("filters.clearField")}
-                  />
-                </div>
-              )}
-              {hasAccountGroupAxis && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="limit-account-group">
-                    {t("dialog.accountGroup")}
-                  </Label>
-                  <Autocomplete
-                    id="limit-account-group"
-                    value={form.accountGroup}
-                    spellCheck={false}
-                    placeholder={t("dialog.accountGroupPlaceholder")}
-                    disabled={isEdit}
-                    suggestions={searchableAccountGroupSuggestions}
-                    onChange={(v) =>
-                      setForm((prev) => ({ ...prev, accountGroup: v }))
-                    }
-                    onClear={() =>
-                      setForm((prev) => ({ ...prev, accountGroup: "" }))
-                    }
-                    clearLabel={tc("filters.clearField")}
-                  />
-                </div>
-              )}
-              {!isSpotFundsPnl && scopeHasAsset(form.scope) && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="limit-asset">{t("dialog.asset")}</Label>
-                  <Autocomplete
-                    id="limit-asset"
-                    value={form.asset}
-                    spellCheck={false}
-                    placeholder={t("dialog.assetPlaceholder")}
-                    disabled={isEdit}
-                    suggestions={searchableAssetSuggestions}
-                    onChange={(v) =>
-                      setForm((prev) => ({ ...prev, asset: v }))
-                    }
-                    onClear={() =>
-                      setForm((prev) => ({ ...prev, asset: "" }))
-                    }
-                    clearLabel={tc("filters.clearField")}
-                  />
-                </div>
-              )}
-            </div>
-          )}
+              <div className="space-y-1.5">
+                <Label>{t("dialog.policy")}</Label>
+                <Select
+                  value={form.policy}
+                  onValueChange={setPolicy}
+                  disabled={isEdit}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {getPolicies().map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {policyLabel(tc, p)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-          <div className="space-y-3 rounded-card border border-border p-3">
-            <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-              {t("dialog.values")}
-            </p>
-            {kinds.map(({ kind }) => {
-              // Human label/hint come from the policy catalog (domain ns), keyed
-              // by policy id + field key; the field-label helper falls back to
-              // the mnemonic key, and the hint falls back to the kind hint, so
-              // unknown fields still render.
-              const fieldLabel = policyFieldLabel(t, form.policy, kind);
-              const catalogHint = policyFieldHint(t, form.policy, kind);
-              const fieldHint = catalogHint || kindHint(t, form.policy, kind);
-              const isDuration = kind === "window";
-              return (
-                <div key={kind} className="space-y-1.5">
-                  <Label htmlFor={`kind-${kind}`}>{fieldLabel}</Label>
-                  {isDuration ? (
-                    <DurationPicker
-                      id={`kind-${kind}`}
-                      value={form.values[kind] ?? ""}
-                      onChange={(v) => setValue(kind, v)}
+              <div className="space-y-1.5">
+                <Label>{t("dialog.scope")}</Label>
+                <Select
+                  value={form.scope}
+                  onValueChange={setScope}
+                  disabled={isEdit}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allowedScopes.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {scopeLabel(tc, s)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {(scopeHasAccount(form.scope) ||
+              hasAccountGroupAxis ||
+              scopeHasAsset(form.scope)) && (
+              <div className="grid grid-cols-2 gap-3">
+                {scopeHasAccount(form.scope) && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="limit-account">{t("dialog.account")}</Label>
+                    <Autocomplete
+                      id="limit-account"
+                      value={form.account}
+                      spellCheck={false}
+                      placeholder={t("dialog.accountPlaceholder")}
+                      disabled={isEdit}
+                      suggestions={searchableAccountSuggestions}
+                      onChange={(v) =>
+                        setForm((prev) => ({ ...prev, account: v }))
+                      }
+                      onSuggestionSelect={(account) =>
+                        setForm((prev) => ({ ...prev, account }))
+                      }
+                      onClear={() =>
+                        setForm((prev) => ({ ...prev, account: "" }))
+                      }
+                      clearLabel={tc("filters.clearField")}
                     />
-                  ) : (
-                    <>
-                      <NumberStepper
+                  </div>
+                )}
+                {hasAccountGroupAxis && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="limit-account-group">
+                      {t("dialog.accountGroup")}
+                    </Label>
+                    <Autocomplete
+                      id="limit-account-group"
+                      value={form.accountGroup}
+                      spellCheck={false}
+                      placeholder={t("dialog.accountGroupPlaceholder")}
+                      disabled={isEdit}
+                      suggestions={searchableAccountGroupSuggestions}
+                      onChange={(v) =>
+                        setForm((prev) => ({ ...prev, accountGroup: v }))
+                      }
+                      onClear={() =>
+                        setForm((prev) => ({ ...prev, accountGroup: "" }))
+                      }
+                      clearLabel={tc("filters.clearField")}
+                    />
+                  </div>
+                )}
+                {!isSpotFundsPnl && scopeHasAsset(form.scope) && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="limit-asset">{t("dialog.asset")}</Label>
+                    <Autocomplete
+                      id="limit-asset"
+                      value={form.asset}
+                      spellCheck={false}
+                      placeholder={t("dialog.assetPlaceholder")}
+                      disabled={isEdit}
+                      suggestions={searchableAssetSuggestions}
+                      onChange={(v) =>
+                        setForm((prev) => ({ ...prev, asset: v }))
+                      }
+                      onClear={() =>
+                        setForm((prev) => ({ ...prev, asset: "" }))
+                      }
+                      clearLabel={tc("filters.clearField")}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-3 rounded-card border border-border p-3">
+              <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
+                {t("dialog.values")}
+              </p>
+              {kinds.map(({ kind }) => {
+                // Human label/hint come from the policy catalog (domain ns), keyed
+                // by policy id + field key; the field-label helper falls back to
+                // the mnemonic key, and the hint falls back to the kind hint, so
+                // unknown fields still render.
+                const fieldLabel = policyFieldLabel(t, form.policy, kind);
+                const catalogHint = policyFieldHint(t, form.policy, kind);
+                const fieldHint = catalogHint || kindHint(t, form.policy, kind);
+                const isDuration = kind === "window";
+                return (
+                  <div key={kind} className="space-y-1.5">
+                    <Label htmlFor={`kind-${kind}`}>{fieldLabel}</Label>
+                    {isDuration ? (
+                      <DurationPicker
                         id={`kind-${kind}`}
                         value={form.values[kind] ?? ""}
-                        spellCheck={false}
-                        min={isSpotFundsPnl ? null : "0"}
-                        allowSignedInput={isSpotFundsPnl}
-                        onChange={(value) => setValue(kind, value)}
-                        onClear={() => setValue(kind, "")}
-                        clearLabel={tc("filters.clearField")}
+                        onChange={(v) => setValue(kind, v)}
                       />
-                      <p className="text-[0.6875rem] text-muted">{fieldHint}</p>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-            <p className="text-[0.6875rem] text-muted">
-              {form.policy === "rate_limit"
-                ? t("dialog.rateLimitFootnote")
-                : t("dialog.atLeastOneFootnote")}
-            </p>
+                    ) : (
+                      <>
+                        <NumberStepper
+                          id={`kind-${kind}`}
+                          value={form.values[kind] ?? ""}
+                          spellCheck={false}
+                          min={isSpotFundsPnl ? null : "0"}
+                          allowSignedInput={isSpotFundsPnl}
+                          onChange={(value) => setValue(kind, value)}
+                          onClear={() => setValue(kind, "")}
+                          clearLabel={tc("filters.clearField")}
+                        />
+                        <p className="text-[0.6875rem] text-muted">
+                          {fieldHint}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+              <p className="text-[0.6875rem] text-muted">
+                {form.policy === "rate_limit"
+                  ? t("dialog.rateLimitFootnote")
+                  : t("dialog.atLeastOneFootnote")}
+              </p>
+            </div>
+
+            {validation && (
+              <p className="text-[0.6875rem] text-[var(--danger)]">
+                {t(validation.key, validation.values)}
+              </p>
+            )}
+            {error && !confirmOpen && (
+              <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            )}
           </div>
 
-          {validation && (
-            <p className="text-[0.6875rem] text-[var(--danger)]">
-              {t(validation.key, validation.values)}
-            </p>
-          )}
-          {error && !confirmOpen && (
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              disabled={busy}
+            >
+              {tc("actions.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              onClick={requestSubmit}
+              disabled={busy || validation !== null}
+            >
+              {isEdit ? t("dialog.save") : t("dialog.addTitle")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("restartConfirm.title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("restartConfirm.description")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {error && (
             <ErrorBanner message={error} onDismiss={() => setError(null)} />
           )}
-        </div>
-
-        <DialogFooter>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            {tc("actions.cancel")}
-          </Button>
-          <Button
-            size="sm"
-            onClick={requestSubmit}
-            disabled={busy || validation !== null}
-          >
-            {isEdit ? t("dialog.save") : t("dialog.addTitle")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t("restartConfirm.title")}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {t("restartConfirm.description")}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {error && (
-          <ErrorBanner message={error} onDismiss={() => setError(null)} />
-        )}
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
-            {tc("actions.cancel")}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            onClick={(e) => {
-              e.preventDefault();
-              void submit();
-            }}
-            disabled={busy}
-          >
-            {t("restartConfirm.confirm")}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-    <AlertDialog
-      open={missingAccountConfirmOpen}
-      onOpenChange={setMissingAccountConfirmOpen}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t("missingAccountConfirm.title")}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {t("missingAccountConfirm.description", {
-              account: candidate.account,
-            })}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {error && (
-          <ErrorBanner message={error} onDismiss={() => setError(null)} />
-        )}
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
-            {tc("actions.cancel")}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            onClick={(e) => {
-              e.preventDefault();
-              void submit("create");
-            }}
-            disabled={busy}
-          >
-            {t("missingAccountConfirm.confirm")}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>
+              {tc("actions.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void submit();
+              }}
+              disabled={busy}
+            >
+              {t("restartConfirm.confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={missingAccountConfirmOpen}
+        onOpenChange={setMissingAccountConfirmOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("missingAccountConfirm.title")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("missingAccountConfirm.description", {
+                account: candidate.account,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {error && (
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>
+              {tc("actions.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void submit("create");
+              }}
+              disabled={busy}
+            >
+              {t("missingAccountConfirm.confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

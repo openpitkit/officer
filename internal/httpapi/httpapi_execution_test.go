@@ -678,6 +678,35 @@ func TestApplyExecutionReport_FillRequiresLeaves(t *testing.T) {
 	}
 }
 
+// TestApplyExecutionReport_FillStatusRequiresFill verifies that neither fill
+// status can carry a commission in place of the mandatory fill pair.
+func TestApplyExecutionReport_FillStatusRequiresFill(t *testing.T) {
+	for _, status := range []string{"filled", "partially_filled"} {
+		t.Run(status, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+				bytes.NewBufferString(
+					`{"status":"`+status+`","leavesQuantity":"0",`+
+						`"commission":{"amount":"-0.12","currency":"USD"}}`,
+				),
+			))
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if !svc.execReportIn.Order.IsZero() {
+				t.Fatalf("commission-only fill reached service: %+v", svc.execReportIn)
+			}
+		})
+	}
+}
+
 // TestApplyExecutionReport_NonFillOmitsLeaves checks a workflow-only report
 // reaches the service without leavesQuantity.
 func TestApplyExecutionReport_NonFillOmitsLeaves(t *testing.T) {
@@ -846,6 +875,49 @@ func TestApplyExecutionReport_RejectsInvalidWorkflowLeaves(t *testing.T) {
 	}
 }
 
+func TestApplyExecutionReport_RejectsMalformedLockPrice(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "surrounding whitespace",
+			body: `{"status":"cancelled","lockPrice":" 12"}`,
+		},
+		{
+			name: "exponent notation",
+			body: `{"status":"cancelled","lockPrice":"1e3"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+				bytes.NewBufferString(tc.body),
+			))
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d: %s", rec.Code, rec.Body.String())
+			}
+			m := bodyMap(t, rec.Result())
+			errors, _ := m["errors"].([]any)
+			problem, _ := errors[0].(map[string]any)
+			if problem["pointer"] != "/lockPrice" ||
+				problem["constraint"] != "format" {
+				t.Fatalf("validation problem = %+v", problem)
+			}
+			if !svc.execReportIn.Order.IsZero() {
+				t.Fatalf("invalid lock price reached service: %+v", svc.execReportIn)
+			}
+		})
+	}
+}
+
 // Commission routing does not make leaves required for a workflow report.
 func TestApplyExecutionReport_CommissionOnlyWorkflowOmitsLeaves(t *testing.T) {
 	svc := &fakeService{}
@@ -974,6 +1046,14 @@ func TestApplyExecutionReport_InvalidStatus(t *testing.T) {
 	if errObj["code"] != "validation" {
 		t.Fatalf("want code=validation, got %v", errObj["code"])
 	}
+	errors, _ := m["errors"].([]any)
+	problem, _ := errors[0].(map[string]any)
+	if problem["pointer"] != "/status" {
+		t.Fatalf("pointer = %v, want /status", problem["pointer"])
+	}
+	if problem["constraint"] != "format" {
+		t.Fatalf("constraint = %v, want format", problem["constraint"])
+	}
 	if svc.execReportIn.Order != "" {
 		t.Fatalf("invalid status reached service: %+v", svc.execReportIn)
 	}
@@ -1002,5 +1082,13 @@ func TestApplyExecutionReport_MissingStatus(t *testing.T) {
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "validation" {
 		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	errors, _ := m["errors"].([]any)
+	problem, _ := errors[0].(map[string]any)
+	if problem["pointer"] != "/status" {
+		t.Fatalf("pointer = %v, want /status", problem["pointer"])
+	}
+	if problem["constraint"] != "required" {
+		t.Fatalf("constraint = %v, want required", problem["constraint"])
 	}
 }

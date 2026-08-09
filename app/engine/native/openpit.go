@@ -979,25 +979,25 @@ func (l groupLane) routedAccountIDs(
 // persistence plus any adjustment outcomes. Blocks are stamped with the report's
 // account, since the binding's block record does not name the account.
 func (e *openPitEngine) ApplyExecutionReport(
-	ctx context.Context, in domain.ExecutionReportInput,
+	ctx context.Context, in domain.ExecutionReportInput, leavesQuantity string,
 ) (ExecutionReportResult, error) {
 	var result ExecutionReportResult
 	err := e.RunAccountSynchronized(ctx, in.Account, func(lane fwengine.AccountLane) error {
 		var err error
-		result, err = lane.ApplyExecutionReport(ctx, in)
+		result, err = lane.ApplyExecutionReport(ctx, in, leavesQuantity)
 		return err
 	})
 	return result, err
 }
 
 func (l accountLane) ApplyExecutionReport(
-	ctx context.Context, in domain.ExecutionReportInput,
+	ctx context.Context, in domain.ExecutionReportInput, leavesQuantity string,
 ) (ExecutionReportResult, error) {
 	accountID, err := l.routedAccountID(in.Account)
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
-	report, err := executionReportFromAccount(in, accountID)
+	report, err := executionReportFromAccount(in, accountID, leavesQuantity)
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}

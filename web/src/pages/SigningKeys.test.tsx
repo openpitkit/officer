@@ -31,7 +31,10 @@ import { ThemeProvider } from "@/theme/ThemeProvider";
 
 // Radix Select requires pointer-capture stubs in jsdom.
 beforeAll(() => {
-  const proto = window.HTMLElement.prototype as unknown as Record<string, unknown>;
+  const proto = window.HTMLElement.prototype as unknown as Record<
+    string,
+    unknown
+  >;
   proto.hasPointerCapture = () => false;
   proto.setPointerCapture = () => {};
   proto.releasePointerCapture = () => {};
@@ -64,7 +67,9 @@ function makeKey(overrides: Partial<SigningKey> = {}): SigningKey {
   };
 }
 
-function makeStatus(overrides: Partial<SigningKeysStatus> = {}): SigningKeysStatus {
+function makeStatus(
+  overrides: Partial<SigningKeysStatus> = {},
+): SigningKeysStatus {
   return {
     keys: [makeKey()],
     eSignEnabled: true,
@@ -113,9 +118,17 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  generateSigningKeyMock.mockResolvedValue({ key: makeKey(), publicKey: "-----BEGIN..." });
-  importSigningKeyMock.mockResolvedValue({ key: makeKey(), publicKey: "-----BEGIN..." });
-  exportPublicKeyMock.mockResolvedValue("-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----");
+  generateSigningKeyMock.mockResolvedValue({
+    key: makeKey(),
+    publicKey: "-----BEGIN...",
+  });
+  importSigningKeyMock.mockResolvedValue({
+    key: makeKey(),
+    publicKey: "-----BEGIN...",
+  });
+  exportPublicKeyMock.mockResolvedValue(
+    "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
+  );
   setESignEnabledMock.mockResolvedValue(undefined);
 });
 
@@ -150,7 +163,9 @@ describe("SigningKeys page — generate", () => {
     renderPage();
     await userEvent.click(screen.getByRole("button", { name: /^Generate$/i }));
     const dialog = screen.getByRole("alertdialog");
-    const confirmBtn = within(dialog).getByRole("button", { name: /Generate$/i });
+    const confirmBtn = within(dialog).getByRole("button", {
+      name: /Generate$/i,
+    });
     await userEvent.click(confirmBtn);
     await waitFor(() => expect(generateSigningKeyMock).toHaveBeenCalledOnce());
   });
@@ -161,18 +176,27 @@ describe("SigningKeys page — import", () => {
     mockReady(makeStatus());
     renderPage();
     // Switch to import mode
-    await userEvent.click(screen.getByRole("button", { name: /Import your key/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Import your key/i }),
+    );
     await userEvent.click(screen.getByRole("button", { name: /^Import$/i }));
-    expect(screen.getByText(/Paste a private key before importing/i)).toBeDefined();
+    expect(
+      screen.getByText(/Paste a private key before importing/i),
+    ).toBeDefined();
     expect(importSigningKeyMock).not.toHaveBeenCalled();
   });
 
   it("calls importSigningKey with pasted key and chosen format", async () => {
     mockReady(makeStatus());
     renderPage();
-    await userEvent.click(screen.getByRole("button", { name: /Import your key/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /Import your key/i }),
+    );
     const ta = screen.getByPlaceholderText(/Paste your private key here/i);
-    await userEvent.type(ta, "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----");
+    await userEvent.type(
+      ta,
+      "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----",
+    );
     await userEvent.click(screen.getByRole("button", { name: /^Import$/i }));
     await waitFor(() =>
       expect(importSigningKeyMock).toHaveBeenCalledWith(
@@ -221,9 +245,7 @@ describe("SigningKeys page — eSign toggle", () => {
     renderPage();
     const checkbox = screen.getByRole("checkbox");
     await userEvent.click(checkbox);
-    await waitFor(() =>
-      expect(setESignEnabledMock).toHaveBeenCalledWith(true),
-    );
+    await waitFor(() => expect(setESignEnabledMock).toHaveBeenCalledWith(true));
   });
 
   it("does not enable eSign without an active signing key", async () => {

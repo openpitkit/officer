@@ -17,9 +17,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  normalizeSigningKeysStatus,
-} from "@/api/client";
+import { normalizeSigningKeysStatus } from "@/api/client";
 import type { BackupArchive } from "@/api/types";
 import { createApiClient, createOfficerApi } from "@/framework";
 
@@ -32,52 +30,70 @@ function api() {
   );
 }
 
-const createMarketDataInstance = (...args: Parameters<ReturnType<typeof api>["createMarketDataInstance"]>) =>
-  api().createMarketDataInstance(...args);
-const checkOrder = (...args: Parameters<ReturnType<typeof api>["checkOrder"]>) =>
-  api().checkOrder(...args);
-const exportBusinessCsv = (...args: Parameters<ReturnType<typeof api>["exportBusinessCsv"]>) =>
-  api().exportBusinessCsv(...args);
-const fetchAccounts = (...args: Parameters<ReturnType<typeof api>["fetchAccounts"]>) =>
-  api().fetchAccounts(...args);
-const fetchAssets = (...args: Parameters<ReturnType<typeof api>["fetchAssets"]>) =>
-  api().fetchAssets(...args);
-const fetchBalancesPage = (...args: Parameters<ReturnType<typeof api>["fetchBalancesPage"]>) =>
-  api().fetchBalancesPage(...args);
-const fetchGroups = (...args: Parameters<ReturnType<typeof api>["fetchGroups"]>) =>
-  api().fetchGroups(...args);
-const exportBackup = (...args: Parameters<ReturnType<typeof api>["exportBackup"]>) =>
-  api().exportBackup(...args);
-const fetchSigningKeys = (...args: Parameters<ReturnType<typeof api>["fetchSigningKeys"]>) =>
-  api().fetchSigningKeys(...args);
+const createMarketDataInstance = (
+  ...args: Parameters<ReturnType<typeof api>["createMarketDataInstance"]>
+) => api().createMarketDataInstance(...args);
+const checkOrder = (
+  ...args: Parameters<ReturnType<typeof api>["checkOrder"]>
+) => api().checkOrder(...args);
+const exportBusinessCsv = (
+  ...args: Parameters<ReturnType<typeof api>["exportBusinessCsv"]>
+) => api().exportBusinessCsv(...args);
+const fetchAccounts = (
+  ...args: Parameters<ReturnType<typeof api>["fetchAccounts"]>
+) => api().fetchAccounts(...args);
+const fetchAssets = (
+  ...args: Parameters<ReturnType<typeof api>["fetchAssets"]>
+) => api().fetchAssets(...args);
+const fetchBalancesPage = (
+  ...args: Parameters<ReturnType<typeof api>["fetchBalancesPage"]>
+) => api().fetchBalancesPage(...args);
+const fetchGroups = (
+  ...args: Parameters<ReturnType<typeof api>["fetchGroups"]>
+) => api().fetchGroups(...args);
+const exportBackup = (
+  ...args: Parameters<ReturnType<typeof api>["exportBackup"]>
+) => api().exportBackup(...args);
+const fetchSigningKeys = (
+  ...args: Parameters<ReturnType<typeof api>["fetchSigningKeys"]>
+) => api().fetchSigningKeys(...args);
 const fetchEventReproduction = (
   ...args: Parameters<ReturnType<typeof api>["fetchEventReproduction"]>
 ) => api().fetchEventReproduction(...args);
 const fetchPublicKeyById = (
   ...args: Parameters<ReturnType<typeof api>["fetchPublicKeyById"]>
 ) => api().fetchPublicKeyById(...args);
-const generateSigningKey = (...args: Parameters<ReturnType<typeof api>["generateSigningKey"]>) =>
-  api().generateSigningKey(...args);
-const importSigningKey = (...args: Parameters<ReturnType<typeof api>["importSigningKey"]>) =>
-  api().importSigningKey(...args);
-const restartService = (...args: Parameters<ReturnType<typeof api>["restartService"]>) =>
-  api().restartService(...args);
-const resetDatabase = (...args: Parameters<ReturnType<typeof api>["resetDatabase"]>) =>
-  api().resetDatabase(...args);
-const restoreBackup = (...args: Parameters<ReturnType<typeof api>["restoreBackup"]>) =>
-  api().restoreBackup(...args);
+const generateSigningKey = (
+  ...args: Parameters<ReturnType<typeof api>["generateSigningKey"]>
+) => api().generateSigningKey(...args);
+const importSigningKey = (
+  ...args: Parameters<ReturnType<typeof api>["importSigningKey"]>
+) => api().importSigningKey(...args);
+const restartService = (
+  ...args: Parameters<ReturnType<typeof api>["restartService"]>
+) => api().restartService(...args);
+const resetDatabase = (
+  ...args: Parameters<ReturnType<typeof api>["resetDatabase"]>
+) => api().resetDatabase(...args);
+const restoreBackup = (
+  ...args: Parameters<ReturnType<typeof api>["restoreBackup"]>
+) => api().restoreBackup(...args);
 const searchMarketDataSymbols = (
   ...args: Parameters<ReturnType<typeof api>["searchMarketDataSymbols"]>
 ) => api().searchMarketDataSymbols(...args);
-const setESignEnabled = (...args: Parameters<ReturnType<typeof api>["setESignEnabled"]>) =>
-  api().setESignEnabled(...args);
-const stopService = (...args: Parameters<ReturnType<typeof api>["stopService"]>) =>
-  api().stopService(...args);
+const setESignEnabled = (
+  ...args: Parameters<ReturnType<typeof api>["setESignEnabled"]>
+) => api().setESignEnabled(...args);
+const stopService = (
+  ...args: Parameters<ReturnType<typeof api>["stopService"]>
+) => api().stopService(...args);
 const submitExecutionReport = (
   ...args: Parameters<ReturnType<typeof api>["submitExecutionReport"]>
 ) => api().submitExecutionReport(...args);
 const updateMarketDataInstanceSettings = (
-  ...args: Parameters<ReturnType<typeof api>["updateMarketDataInstanceSettings"]>
+  ...args: Parameters<
+    ReturnType<typeof api>["updateMarketDataInstanceSettings"]
+  >
 ) => api().updateMarketDataInstanceSettings(...args);
 const verifyMarketDataSymbol = (
   ...args: Parameters<ReturnType<typeof api>["verifyMarketDataSymbol"]>
@@ -383,7 +399,10 @@ describe("assets client", () => {
       order: "desc",
     });
 
-    const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://test");
+    const url = new URL(
+      String(vi.mocked(fetch).mock.calls[0][0]),
+      "http://test",
+    );
     expect(url.pathname).toBe("/app/api/v1/assets");
     expect(url.searchParams.get("code")).toBe("apple");
     expect(url.searchParams.get("codeMatch")).toBeNull();
@@ -404,7 +423,10 @@ describe("assets client", () => {
 
     const result = await api().fetchAssetsPage({ limit: 5, offset: 10 });
 
-    const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://test");
+    const url = new URL(
+      String(vi.mocked(fetch).mock.calls[0][0]),
+      "http://test",
+    );
     expect(url.searchParams.get("limit")).toBe("5");
     expect(url.searchParams.get("offset")).toBe("10");
     expect(result).toMatchObject({
@@ -443,7 +465,10 @@ describe("balances client", () => {
       order: "asc",
     });
 
-    const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://test");
+    const url = new URL(
+      String(vi.mocked(fetch).mock.calls[0][0]),
+      "http://test",
+    );
     expect(url.pathname).toBe("/app/api/v1/balances");
     expect(url.searchParams.get("account")).toBe("desk-alpha");
     expect(url.searchParams.get("accountMatch")).toBeNull();
@@ -513,7 +538,7 @@ describe("business CSV client", () => {
         status: 200,
         headers: {
           "Content-Type": "text/csv",
-          "Content-Disposition": "attachment; filename=\"accounts.csv\"",
+          "Content-Disposition": 'attachment; filename="accounts.csv"',
         },
       }),
     );
@@ -629,7 +654,6 @@ describe("business CSV client", () => {
       message: "bad delimiter",
     });
   });
-
 });
 
 describe("limits client", () => {
@@ -648,7 +672,10 @@ describe("limits client", () => {
       offset: 50,
     });
 
-    const calledUrl = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://test");
+    const calledUrl = new URL(
+      String(vi.mocked(fetch).mock.calls[0][0]),
+      "http://test",
+    );
     expect(calledUrl.pathname).toBe("/app/api/v1/limits");
     expect(Object.fromEntries(calledUrl.searchParams.entries())).toEqual(
       expect.objectContaining({
@@ -882,7 +909,9 @@ describe("limits client", () => {
         },
         "reject",
       ),
-    ).rejects.toThrow("rate limit max_orders must be an integer greater than 0");
+    ).rejects.toThrow(
+      "rate limit max_orders must be an integer greater than 0",
+    );
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -1097,10 +1126,7 @@ describe("append-only list clients", () => {
     });
     expect(trades).toMatchObject({
       total: 4,
-      items: [
-        { id: "trd-1" },
-        { id: "trd-legacy-order-alias", order: "" },
-      ],
+      items: [{ id: "trd-1" }, { id: "trd-legacy-order-alias", order: "" }],
     });
     expect(audit).toMatchObject({
       total: 5,
@@ -1196,7 +1222,8 @@ describe("backup client", () => {
         status: 200,
         headers: {
           "Content-Type": "application/json",
-          "Content-Disposition": "attachment; filename*=UTF-8''pit%20backup.json",
+          "Content-Disposition":
+            "attachment; filename*=UTF-8''pit%20backup.json",
         },
       }),
     );
@@ -1225,7 +1252,7 @@ describe("backup client", () => {
         status: 200,
         headers: {
           "Content-Type": "application/zip",
-          "Content-Disposition": "attachment; filename=\"pit backup.zip\"",
+          "Content-Disposition": 'attachment; filename="pit backup.zip"',
         },
       }),
     );
@@ -1669,7 +1696,10 @@ describe("searchMarketDataSymbols", () => {
   it("tolerates missing optional fields and an unsupported result", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
-        search: { supported: false, matches: [{ symbol: "X", secType: "STK" }] },
+        search: {
+          supported: false,
+          matches: [{ symbol: "X", secType: "STK" }],
+        },
       }),
     );
 
@@ -1847,10 +1877,10 @@ describe("signing-keys HTTP calls", () => {
   }
 
   function signingConfigResponse(): Response {
-    return new Response(
-      JSON.stringify({ noESign: false }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ noESign: false }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   function generateResponse(): Response {
@@ -2072,7 +2102,10 @@ describe("event reproduction client", () => {
       }),
     );
 
-    const result = await fetchEventReproduction("ord-1", "evt-legacy-order-alias");
+    const result = await fetchEventReproduction(
+      "ord-1",
+      "evt-legacy-order-alias",
+    );
 
     expect(result.event.id).toBe("evt-legacy-order-alias");
     expect(result.event.order).toBe("");
@@ -2290,14 +2323,16 @@ describe("event reproduction client", () => {
   it("fetchPublicKeyById surfaces a 404 for an unknown key id", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(
-        JSON.stringify({ error: { code: "not_found", message: "unknown key" } }),
+        JSON.stringify({
+          error: { code: "not_found", message: "unknown key" },
+        }),
         { status: 404, headers: { "Content-Type": "application/json" } },
       ),
     );
 
-    await expect(fetchPublicKeyById("missing", "raw-base64")).rejects.toMatchObject(
-      { status: 404 },
-    );
+    await expect(
+      fetchPublicKeyById("missing", "raw-base64"),
+    ).rejects.toMatchObject({ status: 404 });
   });
 });
 
@@ -2348,7 +2383,9 @@ describe("order check client", () => {
 // ---------------------------------------------------------------------------
 
 describe("Orders createOrder submit lifecycle", () => {
-  function approvalResponse(orderExternalId = "ord_alpha_0000000001"): Response {
+  function approvalResponse(
+    orderExternalId = "ord_alpha_0000000001",
+  ): Response {
     return new Response(
       JSON.stringify({
         token: "approval-token",
@@ -2990,7 +3027,6 @@ describe("Orders confirmOrder and cancelOrder", () => {
     expect(result.attestationKeyId).toBe("key-9");
     expect(result.signed).toBe(true);
   });
-
 });
 
 describe("Orders conflict error decode", () => {

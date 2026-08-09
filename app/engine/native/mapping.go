@@ -894,8 +894,6 @@ func pnlHaltReasonToSDK(reason domain.PnlHaltReason) (model.PnlHaltReason, error
 		return model.PnlHaltReasonMissingCostBasis, nil
 	case domain.PnlHaltReasonArithmeticOverflow:
 		return model.PnlHaltReasonArithmeticOverflow, nil
-	case domain.PnlHaltReasonStaleDenomination:
-		return model.PnlHaltReasonStaleDenomination, nil
 	default:
 		return 0, fmt.Errorf("engine: unsupported realized_pnl halt %q: %w", reason, domain.ErrInvalid)
 	}
@@ -1248,8 +1246,6 @@ func pnlHaltReasonFromSDK(
 		return domain.PnlHaltReasonMissingCostBasis, nil
 	case model.PnlHaltReasonArithmeticOverflow:
 		return domain.PnlHaltReasonArithmeticOverflow, nil
-	case model.PnlHaltReasonStaleDenomination:
-		return domain.PnlHaltReasonStaleDenomination, nil
 	default:
 		return "", fmt.Errorf("engine: unrecognized realized_pnl halt reason %d", reason)
 	}
@@ -1392,16 +1388,22 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 // terminal-status flag, and the original engine pre-trade lock). Request
 // leaves remains separate for persistence. The account is resolved to its
 // stored engine id.
-func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.ExecutionReport, error) {
+func executionReportFrom(
+	in domain.ExecutionReportInput,
+	leavesQuantity string,
+	res idResolver,
+) (model.ExecutionReport, error) {
 	account, err := res.account(in.Account)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	return executionReportFromAccount(in, account)
+	return executionReportFromAccount(in, account, leavesQuantity)
 }
 
 func executionReportFromAccount(
-	in domain.ExecutionReportInput, account param.AccountID,
+	in domain.ExecutionReportInput,
+	account param.AccountID,
+	leavesQuantity string,
 ) (model.ExecutionReport, error) {
 	base, err := newAsset(in.BaseAsset)
 	if err != nil {
@@ -1418,11 +1420,11 @@ func executionReportFromAccount(
 	targetStatus := in.OrderStatus
 	isFinal := domain.OrderStatusTerminal(targetStatus)
 	var leaves *param.Quantity
-	if in.ReleaseQuantity != "" {
-		value, err := param.NewQuantityFromString(in.ReleaseQuantity)
+	if leavesQuantity != "" {
+		value, err := param.NewQuantityFromString(leavesQuantity)
 		if err != nil {
 			return model.ExecutionReport{}, fmt.Errorf(
-				"engine: release quantity %q: %w", in.ReleaseQuantity, err,
+				"engine: leaves quantity %q: %w", leavesQuantity, err,
 			)
 		}
 		leaves = &value
@@ -1432,7 +1434,7 @@ func executionReportFromAccount(
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	if !hasFill && in.Commission == nil && (targetStatus == domain.OrderStatusFilled ||
+	if !hasFill && (targetStatus == domain.OrderStatusFilled ||
 		targetStatus == domain.OrderStatusPartiallyFilled) {
 		return model.ExecutionReport{}, fmt.Errorf(
 			"engine: fill status %q requires fill price and quantity: %w",
@@ -1440,7 +1442,7 @@ func executionReportFromAccount(
 	}
 	if hasFill && leaves == nil {
 		return model.ExecutionReport{}, errors.New(
-			"engine: fill report has no release quantity")
+			"engine: fill report has no selected leaves quantity")
 	}
 	lockBytes, err := executionReportLockBytes(in)
 	if err != nil {
@@ -1562,7 +1564,6 @@ func executionReportPersistenceFrom(
 		AccountPnl:           accountPnl,
 		AccountPnlHaltReason: accountPnlHaltReason,
 		Leaves:               in.LeavesQuantity,
-		ReleaseQuantity:      in.ReleaseQuantity,
 		Balances:             executionBalanceSettlementsFrom(outcomes),
 		Events:               events,
 		Blocks:               blocks,

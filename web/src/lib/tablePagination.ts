@@ -31,9 +31,6 @@ export function hasNextPage<T>(
   return rows.length > (page + 1) * pageSize;
 }
 
-export function knownPageCount(
-  rowCount: number,
-  pageSize: number,
-): number {
+export function knownPageCount(rowCount: number, pageSize: number): number {
   return Math.max(1, Math.ceil(rowCount / pageSize));
 }

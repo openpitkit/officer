@@ -107,7 +107,9 @@ export function ConnectAgent() {
             rows={8}
           />
           <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-lt">{t("connect.claude.skillHint")}</p>
+            <p className="text-xs text-muted-lt">
+              {t("connect.claude.skillHint")}
+            </p>
             <Button
               variant="outline"
               size="sm"

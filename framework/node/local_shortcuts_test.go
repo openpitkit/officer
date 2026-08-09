@@ -171,7 +171,7 @@ func TestLocalNode_CancelOrderUsesPreReportLeaves(t *testing.T) {
 	}
 	input := eng.execReportCalls[0]
 	if input.Order != order.ExternalID || input.OrderStatus != domain.OrderStatusCancelled ||
-		input.LeavesQuantity != "0" || input.ReleaseQuantity != "20" ||
+		input.LeavesQuantity != "0" || eng.execReportLeaves[0] != "20" ||
 		!bytes.Equal(input.Lock, []byte("stored-lock")) ||
 		input.FillQuantity != "" || input.FillPrice != "" {
 		t.Fatalf("synthetic cancellation input = %+v", input)

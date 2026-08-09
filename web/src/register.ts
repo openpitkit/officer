@@ -43,10 +43,7 @@ import {
   registerWidget,
 } from "@/framework";
 import { openLocaleResources } from "@/i18n";
-import {
-  registerOpenRowActions,
-  registerOpenVocabulary,
-} from "@/openDefaults";
+import { registerOpenRowActions, registerOpenVocabulary } from "@/openDefaults";
 import { openRoutes } from "@/openRoutes";
 import { Accounts } from "@/pages/Accounts";
 import { Assets } from "@/pages/Assets";
@@ -229,9 +226,21 @@ export function registerOpenOfficerDefaults(): void {
   // Widget ids: counts-row, mcp-access-card, market-data-card,
   // activity-columns, audit-strip.
   registerWidget({ id: "counts-row", order: 10, Component: CountsRow });
-  registerWidget({ id: "mcp-access-card", order: 20, Component: McpAccessCard });
-  registerWidget({ id: "market-data-card", order: 30, Component: MarketDataCard });
-  registerWidget({ id: "activity-columns", order: 40, Component: ActivityColumns });
+  registerWidget({
+    id: "mcp-access-card",
+    order: 20,
+    Component: McpAccessCard,
+  });
+  registerWidget({
+    id: "market-data-card",
+    order: 30,
+    Component: MarketDataCard,
+  });
+  registerWidget({
+    id: "activity-columns",
+    order: 40,
+    Component: ActivityColumns,
+  });
   registerWidget({ id: "audit-strip", order: 50, Component: AuditStrip });
 
   // Row action ids: account-positions, account-trading, account-policies,

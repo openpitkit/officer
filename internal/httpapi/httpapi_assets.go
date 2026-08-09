@@ -75,7 +75,8 @@ func handleCreateAsset(svc Service) http.HandlerFunc {
 
 // handleUpdateAsset handles PUT /api/v1/assets/{code}. The path code identifies
 // the asset; the body carries the replacement public code, title and
-// classification.
+// classification. A code rename rebuilds the live engine and can report
+// ErrEngineRestarting while another rebuild is in progress.
 func handleUpdateAsset(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, err := httpx.PathGroupCode(r)

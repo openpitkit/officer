@@ -317,9 +317,7 @@ describe("OrderVerificationPanel — reproduction mode", () => {
 
     renderPanel("ord-repro-1", "evt-repro-1");
 
-    await waitFor(() =>
-      expect(fetchEventReproductionMock).toHaveBeenCalled(),
-    );
+    await waitFor(() => expect(fetchEventReproductionMock).toHaveBeenCalled());
     // The endpoint is keyed on the (order, event) pair.
     const [orderId, eventId] = fetchEventReproductionMock.mock.calls[0];
     expect(orderId).toBe("ord-repro-1");
@@ -381,9 +379,7 @@ describe("OrderVerificationPanel — reproduction mode", () => {
     await screen.findByText("Token");
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("VALID")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("VALID")).toBeInTheDocument());
     // Verification resolved the ATTESTATION's key id, in raw-base64 (the on-load
     // fetch may carry an AbortSignal as a third arg).
     expect(fetchPublicKeyByIdMock).toHaveBeenCalled();
@@ -479,9 +475,7 @@ describe("OrderVerificationPanel — verify token mode", () => {
     await user.paste(fixture.token);
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("VALID")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("VALID")).toBeInTheDocument());
     expect(fetchPublicKeyByIdMock).toHaveBeenCalledWith(
       "key-paste",
       "raw-base64",
@@ -557,9 +551,7 @@ describe("OrderVerificationPanel — verify token mode", () => {
     await user.paste(fixture.token);
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("VALID")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("VALID")).toBeInTheDocument());
     // The result section is surfaced in the breakdown for a non-submit payload.
     expect(screen.getAllByText("Order status")).toHaveLength(2);
     expect(screen.getByText("Execution-report request")).toBeInTheDocument();
@@ -576,7 +568,9 @@ describe("OrderVerificationPanel — verify token mode", () => {
     expect(screen.getByText("policy_reject")).toBeInTheDocument();
     expect(screen.getByText("account")).toBeInTheDocument();
     expect(screen.getByText("daily_loss")).toBeInTheDocument();
-    expect(screen.getAllByText("Daily loss threshold reached").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("Daily loss threshold reached").length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText("operator@example.test")).toBeInTheDocument();
     // Even a legacy or hostile token carrying a lock field must not surface it.
     expect(screen.queryByText("opaque-lock")).not.toBeInTheDocument();
@@ -626,9 +620,7 @@ describe("OrderVerificationPanel — verify token mode", () => {
     await user.paste("not-a-real-token");
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("ERROR")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("ERROR")).toBeInTheDocument());
     expect(fetchPublicKeyByIdMock).not.toHaveBeenCalled();
   });
 

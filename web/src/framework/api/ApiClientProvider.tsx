@@ -28,10 +28,7 @@ import {
   type ApiClient,
   type ApiClientConfig,
 } from "./createApiClient";
-import {
-  createOfficerApi,
-  type OfficerApi,
-} from "./officerApi";
+import { createOfficerApi, type OfficerApi } from "./officerApi";
 
 const ApiClientContext = createContext<ApiClient | null>(null);
 const OfficerApiContext = createContext<OfficerApi | null>(null);

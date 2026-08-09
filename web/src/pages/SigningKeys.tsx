@@ -41,12 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -74,11 +69,7 @@ function errMessage(err: unknown): string {
 // Card A — Active key
 // ---------------------------------------------------------------------------
 
-function ActiveKeyCard({
-  activeKey,
-}: {
-  activeKey: SigningKey | null;
-}) {
+function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
   const { t } = useTranslation("approvalKeys");
   const { exportPublicKey } = useOfficerApi();
 
@@ -119,12 +110,18 @@ function ActiveKeyCard({
           <>
             <StatRow
               label={t("currentKey.keyId")}
-              value={<span className="font-mono text-xs">{activeKey.keyId}</span>}
+              value={
+                <span className="font-mono text-xs">{activeKey.keyId}</span>
+              }
               mono={false}
             />
             <StatRow
               label={t("currentKey.fingerprint")}
-              value={<span className="font-mono text-xs">{activeKey.fingerprint}</span>}
+              value={
+                <span className="font-mono text-xs">
+                  {activeKey.fingerprint}
+                </span>
+              }
               mono={false}
             />
             <StatRow
@@ -189,17 +186,14 @@ function ActiveKeyCard({
 // Card B — Generate / Import
 // ---------------------------------------------------------------------------
 
-function ManageKeyCard({
-  onDone,
-}: {
-  onDone: () => void;
-}) {
+function ManageKeyCard({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation("approvalKeys");
   const { t: tc } = useTranslation();
   const { generateSigningKey, importSigningKey } = useOfficerApi();
 
   const [mode, setMode] = useState<"generate" | "import">("generate");
-  const [importFormat, setImportFormat] = useState<SigningKeyFormat>("pem-pkcs8");
+  const [importFormat, setImportFormat] =
+    useState<SigningKeyFormat>("pem-pkcs8");
   const [importKey, setImportKey] = useState("");
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -284,7 +278,9 @@ function ManageKeyCard({
               {t("manageKey.generateButton")}
             </Button>
             {generateError && (
-              <p className="mt-2 text-xs text-[var(--danger)]">{generateError}</p>
+              <p className="mt-2 text-xs text-[var(--danger)]">
+                {generateError}
+              </p>
             )}
           </div>
         )}
@@ -331,14 +327,26 @@ function ManageKeyCard({
             {importError && (
               <p className="text-xs text-[var(--danger)]">{importError}</p>
             )}
-            <Button size="sm" onClick={() => void handleImport()} disabled={importBusy}>
-              {importBusy ? t("manageKey.importBusy") : t("manageKey.importButton")}
+            <Button
+              size="sm"
+              onClick={() => void handleImport()}
+              disabled={importBusy}
+            >
+              {importBusy
+                ? t("manageKey.importBusy")
+                : t("manageKey.importButton")}
             </Button>
           </div>
         )}
 
         {/* Generate confirm dialog */}
-        <AlertDialog open={generateDialogOpen} onOpenChange={(open) => { setGenerateDialogOpen(open); if (!open) setGenerateError(null); }}>
+        <AlertDialog
+          open={generateDialogOpen}
+          onOpenChange={(open) => {
+            setGenerateDialogOpen(open);
+            if (!open) setGenerateError(null);
+          }}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>

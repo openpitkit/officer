@@ -70,7 +70,10 @@ export function FilterSelect<Value extends string>({
       <SelectTrigger
         // With an icon the trigger contracts to a compact glyph + chevron; the
         // word stays as title/aria-label. Word-only mode keeps the given width.
-        className={cn("h-8 text-xs", SelectedIcon ? "w-12 shrink-0" : className)}
+        className={cn(
+          "h-8 text-xs",
+          SelectedIcon ? "w-12 shrink-0" : className,
+        )}
         aria-label={ariaLabel}
         title={selectedLabel}
       >

@@ -15,12 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import {
-  fireEvent,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
@@ -57,14 +52,12 @@ vi.mock("@/api/useMarketData", () => ({
   }),
 }));
 vi.mock("@/components/TableControls", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/components/TableControls")>(
-      "@/components/TableControls",
-    );
-  const dialogs =
-    await vi.importActual<typeof import("@/components/BusinessCsvDialogs")>(
-      "@/components/BusinessCsvDialogs",
-    );
+  const actual = await vi.importActual<
+    typeof import("@/components/TableControls")
+  >("@/components/TableControls");
+  const dialogs = await vi.importActual<
+    typeof import("@/components/BusinessCsvDialogs")
+  >("@/components/BusinessCsvDialogs");
   return {
     ...actual,
     CsvTransferMenu: ({
@@ -97,7 +90,9 @@ function ready<T>(data: T): PollingResult<T> {
   return { load: { state: "ready", data, error: null }, reload: vi.fn() };
 }
 
-function readyPage<T>(items: T[]): PollingResult<{ items: T[]; total: number }> {
+function readyPage<T>(
+  items: T[],
+): PollingResult<{ items: T[]; total: number }> {
   return ready({ items, total: items.length });
 }
 
@@ -220,7 +215,9 @@ function renderPositions(initialEntry = "/positions") {
         exportBusinessCsv: exportBusinessCsvMock,
         fetchAccounts: async () => [account],
         fetchAdjustmentsPage: fetchAdjustmentsMock,
-        fetchAssets: async () => [{ code: balance.asset, title: balance.asset, assetClass: "" }],
+        fetchAssets: async () => [
+          { code: balance.asset, title: balance.asset, assetClass: "" },
+        ],
         fetchGroups: async () => [group],
       },
     },
@@ -348,7 +345,10 @@ describe("Positions adjustment panel", () => {
     await user.type(scope.getByLabelText("Held adjustment amount"), "10");
     await user.clear(scope.getByLabelText("Incoming adjustment amount"));
     await user.type(scope.getByLabelText("Incoming adjustment amount"), "-50");
-    await user.type(scope.getByLabelText("Average entry price (optional)"), "142.50");
+    await user.type(
+      scope.getByLabelText("Average entry price (optional)"),
+      "142.50",
+    );
     await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
     await user.click(
       scope.getByRole("button", { name: /bounds \(optional\)/i }),
@@ -422,9 +422,7 @@ describe("Positions adjustment panel", () => {
       }),
     );
 
-    const scope = within(
-      screen.getByRole("region", { name: "Adjustment" }),
-    );
+    const scope = within(screen.getByRole("region", { name: "Adjustment" }));
     const amount = scope.getByLabelText("Available adjustment amount");
     const submit = scope.getByRole("button", { name: /submit adjustment/i });
     await user.type(amount, "600");
@@ -452,9 +450,7 @@ describe("Positions adjustment panel", () => {
     await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
-    await waitFor(() =>
-      expect(createAdjustmentMock).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
     expect(createAdjustmentMock).toHaveBeenCalledWith(
       "Bucks McMoneyface",
       {
@@ -484,9 +480,7 @@ describe("Positions adjustment panel", () => {
       }),
     );
 
-    const scope = within(
-      screen.getByRole("region", { name: "Adjustment" }),
-    );
+    const scope = within(screen.getByRole("region", { name: "Adjustment" }));
     await user.type(
       scope.getByLabelText("Average entry price (optional)"),
       "142.50",
@@ -843,10 +837,7 @@ describe("Positions adjustment panel", () => {
     );
 
     useBalancesMock.mockReturnValue(readyPage<Balance>([balance]));
-    await user.type(
-      screen.getByLabelText("Filter by asset"),
-      "MSFT",
-    );
+    await user.type(screen.getByLabelText("Filter by asset"), "MSFT");
 
     panel = screen.getByRole("region", { name: "Adjustment" });
     expect(within(panel).getByLabelText("Account")).toHaveValue("my");
@@ -943,9 +934,14 @@ describe("Positions business CSV", () => {
       }),
     ).toBeDisabled();
 
-    expect(screen.getByRole("dialog", { name: /more filters/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: /more filters/i }),
+    ).toBeInTheDocument();
     expect(available).toBeInvalid();
-    expect(available).toHaveProperty("validationMessage", "Enter a valid number.");
+    expect(available).toHaveProperty(
+      "validationMessage",
+      "Enter a valid number.",
+    );
     expect(lastBalanceFilters()).not.toEqual(
       expect.objectContaining({
         availableMode: "eq",
@@ -959,16 +955,26 @@ describe("Positions business CSV", () => {
   // are addressed by their order: available, held, incoming, avg entry price,
   // realized PnL, updated.
   it.each([
-    ["avg entry price", 3, /currency for the avg entry price threshold/i, {
-      averageEntryPriceMode: "eq",
-      averageEntryPriceMin: "10",
-      averageEntryPriceCurrency: "USD",
-    }],
-    ["realized pnl", 4, /currency for the realized pnl threshold/i, {
-      realizedPnlMode: "eq",
-      realizedPnlMin: "10",
-      realizedPnlCurrency: "USD",
-    }],
+    [
+      "avg entry price",
+      3,
+      /currency for the avg entry price threshold/i,
+      {
+        averageEntryPriceMode: "eq",
+        averageEntryPriceMin: "10",
+        averageEntryPriceCurrency: "USD",
+      },
+    ],
+    [
+      "realized pnl",
+      4,
+      /currency for the realized pnl threshold/i,
+      {
+        realizedPnlMode: "eq",
+        realizedPnlMin: "10",
+        realizedPnlCurrency: "USD",
+      },
+    ],
   ])(
     "blocks a %s threshold until it names a currency, then sends both",
     async (_label, valueIndex, currencyLabel, expected) => {
@@ -987,7 +993,9 @@ describe("Positions business CSV", () => {
       });
       expect(currency).toBeInvalid();
       expect(
-        within(dialog).getByText(/select the currency the threshold is given in/i),
+        within(dialog).getByText(
+          /select the currency the threshold is given in/i,
+        ),
       ).toBeInTheDocument();
       expect(
         within(dialog).getByRole("button", { name: /apply advanced filter/i }),
@@ -997,7 +1005,9 @@ describe("Positions business CSV", () => {
 
       expect(currency).not.toBeInvalid();
       expect(
-        within(dialog).queryByText(/Only positions held in this account currency are compared/i),
+        within(dialog).queryByText(
+          /Only positions held in this account currency are compared/i,
+        ),
       ).not.toBeInTheDocument();
       await user.click(
         within(dialog).getByRole("button", { name: /apply advanced filter/i }),
@@ -1039,7 +1049,9 @@ describe("Positions business CSV", () => {
         }),
       ),
     );
-    expect(screen.getByText(/realized pnl: Greater than 50 EUR/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/realized pnl: Greater than 50 EUR/i),
+    ).toBeInTheDocument();
   });
 
   it("suggests known groups while typing the group filter", async () => {
@@ -1057,7 +1069,9 @@ describe("Positions business CSV", () => {
       ),
     );
     expect(screen.getByText(/active filters/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /clear all filters/i }));
+    await user.click(
+      screen.getByRole("button", { name: /clear all filters/i }),
+    );
     expect(screen.getByLabelText("Filter by group")).toHaveValue("");
     expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
   });
@@ -1078,7 +1092,9 @@ describe("Positions business CSV", () => {
       ),
     );
     expect(screen.getByText(/active filters/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /clear all filters/i }));
+    await user.click(
+      screen.getByRole("button", { name: /clear all filters/i }),
+    );
     expect(screen.getByLabelText("Filter by account")).toHaveValue("");
     expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
   });
@@ -1091,7 +1107,9 @@ describe("Positions business CSV", () => {
     await user.type(screen.getByLabelText("Filter by group"), "equity-desks");
     await user.type(screen.getByLabelText("Filter by asset"), "AAPL");
     await user.click(screen.getByRole("button", { name: /apply filters/i }));
-    await user.click(screen.getByRole("button", { name: /export positions csv/i }));
+    await user.click(
+      screen.getByRole("button", { name: /export positions csv/i }),
+    );
     await user.click(screen.getByRole("button", { name: /^export$/i }));
 
     await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
@@ -1119,7 +1137,9 @@ describe("Positions business CSV", () => {
     );
     renderPositions("/positions?tab=history&source=mcp");
 
-    await user.click(screen.getByRole("button", { name: /export history csv/i }));
+    await user.click(
+      screen.getByRole("button", { name: /export history csv/i }),
+    );
 
     await waitFor(() => expect(fetchAdjustmentsMock).toHaveBeenCalledTimes(1));
     expect(fetchAdjustmentsMock).toHaveBeenCalledWith({
@@ -1171,7 +1191,9 @@ describe("Positions business CSV", () => {
     });
     renderPositions("/positions?tab=history");
 
-    await user.click(screen.getByRole("button", { name: /export history csv/i }));
+    await user.click(
+      screen.getByRole("button", { name: /export history csv/i }),
+    );
 
     await waitFor(() => expect(fetchAdjustmentsMock).toHaveBeenCalledTimes(1));
     const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0];
@@ -1189,7 +1211,6 @@ describe("Positions business CSV", () => {
     expect(body).toContain(",-10.5,");
     expect(body).not.toContain("'-10.5");
   });
-
 });
 
 /** Find a balance data row by its account, defaulting to the seeded one. */
@@ -1226,7 +1247,7 @@ describe("Positions balance row asset cell", () => {
       readyPage([
         {
           ...balance,
-          realizedPnlHaltReason: "stale_denomination",
+          realizedPnlHaltReason: "arithmetic_overflow",
         },
       ]),
     );
@@ -1234,7 +1255,7 @@ describe("Positions balance row asset cell", () => {
     renderPositions();
 
     const warning = within(balanceRow()).getByRole("note", {
-      name: /uses a previous effective account currency/i,
+      name: /exact arithmetic exceeded the supported numeric range/i,
     });
     expect(warning).toHaveAttribute("tabindex", "0");
   });
@@ -1318,8 +1339,18 @@ describe("Positions value denomination", () => {
   it("shows the same figures under each account's own currency", () => {
     useBalancesMock.mockReturnValue(
       readyPage<Balance>([
-        { ...balance, account: "usd-desk", realizedPnl: "100", accountCurrency: "USD" },
-        { ...balance, account: "eur-desk", realizedPnl: "100", accountCurrency: "EUR" },
+        {
+          ...balance,
+          account: "usd-desk",
+          realizedPnl: "100",
+          accountCurrency: "USD",
+        },
+        {
+          ...balance,
+          account: "eur-desk",
+          realizedPnl: "100",
+          accountCurrency: "EUR",
+        },
       ]),
     );
     renderPositions();
@@ -1341,9 +1372,7 @@ describe("Positions value denomination", () => {
     const scope = within(balanceRow());
     expect(scope.getByText("42.10")).toBeInTheDocument();
     expect(scope.queryByText("USD")).not.toBeInTheDocument();
-    expect(
-      scope.getByTitle(/account sets no currency/i),
-    ).toBeInTheDocument();
+    expect(scope.getByTitle(/account sets no currency/i)).toBeInTheDocument();
   });
 
   // A halted P&L and a denominated one are shown by the same cell. The halt
@@ -1448,7 +1477,7 @@ describe("Positions history row actions", () => {
         (candidate) =>
           candidate.textContent?.includes("Bucks McMoneyface") &&
           candidate.textContent?.includes("AAPL"),
-    );
+      );
     expect(row).toBeDefined();
     const scope = within(row as HTMLElement);
     expect(scope.getByText(/balance 600/)).toBeInTheDocument();
@@ -1576,9 +1605,7 @@ describe("Positions history row actions", () => {
     expect(
       scope.getByText(/authoritative initial PnL value is unavailable/i),
     ).toHaveClass("text-[var(--warn)]");
-    expect(scope.getByText(/accepted/i)).toHaveClass(
-      "border-[var(--warn)]",
-    );
+    expect(scope.getByText(/accepted/i)).toHaveClass("border-[var(--warn)]");
   });
 });
 
@@ -1590,9 +1617,7 @@ describe("Positions row navigation to history", () => {
     await user.click(balanceRow());
 
     // History tab is now active: its source control (history-only) is shown.
-    expect(
-      await screen.findByText("Adjustment history"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Adjustment history")).toBeInTheDocument();
     expect(screen.getByLabelText("Filter by account")).toHaveValue(
       "Bucks McMoneyface",
     );
@@ -1668,7 +1693,9 @@ describe("Positions share filter set", () => {
     );
 
     // The history tab is active and its filters are seeded.
-    expect(screen.getByLabelText("Filter by account")).toHaveValue("desk-alpha");
+    expect(screen.getByLabelText("Filter by account")).toHaveValue(
+      "desk-alpha",
+    );
     expect(screen.getByLabelText("Filter by asset")).toHaveValue("AAPL");
     await waitFor(() => {
       const filter =

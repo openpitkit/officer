@@ -43,13 +43,10 @@ function PollingProbe({
   fetchSpy: (value: string) => void;
   value: string;
 }) {
-  const fetcher = useCallback(
-    async () => {
-      fetchSpy(value);
-      return value;
-    },
-    [fetchSpy, value],
-  );
+  const fetcher = useCallback(async () => {
+    fetchSpy(value);
+    return value;
+  }, [fetchSpy, value]);
   const { load } = usePolling(fetcher, 60000, value);
   return <span>{load.state === "ready" ? load.data : load.state}</span>;
 }

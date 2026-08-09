@@ -142,7 +142,11 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-function requireStringField(obj: Json, label: string, ...keys: string[]): string {
+function requireStringField(
+  obj: Json,
+  label: string,
+  ...keys: string[]
+): string {
   const value = pick(obj, ...keys);
   if (typeof value !== "string") {
     throw new ApiError(`${label} is missing from the API response`, "internal");
@@ -276,7 +280,9 @@ function normalizeAccount(v: unknown): Account {
       default: asString(pick(cascade, "default", "Default")),
     },
     blocked: asBool(pick(o, "blocked", "Blocked")),
-    blockReason: asString(pick(o, "blockReason", "BlockReason", "block_reason")),
+    blockReason: asString(
+      pick(o, "blockReason", "BlockReason", "block_reason"),
+    ),
     blockSource: asAccountBlockSource(
       pick(o, "blockSource", "BlockSource", "block_source"),
     ),
@@ -284,9 +290,16 @@ function normalizeAccount(v: unknown): Account {
       pick(o, "accountBlocked", "AccountBlocked", "account_blocked"),
     ),
     accountBlockReason: asString(
-      pick(o, "accountBlockReason", "AccountBlockReason", "account_block_reason"),
+      pick(
+        o,
+        "accountBlockReason",
+        "AccountBlockReason",
+        "account_block_reason",
+      ),
     ),
-    groupBlocked: asBool(pick(o, "groupBlocked", "GroupBlocked", "group_blocked")),
+    groupBlocked: asBool(
+      pick(o, "groupBlocked", "GroupBlocked", "group_blocked"),
+    ),
     groupBlockReason: asString(
       pick(o, "groupBlockReason", "GroupBlockReason", "group_block_reason"),
     ),
@@ -310,7 +323,9 @@ function normalizeGroup(v: unknown): Group {
     currency: asString(pick(o, "currency", "Currency")),
     notes: asString(pick(o, "notes", "Notes")),
     blocked: asBool(pick(o, "blocked", "Blocked")),
-    blockReason: asString(pick(o, "blockReason", "BlockReason", "block_reason")),
+    blockReason: asString(
+      pick(o, "blockReason", "BlockReason", "block_reason"),
+    ),
     accountCount: asInt(pick(o, "accountCount", "AccountCount")),
     positionCount: asInt(pick(o, "positionCount", "PositionCount")),
   };
@@ -331,7 +346,12 @@ function normalizeBalance(v: unknown): Balance {
       pick(o, "realizedPnl", "RealizedPnl", "realized_pnl"),
     ),
     realizedPnlHaltReason: asString(
-      pick(o, "realizedPnlHaltReason", "RealizedPnlHaltReason", "realized_pnl_halt_reason"),
+      pick(
+        o,
+        "realizedPnlHaltReason",
+        "RealizedPnlHaltReason",
+        "realized_pnl_halt_reason",
+      ),
     ),
     accountCurrency: asString(
       pick(o, "accountCurrency", "AccountCurrency", "account_currency"),
@@ -405,7 +425,12 @@ function normalizeAdjustmentRequest(v: unknown): AdjustmentRequest {
   if (incomingBounds) {
     req.incomingBounds = incomingBounds;
   }
-  const aep = pick(o, "averageEntryPrice", "AverageEntryPrice", "average_entry_price");
+  const aep = pick(
+    o,
+    "averageEntryPrice",
+    "AverageEntryPrice",
+    "average_entry_price",
+  );
   if (aep !== undefined) {
     req.averageEntryPrice = asString(aep);
   }
@@ -416,7 +441,9 @@ function normalizeAdjustmentRequest(v: unknown): AdjustmentRequest {
   return req;
 }
 
-function normalizeAdjustmentAccepted(v: unknown): AdjustmentAccepted | undefined {
+function normalizeAdjustmentAccepted(
+  v: unknown,
+): AdjustmentAccepted | undefined {
   if (!isObject(v)) {
     return undefined;
   }
@@ -432,12 +459,20 @@ function normalizeAdjustmentAccepted(v: unknown): AdjustmentAccepted | undefined
     ),
   );
   return {
-    balanceDelta: asString(pick(v, "balanceDelta", "BalanceDelta", "balance_delta")),
-    balanceResult: asString(pick(v, "balanceResult", "BalanceResult", "balance_result")),
+    balanceDelta: asString(
+      pick(v, "balanceDelta", "BalanceDelta", "balance_delta"),
+    ),
+    balanceResult: asString(
+      pick(v, "balanceResult", "BalanceResult", "balance_result"),
+    ),
     heldDelta: asString(pick(v, "heldDelta", "HeldDelta", "held_delta")),
     heldResult: asString(pick(v, "heldResult", "HeldResult", "held_result")),
-    incomingDelta: asString(pick(v, "incomingDelta", "IncomingDelta", "incoming_delta")),
-    incomingResult: asString(pick(v, "incomingResult", "IncomingResult", "incoming_result")),
+    incomingDelta: asString(
+      pick(v, "incomingDelta", "IncomingDelta", "incoming_delta"),
+    ),
+    incomingResult: asString(
+      pick(v, "incomingResult", "IncomingResult", "incoming_result"),
+    ),
     realizedPnlResult,
     ...(realizedPnlHaltReason ? { realizedPnlHaltReason } : {}),
     averageEntryPrice: asString(
@@ -463,7 +498,9 @@ function normalizeAdjustmentResultOptional(
   return delta !== "" || result !== "" ? { delta, result } : undefined;
 }
 
-function normalizeAdjustmentRejected(v: unknown): AdjustmentRejected | undefined {
+function normalizeAdjustmentRejected(
+  v: unknown,
+): AdjustmentRejected | undefined {
   if (!isObject(v)) {
     return undefined;
   }
@@ -502,8 +539,12 @@ function normalizeAdjustment(v: unknown): Adjustment {
     ),
     status: asAdjustmentStatus(pick(o, "status", "Status")),
     request: normalizeAdjustmentRequest(pick(o, "request", "Request")),
-    accepted: normalizeAdjustmentAccepted(pick(outcome, "accepted", "Accepted")),
-    rejected: normalizeAdjustmentRejected(pick(outcome, "rejected", "Rejected")),
+    accepted: normalizeAdjustmentAccepted(
+      pick(outcome, "accepted", "Accepted"),
+    ),
+    rejected: normalizeAdjustmentRejected(
+      pick(outcome, "rejected", "Rejected"),
+    ),
   };
 }
 
@@ -515,7 +556,9 @@ function normalizeOrder(v: unknown): Order {
     "DisplayPrice",
     "display_price",
   );
-  const amountValue = asString(pick(o, "amountValue", "AmountValue", "amount_value"));
+  const amountValue = asString(
+    pick(o, "amountValue", "AmountValue", "amount_value"),
+  );
   const leavesQuantity = requireStringField(
     o,
     "leavesQuantity",
@@ -532,10 +575,17 @@ function normalizeOrder(v: unknown): Order {
     baseAsset: asString(pick(o, "baseAsset", "BaseAsset", "base_asset")),
     quoteAsset: asString(pick(o, "quoteAsset", "QuoteAsset", "quote_asset")),
     side: asString(pick(o, "side", "Side")) as Order["side"],
-    amountKind: asString(pick(o, "amountKind", "AmountKind", "amount_kind")) as Order["amountKind"],
+    amountKind: asString(
+      pick(o, "amountKind", "AmountKind", "amount_kind"),
+    ) as Order["amountKind"],
     amountValue,
     commissionSubtotals: normalizeArray(
-      pick(o, "commissionSubtotals", "CommissionSubtotals", "commission_subtotals"),
+      pick(
+        o,
+        "commissionSubtotals",
+        "CommissionSubtotals",
+        "commission_subtotals",
+      ),
       normalizeCommission,
     ),
     leavesQuantity,
@@ -578,7 +628,12 @@ function normalizeOrderEvent(v: unknown): OrderEvent {
   if (rejectReason !== undefined) {
     event.rejectReason = asString(rejectReason);
   }
-  const rejectDetails = pick(o, "rejectDetails", "RejectDetails", "reject_details");
+  const rejectDetails = pick(
+    o,
+    "rejectDetails",
+    "RejectDetails",
+    "reject_details",
+  );
   if (rejectDetails !== undefined) {
     event.rejectDetails = asString(rejectDetails);
   }
@@ -590,11 +645,21 @@ function normalizeOrderEvent(v: unknown): OrderEvent {
   if (fillPrice !== undefined) {
     event.fillPrice = asString(fillPrice);
   }
-  const fillLockPrice = pick(o, "fillLockPrice", "FillLockPrice", "fill_lock_price");
+  const fillLockPrice = pick(
+    o,
+    "fillLockPrice",
+    "FillLockPrice",
+    "fill_lock_price",
+  );
   if (fillLockPrice !== undefined) {
     event.fillLockPrice = asString(fillLockPrice);
   }
-  const leavesQuantity = pick(o, "leavesQuantity", "LeavesQuantity", "leaves_quantity");
+  const leavesQuantity = pick(
+    o,
+    "leavesQuantity",
+    "LeavesQuantity",
+    "leaves_quantity",
+  );
   if (leavesQuantity !== undefined) {
     event.leavesQuantity = asString(leavesQuantity);
   }
@@ -632,9 +697,8 @@ function normalizeExecutionReportRequestRecord(
       pick(v, "leavesQuantity", "LeavesQuantity", "leaves_quantity"),
     ),
     lockPrice: asString(pick(v, "lockPrice", "LockPrice", "lock_price")),
-    commission: normalizeCommissionOptional(
-      pick(v, "commission", "Commission"),
-    ) ?? null,
+    commission:
+      normalizeCommissionOptional(pick(v, "commission", "Commission")) ?? null,
     order: asString(pick(v, "order", "Order")),
     account: asString(pick(v, "account", "Account")),
     side: asString(pick(v, "side", "Side")),
@@ -739,14 +803,16 @@ function normalizeOrderSizeLimit(v: unknown): OrderSizeLimit {
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     asset: asString(pick(o, "asset", "Asset")),
-    maxQuantity: asString(pick(o, "maxQuantity", "MaxQuantity", "max_quantity")),
-    maxNotional: asString(pick(o, "maxNotional", "MaxNotional", "max_notional")),
+    maxQuantity: asString(
+      pick(o, "maxQuantity", "MaxQuantity", "max_quantity"),
+    ),
+    maxNotional: asString(
+      pick(o, "maxNotional", "MaxNotional", "max_notional"),
+    ),
   };
 }
 
-function normalizeSpotFundsPnlBoundsLimit(
-  v: unknown,
-): SpotFundsPnlBoundsLimit {
+function normalizeSpotFundsPnlBoundsLimit(v: unknown): SpotFundsPnlBoundsLimit {
   const o = isObject(v) ? v : {};
   return {
     scope: asString(pick(o, "scope", "Scope")),
@@ -965,9 +1031,10 @@ function limitEndpointBody(
   // Only an account-carrying scope names an account the backend could need to
   // create or reject; a broker/asset/group scope must not send the parameter
   // at all, since the backend ignores it there.
-  const query = limit.account.trim() !== ""
-    ? `?${missingAccountQuery(missingAccount)}`
-    : "";
+  const query =
+    limit.account.trim() !== ""
+      ? `?${missingAccountQuery(missingAccount)}`
+      : "";
   switch (limit.policy) {
     case "rate_limit":
       return {
@@ -1011,11 +1078,7 @@ function singleFlattenedLimit(policy: string, limits: AccountLimits): Limit {
   const flattened = flattenAccountLimits(limits);
   const first = flattened[0];
   if (first === undefined) {
-    throw new ApiError(
-      `empty ${policy} limit response`,
-      "internal",
-      500,
-    );
+    throw new ApiError(`empty ${policy} limit response`, "internal", 500);
   }
   return first;
 }
@@ -1061,7 +1124,9 @@ function normalizeAudit(v: unknown): AuditEntry {
     actorTitle: asString(pick(o, "actorTitle", "ActorTitle", "actor_title")),
     action: asString(pick(o, "action", "Action")),
     account: asString(pick(o, "account", "Account")),
-    accountTitle: asString(pick(o, "accountTitle", "AccountTitle", "account_title")),
+    accountTitle: asString(
+      pick(o, "accountTitle", "AccountTitle", "account_title"),
+    ),
     group: asString(pick(o, "group", "Group")),
     detail: asString(pick(o, "detail", "Detail")),
     source: asSource(pick(o, "source", "Source")),
@@ -1093,13 +1158,25 @@ function normalizeOverview(v: unknown): Overview {
   return {
     counts: {
       accounts: accountsTotal,
-      accountsActive: typeof accountsActiveRaw === "number" ? asInt(accountsActiveRaw) : accountsTotal,
+      accountsActive:
+        typeof accountsActiveRaw === "number"
+          ? asInt(accountsActiveRaw)
+          : accountsTotal,
       groups: groupsTotal,
-      groupsActive: typeof groupsActiveRaw === "number" ? asInt(groupsActiveRaw) : groupsTotal,
+      groupsActive:
+        typeof groupsActiveRaw === "number"
+          ? asInt(groupsActiveRaw)
+          : groupsTotal,
       limits: asInt(pick(counts, "limits", "Limits")),
-      ordersActive: asInt(pick(counts, "ordersActive", "OrdersActive", "orders_active")),
-      ordersToday: asInt(pick(counts, "ordersToday", "OrdersToday", "orders_today")),
-      ordersTotal: asInt(pick(counts, "ordersTotal", "OrdersTotal", "orders_total")),
+      ordersActive: asInt(
+        pick(counts, "ordersActive", "OrdersActive", "orders_active"),
+      ),
+      ordersToday: asInt(
+        pick(counts, "ordersToday", "OrdersToday", "orders_today"),
+      ),
+      ordersTotal: asInt(
+        pick(counts, "ordersTotal", "OrdersTotal", "orders_total"),
+      ),
     },
     activity,
   };
@@ -1136,7 +1213,9 @@ function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
     ),
     baseAsset: asString(pick(o, "baseAsset", "BaseAsset", "base_asset")),
     quoteAsset: asString(pick(o, "quoteAsset", "QuoteAsset", "quote_asset")),
-    manualPrice: asString(pick(o, "manualPrice", "ManualPrice", "manual_price")),
+    manualPrice: asString(
+      pick(o, "manualPrice", "ManualPrice", "manual_price"),
+    ),
     enabled: asBool(pick(o, "enabled", "Enabled")),
     syntheticInverse: asBool(
       pick(o, "syntheticInverse", "SyntheticInverse", "synthetic_inverse"),
@@ -1380,9 +1459,7 @@ function normalizeMarketDataSymbolMatch(v: unknown): MarketDataSymbolMatch {
   return match;
 }
 
-function normalizeMarketDataSymbolSearch(
-  v: unknown,
-): MarketDataSymbolSearch {
+function normalizeMarketDataSymbolSearch(v: unknown): MarketDataSymbolSearch {
   const o = isObject(v) ? v : {};
   return {
     supported: asBool(pick(o, "supported", "Supported")),
@@ -1404,7 +1481,12 @@ function normalizeServiceInfo(v: unknown): ServiceInfo {
       pick(o, "engineVersion", "EngineVersion", "engine_version"),
     ),
     engineBuildProfile: asString(
-      pick(o, "engineBuildProfile", "EngineBuildProfile", "engine_build_profile"),
+      pick(
+        o,
+        "engineBuildProfile",
+        "EngineBuildProfile",
+        "engine_build_profile",
+      ),
     ),
     release: asBool(pick(o, "release", "Release")),
     database: {
@@ -1423,9 +1505,7 @@ function normalizeServiceInfo(v: unknown): ServiceInfo {
 function normalizeServiceLogs(v: unknown): ServiceLogs {
   const o = isObject(v) ? v : {};
   const rawLines = pick(o, "lines", "Lines");
-  const lines = Array.isArray(rawLines)
-    ? rawLines.map((x) => asString(x))
-    : [];
+  const lines = Array.isArray(rawLines) ? rawLines.map((x) => asString(x)) : [];
   const rawCount = pick(o, "count", "Count");
   // Trust the server count when present; otherwise fall back to the line total.
   const count = typeof rawCount === "number" ? asInt(rawCount) : lines.length;
@@ -1434,7 +1514,10 @@ function normalizeServiceLogs(v: unknown): ServiceLogs {
 
 function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
   if (!isObject(v)) {
-    throw new ApiError("The service encountered an internal error.", "internal");
+    throw new ApiError(
+      "The service encountered an internal error.",
+      "internal",
+    );
   }
   const o = v;
   const applied = pick(o, "applied", "Applied");
@@ -1463,12 +1546,20 @@ function encode(id: string): string {
 // --- Status / health ---
 
 /** Fetch and normalize the deployment status from GET /status. */
-async function fetchStatus(client: ApiClient, signal?: AbortSignal): Promise<Status> {
-  return normalizeStatus(await client.request(`${client.baseUrl}/status`, { signal }));
+async function fetchStatus(
+  client: ApiClient,
+  signal?: AbortSignal,
+): Promise<Status> {
+  return normalizeStatus(
+    await client.request(`${client.baseUrl}/status`, { signal }),
+  );
 }
 
 /** Fetch the liveness signal from GET /health. */
-async function fetchHealth(client: ApiClient, signal?: AbortSignal): Promise<Health> {
+async function fetchHealth(
+  client: ApiClient,
+  signal?: AbortSignal,
+): Promise<Health> {
   const v = await client.request(`${client.baseUrl}/health`, { signal });
   const o = isObject(v) ? v : {};
   return { ok: asBool(pick(o, "ok", "Ok", "healthy", "Healthy")) };
@@ -1477,19 +1568,26 @@ async function fetchHealth(client: ApiClient, signal?: AbortSignal): Promise<Hea
 // --- Overview / Dashboard ---
 
 /** GET /overview. */
-async function fetchOverview(client: ApiClient, signal?: AbortSignal): Promise<Overview> {
+async function fetchOverview(
+  client: ApiClient,
+  signal?: AbortSignal,
+): Promise<Overview> {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   const since = d.toISOString();
   return normalizeOverview(
-    await client.request(`${client.baseUrl}/overview?since=${encodeURIComponent(since)}`, { signal }),
+    await client.request(
+      `${client.baseUrl}/overview?since=${encodeURIComponent(since)}`,
+      { signal },
+    ),
   );
 }
 
 // --- Market data ---
 
 /** GET /market-data. */
-async function fetchMarketData(client: ApiClient, 
+async function fetchMarketData(
+  client: ApiClient,
   signal?: AbortSignal,
 ): Promise<MarketDataStatus> {
   const v = await client.request(`${client.baseUrl}/market-data`, { signal });
@@ -1498,13 +1596,16 @@ async function fetchMarketData(client: ApiClient,
 }
 
 /** POST /market-data/instances. */
-async function createMarketDataInstance(client: ApiClient, body: {
-  id?: string;
-  provider: string;
-  label: string;
-  credentials?: string;
-  enabled: boolean;
-}): Promise<MarketDataInstance> {
+async function createMarketDataInstance(
+  client: ApiClient,
+  body: {
+    id?: string;
+    provider: string;
+    label: string;
+    credentials?: string;
+    enabled: boolean;
+  },
+): Promise<MarketDataInstance> {
   const v = await client.request(`${client.baseUrl}/market-data/instances`, {
     method: "POST",
     body,
@@ -1514,7 +1615,8 @@ async function createMarketDataInstance(client: ApiClient, body: {
 }
 
 /** PUT /market-data/instances/{id}/settings. */
-async function updateMarketDataInstanceSettings(client: ApiClient, 
+async function updateMarketDataInstanceSettings(
+  client: ApiClient,
   id: string,
   body: {
     label: string;
@@ -1533,14 +1635,18 @@ async function updateMarketDataInstanceSettings(client: ApiClient,
 }
 
 /** PUT /market-data/instances/{id}/enabled. */
-async function setMarketDataInstanceEnabled(client: ApiClient, 
+async function setMarketDataInstanceEnabled(
+  client: ApiClient,
   id: string,
   enabled: boolean,
 ): Promise<void> {
-  await client.request(`${client.baseUrl}/market-data/instances/${encode(id)}/enabled`, {
-    method: "PUT",
-    body: { enabled },
-  });
+  await client.request(
+    `${client.baseUrl}/market-data/instances/${encode(id)}/enabled`,
+    {
+      method: "PUT",
+      body: { enabled },
+    },
+  );
 }
 
 /** DELETE /market-data/instances/{id}. */
@@ -1557,7 +1663,8 @@ async function deleteMarketDataInstance(
 }
 
 /** PUT /market-data/instances/{id}/instruments. */
-async function upsertMarketDataInstrument(client: ApiClient, 
+async function upsertMarketDataInstrument(
+  client: ApiClient,
   id: string,
   body: {
     externalSymbol: string;
@@ -1576,7 +1683,8 @@ async function upsertMarketDataInstrument(client: ApiClient,
 }
 
 /** PUT /market-data/instances/{id}/instruments/enabled. */
-async function setMarketDataInstrumentEnabled(client: ApiClient, 
+async function setMarketDataInstrumentEnabled(
+  client: ApiClient,
   id: string,
   externalSymbol: string,
   enabled: boolean,
@@ -1588,7 +1696,8 @@ async function setMarketDataInstrumentEnabled(client: ApiClient,
 }
 
 /** DELETE /market-data/instances/{id}/instruments?externalSymbol=. */
-async function deleteMarketDataInstrument(client: ApiClient, 
+async function deleteMarketDataInstrument(
+  client: ApiClient,
   id: string,
   externalSymbol: string,
 ): Promise<void> {
@@ -1600,15 +1709,18 @@ async function deleteMarketDataInstrument(client: ApiClient,
 }
 
 /** POST /market-data/restart - stop and restart all feed subscriptions. */
-async function restartMarketData(client: ApiClient, ): Promise<MarketDataStatus> {
-  const v = await client.request(`${client.baseUrl}/market-data/restart`, { method: "POST" });
+async function restartMarketData(client: ApiClient): Promise<MarketDataStatus> {
+  const v = await client.request(`${client.baseUrl}/market-data/restart`, {
+    method: "POST",
+  });
   const o = isObject(v) ? v : {};
   return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
 }
 
 /** POST /market-data/instances/{id}/verify-symbol - stateless symbol check.
  *  Never disturbs live feeds; supported=false when the provider can't verify. */
-async function verifyMarketDataSymbol(client: ApiClient, 
+async function verifyMarketDataSymbol(
+  client: ApiClient,
   id: string,
   externalSymbol: string,
 ): Promise<MarketDataSymbolVerification> {
@@ -1639,7 +1751,8 @@ export interface MarketDataSymbolSearchInput {
  *  resolve. Never disturbs live feeds; supported=false when the provider can't
  *  search. The secType/exchange/currency criteria scope the resolve so crypto,
  *  forex, and futures resolve to an exact contract. */
-async function searchMarketDataSymbols(client: ApiClient, 
+async function searchMarketDataSymbols(
+  client: ApiClient,
   id: string,
   input: MarketDataSymbolSearchInput,
 ): Promise<MarketDataSymbolSearch> {
@@ -1667,15 +1780,23 @@ async function searchMarketDataSymbols(client: ApiClient,
 // --- Service info ---
 
 /** GET /service. */
-async function fetchServiceInfo(client: ApiClient, signal?: AbortSignal): Promise<ServiceInfo> {
-  return normalizeServiceInfo(await client.request(`${client.baseUrl}/service`, { signal }));
+async function fetchServiceInfo(
+  client: ApiClient,
+  signal?: AbortSignal,
+): Promise<ServiceInfo> {
+  return normalizeServiceInfo(
+    await client.request(`${client.baseUrl}/service`, { signal }),
+  );
 }
 
 /** GET /service/logs - the captured log tail, oldest line first. */
-async function fetchServiceLogs(client: ApiClient, 
+async function fetchServiceLogs(
+  client: ApiClient,
   signal?: AbortSignal,
 ): Promise<ServiceLogs> {
-  return normalizeServiceLogs(await client.request(`${client.baseUrl}/service/logs`, { signal }));
+  return normalizeServiceLogs(
+    await client.request(`${client.baseUrl}/service/logs`, { signal }),
+  );
 }
 
 /** POST /service/restart - request service process restart. */
@@ -1711,13 +1832,16 @@ function businessCsvFilters(
 }
 
 /** POST /business-csv/export - returns a business CSV or ZIP blob. */
-async function exportBusinessCsv(client: ApiClient, input: {
-  entity: BusinessCsvEntity;
-  delimiter: BusinessCsvDelimiter;
-  filters?: BusinessCsvExportFilters;
-  signal?: AbortSignal;
-  zip?: boolean;
-}): Promise<{ blob: Blob; filename: string }> {
+async function exportBusinessCsv(
+  client: ApiClient,
+  input: {
+    entity: BusinessCsvEntity;
+    delimiter: BusinessCsvDelimiter;
+    filters?: BusinessCsvExportFilters;
+    signal?: AbortSignal;
+    zip?: boolean;
+  },
+): Promise<{ blob: Blob; filename: string }> {
   return client.requestBlob(`${client.baseUrl}/business-csv/export`, {
     method: "POST",
     body: {
@@ -1733,7 +1857,8 @@ async function exportBusinessCsv(client: ApiClient, input: {
 }
 
 /** POST /backup/export - returns a portable backup archive and filename. */
-async function exportBackup(client: ApiClient, 
+async function exportBackup(
+  client: ApiClient,
   scope: BackupScope,
   signal?: AbortSignal,
   zip?: boolean,
@@ -1747,21 +1872,26 @@ async function exportBackup(client: ApiClient,
     body,
     signal,
     accept: zip ? "application/zip" : "application/json",
-    fallbackFilename: zip ? "pit-officer-backup.zip" : "pit-officer-backup.json",
+    fallbackFilename: zip
+      ? "pit-officer-backup.zip"
+      : "pit-officer-backup.json",
   });
 }
 
 /** POST /backup/restore - imports a portable backup archive. */
-async function restoreBackup(client: ApiClient, input: {
-  archive?: BackupArchive;
-  archiveFile?: {
-    base64: string;
-    filename: string;
-  };
-  scope: BackupScope;
-  mode: RestoreMode;
-  signal?: AbortSignal;
-}): Promise<BackupRestoreSummary> {
+async function restoreBackup(
+  client: ApiClient,
+  input: {
+    archive?: BackupArchive;
+    archiveFile?: {
+      base64: string;
+      filename: string;
+    };
+    scope: BackupScope;
+    mode: RestoreMode;
+    signal?: AbortSignal;
+  },
+): Promise<BackupRestoreSummary> {
   const body: Record<string, unknown> = {
     scope: input.scope,
     mode: input.mode,
@@ -1786,7 +1916,7 @@ async function restoreBackup(client: ApiClient, input: {
 }
 
 /** POST /database/reset - recreates the database from scratch. */
-async function resetDatabase(client: ApiClient, ): Promise<void> {
+async function resetDatabase(client: ApiClient): Promise<void> {
   await client.request(`${client.baseUrl}/database/reset`, {
     method: "POST",
     body: { confirm: true },
@@ -1826,11 +1956,21 @@ function accountListQuery(filters?: AccountListFilters): string {
   appendListFilter(params, "code", filters.code);
   appendListFilter(params, "codeMatch", filters.codeMatch, "contains");
   appendListFilter(params, "status", filters.status, "all");
-  appendListFilter(params, "positionCountMode", filters.positionCountMode, "all");
+  appendListFilter(
+    params,
+    "positionCountMode",
+    filters.positionCountMode,
+    "all",
+  );
   appendListFilter(params, "positionCountMin", filters.positionCountMin);
   appendListFilter(params, "positionCountMax", filters.positionCountMax);
   appendListFilter(params, "blockReason", filters.blockReason);
-  appendListFilter(params, "blockReasonMatch", filters.blockReasonMatch, "contains");
+  appendListFilter(
+    params,
+    "blockReasonMatch",
+    filters.blockReasonMatch,
+    "contains",
+  );
   if (filters.group !== undefined) {
     params.set("group", filters.group);
   }
@@ -1848,7 +1988,12 @@ function groupListQuery(filters?: GroupListFilters): string {
   appendListFilter(params, "code", filters.code);
   appendListFilter(params, "codeMatch", filters.codeMatch, "contains");
   appendListFilter(params, "status", filters.status, "all");
-  appendListFilter(params, "positionCountMode", filters.positionCountMode, "all");
+  appendListFilter(
+    params,
+    "positionCountMode",
+    filters.positionCountMode,
+    "all",
+  );
   appendListFilter(params, "positionCountMin", filters.positionCountMin);
   appendListFilter(params, "positionCountMax", filters.positionCountMax);
   appendListFilter(params, "accountCountMode", filters.accountCountMode, "all");
@@ -1857,7 +2002,12 @@ function groupListQuery(filters?: GroupListFilters): string {
   appendListFilter(params, "notes", filters.notes);
   appendListFilter(params, "notesMatch", filters.notesMatch, "contains");
   appendListFilter(params, "blockReason", filters.blockReason);
-  appendListFilter(params, "blockReasonMatch", filters.blockReasonMatch, "contains");
+  appendListFilter(
+    params,
+    "blockReasonMatch",
+    filters.blockReasonMatch,
+    "contains",
+  );
   appendListFilter(params, "sort", filters.sort);
   appendListFilter(params, "order", filters.order);
   appendListFilter(params, "limit", filters.limit);
@@ -1888,9 +2038,12 @@ async function fetchAccountsPage(
   signal?: AbortSignal,
 ): Promise<PagedResult<Account>> {
   const filters = listFiltersFromArg(input);
-  const v = await client.request(`${client.baseUrl}/accounts${accountListQuery(filters)}`, {
-    signal: signalFromListArg(input, signal),
-  });
+  const v = await client.request(
+    `${client.baseUrl}/accounts${accountListQuery(filters)}`,
+    {
+      signal: signalFromListArg(input, signal),
+    },
+  );
   const o = isObject(v) ? v : {};
   return {
     items: normalizeArray(pick(o, "accounts", "Accounts"), normalizeAccount),
@@ -1929,26 +2082,38 @@ async function updateAccount(
   code: string,
   title: string,
 ): Promise<Account> {
-  const v = await client.request(`${client.baseUrl}/accounts/${encode(oldCode)}`, {
-    method: "PUT",
-    body: { code, title },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(oldCode)}`,
+    {
+      method: "PUT",
+      body: { code, title },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeAccount(pick(o, "account", "Account"));
 }
 
 /** DELETE /accounts/{code}. Returns 204; throws ApiError on failure. */
-async function deleteAccount(client: ApiClient, code: string, force = false): Promise<void> {
+async function deleteAccount(
+  client: ApiClient,
+  code: string,
+  force = false,
+): Promise<void> {
   const query = force ? "?force=true" : "";
-  await client.request(`${client.baseUrl}/accounts/${encode(code)}${query}`, { method: "DELETE" });
+  await client.request(`${client.baseUrl}/accounts/${encode(code)}${query}`, {
+    method: "DELETE",
+  });
 }
 
 /** GET /accounts/{code}: the account plus its account-scoped limits. */
-async function fetchAccountState(client: ApiClient, 
+async function fetchAccountState(
+  client: ApiClient,
   code: string,
   signal?: AbortSignal,
 ): Promise<{ account: Account; limits: Limit[] }> {
-  const v = await client.request(`${client.baseUrl}/accounts/${encode(code)}`, { signal });
+  const v = await client.request(`${client.baseUrl}/accounts/${encode(code)}`, {
+    signal,
+  });
   const o = isObject(v) ? v : {};
   return {
     account: normalizeAccount(pick(o, "account", "Account")),
@@ -1957,7 +2122,8 @@ async function fetchAccountState(client: ApiClient,
 }
 
 /** POST /accounts/{code}/block. Returns the updated account. */
-async function blockAccount(client: ApiClient,
+async function blockAccount(
+  client: ApiClient,
   code: string,
   reason: string,
   missingAccount: MissingAccountPolicy,
@@ -1988,7 +2154,8 @@ async function unblockAccount(
 }
 
 /** PUT /accounts/{code}/group. Returns the updated account. */
-async function setAccountGroup(client: ApiClient,
+async function setAccountGroup(
+  client: ApiClient,
   code: string,
   group: string,
   missingAccount: MissingAccountPolicy,
@@ -2010,23 +2177,30 @@ async function setAccountCurrency(
   code: string,
   currency: string,
 ): Promise<Account> {
-  const v = await client.request(`${client.baseUrl}/accounts/${encode(code)}/currency`, {
-    method: "PUT",
-    body: { currency },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(code)}/currency`,
+    {
+      method: "PUT",
+      body: { currency },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeAccount(pick(o, "account", "Account"));
 }
 
 /** PUT /accounts/{code}/notes. Returns the updated account. */
-async function setAccountNotes(client: ApiClient, 
+async function setAccountNotes(
+  client: ApiClient,
   code: string,
   notes: string,
 ): Promise<Account> {
-  const v = await client.request(`${client.baseUrl}/accounts/${encode(code)}/notes`, {
-    method: "PUT",
-    body: { notes },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(code)}/notes`,
+    {
+      method: "PUT",
+      body: { notes },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeAccount(pick(o, "account", "Account"));
 }
@@ -2041,9 +2215,12 @@ async function fetchGroupsPage(
   signal?: AbortSignal,
 ): Promise<PagedResult<Group>> {
   const filters = listFiltersFromArg(input);
-  const v = await client.request(`${client.baseUrl}/groups${groupListQuery(filters)}`, {
-    signal: signalFromListArg(input, signal),
-  });
+  const v = await client.request(
+    `${client.baseUrl}/groups${groupListQuery(filters)}`,
+    {
+      signal: signalFromListArg(input, signal),
+    },
+  );
   const o = isObject(v) ? v : {};
   return {
     items: normalizeArray(pick(o, "groups", "Groups"), normalizeGroup),
@@ -2061,7 +2238,8 @@ async function fetchGroups(
 }
 
 /** POST /groups. */
-async function createGroup(client: ApiClient, 
+async function createGroup(
+  client: ApiClient,
   code: string,
   title: string,
   notes: string,
@@ -2082,20 +2260,26 @@ async function updateGroup(
   code: string,
   title: string,
 ): Promise<Group> {
-  const v = await client.request(`${client.baseUrl}/groups/${encode(oldCode)}`, {
-    method: "PUT",
-    body: { code, title },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/groups/${encode(oldCode)}`,
+    {
+      method: "PUT",
+      body: { code, title },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeGroup(pick(o, "group", "Group"));
 }
 
 /** GET /groups/{code}: the group plus its member accounts. */
-async function fetchGroupState(client: ApiClient, 
+async function fetchGroupState(
+  client: ApiClient,
   code: string,
   signal?: AbortSignal,
 ): Promise<{ group: Group; accounts: Account[] }> {
-  const v = await client.request(`${client.baseUrl}/groups/${encode(code)}`, { signal });
+  const v = await client.request(`${client.baseUrl}/groups/${encode(code)}`, {
+    signal,
+  });
   const o = isObject(v) ? v : {};
   return {
     group: normalizeGroup(pick(o, "group", "Group")),
@@ -2109,10 +2293,13 @@ async function setGroupCurrency(
   code: string,
   currency: string,
 ): Promise<Group> {
-  const v = await client.request(`${client.baseUrl}/groups/${encode(code)}/currency`, {
-    method: "PUT",
-    body: { currency },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/groups/${encode(code)}/currency`,
+    {
+      method: "PUT",
+      body: { currency },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeGroup(pick(o, "group", "Group"));
 }
@@ -2122,52 +2309,68 @@ async function setDefaultGroupCurrency(
   client: ApiClient,
   currency: string,
 ): Promise<Group> {
-  const v = await client.request(`${client.baseUrl}/groups/-/default/currency`, {
-    method: "PUT",
-    body: { currency },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/groups/-/default/currency`,
+    {
+      method: "PUT",
+      body: { currency },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeGroup(pick(o, "group", "Group"));
 }
 
 /** PUT /groups/{code}/notes. Returns the updated group. */
-async function setGroupNotes(client: ApiClient, 
+async function setGroupNotes(
+  client: ApiClient,
   code: string,
   notes: string,
 ): Promise<Group> {
-  const v = await client.request(`${client.baseUrl}/groups/${encode(code)}/notes`, {
-    method: "PUT",
-    body: { notes },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/groups/${encode(code)}/notes`,
+    {
+      method: "PUT",
+      body: { notes },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeGroup(pick(o, "group", "Group"));
 }
 
 /** POST /groups/{code}/block. Returns the updated group. */
-async function blockGroup(client: ApiClient, 
+async function blockGroup(
+  client: ApiClient,
   code: string,
   reason: string,
 ): Promise<Group> {
-  const v = await client.request(`${client.baseUrl}/groups/${encode(code)}/block`, {
-    method: "POST",
-    body: { reason },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/groups/${encode(code)}/block`,
+    {
+      method: "POST",
+      body: { reason },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeGroup(pick(o, "group", "Group"));
 }
 
 /** POST /groups/{code}/unblock. Returns the updated group. */
 async function unblockGroup(client: ApiClient, code: string): Promise<Group> {
-  const v = await client.request(`${client.baseUrl}/groups/${encode(code)}/unblock`, {
-    method: "POST",
-  });
+  const v = await client.request(
+    `${client.baseUrl}/groups/${encode(code)}/unblock`,
+    {
+      method: "POST",
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeGroup(pick(o, "group", "Group"));
 }
 
 /** DELETE /groups/{code}. Returns 204; throws ApiError on failure. */
 async function deleteGroup(client: ApiClient, code: string): Promise<void> {
-  await client.request(`${client.baseUrl}/groups/${encode(code)}`, { method: "DELETE" });
+  await client.request(`${client.baseUrl}/groups/${encode(code)}`, {
+    method: "DELETE",
+  });
 }
 
 // --- Assets ---
@@ -2239,17 +2442,22 @@ async function updateAsset(
   title: string,
   assetClass: string,
 ): Promise<Asset> {
-  const v = await client.request(`${client.baseUrl}/assets/${encode(oldCode)}`, {
-    method: "PUT",
-    body: { code, title, assetClass },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/assets/${encode(oldCode)}`,
+    {
+      method: "PUT",
+      body: { code, title, assetClass },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeAsset(pick(o, "asset", "Asset"));
 }
 
 /** DELETE /assets/{code}. Returns 204; throws ApiError on failure. */
 async function deleteAsset(client: ApiClient, code: string): Promise<void> {
-  await client.request(`${client.baseUrl}/assets/${encode(code)}`, { method: "DELETE" });
+  await client.request(`${client.baseUrl}/assets/${encode(code)}`, {
+    method: "DELETE",
+  });
 }
 
 // --- Asset classes ---
@@ -2372,7 +2580,12 @@ function balanceListQuery(filter: BalanceListFilters = {}): string {
   appendListFilter(params, "incomingMode", filter.incomingMode, "all");
   appendListFilter(params, "incomingMin", filter.incomingMin);
   appendListFilter(params, "incomingMax", filter.incomingMax);
-  appendListFilter(params, "averageEntryPriceMode", filter.averageEntryPriceMode, "all");
+  appendListFilter(
+    params,
+    "averageEntryPriceMode",
+    filter.averageEntryPriceMode,
+    "all",
+  );
   appendListFilter(params, "averageEntryPriceMin", filter.averageEntryPriceMin);
   appendListFilter(params, "averageEntryPriceMax", filter.averageEntryPriceMax);
   appendListFilter(
@@ -2401,7 +2614,10 @@ async function fetchBalancesPage(
   filter: BalanceListFilters = {},
   signal?: AbortSignal,
 ): Promise<PagedResult<Balance>> {
-  const v = await client.request(`${client.baseUrl}/balances${balanceListQuery(filter)}`, { signal });
+  const v = await client.request(
+    `${client.baseUrl}/balances${balanceListQuery(filter)}`,
+    { signal },
+  );
   const o = isObject(v) ? v : {};
   return {
     items: normalizeArray(pick(o, "balances", "Balances"), normalizeBalance),
@@ -2455,7 +2671,8 @@ async function setBalanceRealizedPnl(
 }
 
 /** POST /accounts/{code}/adjustments. */
-async function createAdjustment(client: ApiClient,
+async function createAdjustment(
+  client: ApiClient,
   accountCode: string,
   body: AdjustmentBody,
   missingAccount: MissingAccountPolicy,
@@ -2480,7 +2697,8 @@ export interface AdjustmentsFilter {
 }
 
 /** GET /accounts/{code}/adjustments, newest first. */
-async function fetchAccountAdjustments(client: ApiClient, 
+async function fetchAccountAdjustments(
+  client: ApiClient,
   accountCode: string,
   filter: AdjustmentsFilter = {},
   signal?: AbortSignal,
@@ -2498,7 +2716,10 @@ async function fetchAccountAdjustments(client: ApiClient,
     { signal },
   );
   const o = isObject(v) ? v : {};
-  return normalizeArray(pick(o, "adjustments", "Adjustments"), normalizeAdjustment);
+  return normalizeArray(
+    pick(o, "adjustments", "Adjustments"),
+    normalizeAdjustment,
+  );
 }
 
 export interface GlobalAdjustmentsFilter extends PageRequest {
@@ -2621,7 +2842,10 @@ function normalizeApprovalToken(v: unknown): ApprovalToken {
     keyId: asString(pick(o, "keyId", "KeyId", "key_id")),
     id: asString(pick(o, "id", "Id", "ID")),
     verdict: normalizeSubmitVerdict(pick(o, "verdict", "Verdict")),
-    reasons: normalizeArray(pick(o, "reasons", "Reasons"), normalizeCheckReject),
+    reasons: normalizeArray(
+      pick(o, "reasons", "Reasons"),
+      normalizeCheckReject,
+    ),
   };
 }
 
@@ -2752,7 +2976,10 @@ function normalizeCheckResult(v: unknown): CheckResult {
   const o = isObject(v) ? v : {};
   return {
     passed: asBool(pick(o, "passed", "Passed")),
-    rejects: normalizeArray(pick(o, "rejects", "Rejects"), normalizeCheckReject),
+    rejects: normalizeArray(
+      pick(o, "rejects", "Rejects"),
+      normalizeCheckReject,
+    ),
     wouldDisplayPrice: asString(
       pick(o, "wouldDisplayPrice", "WouldDisplayPrice", "would_display_price"),
     ),
@@ -2773,11 +3000,16 @@ export interface CheckOrderBody {
 }
 
 /** POST /orders/check - pre-trade dry-run; never mutates state. */
-async function checkOrder(client: ApiClient, 
+async function checkOrder(
+  client: ApiClient,
   body: CheckOrderBody,
   signal?: AbortSignal,
 ): Promise<CheckResult> {
-  const v = await client.request(`${client.baseUrl}/orders/check`, { method: "POST", body, signal });
+  const v = await client.request(`${client.baseUrl}/orders/check`, {
+    method: "POST",
+    body,
+    signal,
+  });
   const o = isObject(v) ? v : {};
   return normalizeCheckResult(pick(o, "check", "Check"));
 }
@@ -2819,7 +3051,10 @@ async function fetchOrdersPage(
   filter: OrderListFilters = {},
   signal?: AbortSignal,
 ): Promise<PagedResult<Order>> {
-  const v = await client.request(`${client.baseUrl}/orders${orderListQuery(filter)}`, { signal });
+  const v = await client.request(
+    `${client.baseUrl}/orders${orderListQuery(filter)}`,
+    { signal },
+  );
   const o = isObject(v) ? v : {};
   return {
     items: normalizeArray(pick(o, "orders", "Orders"), normalizeOrder),
@@ -2839,11 +3074,14 @@ async function fetchOrders(
 /** GET /orders/{id}: the order plus its per-event signed timeline and
  *  trades. Signatures are sourced per event (each event carries its own signed
  *  flag and alg); there is no order-level approval envelope. */
-async function fetchOrderDetail(client: ApiClient,
+async function fetchOrderDetail(
+  client: ApiClient,
   id: string,
   signal?: AbortSignal,
 ): Promise<{ order: Order; events: OrderEvent[]; trades: Trade[] }> {
-  const v = await client.request(`${client.baseUrl}/orders/${encode(id)}`, { signal });
+  const v = await client.request(`${client.baseUrl}/orders/${encode(id)}`, {
+    signal,
+  });
   const o = isObject(v) ? v : {};
   return {
     order: normalizeOrder(pick(o, "order", "Order")),
@@ -2880,7 +3118,9 @@ function normalizePublicKeyMaterial(v: unknown): PublicKeyMaterial | null {
   };
 }
 
-function normalizeApprovalTokenResponse(v: unknown): ApprovalTokenResponse | null {
+function normalizeApprovalTokenResponse(
+  v: unknown,
+): ApprovalTokenResponse | null {
   if (!isObject(v)) {
     return null;
   }
@@ -2889,7 +3129,10 @@ function normalizeApprovalTokenResponse(v: unknown): ApprovalTokenResponse | nul
     keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
     id: asString(pick(v, "id", "Id", "ID")),
     verdict: normalizeSubmitVerdict(pick(v, "verdict", "Verdict")),
-    reasons: normalizeArray(pick(v, "reasons", "Reasons"), normalizeCheckReject),
+    reasons: normalizeArray(
+      pick(v, "reasons", "Reasons"),
+      normalizeCheckReject,
+    ),
   };
 }
 
@@ -2938,7 +3181,9 @@ function normalizeAttestationResult(v: unknown): AttestationResult | null {
   }
   return {
     outcome: asString(pick(v, "outcome", "Outcome")),
-    fillQuantity: asString(pick(v, "fillQuantity", "FillQuantity", "fill_quantity")),
+    fillQuantity: asString(
+      pick(v, "fillQuantity", "FillQuantity", "fill_quantity"),
+    ),
     fillPrice: asString(pick(v, "fillPrice", "FillPrice", "fill_price")),
     fillLockPrice: asString(
       pick(v, "fillLockPrice", "FillLockPrice", "fill_lock_price"),
@@ -2949,8 +3194,13 @@ function normalizeAttestationResult(v: unknown): AttestationResult | null {
     leavesQuantity: asString(
       pick(v, "leavesQuantity", "LeavesQuantity", "leaves_quantity"),
     ),
-    orderStatus: asString(pick(v, "orderStatus", "OrderStatus", "order_status")),
-    blocks: normalizeArray(pick(v, "blocks", "Blocks"), normalizeAttestationBlock),
+    orderStatus: asString(
+      pick(v, "orderStatus", "OrderStatus", "order_status"),
+    ),
+    blocks: normalizeArray(
+      pick(v, "blocks", "Blocks"),
+      normalizeAttestationBlock,
+    ),
   };
 }
 
@@ -2961,7 +3211,9 @@ function normalizeEventReproductionRequest(
     return null;
   }
   return {
-    requestType: asString(pick(v, "requestType", "RequestType", "request_type")),
+    requestType: asString(
+      pick(v, "requestType", "RequestType", "request_type"),
+    ),
     orderId: asString(pick(v, "orderId")),
     eventId: asString(pick(v, "eventId")),
     instrument: asString(pick(v, "instrument", "Instrument")),
@@ -3010,7 +3262,9 @@ function normalizeExecutionReportResponse(
   };
 }
 
-function normalizeOrderMutationResponse(v: unknown): OrderMutationResponse | null {
+function normalizeOrderMutationResponse(
+  v: unknown,
+): OrderMutationResponse | null {
   if (!isObject(v)) {
     return null;
   }
@@ -3049,7 +3303,8 @@ function normalizeEventReproductionResponse(
  *  engine-processed request, so each attested event has its own bundle. Signed
  *  artifacts (token, canonicalApproval, signature, publicKey.key) are returned
  *  verbatim and are never re-serialized here. */
-async function fetchEventReproduction(client: ApiClient,
+async function fetchEventReproduction(
+  client: ApiClient,
   id: string,
   eventId: string,
   signal?: AbortSignal,
@@ -3060,13 +3315,17 @@ async function fetchEventReproduction(client: ApiClient,
   );
   const o = isObject(v) ? v : {};
   return {
-    requestType: asString(pick(o, "requestType", "RequestType", "request_type")),
+    requestType: asString(
+      pick(o, "requestType", "RequestType", "request_type"),
+    ),
     event: normalizeOrderEvent(pick(o, "event", "Event")),
     attestation: normalizeEventAttestation(
       pick(o, "attestation", "Attestation"),
     ),
     request: normalizeEventReproductionRequest(pick(o, "request", "Request")),
-    response: normalizeEventReproductionResponse(pick(o, "response", "Response")),
+    response: normalizeEventReproductionResponse(
+      pick(o, "response", "Response"),
+    ),
     canonicalApproval: asNullableString(
       pick(o, "canonicalApproval", "CanonicalApproval", "canonical_approval"),
     ),
@@ -3081,7 +3340,8 @@ async function fetchEventReproduction(client: ApiClient,
 
 /** GET /signing/keys/{keyId}/public?format= — resolve one key's public material
  *  by id (rotation-safe: not the active key). Only public material is returned. */
-async function fetchPublicKeyById(client: ApiClient,
+async function fetchPublicKeyById(
+  client: ApiClient,
   keyId: string,
   format: SigningKeyFormat,
   signal?: AbortSignal,
@@ -3108,9 +3368,10 @@ export interface ExecutionReportBody {
   /** A fill is allowed only for `filled` or `partially_filled`. */
   quantity?: string;
   price?: string;
-  /** Caller-reported open base quantity. Required with a fill, forbidden for a
-   *  commission-only fill status, and otherwise optional. A supplied value is
-   *  recorded verbatim. */
+  /** Caller-reported open base quantity. Required for `filled` and
+   *  `partially_filled`; otherwise optional. A supplied value is recorded
+   *  verbatim. For terminal non-trade reports, the SDK instead receives the
+   *  order's previously recorded leaves. */
   leavesQuantity?: string;
   lockPrice?: string;
   /** A null or empty pair means no commission. Otherwise amount and currency
@@ -3150,29 +3411,40 @@ function normalizeExecutionOutcome(v: unknown): ExecutionOutcome {
     incomingDelta: asString(pick(o, "incomingDelta", "IncomingDelta")),
     incomingResult: asString(pick(o, "incomingResult", "IncomingResult")),
     realizedPnlDelta: asString(pick(o, "realizedPnlDelta", "RealizedPnlDelta")),
-    realizedPnlResult: asString(pick(o, "realizedPnlResult", "RealizedPnlResult")),
+    realizedPnlResult: asString(
+      pick(o, "realizedPnlResult", "RealizedPnlResult"),
+    ),
     ...(realizedPnlHaltReason ? { realizedPnlHaltReason } : {}),
-    averageEntryPrice: asString(pick(o, "averageEntryPrice", "AverageEntryPrice")),
+    averageEntryPrice: asString(
+      pick(o, "averageEntryPrice", "AverageEntryPrice"),
+    ),
   };
 }
 
 /** POST /orders/{id}/execution-reports. Returns the recorded result,
  *  including any engine blocks and balance outcomes, plus the attestation that
  *  proves what Officer recorded for this report. */
-async function submitExecutionReport(client: ApiClient,
+async function submitExecutionReport(
+  client: ApiClient,
   id: string,
   body: ExecutionReportBody,
 ): Promise<ExecutionReportResult> {
-  const v = await client.request(`${client.baseUrl}/orders/${encode(id)}/execution-reports`, {
-    method: "POST",
-    body,
-  });
+  const v = await client.request(
+    `${client.baseUrl}/orders/${encode(id)}/execution-reports`,
+    {
+      method: "POST",
+      body,
+    },
+  );
   const o = isObject(v) ? v : {};
   const result = pick(o, "result", "Result");
   const ro = isObject(result) ? result : {};
   return {
     id: asString(pick(o, "id", "Id", "ID")),
-    blocks: normalizeArray(pick(ro, "blocks", "Blocks"), normalizeExecutionBlock),
+    blocks: normalizeArray(
+      pick(ro, "blocks", "Blocks"),
+      normalizeExecutionBlock,
+    ),
     outcomes: normalizeArray(
       pick(ro, "outcomes", "Outcomes"),
       normalizeExecutionOutcome,
@@ -3194,7 +3466,8 @@ export interface ConfirmOrderBody {
 }
 
 /** POST /orders/{id}/cancel body: the approval token from the workflow, optional
- *  caller-reported leaves, and an optional reason. */
+ *  caller-reported leaves recorded verbatim, and an optional reason. The SDK
+ *  cancellation uses the order's previously recorded leaves. */
 export interface CancelOrderBody {
   token: string;
   /** A supplied value is recorded verbatim. Omitted or empty means absent;
@@ -3218,7 +3491,8 @@ function orderMutationResponseOrThrow(v: unknown): OrderMutationResponse {
 
 /** POST /orders/{id}/confirm. Verifies the approval token and records
  *  order-confirmation history, returning the order plus its attestation. */
-async function confirmOrder(client: ApiClient,
+async function confirmOrder(
+  client: ApiClient,
   id: string,
   body: ConfirmOrderBody,
   signal?: AbortSignal,
@@ -3232,7 +3506,8 @@ async function confirmOrder(client: ApiClient,
 
 /** POST /orders/{id}/cancel. Verifies the approval token and records
  *  the untouched-order cancellation shortcut. */
-async function cancelOrder(client: ApiClient,
+async function cancelOrder(
+  client: ApiClient,
   id: string,
   body: CancelOrderBody,
   signal?: AbortSignal,
@@ -3325,9 +3600,12 @@ async function fetchPoliciesPage(
   signal?: AbortSignal,
 ): Promise<PagedResult<Limit>> {
   const filters = listFiltersFromArg(input);
-  const v = await client.request(`${client.baseUrl}/limits${policyListQuery(filters)}`, {
-    signal: signalFromListArg(input, signal),
-  });
+  const v = await client.request(
+    `${client.baseUrl}/limits${policyListQuery(filters)}`,
+    {
+      signal: signalFromListArg(input, signal),
+    },
+  );
   const o = isObject(v) ? v : {};
   return {
     items: normalizeArray(pick(o, "policies", "Policies"), (row) =>
@@ -3358,13 +3636,16 @@ async function putLimit(
 }
 
 /** DELETE /limits identified by its target tuple. */
-async function deleteLimit(client: ApiClient, target: {
-  policy: string;
-  scope: string;
-  account: string;
-  accountGroup?: string;
-  asset: string;
-}): Promise<void> {
+async function deleteLimit(
+  client: ApiClient,
+  target: {
+    policy: string;
+    scope: string;
+    account: string;
+    accountGroup?: string;
+    asset: string;
+  },
+): Promise<void> {
   const params = new URLSearchParams({
     policy: target.policy,
     scope: target.scope,
@@ -3378,7 +3659,9 @@ async function deleteLimit(client: ApiClient, target: {
   if (target.asset) {
     params.set("asset", target.asset);
   }
-  await client.request(`${client.baseUrl}/limits?${params.toString()}`, { method: "DELETE" });
+  await client.request(`${client.baseUrl}/limits?${params.toString()}`, {
+    method: "DELETE",
+  });
 }
 
 // --- Audit ---
@@ -3420,7 +3703,8 @@ function normalizeMcpCommand(v: unknown): McpCommand {
 }
 
 /** GET /mcp-access - returns the full MCP command catalogue. */
-async function getMcpCommands(client: ApiClient, 
+async function getMcpCommands(
+  client: ApiClient,
   signal?: AbortSignal,
 ): Promise<McpCommand[]> {
   const v = await client.request(`${client.baseUrl}/mcp-access`, { signal });
@@ -3429,14 +3713,18 @@ async function getMcpCommands(client: ApiClient,
 }
 
 /** PUT /mcp-access/{command} - enable or disable one MCP command. */
-async function setMcpCommand(client: ApiClient, 
+async function setMcpCommand(
+  client: ApiClient,
   name: string,
   enabled: boolean,
 ): Promise<McpCommand> {
-  const v = await client.request(`${client.baseUrl}/mcp-access/${encode(name)}`, {
-    method: "PUT",
-    body: { enabled },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/mcp-access/${encode(name)}`,
+    {
+      method: "PUT",
+      body: { enabled },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeMcpCommand(pick(o, "command", "Command"));
 }
@@ -3444,14 +3732,20 @@ async function setMcpCommand(client: ApiClient,
 // --- User settings ---
 
 /** GET /user-settings - the current operator's UI preferences. */
-async function fetchWelcomeSeen(client: ApiClient, signal?: AbortSignal): Promise<boolean> {
+async function fetchWelcomeSeen(
+  client: ApiClient,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const v = await client.request(`${client.baseUrl}/user-settings`, { signal });
   const o = isObject(v) ? v : {};
   return asBool(pick(o, "welcomeSeen", "WelcomeSeen", "welcome_seen"));
 }
 
 /** PUT /user-settings - persist the "don't show the welcome again" choice. */
-async function setWelcomeSeen(client: ApiClient, seen: boolean): Promise<boolean> {
+async function setWelcomeSeen(
+  client: ApiClient,
+  seen: boolean,
+): Promise<boolean> {
   const v = await client.request(`${client.baseUrl}/user-settings`, {
     method: "PUT",
     body: { welcomeSeen: seen },
@@ -3508,7 +3802,9 @@ async function fetchAudit(
 ): Promise<AuditEntry[]> {
   const page = await fetchAuditPage(
     client,
-    typeof limitOrFilter === "number" ? { limit: limitOrFilter } : limitOrFilter,
+    typeof limitOrFilter === "number"
+      ? { limit: limitOrFilter }
+      : limitOrFilter,
     signal,
   );
   return page.items;
@@ -3524,7 +3820,8 @@ function normalizeAuditActionGroup(v: unknown): AuditActionGroup {
 
 /** GET /audit/actions - the audit action catalogue, grouped by category
  *  (control first, canonical order). */
-async function fetchAuditActions(client: ApiClient, 
+async function fetchAuditActions(
+  client: ApiClient,
   signal?: AbortSignal,
 ): Promise<AuditActionGroup[]> {
   const v = await client.request(`${client.baseUrl}/audit/actions`, { signal });
@@ -3553,7 +3850,9 @@ function asFlag(v: unknown): boolean {
 
 export function normalizeSigningKeysStatus(v: unknown): SigningKeysStatus {
   const o = isObject(v) ? v : {};
-  const cfg = isObject(pick(o, "config", "Config")) ? pick(o, "config", "Config") : {};
+  const cfg = isObject(pick(o, "config", "Config"))
+    ? pick(o, "config", "Config")
+    : {};
   return {
     keys: normalizeArray(pick(o, "keys", "Keys"), normalizeSigningKey),
     eSignEnabled: !asFlag(
@@ -3571,7 +3870,8 @@ function normalizeSigningKeyResult(v: unknown): SigningKeyResult {
 }
 
 /** GET /signing/keys — list all keys (including inactive) + global config. */
-async function fetchSigningKeys(client: ApiClient, 
+async function fetchSigningKeys(
+  client: ApiClient,
   signal?: AbortSignal,
 ): Promise<SigningKeysStatus> {
   const [keysV, cfgV] = await Promise.all([
@@ -3588,13 +3888,18 @@ async function fetchSigningKeys(client: ApiClient,
 }
 
 /** POST /signing/keys/generate — create a new Ed25519 key pair. */
-async function generateSigningKey(client: ApiClient, ): Promise<SigningKeyResult> {
-  const v = await client.request(`${client.baseUrl}/signing/keys/generate`, { method: "POST" });
+async function generateSigningKey(
+  client: ApiClient,
+): Promise<SigningKeyResult> {
+  const v = await client.request(`${client.baseUrl}/signing/keys/generate`, {
+    method: "POST",
+  });
   return normalizeSigningKeyResult(v);
 }
 
 /** POST /signing/keys/import — import a BYOK private key. */
-async function importSigningKey(client: ApiClient, 
+async function importSigningKey(
+  client: ApiClient,
   key: string,
   format: SigningKeyFormat,
 ): Promise<SigningKeyResult> {
@@ -3606,7 +3911,8 @@ async function importSigningKey(client: ApiClient,
 }
 
 /** GET /signing/keys/active/public?format= — export the active public key. */
-async function exportPublicKey(client: ApiClient, 
+async function exportPublicKey(
+  client: ApiClient,
   format: SigningKeyFormat,
   signal?: AbortSignal,
 ): Promise<string> {
@@ -3619,7 +3925,10 @@ async function exportPublicKey(client: ApiClient,
 }
 
 /** PUT /signing/config — toggle the global eSign flag. */
-async function setESignEnabled(client: ApiClient, enabled: boolean): Promise<void> {
+async function setESignEnabled(
+  client: ApiClient,
+  enabled: boolean,
+): Promise<void> {
   await client.request(`${client.baseUrl}/signing/config`, {
     method: "PUT",
     body: { noESign: !enabled },

@@ -15,7 +15,12 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { forwardRef, type HTMLAttributes, type TdHTMLAttributes, type ThHTMLAttributes } from "react";
+import {
+  forwardRef,
+  type HTMLAttributes,
+  type TdHTMLAttributes,
+  type ThHTMLAttributes,
+} from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -27,21 +32,20 @@ const HIDE_BELOW = {
   lg: "hidden lg:table-cell",
 } as const;
 
-const Table = forwardRef<
-  HTMLTableElement,
-  HTMLAttributes<HTMLTableElement>
->(({ className, ...props }, ref) => (
-  <div className="ledger-table-wrap w-full overflow-x-auto">
-    <table
-      ref={ref}
-      className={cn(
-        "ledger-table w-full caption-bottom border-collapse text-[length:var(--dens-table-fz)]",
-        className,
-      )}
-      {...props}
-    />
-  </div>
-));
+const Table = forwardRef<HTMLTableElement, HTMLAttributes<HTMLTableElement>>(
+  ({ className, ...props }, ref) => (
+    <div className="ledger-table-wrap w-full overflow-x-auto">
+      <table
+        ref={ref}
+        className={cn(
+          "ledger-table w-full caption-bottom border-collapse text-[length:var(--dens-table-fz)]",
+          className,
+        )}
+        {...props}
+      />
+    </div>
+  ),
+);
 Table.displayName = "Table";
 
 const TableHeader = forwardRef<

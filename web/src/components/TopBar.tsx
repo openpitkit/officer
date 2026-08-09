@@ -15,12 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import {
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Menu } from "lucide-react";
 import { useTranslation } from "react-i18next";

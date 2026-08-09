@@ -19,26 +19,27 @@ import { forwardRef, type InputHTMLAttributes } from "react";
 
 import { cn } from "@/lib/utils";
 
-const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
-  ({ className, type = "text", ...props }, ref) => (
-    <input
-      ref={ref}
-      type={type}
-      className={cn(
-        type === "checkbox"
-          ? "accent-[var(--accent)]"
-          : [
-              "flex h-[var(--dens-field-h)] w-full rounded-card border border-border bg-surface-2 px-[var(--dens-field-px)] py-1 text-[length:var(--dens-field-fz)] text-text",
-              "placeholder:text-muted focus-visible:border-border-hover focus-visible:outline-none",
-              "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
-            ],
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        className,
-      )}
-      {...props}
-    />
-  ),
-);
+const Input = forwardRef<
+  HTMLInputElement,
+  InputHTMLAttributes<HTMLInputElement>
+>(({ className, type = "text", ...props }, ref) => (
+  <input
+    ref={ref}
+    type={type}
+    className={cn(
+      type === "checkbox"
+        ? "accent-[var(--accent)]"
+        : [
+            "flex h-[var(--dens-field-h)] w-full rounded-card border border-border bg-surface-2 px-[var(--dens-field-px)] py-1 text-[length:var(--dens-field-fz)] text-text",
+            "placeholder:text-muted focus-visible:border-border-hover focus-visible:outline-none",
+            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+          ],
+      "disabled:cursor-not-allowed disabled:opacity-50",
+      className,
+    )}
+    {...props}
+  />
+));
 Input.displayName = "Input";
 
 export { Input };

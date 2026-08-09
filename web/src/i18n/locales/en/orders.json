@@ -247,12 +247,12 @@
       "statusHelp": {
         "submitted": "Records the order as submitted to the venue. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
         "accepted": "Records venue acceptance of the order. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
-        "rejected": "Closes the order as rejected and releases any remaining pre-trade lock. The report may also carry a fill and/or commission.",
+        "rejected": "Closes the order as rejected and releases its pre-trade lock. The previously recorded leaves quantity is the lock's size. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
         "committed": "Records the order as committed. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
-        "rolled_back": "Closes the order as rolled back and releases any remaining pre-trade lock. The report may also carry a fill and/or commission.",
-        "filled": "Records a trade and closes the order.",
-        "partially_filled": "Records a trade and leaves the order open.",
-        "cancelled": "Closes the order and releases any remaining pre-trade lock. The report may also carry a fill and/or commission."
+        "rolled_back": "Closes the order as rolled back and releases its pre-trade lock. The previously recorded leaves quantity is the lock's size. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
+        "filled": "Records a fill and closes the order. Fill and leaves quantity are required.",
+        "partially_filled": "Records a fill and leaves the order open. Fill and leaves quantity are required.",
+        "cancelled": "Closes the order and releases its pre-trade lock. The previously recorded leaves quantity is the lock's size. Fill fields are not available for this status; a supplied commission is still processed by the engine."
       },
       "finalFill": "Final fill (closes the order)",
       "force": "Force: bypass the check that prevents reports on finalized orders",
@@ -262,9 +262,7 @@
       "reportId": "Report ID",
       "accountBlocked": "Account {{account}} blocked:",
       "done": "Done",
-      "validationError": "Quantity and price are required for a fill status.",
-      "leavesRequired": "Leaves quantity is required.",
-      "commissionRequired": "Commission amount and currency must be set together."
+      "leavesInvalid": "Leaves quantity must be a plain non-negative decimal without surrounding spaces."
     }
   },
 

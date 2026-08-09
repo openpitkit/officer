@@ -231,6 +231,28 @@ func TestUpdateAsset_Rename(t *testing.T) {
 	}
 }
 
+func TestUpdateAsset_EngineRestarting(t *testing.T) {
+	svc := &fakeService{
+		assets:         []domain.Asset{{Code: "AAPL", Title: "Apple Inc."}},
+		updateAssetErr: domain.ErrEngineRestarting,
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"code":"AAPL.US","title":"Apple Inc."}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assets/AAPL", body))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "engine_restarting" {
+		t.Fatalf("want code=engine_restarting, got %v", errObj["code"])
+	}
+}
+
 func TestUpdateAsset_NotFound(t *testing.T) {
 	svc := &fakeService{updateAssetErr: domain.ErrNotFound}
 	r, err := newRouter(svc)

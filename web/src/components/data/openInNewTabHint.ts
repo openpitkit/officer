@@ -25,7 +25,9 @@ function platformNewTabHintKey(): string {
     userAgentData?: { platform?: string };
   };
   const platform =
-    maybeUAData.userAgentData?.platform ?? navigator.platform ?? navigator.userAgent;
+    maybeUAData.userAgentData?.platform ??
+    navigator.platform ??
+    navigator.userAgent;
   const normalized = platform.toLowerCase();
   if (
     normalized.includes("mac") ||

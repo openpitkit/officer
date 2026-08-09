@@ -19,36 +19,46 @@ Please see https://openpit.dev and the OWNERS file for details.
 
 <!doctype html>
 <html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="theme-color"
+      content="#0a0d12"
+      media="(prefers-color-scheme: dark)"
+    />
+    <meta
+      name="theme-color"
+      content="#f6f3ec"
+      media="(prefers-color-scheme: light)"
+    />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Pit Officer</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("pit-officer-theme");
+          var mode =
+            stored === "dark" || stored === "light" ? stored : "system";
+          var prefersDark = window.matchMedia(
+            "(prefers-color-scheme: dark)",
+          ).matches;
+          var resolved =
+            mode === "system" ? (prefersDark ? "dark" : "light") : mode;
+          var root = document.documentElement;
+          root.classList.remove("dark", "light");
+          root.classList.add(resolved);
+        } catch (e) {
+          /* localStorage unavailable: fall back to the default .dark class. */
+        }
+      })();
+    </script>
+  </head>
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#0a0d12" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)" />
-  <meta name="robots" content="noindex, nofollow" />
-  <title>Pit Officer</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <script>
-    (function () {
-      try {
-        var stored = localStorage.getItem("pit-officer-theme");
-        var mode = stored === "dark" || stored === "light" ? stored : "system";
-        var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-        var resolved = mode === "system" ? (prefersDark ? "dark" : "light") : mode;
-        var root = document.documentElement;
-        root.classList.remove("dark", "light");
-        root.classList.add(resolved);
-      } catch (e) {
-        /* localStorage unavailable: fall back to the default .dark class. */
-      }
-    })();
-  </script>
-</head>
-
-<body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.tsx"></script>
-</body>
-
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

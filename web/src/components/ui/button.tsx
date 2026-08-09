@@ -26,7 +26,8 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "border border-accent bg-accent text-bg hover:border-accent-2 hover:bg-accent-2",
+        default:
+          "border border-accent bg-accent text-bg hover:border-accent-2 hover:bg-accent-2",
         outline:
           "border border-border bg-transparent text-text hover:border-border-hover hover:bg-card-hover-bg hover:text-accent",
         ghost:
@@ -48,7 +49,8 @@ const buttonVariants = cva(
 );
 
 export interface ButtonProps
-  extends ButtonHTMLAttributes<HTMLButtonElement>,
+  extends
+    ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   /** Render the child element as the button (Radix Slot composition). */
   asChild?: boolean;

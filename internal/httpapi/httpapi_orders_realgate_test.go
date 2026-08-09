@@ -248,11 +248,74 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 	}
 }
 
+// TestApplyExecutionReport_RealWorkflowOmitsEngineLeaves proves an R3 report
+// records caller leaves while sending no leaves at all to the engine.
+func TestApplyExecutionReport_RealWorkflowOmitsEngineLeaves(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	handler, realm, eng := newRealServiceRouterWithEngine(t)
+
+	const account domain.AccountID = "acc-1"
+	seedRealAccountAndAssets(t, realm, account)
+	order, err := realm.CreateOrder(ctx, domain.Order{
+		Account:     account,
+		Source:      domain.SourceAPI,
+		Principal:   domain.PrincipalOperator,
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "10",
+		Price:       "150",
+		Status:      domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/orders/"+order.ExternalID.String()+"/execution-reports",
+		bytes.NewBufferString(
+			`{"status":"accepted","leavesQuantity":"6.500",`+
+				`"commission":{"amount":"-0.30","currency":"USD"}}`,
+		),
+	))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("workflow report: status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(eng.executionReportLeaves) != 1 || eng.executionReportLeaves[0] != "" {
+		t.Fatalf("engine leaves = %+v, want one empty value", eng.executionReportLeaves)
+	}
+	detail, err := realm.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "6.500" {
+		t.Fatalf("recorded leaves = %q, want caller value 6.500", detail.Order.Leaves)
+	}
+	if len(detail.Events) != 1 || detail.Events[0].Payload.ExecutionReport == nil ||
+		detail.Events[0].Payload.ExecutionReport.LeavesQuantity != "6.500" {
+		t.Fatalf("event request leaves = %+v, want caller value 6.500", detail.Events)
+	}
+}
+
 // newRealServiceRouter builds the full production chain a handler test would
 // otherwise stub: a real SQLite store, a real localNode over an engine fake, a
 // real NodeRouter, a real backend.Service, and the real HTTP router. It returns
 // the mounted handler and the bound realm store for direct seeding.
 func newRealServiceRouter(t *testing.T) (http.Handler, store.RealmStore) {
+	t.Helper()
+	handler, realm, _ := newRealServiceRouterWithEngine(t)
+	return handler, realm
+}
+
+func newRealServiceRouterWithEngine(t *testing.T) (
+	http.Handler,
+	store.RealmStore,
+	*realGateEngine,
+) {
 	t.Helper()
 	ctx := context.Background()
 	st, err := sqlite.New(t.TempDir() + "/httpapi-realgate.db")
@@ -290,7 +353,7 @@ func newRealServiceRouter(t *testing.T) (http.Handler, store.RealmStore) {
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
-	return handler, realm
+	return handler, realm, eng
 }
 
 // seedRealAccountAndAssets registers the account and instrument assets the order
@@ -314,7 +377,8 @@ func seedRealAccountAndAssets(t *testing.T, realm store.RealmStore, id domain.Ac
 // completes the settlement. It carries no risk logic; the gate under test is the
 // node's own terminal-order guard, not the engine.
 type realGateEngine struct {
-	running bool
+	running               bool
+	executionReportLeaves []string
 }
 
 func (e *realGateEngine) Version() string      { return "fake" }
@@ -389,8 +453,9 @@ func (e *realGateEngine) RunGroupSynchronized(
 	return fn(e)
 }
 func (e *realGateEngine) ApplyExecutionReport(
-	_ context.Context, in domain.ExecutionReportInput,
+	_ context.Context, in domain.ExecutionReportInput, leavesQuantity string,
 ) (engine.ExecutionReportResult, error) {
+	e.executionReportLeaves = append(e.executionReportLeaves, leavesQuantity)
 	// Mirror the native settlement builder (executionReportPersistenceFrom): copy
 	// the report-owned fill fields and structured commission into persistence and
 	// the event payload; a fill also copies them onto the persisted trade.

@@ -26,9 +26,7 @@ describe("NumberStepper", () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
 
-    render(
-      <NumberStepper aria-label="Amount" value="" onChange={onChange} />,
-    );
+    render(<NumberStepper aria-label="Amount" value="" onChange={onChange} />);
 
     const input = screen.getByRole("textbox", { name: "Amount" });
     await user.type(input, "word");
@@ -44,9 +42,7 @@ describe("NumberStepper", () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
 
-    render(
-      <NumberStepper aria-label="Amount" value="" onChange={onChange} />,
-    );
+    render(<NumberStepper aria-label="Amount" value="" onChange={onChange} />);
 
     const input = screen.getByRole("textbox", { name: "Amount" });
     await user.type(input, "12.5");
@@ -77,8 +73,6 @@ describe("NumberStepper", () => {
     await user.type(input, "+0.50");
 
     expect(input).toHaveValue("0.50");
-    expect(onChange).not.toHaveBeenCalledWith(
-      expect.stringMatching(/^[+-]/),
-    );
+    expect(onChange).not.toHaveBeenCalledWith(expect.stringMatching(/^[+-]/));
   });
 });

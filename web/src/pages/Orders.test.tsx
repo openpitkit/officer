@@ -15,7 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
@@ -56,14 +62,12 @@ vi.mock("@/api/useMarketData", () => ({
   }),
 }));
 vi.mock("@/components/TableControls", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/components/TableControls")>(
-      "@/components/TableControls",
-    );
-  const dialogs =
-    await vi.importActual<typeof import("@/components/BusinessCsvDialogs")>(
-      "@/components/BusinessCsvDialogs",
-    );
+  const actual = await vi.importActual<
+    typeof import("@/components/TableControls")
+  >("@/components/TableControls");
+  const dialogs = await vi.importActual<
+    typeof import("@/components/BusinessCsvDialogs")
+  >("@/components/BusinessCsvDialogs");
   return {
     ...actual,
     CsvTransferMenu: ({
@@ -101,7 +105,9 @@ function readyEmpty<T>(data: T): PollingResult<T> {
   return { load: { state: "ready", data, error: null }, reload: vi.fn() };
 }
 
-function readyPage<T>(items: T[]): PollingResult<{ items: T[]; total: number }> {
+function readyPage<T>(
+  items: T[],
+): PollingResult<{ items: T[]; total: number }> {
   return readyEmpty({ items, total: items.length });
 }
 
@@ -352,7 +358,9 @@ describe("Orders account pre-fill", () => {
       }),
     ).toBeDisabled();
 
-    expect(screen.getByRole("dialog", { name: /more filters/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: /more filters/i }),
+    ).toBeInTheDocument();
     expect(amount).toBeInvalid();
     expect(amount).toHaveProperty("validationMessage", "Enter a valid number.");
     expect(lastOrderFilters()).not.toEqual(
@@ -373,7 +381,9 @@ describe("Orders account pre-fill", () => {
       ),
     );
     expect(screen.getByText(/active filters/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /clear all filters/i }));
+    await user.click(
+      screen.getByRole("button", { name: /clear all filters/i }),
+    );
     expect(screen.getByPlaceholderText(/filter by account/i)).toHaveValue("");
     expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
   });
@@ -461,7 +471,9 @@ describe("Orders status filter", () => {
 
     await user.click(screen.getByRole("button", { name: /^all$/i }));
 
-    await waitFor(() => expect(lastOrderFilters()).not.toHaveProperty("status"));
+    await waitFor(() =>
+      expect(lastOrderFilters()).not.toHaveProperty("status"),
+    );
   });
 
   it("opens the advanced status draft with every status selected for All orders", async () => {
@@ -578,14 +590,12 @@ describe("Orders side & amount-kind toggles", () => {
     const dialog = await openDialog(user);
 
     const sideGroup = within(dialog).getByRole("radiogroup", { name: "Side" });
-    expect(within(sideGroup).getByRole("radio", { name: "Buy" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    expect(within(sideGroup).getByRole("radio", { name: "Sell" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+    expect(
+      within(sideGroup).getByRole("radio", { name: "Buy" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(
+      within(sideGroup).getByRole("radio", { name: "Sell" }),
+    ).toHaveAttribute("aria-checked", "false");
   });
 
   it("does not pre-select an amount kind", async () => {
@@ -593,7 +603,9 @@ describe("Orders side & amount-kind toggles", () => {
     renderOrders("/orders");
     const dialog = await openDialog(user);
 
-    const kindGroup = within(dialog).getByRole("radiogroup", { name: "Amount kind" });
+    const kindGroup = within(dialog).getByRole("radiogroup", {
+      name: "Amount kind",
+    });
     for (const radio of within(kindGroup).getAllByRole("radio")) {
       expect(radio).toHaveAttribute("aria-checked", "false");
     }
@@ -607,16 +619,16 @@ describe("Orders side & amount-kind toggles", () => {
     expect(within(dialog).getByLabelText("Account")).toHaveValue("desk-alpha");
 
     const sideGroup = within(dialog).getByRole("radiogroup", { name: "Side" });
-    expect(within(sideGroup).getByRole("radio", { name: "Buy" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    expect(within(sideGroup).getByRole("radio", { name: "Sell" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+    expect(
+      within(sideGroup).getByRole("radio", { name: "Buy" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(
+      within(sideGroup).getByRole("radio", { name: "Sell" }),
+    ).toHaveAttribute("aria-checked", "false");
 
-    const kindGroup = within(dialog).getByRole("radiogroup", { name: "Amount kind" });
+    const kindGroup = within(dialog).getByRole("radiogroup", {
+      name: "Amount kind",
+    });
     for (const radio of within(kindGroup).getAllByRole("radio")) {
       expect(radio).toHaveAttribute("aria-checked", "false");
     }
@@ -655,7 +667,9 @@ describe("Orders submit mode", () => {
     renderOrders("/orders");
     const dialog = await openDialog(user);
 
-    const modeGroup = within(dialog).getByRole("radiogroup", { name: "Submit mode" });
+    const modeGroup = within(dialog).getByRole("radiogroup", {
+      name: "Submit mode",
+    });
     for (const radio of within(modeGroup).getAllByRole("radio")) {
       expect(radio).toHaveAttribute("aria-checked", "false");
     }
@@ -675,7 +689,9 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
 
-    const submitButton = within(dialog).getByRole("button", { name: /add order/i });
+    const submitButton = within(dialog).getByRole("button", {
+      name: /add order/i,
+    });
 
     // Text fields filled, but no required choices have been made yet.
     expect(submitButton).toBeDisabled();
@@ -685,12 +701,18 @@ describe("Orders submit mode", () => {
     // Side chosen, amount kind and mode still missing.
     expect(submitButton).toBeDisabled();
 
-    const kindGroup = within(dialog).getByRole("radiogroup", { name: "Amount kind" });
-    await user.click(within(kindGroup).getByRole("radio", { name: /quantity/i }));
+    const kindGroup = within(dialog).getByRole("radiogroup", {
+      name: "Amount kind",
+    });
+    await user.click(
+      within(kindGroup).getByRole("radio", { name: /quantity/i }),
+    );
     // Amount kind chosen, mode still missing.
     expect(submitButton).toBeDisabled();
 
-    const modeGroup = within(dialog).getByRole("radiogroup", { name: "Submit mode" });
+    const modeGroup = within(dialog).getByRole("radiogroup", {
+      name: "Submit mode",
+    });
     await user.click(
       within(modeGroup).getByRole("radio", { name: /submit and settle/i }),
     );
@@ -727,9 +749,7 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "1000");
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(
-      within(dialog).getByRole("radio", { name: /volume/i }),
-    );
+    await user.click(within(dialog).getByRole("radio", { name: /volume/i }));
     await user.click(
       within(dialog).getByRole("radio", { name: /submit and settle/i }),
     );
@@ -769,9 +789,7 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(
-      within(dialog).getByRole("radio", { name: /quantity/i }),
-    );
+    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
     await user.click(
       within(dialog).getByRole("radio", { name: /^drop copy/i }),
     );
@@ -791,7 +809,9 @@ describe("Orders submit mode", () => {
       "server generated when blank",
     );
     expect(
-      within(dialog).getByText(/use your own unique ID when you need a stable order handle/i),
+      within(dialog).getByText(
+        /use your own unique ID when you need a stable order handle/i,
+      ),
     ).toBeInTheDocument();
     const submit = within(dialog).getByRole("button", {
       name: /submit drop-copy/i,
@@ -801,7 +821,9 @@ describe("Orders submit mode", () => {
     );
     expect(price).toHaveAttribute("placeholder", "required");
     expect(
-      within(dialog).getByText(/market orders cannot be submitted as drop-copy/i),
+      within(dialog).getByText(
+        /market orders cannot be submitted as drop-copy/i,
+      ),
     ).toBeInTheDocument();
     expect(submit).toBeDisabled();
     await user.type(price, "0");
@@ -869,7 +891,9 @@ describe("Orders submit mode", () => {
     await user.click(
       within(dialog).getByRole("radio", { name: /submit and settle/i }),
     );
-    await user.click(within(dialog).getByRole("button", { name: /add order/i }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /add order/i }),
+    );
 
     const confirmation = await screen.findByRole("alertdialog", {
       name: "Account does not exist",
@@ -905,9 +929,7 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(
-      within(dialog).getByRole("radio", { name: /quantity/i }),
-    );
+    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
     await user.click(
       within(dialog).getByRole("radio", { name: /^drop copy/i }),
     );
@@ -938,9 +960,7 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100x");
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(
-      within(dialog).getByRole("radio", { name: /quantity/i }),
-    );
+    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
     await user.click(
       within(dialog).getByRole("radio", { name: /submit and settle/i }),
     );
@@ -974,18 +994,25 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Amount"), "100");
     expect(submit).toBeEnabled();
 
-    await user.type(within(dialog).getByLabelText("Limit price (optional)"), "0");
+    await user.type(
+      within(dialog).getByLabelText("Limit price (optional)"),
+      "0",
+    );
     expect(submit).toBeDisabled();
 
     await user.clear(within(dialog).getByLabelText("Limit price (optional)"));
-    await user.type(within(dialog).getByLabelText("Limit price (optional)"), "10");
+    await user.type(
+      within(dialog).getByLabelText("Limit price (optional)"),
+      "10",
+    );
     expect(submit).toBeEnabled();
     expect(createOrderMock).not.toHaveBeenCalled();
   });
 
   it("shows create-order enrichment warnings in the detail dialog", async () => {
     const user = userEvent.setup();
-    const warning = "Order was created, but detail enrichment failed: store down";
+    const warning =
+      "Order was created, but detail enrichment failed: store down";
     createOrderMock.mockResolvedValueOnce({ order: sampleOrder, warning });
     renderOrders("/orders");
     const dialog = await openDialog(user);
@@ -999,20 +1026,27 @@ describe("Orders submit mode", () => {
     await user.click(
       within(dialog).getByRole("radio", { name: /submit and settle/i }),
     );
-    await user.click(within(dialog).getByRole("button", { name: /add order/i }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /add order/i }),
+    );
 
     expect(await screen.findByText(warning)).toBeInTheDocument();
   });
 
   it("clears busy after aborting an in-flight submit", async () => {
     const user = userEvent.setup();
-    createOrderMock.mockImplementation((_body, _missingAccount, signal) => (
-      new Promise((_, reject) => {
-        signal?.addEventListener("abort", () => {
-          reject(new DOMException("aborted", "AbortError"));
-        }, { once: true });
-      })
-    ));
+    createOrderMock.mockImplementation(
+      (_body, _missingAccount, signal) =>
+        new Promise((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        }),
+    );
     renderOrders("/orders");
     let dialog = await openDialog(user);
 
@@ -1025,11 +1059,15 @@ describe("Orders submit mode", () => {
     await user.click(
       within(dialog).getByRole("radio", { name: /submit and settle/i }),
     );
-    await user.click(within(dialog).getByRole("button", { name: /add order/i }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /add order/i }),
+    );
     await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(1));
 
     await user.click(within(dialog).getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
 
     dialog = await openDialog(user);
     await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
@@ -1042,16 +1080,16 @@ describe("Orders submit mode", () => {
       within(dialog).getByRole("radio", { name: /submit and settle/i }),
     );
 
-    expect(within(dialog).getByRole("button", { name: /add order/i })).toBeEnabled();
+    expect(
+      within(dialog).getByRole("button", { name: /add order/i }),
+    ).toBeEnabled();
   });
 });
 
 describe("Orders workflow confirm/cancel shortcuts", () => {
   // Fill the add-order dialog with a valid workflow order and submit it. The page
   // retains the returned approval token and opens the detail view.
-  async function submitWorkflowOrder(
-    user: ReturnType<typeof userEvent.setup>,
-  ) {
+  async function submitWorkflowOrder(user: ReturnType<typeof userEvent.setup>) {
     const dialog = await openDialog(user);
     await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
@@ -1062,7 +1100,9 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     await user.click(
       within(dialog).getByRole("radio", { name: /submit and wait/i }),
     );
-    await user.click(within(dialog).getByRole("button", { name: /add order/i }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /add order/i }),
+    );
   }
 
   it("confirms a workflow order with its retained approval token", async () => {
@@ -1117,7 +1157,7 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     expect(within(detail).getByLabelText("Leaves quantity")).toHaveValue("");
   });
 
-  it("cancels a workflow order with caller-supplied leaves", async () => {
+  it("cancels with raw signed leaves without stepper nudging", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
 
@@ -1130,7 +1170,9 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
       within(detail).getByRole("button", { name: "Cancel order" }),
     );
     const leaves = within(detail).getByLabelText("Leaves quantity");
-    await user.type(leaves, "7.5");
+    await user.type(leaves, "+1.500");
+    await user.keyboard("{ArrowUp}{ArrowDown}");
+    expect(leaves).toHaveValue("+1.500");
     await user.click(
       within(detail).getByRole("button", { name: "Cancel order" }),
     );
@@ -1138,14 +1180,12 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     await waitFor(() =>
       expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
         token: "hold-token",
-        leavesQuantity: "7.5",
+        leavesQuantity: "+1.500",
       }),
     );
   });
 
-  // The engine settles the cancellation and has no reject channel, so the
-  // panel must not send a report without leaves.
-  it("blocks cancellation while leaves is empty or malformed", async () => {
+  it("cancels with no leaves instead of inventing a replacement", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
 
@@ -1157,16 +1197,17 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     await user.click(
       within(detail).getByRole("button", { name: "Cancel order" }),
     );
-    const leaves = within(detail).getByLabelText("Leaves quantity");
-
     const cancel = within(detail).getByRole("button", {
       name: "Cancel order",
     });
-    await waitFor(() => expect(cancel).toBeDisabled());
+    expect(cancel).toBeEnabled();
+    await user.click(cancel);
 
-    await user.type(leaves, "not-a-number");
-    await waitFor(() => expect(cancel).toBeDisabled());
-    expect(cancelOrderMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
+        token: "hold-token",
+      }),
+    );
   });
 
   it("does not retain shortcuts for a rejected workflow submit", async () => {
@@ -1179,13 +1220,15 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
         keyId: "key-1",
         id: rejectedOrder.id,
         verdict: "reject",
-        reasons: [{
-          code: "policy_reject",
-          scope: "account",
-          policy: "daily_loss",
-          reason: "Rejected by policy",
-          details: "",
-        }],
+        reasons: [
+          {
+            code: "policy_reject",
+            scope: "account",
+            policy: "daily_loss",
+            reason: "Rejected by policy",
+            details: "",
+          },
+        ],
       },
     });
     fetchOrderDetailMock.mockResolvedValue({
@@ -1232,10 +1275,9 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-1",
-        { status: "accepted" },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-1", {
+        status: "accepted",
+      }),
     );
     expect(await screen.findByText("Report ID")).toBeInTheDocument();
     expect(screen.getByText("report-alpha-1")).toBeInTheDocument();
@@ -1435,9 +1477,7 @@ describe("Orders drop-copy submission id", () => {
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(
-      within(dialog).getByRole("radio", { name: /quantity/i }),
-    );
+    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
     await user.click(
       within(dialog).getByRole("radio", { name: /^drop copy/i }),
     );
@@ -1496,7 +1536,9 @@ describe("Orders row filters", () => {
       "desk-alpha",
     );
 
-    await user.click(scope.getByRole("button", { name: /filter by aapl \/ usd/i }));
+    await user.click(
+      scope.getByRole("button", { name: /filter by aapl \/ usd/i }),
+    );
     expect(screen.getByPlaceholderText("Base")).toHaveValue("AAPL");
     expect(screen.getByPlaceholderText("Quote")).toHaveValue("USD");
   });
@@ -1524,15 +1566,26 @@ describe("Orders row filters", () => {
 
     await user.click(screen.getByRole("button", { name: /^trades$/i }));
     const link = screen.getByRole("link", { name: "ord-alpha-1" });
-    expect(link).toHaveAttribute("href", expect.stringContaining("order=ord-alpha-1"));
-    expect(link).toHaveAttribute("title", expect.stringContaining("Ctrl-click"));
+    expect(link).toHaveAttribute(
+      "href",
+      expect.stringContaining("order=ord-alpha-1"),
+    );
+    expect(link).toHaveAttribute(
+      "title",
+      expect.stringContaining("Ctrl-click"),
+    );
   });
 });
 
 describe("Order detail account block placement", () => {
   it("shows the account block reason beside the fill event that caused it", async () => {
     const user = userEvent.setup();
-    const order = { ...sampleOrder, id: "ord-alpha-3", status: "filled", price: "99" };
+    const order = {
+      ...sampleOrder,
+      id: "ord-alpha-3",
+      status: "filled",
+      price: "99",
+    };
     const events: OrderEvent[] = [
       {
         id: "evt-alpha-1",
@@ -1555,8 +1608,7 @@ describe("Order detail account block placement", () => {
         fillLockPrice: "99",
         rejectCode: "missing_required_field",
         rejectScope: "account",
-        rejectReason:
-          "failed to access required field 'remaining quantity'",
+        rejectReason: "failed to access required field 'remaining quantity'",
         rejectDetails: "failed to access field 'fill.leaves_quantity'",
         signed: false,
       },
@@ -1579,7 +1631,9 @@ describe("Order detail account block placement", () => {
     const fillEvent = blockReason.closest("li");
 
     expect(fillEvent).not.toBeNull();
-    expect(within(fillEvent as HTMLElement).getByText("fill")).toBeInTheDocument();
+    expect(
+      within(fillEvent as HTMLElement).getByText("fill"),
+    ).toBeInTheDocument();
 
     const orderFields = within(dialog).getByText("Account").closest(".grid");
     expect(orderFields).not.toBeNull();
@@ -1681,9 +1735,7 @@ describe("Order detail per-event verification", () => {
     await user.click(signedButton);
 
     // The per-event reproduction panel opens and requests the (order, event).
-    await waitFor(() =>
-      expect(fetchEventReproductionMock).toHaveBeenCalled(),
-    );
+    await waitFor(() => expect(fetchEventReproductionMock).toHaveBeenCalled());
     const [orderId, eventId] = fetchEventReproductionMock.mock.calls[0];
     expect(orderId).toBe("ord-signed-evt");
     expect(eventId).toBe("evt-signed");
@@ -1706,7 +1758,9 @@ describe("Orders business CSV export", () => {
     const user = userEvent.setup();
     renderOrders("/orders?account=desk-alpha&source=panel");
 
-    await user.click(screen.getByRole("button", { name: /export orders csv/i }));
+    await user.click(
+      screen.getByRole("button", { name: /export orders csv/i }),
+    );
     await user.click(screen.getByRole("button", { name: /^export$/i }));
 
     await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
@@ -1740,7 +1794,9 @@ describe("Orders business CSV export", () => {
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: /export orders csv/i }));
+    await user.click(
+      screen.getByRole("button", { name: /export orders csv/i }),
+    );
     await user.click(screen.getByRole("button", { name: /^export$/i }));
 
     await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
@@ -1763,7 +1819,9 @@ describe("Orders business CSV export", () => {
     renderOrders("/orders?account=desk-alpha&source=api");
 
     await user.click(screen.getByRole("button", { name: /^trades$/i }));
-    await user.click(screen.getByRole("button", { name: /export trades csv/i }));
+    await user.click(
+      screen.getByRole("button", { name: /export trades csv/i }),
+    );
     await user.click(screen.getByRole("button", { name: /^export$/i }));
 
     await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
@@ -1785,22 +1843,27 @@ describe("Orders business CSV export", () => {
     const user = userEvent.setup();
     const anchors: HTMLAnchorElement[] = [];
     const realCreateElement = document.createElement.bind(document);
-    const createElementSpy = vi.spyOn(document, "createElement").mockImplementation(
-      ((tagName: string, options?: ElementCreationOptions) => {
+    const createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation(((
+        tagName: string,
+        options?: ElementCreationOptions,
+      ) => {
         const element = realCreateElement(tagName, options);
         if (tagName === "a") {
           anchors.push(element as HTMLAnchorElement);
         }
         return element;
-      }) as typeof document.createElement,
-    );
+      }) as typeof document.createElement);
     exportBusinessCsvMock.mockResolvedValueOnce({
       blob: new Blob(["orders"]),
       filename: "orders-export.csv",
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByRole("button", { name: /export orders csv/i }));
+    await user.click(
+      screen.getByRole("button", { name: /export orders csv/i }),
+    );
     await user.click(screen.getByRole("button", { name: /^export$/i }));
 
     await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
@@ -1809,41 +1872,227 @@ describe("Orders business CSV export", () => {
   });
 });
 
-describe("Execution report status-driven fields", () => {
+describe("Execution report leaves contract", () => {
   function alphaFourOrder() {
     return {
       ...sampleOrder,
       id: "ord-alpha-4",
-      status: "filled",
+      status: "filled" as const,
       price: "12",
       leavesQuantity: "2",
       displayPrice: "12",
     };
   }
 
-  const alphaFourTrades: Trade[] = [
-    {
-      id: "trd-alpha-9",
-      order: "ord-alpha-4",
-      account: "desk-alpha",
-      at: "2026-06-24T11:08:00Z",
-      source: "panel",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      quantity: "2",
-      price: "12",
-      lockPrice: "12",
-    },
-  ];
+  async function openReport(user: ReturnType<typeof userEvent.setup>) {
+    const order = alphaFourOrder();
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events: [],
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
 
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByRole("button", { name: "Submit execution report" }),
+    );
+    await screen.findByLabelText("Target status");
+  }
+
+  async function selectStatus(
+    user: ReturnType<typeof userEvent.setup>,
+    label: string,
+  ) {
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    await user.click(screen.getByLabelText("Target status"));
+    await user.click(screen.getByRole("option", { name: label }));
+    focusSpy.mockRestore();
+  }
+
+  it.each([
+    ["Filled", "filled"],
+    ["Partially filled", "partially_filled"],
+  ] as const)(
+    "forwards valid decimal drafts verbatim for %s",
+    async (label, status) => {
+      const user = userEvent.setup();
+      await openReport(user);
+      await selectStatus(user, label);
+
+      const leaves = screen.getByLabelText("Leaves quantity");
+      expect(leaves).toHaveValue("");
+      expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Calculate leaves quantity" }),
+      ).toBeInTheDocument();
+
+      const quantity = screen.getByLabelText("Fill quantity");
+      await user.clear(quantity);
+      await user.type(quantity, "1.500");
+      expect(quantity).toHaveValue("1.500");
+
+      const price = screen.getByLabelText("Fill price");
+      await user.clear(price);
+      await user.type(price, "1.500");
+      expect(price).toHaveValue("1.500");
+
+      const lockPrice = screen.getByLabelText("Lock price (optional)");
+      await user.clear(lockPrice);
+      await user.type(lockPrice, "1.500");
+      expect(lockPrice).toHaveValue("1.500");
+
+      await user.type(leaves, "+1.500");
+      expect(leaves).toHaveValue("+1.500");
+      await user.click(screen.getByRole("button", { name: "Submit" }));
+
+      await waitFor(() =>
+        expect(submitExecutionReportMock).toHaveBeenLastCalledWith(
+          "ord-alpha-4",
+          {
+            status,
+            quantity: "1.500",
+            price: "1.500",
+            leavesQuantity: "+1.500",
+            lockPrice: "1.500",
+          },
+        ),
+      );
+    },
+  );
+
+  it("rejects surrounding spaces without rewriting execution-report fields", async () => {
+    const user = userEvent.setup();
+    await openReport(user);
+
+    await user.click(
+      screen.getByRole("button", { name: "Calculate leaves quantity" }),
+    );
+    const submit = screen.getByRole("button", { name: "Submit" });
+    const fields = [
+      [screen.getByLabelText("Fill quantity"), " 2", "2"],
+      [screen.getByLabelText("Fill price"), " 12", "12"],
+      [screen.getByLabelText("Lock price (optional)"), " 12", "12"],
+      [screen.getByLabelText("Leaves quantity"), " 0", "0"],
+    ] as const;
+
+    for (const [field, invalidValue, validValue] of fields) {
+      await user.clear(field);
+      await user.type(field, invalidValue);
+
+      expect(field).toHaveValue(invalidValue);
+      expect(submit).toBeDisabled();
+      expect(submitExecutionReportMock).not.toHaveBeenCalled();
+
+      await user.clear(field);
+      await user.type(field, validValue);
+      expect(field).toHaveValue(validValue);
+      expect(submit).toBeEnabled();
+    }
+  });
+
+  it("refuses a commission-only fill draft the API would reject", async () => {
+    const user = userEvent.setup();
+    await openReport(user);
+
+    await user.clear(screen.getByLabelText("Fill quantity"));
+    await user.clear(screen.getByLabelText("Fill price"));
+    await user.clear(screen.getByLabelText(/lock price/i));
+    await user.type(screen.getByLabelText("Leaves quantity"), "1");
+    await user.click(screen.getByRole("button", { name: "Fee" }));
+    await user.type(screen.getByLabelText("Commission amount"), "0.50");
+    await user.type(screen.getByLabelText("Commission currency"), "USD");
+
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
+    expect(submitExecutionReportMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses leaves the report contract would not record", async () => {
+    const user = userEvent.setup();
+    await openReport(user);
+    await selectStatus(user, "Accepted");
+
+    const leaves = screen.getByLabelText("Leaves quantity");
+    await user.type(leaves, "-1");
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
+
+    await user.clear(leaves);
+    await user.type(leaves, "1");
+    expect(screen.getByRole("button", { name: "Submit" })).toBeEnabled();
+  });
+
+  it("explains malformed leaves while Submit is disabled", async () => {
+    const user = userEvent.setup();
+    await openReport(user);
+    await selectStatus(user, "Accepted");
+
+    const leaves = screen.getByLabelText("Leaves quantity");
+    const submit = screen.getByRole("button", { name: "Submit" });
+    expect(submit).toBeEnabled();
+
+    await user.type(leaves, " 1 ");
+
+    expect(
+      screen.getByText(
+        "Leaves quantity must be a plain non-negative decimal without surrounding spaces.",
+      ),
+    ).toBeInTheDocument();
+    expect(submit).toBeDisabled();
+  });
+
+  it("keeps terminal no-fill leaves optional and sends no synthetic value", async () => {
+    const user = userEvent.setup();
+    await openReport(user);
+    await selectStatus(user, "Cancelled");
+
+    expect(screen.queryByLabelText("Fill quantity")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Fill price")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
+    expect(
+      screen.queryByText(
+        "Leaves quantity must be a plain non-negative decimal without surrounding spaces.",
+      ),
+    ).not.toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "Submit" });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "cancelled",
+      }),
+    );
+  });
+
+  it("records optional workflow leaves exactly as the operator entered them", async () => {
+    const user = userEvent.setup();
+    await openReport(user);
+    await selectStatus(user, "Accepted");
+
+    expect(screen.queryByLabelText("Fill quantity")).not.toBeInTheDocument();
+    const leaves = screen.getByLabelText("Leaves quantity");
+    await user.type(leaves, "1.23000");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "accepted",
+        leavesQuantity: "1.23000",
+      }),
+    );
+  });
   it("clones execution-report event commission and resulting status", async () => {
     const user = userEvent.setup();
     const order = alphaFourOrder();
     const events: OrderEvent[] = [
       {
         id: "evt-alpha-fill",
-        order: "ord-alpha-4",
+        order: order.id,
         at: "2026-06-24T11:08:00Z",
         type: "fill",
         source: "panel",
@@ -1867,10 +2116,10 @@ describe("Execution report status-driven fields", () => {
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(screen.getByText(order.id));
+    await screen.findByRole("dialog", { name: `Order ${order.id}` });
     await user.click(
-      screen.getByLabelText("Clone execution report from order ord-alpha-4"),
+      screen.getByLabelText(`Clone execution report from order ${order.id}`),
     );
 
     expect(await screen.findByLabelText("Fill quantity")).toHaveValue("1");
@@ -1885,17 +2134,14 @@ describe("Execution report status-driven fields", () => {
 
     await user.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        {
-          status: "partially_filled",
-          quantity: "1",
-          price: "12",
-          leavesQuantity: "1",
-          lockPrice: "12",
-          commission: { amount: "-0.50", currency: "USD" },
-        },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(order.id, {
+        status: "partially_filled",
+        quantity: "1",
+        price: "12",
+        leavesQuantity: "1",
+        lockPrice: "12",
+        commission: { amount: "-0.50", currency: "USD" },
+      }),
     );
   });
 
@@ -1905,7 +2151,7 @@ describe("Execution report status-driven fields", () => {
     const events: OrderEvent[] = [
       {
         id: "evt-alpha-filled",
-        order: "ord-alpha-4",
+        order: order.id,
         at: "2026-06-24T11:09:00Z",
         type: "fill",
         source: "panel",
@@ -1928,10 +2174,10 @@ describe("Execution report status-driven fields", () => {
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(screen.getByText(order.id));
+    await screen.findByRole("dialog", { name: `Order ${order.id}` });
     await user.click(
-      screen.getByLabelText("Clone execution report from order ord-alpha-4"),
+      screen.getByLabelText(`Clone execution report from order ${order.id}`),
     );
 
     expect(await screen.findByLabelText("Fill quantity")).toHaveValue("1");
@@ -1940,26 +2186,23 @@ describe("Execution report status-driven fields", () => {
 
     await user.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        {
-          status: "filled",
-          quantity: "1",
-          price: "12",
-          leavesQuantity: "0",
-          lockPrice: "12",
-        },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(order.id, {
+        status: "filled",
+        quantity: "1",
+        price: "12",
+        leavesQuantity: "0",
+        lockPrice: "12",
+      }),
     );
   });
 
-  it("clones a terminal report with its fill settlement fields", async () => {
+  it("clones a terminal report without fill fields it cannot carry", async () => {
     const user = userEvent.setup();
     const order = alphaFourOrder();
     const events: OrderEvent[] = [
       {
         id: "evt-alpha-cancel-fill",
-        order: "ord-alpha-4",
+        order: order.id,
         at: "2026-06-24T11:10:00Z",
         type: "fill",
         source: "panel",
@@ -1983,168 +2226,58 @@ describe("Execution report status-driven fields", () => {
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(screen.getByText(order.id));
+    await screen.findByRole("dialog", { name: `Order ${order.id}` });
     await user.click(
-      screen.getByLabelText("Clone execution report from order ord-alpha-4"),
+      screen.getByLabelText(`Clone execution report from order ${order.id}`),
     );
 
-    await screen.findByLabelText("Target status");
-    expect(screen.getByLabelText("Fill quantity")).toHaveValue("1.5");
-    expect(screen.getByLabelText("Fill price")).toHaveValue("12");
-    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("0.5");
+    expect(await screen.findByLabelText("Leaves quantity")).toHaveValue("0.5");
+    expect(screen.queryByLabelText("Fill quantity")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Fill price")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Commission amount")).toHaveValue("0.75");
     expect(screen.getByLabelText("Commission currency")).toHaveValue("USD");
 
     await user.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        {
-          status: "cancelled",
-          quantity: "1.5",
-          price: "12",
-          leavesQuantity: "0.5",
-          lockPrice: "12",
-          commission: { amount: "-0.75", currency: "USD" },
-        },
-      ),
-    );
-  });
-
-  it("requires leaves for a terminal status without fill fields", async () => {
-    const user = userEvent.setup();
-    const order = alphaFourOrder();
-
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
-    const focusSpy = vi
-      .spyOn(HTMLElement.prototype, "focus")
-      .mockImplementation(() => {});
-    await user.click(await screen.findByLabelText("Target status"));
-    for (const label of [
-      "Submitted",
-      "Accepted",
-      "Rejected",
-      "Committed",
-      "Rolled back",
-      "Filled",
-      "Partially filled",
-      "Cancelled",
-    ]) {
-      expect(screen.getByRole("option", { name: label })).toBeInTheDocument();
-    }
-    await user.click(screen.getByRole("option", { name: "Cancelled" }));
-    focusSpy.mockRestore();
-
-    // Terminal no-fill reports still settle through the engine.
-    expect(screen.queryByLabelText("Fill quantity")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Fill price")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/lock price/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
-    const submit = screen.getByRole("button", { name: "Submit" });
-    expect(submit).toBeDisabled();
-    expect(submitExecutionReportMock).not.toHaveBeenCalled();
-    await user.click(
-      screen.getByRole("button", { name: "Calculate leaves quantity" }),
-    );
-    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("2");
-    expect(submit).toBeEnabled();
-
-    await user.click(screen.getByRole("button", { name: "Fee" }));
-    await user.type(screen.getByLabelText("Commission amount"), "0.25");
-    await user.type(screen.getByLabelText("Commission currency"), "USD");
-
-    await user.click(
-      await screen.findByLabelText(
-        "Force: bypass the check that prevents reports on finalized orders",
-      ),
-    );
-    await user.click(submit);
-
-    await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        {
-          status: "cancelled",
-          leavesQuantity: "2",
-          commission: { amount: "0.25", currency: "USD" },
-          force: true,
-        },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(order.id, {
+        status: "cancelled",
+        leavesQuantity: "0.5",
+        commission: { amount: "-0.75", currency: "USD" },
+      }),
     );
   });
 
   it("calculates leaves quantity for a partial fill", async () => {
     const user = userEvent.setup();
-    const order = alphaFourOrder();
+    await openReport(user);
+    await selectStatus(user, "Partially filled");
 
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
-
-    await screen.findByLabelText("Target status");
-    expect(screen.getByLabelText("Fill quantity")).toHaveValue("2");
-    expect(screen.getByLabelText("Fill price")).toHaveValue("12");
-    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
-
-    const focusSpy = vi
-      .spyOn(HTMLElement.prototype, "focus")
-      .mockImplementation(() => {});
-    await user.click(screen.getByLabelText("Target status"));
-    await user.click(screen.getByRole("option", { name: "Partially filled" }));
-    focusSpy.mockRestore();
-
-    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
     await user.clear(screen.getByLabelText("Fill quantity"));
     await user.type(screen.getByLabelText("Fill quantity"), "0.5");
     await user.click(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
     );
+
     expect(screen.getByLabelText("Leaves quantity")).toHaveValue("1.5");
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        {
-          status: "partially_filled",
-          quantity: "0.5",
-          price: "12",
-          leavesQuantity: "1.5",
-          lockPrice: "12",
-        },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "partially_filled",
+        quantity: "0.5",
+        price: "12",
+        leavesQuantity: "1.5",
+        lockPrice: "12",
+      }),
     );
   });
 
-  it("calculates leaves from the order quantity before a leaves value is stored", async () => {
+  it("leaves fill quantity empty when the remaining quantity is unknown", async () => {
     const user = userEvent.setup();
     const order = {
       ...alphaFourOrder(),
+      amountKind: "volume" as const,
       amountValue: "3",
       leavesQuantity: "",
     };
@@ -2158,42 +2291,31 @@ describe("Execution report status-driven fields", () => {
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(screen.getByText(order.id));
+    await screen.findByRole("dialog", { name: `Order ${order.id}` });
     await user.click(
       screen.getByRole("button", { name: "Submit execution report" }),
     );
 
-    expect(screen.getByLabelText("Fill quantity")).toHaveValue("3");
+    expect(screen.getByLabelText("Fill quantity")).toHaveValue("");
     expect(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
-    ).toBeEnabled();
+    ).toBeDisabled();
   });
 
-  it("requires explicit leaves for the filled status and can calculate zero", async () => {
+  it("seeds fill quantity from remaining leaves and calculates zero", async () => {
     const user = userEvent.setup();
-    const order = alphaFourOrder();
+    await openReport(user);
 
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
-
-    await screen.findByLabelText("Target status");
-    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
     const submit = screen.getByRole("button", { name: "Submit" });
+    expect(screen.getByLabelText("Fill quantity")).toHaveValue("2");
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
     expect(submit).toBeDisabled();
-    expect(submitExecutionReportMock).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText(
+        "Leaves quantity must be a plain non-negative decimal without surrounding spaces.",
+      ),
+    ).not.toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
@@ -2203,166 +2325,85 @@ describe("Execution report status-driven fields", () => {
     await user.click(submit);
 
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        {
-          status: "filled",
-          quantity: "2",
-          price: "12",
-          leavesQuantity: "0",
-          lockPrice: "12",
-        },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "filled",
+        quantity: "2",
+        price: "12",
+        leavesQuantity: "0",
+        lockPrice: "12",
+      }),
     );
   });
 
   it("submits structured commission when all optional fields are set", async () => {
     const user = userEvent.setup();
-    const order = alphaFourOrder();
+    await openReport(user);
 
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
-
-    await screen.findByLabelText("Target status");
-    expect(screen.getAllByText("Commission").length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("button", { name: "Commission details" }));
-    expect(
-      await screen.findByText(
-        /Commission is entered in its own currency/,
-      ),
-    ).toBeInTheDocument();
-    await user.keyboard("{Escape}");
     await user.click(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
     );
-    expect(screen.queryByLabelText("Commission amount")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Fee" }));
-    await user.type(
-      screen.getByLabelText("Commission amount"),
-      "-0.50",
-    );
+    await user.type(screen.getByLabelText("Commission amount"), "-0.50");
     expect(screen.getByLabelText("Commission amount")).toHaveValue("0.50");
     await user.type(screen.getByLabelText("Commission currency"), " USD ");
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        {
-          status: "filled",
-          quantity: "2",
-          price: "12",
-          leavesQuantity: "0",
-          lockPrice: "12",
-          commission: { amount: "0.50", currency: "USD" },
-        },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "filled",
+        quantity: "2",
+        price: "12",
+        leavesQuantity: "0",
+        lockPrice: "12",
+        commission: { amount: "0.50", currency: "USD" },
+      }),
     );
   });
 
   it("disables submit while a structured commission is incomplete", async () => {
     const user = userEvent.setup();
-    const order = alphaFourOrder();
+    await openReport(user);
 
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
-
-    await screen.findByLabelText("Target status");
     await user.click(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
     );
     await user.click(screen.getByRole("button", { name: "Fee" }));
-    await user.type(
-      screen.getByLabelText("Commission amount"),
-      "0.50",
-    );
+    await user.type(screen.getByLabelText("Commission amount"), "0.50");
+
     expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
     expect(submitExecutionReportMock).not.toHaveBeenCalled();
   });
 
   it("disables submit while a visible numeric draft is invalid", async () => {
     const user = userEvent.setup();
-    const order = alphaFourOrder();
+    await openReport(user);
 
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
     await user.click(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
     );
-
     const submit = screen.getByRole("button", { name: "Submit" });
     expect(submit).toBeEnabled();
+
     const quantity = screen.getByLabelText("Fill quantity");
     await user.type(quantity, "x");
 
     expect(quantity).toHaveValue("2x");
-    expect(quantity).toBeInvalid();
     expect(submit).toBeDisabled();
     expect(submitExecutionReportMock).not.toHaveBeenCalled();
   });
 
   it("requires positive fill economics while allowing zero leaves and commission", async () => {
     const user = userEvent.setup();
-    const order = alphaFourOrder();
+    await openReport(user);
 
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
     await user.click(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
     );
-
     const submit = screen.getByRole("button", { name: "Submit" });
     const quantity = screen.getByLabelText("Fill quantity");
     const price = screen.getByLabelText("Fill price");
     const lockPrice = screen.getByLabelText("Lock price (optional)");
+
     expect(screen.getByLabelText("Leaves quantity")).toHaveValue("0");
     expect(submit).toBeEnabled();
 
@@ -2390,23 +2431,16 @@ describe("Execution report status-driven fields", () => {
     await user.type(screen.getByLabelText("Commission amount"), "0");
     await user.type(screen.getByLabelText("Commission currency"), "USD");
     expect(submit).toBeEnabled();
-    expect(submitExecutionReportMock).not.toHaveBeenCalled();
   });
 
   it("reflects the server's post-report state, not the requested one", async () => {
     const user = userEvent.setup();
     const order = { ...alphaFourOrder(), status: "partially_filled" as const };
-    // The engine's resulting state, published once the page refetches. It
-    // differs from the requested "filled" status, so the table must show THIS
-    // value rather than optimistically echoing the request.
     const serverResolved = {
       ...order,
       status: "committed" as const,
       leavesQuantity: "1",
     };
-
-    // reload() swaps the polled data to the engine's resolved row, mimicking a
-    // real refetch; the page re-renders and picks up the new server state.
     const swapToResolved = vi.fn(() => {
       useOrdersMock.mockReturnValue(readyPage<Order>([serverResolved]));
     });
@@ -2428,25 +2462,23 @@ describe("Execution report status-driven fields", () => {
     });
     renderOrders("/orders");
 
-    const row = screen.getByText("ord-alpha-4").closest("tr");
+    const row = screen.getByText(order.id).closest("tr");
     expect(row).not.toBeNull();
     expect(
       within(row as HTMLElement).getByText("partially_filled"),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(screen.getByText(order.id));
+    await screen.findByRole("dialog", { name: `Order ${order.id}` });
     await user.click(
       screen.getByRole("button", { name: "Submit execution report" }),
     );
-    await screen.findByLabelText("Target status");
     await user.click(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
     );
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => expect(swapToResolved).toHaveBeenCalled());
-    // The row shows the engine's resolved status, never the requested "filled".
     await waitFor(() =>
       expect(
         within(row as HTMLElement).getByText("committed"),
@@ -2457,184 +2489,139 @@ describe("Execution report status-driven fields", () => {
     ).not.toBeInTheDocument();
     await waitFor(() => expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2));
     await user.click(screen.getByRole("button", { name: "Done" }));
-    const detailDialog = screen.getByRole("dialog", {
-      name: "Order ord-alpha-4",
-    });
-    expect(within(detailDialog).getByText("committed")).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("dialog", { name: `Order ${order.id}` }),
+      ).getByText("committed"),
+    ).toBeInTheDocument();
   });
 
-  it("submits a non-terminal workflow status without leaves", async () => {
+  it("preserves commission and leaves draft after switching to a workflow status", async () => {
     const user = userEvent.setup();
-    const order = alphaFourOrder();
-
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
-    const focusSpy = vi
-      .spyOn(HTMLElement.prototype, "focus")
-      .mockImplementation(() => {});
-    await user.click(await screen.findByLabelText("Target status"));
-    await user.click(screen.getByRole("option", { name: "Accepted" }));
-    focusSpy.mockRestore();
-
-    // Non-fill workflow statuses do not carry engine settlement fields.
-    expect(screen.queryByLabelText("Fill quantity")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Leaves quantity")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Submit" }));
-
-    await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        { status: "accepted" },
-      ),
-    );
-  });
-
-  it("preserves commission and requires leaves after switching to a workflow status", async () => {
-    const user = userEvent.setup();
-    const order = alphaFourOrder();
-
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
+    await openReport(user);
 
     await user.click(screen.getByRole("button", { name: "Fee" }));
     await user.type(screen.getByLabelText("Commission amount"), "0.50");
     await user.type(screen.getByLabelText("Commission currency"), "USD");
-
-    const focusSpy = vi
-      .spyOn(HTMLElement.prototype, "focus")
-      .mockImplementation(() => {});
-    await user.click(await screen.findByLabelText("Target status"));
-    await user.click(screen.getByRole("option", { name: "Accepted" }));
-    focusSpy.mockRestore();
+    await selectStatus(user, "Accepted");
 
     expect(screen.queryByLabelText("Fill quantity")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Fill price")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Commission amount")).toHaveValue("0.50");
     expect(screen.getByLabelText("Commission currency")).toHaveValue("USD");
     expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
-    const submit = screen.getByRole("button", { name: "Submit" });
-    expect(submit).toBeDisabled();
-    await user.click(
+    expect(
       screen.getByRole("button", { name: "Calculate leaves quantity" }),
-    );
-    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("2");
-    expect(submit).toBeEnabled();
-    await user.click(submit);
+    ).toBeEnabled();
 
+    await user.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        {
-          status: "accepted",
-          leavesQuantity: "2",
-          commission: { amount: "0.50", currency: "USD" },
-        },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "accepted",
+        commission: { amount: "0.50", currency: "USD" },
+      }),
     );
   });
 
   it("drops cloned fill fields when switching to a workflow status", async () => {
     const user = userEvent.setup();
     const order = alphaFourOrder();
+    const trades: Trade[] = [
+      {
+        id: "trd-alpha-9",
+        order: order.id,
+        account: order.account,
+        at: "2026-06-24T11:08:00Z",
+        source: "panel",
+        baseAsset: order.baseAsset,
+        quoteAsset: order.quoteAsset,
+        side: order.side,
+        quantity: "2",
+        price: "12",
+        lockPrice: "12",
+      },
+    ];
 
     useOrdersMock.mockReturnValue(readyPage<Order>([order]));
     fetchOrderDetailMock.mockResolvedValueOnce({
       order,
       events: [],
-      trades: alphaFourTrades,
+      trades,
       approval: null,
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(screen.getByText(order.id));
+    await screen.findByRole("dialog", { name: `Order ${order.id}` });
     await user.click(
       screen.getByLabelText("Clone execution report for trade trd-alpha-9"),
     );
-    const focusSpy = vi
-      .spyOn(HTMLElement.prototype, "focus")
-      .mockImplementation(() => {});
-    await user.click(await screen.findByLabelText("Target status"));
-    await user.click(screen.getByRole("option", { name: "Accepted" }));
-    focusSpy.mockRestore();
+    await selectStatus(user, "Accepted");
 
     expect(screen.queryByLabelText("Fill quantity")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Fill price")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Leaves quantity")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        "ord-alpha-4",
-        { status: "accepted" },
-      ),
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(order.id, {
+        status: "accepted",
+      }),
     );
   });
 
-  it("seeds the order leaves when cloning from a trade row so calculate works", async () => {
+  it("keeps a trade row's fill quantity while seeding its leaves calculation", async () => {
     const user = userEvent.setup();
     const order = alphaFourOrder();
+    const trades: Trade[] = [
+      {
+        id: "trd-alpha-9",
+        order: order.id,
+        account: order.account,
+        at: "2026-06-24T11:08:00Z",
+        source: "panel",
+        baseAsset: order.baseAsset,
+        quoteAsset: order.quoteAsset,
+        side: order.side,
+        quantity: "1",
+        price: "12",
+        lockPrice: "12",
+      },
+    ];
 
     useOrdersMock.mockReturnValue(readyPage<Order>([order]));
     fetchOrderDetailMock.mockResolvedValueOnce({
       order,
       events: [],
-      trades: alphaFourTrades,
+      trades,
       approval: null,
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(screen.getByText(order.id));
+    await screen.findByRole("dialog", { name: `Order ${order.id}` });
     await user.click(
       screen.getByLabelText("Clone execution report for trade trd-alpha-9"),
     );
 
-    await screen.findByLabelText("Target status");
-    // Fill fields carry the trade; leaves opens empty for the operator.
-    expect(screen.getByLabelText("Fill quantity")).toHaveValue("2");
+    expect(await screen.findByLabelText("Fill quantity")).toHaveValue("1");
     expect(screen.getByLabelText("Fill price")).toHaveValue("12");
     expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
 
-    // The order's remaining leaves (2) seeds the calculator: 2 - 2 = 0.
     const calculate = screen.getByRole("button", {
       name: "Calculate leaves quantity",
     });
     expect(calculate).toBeEnabled();
     await user.click(calculate);
-    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("0");
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("1");
 
     await user.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(order.id, {
         status: "filled",
-        quantity: "2",
+        quantity: "1",
         price: "12",
-        leavesQuantity: "0",
+        leavesQuantity: "1",
         lockPrice: "12",
       }),
     );
@@ -2642,29 +2629,10 @@ describe("Execution report status-driven fields", () => {
 
   it("keeps the parent dialog's modality lock when a nested info dialog closes", async () => {
     const user = userEvent.setup();
-    const order = alphaFourOrder();
+    await openReport(user);
 
-    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
-    fetchOrderDetailMock.mockResolvedValueOnce({
-      order,
-      events: [],
-      trades: [],
-      approval: null,
-    });
-    renderOrders("/orders");
-
-    await user.click(screen.getByText("ord-alpha-4"));
-    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
-    await user.click(
-      screen.getByRole("button", { name: "Submit execution report" }),
-    );
-    await screen.findByLabelText("Target status");
-
-    // Radix locks background pointer events while the modal chain is open.
     expect(document.body.style.pointerEvents).toBe("none");
 
-    // Open a nested info dialog inside the exec-report dialog, then close only
-    // that inner dialog.
     await user.click(
       screen.getByRole("button", { name: "Commission details" }),
     );
@@ -2672,12 +2640,8 @@ describe("Execution report status-driven fields", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(info).not.toBeInTheDocument());
 
-    // The still-open parent dialog must keep the modality lock so it keeps
-    // receiving clicks; the inner close must not clear it.
     expect(screen.getByLabelText("Target status")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(document.body.style.pointerEvents).toBe("none"),
-    );
+    await waitFor(() => expect(document.body.style.pointerEvents).toBe("none"));
   });
 });
 
@@ -2696,16 +2660,16 @@ describe("Orders filter, debounce, sort and pagination", () => {
     const accountInput = screen.getByPlaceholderText(/filter by account/i);
     fireEvent.change(accountInput, { target: { value: "desk-zeta" } });
 
-    expect(
-      orderFilterWasRequested((f) => f.account === "desk-zeta"),
-    ).toBe(false);
+    expect(orderFilterWasRequested((f) => f.account === "desk-zeta")).toBe(
+      false,
+    );
 
     act(() => {
       vi.advanceTimersByTime(299);
     });
-    expect(
-      orderFilterWasRequested((f) => f.account === "desk-zeta"),
-    ).toBe(false);
+    expect(orderFilterWasRequested((f) => f.account === "desk-zeta")).toBe(
+      false,
+    );
 
     await act(async () => {
       vi.advanceTimersByTime(1);
@@ -2714,17 +2678,17 @@ describe("Orders filter, debounce, sort and pagination", () => {
     expect(
       screen.getByRole("option", { name: "desk-zeta" }),
     ).toBeInTheDocument();
-    expect(
-      orderFilterWasRequested((f) => f.account === "desk-zeta"),
-    ).toBe(false);
+    expect(orderFilterWasRequested((f) => f.account === "desk-zeta")).toBe(
+      false,
+    );
 
     act(() => {
       fireEvent.keyDown(accountInput, { key: "Enter" });
       vi.runOnlyPendingTimers();
     });
-    expect(
-      orderFilterWasRequested((f) => f.account === "desk-zeta"),
-    ).toBe(true);
+    expect(orderFilterWasRequested((f) => f.account === "desk-zeta")).toBe(
+      true,
+    );
   });
 
   it("applies an order account suggestion when it is selected", async () => {
@@ -2799,7 +2763,9 @@ describe("Orders filter, debounce, sort and pagination", () => {
 
   it("resets to the first page when a filter changes", async () => {
     const user = userEvent.setup();
-    useOrdersMock.mockReturnValue(readyPageWithTotal<Order>([sampleOrder], 120));
+    useOrdersMock.mockReturnValue(
+      readyPageWithTotal<Order>([sampleOrder], 120),
+    );
     renderOrders("/orders");
 
     // Page size is 50, total 120 → advance to the second page first.
@@ -2816,7 +2782,9 @@ describe("Orders filter, debounce, sort and pagination", () => {
   });
 
   it("keeps the active sort across a filter change", async () => {
-    useOrdersMock.mockReturnValue(readyPageWithTotal<Order>([sampleOrder], 120));
+    useOrdersMock.mockReturnValue(
+      readyPageWithTotal<Order>([sampleOrder], 120),
+    );
     renderOrders("/orders");
 
     // Default sort is at/desc; it must survive a filter edit.
@@ -2836,10 +2804,7 @@ describe("Orders filter, debounce, sort and pagination", () => {
     const user = userEvent.setup();
     renderOrders("/orders");
 
-    await user.type(
-      screen.getByPlaceholderText(/^exact id$/i),
-      "ord-alpha-1",
-    );
+    await user.type(screen.getByPlaceholderText(/^exact id$/i), "ord-alpha-1");
     await user.click(screen.getByRole("button", { name: /^open$/i }));
 
     expect(
@@ -2869,7 +2834,9 @@ describe("Orders filter, debounce, sort and pagination", () => {
 
   it("reads the server total to drive pagination", async () => {
     const user = userEvent.setup();
-    useOrdersMock.mockReturnValue(readyPageWithTotal<Order>([sampleOrder], 120));
+    useOrdersMock.mockReturnValue(
+      readyPageWithTotal<Order>([sampleOrder], 120),
+    );
     renderOrders("/orders");
 
     // 120 rows at a page size of 50 → three known pages.

@@ -99,9 +99,8 @@ func TestLocalNode_SubmitOrderRejectedRecordsZeroLeaves(t *testing.T) {
 	}, testCaller); err != nil {
 		t.Fatalf("forced terminal report after reject: %v", err)
 	}
-	if len(eng.execReportCalls) != 1 ||
-		eng.execReportCalls[0].ReleaseQuantity != "0" {
-		t.Fatalf("engine terminal context = %+v, want recorded zero", eng.execReportCalls)
+	if len(eng.execReportLeaves) != 1 || eng.execReportLeaves[0] != "0" {
+		t.Fatalf("engine terminal leaves = %+v, want recorded zero", eng.execReportLeaves)
 	}
 }
 
@@ -362,13 +361,13 @@ func TestLocalNode_CancelVolumeOrderUsesPreReportLeaves(t *testing.T) {
 	if len(eng.execReportCalls) != 1 {
 		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 	}
-	if got := eng.execReportCalls[0].ReleaseQuantity; got != "5" {
-		t.Fatalf("cancellation release quantity = %q, want stored leaves 5", got)
+	if got := eng.execReportLeaves[0]; got != "5" {
+		t.Fatalf("cancellation selected leaves = %q, want stored leaves 5", got)
 	}
 }
 
 // An engine block does not make Officer derive, withhold, or annotate a
-// different pre-report cancellation release quantity.
+// different pre-report cancellation leaves value.
 func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -387,8 +386,8 @@ func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
 	if len(eng.execReportCalls) != 1 {
 		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 	}
-	if got := eng.execReportCalls[0].ReleaseQuantity; got != "2" {
-		t.Fatalf("cancellation release = %q, want stored leaves 2", got)
+	if got := eng.execReportLeaves[0]; got != "2" {
+		t.Fatalf("cancellation selected leaves = %q, want stored leaves 2", got)
 	}
 	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
 		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
@@ -397,7 +396,8 @@ func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
 		t.Fatalf("ListAuditFiltered(execution report): %v", err)
 	}
 	if len(rows) != 1 ||
-		!strings.Contains(rows[0].Detail, "releaseQty=2") ||
+		!strings.Contains(rows[0].Detail, "leavesQty=0") ||
+		!strings.Contains(rows[0].Detail, "sdkLeavesQty=2") ||
 		strings.Contains(rows[0].Detail, "releaseApplied=") {
 		t.Fatalf(
 			"blocked cancellation audit = %+v, want no local release marker",
@@ -498,10 +498,11 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered(execution report): %v", err)
 	}
-	// The immediate report settles its own fill, so the audited release is the
-	// zero the engine recorded, not an empty field.
+	// The immediate report settles its own fill, so the audited leaves are the
+	// zero in the adapter-built report request.
 	if len(audit) != 1 || audit[0].Account != "acc-1" ||
-		!strings.Contains(audit[0].Detail, "qty=2 releaseQty=0 filled") {
+		!strings.Contains(audit[0].Detail, "qty=2 leavesQty=0 filled") ||
+		!strings.Contains(audit[0].Detail, "sdkLeavesQty=0") {
 		t.Fatalf("immediate execution-report audit = %+v", audit)
 	}
 }

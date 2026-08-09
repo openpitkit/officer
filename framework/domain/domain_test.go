@@ -35,9 +35,8 @@ func TestExecutionReportRequestFromInputOmitsInternalSettlementContext(t *testin
 	t.Parallel()
 
 	request := domain.ExecutionReportRequestFromInput(domain.ExecutionReportInput{
-		LockPrice:       "100.25",
-		Lock:            []byte{0x00, 0x7f, 0xff},
-		ReleaseQuantity: "2",
+		LockPrice: "100.25",
+		Lock:      []byte{0x00, 0x7f, 0xff},
 	})
 	encoded, err := json.Marshal(request)
 	if err != nil {
@@ -45,9 +44,6 @@ func TestExecutionReportRequestFromInputOmitsInternalSettlementContext(t *testin
 	}
 	if bytes.Contains(encoded, []byte(`"lock":`)) {
 		t.Fatalf("execution-report audit snapshot exposed opaque lock: %s", encoded)
-	}
-	if bytes.Contains(encoded, []byte(`releaseQuantity`)) {
-		t.Fatalf("execution-report audit snapshot exposed settlement context: %s", encoded)
 	}
 	if !bytes.Contains(encoded, []byte(`"lockPrice":"100.25"`)) {
 		t.Fatalf("execution-report audit snapshot lost display price: %s", encoded)
@@ -158,7 +154,6 @@ func TestValidatePnlHaltReason(t *testing.T) {
 		{"missing initial pnl", domain.PnlHaltReasonMissingInitialPnl},
 		{"missing cost basis", domain.PnlHaltReasonMissingCostBasis},
 		{"arithmetic overflow", domain.PnlHaltReasonArithmeticOverflow},
-		{"stale denomination", domain.PnlHaltReasonStaleDenomination},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
@@ -733,17 +728,6 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			requiresEngine: true,
 		},
 		{
-			name: "fee-only fill status routes through engine",
-			in: domain.ExecutionReportInput{
-				Commission: &domain.Commission{
-					Amount:   "1",
-					Currency: "USD",
-				},
-				OrderStatus: domain.OrderStatusPartiallyFilled,
-			},
-			requiresEngine: true,
-		},
-		{
 			name: "workflow commission does not require leaves",
 			in: domain.ExecutionReportInput{
 				Commission: &domain.Commission{
@@ -755,21 +739,10 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			requiresEngine: true,
 		},
 		{
-			name: "fee-only filled status routes through engine",
-			in: domain.ExecutionReportInput{
-				Commission: &domain.Commission{
-					Amount:   "-1",
-					Currency: "USD",
-				},
-				OrderStatus: domain.OrderStatusFilled,
-			},
-			requiresEngine: true,
-		},
-		{
 			name: "terminal without fill",
 			in: domain.ExecutionReportInput{
 				LeavesQuantity: "2",
-				LockPrice:      "100",
+				LockPrice:      "-100",
 				OrderStatus:    domain.OrderStatusCancelled,
 			},
 			requiresEngine: true,
@@ -888,6 +861,20 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			},
 		},
 		{
+			name: "commission-only partially filled status",
+			in: domain.ExecutionReportInput{
+				Commission:  &domain.Commission{Amount: "1", Currency: "USD"},
+				OrderStatus: domain.OrderStatusPartiallyFilled,
+			},
+		},
+		{
+			name: "commission-only filled status",
+			in: domain.ExecutionReportInput{
+				Commission:  &domain.Commission{Amount: "1", Currency: "USD"},
+				OrderStatus: domain.OrderStatusFilled,
+			},
+		},
+		{
 			name: "workflow with fill",
 			in: domain.ExecutionReportInput{
 				FillQuantity:   "1",
@@ -937,28 +924,6 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 				FillPrice:      "100",
 				LeavesQuantity: "0",
 				OrderStatus:    domain.OrderStatusRolledBack,
-			},
-		},
-		{
-			name: "fee-only fill status with leaves",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "1",
-				Commission: &domain.Commission{
-					Amount:   "1",
-					Currency: "USD",
-				},
-				OrderStatus: domain.OrderStatusPartiallyFilled,
-			},
-		},
-		{
-			name: "fee-only terminal fill status with leaves",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "1",
-				Commission: &domain.Commission{
-					Amount:   "1",
-					Currency: "USD",
-				},
-				OrderStatus: domain.OrderStatusFilled,
 			},
 		},
 		{
@@ -1025,6 +990,20 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 				OrderStatus:    domain.OrderStatusCommitted,
 			},
 		},
+		{
+			name: "terminal with padded lock price",
+			in: domain.ExecutionReportInput{
+				LockPrice:   " 100 ",
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+		},
+		{
+			name: "terminal with exponent lock price",
+			in: domain.ExecutionReportInput{
+				LockPrice:   "1e3",
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+		},
 	}
 	for _, tc := range invalid {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1042,6 +1021,119 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 	if !errors.Is(err, domain.ErrInvalid) ||
 		!strings.Contains(err.Error(), "commission amount and currency") {
 		t.Fatalf("one-sided commission error = %v, want commission error", err)
+	}
+}
+
+// TestExecutionReportValidationPointer pins that a refusal naming one request
+// member carries that member on the error itself, so a surface renders the
+// pointer instead of matching the message text.
+func TestExecutionReportValidationPointer(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		in         domain.ExecutionReportInput
+		want       string
+		constraint string
+	}{
+		{
+			name:       "missing status",
+			in:         domain.ExecutionReportInput{},
+			want:       "/status",
+			constraint: "required",
+		},
+		{
+			name:       "unsupported status",
+			in:         domain.ExecutionReportInput{OrderStatus: "nope"},
+			want:       "/status",
+			constraint: "format",
+		},
+		{
+			name: "one-sided commission",
+			in: domain.ExecutionReportInput{
+				Commission:  &domain.Commission{Amount: "-1"},
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+			want:       "/commission",
+			constraint: "paired_fields",
+		},
+		{
+			name: "empty commission pair",
+			in: domain.ExecutionReportInput{
+				Commission:  &domain.Commission{},
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+			want:       "/commission",
+			constraint: "required",
+		},
+		{
+			name: "fill without leaves",
+			in: domain.ExecutionReportInput{
+				FillQuantity: "1",
+				FillPrice:    "100",
+				OrderStatus:  domain.OrderStatusFilled,
+			},
+			want:       "/leavesQuantity",
+			constraint: "required",
+		},
+		{
+			name: "malformed leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "not-a-number",
+				OrderStatus:    domain.OrderStatusCancelled,
+			},
+			want:       "/leavesQuantity",
+			constraint: "format",
+		},
+		{
+			name: "malformed lock price",
+			in: domain.ExecutionReportInput{
+				LockPrice:   "1e3",
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+			want:       "/lockPrice",
+			constraint: "format",
+		},
+		{
+			name: "report-wide refusal names no member",
+			in: domain.ExecutionReportInput{
+				FillQuantity: "1",
+				OrderStatus:  domain.OrderStatusFilled,
+			},
+			want:       "",
+			constraint: "execution_report",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := domain.ExecutionReportRequiresEngine(tc.in)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("error = %v, want ErrInvalid", err)
+			}
+			if got := domain.ExecutionReportValidationPointer(err); got != tc.want {
+				t.Fatalf("pointer = %q, want %q (error %v)", got, tc.want, err)
+			}
+			if got := domain.ExecutionReportValidationConstraint(err); got != tc.constraint {
+				t.Fatalf("constraint = %q, want %q (error %v)", got, tc.constraint, err)
+			}
+		})
+	}
+}
+
+// TestExecutionReportValidationPointerIgnoresOtherErrors pins that the accessor
+// answers for execution-report refusals only.
+func TestExecutionReportValidationPointerIgnoresOtherErrors(t *testing.T) {
+	t.Parallel()
+	if got := domain.ExecutionReportValidationPointer(domain.ErrInvalid); got != "" {
+		t.Fatalf("pointer = %q, want empty for a plain error", got)
+	}
+	if got := domain.ExecutionReportValidationPointer(nil); got != "" {
+		t.Fatalf("pointer = %q, want empty for no error", got)
+	}
+	if got := domain.ExecutionReportValidationConstraint(domain.ErrInvalid); got != "" {
+		t.Fatalf("constraint = %q, want empty for a plain error", got)
+	}
+	if got := domain.ExecutionReportValidationConstraint(nil); got != "" {
+		t.Fatalf("constraint = %q, want empty for no error", got)
 	}
 }
 

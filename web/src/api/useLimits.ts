@@ -22,9 +22,7 @@ import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
 
 /** Poll the unified, paged GET /api/v1/limits policy list. */
-export function useLimits(
-  filters?: PolicyListFilters,
-): PollingResult<Limit[]> {
+export function useLimits(filters?: PolicyListFilters): PollingResult<Limit[]> {
   const api = useOfficerApi();
   const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
   const fetcher = useCallback(

@@ -28,7 +28,9 @@ export function ClosedReferenceAuthProvider({
   children: ReactNode;
 }) {
   return (
-    <AuthProvider hasPermission={(permission) => permission !== hiddenPermission}>
+    <AuthProvider
+      hasPermission={(permission) => permission !== hiddenPermission}
+    >
       {children}
     </AuthProvider>
   );

@@ -20,6 +20,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -71,7 +72,9 @@ func (s *Service) CreateAsset(
 }
 
 // UpdateAsset validates the old and new asset metadata and updates the asset,
-// renaming its public code when it differs.
+// renaming its public code when it differs. A rename rebuilds the live engine
+// from the renamed store snapshot and can report ErrEngineRestarting while
+// another rebuild is in progress.
 func (s *Service) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset,
 ) (domain.Asset, error) {
@@ -91,7 +94,29 @@ func (s *Service) UpdateAsset(
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	return n.UpdateAsset(ctx, oldCode, asset, auth.CallerFromContext(ctx))
+	updated, err := n.UpdateAsset(ctx, oldCode, asset, auth.CallerFromContext(ctx))
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	if updated.Code == oldCode {
+		return updated, nil
+	}
+
+	var restartErr error
+	s.marketDataMu.Lock()
+	if s.md != nil {
+		restartErr = s.md.Restart()
+	}
+	s.marketDataMu.Unlock()
+	if restartErr != nil {
+		slog.Warn(
+			"market-data restart after asset rename failed",
+			"from", oldCode,
+			"to", updated.Code,
+			"error", restartErr,
+		)
+	}
+	return updated, nil
 }
 
 // --- Asset classes ---------------------------------------------------------

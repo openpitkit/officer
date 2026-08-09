@@ -43,7 +43,10 @@ const SPOT_FUNDS_PNL_POLICY = "spot_funds_pnl_bounds_kill_switch";
  * string keeps these client-side mirrors language-agnostic - the rules and
  * thresholds stay here, the wording lives in the catalog.
  */
-export type FieldError = { key: string; values?: Record<string, string | number> };
+export type FieldError = {
+  key: string;
+  values?: Record<string, string | number>;
+};
 
 /** Validate an account id: non-empty, <= 64 chars, printable, no
  *  leading/trailing whitespace. Returns a {@link FieldError} or null. */
@@ -189,7 +192,7 @@ export function parseGoDurationSeconds(value: string): number | null {
   const unit: Record<string, number> = {
     ns: 1e-9,
     us: 1e-6,
-    "µs": 1e-6,
+    µs: 1e-6,
     ms: 1e-3,
     s: 1,
     m: 60,

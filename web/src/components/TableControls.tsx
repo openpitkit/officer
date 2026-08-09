@@ -27,10 +27,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type {
-  BusinessCsvEntity,
-  BusinessCsvExportFilters,
-} from "@/api/types";
+import type { BusinessCsvEntity, BusinessCsvExportFilters } from "@/api/types";
 import { BusinessCsvExportDialog } from "@/components/BusinessCsvDialogs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -237,11 +234,7 @@ export function PageSizeSelect({
       </SelectTrigger>
       <SelectContent>
         {pageSizes.map((n) => (
-          <SelectItem
-            key={n}
-            value={String(n)}
-            aria-label={rowCountLabel(n)}
-          >
+          <SelectItem key={n} value={String(n)} aria-label={rowCountLabel(n)}>
             {n}
           </SelectItem>
         ))}

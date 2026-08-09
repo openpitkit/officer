@@ -30,9 +30,7 @@ import {
   RegistryRowActions,
 } from "@openpit/officer-web";
 
-import {
-  ClosedReferenceAuthProvider,
-} from "./components";
+import { ClosedReferenceAuthProvider } from "./components";
 import {
   hiddenActionID,
   privateActionID,
@@ -112,7 +110,9 @@ describe("closed reference web composition", () => {
   it("removes entries through unregister APIs", () => {
     registerClosedReferenceComposition();
 
-    expect(getRoutes().some((entry) => entry.id === removedRouteID)).toBe(false);
+    expect(getRoutes().some((entry) => entry.id === removedRouteID)).toBe(
+      false,
+    );
     unregisterClosedReferenceComposition();
     expect(getRoutes().some((entry) => entry.id === privatePageID)).toBe(false);
     expect(getNav("primary").some((entry) => entry.id === privateNavID)).toBe(

@@ -62,6 +62,7 @@ type fakeEngine struct {
 	adjustmentBatchResults []engine.AdjustmentResult
 	submitCalls            []domain.Order
 	execReportCalls        []domain.ExecutionReportInput
+	execReportLeaves       []string
 	registerGroupCalls     []groupCall
 	unregisterGroupCalls   []groupCall
 	blockGroupCalls        []blockGroupCall
@@ -879,18 +880,17 @@ func (e *fakeEngine) SubmitImmediate(
 		}
 	}
 	reportInput := domain.ExecutionReportInput{
-		BaseAsset:       o.BaseAsset,
-		QuoteAsset:      o.QuoteAsset,
-		FillQuantity:    o.AmountValue,
-		FillPrice:       tradePrice,
-		LeavesQuantity:  "0",
-		ReleaseQuantity: "0",
-		LockPrice:       settlementPrice,
-		Lock:            append([]byte(nil), e.submitLock...),
-		Order:           o.ExternalID,
-		Account:         o.Account,
-		Side:            o.Side,
-		OrderStatus:     domain.OrderStatusFilled,
+		BaseAsset:      o.BaseAsset,
+		QuoteAsset:     o.QuoteAsset,
+		FillQuantity:   o.AmountValue,
+		FillPrice:      tradePrice,
+		LeavesQuantity: "0",
+		LockPrice:      settlementPrice,
+		Lock:           append([]byte(nil), e.submitLock...),
+		Order:          o.ExternalID,
+		Account:        o.Account,
+		Side:           o.Side,
+		OrderStatus:    domain.OrderStatusFilled,
 	}
 	request := domain.ExecutionReportRequestFromInput(reportInput)
 	persistence := engine.ExecutionReportPersistence{
@@ -908,7 +908,6 @@ func (e *fakeEngine) SubmitImmediate(
 		AccountPnl:           e.submitAccountPnl,
 		AccountPnlHaltReason: e.submitAccountPnlHaltReason,
 		Leaves:               reportInput.LeavesQuantity,
-		ReleaseQuantity:      reportInput.ReleaseQuantity,
 		Balances:             balanceSettlementsFrom(e.submitOutcomes),
 		Events: []domain.OrderEvent{{
 			Order: o.ExternalID,
@@ -985,7 +984,7 @@ func (e *fakeEngine) RunGroupSynchronized(
 }
 
 func (e *fakeEngine) ApplyExecutionReport(
-	_ context.Context, in domain.ExecutionReportInput,
+	_ context.Context, in domain.ExecutionReportInput, leavesQuantity string,
 ) (engine.ExecutionReportResult, error) {
 	e.stateMu.Lock()
 	outsideSync := e.inAccountSync == 0
@@ -1004,6 +1003,7 @@ func (e *fakeEngine) ApplyExecutionReport(
 	}
 	e.stateMu.Lock()
 	e.execReportCalls = append(e.execReportCalls, in)
+	e.execReportLeaves = append(e.execReportLeaves, leavesQuantity)
 	e.stateMu.Unlock()
 	if e.emptyExecReportPersistence {
 		return engine.ExecutionReportResult{
@@ -1054,14 +1054,13 @@ func (e *fakeEngine) ApplyExecutionReport(
 		}
 	}
 	persistence := engine.ExecutionReportPersistence{
-		Trade:           trade,
-		Commission:      in.Commission,
-		OrderStatus:     in.OrderStatus,
-		Leaves:          in.LeavesQuantity,
-		ReleaseQuantity: in.ReleaseQuantity,
-		Balances:        balanceSettlementsFrom(e.execReportOutcomes),
-		Events:          events,
-		Blocks:          e.execReportBlocks,
+		Trade:       trade,
+		Commission:  in.Commission,
+		OrderStatus: in.OrderStatus,
+		Leaves:      in.LeavesQuantity,
+		Balances:    balanceSettlementsFrom(e.execReportOutcomes),
+		Events:      events,
+		Blocks:      e.execReportBlocks,
 	}
 	return engine.ExecutionReportResult{
 		Persistence: &persistence,

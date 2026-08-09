@@ -43,6 +43,13 @@ export function isPositiveDecimalString(value: string): boolean {
   return decimal !== null && decimal.units > 0n;
 }
 
+/** Whether a value is accepted as an open base quantity - leaves. The API
+ *  records it verbatim, refusing surrounding space and exponent notation, so
+ *  the untrimmed string is what gets checked. */
+export function isOpenQuantityString(value: string): boolean {
+  return value === value.trim() && isNonNegativeDecimalString(value);
+}
+
 /** Whether an optional decimal field is empty or strictly positive. */
 export function isOptionalPositiveDecimalString(value: string): boolean {
   return value.trim() === "" || isPositiveDecimalString(value);

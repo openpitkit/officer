@@ -85,11 +85,15 @@ import {
   type OrderStatusValue,
 } from "@/lib/orderStatus";
 import { formatDateTime } from "@/i18n/format";
-import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
+import {
+  DEFAULT_SEARCH_DEBOUNCE_MS,
+  useDebouncedValue,
+} from "@/lib/useDebounce";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import {
   isDecimalRangeValid,
   isNonNegativeDecimalString,
+  isOpenQuantityString,
   isOptionalPositiveDecimalString,
   isPositiveDecimalString,
   subtractDecimalStrings,
@@ -151,9 +155,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  knownPageCount,
-} from "@/lib/tablePagination";
+import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 
 // ---------------------------------------------------------------------------
@@ -222,13 +224,17 @@ function instrument(baseAsset: string, quoteAsset: string): string {
 
 function commissionLabel(commissions: Commission[]): string {
   return commissions
-    .filter((commission) => commission.amount !== "" && commission.currency !== "")
+    .filter(
+      (commission) => commission.amount !== "" && commission.currency !== "",
+    )
     .map((commission) => `${commission.amount} ${commission.currency}`)
     .join(", ");
 }
 
 function tradeCommissionLabel(trade: Trade): string {
-  return trade.commission === undefined ? "" : commissionLabel([trade.commission]);
+  return trade.commission === undefined
+    ? ""
+    : commissionLabel([trade.commission]);
 }
 
 function ordersFilterHref({
@@ -298,14 +304,18 @@ function CheckPreview({ state }: { state: CheckState }) {
   let wouldBlockMessage = "";
   if (wouldBlock) {
     if (wouldBlock.code === "account_blocked") {
-      wouldBlockMessage = t("check.accountBlocked", { account: wouldBlock.account });
+      wouldBlockMessage = t("check.accountBlocked", {
+        account: wouldBlock.account,
+      });
     } else if (wouldBlock.reason) {
       wouldBlockMessage = t("check.wouldBlockReason", {
         account: wouldBlock.account,
         reason: wouldBlock.reason,
       });
     } else {
-      wouldBlockMessage = t("check.wouldBlock", { account: wouldBlock.account });
+      wouldBlockMessage = t("check.wouldBlock", {
+        account: wouldBlock.account,
+      });
     }
   }
 
@@ -320,7 +330,11 @@ function CheckPreview({ state }: { state: CheckState }) {
     >
       <div className="flex items-center gap-2">
         <span
-          className={result.passed ? "text-[var(--ok)] font-medium" : "text-[var(--danger)] font-medium"}
+          className={
+            result.passed
+              ? "text-[var(--ok)] font-medium"
+              : "text-[var(--danger)] font-medium"
+          }
         >
           {result.passed ? t("check.wouldPass") : t("check.wouldReject")}
         </span>
@@ -328,12 +342,19 @@ function CheckPreview({ state }: { state: CheckState }) {
       {result.rejects.length > 0 && (
         <ul className="space-y-1">
           {result.rejects.map((r, i) => {
-            const localizedReason = t(`check.rejectReasons.${r.code}`, { defaultValue: "" });
+            const localizedReason = t(`check.rejectReasons.${r.code}`, {
+              defaultValue: "",
+            });
             const reason = localizedReason || r.reason || r.details || r.code;
             const details =
-              r.details && r.details !== r.reason && r.details !== reason ? r.details : "";
+              r.details && r.details !== r.reason && r.details !== reason
+                ? r.details
+                : "";
             return (
-              <li key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--danger)]">
+              <li
+                key={i}
+                className="flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--danger)]"
+              >
                 <span className="font-medium">{reason}</span>
                 {details && <span>{details}</span>}
                 {r.code && r.code !== reason && (
@@ -350,9 +371,7 @@ function CheckPreview({ state }: { state: CheckState }) {
         </div>
       )}
       {wouldBlock && (
-        <div className="text-[var(--danger)]">
-          {wouldBlockMessage}
-        </div>
+        <div className="text-[var(--danger)]">{wouldBlockMessage}</div>
       )}
     </div>
   );
@@ -407,8 +426,12 @@ function SubmitOrderDialog({
   const [baseAsset, setBaseAsset] = useState(initialValues?.baseAsset ?? "");
   const [quoteAsset, setQuoteAsset] = useState(initialValues?.quoteAsset ?? "");
   const [side, setSide] = useState<string>(initialValues?.side ?? "");
-  const [amountKind, setAmountKind] = useState<string>(initialValues?.amountKind ?? "");
-  const [amountValue, setAmountValue] = useState(initialValues?.amountValue ?? "");
+  const [amountKind, setAmountKind] = useState<string>(
+    initialValues?.amountKind ?? "",
+  );
+  const [amountValue, setAmountValue] = useState(
+    initialValues?.amountValue ?? "",
+  );
   const [price, setPrice] = useState(initialValues?.price ?? "");
   const [submitMode, setSubmitMode] = useState<
     "immediate" | "drop_copy" | "hold" | null
@@ -431,10 +454,12 @@ function SubmitOrderDialog({
     quoteAsset.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
-  const [dialogAccountSuggestions, setDialogAccountSuggestions] =
-    useState<string[]>([]);
-  const [dialogAssetSuggestions, setDialogAssetSuggestions] =
-    useState<string[]>([]);
+  const [dialogAccountSuggestions, setDialogAccountSuggestions] = useState<
+    string[]
+  >([]);
+  const [dialogAssetSuggestions, setDialogAssetSuggestions] = useState<
+    string[]
+  >([]);
   const checkAbortRef = useRef<AbortController | null>(null);
   const submitAbortRef = useRef<AbortController | null>(null);
   const accountFieldRef = useRef<HTMLInputElement | null>(null);
@@ -717,10 +742,7 @@ function SubmitOrderDialog({
       }
       // A rejected pre-trade verdict has no accepted workflow to confirm or
       // cancel. Retain only accepted `hold` tokens for the history shortcuts.
-      if (
-        submitMode === "hold" &&
-        result.approval?.verdict === "accept"
-      ) {
+      if (submitMode === "hold" && result.approval?.verdict === "accept") {
         onWorkflowTokenIssued(result.approval);
       }
       onCreated();
@@ -772,7 +794,12 @@ function SubmitOrderDialog({
     submitMode !== null;
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) handleClose();
+      }}
+    >
       <DialogContent
         className="max-w-md"
         onOpenAutoFocus={(e) => {
@@ -789,7 +816,9 @@ function SubmitOrderDialog({
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="so-external-id">{t("addOrder.dialog.externalId")}</Label>
+            <Label htmlFor="so-external-id">
+              {t("addOrder.dialog.externalId")}
+            </Label>
             <ClearableInput
               id="so-external-id"
               value={externalId}
@@ -845,7 +874,9 @@ function SubmitOrderDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="so-quote">{t("addOrder.dialog.quoteAsset")}</Label>
+              <Label htmlFor="so-quote">
+                {t("addOrder.dialog.quoteAsset")}
+              </Label>
               <Autocomplete
                 id="so-quote"
                 value={quoteAsset}
@@ -901,7 +932,9 @@ function SubmitOrderDialog({
           </div>
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
-              <Label id="so-mode-label">{t("addOrder.dialog.submitMode")}</Label>
+              <Label id="so-mode-label">
+                {t("addOrder.dialog.submitMode")}
+              </Label>
               <a
                 href="/docs"
                 target="_blank"
@@ -993,9 +1026,9 @@ function SubmitOrderDialog({
                 value={amountValue}
                 onChange={setAmountValue}
                 placeholder={t("addOrder.dialog.amountPlaceholder")}
-              disabled={busy}
-              allowSignedInput={false}
-              className="flex-1"
+                disabled={busy}
+                allowSignedInput={false}
+                className="flex-1"
                 onClear={() => setAmountValue("")}
                 clearLabel={tc("filters.clearField")}
               />
@@ -1037,10 +1070,19 @@ function SubmitOrderDialog({
           )}
 
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClose}
+              disabled={busy}
+            >
               {tc("actions.cancel")}
             </Button>
-            <Button size="sm" onClick={requestSubmit} disabled={busy || !canSubmit}>
+            <Button
+              size="sm"
+              onClick={requestSubmit}
+              disabled={busy || !canSubmit}
+            >
               {busy
                 ? t("addOrder.dialog.submitBusy")
                 : submitMode === "drop_copy"
@@ -1122,7 +1164,6 @@ function SubmitOrderDialog({
 /** Input fields that can be preseeded when cloning an execution report. */
 interface ExecReportInitialValues {
   status?: ExecReportOrderStatus;
-  hasFillPayload?: boolean;
   quantity: string;
   price: string;
   lockPrice: string;
@@ -1154,30 +1195,24 @@ const EXEC_REPORT_FILL_STATUSES = new Set<ExecReportOrderStatus>([
   "partially_filled",
 ]);
 
-const EXEC_REPORT_TERMINAL_STATUSES = new Set<ExecReportOrderStatus>([
-  "rejected",
-  "rolled_back",
-  "filled",
-  "cancelled",
-]);
-
-function execReportShowsFillFields(
-  status: ExecReportOrderStatus,
-  hasFillPayload: boolean,
-): boolean {
-  return (
-    EXEC_REPORT_FILL_STATUSES.has(status) ||
-    (hasFillPayload && EXEC_REPORT_TERMINAL_STATUSES.has(status))
-  );
+// Only a fill status accepts a fill; every other status refuses the pair, so
+// showing the fields there would build a report the API rejects.
+function execReportShowsFillFields(status: ExecReportOrderStatus): boolean {
+  return EXEC_REPORT_FILL_STATUSES.has(status);
 }
 
-function asExecReportOrderStatus(value: string | undefined): ExecReportOrderStatus | undefined {
+function asExecReportOrderStatus(
+  value: string | undefined,
+): ExecReportOrderStatus | undefined {
   return EXEC_REPORT_STATUS_OPTIONS.includes(value as ExecReportOrderStatus)
     ? (value as ExecReportOrderStatus)
     : undefined;
 }
 
-function remainingLeavesFromHistory(order: Order, events: OrderEvent[]): string {
+function remainingLeavesFromHistory(
+  order: Order,
+  events: OrderEvent[],
+): string {
   if (order.amountKind !== "quantity") {
     return "";
   }
@@ -1200,13 +1235,13 @@ function execReportInitialValuesFromOrder(
   events: OrderEvent[] = [],
 ): ExecReportInitialValues {
   const lockPrice = order.displayPrice;
+  const leaves =
+    order.leavesQuantity || remainingLeavesFromHistory(order, events);
   return {
-    quantity: order.amountKind === "quantity" ? order.amountValue : "",
+    quantity: leaves,
     price: lockPrice,
     lockPrice,
-    leaves:
-      order.leavesQuantity ||
-      remainingLeavesFromHistory(order, events),
+    leaves,
   };
 }
 
@@ -1233,8 +1268,7 @@ interface ExecReportSubmittedUpdate {
   orderExternalId: string;
 }
 
-/** Field values for a given status. Leaves is always operator-entered or
- * explicitly calculated by button; it is never auto-filled on status change. */
+/** Field values for a given status. Leaves is never auto-filled on status change. */
 function execReportFieldsForStatus(
   status: ExecReportOrderStatus,
   initialValues: ExecReportInitialValues | undefined,
@@ -1244,34 +1278,18 @@ function execReportFieldsForStatus(
   leavesQuantity: string;
   lockPrice: string;
 } {
-  if (
-    initialValues?.hasFillPayload === true &&
-    execReportShowsFillFields(status, true)
-  ) {
-    return {
-      quantity: initialValues.quantity,
-      price: initialValues.price,
-      leavesQuantity: initialValues.leavesQuantity ?? "",
-      lockPrice: initialValues.lockPrice,
-    };
-  }
-  if (status === "filled") {
-    return {
-      quantity: initialValues?.leaves ?? initialValues?.quantity ?? "",
-      price: initialValues?.price ?? "",
-      leavesQuantity: initialValues?.leavesQuantity ?? "",
-      lockPrice: initialValues?.lockPrice ?? "",
-    };
-  }
-  if (status === "partially_filled") {
+  // Leaves are recorded for every status, so a cloned value survives a status
+  // the fill fields cannot follow.
+  const leavesQuantity = initialValues?.leavesQuantity ?? "";
+  if (execReportShowsFillFields(status)) {
     return {
       quantity: initialValues?.quantity ?? "",
       price: initialValues?.price ?? "",
-      leavesQuantity: initialValues?.leavesQuantity ?? "",
+      leavesQuantity,
       lockPrice: initialValues?.lockPrice ?? "",
     };
   }
-  return { quantity: "", price: "", leavesQuantity: "", lockPrice: "" };
+  return { quantity: "", price: "", leavesQuantity, lockPrice: "" };
 }
 
 function ExecReportInfoButton({
@@ -1349,16 +1367,14 @@ function ExecReportDialog({
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
 
-  const hasFillPayload = initialValues?.hasFillPayload === true;
-  const showFillFields = execReportShowsFillFields(status, hasFillPayload);
-  const requiresLeaves =
-    showFillFields ||
-    EXEC_REPORT_TERMINAL_STATUSES.has(status) ||
-    commissionMode !== "none";
+  const showFillFields = execReportShowsFillFields(status);
+  const requiresLeaves = showFillFields;
 
   function resetEconomicsFields(nextInitialValues?: ExecReportInitialValues) {
     setCommissionMode(commissionModeFor(nextInitialValues?.commission?.amount));
-    setCommissionAmount(commissionMagnitude(nextInitialValues?.commission?.amount));
+    setCommissionAmount(
+      commissionMagnitude(nextInitialValues?.commission?.amount),
+    );
     setCommissionCurrency(nextInitialValues?.commission?.currency ?? "");
     setCommissionCurrencySuggestions([]);
   }
@@ -1392,11 +1408,7 @@ function ExecReportDialog({
 
   function applyStatus(next: ExecReportOrderStatus) {
     const wasShowingFillFields = showFillFields;
-    const nextShowsFillFields = execReportShowsFillFields(next, hasFillPayload);
-    const nextRequiresLeaves =
-      nextShowsFillFields ||
-      EXEC_REPORT_TERMINAL_STATUSES.has(next) ||
-      commissionMode !== "none";
+    const nextShowsFillFields = execReportShowsFillFields(next);
     setStatus(next);
     if (wasShowingFillFields !== nextShowsFillFields) {
       const fields = nextShowsFillFields
@@ -1405,12 +1417,6 @@ function ExecReportDialog({
       setQuantity(fields.quantity);
       setPrice(fields.price);
       setLockPrice(fields.lockPrice);
-    }
-    if (!nextRequiresLeaves) {
-      setLeavesQuantity("");
-    } else if (!requiresLeaves) {
-      const fields = execReportFieldsForStatus(next, initialValues);
-      setLeavesQuantity(fields.leavesQuantity);
     }
   }
 
@@ -1461,7 +1467,7 @@ function ExecReportDialog({
   function calculateLeavesQuantity() {
     const result = subtractDecimalStrings(
       initialValues?.leaves ?? "",
-      showFillFields ? quantity.trim() : "0",
+      showFillFields ? quantity : "0",
     );
     if (result !== null) {
       setLeavesQuantity(result);
@@ -1472,19 +1478,23 @@ function ExecReportDialog({
     !busy &&
     (initialValues?.leaves ?? "").trim() !== "" &&
     (!showFillFields ||
-      (quantity.trim() !== "" && isPositiveDecimalString(quantity)));
-
+      (quantity !== "" &&
+        quantity === quantity.trim() &&
+        isPositiveDecimalString(quantity)));
+  // A fill status carries the pair and its leaves or the API refuses the whole
+  // report; a commission never stands in for the trade. Values travel verbatim,
+  // so the checks accept exactly what the report contract accepts.
   const fillFieldsValid =
     !showFillFields ||
-    (quantity.trim() !== "" &&
+    (quantity === quantity.trim() &&
+      price === price.trim() &&
+      lockPrice === lockPrice.trim() &&
       isPositiveDecimalString(quantity) &&
-      price.trim() !== "" &&
       isPositiveDecimalString(price) &&
       isOptionalPositiveDecimalString(lockPrice));
   const leavesValid =
-    !requiresLeaves ||
-    (leavesQuantity.trim() !== "" &&
-      isNonNegativeDecimalString(leavesQuantity));
+    (!requiresLeaves && leavesQuantity === "") ||
+    isOpenQuantityString(leavesQuantity);
   const commissionValid =
     commissionMode === "none" ||
     (commissionAmount.trim() !== "" &&
@@ -1502,30 +1512,12 @@ function ExecReportDialog({
       setCommissionAmount("");
       setCommissionCurrency("");
       setCommissionCurrencySuggestions([]);
-      if (
-        !showFillFields &&
-        !EXEC_REPORT_TERMINAL_STATUSES.has(status)
-      ) {
-        setLeavesQuantity("");
-      }
     }
   }
 
   async function submit() {
-    if (!fillFieldsValid) {
-      setError(t("execReport.dialog.validationError"));
-      return;
-    }
-    if (!leavesValid) {
-      setError(t("execReport.dialog.leavesRequired"));
-      return;
-    }
     const commissionAmountValue = commissionAmount.trim();
     const commissionCurrencyValue = commissionCurrency.trim();
-    if (!commissionValid) {
-      setError(t("execReport.dialog.commissionRequired"));
-      return;
-    }
     if (orderExternalId === null) {
       return;
     }
@@ -1534,14 +1526,14 @@ function ExecReportDialog({
     try {
       const body: ExecutionReportBody = { status };
       if (showFillFields) {
-        body.quantity = quantity.trim();
-        body.price = price.trim();
-        if (lockPrice.trim()) {
-          body.lockPrice = lockPrice.trim();
+        body.quantity = quantity;
+        body.price = price;
+        if (lockPrice !== "") {
+          body.lockPrice = lockPrice;
         }
       }
-      if (requiresLeaves) {
-        body.leavesQuantity = leavesQuantity.trim();
+      if (leavesQuantity !== "") {
+        body.leavesQuantity = leavesQuantity;
       }
       if (commissionMode !== "none") {
         body.commission = {
@@ -1568,7 +1560,12 @@ function ExecReportDialog({
   }
 
   return (
-    <Dialog open={orderExternalId !== null} onOpenChange={(v) => { if (!v) handleClose(); }}>
+    <Dialog
+      open={orderExternalId !== null}
+      onOpenChange={(v) => {
+        if (!v) handleClose();
+      }}
+    >
       <DialogContent
         className="max-w-sm"
         onOpenAutoFocus={(e) => {
@@ -1585,9 +1582,13 @@ function ExecReportDialog({
 
         {done ? (
           <div className="space-y-3">
-            <p className="text-xs text-[var(--ok)]">{t("execReport.dialog.accepted")}</p>
+            <p className="text-xs text-[var(--ok)]">
+              {t("execReport.dialog.accepted")}
+            </p>
             <div className="rounded-card border border-border bg-surface-2 px-3 py-2 text-xs">
-              <span className="text-muted-lt">{t("execReport.dialog.reportId")}</span>
+              <span className="text-muted-lt">
+                {t("execReport.dialog.reportId")}
+              </span>
               <div className="mt-0.5">
                 <IdCell
                   value={reportId}
@@ -1601,7 +1602,9 @@ function ExecReportDialog({
                 {blocks.map((block, i) => (
                   <div key={i} className="text-[var(--danger)]">
                     <span className="font-medium">
-                      {t("execReport.dialog.accountBlocked", { account: block.account })}
+                      {t("execReport.dialog.accountBlocked", {
+                        account: block.account,
+                      })}
                     </span>{" "}
                     {block.reason || block.code}
                   </div>
@@ -1609,7 +1612,9 @@ function ExecReportDialog({
               </div>
             )}
             <DialogFooter>
-              <Button size="sm" onClick={handleClose}>{t("execReport.dialog.done")}</Button>
+              <Button size="sm" onClick={handleClose}>
+                {t("execReport.dialog.done")}
+              </Button>
             </DialogFooter>
           </div>
         ) : (
@@ -1618,10 +1623,16 @@ function ExecReportDialog({
               <Label htmlFor="er-status">{t("execReport.dialog.status")}</Label>
               <Select
                 value={status}
-                onValueChange={(next) => applyStatus(next as ExecReportOrderStatus)}
+                onValueChange={(next) =>
+                  applyStatus(next as ExecReportOrderStatus)
+                }
                 disabled={busy}
               >
-                <SelectTrigger id="er-status" className="h-8 text-xs" ref={statusTriggerRef}>
+                <SelectTrigger
+                  id="er-status"
+                  className="h-8 text-xs"
+                  ref={statusTriggerRef}
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1641,7 +1652,9 @@ function ExecReportDialog({
               <>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="er-qty">{t("execReport.dialog.fillQty")}</Label>
+                    <Label htmlFor="er-qty">
+                      {t("execReport.dialog.fillQty")}
+                    </Label>
                     <NumberStepper
                       id="er-qty"
                       value={quantity}
@@ -1651,10 +1664,22 @@ function ExecReportDialog({
                       allowSignedInput={false}
                       onClear={() => setQuantity("")}
                       clearLabel={tc("filters.clearField")}
+                      customValidity={
+                        quantity === quantity.trim()
+                          ? ""
+                          : tc("filters.invalidNumber")
+                      }
                     />
+                    {quantity !== quantity.trim() && (
+                      <p className="text-[0.6875rem] text-muted">
+                        {tc("filters.invalidNumber")}
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="er-price">{t("execReport.dialog.fillPrice")}</Label>
+                    <Label htmlFor="er-price">
+                      {t("execReport.dialog.fillPrice")}
+                    </Label>
                     <NumberStepper
                       id="er-price"
                       value={price}
@@ -1664,11 +1689,23 @@ function ExecReportDialog({
                       allowSignedInput={false}
                       onClear={() => setPrice("")}
                       clearLabel={tc("filters.clearField")}
+                      customValidity={
+                        price === price.trim()
+                          ? ""
+                          : tc("filters.invalidNumber")
+                      }
                     />
+                    {price !== price.trim() && (
+                      <p className="text-[0.6875rem] text-muted">
+                        {tc("filters.invalidNumber")}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="er-lock">{t("execReport.dialog.lockPrice")}</Label>
+                  <Label htmlFor="er-lock">
+                    {t("execReport.dialog.lockPrice")}
+                  </Label>
                   <NumberStepper
                     id="er-lock"
                     value={lockPrice}
@@ -1678,134 +1715,152 @@ function ExecReportDialog({
                     allowSignedInput={false}
                     onClear={() => setLockPrice("")}
                     clearLabel={tc("filters.clearField")}
+                    customValidity={
+                      lockPrice === lockPrice.trim()
+                        ? ""
+                        : tc("filters.invalidNumber")
+                    }
                   />
+                  {lockPrice !== lockPrice.trim() && (
+                    <p className="text-[0.6875rem] text-muted">
+                      {tc("filters.invalidNumber")}
+                    </p>
+                  )}
                 </div>
               </>
             )}
 
             <div className="space-y-3">
               <section className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h3 className="text-xs font-semibold text-text">
-                          {t("execReport.dialog.economics.commission.title")}
-                        </h3>
-                        <p className="text-[0.6875rem] text-muted">
-                          {t("execReport.dialog.economics.commission.summary")}
-                        </p>
-                      </div>
-                      <ExecReportInfoButton
-                        ariaLabel={t(
-                          "execReport.dialog.economics.commission.infoAriaLabel",
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h3 className="text-xs font-semibold text-text">
+                      {t("execReport.dialog.economics.commission.title")}
+                    </h3>
+                    <p className="text-[0.6875rem] text-muted">
+                      {t("execReport.dialog.economics.commission.summary")}
+                    </p>
+                  </div>
+                  <ExecReportInfoButton
+                    ariaLabel={t(
+                      "execReport.dialog.economics.commission.infoAriaLabel",
+                    )}
+                    title={t(
+                      "execReport.dialog.economics.commission.infoTitle",
+                    )}
+                    body={t("execReport.dialog.economics.commission.infoBody")}
+                  />
+                </div>
+                <div
+                  className="flex flex-wrap gap-2"
+                  role="group"
+                  aria-label={t("execReport.dialog.economics.commission.title")}
+                >
+                  {(["none", "fee", "rebate"] as const).map((mode) => (
+                    <Button
+                      key={mode}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-pressed={commissionMode === mode}
+                      disabled={busy}
+                      onClick={() => selectCommissionMode(mode)}
+                      className={cn(
+                        mode === "none" && "text-muted hover:text-text",
+                        mode === "fee" &&
+                          "border-[var(--danger)] text-[var(--danger)] hover:border-[var(--danger)] hover:bg-[var(--danger-dim)] hover:text-[var(--danger)]",
+                        mode === "rebate" &&
+                          "border-[var(--ok)] text-[var(--ok)] hover:border-[var(--ok)] hover:bg-[var(--ok-dim)] hover:text-[var(--ok)]",
+                        commissionMode === mode &&
+                          mode === "none" &&
+                          "bg-surface-hover text-text",
+                        commissionMode === mode &&
+                          mode === "fee" &&
+                          "bg-[var(--danger-dim)]",
+                        commissionMode === mode &&
+                          mode === "rebate" &&
+                          "bg-[var(--ok-dim)]",
+                      )}
+                    >
+                      {t(`execReport.dialog.economics.commission.mode.${mode}`)}
+                    </Button>
+                  ))}
+                </div>
+                {commissionMode !== "none" && (
+                  <div className="grid grid-cols-2 items-end gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="er-commission-amount">
+                        {t("execReport.dialog.commissionAmount")}
+                      </Label>
+                      <NumberStepper
+                        id="er-commission-amount"
+                        value={commissionAmount}
+                        onChange={setCommissionAmount}
+                        placeholder={t(
+                          "execReport.dialog.commissionAmountPlaceholder",
                         )}
-                        title={t(
-                          "execReport.dialog.economics.commission.infoTitle",
-                        )}
-                        body={t(
-                          "execReport.dialog.economics.commission.infoBody",
-                        )}
+                        disabled={busy}
+                        allowSignedInput={false}
+                        onClear={() => setCommissionAmount("")}
+                        clearLabel={tc("filters.clearField")}
                       />
                     </div>
-                    <div
-                      className="flex flex-wrap gap-2"
-                      role="group"
-                      aria-label={t("execReport.dialog.economics.commission.title")}
-                    >
-                      {(["none", "fee", "rebate"] as const).map((mode) => (
-                        <Button
-                          key={mode}
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          aria-pressed={commissionMode === mode}
-                          disabled={busy}
-                          onClick={() => selectCommissionMode(mode)}
-                          className={cn(
-                            mode === "none" && "text-muted hover:text-text",
-                            mode === "fee" && "border-[var(--danger)] text-[var(--danger)] hover:border-[var(--danger)] hover:bg-[var(--danger-dim)] hover:text-[var(--danger)]",
-                            mode === "rebate" && "border-[var(--ok)] text-[var(--ok)] hover:border-[var(--ok)] hover:bg-[var(--ok-dim)] hover:text-[var(--ok)]",
-                            commissionMode === mode && mode === "none" && "bg-surface-hover text-text",
-                            commissionMode === mode && mode === "fee" && "bg-[var(--danger-dim)]",
-                            commissionMode === mode && mode === "rebate" && "bg-[var(--ok-dim)]",
-                          )}
-                        >
-                          {t(`execReport.dialog.economics.commission.mode.${mode}`)}
-                        </Button>
-                      ))}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="er-commission-currency">
+                        {t("execReport.dialog.commissionCurrency")}
+                      </Label>
+                      <Autocomplete
+                        id="er-commission-currency"
+                        value={commissionCurrency}
+                        onChange={setCommissionCurrency}
+                        suggestions={commissionCurrencySuggestions}
+                        placeholder={t(
+                          "execReport.dialog.commissionCurrencyPlaceholder",
+                        )}
+                        disabled={busy}
+                        onClear={() => setCommissionCurrency("")}
+                        clearLabel={tc("filters.clearField")}
+                        className="h-8 text-xs"
+                      />
                     </div>
-                    {commissionMode !== "none" && (
-                      <div className="grid grid-cols-2 items-end gap-3">
-                        <div className="space-y-1.5">
-                          <Label htmlFor="er-commission-amount">
-                            {t("execReport.dialog.commissionAmount")}
-                          </Label>
-                          <NumberStepper
-                            id="er-commission-amount"
-                            value={commissionAmount}
-                            onChange={setCommissionAmount}
-                            placeholder={t(
-                              "execReport.dialog.commissionAmountPlaceholder",
-                            )}
-                            disabled={busy}
-                            allowSignedInput={false}
-                            onClear={() => setCommissionAmount("")}
-                            clearLabel={tc("filters.clearField")}
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor="er-commission-currency">
-                            {t("execReport.dialog.commissionCurrency")}
-                          </Label>
-                          <Autocomplete
-                            id="er-commission-currency"
-                            value={commissionCurrency}
-                            onChange={setCommissionCurrency}
-                            suggestions={commissionCurrencySuggestions}
-                            placeholder={t(
-                              "execReport.dialog.commissionCurrencyPlaceholder",
-                            )}
-                            disabled={busy}
-                            onClear={() => setCommissionCurrency("")}
-                            clearLabel={tc("filters.clearField")}
-                            className="h-8 text-xs"
-                          />
-                        </div>
-                      </div>
-                    )}
+                  </div>
+                )}
               </section>
             </div>
 
-            {requiresLeaves && (
-              <div className="space-y-1.5">
-                <Label htmlFor="er-leaves">
-                  {t("execReport.dialog.leavesQty")}
-                </Label>
-                <div className="flex gap-2">
-                  <NumberStepper
-                    id="er-leaves"
-                    value={leavesQuantity}
-                    onChange={setLeavesQuantity}
-                    placeholder={t("execReport.dialog.leavesQtyPlaceholder")}
-                    disabled={busy}
-                    allowSignedInput={false}
-                    onClear={() => setLeavesQuantity("")}
-                    clearLabel={tc("filters.clearField")}
-                    className="min-w-0 flex-1"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    title={t("execReport.dialog.calculateLeaves")}
-                    aria-label={t("execReport.dialog.calculateLeaves")}
-                    disabled={!canCalculateLeaves}
-                    onClick={calculateLeavesQuantity}
-                  >
-                    <Calculator />
-                  </Button>
-                </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="er-leaves">
+                {t("execReport.dialog.leavesQty")}
+              </Label>
+              <div className="flex gap-2">
+                <ClearableInput
+                  id="er-leaves"
+                  value={leavesQuantity}
+                  onChange={(event) => setLeavesQuantity(event.target.value)}
+                  placeholder={t("execReport.dialog.leavesQtyPlaceholder")}
+                  disabled={busy}
+                  onClear={() => setLeavesQuantity("")}
+                  clearLabel={tc("filters.clearField")}
+                  className="min-w-0 flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  title={t("execReport.dialog.calculateLeaves")}
+                  aria-label={t("execReport.dialog.calculateLeaves")}
+                  disabled={!canCalculateLeaves}
+                  onClick={calculateLeavesQuantity}
+                >
+                  <Calculator />
+                </Button>
               </div>
-            )}
+              {leavesQuantity !== "" && !leavesValid && (
+                <p className="text-[0.6875rem] text-muted">
+                  {t("execReport.dialog.leavesInvalid")}
+                </p>
+              )}
+            </div>
 
             <label className="flex items-center gap-2 text-xs text-text cursor-pointer select-none">
               <input
@@ -1823,11 +1878,18 @@ function ExecReportDialog({
             )}
 
             <DialogFooter>
-              <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleClose}
+                disabled={busy}
+              >
                 {tc("actions.cancel")}
               </Button>
               <Button size="sm" onClick={submit} disabled={busy || !canSubmit}>
-                {busy ? t("execReport.dialog.submitBusy") : t("execReport.dialog.submit")}
+                {busy
+                  ? t("execReport.dialog.submitBusy")
+                  : t("execReport.dialog.submit")}
               </Button>
             </DialogFooter>
           </div>
@@ -1845,9 +1907,15 @@ interface OrderDetailDialogProps {
   orderExternalId: string | null;
   refreshKey: number;
   onClose: () => void;
-  onExecReport: (orderExternalId: string, values?: ExecReportInitialValues) => void;
+  onExecReport: (
+    orderExternalId: string,
+    values?: ExecReportInitialValues,
+  ) => void;
   onCloneOrder: (values: OrderInitialValues) => void;
-  onCloneExecReport: (orderExternalId: string, values: ExecReportInitialValues) => void;
+  onCloneExecReport: (
+    orderExternalId: string,
+    values: ExecReportInitialValues,
+  ) => void;
   /** Approval token for a workflow order, or null when none is retained
    *  (immediate order, or the token was lost on reload). */
   workflowToken: ApprovalToken | null;
@@ -1892,11 +1960,20 @@ function accountBlockReason(ev: OrderEvent): string | null {
   return details.length > 0 ? `${reason} [${details.join(", ")}]` : reason;
 }
 
-function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport, onCloneOrder, onCloneExecReport, workflowToken, onWorkflowShortcutCompleted, successBanner }: OrderDetailDialogProps) {
+function OrderDetailDialog({
+  orderExternalId,
+  refreshKey,
+  onClose,
+  onExecReport,
+  onCloneOrder,
+  onCloneExecReport,
+  workflowToken,
+  onWorkflowShortcutCompleted,
+  successBanner,
+}: OrderDetailDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
-  const { fetchOrderDetail, confirmOrder, cancelOrder } =
-    useOfficerApi();
+  const { fetchOrderDetail, confirmOrder, cancelOrder } = useOfficerApi();
 
   const [state, setState] = useState<DetailState>({ phase: "loading" });
   // The event whose per-event reproduction/verification panel is open, or null
@@ -1904,9 +1981,9 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
   // with the event it produced, so verification is per timeline event.
   const [verifyEventId, setVerifyEventId] = useState<string | null>(null);
   // Workflow-shortcut UI state: the in-flight action and the last error.
-  const [shortcutAction, setShortcutAction] = useState<"confirm" | "cancel" | null>(
-    null,
-  );
+  const [shortcutAction, setShortcutAction] = useState<
+    "confirm" | "cancel" | null
+  >(null);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [cancelFormOpen, setCancelFormOpen] = useState(false);
   const [cancelLeavesQuantity, setCancelLeavesQuantity] = useState("");
@@ -1963,14 +2040,17 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
   const canUseWorkflowShortcut =
     state.phase === "ready" && workflowToken !== null;
 
-  // The cancellation is settled by the engine, so leaves must be present and
-  // well-formed before the request leaves the operator panel.
+  // Cancellation leaves are optional and recorded verbatim: an absent value is
+  // the request's own shape, a supplied one must survive the report contract.
   const cancelLeavesValid =
-    cancelLeavesQuantity.trim() !== "" &&
-    isNonNegativeDecimalString(cancelLeavesQuantity);
+    cancelLeavesQuantity === "" || isOpenQuantityString(cancelLeavesQuantity);
 
   async function runWorkflowShortcut(action: "confirm" | "cancel") {
-    if (orderExternalId === null || workflowToken === null || shortcutAction !== null) {
+    if (
+      orderExternalId === null ||
+      workflowToken === null ||
+      shortcutAction !== null
+    ) {
       return;
     }
     if (action === "cancel" && !cancelLeavesValid) {
@@ -1986,7 +2066,9 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
       } else {
         await cancelOrder(orderExternalId, {
           token: workflowToken.token,
-          leavesQuantity: cancelLeavesQuantity.trim(),
+          ...(cancelLeavesQuantity === ""
+            ? {}
+            : { leavesQuantity: cancelLeavesQuantity }),
         });
       }
       onWorkflowShortcutCompleted(orderExternalId, action);
@@ -2009,513 +2091,588 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
         }}
       >
         <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{t("detail.dialog.title", { orderExternalId })}</DialogTitle>
-          <DialogDescription>
-            {state.phase === "ready" ? (
-              <>
-                {instrument(state.order.baseAsset, state.order.quoteAsset)}
-                {" · "}
-                <span className="capitalize">{state.order.side}</span>
-                {" · "}
-                {amountLabel(state.order.amountKind, state.order.amountValue)}
-                {" · "}
-                {priceLabel(state.order.price)}
-              </>
-            ) : (
-              t("detail.dialog.loading")
-            )}
-          </DialogDescription>
-        </DialogHeader>
-
-        {successBanner && (
-          <div className="rounded-card border border-[var(--ok)] bg-[var(--ok-dim)] px-3 py-2 text-xs font-medium text-[var(--ok)]">
-            {successBanner}
-          </div>
-        )}
-
-        {state.phase === "loading" && (
-          <div className="space-y-2 py-4">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-4 w-full animate-pulse rounded bg-border" />
-            ))}
-          </div>
-        )}
-
-        {state.phase === "error" && (
-          <p className="text-xs text-[var(--danger)]">{state.message}</p>
-        )}
-
-        {state.phase === "ready" && (
-          <div className="space-y-5">
-            {/* Order header fields */}
-            <div className="grid grid-cols-3 gap-2 rounded-card border border-border bg-surface-2 p-3 text-xs">
-              <div>
-                <span className="text-muted-lt">{t("table.externalId")}</span>
-                <div className="mt-0.5">
-                  <IdCell
-                    value={state.order.id}
-                    copyTitle={t("common:rowActions.copyId")}
-                    copiedTitle={t("common:rowActions.copiedId")}
-                  />
-                  {state.order.dropCopy && (
-                    <Badge variant="danger">{t("dropCopy.badge")}</Badge>
-                  )}
-                </div>
-              </div>
-              <div>
-                <span className="text-muted-lt">{t("detail.dialog.fieldAccount")}</span>
-                <div className="mt-0.5">
-                  <IdCell
-                    value={state.order.account}
-                    copyTitle={t("common:rowActions.copyId")}
-                    copiedTitle={t("common:rowActions.copiedId")}
-                  />
-                </div>
-              </div>
-              <div>
-                <span className="text-muted-lt">{t("detail.dialog.fieldStatus")}</span>
-                <div className="mt-0.5">
-                  <Badge variant={statusVariant(state.order.status)}>
-                    {state.order.status}
-                  </Badge>
-                </div>
-              </div>
-              <div>
-                <span className="text-muted-lt">{t("detail.dialog.fieldSource")}</span>
-                <div className="mt-0.5">
-                  <Badge variant={sourceVariant(state.order.source)}>
-                    {state.order.source}
-                  </Badge>
-                </div>
-              </div>
-              <div className="col-span-3">
-                <span className="text-muted-lt">{t("detail.dialog.fieldSubmitted")}</span>
-                <div className="nums mt-0.5 text-muted-lt">{formatDateTime(state.order.at)}</div>
-              </div>
-              {state.order.displayPrice !== "" && (
-                <div className="col-span-3">
-                  <span className="text-muted-lt">{t("detail.dialog.fieldDisplayPrice")}</span>
-                  <div className="nums mt-0.5 text-text">
-                    {state.order.displayPrice}
-                  </div>
-                </div>
-              )}
-              {state.order.commissionSubtotals.length > 0 && (
-                <div className="col-span-3">
-                  <span className="text-muted-lt">{t("detail.dialog.fieldCommission")}</span>
-                  <div className="nums mt-0.5 text-text">
-                    {commissionLabel(state.order.commissionSubtotals)}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Event timeline */}
-            <div>
-              <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
-                {t("detail.dialog.timeline.sectionTitle")}
-              </p>
-              {state.events.length === 0 ? (
-                <p className="text-xs text-muted-lt">{t("detail.dialog.timeline.empty")}</p>
+          <DialogHeader>
+            <DialogTitle>
+              {t("detail.dialog.title", { orderExternalId })}
+            </DialogTitle>
+            <DialogDescription>
+              {state.phase === "ready" ? (
+                <>
+                  {instrument(state.order.baseAsset, state.order.quoteAsset)}
+                  {" · "}
+                  <span className="capitalize">{state.order.side}</span>
+                  {" · "}
+                  {amountLabel(state.order.amountKind, state.order.amountValue)}
+                  {" · "}
+                  {priceLabel(state.order.price)}
+                </>
               ) : (
-                <ol className="space-y-2">
-                  {state.events.map((ev) => {
-                    const blockReason = accountBlockReason(ev);
-                    return (
-                      <li
-                        key={ev.id}
-                        className="flex gap-3 rounded-card border border-border bg-surface-2 p-2.5 text-xs"
-                      >
-                      <div className="w-32 shrink-0">
-                        <div className="nums text-muted-lt">{formatDateTime(ev.at)}</div>
-                      </div>
-                      <div className="flex flex-1 flex-wrap items-start gap-x-3 gap-y-1">
-                        <Badge variant={eventTypeVariant(ev.type)}>{ev.type}</Badge>
-                        <Badge variant={sourceVariant(ev.source)}>{ev.source}</Badge>
-                        {ev.principal && (
-                          <span className="text-muted-lt">
-                            {t("detail.dialog.timeline.by", { principal: ev.principal })}
-                          </span>
-                        )}
-                        {/* Fill payload */}
-                        {ev.fillQuantity !== undefined && (
-                          <span className="text-text">
-                            {t("detail.dialog.timeline.fillQty", { qty: ev.fillQuantity })}
-                            {ev.fillPrice !== undefined && (
-                              <>{" "}{t("detail.dialog.timeline.fillAt", { price: ev.fillPrice })}</>
-                            )}
-                            {ev.fillLockPrice !== undefined && (
+                t("detail.dialog.loading")
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {successBanner && (
+            <div className="rounded-card border border-[var(--ok)] bg-[var(--ok-dim)] px-3 py-2 text-xs font-medium text-[var(--ok)]">
+              {successBanner}
+            </div>
+          )}
+
+          {state.phase === "loading" && (
+            <div className="space-y-2 py-4">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="h-4 w-full animate-pulse rounded bg-border"
+                />
+              ))}
+            </div>
+          )}
+
+          {state.phase === "error" && (
+            <p className="text-xs text-[var(--danger)]">{state.message}</p>
+          )}
+
+          {state.phase === "ready" && (
+            <div className="space-y-5">
+              {/* Order header fields */}
+              <div className="grid grid-cols-3 gap-2 rounded-card border border-border bg-surface-2 p-3 text-xs">
+                <div>
+                  <span className="text-muted-lt">{t("table.externalId")}</span>
+                  <div className="mt-0.5">
+                    <IdCell
+                      value={state.order.id}
+                      copyTitle={t("common:rowActions.copyId")}
+                      copiedTitle={t("common:rowActions.copiedId")}
+                    />
+                    {state.order.dropCopy && (
+                      <Badge variant="danger">{t("dropCopy.badge")}</Badge>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-muted-lt">
+                    {t("detail.dialog.fieldAccount")}
+                  </span>
+                  <div className="mt-0.5">
+                    <IdCell
+                      value={state.order.account}
+                      copyTitle={t("common:rowActions.copyId")}
+                      copiedTitle={t("common:rowActions.copiedId")}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <span className="text-muted-lt">
+                    {t("detail.dialog.fieldStatus")}
+                  </span>
+                  <div className="mt-0.5">
+                    <Badge variant={statusVariant(state.order.status)}>
+                      {state.order.status}
+                    </Badge>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-muted-lt">
+                    {t("detail.dialog.fieldSource")}
+                  </span>
+                  <div className="mt-0.5">
+                    <Badge variant={sourceVariant(state.order.source)}>
+                      {state.order.source}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="col-span-3">
+                  <span className="text-muted-lt">
+                    {t("detail.dialog.fieldSubmitted")}
+                  </span>
+                  <div className="nums mt-0.5 text-muted-lt">
+                    {formatDateTime(state.order.at)}
+                  </div>
+                </div>
+                {state.order.displayPrice !== "" && (
+                  <div className="col-span-3">
+                    <span className="text-muted-lt">
+                      {t("detail.dialog.fieldDisplayPrice")}
+                    </span>
+                    <div className="nums mt-0.5 text-text">
+                      {state.order.displayPrice}
+                    </div>
+                  </div>
+                )}
+                {state.order.commissionSubtotals.length > 0 && (
+                  <div className="col-span-3">
+                    <span className="text-muted-lt">
+                      {t("detail.dialog.fieldCommission")}
+                    </span>
+                    <div className="nums mt-0.5 text-text">
+                      {commissionLabel(state.order.commissionSubtotals)}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Event timeline */}
+              <div>
+                <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
+                  {t("detail.dialog.timeline.sectionTitle")}
+                </p>
+                {state.events.length === 0 ? (
+                  <p className="text-xs text-muted-lt">
+                    {t("detail.dialog.timeline.empty")}
+                  </p>
+                ) : (
+                  <ol className="space-y-2">
+                    {state.events.map((ev) => {
+                      const blockReason = accountBlockReason(ev);
+                      return (
+                        <li
+                          key={ev.id}
+                          className="flex gap-3 rounded-card border border-border bg-surface-2 p-2.5 text-xs"
+                        >
+                          <div className="w-32 shrink-0">
+                            <div className="nums text-muted-lt">
+                              {formatDateTime(ev.at)}
+                            </div>
+                          </div>
+                          <div className="flex flex-1 flex-wrap items-start gap-x-3 gap-y-1">
+                            <Badge variant={eventTypeVariant(ev.type)}>
+                              {ev.type}
+                            </Badge>
+                            <Badge variant={sourceVariant(ev.source)}>
+                              {ev.source}
+                            </Badge>
+                            {ev.principal && (
                               <span className="text-muted-lt">
-                                {" "}{t("detail.dialog.timeline.fillLock", { price: ev.fillLockPrice })}
+                                {t("detail.dialog.timeline.by", {
+                                  principal: ev.principal,
+                                })}
                               </span>
                             )}
-                          </span>
-                        )}
-                        {ev.commission !== undefined && (
-                          <span className="nums text-muted-lt">
-                            {t("detail.dialog.timeline.commission", {
-                              value: commissionLabel([ev.commission]),
-                            })}
-                          </span>
-                        )}
-                        {/* Reject payload */}
-                        {blockReason === null &&
-                          ev.rejectCode !== undefined && (
-                          <span className="text-[var(--danger)]">
-                            {t("detail.dialog.timeline.rejectCode", { code: ev.rejectCode })}
-                          </span>
-                        )}
-                        {blockReason === null &&
-                          ev.rejectScope !== undefined && (
-                          <span className="text-muted-lt">
-                            {t("detail.dialog.timeline.rejectScope", { scope: ev.rejectScope })}
-                          </span>
-                        )}
-                        {blockReason === null &&
-                          ev.rejectPolicy !== undefined && (
-                          <span className="text-muted-lt">
-                            {t("detail.dialog.timeline.rejectPolicy", { policy: ev.rejectPolicy })}
-                          </span>
-                        )}
-                        {blockReason === null &&
-                          ev.rejectReason !== undefined && (
-                          <span className="text-muted-lt">{ev.rejectReason}</span>
-                        )}
-                        {blockReason === null &&
-                          ev.rejectDetails !== undefined && (
-                          <span className="text-muted-lt">{ev.rejectDetails}</span>
-                        )}
-                        {blockReason !== null && (
-                          <div className="w-full rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">
-                            <span className="font-medium">
-                              {t("detail.dialog.accountBlocked", {
-                                account: state.order.account,
-                              })}
-                            </span>
-                            <> {blockReason}</>
-                          </div>
-                        )}
-                      </div>
-                      {/* Per-event attestation: open the reproduction /
-                          verification panel for this event's signature. */}
-                      {eventHasAttestation(ev) && (
-                        <button
-                          type="button"
-                          className={cn(
-                            "shrink-0 self-start rounded-badge p-1 text-muted-lt transition-colors duration-[180ms] hover:text-accent focus-visible:text-accent",
-                            verifyEventId === ev.id && "text-accent",
-                          )}
-                          aria-label={
-                            ev.signed
-                              ? t("detail.dialog.timeline.verifySigned")
-                              : t("detail.dialog.timeline.verifyUnsigned")
-                          }
-                          title={
-                            ev.signed
-                              ? t("detail.dialog.timeline.verifySigned")
-                              : t("detail.dialog.timeline.verifyUnsigned")
-                          }
-                          onClick={() => setVerifyEventId(ev.id)}
-                        >
-                          <KeyRound
-                            className={cn(
-                              "h-3.5 w-3.5",
-                              !ev.signed && "opacity-60",
+                            {/* Fill payload */}
+                            {ev.fillQuantity !== undefined && (
+                              <span className="text-text">
+                                {t("detail.dialog.timeline.fillQty", {
+                                  qty: ev.fillQuantity,
+                                })}
+                                {ev.fillPrice !== undefined && (
+                                  <>
+                                    {" "}
+                                    {t("detail.dialog.timeline.fillAt", {
+                                      price: ev.fillPrice,
+                                    })}
+                                  </>
+                                )}
+                                {ev.fillLockPrice !== undefined && (
+                                  <span className="text-muted-lt">
+                                    {" "}
+                                    {t("detail.dialog.timeline.fillLock", {
+                                      price: ev.fillLockPrice,
+                                    })}
+                                  </span>
+                                )}
+                              </span>
                             )}
-                          />
-                        </button>
-                      )}
-                      {/* Re-issue the engine action this event recorded:
-                          a submission clones the order, a fill clones the report. */}
-                      {ev.type === "submitted" && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="shrink-0 self-start"
-                          aria-label={t("clone.orderAriaLabel", { orderExternalId })}
-                          onClick={() => {
-                            onCloneOrder({
-                              account: state.order.account,
-                              baseAsset: state.order.baseAsset,
-                              quoteAsset: state.order.quoteAsset,
-                              side: state.order.side,
-                              amountKind: state.order.amountKind,
-                              amountValue: state.order.amountValue,
-                              price: state.order.price === "0" ? "" : state.order.price,
-                            });
-                            onClose();
-                          }}
-                        >
-                          <GitFork className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      {ev.type === "fill" && ev.fillQuantity !== undefined && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="shrink-0 self-start"
-                          aria-label={t("clone.execReportEventAriaLabel", { orderExternalId })}
-                          onClick={() =>
-                            onCloneExecReport(orderExternalId, {
-                              status: asExecReportOrderStatus(ev.orderStatus),
-                              hasFillPayload: true,
-                              quantity: ev.fillQuantity ?? "",
-                              price: ev.fillPrice ?? "",
-                              lockPrice: ev.fillLockPrice ?? "",
-                              leavesQuantity: ev.leavesQuantity ?? "",
-                              commission: ev.commission,
-                            })
-                          }
-                        >
-                          <GitFork className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      </li>
-                    );
-                  })}
-                </ol>
-              )}
-            </div>
-
-            {/* Trades — always shown so the order→trades grouping is clear */}
-            <div>
-              <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
-                {t("detail.dialog.trades.sectionTitle")}
-              </p>
-              {state.trades.length === 0 ? (
-                <p className="text-xs text-muted-lt">
-                  {t("detail.dialog.trades.empty")}
-                </p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>
-                        <ColumnHeader
-                          description={t("table.columnDescriptions.externalId")}
-                        >
-                          {t("table.externalId")}
-                        </ColumnHeader>
-                      </TableHead>
-                      <TableHead>
-                        <ColumnHeader description={t("table.columnDescriptions.qty")}>
-                          {t("table.qty")}
-                        </ColumnHeader>
-                      </TableHead>
-                      <TableHead>
-                        <ColumnHeader
-                          description={t("table.columnDescriptions.price")}
-                        >
-                          {t("table.price")}
-                        </ColumnHeader>
-                      </TableHead>
-                      <TableHead>
-                        <ColumnHeader
-                          description={t("table.columnDescriptions.lockPrice")}
-                        >
-                          {t("table.lockPrice")}
-                        </ColumnHeader>
-                      </TableHead>
-                      <TableHead>
-                        <ColumnHeader
-                          description={t("table.columnDescriptions.commission")}
-                        >
-                          {t("table.commission")}
-                        </ColumnHeader>
-                      </TableHead>
-                      <TableHead>
-                        <ColumnHeader
-                          description={t("table.columnDescriptions.source")}
-                        >
-                          {t("table.source")}
-                        </ColumnHeader>
-                      </TableHead>
-                      <TableHead>
-                        <ColumnHeader description={t("table.columnDescriptions.time")}>
-                          {t("table.time")}
-                        </ColumnHeader>
-                      </TableHead>
-                      <TableHead className="text-right" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {state.trades.map((trade) => (
-                      <TableRow
-                        key={trade.id}
-                        className="hover:bg-transparent"
-                      >
-                        <TableCell className="nums text-xs text-muted-lt">
-                          <IdCell
-                            value={trade.id}
-                            copyTitle={t("common:rowActions.copyId")}
-                            copiedTitle={t("common:rowActions.copiedId")}
-                          />
-                        </TableCell>
-                        <TableCell className="nums text-xs">
-                          {trade.quantity}
-                        </TableCell>
-                        <TableCell className="nums text-xs">{trade.price}</TableCell>
-                        <TableCell className="nums text-xs text-muted-lt">
-                          {trade.lockPrice || tc("value.none")}
-                        </TableCell>
-                        <TableCell className="nums text-xs text-muted-lt">
-                          {tradeCommissionLabel(trade) || tc("value.none")}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={sourceVariant(trade.source)}>
-                            {trade.source}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
-                          {formatDateTime(trade.at)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <RowActions>
-                            <CloneButton
-                              title={t("clone.execReportAriaLabel", {
-                                tradeId: trade.id,
-                              })}
-                              onClick={() =>
-                                onCloneExecReport(orderExternalId, {
-                                  hasFillPayload: true,
-                                  quantity: trade.quantity,
-                                  price: trade.price,
-                                  lockPrice: trade.lockPrice,
-                                  commission: trade.commission,
-                                  leaves: state.order.leavesQuantity,
-                                })
+                            {ev.commission !== undefined && (
+                              <span className="nums text-muted-lt">
+                                {t("detail.dialog.timeline.commission", {
+                                  value: commissionLabel([ev.commission]),
+                                })}
+                              </span>
+                            )}
+                            {/* Reject payload */}
+                            {blockReason === null &&
+                              ev.rejectCode !== undefined && (
+                                <span className="text-[var(--danger)]">
+                                  {t("detail.dialog.timeline.rejectCode", {
+                                    code: ev.rejectCode,
+                                  })}
+                                </span>
+                              )}
+                            {blockReason === null &&
+                              ev.rejectScope !== undefined && (
+                                <span className="text-muted-lt">
+                                  {t("detail.dialog.timeline.rejectScope", {
+                                    scope: ev.rejectScope,
+                                  })}
+                                </span>
+                              )}
+                            {blockReason === null &&
+                              ev.rejectPolicy !== undefined && (
+                                <span className="text-muted-lt">
+                                  {t("detail.dialog.timeline.rejectPolicy", {
+                                    policy: ev.rejectPolicy,
+                                  })}
+                                </span>
+                              )}
+                            {blockReason === null &&
+                              ev.rejectReason !== undefined && (
+                                <span className="text-muted-lt">
+                                  {ev.rejectReason}
+                                </span>
+                              )}
+                            {blockReason === null &&
+                              ev.rejectDetails !== undefined && (
+                                <span className="text-muted-lt">
+                                  {ev.rejectDetails}
+                                </span>
+                              )}
+                            {blockReason !== null && (
+                              <div className="w-full rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">
+                                <span className="font-medium">
+                                  {t("detail.dialog.accountBlocked", {
+                                    account: state.order.account,
+                                  })}
+                                </span>
+                                <> {blockReason}</>
+                              </div>
+                            )}
+                          </div>
+                          {/* Per-event attestation: open the reproduction /
+                          verification panel for this event's signature. */}
+                          {eventHasAttestation(ev) && (
+                            <button
+                              type="button"
+                              className={cn(
+                                "shrink-0 self-start rounded-badge p-1 text-muted-lt transition-colors duration-[180ms] hover:text-accent focus-visible:text-accent",
+                                verifyEventId === ev.id && "text-accent",
+                              )}
+                              aria-label={
+                                ev.signed
+                                  ? t("detail.dialog.timeline.verifySigned")
+                                  : t("detail.dialog.timeline.verifyUnsigned")
                               }
-                            />
-                          </RowActions>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </div>
-
-            {canUseWorkflowShortcut && (
-              <div className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
-                <div>
-                  <h4 className="text-xs font-bold text-text">
-                    {t("detail.dialog.workflow.title")}
-                  </h4>
-                  <p className="mt-0.5 text-[0.6875rem] text-muted">
-                    {t("detail.dialog.workflow.description")}
-                  </p>
-                </div>
-                {shortcutError && (
-                  <ErrorBanner
-                    message={shortcutError}
-                    onDismiss={() => setShortcutError(null)}
-                  />
-                )}
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    onClick={() => void runWorkflowShortcut("confirm")}
-                    disabled={shortcutAction !== null}
-                  >
-                    {shortcutAction === "confirm"
-                      ? t("detail.dialog.workflow.confirmBusy")
-                      : t("detail.dialog.workflow.confirm")}
-                  </Button>
-                  {!cancelFormOpen && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
-                      onClick={() => setCancelFormOpen(true)}
-                      disabled={shortcutAction !== null}
-                    >
-                      {t("detail.dialog.workflow.cancel")}
-                    </Button>
-                  )}
-                </div>
-                {cancelFormOpen && (
-                  <div className="space-y-2 border-t border-border pt-3">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="workflow-cancel-leaves">
-                        {t("execReport.dialog.leavesQty")}
-                      </Label>
-                      <NumberStepper
-                        id="workflow-cancel-leaves"
-                        value={cancelLeavesQuantity}
-                        onChange={setCancelLeavesQuantity}
-                        placeholder={t(
-                          "execReport.dialog.leavesQtyPlaceholder",
-                        )}
-                        disabled={shortcutAction !== null}
-                        allowSignedInput={false}
-                        onClear={() => setCancelLeavesQuantity("")}
-                        clearLabel={tc("filters.clearField")}
-                      />
-                      {!cancelLeavesValid && (
-                        <p className="text-[0.6875rem] text-muted">
-                          {t("execReport.dialog.leavesRequired")}
-                        </p>
-                      )}
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
-                      onClick={() => void runWorkflowShortcut("cancel")}
-                      disabled={shortcutAction !== null || !cancelLeavesValid}
-                    >
-                      {shortcutAction === "cancel"
-                        ? t("detail.dialog.workflow.cancelBusy")
-                        : t("detail.dialog.workflow.cancel")}
-                    </Button>
-                  </div>
+                              title={
+                                ev.signed
+                                  ? t("detail.dialog.timeline.verifySigned")
+                                  : t("detail.dialog.timeline.verifyUnsigned")
+                              }
+                              onClick={() => setVerifyEventId(ev.id)}
+                            >
+                              <KeyRound
+                                className={cn(
+                                  "h-3.5 w-3.5",
+                                  !ev.signed && "opacity-60",
+                                )}
+                              />
+                            </button>
+                          )}
+                          {/* Re-issue the engine action this event recorded:
+                          a submission clones the order, a fill clones the report. */}
+                          {ev.type === "submitted" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="shrink-0 self-start"
+                              aria-label={t("clone.orderAriaLabel", {
+                                orderExternalId,
+                              })}
+                              onClick={() => {
+                                onCloneOrder({
+                                  account: state.order.account,
+                                  baseAsset: state.order.baseAsset,
+                                  quoteAsset: state.order.quoteAsset,
+                                  side: state.order.side,
+                                  amountKind: state.order.amountKind,
+                                  amountValue: state.order.amountValue,
+                                  price:
+                                    state.order.price === "0"
+                                      ? ""
+                                      : state.order.price,
+                                });
+                                onClose();
+                              }}
+                            >
+                              <GitFork className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                          {ev.type === "fill" &&
+                            ev.fillQuantity !== undefined && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="shrink-0 self-start"
+                                aria-label={t(
+                                  "clone.execReportEventAriaLabel",
+                                  { orderExternalId },
+                                )}
+                                onClick={() =>
+                                  onCloneExecReport(orderExternalId, {
+                                    status: asExecReportOrderStatus(
+                                      ev.orderStatus,
+                                    ),
+                                    quantity: ev.fillQuantity ?? "",
+                                    price: ev.fillPrice ?? "",
+                                    lockPrice: ev.fillLockPrice ?? "",
+                                    leavesQuantity: ev.leavesQuantity ?? "",
+                                    commission: ev.commission,
+                                  })
+                                }
+                              >
+                                <GitFork className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                        </li>
+                      );
+                    })}
+                  </ol>
                 )}
               </div>
-            )}
 
-            <DialogFooter>
-              <Button
-                variant="outline"
-                size="sm"
-                className="sm:mr-auto"
-                onClick={() =>
-                  onExecReport(
-                    orderExternalId,
-                    execReportInitialValuesFromOrder(state.order, state.events),
-                  )
-                }
-              >
-                {t("detail.dialog.trades.submitExecReport")}
-              </Button>
-              {state.phase === "ready" && (
+              {/* Trades — always shown so the order→trades grouping is clear */}
+              <div>
+                <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
+                  {t("detail.dialog.trades.sectionTitle")}
+                </p>
+                {state.trades.length === 0 ? (
+                  <p className="text-xs text-muted-lt">
+                    {t("detail.dialog.trades.empty")}
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>
+                          <ColumnHeader
+                            description={t(
+                              "table.columnDescriptions.externalId",
+                            )}
+                          >
+                            {t("table.externalId")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader
+                            description={t("table.columnDescriptions.qty")}
+                          >
+                            {t("table.qty")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader
+                            description={t("table.columnDescriptions.price")}
+                          >
+                            {t("table.price")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader
+                            description={t(
+                              "table.columnDescriptions.lockPrice",
+                            )}
+                          >
+                            {t("table.lockPrice")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader
+                            description={t(
+                              "table.columnDescriptions.commission",
+                            )}
+                          >
+                            {t("table.commission")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader
+                            description={t("table.columnDescriptions.source")}
+                          >
+                            {t("table.source")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader
+                            description={t("table.columnDescriptions.time")}
+                          >
+                            {t("table.time")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead className="text-right" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {state.trades.map((trade) => (
+                        <TableRow
+                          key={trade.id}
+                          className="hover:bg-transparent"
+                        >
+                          <TableCell className="nums text-xs text-muted-lt">
+                            <IdCell
+                              value={trade.id}
+                              copyTitle={t("common:rowActions.copyId")}
+                              copiedTitle={t("common:rowActions.copiedId")}
+                            />
+                          </TableCell>
+                          <TableCell className="nums text-xs">
+                            {trade.quantity}
+                          </TableCell>
+                          <TableCell className="nums text-xs">
+                            {trade.price}
+                          </TableCell>
+                          <TableCell className="nums text-xs text-muted-lt">
+                            {trade.lockPrice || tc("value.none")}
+                          </TableCell>
+                          <TableCell className="nums text-xs text-muted-lt">
+                            {tradeCommissionLabel(trade) || tc("value.none")}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={sourceVariant(trade.source)}>
+                              {trade.source}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
+                            {formatDateTime(trade.at)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <RowActions>
+                              <CloneButton
+                                title={t("clone.execReportAriaLabel", {
+                                  tradeId: trade.id,
+                                })}
+                                onClick={() =>
+                                  onCloneExecReport(orderExternalId, {
+                                    quantity: trade.quantity,
+                                    price: trade.price,
+                                    lockPrice: trade.lockPrice,
+                                    commission: trade.commission,
+                                    leaves: state.order.leavesQuantity,
+                                  })
+                                }
+                              />
+                            </RowActions>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+
+              {canUseWorkflowShortcut && (
+                <div className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-text">
+                      {t("detail.dialog.workflow.title")}
+                    </h4>
+                    <p className="mt-0.5 text-[0.6875rem] text-muted">
+                      {t("detail.dialog.workflow.description")}
+                    </p>
+                  </div>
+                  {shortcutError && (
+                    <ErrorBanner
+                      message={shortcutError}
+                      onDismiss={() => setShortcutError(null)}
+                    />
+                  )}
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => void runWorkflowShortcut("confirm")}
+                      disabled={shortcutAction !== null}
+                    >
+                      {shortcutAction === "confirm"
+                        ? t("detail.dialog.workflow.confirmBusy")
+                        : t("detail.dialog.workflow.confirm")}
+                    </Button>
+                    {!cancelFormOpen && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                        onClick={() => setCancelFormOpen(true)}
+                        disabled={shortcutAction !== null}
+                      >
+                        {t("detail.dialog.workflow.cancel")}
+                      </Button>
+                    )}
+                  </div>
+                  {cancelFormOpen && (
+                    <div className="space-y-2 border-t border-border pt-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="workflow-cancel-leaves">
+                          {t("execReport.dialog.leavesQty")}
+                        </Label>
+                        <ClearableInput
+                          id="workflow-cancel-leaves"
+                          value={cancelLeavesQuantity}
+                          onChange={(event) =>
+                            setCancelLeavesQuantity(event.target.value)
+                          }
+                          placeholder={t(
+                            "execReport.dialog.leavesQtyPlaceholder",
+                          )}
+                          disabled={shortcutAction !== null}
+                          onClear={() => setCancelLeavesQuantity("")}
+                          clearLabel={tc("filters.clearField")}
+                        />
+                        {!cancelLeavesValid && (
+                          <p className="text-[0.6875rem] text-muted">
+                            {t("execReport.dialog.leavesInvalid")}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                        onClick={() => void runWorkflowShortcut("cancel")}
+                        disabled={shortcutAction !== null || !cancelLeavesValid}
+                      >
+                        {shortcutAction === "cancel"
+                          ? t("detail.dialog.workflow.cancelBusy")
+                          : t("detail.dialog.workflow.cancel")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <DialogFooter>
                 <Button
                   variant="outline"
                   size="sm"
-                  aria-label={t("clone.orderAriaLabel", { orderExternalId })}
-                  onClick={() => {
-                    onCloneOrder({
-                      account: state.order.account,
-                      baseAsset: state.order.baseAsset,
-                      quoteAsset: state.order.quoteAsset,
-                      side: state.order.side,
-                      amountKind: state.order.amountKind,
-                      amountValue: state.order.amountValue,
-                      price: state.order.price === "0" ? "" : state.order.price,
-                    });
-                    onClose();
-                  }}
+                  className="sm:mr-auto"
+                  onClick={() =>
+                    onExecReport(
+                      orderExternalId,
+                      execReportInitialValuesFromOrder(
+                        state.order,
+                        state.events,
+                      ),
+                    )
+                  }
                 >
-                  <GitFork className="h-3.5 w-3.5" />
-                  {t("clone.orderButton")}
+                  {t("detail.dialog.trades.submitExecReport")}
                 </Button>
-              )}
-              <Button size="sm" onClick={onClose}>
-                {tc("actions.close")}
-              </Button>
-            </DialogFooter>
-          </div>
-        )}
+                {state.phase === "ready" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label={t("clone.orderAriaLabel", { orderExternalId })}
+                    onClick={() => {
+                      onCloneOrder({
+                        account: state.order.account,
+                        baseAsset: state.order.baseAsset,
+                        quoteAsset: state.order.quoteAsset,
+                        side: state.order.side,
+                        amountKind: state.order.amountKind,
+                        amountValue: state.order.amountValue,
+                        price:
+                          state.order.price === "0" ? "" : state.order.price,
+                      });
+                      onClose();
+                    }}
+                  >
+                    <GitFork className="h-3.5 w-3.5" />
+                    {t("clone.orderButton")}
+                  </Button>
+                )}
+                <Button size="sm" onClick={onClose}>
+                  {tc("actions.close")}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -2561,42 +2718,42 @@ function OrdersTable({
   onFilterAccount,
   onFilterInstrument,
   onClone,
-	}: OrdersTableProps) {
-	  const { t } = useTranslation("orders");
-	  const { t: tc } = useTranslation();
-	  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
-	  const [selectedIndex, setSelectedIndex] = useState(0);
+}: OrdersTableProps) {
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
-	  const focusRow = (index: number) => {
-	    rowRefs.current[index]?.focus();
-	  };
+  const focusRow = (index: number) => {
+    rowRefs.current[index]?.focus();
+  };
 
-	  const onRowKeyDown = (
-	    event: KeyboardEvent<HTMLTableRowElement>,
-	    index: number,
-	    order: Order,
-	  ) => {
-	    if (event.key === "Enter") {
-	      event.preventDefault();
-	      onRowClick(order);
-	      return;
-	    }
-	    if (event.key === "ArrowDown" || event.key === "j") {
-	      event.preventDefault();
-	      const next = Math.min(index + 1, orders.length - 1);
-	      setSelectedIndex(next);
-	      focusRow(next);
-	      return;
-	    }
-	    if (event.key === "ArrowUp" || event.key === "k") {
-	      event.preventDefault();
-	      const next = Math.max(index - 1, 0);
-	      setSelectedIndex(next);
-	      focusRow(next);
-	    }
-	  };
+  const onRowKeyDown = (
+    event: KeyboardEvent<HTMLTableRowElement>,
+    index: number,
+    order: Order,
+  ) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      onRowClick(order);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "j") {
+      event.preventDefault();
+      const next = Math.min(index + 1, orders.length - 1);
+      setSelectedIndex(next);
+      focusRow(next);
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "k") {
+      event.preventDefault();
+      const next = Math.max(index - 1, 0);
+      setSelectedIndex(next);
+      focusRow(next);
+    }
+  };
 
-	  // Amount label: "100 qty" or "500 vol".
+  // Amount label: "100 qty" or "500 vol".
   function amountLabel(kind: string, value: string): string {
     return kind === "quantity"
       ? t("amount.qty", { value })
@@ -2613,242 +2770,250 @@ function OrdersTable({
 
   return (
     <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead>
-              <ColumnHeader description={t("table.columnDescriptions.externalId")}>
-                {t("table.externalId")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="account"
-                label={t("table.account")}
-                description={t("table.columnDescriptions.account")}
-                direction={sortDirection(activeSort, activeOrder, "account")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="baseAsset"
-                label={t("table.instrument")}
-                description={t("table.columnDescriptions.instrument")}
-                direction={sortDirection(activeSort, activeOrder, "baseAsset")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead className="orders-side-cell">
-              <SortableHeader
-                field="side"
-                label={t("table.side")}
-                description={t("table.columnDescriptions.side")}
-                direction={sortDirection(activeSort, activeOrder, "side")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="amountValue"
-                label={t("table.amount")}
-                description={t("table.columnDescriptions.amount")}
-                direction={sortDirection(activeSort, activeOrder, "amountValue")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="price"
-                label={t("table.price")}
-                description={t("table.columnDescriptions.price")}
-                direction={sortDirection(activeSort, activeOrder, "price")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <ColumnHeader
-                description={t("table.columnDescriptions.displayPrice")}
-              >
-                {t("table.displayPrice")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <ColumnHeader description={t("table.columnDescriptions.commission")}>
-                {t("table.commission")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className="w-[var(--orders-status-column-width)]">
-              <SortableHeader
-                field="status"
-                label={t("table.status")}
-                description={t("table.columnDescriptions.status")}
-                direction={sortDirection(activeSort, activeOrder, "status")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="source"
-                label={t("table.source")}
-                description={t("table.columnDescriptions.source")}
-                direction={sortDirection(activeSort, activeOrder, "source")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="at"
-                label={t("table.time")}
-                description={t("table.columnDescriptions.time")}
-                direction={sortDirection(activeSort, activeOrder, "at")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead className="text-right" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-	          {orders.map((order, index) => (
-	            <TableRow
-	              key={order.id}
-	              ref={(node) => {
-	                rowRefs.current[index] = node;
-	              }}
-	              tabIndex={0}
-	              className={cn(
-	                "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-	                selectedIndex === index && "ring-1 ring-inset ring-ring",
-	              )}
-	              onClick={() => onRowClick(order)}
-	              onFocus={() => setSelectedIndex(index)}
-	              onKeyDown={(event) => onRowKeyDown(event, index, order)}
-	            >
-              <TableCell className="text-muted-lt">
-                <div className="flex min-w-0 items-center gap-1">
-                  <IdCell
-                    value={order.id}
-                    copyTitle={t("common:rowActions.copyId")}
-                    copiedTitle={t("common:rowActions.copiedId")}
-                  />
-                  {order.signed && (
-                    <span
-                      className="shrink-0"
-                      role="img"
-                      aria-label={t("table.signedIndicator")}
-                      title={t("table.signedIndicator")}
-                    >
-                      <KeyRound className="h-3.5 w-3.5 text-muted-lt" />
-                    </span>
-                  )}
-                  {order.dropCopy && (
-                    <Badge variant="danger" className="shrink-0">
-                      {t("dropCopy.badge")}
-                    </Badge>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell className="nums text-xs">
-                <div className="flex min-w-0 items-center gap-1">
-                  <IdCell
-                    value={order.account}
-                    copyTitle={t("common:rowActions.copyId")}
-                    copiedTitle={t("common:rowActions.copiedId")}
-                  />
-                  <span className="ml-auto flex shrink-0 items-center">
-                    <FilterByButton
-                      size={28}
-                      title={tc("rowActions.filterByTitle", {
-                        field: order.account,
-                      })}
-                      href={ordersFilterHref({ account: order.account })}
-                      onClick={() => onFilterAccount(order.account)}
-                    />
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead>
+            <ColumnHeader
+              description={t("table.columnDescriptions.externalId")}
+            >
+              {t("table.externalId")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="account"
+              label={t("table.account")}
+              description={t("table.columnDescriptions.account")}
+              direction={sortDirection(activeSort, activeOrder, "account")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="baseAsset"
+              label={t("table.instrument")}
+              description={t("table.columnDescriptions.instrument")}
+              direction={sortDirection(activeSort, activeOrder, "baseAsset")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead className="orders-side-cell">
+            <SortableHeader
+              field="side"
+              label={t("table.side")}
+              description={t("table.columnDescriptions.side")}
+              direction={sortDirection(activeSort, activeOrder, "side")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="amountValue"
+              label={t("table.amount")}
+              description={t("table.columnDescriptions.amount")}
+              direction={sortDirection(activeSort, activeOrder, "amountValue")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="price"
+              label={t("table.price")}
+              description={t("table.columnDescriptions.price")}
+              direction={sortDirection(activeSort, activeOrder, "price")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <ColumnHeader
+              description={t("table.columnDescriptions.displayPrice")}
+            >
+              {t("table.displayPrice")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <ColumnHeader
+              description={t("table.columnDescriptions.commission")}
+            >
+              {t("table.commission")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className="w-[var(--orders-status-column-width)]">
+            <SortableHeader
+              field="status"
+              label={t("table.status")}
+              description={t("table.columnDescriptions.status")}
+              direction={sortDirection(activeSort, activeOrder, "status")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="source"
+              label={t("table.source")}
+              description={t("table.columnDescriptions.source")}
+              direction={sortDirection(activeSort, activeOrder, "source")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="at"
+              label={t("table.time")}
+              description={t("table.columnDescriptions.time")}
+              direction={sortDirection(activeSort, activeOrder, "at")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead className="text-right" />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {orders.map((order, index) => (
+          <TableRow
+            key={order.id}
+            ref={(node) => {
+              rowRefs.current[index] = node;
+            }}
+            tabIndex={0}
+            className={cn(
+              "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              selectedIndex === index && "ring-1 ring-inset ring-ring",
+            )}
+            onClick={() => onRowClick(order)}
+            onFocus={() => setSelectedIndex(index)}
+            onKeyDown={(event) => onRowKeyDown(event, index, order)}
+          >
+            <TableCell className="text-muted-lt">
+              <div className="flex min-w-0 items-center gap-1">
+                <IdCell
+                  value={order.id}
+                  copyTitle={t("common:rowActions.copyId")}
+                  copiedTitle={t("common:rowActions.copiedId")}
+                />
+                {order.signed && (
+                  <span
+                    className="shrink-0"
+                    role="img"
+                    aria-label={t("table.signedIndicator")}
+                    title={t("table.signedIndicator")}
+                  >
+                    <KeyRound className="h-3.5 w-3.5 text-muted-lt" />
                   </span>
-                </div>
-              </TableCell>
-              <TableCell className="text-xs">
-                <div className="flex min-w-0 items-center gap-1">
-                  <span className="min-w-0 truncate">
-                    {instrument(order.baseAsset, order.quoteAsset)}
-                  </span>
-                  <span className="ml-auto flex shrink-0 items-center">
-                    <FilterByButton
-                      size={28}
-                      title={tc("rowActions.filterByTitle", {
-                        field: instrument(order.baseAsset, order.quoteAsset),
-                      })}
-                      href={ordersFilterHref({
-                        baseAsset: order.baseAsset,
-                        quoteAsset: order.quoteAsset,
-                      })}
-                      onClick={() =>
-                        onFilterInstrument(order.baseAsset, order.quoteAsset)
-                      }
-                    />
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell className="orders-side-cell">
-                <Badge variant={order.side === "buy" ? "buy" : "sell"}>
-                  {order.side}
-                </Badge>
-              </TableCell>
-              <TableCell className="nums text-xs">
-                {amountLabel(order.amountKind, order.amountValue)}
-              </TableCell>
-              <TableCell className="nums text-xs">
-                {priceLabel(order.price)}
-              </TableCell>
-              <TableCell className="nums text-xs text-muted-lt">
-                {order.displayPrice !== ""
-                  ? order.displayPrice
-                  : tc("value.none")}
-              </TableCell>
-              <TableCell className="nums text-xs text-muted-lt">
-                {commissionLabel(order.commissionSubtotals) || tc("value.none")}
-              </TableCell>
-              <TableCell className="w-[var(--orders-status-column-width)]">
-                <Badge variant={statusVariant(order.status)}>{order.status}</Badge>
-              </TableCell>
-              <TableCell>
-                <Badge variant={sourceVariant(order.source)}>{order.source}</Badge>
-              </TableCell>
-              <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
-                {formatDateTime(order.at)}
-              </TableCell>
-              <TableCell
-                className="text-right"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <RowActions>
-                  <ViewEntityButton
-                    title={tc("rowActions.viewTitle", {
-                      entity: order.id,
+                )}
+                {order.dropCopy && (
+                  <Badge variant="danger" className="shrink-0">
+                    {t("dropCopy.badge")}
+                  </Badge>
+                )}
+              </div>
+            </TableCell>
+            <TableCell className="nums text-xs">
+              <div className="flex min-w-0 items-center gap-1">
+                <IdCell
+                  value={order.account}
+                  copyTitle={t("common:rowActions.copyId")}
+                  copiedTitle={t("common:rowActions.copiedId")}
+                />
+                <span className="ml-auto flex shrink-0 items-center">
+                  <FilterByButton
+                    size={28}
+                    title={tc("rowActions.filterByTitle", {
+                      field: order.account,
                     })}
-                    href={ordersFilterHref({ order: order.id })}
-                    onClick={() => onRowClick(order)}
+                    href={ordersFilterHref({ account: order.account })}
+                    onClick={() => onFilterAccount(order.account)}
                   />
-                  <CloneButton
-                    title={t("clone.orderAriaLabel", {
-                      orderExternalId: order.id,
+                </span>
+              </div>
+            </TableCell>
+            <TableCell className="text-xs">
+              <div className="flex min-w-0 items-center gap-1">
+                <span className="min-w-0 truncate">
+                  {instrument(order.baseAsset, order.quoteAsset)}
+                </span>
+                <span className="ml-auto flex shrink-0 items-center">
+                  <FilterByButton
+                    size={28}
+                    title={tc("rowActions.filterByTitle", {
+                      field: instrument(order.baseAsset, order.quoteAsset),
+                    })}
+                    href={ordersFilterHref({
+                      baseAsset: order.baseAsset,
+                      quoteAsset: order.quoteAsset,
                     })}
                     onClick={() =>
-                      onClone({
-                        account: order.account,
-                        baseAsset: order.baseAsset,
-                        quoteAsset: order.quoteAsset,
-                        side: order.side,
-                        amountKind: order.amountKind,
-                        amountValue: order.amountValue,
-                        price: order.price === "0" ? "" : order.price,
-                      })
+                      onFilterInstrument(order.baseAsset, order.quoteAsset)
                     }
                   />
-                </RowActions>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
+                </span>
+              </div>
+            </TableCell>
+            <TableCell className="orders-side-cell">
+              <Badge variant={order.side === "buy" ? "buy" : "sell"}>
+                {order.side}
+              </Badge>
+            </TableCell>
+            <TableCell className="nums text-xs">
+              {amountLabel(order.amountKind, order.amountValue)}
+            </TableCell>
+            <TableCell className="nums text-xs">
+              {priceLabel(order.price)}
+            </TableCell>
+            <TableCell className="nums text-xs text-muted-lt">
+              {order.displayPrice !== ""
+                ? order.displayPrice
+                : tc("value.none")}
+            </TableCell>
+            <TableCell className="nums text-xs text-muted-lt">
+              {commissionLabel(order.commissionSubtotals) || tc("value.none")}
+            </TableCell>
+            <TableCell className="w-[var(--orders-status-column-width)]">
+              <Badge variant={statusVariant(order.status)}>
+                {order.status}
+              </Badge>
+            </TableCell>
+            <TableCell>
+              <Badge variant={sourceVariant(order.source)}>
+                {order.source}
+              </Badge>
+            </TableCell>
+            <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
+              {formatDateTime(order.at)}
+            </TableCell>
+            <TableCell
+              className="text-right"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <RowActions>
+                <ViewEntityButton
+                  title={tc("rowActions.viewTitle", {
+                    entity: order.id,
+                  })}
+                  href={ordersFilterHref({ order: order.id })}
+                  onClick={() => onRowClick(order)}
+                />
+                <CloneButton
+                  title={t("clone.orderAriaLabel", {
+                    orderExternalId: order.id,
+                  })}
+                  onClick={() =>
+                    onClone({
+                      account: order.account,
+                      baseAsset: order.baseAsset,
+                      quoteAsset: order.quoteAsset,
+                      side: order.side,
+                      amountKind: order.amountKind,
+                      amountValue: order.amountValue,
+                      price: order.price === "0" ? "" : order.price,
+                    })
+                  }
+                />
+              </RowActions>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
     </Table>
   );
 }
@@ -2865,7 +3030,10 @@ interface TradesTableProps {
   onOrderClick: (orderExternalId: string) => void;
   onFilterAccount: (account: string) => void;
   onFilterInstrument: (baseAsset: string, quoteAsset: string) => void;
-  onCloneExecReport: (orderExternalId: string, values: ExecReportInitialValues) => void;
+  onCloneExecReport: (
+    orderExternalId: string,
+    values: ExecReportInitialValues,
+  ) => void;
 }
 
 function TradesTable({
@@ -2877,41 +3045,41 @@ function TradesTable({
   onFilterAccount,
   onFilterInstrument,
   onCloneExecReport,
-	}: TradesTableProps) {
-		  const { t } = useTranslation("orders");
-		  const { t: tc } = useTranslation();
-		  const openInNewTabHint = useOpenInNewTabHint();
-		  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
-	  const [selectedIndex, setSelectedIndex] = useState(0);
+}: TradesTableProps) {
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
+  const openInNewTabHint = useOpenInNewTabHint();
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
-	  const focusRow = (index: number) => {
-	    rowRefs.current[index]?.focus();
-	  };
+  const focusRow = (index: number) => {
+    rowRefs.current[index]?.focus();
+  };
 
-	  const onRowKeyDown = (
-	    event: KeyboardEvent<HTMLTableRowElement>,
-	    index: number,
-	    trade: Trade,
-	  ) => {
-	    if (event.key === "Enter") {
-	      event.preventDefault();
-	      onOrderClick(trade.order);
-	      return;
-	    }
-	    if (event.key === "ArrowDown" || event.key === "j") {
-	      event.preventDefault();
-	      const next = Math.min(index + 1, trades.length - 1);
-	      setSelectedIndex(next);
-	      focusRow(next);
-	      return;
-	    }
-	    if (event.key === "ArrowUp" || event.key === "k") {
-	      event.preventDefault();
-	      const next = Math.max(index - 1, 0);
-	      setSelectedIndex(next);
-	      focusRow(next);
-	    }
-	  };
+  const onRowKeyDown = (
+    event: KeyboardEvent<HTMLTableRowElement>,
+    index: number,
+    trade: Trade,
+  ) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      onOrderClick(trade.order);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "j") {
+      event.preventDefault();
+      const next = Math.min(index + 1, trades.length - 1);
+      setSelectedIndex(next);
+      focusRow(next);
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "k") {
+      event.preventDefault();
+      const next = Math.max(index - 1, 0);
+      setSelectedIndex(next);
+      focusRow(next);
+    }
+  };
 
   const onOrderLinkClick = (
     event: MouseEvent<HTMLAnchorElement>,
@@ -2924,227 +3092,232 @@ function TradesTable({
     onOrderClick(orderExternalId);
   };
 
-	  return (
+  return (
     <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead>
-              <ColumnHeader description={t("table.columnDescriptions.externalId")}>
-                {t("table.externalId")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <ColumnHeader description={t("table.columnDescriptions.order")}>
-                {t("table.order")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="account"
-                label={t("table.account")}
-                description={t("table.columnDescriptions.account")}
-                direction={sortDirection(activeSort, activeOrder, "account")}
-                onSort={onSortChange}
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead>
+            <ColumnHeader
+              description={t("table.columnDescriptions.externalId")}
+            >
+              {t("table.externalId")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <ColumnHeader description={t("table.columnDescriptions.order")}>
+              {t("table.order")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="account"
+              label={t("table.account")}
+              description={t("table.columnDescriptions.account")}
+              direction={sortDirection(activeSort, activeOrder, "account")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="baseAsset"
+              label={t("table.instrument")}
+              description={t("table.columnDescriptions.instrument")}
+              direction={sortDirection(activeSort, activeOrder, "baseAsset")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead className="trades-side-cell">
+            <SortableHeader
+              field="side"
+              label={t("table.side")}
+              description={t("table.columnDescriptions.side")}
+              direction={sortDirection(activeSort, activeOrder, "side")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="quantity"
+              label={t("table.qty")}
+              description={t("table.columnDescriptions.qty")}
+              direction={sortDirection(activeSort, activeOrder, "quantity")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="price"
+              label={t("table.price")}
+              description={t("table.columnDescriptions.price")}
+              direction={sortDirection(activeSort, activeOrder, "price")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="lockPrice"
+              label={t("table.lockPrice")}
+              description={t("table.columnDescriptions.lockPrice")}
+              direction={sortDirection(activeSort, activeOrder, "lockPrice")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <ColumnHeader
+              description={t("table.columnDescriptions.commission")}
+            >
+              {t("table.commission")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="source"
+              label={t("table.source")}
+              description={t("table.columnDescriptions.source")}
+              direction={sortDirection(activeSort, activeOrder, "source")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="at"
+              label={t("table.time")}
+              description={t("table.columnDescriptions.time")}
+              direction={sortDirection(activeSort, activeOrder, "at")}
+              onSort={onSortChange}
+            />
+          </TableHead>
+          <TableHead className="text-right" />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {trades.map((trade, index) => (
+          <TableRow
+            key={trade.id}
+            ref={(node) => {
+              rowRefs.current[index] = node;
+            }}
+            tabIndex={0}
+            className={cn(
+              "hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              selectedIndex === index && "ring-1 ring-inset ring-ring",
+            )}
+            onFocus={() => setSelectedIndex(index)}
+            onKeyDown={(event) => onRowKeyDown(event, index, trade)}
+          >
+            <TableCell className="text-muted-lt">
+              <IdCell
+                value={trade.id}
+                copyTitle={t("common:rowActions.copyId")}
+                copiedTitle={t("common:rowActions.copiedId")}
               />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="baseAsset"
-                label={t("table.instrument")}
-                description={t("table.columnDescriptions.instrument")}
-                direction={sortDirection(activeSort, activeOrder, "baseAsset")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead className="trades-side-cell">
-              <SortableHeader
-                field="side"
-                label={t("table.side")}
-                description={t("table.columnDescriptions.side")}
-                direction={sortDirection(activeSort, activeOrder, "side")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="quantity"
-                label={t("table.qty")}
-                description={t("table.columnDescriptions.qty")}
-                direction={sortDirection(activeSort, activeOrder, "quantity")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="price"
-                label={t("table.price")}
-                description={t("table.columnDescriptions.price")}
-                direction={sortDirection(activeSort, activeOrder, "price")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="lockPrice"
-                label={t("table.lockPrice")}
-                description={t("table.columnDescriptions.lockPrice")}
-                direction={sortDirection(activeSort, activeOrder, "lockPrice")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <ColumnHeader description={t("table.columnDescriptions.commission")}>
-                {t("table.commission")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="source"
-                label={t("table.source")}
-                description={t("table.columnDescriptions.source")}
-                direction={sortDirection(activeSort, activeOrder, "source")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="at"
-                label={t("table.time")}
-                description={t("table.columnDescriptions.time")}
-                direction={sortDirection(activeSort, activeOrder, "at")}
-                onSort={onSortChange}
-              />
-            </TableHead>
-            <TableHead className="text-right" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-	          {trades.map((trade, index) => (
-	            <TableRow
-	              key={trade.id}
-	              ref={(node) => {
-	                rowRefs.current[index] = node;
-	              }}
-	              tabIndex={0}
-	              className={cn(
-	                "hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-	                selectedIndex === index && "ring-1 ring-inset ring-ring",
-	              )}
-	              onFocus={() => setSelectedIndex(index)}
-	              onKeyDown={(event) => onRowKeyDown(event, index, trade)}
-	            >
-              <TableCell className="text-muted-lt">
+            </TableCell>
+            <TableCell>
+              <IdCell
+                value={trade.order}
+                copyTitle={t("common:rowActions.copyId")}
+                copiedTitle={t("common:rowActions.copiedId")}
+              >
+                <a
+                  className="nums text-xs text-accent underline-offset-2 hover:underline"
+                  href={ordersFilterHref({ order: trade.order })}
+                  title={`${tc("rowActions.viewTitle", {
+                    entity: trade.order,
+                  })}\n${openInNewTabHint}`}
+                  onClick={(event) => onOrderLinkClick(event, trade.order)}
+                >
+                  {trade.order}
+                </a>
+              </IdCell>
+            </TableCell>
+            <TableCell className="nums text-xs">
+              <div className="flex min-w-0 items-center gap-1">
                 <IdCell
-                  value={trade.id}
+                  value={trade.account}
                   copyTitle={t("common:rowActions.copyId")}
                   copiedTitle={t("common:rowActions.copiedId")}
                 />
-              </TableCell>
-              <TableCell>
+                <span className="ml-auto flex shrink-0 items-center">
+                  <FilterByButton
+                    size={28}
+                    title={tc("rowActions.filterByTitle", {
+                      field: trade.account,
+                    })}
+                    href={ordersFilterHref({
+                      tab: "trades",
+                      account: trade.account,
+                    })}
+                    onClick={() => onFilterAccount(trade.account)}
+                  />
+                </span>
+              </div>
+            </TableCell>
+            <TableCell className="text-xs">
+              <div className="flex min-w-0 items-center gap-1">
                 <IdCell
-                  value={trade.order}
+                  value={instrument(trade.baseAsset, trade.quoteAsset)}
                   copyTitle={t("common:rowActions.copyId")}
                   copiedTitle={t("common:rowActions.copiedId")}
-                >
-                  <a
-                    className="nums text-xs text-accent underline-offset-2 hover:underline"
-                    href={ordersFilterHref({ order: trade.order })}
-                    title={`${tc("rowActions.viewTitle", {
-                      entity: trade.order,
-                    })}\n${openInNewTabHint}`}
-                    onClick={(event) => onOrderLinkClick(event, trade.order)}
-                  >
-                    {trade.order}
-                  </a>
-                </IdCell>
-              </TableCell>
-              <TableCell className="nums text-xs">
-                <div className="flex min-w-0 items-center gap-1">
-                  <IdCell
-                    value={trade.account}
-                    copyTitle={t("common:rowActions.copyId")}
-                    copiedTitle={t("common:rowActions.copiedId")}
-                  />
-                  <span className="ml-auto flex shrink-0 items-center">
-                    <FilterByButton
-                      size={28}
-                      title={tc("rowActions.filterByTitle", {
-                        field: trade.account,
-                      })}
-                      href={ordersFilterHref({
-                        tab: "trades",
-                        account: trade.account,
-                      })}
-                      onClick={() => onFilterAccount(trade.account)}
-                    />
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell className="text-xs">
-                <div className="flex min-w-0 items-center gap-1">
-                  <IdCell
-                    value={instrument(trade.baseAsset, trade.quoteAsset)}
-                    copyTitle={t("common:rowActions.copyId")}
-                    copiedTitle={t("common:rowActions.copiedId")}
-                  />
-                  <span className="ml-auto flex shrink-0 items-center">
-                    <FilterByButton
-                      size={28}
-                      title={tc("rowActions.filterByTitle", {
-                        field: instrument(trade.baseAsset, trade.quoteAsset),
-                      })}
-                      href={ordersFilterHref({
-                        tab: "trades",
-                        baseAsset: trade.baseAsset,
-                        quoteAsset: trade.quoteAsset,
-                      })}
-                      onClick={() =>
-                        onFilterInstrument(trade.baseAsset, trade.quoteAsset)
-                      }
-                    />
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell className="trades-side-cell">
-                <Badge variant={trade.side === "buy" ? "buy" : "sell"}>
-                  {trade.side}
-                </Badge>
-              </TableCell>
-              <TableCell className="nums text-xs">{trade.quantity}</TableCell>
-              <TableCell className="nums text-xs">{trade.price}</TableCell>
-              <TableCell className="nums text-xs text-muted-lt">
-                {trade.lockPrice || tc("value.none")}
-              </TableCell>
-              <TableCell className="nums text-xs text-muted-lt">
-                {tradeCommissionLabel(trade) || tc("value.none")}
-              </TableCell>
-              <TableCell>
-                <Badge variant={sourceVariant(trade.source)}>{trade.source}</Badge>
-              </TableCell>
-              <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
-                {formatDateTime(trade.at)}
-              </TableCell>
-              <TableCell className="text-right">
-                <RowActions>
-                  <CloneButton
-                    title={t("clone.execReportAriaLabel", {
-                      tradeId: trade.id,
+                />
+                <span className="ml-auto flex shrink-0 items-center">
+                  <FilterByButton
+                    size={28}
+                    title={tc("rowActions.filterByTitle", {
+                      field: instrument(trade.baseAsset, trade.quoteAsset),
+                    })}
+                    href={ordersFilterHref({
+                      tab: "trades",
+                      baseAsset: trade.baseAsset,
+                      quoteAsset: trade.quoteAsset,
                     })}
                     onClick={() =>
-                      onCloneExecReport(trade.order, {
-                        hasFillPayload: true,
-                        quantity: trade.quantity,
-                        price: trade.price,
-                        lockPrice: trade.lockPrice,
-                        commission: trade.commission,
-                      })
+                      onFilterInstrument(trade.baseAsset, trade.quoteAsset)
                     }
                   />
-                </RowActions>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
+                </span>
+              </div>
+            </TableCell>
+            <TableCell className="trades-side-cell">
+              <Badge variant={trade.side === "buy" ? "buy" : "sell"}>
+                {trade.side}
+              </Badge>
+            </TableCell>
+            <TableCell className="nums text-xs">{trade.quantity}</TableCell>
+            <TableCell className="nums text-xs">{trade.price}</TableCell>
+            <TableCell className="nums text-xs text-muted-lt">
+              {trade.lockPrice || tc("value.none")}
+            </TableCell>
+            <TableCell className="nums text-xs text-muted-lt">
+              {tradeCommissionLabel(trade) || tc("value.none")}
+            </TableCell>
+            <TableCell>
+              <Badge variant={sourceVariant(trade.source)}>
+                {trade.source}
+              </Badge>
+            </TableCell>
+            <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
+              {formatDateTime(trade.at)}
+            </TableCell>
+            <TableCell className="text-right">
+              <RowActions>
+                <CloneButton
+                  title={t("clone.execReportAriaLabel", {
+                    tradeId: trade.id,
+                  })}
+                  onClick={() =>
+                    onCloneExecReport(trade.order, {
+                      quantity: trade.quantity,
+                      price: trade.price,
+                      lockPrice: trade.lockPrice,
+                      commission: trade.commission,
+                    })
+                  }
+                />
+              </RowActions>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
     </Table>
   );
 }
@@ -3286,7 +3459,10 @@ function addAtRange(
     filter.atMode = mode;
     filter.atMin = min;
   } else if (
-    (mode === "lt" || mode === "lte" || mode === "less_than" || mode === "before") &&
+    (mode === "lt" ||
+      mode === "lte" ||
+      mode === "less_than" ||
+      mode === "before") &&
     min !== undefined
   ) {
     filter.atMode = mode;
@@ -3457,10 +3633,7 @@ function OrderStatusFilterGroup({
     onChange(ALL_ORDER_STATUSES.filter((value) => next.has(value)));
   };
 
-  const renderGroup = (
-    title: string,
-    group: readonly OrderStatusValue[],
-  ) => {
+  const renderGroup = (title: string, group: readonly OrderStatusValue[]) => {
     const nextWithoutGroup = selected.filter(
       (status) => !group.includes(status),
     );
@@ -3559,13 +3732,12 @@ export function Orders() {
     params.get("tab") === "trades" ? "trades" : "orders",
   );
   const initialBaseAsset = params.get("baseAsset") ?? "";
-  const initialAccount = globalAccountFilter.account || params.get("account") || "";
+  const initialAccount =
+    globalAccountFilter.account || params.get("account") || "";
 
   // Filter state — seeded from URL on mount
   const [orderAccount, setOrderAccount] = useState(initialAccount);
-  const [orderAccountDraft, setOrderAccountDraft] = useState(
-    initialAccount,
-  );
+  const [orderAccountDraft, setOrderAccountDraft] = useState(initialAccount);
   const [orderSource, setOrderSource] = useState(params.get("source") ?? "");
   const [orderSide, setOrderSide] = useState<"all" | OrderSide>(
     params.get("side") === "buy" || params.get("side") === "sell"
@@ -3592,13 +3764,21 @@ export function Orders() {
   const [orderAmountMode, setOrderAmountMode] = useState<RangeFilterMode>(
     rangeModeFromParams(params, "amountMode"),
   );
-  const [orderAmountMin, setOrderAmountMin] = useState(params.get("amountMin") ?? "");
-  const [orderAmountMax, setOrderAmountMax] = useState(params.get("amountMax") ?? "");
+  const [orderAmountMin, setOrderAmountMin] = useState(
+    params.get("amountMin") ?? "",
+  );
+  const [orderAmountMax, setOrderAmountMax] = useState(
+    params.get("amountMax") ?? "",
+  );
   const [orderPriceMode, setOrderPriceMode] = useState<RangeFilterMode>(
     rangeModeFromParams(params, "priceMode"),
   );
-  const [orderPriceMin, setOrderPriceMin] = useState(params.get("priceMin") ?? "");
-  const [orderPriceMax, setOrderPriceMax] = useState(params.get("priceMax") ?? "");
+  const [orderPriceMin, setOrderPriceMin] = useState(
+    params.get("priceMin") ?? "",
+  );
+  const [orderPriceMax, setOrderPriceMax] = useState(
+    params.get("priceMax") ?? "",
+  );
   const [orderAtMode, setOrderAtMode] = useState<RangeFilterMode>(
     rangeModeFromParams(params, "atMode"),
   );
@@ -3614,9 +3794,7 @@ export function Orders() {
   }>({ sort: "at", order: "desc" });
 
   const [tradeAccount, setTradeAccount] = useState(initialAccount);
-  const [tradeAccountDraft, setTradeAccountDraft] = useState(
-    initialAccount,
-  );
+  const [tradeAccountDraft, setTradeAccountDraft] = useState(initialAccount);
   const [tradeExternalId, setTradeExternalId] = useState(
     params.get("id") ?? "",
   );
@@ -3655,8 +3833,12 @@ export function Orders() {
   const [tradePriceMode, setTradePriceMode] = useState<RangeFilterMode>(
     rangeModeFromParams(params, "priceMode", NUMBER_FILTER_MODES, "eq"),
   );
-  const [tradePriceMin, setTradePriceMin] = useState(params.get("priceMin") ?? "");
-  const [tradePriceMax, setTradePriceMax] = useState(params.get("priceMax") ?? "");
+  const [tradePriceMin, setTradePriceMin] = useState(
+    params.get("priceMin") ?? "",
+  );
+  const [tradePriceMax, setTradePriceMax] = useState(
+    params.get("priceMax") ?? "",
+  );
   const [tradeLockPriceMode, setTradeLockPriceMode] = useState<RangeFilterMode>(
     rangeModeFromParams(params, "lockPriceMode", NUMBER_FILTER_MODES, "eq"),
   );
@@ -3997,8 +4179,7 @@ export function Orders() {
   ) {
     const nextAccount = value.trim();
     return {
-      active:
-        nextAccount !== "" && nextAccount === globalAccountFilter.account,
+      active: nextAccount !== "" && nextAccount === globalAccountFilter.account,
       disabled: nextAccount === "",
       activeLabel: tc("filters.globalAccount.active"),
       inactiveLabel: tc("filters.globalAccount.inactive"),
@@ -4137,7 +4318,10 @@ export function Orders() {
       filter.atMax = tradeAtTo;
     }
     if (tradeQuantityMode === "between") {
-      if (debouncedTradeQuantityMin !== "" && debouncedTradeQuantityMax !== "") {
+      if (
+        debouncedTradeQuantityMin !== "" &&
+        debouncedTradeQuantityMax !== ""
+      ) {
         filter.quantityMode = tradeQuantityMode;
         filter.quantityMin = debouncedTradeQuantityMin;
         filter.quantityMax = debouncedTradeQuantityMax;
@@ -4157,7 +4341,10 @@ export function Orders() {
       filter.priceMin = debouncedTradePriceMin;
     }
     if (tradeLockPriceMode === "between") {
-      if (debouncedTradeLockPriceMin !== "" && debouncedTradeLockPriceMax !== "") {
+      if (
+        debouncedTradeLockPriceMin !== "" &&
+        debouncedTradeLockPriceMax !== ""
+      ) {
         filter.lockPriceMode = tradeLockPriceMode;
         filter.lockPriceMin = debouncedTradeLockPriceMin;
         filter.lockPriceMax = debouncedTradeLockPriceMax;
@@ -4195,7 +4382,9 @@ export function Orders() {
 
   const accountSuggestionQuery =
     tab === "orders" ? debouncedOrderAccountDraft : debouncedTradeAccountDraft;
-  const [allAccountSuggestions, setAllAccountSuggestions] = useState<string[]>([]);
+  const [allAccountSuggestions, setAllAccountSuggestions] = useState<string[]>(
+    [],
+  );
   const visibleAccountSuggestions =
     accountSuggestionQuery.trim() === "" ? [] : allAccountSuggestions;
   useEffect(() => {
@@ -4283,14 +4472,22 @@ export function Orders() {
 
   // Dialog state
   const [submitOpen, setSubmitOpen] = useState(false);
-  const [submitInitialValues, setSubmitInitialValues] = useState<OrderInitialValues | undefined>(undefined);
-  const [detailOrderExternalId, setDetailOrderExternalId] = useState<string | null>(
-    params.get("order"),
-  );
+  const [submitInitialValues, setSubmitInitialValues] = useState<
+    OrderInitialValues | undefined
+  >(undefined);
+  const [detailOrderExternalId, setDetailOrderExternalId] = useState<
+    string | null
+  >(params.get("order"));
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
-  const [detailSuccessBanner, setDetailSuccessBanner] = useState<string | undefined>(undefined);
-  const [execReportOrderExternalId, setExecReportOrderExternalId] = useState<string | null>(null);
-  const [execReportInitialValues, setExecReportInitialValues] = useState<ExecReportInitialValues | undefined>(undefined);
+  const [detailSuccessBanner, setDetailSuccessBanner] = useState<
+    string | undefined
+  >(undefined);
+  const [execReportOrderExternalId, setExecReportOrderExternalId] = useState<
+    string | null
+  >(null);
+  const [execReportInitialValues, setExecReportInitialValues] = useState<
+    ExecReportInitialValues | undefined
+  >(undefined);
   const [lookupId, setLookupId] = useState("");
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupNotFoundOpen, setLookupNotFoundOpen] = useState(false);
@@ -4335,7 +4532,10 @@ export function Orders() {
     setDetailSuccessBanner(undefined);
   }
 
-  function openExecReport(externalId: string, values?: ExecReportInitialValues) {
+  function openExecReport(
+    externalId: string,
+    values?: ExecReportInitialValues,
+  ) {
     setExecReportOrderExternalId(externalId);
     setExecReportInitialValues(values);
   }
@@ -4350,20 +4550,25 @@ export function Orders() {
     setSubmitOpen(true);
   }
 
-  function openCloneExecReport(orderExternalId: string, values: ExecReportInitialValues) {
+  function openCloneExecReport(
+    orderExternalId: string,
+    values: ExecReportInitialValues,
+  ) {
     setDetailOrderExternalId(null);
     setExecReportInitialValues(values);
     setExecReportOrderExternalId(orderExternalId);
   }
 
   const activeLoad = tab === "orders" ? ordersResult : tradesResult;
-  const activeReload = tab === "orders" ? ordersResult.reload : tradesResult.reload;
+  const activeReload =
+    tab === "orders" ? ordersResult.reload : tradesResult.reload;
   // Render the server's rows as-is. A mutation refetches (reload) so the table
   // reflects the engine's resulting state, never the operator's requested one.
   const orderRows =
     ordersResult.load.state === "ready" ? ordersResult.load.data.items : [];
   const tradeRows = useMemo(
-    () => (tradesResult.load.state === "ready" ? tradesResult.load.data.items : []),
+    () =>
+      tradesResult.load.state === "ready" ? tradesResult.load.data.items : [],
     [tradesResult.load],
   );
   // Deep-link: open the trade's order detail when the applied trade id changes.
@@ -4415,7 +4620,9 @@ export function Orders() {
       canPrevious={tradePage > 0}
       canNext={hasMoreTrades}
       knownTotalPages={
-        tradesPage !== null ? knownPageCount(tradesPage.total, tradeSize) : undefined
+        tradesPage !== null
+          ? knownPageCount(tradesPage.total, tradeSize)
+          : undefined
       }
       onPrevious={() => setTradePage((p) => Math.max(0, p - 1))}
       onNext={() => setTradePage((p) => p + 1)}
@@ -4425,19 +4632,21 @@ export function Orders() {
 
   // When the active tab is filtered to a single account, opening "Add order"
   // pre-fills that account; with no account filter, the form opens blank.
-  const activeAccountFilter = (tab === "orders" ? orderAccount : tradeAccount).trim();
+  const activeAccountFilter = (
+    tab === "orders" ? orderAccount : tradeAccount
+  ).trim();
   const activeAccountGlobalLocked =
     globalAccountFilter.account !== "" &&
     activeAccountFilter === globalAccountFilter.account;
   const activeSourceFilter =
     tab === "orders" ? normalizedOrderSource : normalizedTradeSource;
   const activeExportFilters = {
-	    ...(activeAccountFilter ? { account: activeAccountFilter } : {}),
-	    ...(activeSourceFilter ? { source: activeSourceFilter } : {}),
-	    ...(tab === "trades" && appliedTradeExternalId.trim()
-	      ? { id: appliedTradeExternalId.trim() }
-	      : {}),
-	  };
+    ...(activeAccountFilter ? { account: activeAccountFilter } : {}),
+    ...(activeSourceFilter ? { source: activeSourceFilter } : {}),
+    ...(tab === "trades" && appliedTradeExternalId.trim()
+      ? { id: appliedTradeExternalId.trim() }
+      : {}),
+  };
 
   const shareHref = useMemo(() => {
     const query = new URLSearchParams();
@@ -4516,45 +4725,55 @@ export function Orders() {
     tradeSide,
   ]);
 
-  const orderRangeValue = useCallback((mode: RangeFilterMode, min: string, max: string) => {
-    const operator = t(`filter.range.${mode}`);
-    const from = min.trim();
-    const to = max.trim();
-    if (mode === "between") {
-      return [operator, from, to].filter(Boolean).join(" ");
-    }
-    if (mode === "less_than") {
-      return [operator, to || from].filter(Boolean).join(" ");
-    }
-    return [operator, from || to].filter(Boolean).join(" ");
-  }, [t]);
-  const numberRangeValue = useCallback((mode: RangeFilterMode, min: string, max: string) => {
-    const operator = tc(`operators.number.${mode}`);
-    const from = min.trim();
-    const to = max.trim();
-    if (mode === "between") {
-      return [operator, from, to].filter(Boolean).join(" ");
-    }
-    if (mode === "lt" || mode === "lte") {
-      return [operator, to || from].filter(Boolean).join(" ");
-    }
-    return [operator, from || to].filter(Boolean).join(" ");
-  }, [tc]);
-  const timeRangeValue = useCallback((mode: RangeFilterMode, min: string, max: string) => {
-    const operator = tc(`operators.time.${mode}`);
-    const from = min.trim();
-    const to = max.trim();
-    if (mode === "between") {
-      return [operator, from, to].filter(Boolean).join(" ");
-    }
-    if (mode === "before") {
-      return [operator, to || from].filter(Boolean).join(" ");
-    }
-    return [operator, from || to].filter(Boolean).join(" ");
-  }, [tc]);
+  const orderRangeValue = useCallback(
+    (mode: RangeFilterMode, min: string, max: string) => {
+      const operator = t(`filter.range.${mode}`);
+      const from = min.trim();
+      const to = max.trim();
+      if (mode === "between") {
+        return [operator, from, to].filter(Boolean).join(" ");
+      }
+      if (mode === "less_than") {
+        return [operator, to || from].filter(Boolean).join(" ");
+      }
+      return [operator, from || to].filter(Boolean).join(" ");
+    },
+    [t],
+  );
+  const numberRangeValue = useCallback(
+    (mode: RangeFilterMode, min: string, max: string) => {
+      const operator = tc(`operators.number.${mode}`);
+      const from = min.trim();
+      const to = max.trim();
+      if (mode === "between") {
+        return [operator, from, to].filter(Boolean).join(" ");
+      }
+      if (mode === "lt" || mode === "lte") {
+        return [operator, to || from].filter(Boolean).join(" ");
+      }
+      return [operator, from || to].filter(Boolean).join(" ");
+    },
+    [tc],
+  );
+  const timeRangeValue = useCallback(
+    (mode: RangeFilterMode, min: string, max: string) => {
+      const operator = tc(`operators.time.${mode}`);
+      const from = min.trim();
+      const to = max.trim();
+      if (mode === "between") {
+        return [operator, from, to].filter(Boolean).join(" ");
+      }
+      if (mode === "before") {
+        return [operator, to || from].filter(Boolean).join(" ");
+      }
+      return [operator, from || to].filter(Boolean).join(" ");
+    },
+    [tc],
+  );
 
   const activeFilterChips = useMemo(() => {
-    const entries: Array<{ key: string; label: string; onRemove: () => void }> = [];
+    const entries: Array<{ key: string; label: string; onRemove: () => void }> =
+      [];
     const add = (key: string, label: string, onRemove: () => void) => {
       entries.push({ key, label, onRemove });
     };
@@ -4576,10 +4795,14 @@ export function Orders() {
         });
       }
       if (orderSide !== "all") {
-        add("side", `${t("filter.sideLabel")}: ${t(`filter.side.${orderSide}`)}`, () => {
-          setOrderSide("all");
-          setOrderPage(0);
-        });
+        add(
+          "side",
+          `${t("filter.sideLabel")}: ${t(`filter.side.${orderSide}`)}`,
+          () => {
+            setOrderSide("all");
+            setOrderPage(0);
+          },
+        );
       }
       if (orderStatuses.length > 0) {
         const value = statusIsActive
@@ -4594,51 +4817,75 @@ export function Orders() {
         });
       }
       if (orderBaseAsset.trim() !== "") {
-        add("baseAsset", `${t("filter.baseAssetLabel")}: ${orderBaseAsset.trim()}`, () => {
-          setOrderBaseAssetDraft("");
-          setOrderBaseAsset("");
-          setOrderPage(0);
-        });
+        add(
+          "baseAsset",
+          `${t("filter.baseAssetLabel")}: ${orderBaseAsset.trim()}`,
+          () => {
+            setOrderBaseAssetDraft("");
+            setOrderBaseAsset("");
+            setOrderPage(0);
+          },
+        );
       }
       if (orderQuoteAsset.trim() !== "") {
-        add("quoteAsset", `${t("filter.quoteAssetLabel")}: ${orderQuoteAsset.trim()}`, () => {
-          setOrderQuoteAssetDraft("");
-          setOrderQuoteAsset("");
-          setOrderPage(0);
-        });
+        add(
+          "quoteAsset",
+          `${t("filter.quoteAssetLabel")}: ${orderQuoteAsset.trim()}`,
+          () => {
+            setOrderQuoteAssetDraft("");
+            setOrderQuoteAsset("");
+            setOrderPage(0);
+          },
+        );
       }
       if (orderAmountMode !== "all") {
-        add("amount", `${t("filter.amountLabel")}: ${orderRangeValue(orderAmountMode, orderAmountMin, orderAmountMax)}`, () => {
-          setOrderAmountMode("all");
-          setOrderAmountMin("");
-          setOrderAmountMax("");
-          setOrderPage(0);
-        });
+        add(
+          "amount",
+          `${t("filter.amountLabel")}: ${orderRangeValue(orderAmountMode, orderAmountMin, orderAmountMax)}`,
+          () => {
+            setOrderAmountMode("all");
+            setOrderAmountMin("");
+            setOrderAmountMax("");
+            setOrderPage(0);
+          },
+        );
       }
       if (orderPriceMode !== "all") {
-        add("price", `${t("filter.priceLabel")}: ${orderRangeValue(orderPriceMode, orderPriceMin, orderPriceMax)}`, () => {
-          setOrderPriceMode("all");
-          setOrderPriceMin("");
-          setOrderPriceMax("");
-          setOrderPage(0);
-        });
+        add(
+          "price",
+          `${t("filter.priceLabel")}: ${orderRangeValue(orderPriceMode, orderPriceMin, orderPriceMax)}`,
+          () => {
+            setOrderPriceMode("all");
+            setOrderPriceMin("");
+            setOrderPriceMax("");
+            setOrderPage(0);
+          },
+        );
       }
       if (orderAtMode !== "all") {
-        add("at", `${t("filter.timeLabel")}: ${orderRangeValue(orderAtMode, orderAtMin, orderAtMax)}`, () => {
-          setOrderAtMode("all");
-          setOrderAtMin("");
-          setOrderAtMax("");
-          setOrderPage(0);
-        });
+        add(
+          "at",
+          `${t("filter.timeLabel")}: ${orderRangeValue(orderAtMode, orderAtMin, orderAtMax)}`,
+          () => {
+            setOrderAtMode("all");
+            setOrderAtMin("");
+            setOrderAtMax("");
+            setOrderPage(0);
+          },
+        );
       }
       return entries;
     }
     if (appliedTradeExternalId.trim() !== "") {
-      add("externalId", `${t("table.externalId")}: ${appliedTradeExternalId.trim()}`, () => {
-        setTradeExternalId("");
-        setAppliedTradeExternalId("");
-        resetTradePage();
-      });
+      add(
+        "externalId",
+        `${t("table.externalId")}: ${appliedTradeExternalId.trim()}`,
+        () => {
+          setTradeExternalId("");
+          setAppliedTradeExternalId("");
+          resetTradePage();
+        },
+      );
     }
     if (tradeAccount.trim() !== "") {
       add("account", `${t("table.account")}: ${tradeAccount.trim()}`, () => {
@@ -4657,64 +4904,100 @@ export function Orders() {
       });
     }
     if (tradeSide !== "all") {
-      add("side", `${t("filter.sideLabel")}: ${t(`filter.side.${tradeSide}`)}`, () => {
-        setTradeSide("all");
-        resetTradePage();
-      });
+      add(
+        "side",
+        `${t("filter.sideLabel")}: ${t(`filter.side.${tradeSide}`)}`,
+        () => {
+          setTradeSide("all");
+          resetTradePage();
+        },
+      );
     }
     if (tradeBaseAsset.trim() !== "") {
-      add("baseAsset", `${t("filter.baseAssetLabel")}: ${tradeBaseAsset.trim()}`, () => {
-        setTradeBaseAssetDraft("");
-        setTradeBaseAsset("");
-        resetTradePage();
-      });
+      add(
+        "baseAsset",
+        `${t("filter.baseAssetLabel")}: ${tradeBaseAsset.trim()}`,
+        () => {
+          setTradeBaseAssetDraft("");
+          setTradeBaseAsset("");
+          resetTradePage();
+        },
+      );
     }
     if (tradeQuoteAsset.trim() !== "") {
-      add("quoteAsset", `${t("filter.quoteAssetLabel")}: ${tradeQuoteAsset.trim()}`, () => {
-        setTradeQuoteAssetDraft("");
-        setTradeQuoteAsset("");
-        resetTradePage();
-      });
+      add(
+        "quoteAsset",
+        `${t("filter.quoteAssetLabel")}: ${tradeQuoteAsset.trim()}`,
+        () => {
+          setTradeQuoteAssetDraft("");
+          setTradeQuoteAsset("");
+          resetTradePage();
+        },
+      );
     }
-    if (tradeAtMode !== "after" || tradeAtMin.trim() !== "" || tradeAtMax.trim() !== "") {
-      add("at", `${t("filter.timeLabel")}: ${timeRangeValue(tradeAtMode, tradeAtMin, tradeAtMax)}`, () => {
-        setTradeAtMode("after");
-        setTradeAtMin("");
-        setTradeAtMax("");
-        resetTradePage();
-      });
+    if (
+      tradeAtMode !== "after" ||
+      tradeAtMin.trim() !== "" ||
+      tradeAtMax.trim() !== ""
+    ) {
+      add(
+        "at",
+        `${t("filter.timeLabel")}: ${timeRangeValue(tradeAtMode, tradeAtMin, tradeAtMax)}`,
+        () => {
+          setTradeAtMode("after");
+          setTradeAtMin("");
+          setTradeAtMax("");
+          resetTradePage();
+        },
+      );
     }
     if (
       tradeQuantityMode !== "eq" ||
       tradeQuantityMin.trim() !== "" ||
       tradeQuantityMax.trim() !== ""
     ) {
-      add("quantity", `${t("table.qty")}: ${numberRangeValue(tradeQuantityMode, tradeQuantityMin, tradeQuantityMax)}`, () => {
-        setTradeQuantityMode("eq");
-        setTradeQuantityMin("");
-        setTradeQuantityMax("");
-        resetTradePage();
-      });
+      add(
+        "quantity",
+        `${t("table.qty")}: ${numberRangeValue(tradeQuantityMode, tradeQuantityMin, tradeQuantityMax)}`,
+        () => {
+          setTradeQuantityMode("eq");
+          setTradeQuantityMin("");
+          setTradeQuantityMax("");
+          resetTradePage();
+        },
+      );
     }
-    if (tradePriceMode !== "eq" || tradePriceMin.trim() !== "" || tradePriceMax.trim() !== "") {
-      add("price", `${t("table.price")}: ${numberRangeValue(tradePriceMode, tradePriceMin, tradePriceMax)}`, () => {
-        setTradePriceMode("eq");
-        setTradePriceMin("");
-        setTradePriceMax("");
-        resetTradePage();
-      });
+    if (
+      tradePriceMode !== "eq" ||
+      tradePriceMin.trim() !== "" ||
+      tradePriceMax.trim() !== ""
+    ) {
+      add(
+        "price",
+        `${t("table.price")}: ${numberRangeValue(tradePriceMode, tradePriceMin, tradePriceMax)}`,
+        () => {
+          setTradePriceMode("eq");
+          setTradePriceMin("");
+          setTradePriceMax("");
+          resetTradePage();
+        },
+      );
     }
     if (
       tradeLockPriceMode !== "eq" ||
       tradeLockPriceMin.trim() !== "" ||
       tradeLockPriceMax.trim() !== ""
     ) {
-      add("lockPrice", `${t("table.lockPrice")}: ${numberRangeValue(tradeLockPriceMode, tradeLockPriceMin, tradeLockPriceMax)}`, () => {
-        setTradeLockPriceMode("eq");
-        setTradeLockPriceMin("");
-        setTradeLockPriceMax("");
-        resetTradePage();
-      });
+      add(
+        "lockPrice",
+        `${t("table.lockPrice")}: ${numberRangeValue(tradeLockPriceMode, tradeLockPriceMin, tradeLockPriceMax)}`,
+        () => {
+          setTradeLockPriceMode("eq");
+          setTradeLockPriceMin("");
+          setTradeLockPriceMax("");
+          resetTradePage();
+        },
+      );
     }
     return entries;
   }, [
@@ -4763,9 +5046,10 @@ export function Orders() {
   const visibleFilterChips = useMemo(
     () =>
       tab === "orders"
-        ? activeFilterChips.filter((entry) =>
-            ["amount", "price", "at"].includes(entry.key) ||
-            (entry.key === "status" && !statusIsActive),
+        ? activeFilterChips.filter(
+            (entry) =>
+              ["amount", "price", "at"].includes(entry.key) ||
+              (entry.key === "status" && !statusIsActive),
           )
         : activeFilterChips.filter((entry) =>
             ["at", "quantity", "price", "lockPrice"].includes(entry.key),
@@ -4835,7 +5119,7 @@ export function Orders() {
     if (lookupBusy) {
       return;
     }
-	    const externalId = value.trim();
+    const externalId = value.trim();
     if (!externalId) {
       return;
     }
@@ -4848,44 +5132,44 @@ export function Orders() {
       setLookupNotFoundOpen(true);
     } finally {
       setLookupBusy(false);
-	    }
+    }
   }
 
-	  useEffect(() => {
-	    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-	      if (event.defaultPrevented || isEditableTarget(event.target)) {
-	        return;
-	      }
-	      if (event.key === "/") {
-	        event.preventDefault();
-	        filterRegionRef.current
-	          ?.querySelector<HTMLInputElement>("input:not([disabled])")
-	          ?.focus();
-	        return;
-	      }
-	      if (event.key !== "Escape") {
-	        return;
-	      }
-	      if (detailOrderExternalId !== null) {
-	        setDetailOrderExternalId(null);
-	        setDetailSuccessBanner(undefined);
-	        return;
-	      }
-	      if (execReportOrderExternalId !== null) {
-	        setExecReportOrderExternalId(null);
-	        setExecReportInitialValues(undefined);
-	        return;
-	      }
-	      if (submitOpen) {
-	        setSubmitInitialValues(undefined);
-	        setSubmitOpen(false);
-	      }
-	    };
-	    window.addEventListener("keydown", onKeyDown);
-	    return () => window.removeEventListener("keydown", onKeyDown);
-	  }, [detailOrderExternalId, execReportOrderExternalId, submitOpen]);
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || isEditableTarget(event.target)) {
+        return;
+      }
+      if (event.key === "/") {
+        event.preventDefault();
+        filterRegionRef.current
+          ?.querySelector<HTMLInputElement>("input:not([disabled])")
+          ?.focus();
+        return;
+      }
+      if (event.key !== "Escape") {
+        return;
+      }
+      if (detailOrderExternalId !== null) {
+        setDetailOrderExternalId(null);
+        setDetailSuccessBanner(undefined);
+        return;
+      }
+      if (execReportOrderExternalId !== null) {
+        setExecReportOrderExternalId(null);
+        setExecReportInitialValues(undefined);
+        return;
+      }
+      if (submitOpen) {
+        setSubmitInitialValues(undefined);
+        setSubmitOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [detailOrderExternalId, execReportOrderExternalId, submitOpen]);
 
-	  return (
+  return (
     <Page
       title={t("title")}
       actions={
@@ -4935,9 +5219,7 @@ export function Orders() {
         </div>
       }
     >
-      <p className="text-xs text-muted-lt">
-        {t("subtitle")}
-      </p>
+      <p className="text-xs text-muted-lt">{t("subtitle")}</p>
 
       {/* Tab toggle */}
       <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
@@ -5018,7 +5300,9 @@ export function Orders() {
                 label={tc("exactLookup.label")}
                 value={lookupId}
                 placeholder={t("lookup.placeholder")}
-                openLabel={lookupBusy ? t("lookup.searching") : tc("exactLookup.open")}
+                openLabel={
+                  lookupBusy ? t("lookup.searching") : tc("exactLookup.open")
+                }
                 onChange={setLookupId}
                 onOpen={(value) => void openOrderById(value)}
                 style={{ width: "100%" }}
@@ -5174,7 +5458,9 @@ export function Orders() {
                     <SelectValue placeholder={t("filter.sourceAll")} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="_all">{t("filter.sourceAll")}</SelectItem>
+                    <SelectItem value="_all">
+                      {t("filter.sourceAll")}
+                    </SelectItem>
                     {SOURCES.filter(Boolean).map((source) => (
                       <SelectItem key={source} value={source}>
                         {source}
@@ -5298,7 +5584,9 @@ export function Orders() {
                     <SelectValue placeholder={t("filter.sourceAll")} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="_all">{t("filter.sourceAll")}</SelectItem>
+                    <SelectItem value="_all">
+                      {t("filter.sourceAll")}
+                    </SelectItem>
                     {SOURCES.filter(Boolean).map((source) => (
                       <SelectItem key={source} value={source}>
                         {source}
@@ -5324,7 +5612,9 @@ export function Orders() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{tc("filters.more")}</DialogTitle>
-            <DialogDescription>{t("filter.advancedDescription")}</DialogDescription>
+            <DialogDescription>
+              {t("filter.advancedDescription")}
+            </DialogDescription>
           </DialogHeader>
           {tab === "orders" ? (
             <div ref={advancedFilterDialogRef} className="grid gap-3">
@@ -5670,12 +5960,14 @@ export function Orders() {
       {/* Dialogs */}
       <SubmitOrderDialog
         open={submitOpen}
-        onClose={() => { setSubmitOpen(false); setSubmitInitialValues(undefined); }}
+        onClose={() => {
+          setSubmitOpen(false);
+          setSubmitInitialValues(undefined);
+        }}
         onCreated={ordersResult.reload}
-        onOpenDetail={(id, banner) => openDetailWithBanner(
-          id,
-          banner ?? t("addOrder.added"),
-        )}
+        onOpenDetail={(id, banner) =>
+          openDetailWithBanner(id, banner ?? t("addOrder.added"))
+        }
         onWorkflowTokenIssued={rememberWorkflowToken}
         accountSuggestions={allAccountSuggestions}
         assetSuggestions={assetSuggestions}
@@ -5726,7 +6018,9 @@ export function Orders() {
           <DialogHeader>
             <DialogTitle>{t("lookup.notFound.title")}</DialogTitle>
             <DialogDescription>
-              {t("lookup.notFound.description", { externalId: lookupId.trim() })}
+              {t("lookup.notFound.description", {
+                externalId: lookupId.trim(),
+              })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

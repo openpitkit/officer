@@ -36,10 +36,7 @@ import {
   TimeRangeFilter,
   type AuditFilter,
 } from "@/framework";
-import {
-  PageSizeSelect,
-  TablePagination,
-} from "@/components/TableControls";
+import { PageSizeSelect, TablePagination } from "@/components/TableControls";
 import { knownPageCount } from "@/lib/tablePagination";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -150,7 +147,9 @@ function AuditTable({
       <TableHeader>
         <TableRow className="hover:bg-transparent">
           <TableHead>
-            <ColumnHeader description={t("table.columnDescriptions.externalId")}>
+            <ColumnHeader
+              description={t("table.columnDescriptions.externalId")}
+            >
               {tc("fields.externalId")}
             </ColumnHeader>
           </TableHead>
@@ -253,7 +252,9 @@ function AuditTable({
                   {entry.source}
                 </Badge>
               ) : (
-                <span className="text-xs text-muted-lt">{tc("value.none")}</span>
+                <span className="text-xs text-muted-lt">
+                  {tc("value.none")}
+                </span>
               )}
             </TableCell>
             <TableCell className="text-xs text-text">
@@ -509,7 +510,10 @@ export function Audit() {
   const clearFilters = () => {
     setExternalId("");
     setAppliedExternalId("");
-    if (globalAccountFilter.account === "" || account !== globalAccountFilter.account) {
+    if (
+      globalAccountFilter.account === "" ||
+      account !== globalAccountFilter.account
+    ) {
       setAccount("");
     }
     setAsset("");
@@ -524,7 +528,8 @@ export function Audit() {
     resetPage();
   };
   const accountGlobalLocked =
-    globalAccountFilter.account !== "" && account.trim() === globalAccountFilter.account;
+    globalAccountFilter.account !== "" &&
+    account.trim() === globalAccountFilter.account;
   const accountGlobalToggle = {
     active: accountGlobalLocked,
     disabled: account.trim() === "",
@@ -680,9 +685,7 @@ export function Audit() {
               resetPage();
             }}
             ariaLabel={t("actions.pageSize.ariaLabel")}
-            rowCountLabel={(count) =>
-              t("actions.pageSize.rowCount", { count })
-            }
+            rowCountLabel={(count) => t("actions.pageSize.rowCount", { count })}
           />
           <RefreshButton onClick={reload} busy={load.state === "loading"} />
         </>
@@ -880,10 +883,9 @@ export function Audit() {
       {catalogue.load.state === "error" && (
         <ErrorState message={catalogue.load.error} onRetry={catalogue.reload} />
       )}
-      {catalogue.load.state === "ready" &&
-        load.state === "error" && (
-          <ErrorState message={load.error} onRetry={reload} />
-        )}
+      {catalogue.load.state === "ready" && load.state === "error" && (
+        <ErrorState message={load.error} onRetry={reload} />
+      )}
       {catalogue.load.state === "ready" &&
         load.state === "ready" &&
         (pagedEntries.length === 0 ? (

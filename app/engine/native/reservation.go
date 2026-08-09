@@ -115,21 +115,20 @@ func (l accountLane) SubmitImmediate(
 	// The zero leaves is the request's own terms - an immediate order fills in
 	// full - not a terminal zero Officer derived from an engine answer.
 	reportInput := domain.ExecutionReportInput{
-		BaseAsset:       o.BaseAsset,
-		QuoteAsset:      o.QuoteAsset,
-		FillQuantity:    fillQuantity,
-		FillPrice:       tradePrice,
-		LeavesQuantity:  "0",
-		ReleaseQuantity: "0",
-		LockPrice:       settlement,
-		Lock:            lockBytes,
-		Account:         o.Account,
-		Side:            o.Side,
-		Order:           o.ExternalID,
-		OrderStatus:     domain.OrderStatusFilled,
+		BaseAsset:      o.BaseAsset,
+		QuoteAsset:     o.QuoteAsset,
+		FillQuantity:   fillQuantity,
+		FillPrice:      tradePrice,
+		LeavesQuantity: "0",
+		LockPrice:      settlement,
+		Lock:           lockBytes,
+		Account:        o.Account,
+		Side:           o.Side,
+		Order:          o.ExternalID,
+		OrderStatus:    domain.OrderStatusFilled,
 	}
 
-	report, err := executionReportFromAccount(reportInput, accountID)
+	report, err := executionReportFromAccount(reportInput, accountID, "0")
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -222,20 +221,19 @@ func (l accountLane) submitImmediateDropCopy(
 			// - an immediate order fills in full - not a terminal zero Officer
 			// derived from an engine answer.
 			reportInput := domain.ExecutionReportInput{
-				BaseAsset:       o.BaseAsset,
-				QuoteAsset:      o.QuoteAsset,
-				FillQuantity:    fillQuantity,
-				FillPrice:       tradePrice,
-				LeavesQuantity:  "0",
-				ReleaseQuantity: "0",
-				LockPrice:       settlement,
-				Lock:            lockBytes,
-				Account:         o.Account,
-				Side:            o.Side,
-				Order:           o.ExternalID,
-				OrderStatus:     domain.OrderStatusFilled,
+				BaseAsset:      o.BaseAsset,
+				QuoteAsset:     o.QuoteAsset,
+				FillQuantity:   fillQuantity,
+				FillPrice:      tradePrice,
+				LeavesQuantity: "0",
+				LockPrice:      settlement,
+				Lock:           lockBytes,
+				Account:        o.Account,
+				Side:           o.Side,
+				Order:          o.ExternalID,
+				OrderStatus:    domain.OrderStatusFilled,
 			}
-			report, err := executionReportFromAccount(reportInput, accountID)
+			report, err := executionReportFromAccount(reportInput, accountID, "0")
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}

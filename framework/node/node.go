@@ -161,7 +161,9 @@ type Node interface {
 	CreateAsset(ctx context.Context, asset domain.Asset, caller domain.Caller) (domain.Asset, error)
 
 	// UpdateAsset replaces the asset's public code and mutable fields and audits
-	// the action.
+	// the action. A code rename rebuilds the live engine from the renamed store
+	// snapshot and can report ErrEngineRestarting while another rebuild is in
+	// progress.
 	UpdateAsset(
 		ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
 	) (domain.Asset, error)

@@ -36,9 +36,17 @@ const DENSITY_OPTIONS: {
   labelKey: string;
   icon: LucideIcon;
 }[] = [
-  { value: "comfortable", labelKey: "display.density.comfortable", icon: Rows2 },
+  {
+    value: "comfortable",
+    labelKey: "display.density.comfortable",
+    icon: Rows2,
+  },
   { value: "compact", labelKey: "display.density.compact", icon: Rows3 },
-  { value: "terminal", labelKey: "display.density.terminal", icon: AlignJustify },
+  {
+    value: "terminal",
+    labelKey: "display.density.terminal",
+    icon: AlignJustify,
+  },
 ];
 
 const TRADE_STYLE_OPTIONS: {
@@ -113,31 +121,33 @@ export function DisplaySwitches({ className }: { className?: string }) {
             {t("display.tradeStyle.label")}
           </span>
         </div>
-        {TRADE_STYLE_OPTIONS.map(({ value, labelKey, titleKey, swatchClassName }) => (
-          <button
-            key={value}
-            type="button"
-            title={t(titleKey)}
-            className={cn(
-              "inline-flex h-[var(--dens-control-h)] items-center gap-[var(--dens-control-gap)] border-l border-border px-1 text-[length:var(--dens-control-fz)] font-medium transition-colors duration-[180ms] first:border-l-0 sm:px-[var(--dens-control-px)]",
-              tradeStyle === value
-                ? "bg-accent-dim text-accent"
-                : "text-muted-lt hover:bg-surface-hover hover:text-accent",
-            )}
-            aria-pressed={tradeStyle === value}
-            onClick={() => setTradeStyle(value)}
-          >
-            <span
+        {TRADE_STYLE_OPTIONS.map(
+          ({ value, labelKey, titleKey, swatchClassName }) => (
+            <button
+              key={value}
+              type="button"
+              title={t(titleKey)}
               className={cn(
-                "h-[var(--dens-swatch)] w-[var(--dens-swatch)] rounded-[2px] shadow-[0_0_0_1px_var(--tag-border)]",
-                swatchClassName,
+                "inline-flex h-[var(--dens-control-h)] items-center gap-[var(--dens-control-gap)] border-l border-border px-1 text-[length:var(--dens-control-fz)] font-medium transition-colors duration-[180ms] first:border-l-0 sm:px-[var(--dens-control-px)]",
+                tradeStyle === value
+                  ? "bg-accent-dim text-accent"
+                  : "text-muted-lt hover:bg-surface-hover hover:text-accent",
               )}
-            />
-            <span className="display-switches__trade-label">
-              {t(labelKey)}
-            </span>
-          </button>
-        ))}
+              aria-pressed={tradeStyle === value}
+              onClick={() => setTradeStyle(value)}
+            >
+              <span
+                className={cn(
+                  "h-[var(--dens-swatch)] w-[var(--dens-swatch)] rounded-[2px] shadow-[0_0_0_1px_var(--tag-border)]",
+                  swatchClassName,
+                )}
+              />
+              <span className="display-switches__trade-label">
+                {t(labelKey)}
+              </span>
+            </button>
+          ),
+        )}
       </div>
     </div>
   );

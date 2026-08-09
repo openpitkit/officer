@@ -109,8 +109,14 @@ describe("BackupCard", () => {
 
     const exportTab = screen.getByRole("tab", { name: /^export$/i });
     const restoreTab = screen.getByRole("tab", { name: /^restore$/i });
-    expect(exportTab).toHaveAttribute("aria-controls", "backup-workflow-panel-export");
-    expect(restoreTab).toHaveAttribute("aria-controls", "backup-workflow-panel-restore");
+    expect(exportTab).toHaveAttribute(
+      "aria-controls",
+      "backup-workflow-panel-export",
+    );
+    expect(restoreTab).toHaveAttribute(
+      "aria-controls",
+      "backup-workflow-panel-restore",
+    );
     expect(
       screen.getByRole("tabpanel", { name: /^export$/i }),
     ).toBeInTheDocument();
@@ -143,7 +149,8 @@ describe("BackupCard", () => {
     const button = screen.getByRole("button", { name: /^restore$/i });
     expect(button).toBeDisabled();
 
-    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
     if (input == null) {
       throw new Error("backup file input not found");
     }
@@ -200,7 +207,8 @@ describe("BackupCard", () => {
 
     await user.click(screen.getByRole("tab", { name: /^restore$/i }));
     await user.click(screen.getByRole("radio", { name: /overwrite/i }));
-    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
     if (input == null) {
       throw new Error("backup file input not found");
     }
@@ -238,7 +246,8 @@ describe("BackupCard", () => {
 
     await user.click(screen.getByRole("tab", { name: /^restore$/i }));
     await user.click(screen.getByRole("radio", { name: /delete selected/i }));
-    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
     if (input == null) {
       throw new Error("backup file input not found");
     }
@@ -284,7 +293,8 @@ describe("BackupCard", () => {
 
     await user.click(screen.getByRole("tab", { name: /^restore$/i }));
     await user.click(screen.getByRole("radio", { name: /delete selected/i }));
-    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
     if (input == null) {
       throw new Error("backup file input not found");
     }

@@ -18,8 +18,5 @@
     "src/i18n/index.ts",
     "src/i18n/locales.ts"
   ],
-  "exclude": [
-    "src/**/*.test.ts",
-    "src/**/*.test.tsx"
-  ]
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

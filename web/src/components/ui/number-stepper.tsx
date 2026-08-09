@@ -30,11 +30,10 @@ import { Input } from "@/components/ui/input";
 import { isDecimalString, stepValue } from "@/lib/numberStep";
 import { cn } from "@/lib/utils";
 
-export interface NumberStepperProps
-  extends Omit<
-    InputHTMLAttributes<HTMLInputElement>,
-    "min" | "onChange" | "value" | "type"
-  > {
+export interface NumberStepperProps extends Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "min" | "onChange" | "value" | "type"
+> {
   value: string;
   onChange: (value: string) => void;
   /** Lower clamp for the +/- controls; defaults to 0. Use null for signed values. */
@@ -141,7 +140,9 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
               return;
             }
             setDraftValue(next);
-            e.target.setCustomValidity(nextValid ? customValidity : invalidMessage);
+            e.target.setCustomValidity(
+              nextValid ? customValidity : invalidMessage,
+            );
             onChange(next);
           }}
           onKeyDown={(e) => {

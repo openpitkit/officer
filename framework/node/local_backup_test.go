@@ -1289,8 +1289,8 @@ func TestLocalNode_TerminalCancellationUsesRestoredLeaves(t *testing.T) {
 	if len(eng.execReportCalls) != 1 {
 		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 	}
-	if got := eng.execReportCalls[0].ReleaseQuantity; got != leaves {
-		t.Fatalf("release quantity = %q, want restored leaves %q", got, leaves)
+	if got := eng.execReportLeaves[0]; got != leaves {
+		t.Fatalf("selected leaves = %q, want restored leaves %q", got, leaves)
 	}
 	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
 		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
@@ -1338,8 +1338,8 @@ func TestLocalNode_TerminalCancellationUsesStoredZeroOverReportedLeaves(t *testi
 	if len(eng.execReportCalls) != 1 {
 		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 	}
-	if got := eng.execReportCalls[0].ReleaseQuantity; got != "0" {
-		t.Fatalf("release quantity = %q, want stored leaves 0", got)
+	if got := eng.execReportLeaves[0]; got != "0" {
+		t.Fatalf("selected leaves = %q, want stored leaves 0", got)
 	}
 	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
 		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},

@@ -212,8 +212,7 @@ const WELCOME_PRESET_ASSET_CLASSES: PresetAssetClass[] = [
   {
     code: "stablecoin",
     title: "Stablecoins",
-    notes:
-      "Tokenized cash-equivalent settlement assets used by crypto venues.",
+    notes: "Tokenized cash-equivalent settlement assets used by crypto venues.",
   },
   {
     code: "crypto",
@@ -295,7 +294,10 @@ function findMarketDataInstance(
   );
 }
 
-function shouldReconcilePresetAsset(asset: Asset, preset: PresetAsset): boolean {
+function shouldReconcilePresetAsset(
+  asset: Asset,
+  preset: PresetAsset,
+): boolean {
   return (
     asset.assetClass === "" ||
     asset.assetClass === AUTO_CREATED_ASSET_CLASS ||
@@ -535,7 +537,9 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
 
     const existingAssets = await fetchAssets({ limit: MAX_LIST_LIMIT });
     for (const preset of WELCOME_PRESET_ASSETS) {
-      const existing = existingAssets.find((asset) => asset.code === preset.code);
+      const existing = existingAssets.find(
+        (asset) => asset.code === preset.code,
+      );
       if (existing === undefined) {
         await createAsset(preset.code, preset.title, preset.assetClass);
         onApplied();
@@ -681,24 +685,21 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
 
           <Section icon={TerminalSquare} label={t("welcome.sections.uses")}>
             <div className="grid gap-2 sm:grid-cols-2">
-              {[
-                "dropCopy",
-                "preTrade",
-                "surfaces",
-                "operations",
-              ].map((item) => (
-                <div
-                  key={item}
-                  className="rounded-card border border-border bg-surface-2 p-3"
-                >
-                  <div className="text-xs font-bold text-text">
-                    {t(`welcome.useCases.${item}.title`)}
+              {["dropCopy", "preTrade", "surfaces", "operations"].map(
+                (item) => (
+                  <div
+                    key={item}
+                    className="rounded-card border border-border bg-surface-2 p-3"
+                  >
+                    <div className="text-xs font-bold text-text">
+                      {t(`welcome.useCases.${item}.title`)}
+                    </div>
+                    <p className="mt-1 text-xs">
+                      {t(`welcome.useCases.${item}.copy`)}
+                    </p>
                   </div>
-                  <p className="mt-1 text-xs">
-                    {t(`welcome.useCases.${item}.copy`)}
-                  </p>
-                </div>
-              ))}
+                ),
+              )}
             </div>
           </Section>
 

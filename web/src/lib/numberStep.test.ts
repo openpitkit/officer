@@ -22,6 +22,7 @@ import {
   isDecimalString,
   isNonNegativeDecimalString,
   isNonNegativeIntegerRangeValid,
+  isOpenQuantityString,
   isOptionalPositiveDecimalString,
   isPositiveDecimalString,
   smartStep,
@@ -80,9 +81,27 @@ describe("decimal mutation validators", () => {
   });
 });
 
+describe("isOpenQuantityString", () => {
+  it.each([
+    ["1", true],
+    ["0", true],
+    ["1.50", true],
+    [" 1", false],
+    ["1 ", false],
+    [" 1 ", false],
+    ["1e3", false],
+    ["-1", false],
+    ["", false],
+  ])("accepts %j: %s", (value, expected) => {
+    expect(isOpenQuantityString(value)).toBe(expected);
+  });
+});
+
 describe("isNonNegativeIntegerRangeValid", () => {
   it("rejects signed and fractional counts and validates visible bounds", () => {
-    expect(isNonNegativeIntegerRangeValid("eq", "12", "hidden-invalid")).toBe(true);
+    expect(isNonNegativeIntegerRangeValid("eq", "12", "hidden-invalid")).toBe(
+      true,
+    );
     expect(isNonNegativeIntegerRangeValid("eq", "-1", "")).toBe(false);
     expect(isNonNegativeIntegerRangeValid("eq", "1.5", "")).toBe(false);
     expect(isNonNegativeIntegerRangeValid("between", "1", "2")).toBe(true);

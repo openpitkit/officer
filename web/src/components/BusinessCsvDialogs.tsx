@@ -58,9 +58,7 @@ function errMessage(err: unknown): string {
 
 function downloadBlob(blob: Blob, filename: string) {
   const href =
-    typeof URL.createObjectURL === "function"
-      ? URL.createObjectURL(blob)
-      : "";
+    typeof URL.createObjectURL === "function" ? URL.createObjectURL(blob) : "";
   const anchor = document.createElement("a");
   anchor.href = href;
   anchor.download = filename;
@@ -90,8 +88,7 @@ export function BusinessCsvExportDialog({
   const { t } = useTranslation("common");
   const { exportBusinessCsv } = useOfficerApi();
   const [localOpen, setLocalOpen] = useState(false);
-  const [delimiter, setDelimiter] =
-    useState<BusinessCsvDelimiter>("comma");
+  const [delimiter, setDelimiter] = useState<BusinessCsvDelimiter>("comma");
   const [zip, setZip] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

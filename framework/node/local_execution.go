@@ -122,12 +122,13 @@ func (n *localNode) applyExecutionReport(
 		if len(in.Lock) == 0 && len(detail.Order.Lock) > 0 {
 			in.Lock = detail.Order.Lock
 		}
-		if err := attachExecutionEngineLeaves(&in, detail); err != nil {
+		leavesQuantity, err := executionEngineLeaves(in, detail)
+		if err != nil {
 			return err
 		}
 		overFilled := executionReportOverFilled(in, detail)
 
-		applied, err := lane.ApplyExecutionReport(ctx, in)
+		applied, err := lane.ApplyExecutionReport(ctx, in, leavesQuantity)
 		if err != nil {
 			return fmt.Errorf("apply execution report: %w", err)
 		}
@@ -170,7 +171,9 @@ func (n *localNode) applyExecutionReport(
 			)
 		}
 
-		detailText := executionReportDetail(in, status, len(result.Blocks))
+		detailText := executionReportDetail(
+			in, leavesQuantity, status, len(result.Blocks),
+		)
 		if overFilled {
 			detailText += " overfill=true"
 		}
@@ -195,35 +198,39 @@ func (n *localNode) applyExecutionReport(
 	return result, nil
 }
 
-// attachExecutionEngineLeaves selects leaves using their source before the
-// report changes the stored order. A fill sends the caller's exact value. A
-// terminal no-fill report sends the previously recorded order value, regardless
-// of whether the caller supplied a replacement for persistence. Other reports
-// do not send leaves to the engine.
-func attachExecutionEngineLeaves(
-	in *domain.ExecutionReportInput, detail domain.OrderDetail,
-) error {
-	in.ReleaseQuantity = ""
+// executionEngineLeaves selects leaves using their source before the report
+// changes the stored order. A fill sends the caller's exact value. A terminal
+// no-fill report sends the previously recorded order value, regardless of
+// whether the caller supplied a replacement for persistence. Other reports do
+// not send leaves to the engine.
+//
+// Every recorded order carries leaves: the accepted path stores the engine's
+// opening quantity and the pre-trade reject stores the engine's zero. An empty
+// one is therefore a corrupt record rather than caller input, and releasing the
+// reservation without it would guess a quantity Officer never received.
+func executionEngineLeaves(
+	in domain.ExecutionReportInput, detail domain.OrderDetail,
+) (string, error) {
 	if in.FillQuantity != "" && in.FillPrice != "" {
-		in.ReleaseQuantity = in.LeavesQuantity
-		return nil
+		return in.LeavesQuantity, nil
 	}
 	if in.OrderStatus != domain.OrderStatusCancelled &&
 		in.OrderStatus != domain.OrderStatusRejected &&
 		in.OrderStatus != domain.OrderStatusRolledBack {
-		return nil
+		return "", nil
 	}
 	if detail.Order.Leaves == "" {
-		return nil
+		return "", fmt.Errorf(
+			"stored order %s leaves are empty", detail.Order.ExternalID,
+		)
 	}
 	// Officer wrote the recorded value itself, so a corrupt one is an internal
 	// fault and must not answer the caller as invalid input. Only the syntax is
 	// checked: the stored string, not a reparsed one, is what the engine gets.
 	if _, err := domain.ParseOpenQuantity(detail.Order.Leaves); err != nil {
-		return fmt.Errorf("stored order leaves: %w", err)
+		return "", fmt.Errorf("stored order leaves: %w", err)
 	}
-	in.ReleaseQuantity = detail.Order.Leaves
-	return nil
+	return detail.Order.Leaves, nil
 }
 
 // executionReportOverFilled reports that a terminal report's own fill exceeds
@@ -329,7 +336,7 @@ func (n *localNode) recordWorkflowExecutionReport(
 			return fmt.Errorf("record workflow execution report: %w", err)
 		}
 		in.ExternalID = reportID
-		detailText := executionReportDetail(in, status, 0)
+		detailText := executionReportDetail(in, "", status, 0)
 		if forcedTerminalBypass {
 			detailText += " forced=true"
 		}

@@ -113,8 +113,7 @@ export function ActionButton({
       className={cn(
         "inline-flex shrink-0 items-center justify-center rounded-badge bg-transparent text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         active && "bg-accent-dim text-accent",
-        danger &&
-          "hover:bg-[var(--danger-dim)] hover:text-[var(--danger)]",
+        danger && "hover:bg-[var(--danger-dim)] hover:text-[var(--danger)]",
         disabled &&
           "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted",
       )}
@@ -293,7 +292,9 @@ export function CloneButton({
   title = "Clone",
   size = 30,
 }: RowActionClickProps) {
-  return <ActionButton icon="clone" title={title} onClick={onClick} size={size} />;
+  return (
+    <ActionButton icon="clone" title={title} onClick={onClick} size={size} />
+  );
 }
 
 export function EditButton({
@@ -514,7 +515,10 @@ export function IdCell({
   style,
 }: IdCellProps) {
   return (
-    <span className="inline-flex min-w-0 items-center" style={{ gap, ...style }}>
+    <span
+      className="inline-flex min-w-0 items-center"
+      style={{ gap, ...style }}
+    >
       <span className={cn("min-w-0 truncate", mono && "nums")}>
         {children ?? value}
       </span>

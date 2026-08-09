@@ -35,11 +35,7 @@ import {
 } from "@/lib/browserStorage";
 
 function isDensityMode(value: string | null): value is DensityMode {
-  return (
-    value === "comfortable" ||
-    value === "compact" ||
-    value === "terminal"
-  );
+  return value === "comfortable" || value === "compact" || value === "terminal";
 }
 
 function isTradeStyle(value: string | null): value is TradeStyle {

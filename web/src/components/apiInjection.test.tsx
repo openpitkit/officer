@@ -46,7 +46,10 @@ function marketDataResponse(restartRequired: boolean): Response {
   });
 }
 
-function renderWithInjectedApi(ui: React.ReactElement, fetchMock: typeof fetch) {
+function renderWithInjectedApi(
+  ui: React.ReactElement,
+  fetchMock: typeof fetch,
+) {
   return renderWithApi(ui, {
     fetch: fetchMock,
     config: {
@@ -70,7 +73,9 @@ function expectInjectedRequest(call: unknown[], path: string) {
 
 describe("API provider injection", () => {
   it("routes welcome dismissal through the injected API client", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ welcomeSeen: true }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ welcomeSeen: true }));
 
     renderWithInjectedApi(
       <MemoryRouter>
@@ -155,5 +160,4 @@ describe("API provider injection", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expectInjectedRequest(fetchMock.mock.calls[0], "/business-csv/export");
   });
-
 });

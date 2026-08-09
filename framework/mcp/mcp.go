@@ -89,8 +89,9 @@ type Source interface {
 	) (domain.Order, Attestation, error)
 	// CancelOrder verifies the token and synthesizes a cancellation report for an
 	// order that has no execution-report activity. Optional caller leaves is
-	// recorded when supplied. It also returns the resulting attestation, so an
-	// MCP caller receives the same proof an HTTP caller does.
+	// recorded verbatim when supplied, while the SDK receives the order's
+	// previously recorded leaves. It also returns the resulting attestation, so
+	// an MCP caller receives the same proof an HTTP caller does.
 	CancelOrder(
 		ctx context.Context,
 		orderExternalID, token, leavesQuantity, reason string,

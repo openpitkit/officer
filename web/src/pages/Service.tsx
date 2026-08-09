@@ -64,12 +64,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
   serviceLogsDownloadUrl,
@@ -97,20 +92,20 @@ const serviceTabs: {
   labelKey: string;
   icon: LucideIcon;
 }[] = [
-    { id: "application", labelKey: "tabs.application", icon: Server },
-    { id: "api", labelKey: "tabs.api", icon: Plug },
-    { id: "database", labelKey: "tabs.database", icon: Database },
-    { id: "logs", labelKey: "tabs.logs", icon: Logs },
-  ];
+  { id: "application", labelKey: "tabs.application", icon: Server },
+  { id: "api", labelKey: "tabs.api", icon: Plug },
+  { id: "database", labelKey: "tabs.database", icon: Database },
+  { id: "logs", labelKey: "tabs.logs", icon: Logs },
+];
 
 const backupWorkflowTabs: {
   id: BackupWorkflow;
   labelKey: string;
   icon: LucideIcon;
 }[] = [
-    { id: "export", labelKey: "backup.tabs.export", icon: Download },
-    { id: "restore", labelKey: "backup.tabs.restore", icon: Upload },
-  ];
+  { id: "export", labelKey: "backup.tabs.export", icon: Download },
+  { id: "restore", labelKey: "backup.tabs.restore", icon: Upload },
+];
 
 const backupSections: BackupSection[] = [
   "accounts_groups",
@@ -998,13 +993,7 @@ export function ServiceCard({
             )}
             onClick={() => onTabChange(id)}
             onKeyDown={(event) =>
-              moveTabFocus(
-                event,
-                serviceTabIDs,
-                id,
-                onTabChange,
-                serviceTabID,
-              )
+              moveTabFocus(event, serviceTabIDs, id, onTabChange, serviceTabID)
             }
           >
             <Icon className="h-3.5 w-3.5" />
@@ -1034,9 +1023,7 @@ export function ServiceCard({
                 <StatRow
                   label={t("application.build")}
                   value={
-                    <Badge variant="warn">
-                      {t("application.nonRelease")}
-                    </Badge>
+                    <Badge variant="warn">{t("application.nonRelease")}</Badge>
                   }
                 />
               )}
@@ -1104,11 +1091,9 @@ export function ServiceCard({
                   {parseProfileRows(info.engineBuildProfile).map((row) => (
                     <StatRow
                       key={row.param}
-                      label={
-                        t(`engine.profileParams.${row.param}`, {
-                          defaultValue: row.param,
-                        })
-                      }
+                      label={t(`engine.profileParams.${row.param}`, {
+                        defaultValue: row.param,
+                      })}
                       value={row.value || tc("value.none")}
                       mono={false}
                     />
@@ -1133,10 +1118,7 @@ export function ServiceCard({
           aria-labelledby={serviceTabID("database")}
           className="space-y-4"
         >
-          <DatabaseCard
-            database={info.database}
-            onReset={onDatabaseReset}
-          />
+          <DatabaseCard database={info.database} onReset={onDatabaseReset} />
           <BackupCard />
         </div>
       )}

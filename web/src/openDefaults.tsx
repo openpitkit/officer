@@ -18,11 +18,7 @@
 import { createElement } from "react";
 
 import type { Account, Group, Limit } from "@/api/types";
-import {
-  registerPolicy,
-  registerRowAction,
-  registerScope,
-} from "@/framework";
+import { registerPolicy, registerRowAction, registerScope } from "@/framework";
 import {
   AccountAuditAction,
   AccountDeleteAction,
@@ -72,10 +68,7 @@ export function registerOpenVocabulary(): void {
     catalog: {
       wikiUrl:
         "https://wiki.openpit.dev/Spot-Funds/?officer#self-computed-pnl-kill-switch",
-      fields: [
-        { key: "lower_bound" },
-        { key: "upper_bound" },
-      ],
+      fields: [{ key: "lower_bound" }, { key: "upper_bound" }],
     },
   });
 }

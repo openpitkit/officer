@@ -45,7 +45,10 @@ export interface PolicyRegistration {
 }
 
 const scopes = new Map<string, number>();
-const policies = new Map<string, { policy: PolicyRegistration; sequence: number }>();
+const policies = new Map<
+  string,
+  { policy: PolicyRegistration; sequence: number }
+>();
 let nextScopeSequence = 0;
 let nextPolicySequence = 0;
 

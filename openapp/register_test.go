@@ -187,6 +187,7 @@ func (e *fakeEngine) RunGroupSynchronized(
 func (e *fakeEngine) ApplyExecutionReport(
 	context.Context,
 	domain.ExecutionReportInput,
+	string,
 ) (engine.ExecutionReportResult, error) {
 	return engine.ExecutionReportResult{}, nil
 }

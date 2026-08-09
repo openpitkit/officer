@@ -195,7 +195,7 @@ function goVerifySnippet(
     `\tsig, _ := base64.StdEncoding.DecodeString(${goQuote(signatureBase64)})`,
     `\tpub, _ := base64.StdEncoding.DecodeString(${goQuote(rawKeyBase64)})`,
     "\tok := ed25519.Verify(ed25519.PublicKey(pub), canonical, sig)",
-    '\tfmt.Println(ok)',
+    "\tfmt.Println(ok)",
     "}",
   ].join("\n");
 }
@@ -231,9 +231,7 @@ function verifyBadge(
     error: { variant: "danger", key: "badgeError" },
   };
   const entry = map[state.phase];
-  return (
-    <Badge variant={entry.variant}>{t(`verify.${entry.key}`)}</Badge>
-  );
+  return <Badge variant={entry.variant}>{t(`verify.${entry.key}`)}</Badge>;
 }
 
 function VerifyResultLine({
@@ -299,10 +297,7 @@ function ApprovalBreakdown({
           label={t("breakdown.approvalRef")}
           value={fields.approvalRef}
         />
-        <BreakdownRow
-          label={t("breakdown.requestType")}
-          value={requestType}
-        />
+        <BreakdownRow label={t("breakdown.requestType")} value={requestType} />
         <BreakdownRow label={t("breakdown.mode")} value={fields.mode} />
         <BreakdownRow
           label={t("breakdown.orderExternalId")}
@@ -319,10 +314,7 @@ function ApprovalBreakdown({
         />
         <BreakdownRow label={t("breakdown.venue")} value={fields.venue} />
         <BreakdownRow label={t("breakdown.side")} value={fields.side} />
-        <BreakdownRow
-          label={t("breakdown.quantity")}
-          value={fields.quantity}
-        />
+        <BreakdownRow label={t("breakdown.quantity")} value={fields.quantity} />
         <BreakdownRow
           label={t("breakdown.amountKind")}
           value={fields.amountKind}
@@ -343,10 +335,7 @@ function ApprovalBreakdown({
           label={t("breakdown.timeInForce")}
           value={fields.timeInForce}
         />
-        <BreakdownRow
-          label={t("breakdown.account")}
-          value={fields.accountId}
-        />
+        <BreakdownRow label={t("breakdown.account")} value={fields.accountId} />
         <BreakdownRow
           label={t("breakdown.accountGroup")}
           value={fields.accountGroupId}
@@ -467,12 +456,9 @@ function ApprovalBreakdown({
               <BreakdownRow
                 key={`${block.account}:${block.code}:${index}`}
                 label={t("breakdown.block", { index: index + 1 })}
-                value={[
-                  block.account,
-                  block.code,
-                  block.reason,
-                  block.details,
-                ].filter(Boolean).join(" · ")}
+                value={[block.account, block.code, block.reason, block.details]
+                  .filter(Boolean)
+                  .join(" · ")}
               />
             ))}
           </>
@@ -545,7 +531,9 @@ function ReproductionMode({
   const { fetchEventReproduction, fetchPublicKeyById } = useOfficerApi();
 
   const [state, setState] = useState<ReproState>({ phase: "loading" });
-  const [verifyState, setVerifyState] = useState<VerifyState>({ phase: "idle" });
+  const [verifyState, setVerifyState] = useState<VerifyState>({
+    phase: "idle",
+  });
   // The attestation's public key in raw-base64 form, resolved by its keyId.
   // WebCrypto import and the ready-to-run snippets need raw bytes; the bundle
   // only carries pem-pkcs8. Null until fetched or when the event is unsigned.
@@ -627,8 +615,7 @@ function ReproductionMode({
       // form for WebCrypto import. Reuse the key already fetched on load, else
       // resolve it by the attestation's keyId now.
       const keyId = b.attestation.keyId || b.publicKey?.keyId || "";
-      const key =
-        rawKey ?? (await fetchPublicKeyById(keyId, "raw-base64")).key;
+      const key = rawKey ?? (await fetchPublicKeyById(keyId, "raw-base64")).key;
       const canonical = new TextEncoder().encode(b.canonicalApproval);
       const ok = await verifyEd25519(canonical, b.signature, key);
       setVerifyState(ok ? { phase: "valid" } : { phase: "invalid" });
@@ -689,10 +676,7 @@ function ReproductionMode({
       ) : null}
 
       {facet ? (
-        <LedgerBlock
-          label={t(facet.labelKey)}
-          note={t("repro.responseNote")}
-        >
+        <LedgerBlock label={t(facet.labelKey)} note={t("repro.responseNote")}>
           {facet.token ? (
             <div className="mb-2">
               <CopyableSnippet
@@ -820,7 +804,9 @@ function VerifyTokenMode(): ReactElement {
   const { fetchPublicKeyById } = useOfficerApi();
 
   const [token, setToken] = useState("");
-  const [verifyState, setVerifyState] = useState<VerifyState>({ phase: "idle" });
+  const [verifyState, setVerifyState] = useState<VerifyState>({
+    phase: "idle",
+  });
   const [result, setResult] = useState<PasteResult | null>(null);
 
   async function runVerify() {

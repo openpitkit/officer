@@ -41,7 +41,9 @@ export function RowActions<Row, Ctx>({
         if (!(typedEntry.when?.(row, ctx) ?? true)) {
           return null;
         }
-        return <Fragment key={entry.id}>{typedEntry.render(row, ctx)}</Fragment>;
+        return (
+          <Fragment key={entry.id}>{typedEntry.render(row, ctx)}</Fragment>
+        );
       })}
     </>
   );

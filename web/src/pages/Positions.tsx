@@ -130,13 +130,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  knownPageCount,
-} from "@/lib/tablePagination";
+import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
 import { ACTIVE_STATUS_QUERY } from "@/lib/orderStatus";
-import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
+import {
+  DEFAULT_SEARCH_DEBOUNCE_MS,
+  useDebouncedValue,
+} from "@/lib/useDebounce";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { operatorOptions } from "@/lib/dataControlLabels";
 import { isDecimalRangeValid } from "@/lib/numberStep";
@@ -294,7 +295,7 @@ function csvCell(value: string | number | undefined): string {
   const raw = value === undefined ? "" : String(value);
   const text = csvFieldIsFormula(raw) ? `'${raw}` : raw;
   if (/[",\n\r\t]/.test(text)) {
-    return `"${text.replaceAll("\"", "\"\"")}"`;
+    return `"${text.replaceAll('"', '""')}"`;
   }
   return text;
 }
@@ -514,7 +515,10 @@ function useAccountCurrencySuggestions(enabled: boolean): string[] {
       return;
     }
     const controller = new AbortController();
-    void fetchAccounts({ limit: MAX_LIST_LIMIT, sort: "code" }, controller.signal)
+    void fetchAccounts(
+      { limit: MAX_LIST_LIMIT, sort: "code" },
+      controller.signal,
+    )
       .then((accounts) => {
         const codes = new Set<string>();
         for (const account of accounts) {
@@ -557,7 +561,10 @@ function outcomeAmountText(
 }
 
 function adjustmentResultParts(
-  result: Exclude<NonNullable<Adjustment["accepted"]>["realizedPnlResult"], undefined>,
+  result: Exclude<
+    NonNullable<Adjustment["accepted"]>["realizedPnlResult"],
+    undefined
+  >,
 ): {
   delta: string;
   result: string;
@@ -581,8 +588,6 @@ function pnlHaltText(t: TFunction, reason: string): string | null {
       return t("balances.pnlHalt.missingCostBasis");
     case "arithmetic_overflow":
       return t("balances.pnlHalt.arithmeticOverflow");
-    case "stale_denomination":
-      return t("balances.pnlHalt.staleDenomination");
     default:
       return t("balances.pnlHalt.unknown");
   }
@@ -650,9 +655,7 @@ function needsCurrency(
  *  full range filter set. Numeric ranges mirror the API `<key>Mode/Min/Max`
  *  params, plus `<key>Currency` for the denominated ones; the updatedAt range
  *  mirrors `updatedAtMode/updatedAfter/updatedBefore`. */
-function balanceRangesFromParams(
-  params: URLSearchParams,
-): BalanceRangeDrafts {
+function balanceRangesFromParams(params: URLSearchParams): BalanceRangeDrafts {
   const ranges: BalanceRangeDrafts = {
     available: { ...EMPTY_BALANCE_RANGES.available },
     held: { ...EMPTY_BALANCE_RANGES.held },
@@ -772,7 +775,9 @@ function addBalanceRange(
     target[`${key}Mode`] = draft.mode;
     target[`${key}Min`] = min;
   } else if (
-    (draft.mode === "lt" || draft.mode === "lte" || draft.mode === "less_than") &&
+    (draft.mode === "lt" ||
+      draft.mode === "lte" ||
+      draft.mode === "less_than") &&
     min !== ""
   ) {
     target[`${key}Mode`] = draft.mode;
@@ -799,10 +804,7 @@ function addUpdatedAtRange(
   if (draft.mode === "all") {
     return;
   }
-  if (
-    (draft.mode === "greater_than" || draft.mode === "after") &&
-    min !== ""
-  ) {
+  if ((draft.mode === "greater_than" || draft.mode === "after") && min !== "") {
     filter.updatedAtMode = draft.mode;
     filter.updatedAfter = min;
   } else if (draft.mode === "less_than" && max !== "") {
@@ -842,8 +844,7 @@ function rangeChipValue(
 
 function hasActiveRange(draft: BalanceRangeDraft): boolean {
   return (
-    draft.mode !== "all" &&
-    (draft.min.trim() !== "" || draft.max.trim() !== "")
+    draft.mode !== "all" && (draft.min.trim() !== "" || draft.max.trim() !== "")
   );
 }
 
@@ -905,7 +906,9 @@ function PositionRangeFilter({
                 onChange({
                   ...draft,
                   mode:
-                    draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                    draft.mode === "all"
+                      ? (operator as RangeFilterMode)
+                      : draft.mode,
                   min: value,
                 })
               }
@@ -913,7 +916,9 @@ function PositionRangeFilter({
                 onChange({
                   ...draft,
                   mode:
-                    draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                    draft.mode === "all"
+                      ? (operator as RangeFilterMode)
+                      : draft.mode,
                   max: value,
                 })
               }
@@ -934,7 +939,9 @@ function PositionRangeFilter({
                 onChange({
                   ...draft,
                   mode:
-                    draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                    draft.mode === "all"
+                      ? (operator as RangeFilterMode)
+                      : draft.mode,
                   min: value,
                 })
               }
@@ -942,7 +949,9 @@ function PositionRangeFilter({
                 onChange({
                   ...draft,
                   mode:
-                    draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                    draft.mode === "all"
+                      ? (operator as RangeFilterMode)
+                      : draft.mode,
                   max: value,
                 })
               }
@@ -965,7 +974,9 @@ function PositionRangeFilter({
                 placeholder={t("filters.currency.placeholder")}
                 suggestions={currencySuggestions}
                 aria-invalid={currencyMissing}
-                aria-errormessage={currencyMissing ? currencyErrorId : undefined}
+                aria-errormessage={
+                  currencyMissing ? currencyErrorId : undefined
+                }
                 aria-label={t("filters.currency.ariaLabel", { field: label })}
                 className="h-8 text-xs"
                 clearLabel={tc("filters.clearField")}
@@ -1024,7 +1035,7 @@ function amountResult(
   if (field.mode === "absolute") {
     return value;
   }
-  return addDecimalStrings(hasValue(current) ? current ?? "0" : "0", value);
+  return addDecimalStrings(hasValue(current) ? (current ?? "0") : "0", value);
 }
 
 function boundsHaveValue(bounds: BoundsDraftState): boolean {
@@ -1278,7 +1289,9 @@ function AmountIntentRow({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="absolute">{t("dialog.mode.absolute")}</SelectItem>
+            <SelectItem value="absolute">
+              {t("dialog.mode.absolute")}
+            </SelectItem>
             <SelectItem value="delta">{t("dialog.mode.delta")}</SelectItem>
           </SelectContent>
         </Select>
@@ -1357,9 +1370,7 @@ function BoundsIntentRow({
         </p>
       </div>
       <div className="space-y-1">
-        <Label htmlFor={`adjust-${id}-lower`}>
-          {t("dialog.bounds.lower")}
-        </Label>
+        <Label htmlFor={`adjust-${id}-lower`}>{t("dialog.bounds.lower")}</Label>
         <NumberStepper
           id={`adjust-${id}-lower`}
           value={field.lower}
@@ -1379,9 +1390,7 @@ function BoundsIntentRow({
         />
       </div>
       <div className="space-y-1">
-        <Label htmlFor={`adjust-${id}-upper`}>
-          {t("dialog.bounds.upper")}
-        </Label>
+        <Label htmlFor={`adjust-${id}-upper`}>{t("dialog.bounds.upper")}</Label>
         <NumberStepper
           id={`adjust-${id}-upper`}
           value={field.upper}
@@ -1491,8 +1500,7 @@ function AdjustmentPanel({
     return amountResult(current, field) !== null;
   });
   const avgPriceValid = !hasValue(avgPrice) || isDecimal(avgPrice);
-  const realizedPnlValid =
-    !hasValue(realizedPnl) || isDecimal(realizedPnl);
+  const realizedPnlValid = !hasValue(realizedPnl) || isDecimal(realizedPnl);
   const allBoundsValid =
     boundsAreValid(balanceBounds) &&
     boundsAreValid(heldBounds) &&
@@ -1501,19 +1509,16 @@ function AdjustmentPanel({
     boundsHaveValue(balanceBounds) ||
     boundsHaveValue(heldBounds) ||
     boundsHaveValue(incomingBounds);
-  const boundsChangeCount = [
-    balanceBounds,
-    heldBounds,
-    incomingBounds,
-  ].filter(boundsHaveValue).length;
+  const boundsChangeCount = [balanceBounds, heldBounds, incomingBounds].filter(
+    boundsHaveValue,
+  ).length;
   const hasChanges =
     hasAmountChange ||
     hasValue(avgPrice) ||
     hasValue(realizedPnl) ||
     hasBoundsChange;
   const hasFilledField =
-    (!lockIdentity && (hasValue(account) || hasValue(asset))) ||
-    hasChanges;
+    (!lockIdentity && (hasValue(account) || hasValue(asset))) || hasChanges;
   const canSubmit =
     trimAccount !== "" &&
     trimAsset !== "" &&
@@ -1633,250 +1638,250 @@ function AdjustmentPanel({
 
   return (
     <>
-    <div
-      role="region"
-      aria-label={t("panel.title")}
-      className="space-y-4 border-l-2 border-l-accent bg-surface-2 px-4 py-4"
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") {
-          return;
-        }
-        const target = event.target;
-        if (
-          target instanceof HTMLElement &&
-          target.getAttribute("role") === "combobox" &&
-          target.getAttribute("aria-expanded") === "true"
-        ) {
-          return;
-        }
-        onClose();
-      }}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <SlidersHorizontal className="h-3.5 w-3.5 text-accent" />
-            <p className="text-sm font-bold text-text">
-              {t("panel.title")}
-            </p>
+      <div
+        role="region"
+        aria-label={t("panel.title")}
+        className="space-y-4 border-l-2 border-l-accent bg-surface-2 px-4 py-4"
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") {
+            return;
+          }
+          const target = event.target;
+          if (
+            target instanceof HTMLElement &&
+            target.getAttribute("role") === "combobox" &&
+            target.getAttribute("aria-expanded") === "true"
+          ) {
+            return;
+          }
+          onClose();
+        }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-accent" />
+              <p className="text-sm font-bold text-text">{t("panel.title")}</p>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            aria-label={tc("actions.close")}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="adjust-panel-account">
+              {t("dialog.fields.account")}
+            </Label>
+            <Autocomplete
+              id="adjust-panel-account"
+              value={account}
+              spellCheck={false}
+              placeholder="acc-1"
+              suggestions={mergedAccountSuggestions}
+              disabled={disabled || lockIdentity}
+              onChange={setAccount}
+              onClear={() => setAccount("")}
+              clearLabel={t("common:filters.clearField")}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="adjust-panel-asset">
+              {t("dialog.fields.asset")}
+            </Label>
+            <Autocomplete
+              id="adjust-panel-asset"
+              value={asset}
+              spellCheck={false}
+              placeholder="AAPL"
+              suggestions={mergedAssetSuggestions}
+              disabled={disabled || lockIdentity}
+              onChange={setAsset}
+              onClear={() => setAsset("")}
+              clearLabel={t("common:filters.clearField")}
+            />
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          aria-label={tc("actions.close")}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor="adjust-panel-account">
-            {t("dialog.fields.account")}
-          </Label>
-          <Autocomplete
-            id="adjust-panel-account"
-            value={account}
-            spellCheck={false}
-            placeholder="acc-1"
-            suggestions={mergedAccountSuggestions}
-            disabled={disabled || lockIdentity}
-            onChange={setAccount}
-            onClear={() => setAccount("")}
-            clearLabel={t("common:filters.clearField")}
+        <div className="border border-border bg-bg">
+          <div className="grid grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] gap-4 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted max-md:hidden">
+            <span>{t("panel.columns.current")}</span>
+            <span>{t("panel.columns.intent")}</span>
+            <span>{t("panel.columns.amount")}</span>
+            <span className="text-right">{t("panel.columns.result")}</span>
+          </div>
+          <AmountIntentRow
+            id="available"
+            label={t("balances.columns.available")}
+            current={balance?.available}
+            field={available}
+            disabled={disabled}
+            onChange={setAvailable}
+            onSubmit={() => void submit()}
+          />
+          <AmountIntentRow
+            id="held"
+            label={t("balances.columns.held")}
+            current={balance?.held}
+            field={held}
+            disabled={disabled}
+            onChange={setHeld}
+            onSubmit={() => void submit()}
+          />
+          <AmountIntentRow
+            id="incoming"
+            label={t("balances.columns.incoming")}
+            current={balance?.incoming}
+            field={incoming}
+            disabled={disabled}
+            onChange={setIncoming}
+            onSubmit={() => void submit()}
+          />
+          <AveragePriceIntentRow
+            current={balance?.averageEntryPrice}
+            currency={balance?.accountCurrency ?? ""}
+            value={avgPrice}
+            valid={avgPriceValid}
+            disabled={disabled}
+            onChange={setAvgPrice}
+            onSubmit={() => void submit()}
+          />
+          <RealizedPnlIntentRow
+            current={balance?.realizedPnl}
+            currency={balance?.accountCurrency ?? ""}
+            value={realizedPnl}
+            valid={realizedPnlValid}
+            disabled={disabled}
+            onChange={setRealizedPnl}
+            onSubmit={() => void submit()}
           />
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="adjust-panel-asset">
-            {t("dialog.fields.asset")}
-          </Label>
-          <Autocomplete
-            id="adjust-panel-asset"
-            value={asset}
-            spellCheck={false}
-            placeholder="AAPL"
-            suggestions={mergedAssetSuggestions}
-            disabled={disabled || lockIdentity}
-            onChange={setAsset}
-            onClear={() => setAsset("")}
-            clearLabel={t("common:filters.clearField")}
-          />
-        </div>
-      </div>
 
-      <div className="border border-border bg-bg">
-        <div className="grid grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] gap-4 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted max-md:hidden">
-          <span>{t("panel.columns.current")}</span>
-          <span>{t("panel.columns.intent")}</span>
-          <span>{t("panel.columns.amount")}</span>
-          <span className="text-right">{t("panel.columns.result")}</span>
-        </div>
-        <AmountIntentRow
-          id="available"
-          label={t("balances.columns.available")}
-          current={balance?.available}
-          field={available}
-          disabled={disabled}
-          onChange={setAvailable}
-          onSubmit={() => void submit()}
-        />
-        <AmountIntentRow
-          id="held"
-          label={t("balances.columns.held")}
-          current={balance?.held}
-          field={held}
-          disabled={disabled}
-          onChange={setHeld}
-          onSubmit={() => void submit()}
-        />
-        <AmountIntentRow
-          id="incoming"
-          label={t("balances.columns.incoming")}
-          current={balance?.incoming}
-          field={incoming}
-          disabled={disabled}
-          onChange={setIncoming}
-          onSubmit={() => void submit()}
-        />
-        <AveragePriceIntentRow
-          current={balance?.averageEntryPrice}
-          currency={balance?.accountCurrency ?? ""}
-          value={avgPrice}
-          valid={avgPriceValid}
-          disabled={disabled}
-          onChange={setAvgPrice}
-          onSubmit={() => void submit()}
-        />
-        <RealizedPnlIntentRow
-          current={balance?.realizedPnl}
-          currency={balance?.accountCurrency ?? ""}
-          value={realizedPnl}
-          valid={realizedPnlValid}
-          disabled={disabled}
-          onChange={setRealizedPnl}
-          onSubmit={() => void submit()}
-        />
-      </div>
-
-      <div className="border border-border bg-bg">
-        <button
-          type="button"
-          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-surface-hover"
-          aria-expanded={boundsOpen}
-          aria-controls="adjust-bounds-panel"
-          onClick={() => setBoundsOpen((open) => !open)}
-        >
-          <span className="flex items-center gap-2">
-            {boundsOpen ? (
-              <ChevronDown className="h-3.5 w-3.5 text-muted-lt" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 text-muted-lt" />
-            )}
-            <span className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
-              {t("dialog.bounds.sectionLabel")}
+        <div className="border border-border bg-bg">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-surface-hover"
+            aria-expanded={boundsOpen}
+            aria-controls="adjust-bounds-panel"
+            onClick={() => setBoundsOpen((open) => !open)}
+          >
+            <span className="flex items-center gap-2">
+              {boundsOpen ? (
+                <ChevronDown className="h-3.5 w-3.5 text-muted-lt" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 text-muted-lt" />
+              )}
+              <span className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
+                {t("dialog.bounds.sectionLabel")}
+              </span>
             </span>
-          </span>
-          <Badge
-            variant={
-              allBoundsValid
+            <Badge
+              variant={
+                allBoundsValid
+                  ? boundsChangeCount > 0
+                    ? "accent"
+                    : "neutral"
+                  : "danger"
+              }
+            >
+              {allBoundsValid
                 ? boundsChangeCount > 0
-                  ? "accent"
-                  : "neutral"
-                : "danger"
-            }
-          >
-            {allBoundsValid
-              ? boundsChangeCount > 0
-                ? `${boundsChangeCount}/3`
-                : t("panel.noChange")
-              : t("panel.invalidDecimal")}
-          </Badge>
-        </button>
-        {boundsOpen && (
-          <div id="adjust-bounds-panel">
-            <BoundsIntentRow
-              id="balance-bounds"
-              label={t("dialog.bounds.balanceLabel")}
-              field={balanceBounds}
-              disabled={disabled}
-              onChange={setBalanceBounds}
-              onSubmit={() => void submit()}
-            />
-            <BoundsIntentRow
-              id="held-bounds"
-              label={t("dialog.bounds.heldLabel")}
-              field={heldBounds}
-              disabled={disabled}
-              onChange={setHeldBounds}
-              onSubmit={() => void submit()}
-            />
-            <BoundsIntentRow
-              id="incoming-bounds"
-              label={t("dialog.bounds.incomingLabel")}
-              field={incomingBounds}
-              disabled={disabled}
-              onChange={setIncomingBounds}
-              onSubmit={() => void submit()}
-            />
-          </div>
+                  ? `${boundsChangeCount}/3`
+                  : t("panel.noChange")
+                : t("panel.invalidDecimal")}
+            </Badge>
+          </button>
+          {boundsOpen && (
+            <div id="adjust-bounds-panel">
+              <BoundsIntentRow
+                id="balance-bounds"
+                label={t("dialog.bounds.balanceLabel")}
+                field={balanceBounds}
+                disabled={disabled}
+                onChange={setBalanceBounds}
+                onSubmit={() => void submit()}
+              />
+              <BoundsIntentRow
+                id="held-bounds"
+                label={t("dialog.bounds.heldLabel")}
+                field={heldBounds}
+                disabled={disabled}
+                onChange={setHeldBounds}
+                onSubmit={() => void submit()}
+              />
+              <BoundsIntentRow
+                id="incoming-bounds"
+                label={t("dialog.bounds.incomingLabel")}
+                field={incomingBounds}
+                disabled={disabled}
+                onChange={setIncomingBounds}
+                onSubmit={() => void submit()}
+              />
+            </div>
+          )}
+        </div>
+
+        {outcome && <AdjustOutcomeView adjustment={outcome} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
         )}
-      </div>
 
-      {outcome && <AdjustOutcomeView adjustment={outcome} />}
-      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
-
-      <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3">
-        <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
-          {outcome
-            ? t("dialog.footer.close")
-            : t("actions.cancel", { ns: "common" })}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={resetAllFields}
-          disabled={busy || !hasFilledField}
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          {t("panel.resetAll")}
-        </Button>
-        <Button size="sm" onClick={() => void submit()} disabled={!canSubmit}>
-          {busy ? t("panel.saving") : t("panel.submit")}
-        </Button>
-      </div>
-    </div>
-    <AlertDialog
-      open={missingAccountConfirmOpen}
-      onOpenChange={setMissingAccountConfirmOpen}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {t("missingAccountConfirm.title")}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {t("missingAccountConfirm.description", { account: trimAccount })}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
-            {t("actions.cancel", { ns: "common" })}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            onClick={(e) => {
-              e.preventDefault();
-              setMissingAccountConfirmOpen(false);
-              void submit("create");
-            }}
-            disabled={busy}
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
+            {outcome
+              ? t("dialog.footer.close")
+              : t("actions.cancel", { ns: "common" })}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={resetAllFields}
+            disabled={busy || !hasFilledField}
           >
-            {t("missingAccountConfirm.confirm")}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+            <RotateCcw className="h-3.5 w-3.5" />
+            {t("panel.resetAll")}
+          </Button>
+          <Button size="sm" onClick={() => void submit()} disabled={!canSubmit}>
+            {busy ? t("panel.saving") : t("panel.submit")}
+          </Button>
+        </div>
+      </div>
+      <AlertDialog
+        open={missingAccountConfirmOpen}
+        onOpenChange={setMissingAccountConfirmOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("missingAccountConfirm.title")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("missingAccountConfirm.description", { account: trimAccount })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>
+              {t("actions.cancel", { ns: "common" })}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                setMissingAccountConfirmOpen(false);
+                void submit("create");
+              }}
+              disabled={busy}
+            >
+              {t("missingAccountConfirm.confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -2088,7 +2093,9 @@ function BalanceDraftRow({
 
   return (
     <>
-      <TableRow className={cn("hover:bg-transparent", expanded && "bg-accent-dim")}>
+      <TableRow
+        className={cn("hover:bg-transparent", expanded && "bg-accent-dim")}
+      >
         <TableCell
           className="text-xs italic text-muted-lt"
           colSpan={BALANCE_TABLE_COLS - 1}
@@ -2166,160 +2173,158 @@ function BalancesTable({
 
   return (
     <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead>
-              <SortableHeader
-                field="account"
-                label={t("balances.columns.account")}
-                description={t("balances.columnDescriptions.account")}
-                direction={sortDirection(activeSort, activeOrder, "account")}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="asset"
-                label={t("balances.columns.asset")}
-                description={t("balances.columnDescriptions.asset")}
-                direction={sortDirection(activeSort, activeOrder, "asset")}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className="text-right">
-              <SortableHeader
-                field="available"
-                label={t("balances.columns.available")}
-                description={t("balances.columnDescriptions.available")}
-                direction={sortDirection(activeSort, activeOrder, "available")}
-                align="right"
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className="text-right">
-              <SortableHeader
-                field="held"
-                label={t("balances.columns.held")}
-                description={t("balances.columnDescriptions.held")}
-                direction={sortDirection(activeSort, activeOrder, "held")}
-                align="right"
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className="text-right">
-              <SortableHeader
-                field="incoming"
-                label={t("balances.columns.incoming")}
-                description={t("balances.columnDescriptions.incoming")}
-                direction={sortDirection(activeSort, activeOrder, "incoming")}
-                align="right"
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className="text-right">
-              <ColumnHeader
-                align="right"
-                description={t("balances.columnDescriptions.avgEntryPrice")}
-              >
-                {t("balances.columns.avgEntryPrice")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead className="text-right">
-              <ColumnHeader
-                align="right"
-                description={t("balances.columnDescriptions.realizedPnl")}
-              >
-                {t("balances.columns.realizedPnl")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <SortableHeader
-                field="updatedAt"
-                label={t("balances.columns.updated")}
-                description={t("balances.columnDescriptions.updated")}
-                direction={sortDirection(activeSort, activeOrder, "updatedAt")}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
-            </TableHead>
-            <TableHead className="text-right">
-              <ColumnHeader
-                align="right"
-                description={t("balances.columnDescriptions.adjust")}
-              >
-                {t("balances.columns.adjust")}
-              </ColumnHeader>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          <BalanceDraftRow
-            defaultAccount={defaultDraftAccount}
-            defaultAsset={defaultDraftAsset}
-            expanded={openKey === DRAFT_ADJUSTMENT_KEY}
-            accountSuggestions={accountSuggestions}
-            assetSuggestions={assetSuggestions}
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead>
+            <SortableHeader
+              field="account"
+              label={t("balances.columns.account")}
+              description={t("balances.columnDescriptions.account")}
+              direction={sortDirection(activeSort, activeOrder, "account")}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="asset"
+              label={t("balances.columns.asset")}
+              description={t("balances.columnDescriptions.asset")}
+              direction={sortDirection(activeSort, activeOrder, "asset")}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className="text-right">
+            <SortableHeader
+              field="available"
+              label={t("balances.columns.available")}
+              description={t("balances.columnDescriptions.available")}
+              direction={sortDirection(activeSort, activeOrder, "available")}
+              align="right"
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className="text-right">
+            <SortableHeader
+              field="held"
+              label={t("balances.columns.held")}
+              description={t("balances.columnDescriptions.held")}
+              direction={sortDirection(activeSort, activeOrder, "held")}
+              align="right"
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className="text-right">
+            <SortableHeader
+              field="incoming"
+              label={t("balances.columns.incoming")}
+              description={t("balances.columnDescriptions.incoming")}
+              direction={sortDirection(activeSort, activeOrder, "incoming")}
+              align="right"
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className="text-right">
+            <ColumnHeader
+              align="right"
+              description={t("balances.columnDescriptions.avgEntryPrice")}
+            >
+              {t("balances.columns.avgEntryPrice")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead className="text-right">
+            <ColumnHeader
+              align="right"
+              description={t("balances.columnDescriptions.realizedPnl")}
+            >
+              {t("balances.columns.realizedPnl")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <SortableHeader
+              field="updatedAt"
+              label={t("balances.columns.updated")}
+              description={t("balances.columnDescriptions.updated")}
+              direction={sortDirection(activeSort, activeOrder, "updatedAt")}
+              onSort={(field, next) =>
+                onSortChange(
+                  next === "none" ? undefined : field,
+                  next === "none" ? undefined : next,
+                )
+              }
+            />
+          </TableHead>
+          <TableHead className="text-right">
+            <ColumnHeader
+              align="right"
+              description={t("balances.columnDescriptions.adjust")}
+            >
+              {t("balances.columns.adjust")}
+            </ColumnHeader>
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <BalanceDraftRow
+          defaultAccount={defaultDraftAccount}
+          defaultAsset={defaultDraftAsset}
+          expanded={openKey === DRAFT_ADJUSTMENT_KEY}
+          accountSuggestions={accountSuggestions}
+          assetSuggestions={assetSuggestions}
+          onToggle={() =>
+            setOpenKey((current) =>
+              current === DRAFT_ADJUSTMENT_KEY ? null : DRAFT_ADJUSTMENT_KEY,
+            )
+          }
+          onClose={() => setOpenKey(null)}
+          onApplied={onApplied}
+        />
+        {balances.map((b) => (
+          <BalanceEditRow
+            key={`${b.account}|${b.asset}`}
+            balance={b}
+            expanded={openKey === `${b.account}|${b.asset}`}
             onToggle={() =>
               setOpenKey((current) =>
-                current === DRAFT_ADJUSTMENT_KEY
+                current === `${b.account}|${b.asset}`
                   ? null
-                  : DRAFT_ADJUSTMENT_KEY,
+                  : `${b.account}|${b.asset}`,
               )
             }
             onClose={() => setOpenKey(null)}
+            onShowHistory={onShowHistory}
+            onFilterAccount={onFilterAccount}
+            onFilterAsset={onFilterAsset}
+            accountSuggestions={accountSuggestions}
+            assetSuggestions={assetSuggestions}
             onApplied={onApplied}
           />
-          {balances.map((b) => (
-            <BalanceEditRow
-              key={`${b.account}|${b.asset}`}
-              balance={b}
-              expanded={openKey === `${b.account}|${b.asset}`}
-              onToggle={() =>
-                setOpenKey((current) =>
-                  current === `${b.account}|${b.asset}`
-                    ? null
-                    : `${b.account}|${b.asset}`,
-                )
-              }
-              onClose={() => setOpenKey(null)}
-              onShowHistory={onShowHistory}
-              onFilterAccount={onFilterAccount}
-              onFilterAsset={onFilterAsset}
-              accountSuggestions={accountSuggestions}
-              assetSuggestions={assetSuggestions}
-              onApplied={onApplied}
-            />
-          ))}
-        </TableBody>
+        ))}
+      </TableBody>
     </Table>
   );
 }
@@ -2344,10 +2349,7 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
     );
   }
   if (accepted) {
-    const haltText = pnlHaltText(
-      t,
-      accepted.realizedPnlHaltReason ?? "",
-    );
+    const haltText = pnlHaltText(t, accepted.realizedPnlHaltReason ?? "");
     const rows: {
       label: string;
       request: AdjustmentAmount | undefined;
@@ -2382,7 +2384,10 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
       const realizedPnl = adjustmentResultParts(accepted.realizedPnlResult);
       rows.push({
         label: t("dialog.outcome.fieldRealizedPnl"),
-        request: { mode: "absolute", value: adjustment.request.realizedPnl ?? "" },
+        request: {
+          mode: "absolute",
+          value: adjustment.request.realizedPnl ?? "",
+        },
         delta: realizedPnl.delta,
         result: realizedPnl.result,
       });
@@ -2479,7 +2484,9 @@ function AmountField({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="absolute">{t("dialog.mode.absolute")}</SelectItem>
+              <SelectItem value="absolute">
+                {t("dialog.mode.absolute")}
+              </SelectItem>
               <SelectItem value="delta">{t("dialog.mode.delta")}</SelectItem>
             </SelectContent>
           </Select>
@@ -2539,7 +2546,9 @@ function BoundsField({
       {field.enabled && (
         <div className="ml-5 grid grid-cols-2 gap-2">
           <div className="space-y-1">
-            <Label className="text-[0.6875rem] text-muted">{t("dialog.bounds.lower")}</Label>
+            <Label className="text-[0.6875rem] text-muted">
+              {t("dialog.bounds.lower")}
+            </Label>
             <NumberStepper
               value={field.lower}
               min={null}
@@ -2552,7 +2561,9 @@ function BoundsField({
             />
           </div>
           <div className="space-y-1">
-            <Label className="text-[0.6875rem] text-muted">{t("dialog.bounds.upper")}</Label>
+            <Label className="text-[0.6875rem] text-muted">
+              {t("dialog.bounds.upper")}
+            </Label>
             <NumberStepper
               value={field.upper}
               min={null}
@@ -2633,12 +2644,16 @@ function AdjustDialog({
 }: AdjustDialogProps) {
   // A preseeded amount (e.g. from an inline row or clone) opens the field
   // already enabled so the operator only adjusts what they need.
-  const seedAmount = (mode: AdjustmentMode | undefined, value: string | undefined): AmountFieldState =>
-    value
-      ? { enabled: true, mode: mode ?? "absolute", value }
-      : emptyAmount();
+  const seedAmount = (
+    mode: AdjustmentMode | undefined,
+    value: string | undefined,
+  ): AmountFieldState =>
+    value ? { enabled: true, mode: mode ?? "absolute", value } : emptyAmount();
 
-  const seedBounds = (lower: string | undefined, upper: string | undefined): BoundsFieldState =>
+  const seedBounds = (
+    lower: string | undefined,
+    upper: string | undefined,
+  ): BoundsFieldState =>
     lower || upper
       ? { enabled: true, lower: lower ?? "", upper: upper ?? "" }
       : emptyBounds();
@@ -2647,12 +2662,24 @@ function AdjustDialog({
   const [asset, setAsset] = useState(initialAsset);
   const [avgPrice, setAvgPrice] = useState(initialAvgPrice ?? "");
   const [realizedPnl, setRealizedPnl] = useState(initialRealizedPnl ?? "");
-  const [balance, setBalance] = useState<AmountFieldState>(() => seedAmount(initialBalanceMode, initialBalanceValue));
-  const [held, setHeld] = useState<AmountFieldState>(() => seedAmount(initialHeldMode, initialHeldValue));
-  const [incoming, setIncoming] = useState<AmountFieldState>(() => seedAmount(initialIncomingMode, initialIncomingValue));
-  const [balanceBounds, setBalanceBounds] = useState<BoundsFieldState>(() => seedBounds(initialBalanceBoundsLower, initialBalanceBoundsUpper));
-  const [heldBounds, setHeldBounds] = useState<BoundsFieldState>(() => seedBounds(initialHeldBoundsLower, initialHeldBoundsUpper));
-  const [incomingBounds, setIncomingBounds] = useState<BoundsFieldState>(() => seedBounds(initialIncomingBoundsLower, initialIncomingBoundsUpper));
+  const [balance, setBalance] = useState<AmountFieldState>(() =>
+    seedAmount(initialBalanceMode, initialBalanceValue),
+  );
+  const [held, setHeld] = useState<AmountFieldState>(() =>
+    seedAmount(initialHeldMode, initialHeldValue),
+  );
+  const [incoming, setIncoming] = useState<AmountFieldState>(() =>
+    seedAmount(initialIncomingMode, initialIncomingValue),
+  );
+  const [balanceBounds, setBalanceBounds] = useState<BoundsFieldState>(() =>
+    seedBounds(initialBalanceBoundsLower, initialBalanceBoundsUpper),
+  );
+  const [heldBounds, setHeldBounds] = useState<BoundsFieldState>(() =>
+    seedBounds(initialHeldBoundsLower, initialHeldBoundsUpper),
+  );
+  const [incomingBounds, setIncomingBounds] = useState<BoundsFieldState>(() =>
+    seedBounds(initialIncomingBoundsLower, initialIncomingBoundsUpper),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
@@ -2681,9 +2708,13 @@ function AdjustDialog({
       setBalance(seedAmount(initialBalanceMode, initialBalanceValue));
       setHeld(seedAmount(initialHeldMode, initialHeldValue));
       setIncoming(seedAmount(initialIncomingMode, initialIncomingValue));
-      setBalanceBounds(seedBounds(initialBalanceBoundsLower, initialBalanceBoundsUpper));
+      setBalanceBounds(
+        seedBounds(initialBalanceBoundsLower, initialBalanceBoundsUpper),
+      );
       setHeldBounds(seedBounds(initialHeldBoundsLower, initialHeldBoundsUpper));
-      setIncomingBounds(seedBounds(initialIncomingBoundsLower, initialIncomingBoundsUpper));
+      setIncomingBounds(
+        seedBounds(initialIncomingBoundsLower, initialIncomingBoundsUpper),
+      );
       setBusy(false);
       setError(null);
       setOutcome(null);
@@ -2691,15 +2722,22 @@ function AdjustDialog({
     }
   }, [
     open,
-    initialAccount, initialAsset,
-    initialBalanceMode, initialBalanceValue,
-    initialHeldMode, initialHeldValue,
-    initialIncomingMode, initialIncomingValue,
+    initialAccount,
+    initialAsset,
+    initialBalanceMode,
+    initialBalanceValue,
+    initialHeldMode,
+    initialHeldValue,
+    initialIncomingMode,
+    initialIncomingValue,
     initialAvgPrice,
     initialRealizedPnl,
-    initialBalanceBoundsLower, initialBalanceBoundsUpper,
-    initialHeldBoundsLower, initialHeldBoundsUpper,
-    initialIncomingBoundsLower, initialIncomingBoundsUpper,
+    initialBalanceBoundsLower,
+    initialBalanceBoundsUpper,
+    initialHeldBoundsLower,
+    initialHeldBoundsUpper,
+    initialIncomingBoundsLower,
+    initialIncomingBoundsUpper,
   ]);
 
   function buildBounds(f: BoundsFieldState): BoundsPair | undefined {
@@ -2732,8 +2770,7 @@ function AdjustDialog({
       (hasValue(heldBounds.lower) || hasValue(heldBounds.upper))) ||
     (incomingBounds.enabled &&
       (hasValue(incomingBounds.lower) || hasValue(incomingBounds.upper)));
-  const hasModalChanges =
-    hasModalAdjustmentChange || hasValue(realizedPnl);
+  const hasModalChanges = hasModalAdjustmentChange || hasValue(realizedPnl);
   const amountFieldValid = (field: AmountFieldState) =>
     !field.enabled || !hasValue(field.value) || isDecimal(field.value);
   const boundsFieldValid = (field: BoundsFieldState) =>
@@ -2837,187 +2874,206 @@ function AdjustDialog({
 
   return (
     <>
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("dialog.title")}</DialogTitle>
-          <DialogDescription>
-            {t("dialog.description")}
-          </DialogDescription>
-        </DialogHeader>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("dialog.title")}</DialogTitle>
+            <DialogDescription>{t("dialog.description")}</DialogDescription>
+          </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Account + asset */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-4">
+            {/* Account + asset */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="adj-account">
+                  {t("dialog.fields.account")}
+                </Label>
+                <Autocomplete
+                  id="adj-account"
+                  value={account}
+                  spellCheck={false}
+                  placeholder="acc-1"
+                  suggestions={mergedAccountSuggestions}
+                  onChange={setAccount}
+                  disabled={busy}
+                  onClear={() => setAccount("")}
+                  clearLabel={t("common:filters.clearField")}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="adj-asset">{t("dialog.fields.asset")}</Label>
+                <Autocomplete
+                  id="adj-asset"
+                  value={asset}
+                  spellCheck={false}
+                  placeholder="AAPL"
+                  suggestions={mergedAssetSuggestions}
+                  onChange={setAsset}
+                  disabled={busy}
+                  onClear={() => setAsset("")}
+                  clearLabel={t("common:filters.clearField")}
+                />
+              </div>
+            </div>
+
             <div className="space-y-1.5">
-              <Label htmlFor="adj-account">{t("dialog.fields.account")}</Label>
-              <Autocomplete
-                id="adj-account"
-                value={account}
+              <Label htmlFor="adj-realized-pnl">
+                {t("dialog.fields.realizedPnl")}
+              </Label>
+              <NumberStepper
+                id="adj-realized-pnl"
+                value={realizedPnl}
+                min={null}
                 spellCheck={false}
-                placeholder="acc-1"
-                suggestions={mergedAccountSuggestions}
-                onChange={setAccount}
+                placeholder={t("dialog.fields.realizedPnlPlaceholder")}
+                inputClassName="text-xs"
                 disabled={busy}
-                onClear={() => setAccount("")}
+                onChange={setRealizedPnl}
+                onClear={() => setRealizedPnl("")}
                 clearLabel={t("common:filters.clearField")}
               />
             </div>
+
+            {/* Average entry price */}
             <div className="space-y-1.5">
-              <Label htmlFor="adj-asset">{t("dialog.fields.asset")}</Label>
-              <Autocomplete
-                id="adj-asset"
-                value={asset}
+              <Label htmlFor="adj-aep">
+                {t("dialog.fields.avgEntryPrice")}
+              </Label>
+              <NumberStepper
+                id="adj-aep"
+                value={avgPrice}
                 spellCheck={false}
-                placeholder="AAPL"
-                suggestions={mergedAssetSuggestions}
-                onChange={setAsset}
+                placeholder="e.g. 142.50"
+                inputClassName="text-xs"
                 disabled={busy}
-                onClear={() => setAsset("")}
+                onChange={setAvgPrice}
+                onClear={() => setAvgPrice("")}
                 clearLabel={t("common:filters.clearField")}
               />
+              <p className="text-[0.6875rem] text-muted">
+                {t("dialog.fields.avgEntryPriceHint")}
+              </p>
             </div>
+
+            {/* Amount fields */}
+            <div className="space-y-3 rounded-card border border-border p-3">
+              <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
+                {t("dialog.amounts.sectionLabel")}
+              </p>
+              <AmountField
+                id="balance"
+                label={t("dialog.amounts.balance")}
+                field={balance}
+                onChange={setBalance}
+              />
+              <AmountField
+                id="held"
+                label={t("dialog.amounts.held")}
+                field={held}
+                onChange={setHeld}
+              />
+              <AmountField
+                id="incoming"
+                label={t("dialog.amounts.incoming")}
+                field={incoming}
+                onChange={setIncoming}
+              />
+            </div>
+
+            {/* Bounds fields */}
+            <div className="space-y-3 rounded-card border border-border p-3">
+              <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
+                {t("dialog.bounds.sectionLabel")}
+              </p>
+              <BoundsField
+                id="balance"
+                label={t("dialog.bounds.balanceLabel")}
+                field={balanceBounds}
+                onChange={setBalanceBounds}
+              />
+              <BoundsField
+                id="held"
+                label={t("dialog.bounds.heldLabel")}
+                field={heldBounds}
+                onChange={setHeldBounds}
+              />
+              <BoundsField
+                id="incoming"
+                label={t("dialog.bounds.incomingLabel")}
+                field={incomingBounds}
+                onChange={setIncomingBounds}
+              />
+            </div>
+
+            {/* Outcome */}
+            {outcome && <AdjustOutcomeView adjustment={outcome} />}
+
+            {error && (
+              <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            )}
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="adj-realized-pnl">
-              {t("dialog.fields.realizedPnl")}
-            </Label>
-            <NumberStepper
-              id="adj-realized-pnl"
-              value={realizedPnl}
-              min={null}
-              spellCheck={false}
-              placeholder={t("dialog.fields.realizedPnlPlaceholder")}
-              inputClassName="text-xs"
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenChange(false)}
               disabled={busy}
-              onChange={setRealizedPnl}
-              onClear={() => setRealizedPnl("")}
-              clearLabel={t("common:filters.clearField")}
-            />
-          </div>
-
-          {/* Average entry price */}
-          <div className="space-y-1.5">
-            <Label htmlFor="adj-aep">{t("dialog.fields.avgEntryPrice")}</Label>
-            <NumberStepper
-              id="adj-aep"
-              value={avgPrice}
-              spellCheck={false}
-              placeholder="e.g. 142.50"
-              inputClassName="text-xs"
+            >
+              {outcome
+                ? t("dialog.footer.close")
+                : t("actions.cancel", { ns: "common" })}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={resetAllFields}
               disabled={busy}
-              onChange={setAvgPrice}
-              onClear={() => setAvgPrice("")}
-              clearLabel={t("common:filters.clearField")}
-            />
-            <p className="text-[0.6875rem] text-muted">
-              {t("dialog.fields.avgEntryPriceHint")}
-            </p>
-          </div>
-
-          {/* Amount fields */}
-          <div className="space-y-3 rounded-card border border-border p-3">
-            <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-              {t("dialog.amounts.sectionLabel")}
-            </p>
-            <AmountField id="balance" label={t("dialog.amounts.balance")} field={balance} onChange={setBalance} />
-            <AmountField id="held" label={t("dialog.amounts.held")} field={held} onChange={setHeld} />
-            <AmountField id="incoming" label={t("dialog.amounts.incoming")} field={incoming} onChange={setIncoming} />
-          </div>
-
-          {/* Bounds fields */}
-          <div className="space-y-3 rounded-card border border-border p-3">
-            <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-              {t("dialog.bounds.sectionLabel")}
-            </p>
-            <BoundsField
-              id="balance"
-              label={t("dialog.bounds.balanceLabel")}
-              field={balanceBounds}
-              onChange={setBalanceBounds}
-            />
-            <BoundsField
-              id="held"
-              label={t("dialog.bounds.heldLabel")}
-              field={heldBounds}
-              onChange={setHeldBounds}
-            />
-            <BoundsField
-              id="incoming"
-              label={t("dialog.bounds.incomingLabel")}
-              field={incomingBounds}
-              onChange={setIncomingBounds}
-            />
-          </div>
-
-          {/* Outcome */}
-          {outcome && <AdjustOutcomeView adjustment={outcome} />}
-
-          {error && (
-            <ErrorBanner message={error} onDismiss={() => setError(null)} />
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            {outcome ? t("dialog.footer.close") : t("actions.cancel", { ns: "common" })}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={resetAllFields}
-            disabled={busy}
-          >
-            {t("actions.clearAll", { ns: "common" })}
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => void submit()}
-            disabled={busy || !hasModalChanges || !modalFieldsValid}
-          >
-            {t("dialog.footer.submit")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-    <AlertDialog
-      open={missingAccountConfirmOpen}
-      onOpenChange={setMissingAccountConfirmOpen}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {t("missingAccountConfirm.title")}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {t("missingAccountConfirm.description", {
-              account: account.trim(),
-            })}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
-            {t("actions.cancel", { ns: "common" })}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            onClick={(e) => {
-              e.preventDefault();
-              setMissingAccountConfirmOpen(false);
-              void submit("create");
-            }}
-            disabled={busy}
-          >
-            {t("missingAccountConfirm.confirm")}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+            >
+              {t("actions.clearAll", { ns: "common" })}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void submit()}
+              disabled={busy || !hasModalChanges || !modalFieldsValid}
+            >
+              {t("dialog.footer.submit")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={missingAccountConfirmOpen}
+        onOpenChange={setMissingAccountConfirmOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("missingAccountConfirm.title")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("missingAccountConfirm.description", {
+                account: account.trim(),
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>
+              {t("actions.cancel", { ns: "common" })}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                setMissingAccountConfirmOpen(false);
+                void submit("create");
+              }}
+              disabled={busy}
+            >
+              {t("missingAccountConfirm.confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -3031,16 +3087,11 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
   const { accepted, rejected } = adj;
   if (rejected) {
     return (
-      <span className="text-[var(--danger)]">
-        {rejected.reason || "—"}
-      </span>
+      <span className="text-[var(--danger)]">{rejected.reason || "—"}</span>
     );
   }
   if (accepted) {
-    const haltText = pnlHaltText(
-      t,
-      accepted.realizedPnlHaltReason ?? "",
-    );
+    const haltText = pnlHaltText(t, accepted.realizedPnlHaltReason ?? "");
     const parts: string[] = [];
     if (accepted.balanceDelta || accepted.balanceResult) {
       parts.push(
@@ -3083,9 +3134,7 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
       parts.push(haltText);
     }
     return (
-      <span
-        className={haltText ? "text-[var(--warn)]" : "nums text-text"}
-      >
+      <span className={haltText ? "text-[var(--warn)]" : "nums text-text"}>
         {parts.length > 0 ? parts.join(" · ") : "—"}
       </span>
     );
@@ -3134,7 +3183,9 @@ function HistoryRow({
     );
   }
   if (req.averageEntryPrice) {
-    reqParts.push(t("history.request.avgPrice", { value: req.averageEntryPrice }));
+    reqParts.push(
+      t("history.request.avgPrice", { value: req.averageEntryPrice }),
+    );
   }
   if (req.realizedPnl) {
     reqParts.push(t("history.request.realizedPnl", { value: req.realizedPnl }));
@@ -3142,7 +3193,9 @@ function HistoryRow({
 
   return (
     <TableRow className="hover:bg-transparent">
-      <TableCell className="text-xs text-muted-lt"><SplitTime iso={adj.at} /></TableCell>
+      <TableCell className="text-xs text-muted-lt">
+        <SplitTime iso={adj.at} />
+      </TableCell>
       <TableCell className="nums text-xs">
         <div className="flex min-w-0 items-center gap-1">
           <IdCell
@@ -3248,7 +3301,11 @@ function sortFromParams(
 ): { sort?: string; order?: SortOrder } {
   const sort = params.get("sort");
   const order = params.get("order");
-  if (sort !== null && allowed.has(sort) && (order === "asc" || order === "desc")) {
+  if (
+    sort !== null &&
+    allowed.has(sort) &&
+    (order === "asc" || order === "desc")
+  ) {
     return { sort, order };
   }
   return fallback;
@@ -3261,7 +3318,8 @@ export function Positions() {
     useOfficerApi();
   const [searchParams] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
-  const initialAccount = globalAccountFilter.account || searchParams.get("account") || "";
+  const initialAccount =
+    globalAccountFilter.account || searchParams.get("account") || "";
   const initialGroup = searchParams.get("group") ?? "";
   const initialAsset = searchParams.get("asset") ?? "";
   const initialTab: PositionsTab =
@@ -3367,18 +3425,42 @@ export function Positions() {
     useState<AdjustmentMode>("absolute");
   const [adjustBalanceValue, setAdjustBalanceValue] = useState("");
   // Extended clone-prefill props (undefined = leave empty / disabled).
-  const [adjustHeldMode, setAdjustHeldMode] = useState<AdjustmentMode | undefined>(undefined);
-  const [adjustHeldValue, setAdjustHeldValue] = useState<string | undefined>(undefined);
-  const [adjustIncomingMode, setAdjustIncomingMode] = useState<AdjustmentMode | undefined>(undefined);
-  const [adjustIncomingValue, setAdjustIncomingValue] = useState<string | undefined>(undefined);
-  const [adjustAvgPrice, setAdjustAvgPrice] = useState<string | undefined>(undefined);
-  const [adjustRealizedPnl, setAdjustRealizedPnl] = useState<string | undefined>(undefined);
-  const [adjustBalanceBoundsLower, setAdjustBalanceBoundsLower] = useState<string | undefined>(undefined);
-  const [adjustBalanceBoundsUpper, setAdjustBalanceBoundsUpper] = useState<string | undefined>(undefined);
-  const [adjustHeldBoundsLower, setAdjustHeldBoundsLower] = useState<string | undefined>(undefined);
-  const [adjustHeldBoundsUpper, setAdjustHeldBoundsUpper] = useState<string | undefined>(undefined);
-  const [adjustIncomingBoundsLower, setAdjustIncomingBoundsLower] = useState<string | undefined>(undefined);
-  const [adjustIncomingBoundsUpper, setAdjustIncomingBoundsUpper] = useState<string | undefined>(undefined);
+  const [adjustHeldMode, setAdjustHeldMode] = useState<
+    AdjustmentMode | undefined
+  >(undefined);
+  const [adjustHeldValue, setAdjustHeldValue] = useState<string | undefined>(
+    undefined,
+  );
+  const [adjustIncomingMode, setAdjustIncomingMode] = useState<
+    AdjustmentMode | undefined
+  >(undefined);
+  const [adjustIncomingValue, setAdjustIncomingValue] = useState<
+    string | undefined
+  >(undefined);
+  const [adjustAvgPrice, setAdjustAvgPrice] = useState<string | undefined>(
+    undefined,
+  );
+  const [adjustRealizedPnl, setAdjustRealizedPnl] = useState<
+    string | undefined
+  >(undefined);
+  const [adjustBalanceBoundsLower, setAdjustBalanceBoundsLower] = useState<
+    string | undefined
+  >(undefined);
+  const [adjustBalanceBoundsUpper, setAdjustBalanceBoundsUpper] = useState<
+    string | undefined
+  >(undefined);
+  const [adjustHeldBoundsLower, setAdjustHeldBoundsLower] = useState<
+    string | undefined
+  >(undefined);
+  const [adjustHeldBoundsUpper, setAdjustHeldBoundsUpper] = useState<
+    string | undefined
+  >(undefined);
+  const [adjustIncomingBoundsLower, setAdjustIncomingBoundsLower] = useState<
+    string | undefined
+  >(undefined);
+  const [adjustIncomingBoundsUpper, setAdjustIncomingBoundsUpper] = useState<
+    string | undefined
+  >(undefined);
 
   const deferredAccountDraft = useDebouncedValue(
     accountDraft.trim(),
@@ -3408,44 +3490,40 @@ export function Positions() {
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
 
-  const balanceListFilters = useMemo<BalanceListFilters>(
-    () => {
-      const filter: BalanceListFilters = {
-        account: deferredAccount || undefined,
-        asset: deferredAsset || undefined,
-        groupCode: deferredGroup || undefined,
-        limit: balanceSize,
-        offset: balancePage * balanceSize,
-        sort: balanceSort.sort,
-        order: balanceSort.order,
-      };
-      addBalanceRange(filter, "available", debouncedBalanceRanges.available);
-      addBalanceRange(filter, "held", debouncedBalanceRanges.held);
-      addBalanceRange(filter, "incoming", debouncedBalanceRanges.incoming);
-      addBalanceRange(
-        filter,
-        "averageEntryPrice",
-        debouncedBalanceRanges.averageEntryPrice,
-      );
-      addBalanceRange(filter, "realizedPnl", debouncedBalanceRanges.realizedPnl);
-      addUpdatedAtRange(filter, debouncedBalanceRanges.updatedAt);
-      return filter;
-    },
-    [
-      balancePage,
-      balanceSize,
-      balanceSort.order,
-      balanceSort.sort,
-      debouncedBalanceRanges,
-      deferredAccount,
-      deferredAsset,
-      deferredGroup,
-    ],
-  );
+  const balanceListFilters = useMemo<BalanceListFilters>(() => {
+    const filter: BalanceListFilters = {
+      account: deferredAccount || undefined,
+      asset: deferredAsset || undefined,
+      groupCode: deferredGroup || undefined,
+      limit: balanceSize,
+      offset: balancePage * balanceSize,
+      sort: balanceSort.sort,
+      order: balanceSort.order,
+    };
+    addBalanceRange(filter, "available", debouncedBalanceRanges.available);
+    addBalanceRange(filter, "held", debouncedBalanceRanges.held);
+    addBalanceRange(filter, "incoming", debouncedBalanceRanges.incoming);
+    addBalanceRange(
+      filter,
+      "averageEntryPrice",
+      debouncedBalanceRanges.averageEntryPrice,
+    );
+    addBalanceRange(filter, "realizedPnl", debouncedBalanceRanges.realizedPnl);
+    addUpdatedAtRange(filter, debouncedBalanceRanges.updatedAt);
+    return filter;
+  }, [
+    balancePage,
+    balanceSize,
+    balanceSort.order,
+    balanceSort.sort,
+    debouncedBalanceRanges,
+    deferredAccount,
+    deferredAsset,
+    deferredGroup,
+  ]);
   const balancesLoad = useBalancesPage(balanceListFilters);
 
-  const deferredSource =
-    sourceFilter === "__all__" ? undefined : sourceFilter;
+  const deferredSource = sourceFilter === "__all__" ? undefined : sourceFilter;
   const historyAtFrom = localDateTimeFilter(debouncedHistoryAtMin);
   const historyAtTo = localDateTimeFilter(debouncedHistoryAtMax);
   const requestHistoryAt =
@@ -3460,21 +3538,18 @@ export function Positions() {
         : historyAtFrom !== ""
           ? { atMode: historyAtMode, atMin: historyAtFrom }
           : {};
-  const adjustmentsLoad = useAdjustmentsPage(
-    {
-      id: appliedHistoryExternalId.trim() || undefined,
-      account: deferredAccount || undefined,
-      asset: deferredAsset || undefined,
-      source: deferredSource,
-      status:
-        historyStatusFilter === "__all__" ? undefined : historyStatusFilter,
-      ...requestHistoryAt,
-      sort: historySort.sort,
-      order: historySort.order,
-      limit: historySize,
-      offset: historyPage * historySize,
-    },
-  );
+  const adjustmentsLoad = useAdjustmentsPage({
+    id: appliedHistoryExternalId.trim() || undefined,
+    account: deferredAccount || undefined,
+    asset: deferredAsset || undefined,
+    source: deferredSource,
+    status: historyStatusFilter === "__all__" ? undefined : historyStatusFilter,
+    ...requestHistoryAt,
+    sort: historySort.sort,
+    order: historySort.order,
+    limit: historySize,
+    offset: historyPage * historySize,
+  });
 
   const [accountSuggestions, setAccountSuggestions] = useState<string[]>([]);
   const [groupSuggestions, setGroupSuggestions] = useState<string[]>([]);
@@ -3505,7 +3580,9 @@ export function Positions() {
     )
       .then((accounts) => {
         const next = accounts.map((account) => account.code);
-        setAccountSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
+        setAccountSuggestions((prev) =>
+          sameStrings(prev, next) ? prev : next,
+        );
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
@@ -3836,9 +3913,7 @@ export function Positions() {
     tab,
   ]);
   const balances =
-    balancesLoad.load.state === "ready"
-      ? balancesLoad.load.data.items
-      : [];
+    balancesLoad.load.state === "ready" ? balancesLoad.load.data.items : [];
   const pagedBalances = balances;
   const hasMoreBalances =
     balancesLoad.load.state === "ready" &&
@@ -4016,12 +4091,16 @@ export function Positions() {
             };
           })
       : []),
-  ].filter((entry): entry is {
-    key: string;
-    label: string;
-    value: string;
-    clear: () => void;
-  } => entry !== null);
+  ].filter(
+    (
+      entry,
+    ): entry is {
+      key: string;
+      label: string;
+      value: string;
+      clear: () => void;
+    } => entry !== null,
+  );
   const visibleFilterChips =
     tab === "positions"
       ? activeFilterChips.filter((entry) =>
@@ -4321,11 +4400,13 @@ export function Positions() {
             setMoreFiltersOpen(next);
           }}
         >
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{tc("filters.more")}</DialogTitle>
-            <DialogDescription>{t("filters.advancedDescription")}</DialogDescription>
-          </DialogHeader>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>{tc("filters.more")}</DialogTitle>
+              <DialogDescription>
+                {t("filters.advancedDescription")}
+              </DialogDescription>
+            </DialogHeader>
             <div ref={advancedFilterDialogRef} className="grid gap-3">
               <PositionRangeFilter
                 label={t("balances.columns.available")}
@@ -4356,7 +4437,9 @@ export function Positions() {
                 draft={balanceRangeDrafts.realizedPnl}
                 denominated
                 currencySuggestions={accountCurrencySuggestions}
-                onChange={(next) => updateBalanceRangeDraft("realizedPnl", next)}
+                onChange={(next) =>
+                  updateBalanceRangeDraft("realizedPnl", next)
+                }
               />
               <PositionRangeFilter
                 label={t("balances.columns.updated")}
@@ -4365,26 +4448,28 @@ export function Positions() {
                 onChange={(next) => updateBalanceRangeDraft("updatedAt", next)}
               />
             </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setBalanceRangeDrafts(cloneBalanceRanges(EMPTY_BALANCE_RANGES));
-              }}
-            >
-              {tc("filters.removeAdvanced")}
-            </Button>
-            <Button
-              type="button"
-              onClick={applyAdvancedFilters}
-              disabled={!advancedNumericFiltersValid}
-            >
-              {tc("filters.applyAdvanced")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setBalanceRangeDrafts(
+                    cloneBalanceRanges(EMPTY_BALANCE_RANGES),
+                  );
+                }}
+              >
+                {tc("filters.removeAdvanced")}
+              </Button>
+              <Button
+                type="button"
+                onClick={applyAdvancedFilters}
+                disabled={!advancedNumericFiltersValid}
+              >
+                {tc("filters.applyAdvanced")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
@@ -4414,9 +4499,7 @@ export function Positions() {
             </p>
           </div>
 
-          {balancesLoad.load.state === "loading" && (
-            <TableSkeleton cols={9} />
-          )}
+          {balancesLoad.load.state === "loading" && <TableSkeleton cols={9} />}
           {balancesLoad.load.state === "error" && (
             <ErrorState
               message={balancesLoad.load.error}
@@ -4495,105 +4578,115 @@ export function Positions() {
               <>
                 {historyPager}
                 <Table>
-	                  <TableHeader>
-	                    <TableRow className="hover:bg-transparent">
-	                      <TableHead>
-	                        <SortableHeader
-	                          field="at"
-	                          label={t("history.columns.time")}
-	                          description={t("history.columnDescriptions.time")}
-	                          direction={sortDirection(
-	                            historySort.sort,
-	                            historySort.order,
-	                            "at",
-	                          )}
-	                          onSort={(field, next) => {
-	                            setHistorySort(
-	                              next === "none" ? {} : { sort: field, order: next },
-	                            );
-	                            resetHistoryPage();
-	                          }}
-	                        />
-	                      </TableHead>
-	                      <TableHead>
-	                        <SortableHeader
-	                          field="account"
-	                          label={t("history.columns.account")}
-	                          description={t("history.columnDescriptions.account")}
-	                          direction={sortDirection(
-	                            historySort.sort,
-	                            historySort.order,
-	                            "account",
-	                          )}
-	                          onSort={(field, next) => {
-	                            setHistorySort(
-	                              next === "none" ? {} : { sort: field, order: next },
-	                            );
-	                            resetHistoryPage();
-	                          }}
-	                        />
-	                      </TableHead>
-	                      <TableHead>
-	                        <SortableHeader
-	                          field="asset"
-	                          label={t("history.columns.asset")}
-	                          description={t("history.columnDescriptions.asset")}
-	                          direction={sortDirection(
-	                            historySort.sort,
-	                            historySort.order,
-	                            "asset",
-	                          )}
-	                          onSort={(field, next) => {
-	                            setHistorySort(
-	                              next === "none" ? {} : { sort: field, order: next },
-	                            );
-	                            resetHistoryPage();
-	                          }}
-	                        />
-	                      </TableHead>
-	                      <TableHead className="w-[var(--positions-source-column-width)]">
-	                        <SortableHeader
-	                          field="source"
-	                          label={t("history.columns.source")}
-	                          description={t("history.columnDescriptions.source")}
-	                          direction={sortDirection(
-	                            historySort.sort,
-	                            historySort.order,
-	                            "source",
-	                          )}
-	                          onSort={(field, next) => {
-	                            setHistorySort(
-	                              next === "none" ? {} : { sort: field, order: next },
-	                            );
-	                            resetHistoryPage();
-	                          }}
-	                        />
-	                      </TableHead>
-	                      <TableHead>
-	                        <ColumnHeader
-	                          description={t("history.columnDescriptions.request")}
-	                        >
-	                          {t("history.columns.request")}
-	                        </ColumnHeader>
-	                      </TableHead>
-	                      <TableHead className="w-[var(--positions-status-column-width)]">
-	                        <SortableHeader
-	                          field="status"
-	                          label={t("history.columns.status")}
-	                          description={t("history.columnDescriptions.status")}
-	                          direction={sortDirection(
-	                            historySort.sort,
-	                            historySort.order,
-	                            "status",
-	                          )}
-	                          onSort={(field, next) => {
-	                            setHistorySort(
-	                              next === "none" ? {} : { sort: field, order: next },
-	                            );
-	                            resetHistoryPage();
-	                          }}
-	                        />
-	                      </TableHead>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>
+                        <SortableHeader
+                          field="at"
+                          label={t("history.columns.time")}
+                          description={t("history.columnDescriptions.time")}
+                          direction={sortDirection(
+                            historySort.sort,
+                            historySort.order,
+                            "at",
+                          )}
+                          onSort={(field, next) => {
+                            setHistorySort(
+                              next === "none"
+                                ? {}
+                                : { sort: field, order: next },
+                            );
+                            resetHistoryPage();
+                          }}
+                        />
+                      </TableHead>
+                      <TableHead>
+                        <SortableHeader
+                          field="account"
+                          label={t("history.columns.account")}
+                          description={t("history.columnDescriptions.account")}
+                          direction={sortDirection(
+                            historySort.sort,
+                            historySort.order,
+                            "account",
+                          )}
+                          onSort={(field, next) => {
+                            setHistorySort(
+                              next === "none"
+                                ? {}
+                                : { sort: field, order: next },
+                            );
+                            resetHistoryPage();
+                          }}
+                        />
+                      </TableHead>
+                      <TableHead>
+                        <SortableHeader
+                          field="asset"
+                          label={t("history.columns.asset")}
+                          description={t("history.columnDescriptions.asset")}
+                          direction={sortDirection(
+                            historySort.sort,
+                            historySort.order,
+                            "asset",
+                          )}
+                          onSort={(field, next) => {
+                            setHistorySort(
+                              next === "none"
+                                ? {}
+                                : { sort: field, order: next },
+                            );
+                            resetHistoryPage();
+                          }}
+                        />
+                      </TableHead>
+                      <TableHead className="w-[var(--positions-source-column-width)]">
+                        <SortableHeader
+                          field="source"
+                          label={t("history.columns.source")}
+                          description={t("history.columnDescriptions.source")}
+                          direction={sortDirection(
+                            historySort.sort,
+                            historySort.order,
+                            "source",
+                          )}
+                          onSort={(field, next) => {
+                            setHistorySort(
+                              next === "none"
+                                ? {}
+                                : { sort: field, order: next },
+                            );
+                            resetHistoryPage();
+                          }}
+                        />
+                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader
+                          description={t("history.columnDescriptions.request")}
+                        >
+                          {t("history.columns.request")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead className="w-[var(--positions-status-column-width)]">
+                        <SortableHeader
+                          field="status"
+                          label={t("history.columns.status")}
+                          description={t("history.columnDescriptions.status")}
+                          direction={sortDirection(
+                            historySort.sort,
+                            historySort.order,
+                            "status",
+                          )}
+                          onSort={(field, next) => {
+                            setHistorySort(
+                              next === "none"
+                                ? {}
+                                : { sort: field, order: next },
+                            );
+                            resetHistoryPage();
+                          }}
+                        />
+                      </TableHead>
                       <TableHead>
                         <ColumnHeader
                           description={t("history.columnDescriptions.outcome")}
@@ -4603,7 +4696,9 @@ export function Positions() {
                       </TableHead>
                       <TableHead>
                         <ColumnHeader
-                          description={t("history.columnDescriptions.externalId")}
+                          description={t(
+                            "history.columnDescriptions.externalId",
+                          )}
                         >
                           {t("history.columns.externalId")}
                         </ColumnHeader>

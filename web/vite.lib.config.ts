@@ -32,7 +32,9 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     lib: {
-      entry: fileURLToPath(new URL("./src/framework/index.ts", import.meta.url)),
+      entry: fileURLToPath(
+        new URL("./src/framework/index.ts", import.meta.url),
+      ),
       formats: ["es"],
       fileName: "index",
     },

@@ -17,11 +17,7 @@
 
 import { useCallback } from "react";
 
-import type {
-  AuditActionGroup,
-  AuditEntry,
-  PagedResult,
-} from "@/api/types";
+import type { AuditActionGroup, AuditEntry, PagedResult } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { type AuditFilter, useOfficerApi } from "@/framework";
 

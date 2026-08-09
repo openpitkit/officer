@@ -1267,7 +1267,7 @@ func TestApplyExecutionReport_InvalidJSON(t *testing.T) {
 
 // TestApplyExecutionReport_QuantityWithoutPrice verifies the "quantity and price
 // must be provided together" guard: a report body with a quantity but no price
-// (or vice versa) is rejected as 400 validation before any service call.
+// (or vice versa) is rejected as 422 validation before any service call.
 func TestApplyExecutionReport_QuantityWithoutPrice(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {
@@ -1278,7 +1278,7 @@ func TestApplyExecutionReport_QuantityWithoutPrice(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("want 422, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
@@ -1302,7 +1302,7 @@ func TestApplyExecutionReport_PartialCommission(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("want 422, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
@@ -1312,6 +1312,14 @@ func TestApplyExecutionReport_PartialCommission(t *testing.T) {
 	if errObj["message"] != "commission amount and currency must be provided together" {
 		t.Fatalf("want commission message, got %v", errObj["message"])
 	}
+	errors, _ := m["errors"].([]any)
+	problem, _ := errors[0].(map[string]any)
+	if problem["pointer"] != "/commission" {
+		t.Fatalf("pointer = %v, want /commission", problem["pointer"])
+	}
+	if problem["constraint"] != "paired_fields" {
+		t.Fatalf("constraint = %v, want paired_fields", problem["constraint"])
+	}
 }
 
 func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
@@ -1320,8 +1328,6 @@ func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
 		leaves string
 	}{
 		{status: domain.OrderStatusAccepted, leaves: "1"},
-		{status: domain.OrderStatusFilled},
-		{status: domain.OrderStatusPartiallyFilled},
 		{status: domain.OrderStatusCancelled, leaves: "1"},
 	} {
 		t.Run(string(tc.status), func(t *testing.T) {
@@ -1357,7 +1363,7 @@ func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
 	}
 }
 
-func TestApplyExecutionReport_CommissionOnlyFillRejectsLeaves(t *testing.T) {
+func TestApplyExecutionReport_CommissionOnlyFillRequiresPair(t *testing.T) {
 	for _, status := range []domain.OrderStatus{
 		domain.OrderStatusFilled,
 		domain.OrderStatusPartiallyFilled,

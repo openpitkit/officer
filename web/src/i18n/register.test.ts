@@ -45,7 +45,9 @@ describe("i18n registration", () => {
 
     registerLocale({ code: "en", endonym: "Custom English" });
     expect(unregisterLocale("en")).toBe(true);
-    const english = getSupportedLocales().find((locale) => locale.code === "en");
+    const english = getSupportedLocales().find(
+      (locale) => locale.code === "en",
+    );
     expect(english).toEqual({ code: "en", endonym: "English" });
 
     registerLocale({ code: "de", endonym: "Deutsch" });

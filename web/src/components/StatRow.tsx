@@ -41,10 +41,7 @@ export function StatRow({
     >
       <span className="text-xs text-muted">{label}</span>
       <span
-        className={cn(
-          "truncate text-right text-sm text-text",
-          mono && "nums",
-        )}
+        className={cn("truncate text-right text-sm text-text", mono && "nums")}
         title={typeof value === "string" ? value : undefined}
       >
         {value}

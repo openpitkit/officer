@@ -48,8 +48,9 @@ export function ClearInlineButton({
   );
 }
 
-export interface ClearableInputProps
-  extends ComponentPropsWithoutRef<typeof Input> {
+export interface ClearableInputProps extends ComponentPropsWithoutRef<
+  typeof Input
+> {
   /** Clears the field; the inline reset glyph shows only while non-empty. */
   onClear?: () => void;
   /** Accessible name + tooltip for the inline reset glyph. */

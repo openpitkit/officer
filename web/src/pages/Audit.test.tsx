@@ -22,11 +22,7 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  AuditActionGroup,
-  AuditEntry,
-  PagedResult,
-} from "@/api/types";
+import type { AuditActionGroup, AuditEntry, PagedResult } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
 import type { AuditFilter } from "@/framework";
 import { SidebarProvider } from "@/components/SidebarContext";

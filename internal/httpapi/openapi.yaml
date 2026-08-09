@@ -2135,12 +2135,12 @@ paths:
         Advances the parent order to a target lifecycle status. The instrument,
         account, and side are taken from the parent order.
 
-        Reports are serialized on the account pipeline. A commission is always
-        processed through the engine. Caller-reported `leavesQuantity` is
-        independent of processing and is recorded when supplied. Reports for
-        ordinary orders are signed and attested fail-closed. Reports for
-        drop-copy orders remain unsigned and unattested because drop-copy did
-        not enforce a pre-trade verdict.
+        Reports are serialized on the account pipeline. Caller-reported
+        `leavesQuantity` is recorded verbatim when supplied. For a terminal
+        non-trade report, the SDK instead receives the order's leaves recorded
+        before this report. Reports for ordinary orders are signed and attested
+        fail-closed. Reports for drop-copy orders remain unsigned and unattested
+        because drop-copy did not enforce a pre-trade verdict.
       tags: [orders]
       requestBody:
         required: true
@@ -2152,18 +2152,18 @@ paths:
               required: [status]
               description: >
                 `quantity` and `price` form one fill and must be provided
-                together. A fill is accepted only for `filled` or
-                `partially_filled` and requires non-empty `leavesQuantity`.
-                Either fill status may instead carry only a commission; that
-                shape must leave `leavesQuantity` omitted or empty. All other
-                statuses reject fill fields and accept optional
+                together. `filled` and `partially_filled` require that pair
+                and non-empty `leavesQuantity`, even with a commission.
+                Every other status rejects fill fields and accepts optional
                 `leavesQuantity`. A supplied leaves value is recorded verbatim
-                on the order, report event, and attestation. Commission is
-                independent: it is always processed through the engine but
-                never changes leaves requirements. A null
-                or empty commission pair means no commission; otherwise amount
-                and currency must both be non-empty. An empty string is an
-                unsupplied member everywhere in this body.
+                on the order, report event, and attestation. For `cancelled`,
+                `rejected`, and `rolled_back`, the SDK receives the order's
+                previously recorded leaves instead; other non-fill reports send
+                no SDK leaves. Commission is independent and does not change
+                leaves requirements. A null or empty commission pair means no
+                commission; otherwise amount and currency must both be
+                non-empty. An empty string is an unsupplied member everywhere
+                in this body.
               allOf:
                 # `quantity` and `price` are one unit: both carry a value or
                 # neither does. Stated on the values because Officer reads an
@@ -2190,9 +2190,7 @@ paths:
                         enum: [filled, partially_filled]
                     required: [status]
                   then:
-                    anyOf:
-                      - $ref: "#/components/schemas/ExecutionReportFillSupplied"
-                      - $ref: "#/components/schemas/ExecutionReportCommissionSupplied"
+                    $ref: "#/components/schemas/ExecutionReportFillSupplied"
                 - if:
                     $ref: "#/components/schemas/ExecutionReportFillSupplied"
                   then:
@@ -2200,17 +2198,6 @@ paths:
                     properties:
                       leavesQuantity:
                         minLength: 1
-                - if:
-                    allOf:
-                      - properties:
-                          status:
-                            enum: [filled, partially_filled]
-                        required: [status]
-                      - $ref: "#/components/schemas/ExecutionReportFillOmitted"
-                  then:
-                    properties:
-                      leavesQuantity:
-                        const: ""
                 - if:
                     properties:
                       status:
@@ -2249,23 +2236,25 @@ paths:
                     - $ref: "#/components/schemas/OpenQuantity"
                   description: >
                     Caller-reported open base quantity. Required and non-empty
-                    with an actual fill; omitted or empty for a commission-only
-                    `filled` or `partially_filled` report; otherwise optional.
+                    for `filled` or `partially_filled`; otherwise optional.
                     Officer records a supplied value verbatim on the order, in
-                    the report event, and in the attestation. Empty means absent.
+                    the report event, and in the attestation. For a terminal
+                    non-trade report, the SDK receives the order's previously
+                    recorded leaves, not this supplied value. Empty means absent.
                 lockPrice:
                   type: string
                   description: >
-                    Lock price used for engine settlement - exact decimal
-                    string. Not accepted on non-terminal workflow reports.
+                    Lock price used for engine settlement - plain decimal
+                    string without surrounding whitespace or exponent notation.
+                    Not accepted on non-terminal workflow reports.
                 commission:
                   description: >
                     Optional report commission. `amount` and `currency` must be
                     provided together; Officer forwards them to the SDK as one
                     structured value and does not convert currencies. It is
-                    independent of `quantity`, `price`, and leaves requirements,
-                    so any report may carry a commission without a trade. It is
-                    always processed through the engine.
+                    independent of leaves requirements. It does not permit a
+                    `filled` or `partially_filled` report to omit its required
+                    trade. It is always processed through the engine.
                   oneOf:
                     - type: object
                       additionalProperties: false
@@ -3312,9 +3301,10 @@ paths:
       description: >
         Verifies the approval token and records a terminal cancellation report
         for an order with no prior execution-report activity. Optional
-        caller-reported `leavesQuantity` is recorded in the order, report event,
-        and attestation when supplied. Omitted or empty `leavesQuantity` remains
-        absent.
+        caller-reported `leavesQuantity` is recorded verbatim in the order,
+        report event, and attestation when supplied. The SDK receives the
+        order's leaves recorded before cancellation; omitted or empty
+        `leavesQuantity` remains absent.
         If activity already exists, the caller must submit an explicit execution
         report instead.
       tags: [signing]
@@ -4247,23 +4237,6 @@ components:
         price:
           const: ""
 
-    ExecutionReportCommissionSupplied:
-      type: object
-      description: >
-        Matches an execution report that supplies a commission: the object is
-        present and both of its members carry a value. Officer reads no other
-        shape - `null`, an absent object, or an empty member - as a commission.
-      required: [commission]
-      properties:
-        commission:
-          type: object
-          required: [amount, currency]
-          properties:
-            amount:
-              minLength: 1
-            currency:
-              minLength: 1
-
     # Errors
 
     ProblemDetails:
@@ -4825,7 +4798,7 @@ components:
             never the same as a reported zero.
         pnlHaltReason:
           type: string
-          enum: ["", missing_fx, missing_account_currency, missing_initial_pnl, missing_cost_basis, arithmetic_overflow, stale_denomination]
+          enum: ["", missing_fx, missing_account_currency, missing_initial_pnl, missing_cost_basis, arithmetic_overflow]
           description: Engine-reported reason account P&L calculation is halted; empty when the P&L value is current.
         group:
           type: string
@@ -4952,7 +4925,7 @@ components:
           description: Exact decimal string, denominated in `accountCurrency`.
         realizedPnlHaltReason:
           type: string
-          enum: ["", missing_fx, missing_account_currency, missing_initial_pnl, missing_cost_basis, arithmetic_overflow, stale_denomination]
+          enum: ["", missing_fx, missing_account_currency, missing_initial_pnl, missing_cost_basis, arithmetic_overflow]
           description: Engine-reported reason position P&L calculation is halted; empty when the P&L value is current.
         averageEntryPrice:
           type: string
@@ -5083,7 +5056,7 @@ components:
               description: Exact decimal string.
         realizedPnlHaltReason:
           type: string
-          enum: ["", missing_fx, missing_account_currency, missing_initial_pnl, missing_cost_basis, arithmetic_overflow, stale_denomination]
+          enum: ["", missing_fx, missing_account_currency, missing_initial_pnl, missing_cost_basis, arithmetic_overflow]
           description: Engine-reported reason position P&L calculation is halted.
         averageEntryPrice:
           type: string

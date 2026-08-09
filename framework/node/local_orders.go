@@ -426,18 +426,14 @@ func (n *localNode) submitImmediate(
 					fmt.Errorf("immediate execution report missing"),
 				)
 			}
-			// The persisted request omits the release quantity, so the audit reads
-			// it back from the write set. It is the leaves of the report Officer
-			// built for this immediate fill, not a quantity the engine chose.
+			// The adapter-built report request carries the leaves sent to the SDK.
 			reported := executionReportInputFromRequest(*result.ExecutionReport)
-			if result.Persistence != nil {
-				reported.ReleaseQuantity = result.Persistence.ReleaseQuantity
-			}
 			if err := n.audit(ctx, caller, store.AuditEntry{
 				Action:  domain.AuditActionExecutionReport,
 				Account: key.Account,
 				Detail: executionReportDetail(
 					reported,
+					reported.LeavesQuantity,
 					domain.OrderStatusFilled,
 					len(result.Blocks),
 				),
@@ -620,11 +616,12 @@ func (n *localNode) cancelOrder(
 			if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
 				return fmt.Errorf("build cancellation execution report: %w", err)
 			}
-			if err := attachExecutionEngineLeaves(&in, detail); err != nil {
-				return fmt.Errorf("build cancellation release: %w", err)
+			leavesForEngine, err := executionEngineLeaves(in, detail)
+			if err != nil {
+				return fmt.Errorf("build cancellation leaves: %w", err)
 			}
 			request := domain.ExecutionReportRequestFromInput(in)
-			result, err = lane.ApplyExecutionReport(ctx, in)
+			result, err = lane.ApplyExecutionReport(ctx, in, leavesForEngine)
 			if err != nil {
 				return fmt.Errorf("apply cancellation execution report: %w", err)
 			}
@@ -663,7 +660,7 @@ func (n *localNode) cancelOrder(
 				)
 			}
 			detailText := executionReportDetail(
-				in, domain.OrderStatusCancelled, len(result.Blocks),
+				in, leavesForEngine, domain.OrderStatusCancelled, len(result.Blocks),
 			)
 			if err := n.audit(ctx, caller, store.AuditEntry{
 				Action:  domain.AuditActionExecutionReport,

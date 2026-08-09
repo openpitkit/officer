@@ -23,7 +23,9 @@ import { Dashboard } from "@/pages/Dashboard";
 
 vi.mock("@/api/useOverview", () => ({ useOverview: vi.fn() }));
 vi.mock("@/components/Page", () => ({
-  Page: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
+  Page: ({ children }: { children: React.ReactNode }) => (
+    <main>{children}</main>
+  ),
 }));
 vi.mock("@/components/PageStates", () => ({
   ErrorState: () => <div data-testid="error-state" />,
@@ -31,7 +33,11 @@ vi.mock("@/components/PageStates", () => ({
 }));
 vi.mock("@/framework", () => ({
   DashboardWidgets: ({ ids }: { ids: string[] }) => (
-    <div>{ids.map((id) => <span key={id}>{id}</span>)}</div>
+    <div>
+      {ids.map((id) => (
+        <span key={id}>{id}</span>
+      ))}
+    </div>
   ),
 }));
 

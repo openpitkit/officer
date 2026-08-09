@@ -22,7 +22,9 @@ import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
 
 /** Poll GET /accounts. */
-export function useAccounts(filters?: AccountListFilters): PollingResult<Account[]> {
+export function useAccounts(
+  filters?: AccountListFilters,
+): PollingResult<Account[]> {
   const api = useOfficerApi();
   const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
   const fetcher = useCallback(

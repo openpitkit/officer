@@ -92,6 +92,10 @@ export function unregisterLocale(code: string): boolean {
 
 /** Reset runtime-supported locales to the open app defaults. */
 export function resetLocales(): void {
-  supportedLocales.splice(0, supportedLocales.length, ...defaultSupportedLocales());
+  supportedLocales.splice(
+    0,
+    supportedLocales.length,
+    ...defaultSupportedLocales(),
+  );
   refreshSupportedLanguages();
 }

@@ -34,8 +34,10 @@ import { ClearInlineButton } from "@/components/ClearableInput";
 import { AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework/constants";
 import { cn } from "@/lib/utils";
 
-export interface AutocompleteProps
-  extends Omit<InputHTMLAttributes<HTMLInputElement>, "onChange"> {
+export interface AutocompleteProps extends Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "onChange"
+> {
   /** The current typed value (controlled). */
   value: string;
   /** Called on every keystroke and when a suggestion is selected. */
@@ -104,8 +106,7 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
     },
     ref,
   ) => {
-    const clearable =
-      onClear !== undefined && value !== "" && !props.disabled;
+    const clearable = onClear !== undefined && value !== "" && !props.disabled;
     const listId = useId();
     const [open, setOpen] = useState(false);
     const [activeIndex, setActiveIndex] = useState(-1);
@@ -182,9 +183,7 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
           aria-expanded={visible}
           aria-controls={visible ? listId : undefined}
           aria-activedescendant={
-            visible && activeIndex >= 0
-              ? `${listId}-${activeIndex}`
-              : undefined
+            visible && activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined
           }
           value={value}
           onChange={(e) => {

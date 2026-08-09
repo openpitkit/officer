@@ -15,7 +15,9 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-export function reportInvalidFilterControls(container: ParentNode | null): boolean {
+export function reportInvalidFilterControls(
+  container: ParentNode | null,
+): boolean {
   const invalid = container?.querySelector<HTMLInputElement>(
     'input[aria-invalid="true"], input:invalid',
   );

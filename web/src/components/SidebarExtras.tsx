@@ -46,8 +46,7 @@ function RestartRequiredNavIndicator() {
   const { t } = useTranslation();
   const { close } = useSidebar();
   const { load } = useMarketData();
-  const restartRequired =
-    load.state === "ready" && load.data.restartRequired;
+  const restartRequired = load.state === "ready" && load.data.restartRequired;
   if (!restartRequired) {
     return null;
   }
@@ -58,9 +57,7 @@ function RestartRequiredNavIndicator() {
       className="mb-1 flex items-center gap-[var(--dens-nav-gap)] rounded-[3px] border border-[var(--warn)]/40 bg-[var(--warn)]/10 px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-[length:var(--dens-footer-fz)] font-semibold text-[var(--warn)] transition-colors hover:bg-[var(--warn)]/15"
     >
       <AlertTriangle className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
-      <span className="flex-1 text-left">
-        {t("nav.restartRequired")}
-      </span>
+      <span className="flex-1 text-left">{t("nav.restartRequired")}</span>
     </Link>
   );
 }
@@ -77,8 +74,7 @@ function NonReleaseNavIndicator() {
   const { t } = useTranslation();
   const { close } = useSidebar();
   const { load } = useService();
-  const isNonRelease =
-    load.state === "ready" && load.data.release === false;
+  const isNonRelease = load.state === "ready" && load.data.release === false;
   if (!isNonRelease) {
     return null;
   }

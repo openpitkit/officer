@@ -165,11 +165,12 @@ beforeEach(() => {
   createAssetMock.mockImplementation(async (code, title, assetClassCode) =>
     asset({ code, title, assetClass: assetClassCode }),
   );
-  updateAssetClassMock.mockImplementation(async (_oldCode, code, title, notes) =>
-    assetClass({ code, title, notes }),
+  updateAssetClassMock.mockImplementation(
+    async (_oldCode, code, title, notes) => assetClass({ code, title, notes }),
   );
-  updateAssetMock.mockImplementation(async (_oldCode, code, title, assetClassCode) =>
-    asset({ code, title, assetClass: assetClassCode }),
+  updateAssetMock.mockImplementation(
+    async (_oldCode, code, title, assetClassCode) =>
+      asset({ code, title, assetClass: assetClassCode }),
   );
   fetchMarketDataMock.mockResolvedValue(marketDataStatus());
   putLimitMock.mockResolvedValue({});
@@ -267,16 +268,8 @@ describe("WelcomeDialog", () => {
         "currency",
       );
       expect(createAssetMock).toHaveBeenCalledWith("EUR", "Euro", "currency");
-      expect(createAssetMock).toHaveBeenCalledWith(
-        "BTC",
-        "Bitcoin",
-        "crypto",
-      );
-      expect(createAssetMock).toHaveBeenCalledWith(
-        "ETH",
-        "Ethereum",
-        "crypto",
-      );
+      expect(createAssetMock).toHaveBeenCalledWith("BTC", "Bitcoin", "crypto");
+      expect(createAssetMock).toHaveBeenCalledWith("ETH", "Ethereum", "crypto");
       expect(createAssetMock).toHaveBeenCalledWith(
         "USDT",
         "Tether USD",
@@ -455,16 +448,8 @@ describe("WelcomeDialog", () => {
         "Crypto assets",
         "Native crypto assets used for demo balances and crypto venue risk checks.",
       );
-      expect(createAssetMock).toHaveBeenCalledWith(
-        "BTC",
-        "Bitcoin",
-        "crypto",
-      );
-      expect(createAssetMock).toHaveBeenCalledWith(
-        "ETH",
-        "Ethereum",
-        "crypto",
-      );
+      expect(createAssetMock).toHaveBeenCalledWith("BTC", "Bitcoin", "crypto");
+      expect(createAssetMock).toHaveBeenCalledWith("ETH", "Ethereum", "crypto");
       expect(createAssetMock).toHaveBeenCalledWith(
         "USD",
         "US Dollar",
@@ -490,11 +475,7 @@ describe("WelcomeDialog", () => {
         "NVIDIA Corp.",
         "equity",
       );
-      expect(createAssetMock).toHaveBeenCalledWith(
-        "SPCX",
-        "SpaceX",
-        "equity",
-      );
+      expect(createAssetMock).toHaveBeenCalledWith("SPCX", "SpaceX", "equity");
       expect(createAssetMock).toHaveBeenCalledWith(
         "META",
         "Facebook / Meta Platforms",
@@ -662,8 +643,12 @@ describe("WelcomeDialog", () => {
     const user = userEvent.setup();
     const onOpenChange = renderWelcome();
 
-    await user.click(screen.getByRole("checkbox", { name: /don't show this again/i }));
-    await user.click(screen.getByRole("button", { name: /Start working in Pit Officer/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /don't show this again/i }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Start working in Pit Officer/i }),
+    );
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(setWelcomeSeenMock).toHaveBeenCalledWith(true);
@@ -673,7 +658,9 @@ describe("WelcomeDialog", () => {
     const user = userEvent.setup();
     const onOpenChange = renderWelcome();
 
-    await user.click(screen.getByRole("button", { name: /Start working in Pit Officer/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Start working in Pit Officer/i }),
+    );
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(setWelcomeSeenMock).not.toHaveBeenCalled();

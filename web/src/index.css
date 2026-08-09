@@ -122,8 +122,8 @@ Please see https://openpit.dev and the OWNERS file for details.
   :root {
     --radius-card: 6px;
     --radius-badge: 3px;
-    --font-display: "Newsreader", Georgia, "JetBrains Mono", ui-monospace,
-      monospace;
+    --font-display:
+      "Newsreader", Georgia, "JetBrains Mono", ui-monospace, monospace;
     --sidebar-width: 14rem;
     --topbar-height: 3.5rem;
     --content-max: 72rem;
@@ -660,9 +660,7 @@ Please see https://openpit.dev and the OWNERS file for details.
   [data-density="terminal"] .space-y-5 > :not([hidden]) ~ :not([hidden]) {
     --tw-space-y-reverse: 0;
     margin-bottom: calc(var(--dens-row-gap) * var(--tw-space-y-reverse));
-    margin-top: calc(
-      var(--dens-row-gap) * calc(1 - var(--tw-space-y-reverse))
-    );
+    margin-top: calc(var(--dens-row-gap) * calc(1 - var(--tw-space-y-reverse)));
   }
 
   [data-density="terminal"] .text-sm {

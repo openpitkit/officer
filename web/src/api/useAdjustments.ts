@@ -19,10 +19,7 @@ import { useCallback } from "react";
 
 import type { Adjustment, PagedResult } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
-import {
-  type GlobalAdjustmentsFilter,
-  useOfficerApi,
-} from "@/framework";
+import { type GlobalAdjustmentsFilter, useOfficerApi } from "@/framework";
 
 /** Poll GET /adjustments with server-side total and offset paging. */
 export function useAdjustmentsPage(

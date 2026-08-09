@@ -216,14 +216,9 @@ type ExecutionReportPersistence struct {
 	// AccountPnlHaltReason is the engine-reported reason account P&L was not
 	// calculated. Empty with a non-empty AccountPnl clears a prior halt.
 	AccountPnlHaltReason domain.PnlHaltReason
-	// Leaves is the caller-reported open quantity to persist on the order.
+	// Leaves is the caller-reported open quantity to persist verbatim on the
+	// order. An empty value leaves the stored quantity unchanged.
 	Leaves string
-	// ReleaseQuantity echoes the terminal leaves that was forwarded to the
-	// engine and is empty for a non-terminal report. It is not persisted: the
-	// order records Leaves instead. Its one reader is the immediate-submit
-	// audit, where the adapter builds the report itself and the persisted
-	// request omits this field, so the write set is the only way back to it.
-	ReleaseQuantity string
 	// Balances are the per-asset balance outcomes returned by the engine.
 	Balances []domain.BalanceSettlement
 	// Events are the order lifecycle events to append.
@@ -284,7 +279,7 @@ type AccountLane interface {
 	SubmitOrder(ctx context.Context, o domain.Order) (OrderResult, error)
 	SubmitImmediate(ctx context.Context, o domain.Order) (ImmediateResult, error)
 	ApplyExecutionReport(
-		ctx context.Context, in domain.ExecutionReportInput,
+		ctx context.Context, in domain.ExecutionReportInput, leavesQuantity string,
 	) (ExecutionReportResult, error)
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
 }

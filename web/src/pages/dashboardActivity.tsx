@@ -54,9 +54,16 @@ export type ActivityGroup = {
 };
 
 /** Maps an `ActivityEntry.kind` prefix to its group bucket. */
-function kindBucket(kind: string): "trading" | "accounts" | "limits" | "groups" | "adjustments" | "other" {
+function kindBucket(
+  kind: string,
+): "trading" | "accounts" | "limits" | "groups" | "adjustments" | "other" {
   const k = kind.toLowerCase();
-  if (k.startsWith("order") || k.startsWith("trade") || k.startsWith("fill") || k.startsWith("exec")) {
+  if (
+    k.startsWith("order") ||
+    k.startsWith("trade") ||
+    k.startsWith("fill") ||
+    k.startsWith("exec")
+  ) {
     return "trading";
   }
   if (k.startsWith("account")) {
@@ -68,7 +75,11 @@ function kindBucket(kind: string): "trading" | "accounts" | "limits" | "groups" 
   if (k.startsWith("group")) {
     return "groups";
   }
-  if (k.startsWith("adjustment") || k.startsWith("balance") || k.startsWith("fund")) {
+  if (
+    k.startsWith("adjustment") ||
+    k.startsWith("balance") ||
+    k.startsWith("fund")
+  ) {
     return "adjustments";
   }
   return "other";
@@ -78,17 +89,22 @@ const BUCKET_META: Record<
   ReturnType<typeof kindBucket>,
   { labelKey: string; route: "trading" | "audit" }
 > = {
-  trading:     { labelKey: "activity.bucket.trading",     route: "trading" },
-  accounts:    { labelKey: "activity.bucket.accounts",    route: "audit"   },
-  limits:      { labelKey: "activity.bucket.limits",      route: "audit"   },
-  groups:      { labelKey: "activity.bucket.groups",      route: "audit"   },
-  adjustments: { labelKey: "activity.bucket.adjustments", route: "audit"   },
-  other:       { labelKey: "activity.bucket.other",       route: "audit"   },
+  trading: { labelKey: "activity.bucket.trading", route: "trading" },
+  accounts: { labelKey: "activity.bucket.accounts", route: "audit" },
+  limits: { labelKey: "activity.bucket.limits", route: "audit" },
+  groups: { labelKey: "activity.bucket.groups", route: "audit" },
+  adjustments: { labelKey: "activity.bucket.adjustments", route: "audit" },
+  other: { labelKey: "activity.bucket.other", route: "audit" },
 };
 
 /** Bucket ordering — determines column order. */
 const BUCKET_ORDER: ReturnType<typeof kindBucket>[] = [
-  "trading", "accounts", "adjustments", "limits", "groups", "other",
+  "trading",
+  "accounts",
+  "adjustments",
+  "limits",
+  "groups",
+  "other",
 ];
 
 /** Split activity entries into display groups, preserving relative order
@@ -101,13 +117,11 @@ export function groupActivity(entries: ActivityEntry[]): ActivityGroup[] {
     arr.push(e);
     map.set(b, arr);
   }
-  return BUCKET_ORDER
-    .filter((b) => map.has(b))
-    .map((b) => ({
-      labelKey: BUCKET_META[b].labelKey,
-      route: BUCKET_META[b].route,
-      entries: map.get(b)!,
-    }));
+  return BUCKET_ORDER.filter((b) => map.has(b)).map((b) => ({
+    labelKey: BUCKET_META[b].labelKey,
+    route: BUCKET_META[b].route,
+    entries: map.get(b)!,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -129,64 +143,140 @@ export function auditActionMeta(action: string): AuditIconMeta {
 
   // Account lifecycle
   if (a === "create_account" || a === "add_account")
-    return { Icon: PlusCircle,       variant: "ok",      titleKey: "audit.action.createAccount" };
+    return {
+      Icon: PlusCircle,
+      variant: "ok",
+      titleKey: "audit.action.createAccount",
+    };
   if (a === "block_account")
-    return { Icon: Ban,              variant: "danger",  titleKey: "audit.action.blockAccount" };
+    return {
+      Icon: Ban,
+      variant: "danger",
+      titleKey: "audit.action.blockAccount",
+    };
   if (a === "unblock_account")
-    return { Icon: LockOpen,         variant: "ok",      titleKey: "audit.action.unblockAccount" };
+    return {
+      Icon: LockOpen,
+      variant: "ok",
+      titleKey: "audit.action.unblockAccount",
+    };
   if (a === "update_account" || a === "edit_account")
-    return { Icon: UserCog,          variant: "accent",  titleKey: "audit.action.updateAccount" };
+    return {
+      Icon: UserCog,
+      variant: "accent",
+      titleKey: "audit.action.updateAccount",
+    };
   if (a === "delete_account")
-    return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.deleteAccount" };
+    return {
+      Icon: Trash2,
+      variant: "danger",
+      titleKey: "audit.action.deleteAccount",
+    };
 
   // Group lifecycle
   if (a === "create_group" || a === "add_group")
-    return { Icon: PlusCircle,       variant: "ok",      titleKey: "audit.action.createGroup" };
+    return {
+      Icon: PlusCircle,
+      variant: "ok",
+      titleKey: "audit.action.createGroup",
+    };
   if (a === "block_group")
-    return { Icon: ShieldOff,        variant: "danger",  titleKey: "audit.action.blockGroup" };
+    return {
+      Icon: ShieldOff,
+      variant: "danger",
+      titleKey: "audit.action.blockGroup",
+    };
   if (a === "unblock_group")
-    return { Icon: LockOpen,         variant: "ok",      titleKey: "audit.action.unblockGroup" };
+    return {
+      Icon: LockOpen,
+      variant: "ok",
+      titleKey: "audit.action.unblockGroup",
+    };
   if (a === "update_group" || a === "edit_group")
-    return { Icon: Users,            variant: "accent",  titleKey: "audit.action.updateGroup" };
+    return {
+      Icon: Users,
+      variant: "accent",
+      titleKey: "audit.action.updateGroup",
+    };
   if (a === "delete_group")
-    return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.deleteGroup" };
+    return {
+      Icon: Trash2,
+      variant: "danger",
+      titleKey: "audit.action.deleteGroup",
+    };
 
   // Limits / policies
   if (a === "set_limit" || a === "create_limit" || a === "add_limit")
-    return { Icon: Lock,             variant: "warn",    titleKey: "audit.action.setLimit" };
+    return { Icon: Lock, variant: "warn", titleKey: "audit.action.setLimit" };
   if (a === "delete_limit" || a === "remove_limit")
-    return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.deleteLimit" };
+    return {
+      Icon: Trash2,
+      variant: "danger",
+      titleKey: "audit.action.deleteLimit",
+    };
   if (a === "update_limit" || a === "edit_limit")
-    return { Icon: Sliders,          variant: "accent",  titleKey: "audit.action.updateLimit" };
+    return {
+      Icon: Sliders,
+      variant: "accent",
+      titleKey: "audit.action.updateLimit",
+    };
 
   // Adjustments / balances
   if (a === "adjustment" || a === "apply_adjustment")
-    return { Icon: Coins,            variant: "accent",  titleKey: "audit.action.adjustment" };
+    return {
+      Icon: Coins,
+      variant: "accent",
+      titleKey: "audit.action.adjustment",
+    };
   if (a === "balance" || a === "update_balance")
-    return { Icon: CircleDollarSign, variant: "neutral", titleKey: "audit.action.balanceUpdate" };
+    return {
+      Icon: CircleDollarSign,
+      variant: "neutral",
+      titleKey: "audit.action.balanceUpdate",
+    };
 
   // Orders / trades
   if (a === "submit_drop_copy_order")
-    return { Icon: AlertTriangle, variant: "danger", titleKey: "audit.action.dropCopyOrder" };
-  if (
-    a === "order" ||
-    a === "submit_order" ||
-    a === "create_order"
-  )
-    return { Icon: ClipboardList,    variant: "neutral", titleKey: "audit.action.order" };
+    return {
+      Icon: AlertTriangle,
+      variant: "danger",
+      titleKey: "audit.action.dropCopyOrder",
+    };
+  if (a === "order" || a === "submit_order" || a === "create_order")
+    return {
+      Icon: ClipboardList,
+      variant: "neutral",
+      titleKey: "audit.action.order",
+    };
   if (a === "trade" || a === "fill")
-    return { Icon: ArrowLeftRight,   variant: "ok",      titleKey: "audit.action.tradeFill" };
+    return {
+      Icon: ArrowLeftRight,
+      variant: "ok",
+      titleKey: "audit.action.tradeFill",
+    };
 
   if (a === "reset_database")
-    return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.resetDatabase" };
+    return {
+      Icon: Trash2,
+      variant: "danger",
+      titleKey: "audit.action.resetDatabase",
+    };
   if (a === "restart_service")
-    return { Icon: RefreshCw,        variant: "warn",    titleKey: "audit.action.restartService" };
+    return {
+      Icon: RefreshCw,
+      variant: "warn",
+      titleKey: "audit.action.restartService",
+    };
   if (a === "stop_service")
-    return { Icon: Power,            variant: "danger",  titleKey: "audit.action.stopService" };
+    return {
+      Icon: Power,
+      variant: "danger",
+      titleKey: "audit.action.stopService",
+    };
 
   // Policy / config and unknown — raw action string as fallback key.
   if (a.includes("policy") || a.includes("config"))
-    return { Icon: Layers,           variant: "accent",  titleKey: action };
+    return { Icon: Layers, variant: "accent", titleKey: action };
 
-  return { Icon: HelpCircle,         variant: "neutral", titleKey: action };
+  return { Icon: HelpCircle, variant: "neutral", titleKey: action };
 }

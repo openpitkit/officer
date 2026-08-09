@@ -93,9 +93,9 @@ describe("framework registries", () => {
       section: "primary",
       order: 1000,
     });
-    expect(getNav("primary").find((entry) => entry.id === "smoke-nav")?.to).toBe(
-      "/smoke",
-    );
+    expect(
+      getNav("primary").find((entry) => entry.id === "smoke-nav")?.to,
+    ).toBe("/smoke");
 
     registerNav({
       id: "smoke-nav",
@@ -105,7 +105,9 @@ describe("framework registries", () => {
       section: "primary",
       order: 1000,
     });
-    const matches = getNav("primary").filter((entry) => entry.id === "smoke-nav");
+    const matches = getNav("primary").filter(
+      (entry) => entry.id === "smoke-nav",
+    );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.to).toBe("/smoke-replaced");
 
@@ -136,9 +138,9 @@ describe("framework registries", () => {
 
   it("adds, replaces, and removes widget entries", () => {
     registerWidget({ id: "smoke-widget", order: 1000, Component: Throwaway });
-    expect(getWidgets().find((entry) => entry.id === "smoke-widget")?.order).toBe(
-      1000,
-    );
+    expect(
+      getWidgets().find((entry) => entry.id === "smoke-widget")?.order,
+    ).toBe(1000);
 
     registerWidget({ id: "smoke-widget", order: 1001, Component: Throwaway });
     const matches = getWidgets().filter((entry) => entry.id === "smoke-widget");
@@ -146,7 +148,9 @@ describe("framework registries", () => {
     expect(matches[0]?.order).toBe(1001);
 
     unregisterWidget("smoke-widget");
-    expect(getWidgets().some((entry) => entry.id === "smoke-widget")).toBe(false);
+    expect(getWidgets().some((entry) => entry.id === "smoke-widget")).toBe(
+      false,
+    );
   });
 
   it("adds, replaces, and removes row-action entries", () => {

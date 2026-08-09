@@ -18,6 +18,7 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -86,9 +87,6 @@ const (
 	// PnlHaltReasonArithmeticOverflow means exact P&L arithmetic exceeded the
 	// supported numeric range.
 	PnlHaltReasonArithmeticOverflow PnlHaltReason = "arithmetic_overflow"
-	// PnlHaltReasonStaleDenomination means stored P&L or cost basis uses a
-	// previous effective account currency.
-	PnlHaltReasonStaleDenomination PnlHaltReason = "stale_denomination"
 )
 
 // ValidatePnlHaltReason returns ErrInvalid unless r is empty (the engine
@@ -105,8 +103,7 @@ func ValidatePnlHaltReason(r PnlHaltReason) error {
 		PnlHaltReasonMissingAccountCurrency,
 		PnlHaltReasonMissingInitialPnl,
 		PnlHaltReasonMissingCostBasis,
-		PnlHaltReasonArithmeticOverflow,
-		PnlHaltReasonStaleDenomination:
+		PnlHaltReasonArithmeticOverflow:
 		return nil
 	default:
 		return fmt.Errorf("unknown pnl halt reason %q: %w", r, ErrInvalid)
@@ -747,16 +744,64 @@ func ExecutionReportStatusChangeEvent(status OrderStatus) (OrderEventType, bool)
 }
 
 type executionReportValidationError struct {
-	message string
-	cause   error
+	message    string
+	pointer    string
+	constraint string
+	cause      error
 }
 
 func (e executionReportValidationError) Error() string { return e.message }
 
 func (e executionReportValidationError) Unwrap() error { return e.cause }
 
+// ValidationPointer reports the JSON pointer of the refused request member, or
+// an empty string when the refusal belongs to the report as a whole. The rule
+// and the member it blames are decided together here; a surface that renders
+// the pointer must read it rather than infer one from the message text.
+func (e executionReportValidationError) ValidationPointer() string {
+	return e.pointer
+}
+
+func (e executionReportValidationError) ValidationConstraint() string {
+	return e.constraint
+}
+
 func invalidExecutionReport(message string) error {
-	return executionReportValidationError{message: message, cause: ErrInvalid}
+	return executionReportValidationError{
+		message:    message,
+		constraint: "execution_report",
+		cause:      ErrInvalid,
+	}
+}
+
+func invalidExecutionReportMember(pointer, constraint, message string) error {
+	return executionReportValidationError{
+		message:    message,
+		pointer:    pointer,
+		constraint: constraint,
+		cause:      ErrInvalid,
+	}
+}
+
+// ExecutionReportValidationPointer returns the refused member's JSON pointer
+// carried by an execution-report validation error, or an empty string when the
+// error names no single member or is of another kind.
+func ExecutionReportValidationPointer(err error) string {
+	var pointed interface{ ValidationPointer() string }
+	if errors.As(err, &pointed) {
+		return pointed.ValidationPointer()
+	}
+	return ""
+}
+
+// ExecutionReportValidationConstraint returns the machine-readable reason for
+// an execution report validation error, if one is available.
+func ExecutionReportValidationConstraint(err error) string {
+	var constrained interface{ ValidationConstraint() string }
+	if errors.As(err, &constrained) {
+		return constrained.ValidationConstraint()
+	}
+	return ""
 }
 
 // executionReportCarriesEnginePayload reports whether an execution report has
@@ -775,8 +820,15 @@ func executionReportCarriesEnginePayload(in ExecutionReportInput) bool {
 // settlement-lock fields.
 func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 	status := in.OrderStatus
+	if status == "" {
+		return false, invalidExecutionReportMember(
+			"/status", "required", "status is required",
+		)
+	}
 	if !OrderStatusSupported(status) {
-		return false, invalidExecutionReport(fmt.Sprintf("invalid status %q", status))
+		return false, invalidExecutionReportMember(
+			"/status", "format", fmt.Sprintf("invalid status %q", status),
+		)
 	}
 	hasQuantity := in.FillQuantity != ""
 	hasPrice := in.FillPrice != ""
@@ -791,14 +843,9 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 			"quantity and price are only allowed for filled or partially_filled statuses",
 		)
 	}
-	if !hasQuantity && in.Commission == nil && status == OrderStatusFilled {
+	if !hasQuantity && isFillStatus {
 		return false, invalidExecutionReport(
-			"quantity and price are required for a filled status without a commission",
-		)
-	}
-	if !hasQuantity && in.Commission == nil && status == OrderStatusPartiallyFilled {
-		return false, invalidExecutionReport(
-			"quantity and price are required for a partially-filled status without a commission",
+			"quantity and price are required for filled or partially_filled statuses",
 		)
 	}
 	requiresEngine := OrderStatusTerminal(status) || executionReportCarriesEnginePayload(in)
@@ -807,28 +854,32 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 			return false, err
 		}
 	}
+	if in.LockPrice != "" {
+		if err := validateExecutionReportLockPrice(in.LockPrice); err != nil {
+			return false, err
+		}
+	}
 	if in.Commission != nil {
 		hasAmount := in.Commission.Amount != ""
 		hasCurrency := in.Commission.Currency != ""
 		if hasAmount != hasCurrency {
-			return false, invalidExecutionReport(
+			return false, invalidExecutionReportMember(
+				"/commission",
+				"paired_fields",
 				"commission amount and currency must be provided together",
 			)
 		}
 		if !hasAmount {
-			return false, invalidExecutionReport(
+			return false, invalidExecutionReportMember(
+				"/commission", "required",
 				"commission amount and currency are required",
 			)
 		}
 	}
 	if hasQuantity && in.LeavesQuantity == "" {
-		return false, invalidExecutionReport(
+		return false, invalidExecutionReportMember(
+			"/leavesQuantity", "required",
 			"leavesQuantity is required for reports with a fill",
-		)
-	}
-	if !hasQuantity && isFillStatus && in.LeavesQuantity != "" {
-		return false, invalidExecutionReport(
-			"leavesQuantity is not allowed for a fill status without a fill",
 		)
 	}
 	_, isWorkflowStatus := ExecutionReportStatusChangeEvent(status)
@@ -849,8 +900,25 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 // where the same syntax failure is an internal fault instead.
 func ValidateLeavesQuantity(value string) error {
 	if _, err := ParseOpenQuantity(value); err != nil {
-		return invalidExecutionReport(
+		return invalidExecutionReportMember(
+			"/leavesQuantity", "format",
 			fmt.Sprintf("invalid leavesQuantity: %v", err),
+		)
+	}
+	return nil
+}
+
+func validateExecutionReportLockPrice(value string) error {
+	if value != strings.TrimSpace(value) || strings.ContainsAny(value, "eE") {
+		return invalidExecutionReportMember(
+			"/lockPrice", "format",
+			fmt.Sprintf("invalid lockPrice: %q is not a plain decimal", value),
+		)
+	}
+	if _, err := decimal.NewFromString(value); err != nil {
+		return invalidExecutionReportMember(
+			"/lockPrice", "format",
+			fmt.Sprintf("invalid lockPrice: %q: %v", value, err),
 		)
 	}
 	return nil
@@ -1163,11 +1231,6 @@ type ExecutionReportInput struct {
 	// the signed attestation. Every fill requires it. Workflow and terminal
 	// no-fill reports may omit it, leaving the recorded order value unchanged.
 	LeavesQuantity string
-	// ReleaseQuantity is the leaves Officer forwards to the engine. For a fill it
-	// is the caller value. For a terminal no-fill report it is the order's value
-	// captured before the report. Workflow and commission-only reports send none.
-	// It never enters persisted requests or public representations.
-	ReleaseQuantity string `json:"-"`
 	// LockPrice is the reference price for the fill's PnL lock; empty when the
 	// originating order carried no lock.
 	LockPrice string

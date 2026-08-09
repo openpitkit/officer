@@ -66,9 +66,7 @@ describe("useOverview", () => {
     });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toMatch(
-      /^https:\/\/closed\.example\/officer\/api\/overview\?/,
-    );
+    expect(url).toMatch(/^https:\/\/closed\.example\/officer\/api\/overview\?/);
     expect(init.headers).toEqual(
       expect.objectContaining({
         "X-Static-Auth": "static-token",

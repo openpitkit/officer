@@ -214,12 +214,14 @@ function parseBlocks(v: unknown): ParsedApprovalBlock[] {
       return [];
     }
     const block = value as Record<string, unknown>;
-    return [{
-      account: str(block.account),
-      code: str(block.code),
-      reason: str(block.reason),
-      details: str(block.details),
-    }];
+    return [
+      {
+        account: str(block.account),
+        code: str(block.code),
+        reason: str(block.reason),
+        details: str(block.details),
+      },
+    ];
   });
 }
 

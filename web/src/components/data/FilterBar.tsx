@@ -85,7 +85,9 @@ export function FilterBar({
       <div className="flex flex-wrap items-end gap-3">
         {children}
         {trailing !== undefined && trailing !== null && (
-          <div className="ml-auto flex flex-wrap items-end gap-3">{trailing}</div>
+          <div className="ml-auto flex flex-wrap items-end gap-3">
+            {trailing}
+          </div>
         )}
       </div>
       {bottom !== undefined && bottom !== null && (
@@ -153,11 +155,7 @@ function GlobalFilterToggle({
   disabledLabel,
 }: GlobalFilterToggleProps) {
   const Icon = active ? Pin : PinOff;
-  const label = disabled
-    ? disabledLabel
-    : active
-      ? activeLabel
-      : inactiveLabel;
+  const label = disabled ? disabledLabel : active ? activeLabel : inactiveLabel;
   return (
     <button
       type="button"
@@ -224,20 +222,23 @@ export function OnlineFilterField({
             />
           ) : (
             clearable && (
-              <ClearInlineButton label={clearLabel} onClick={() => onClear?.()} />
+              <ClearInlineButton
+                label={clearLabel}
+                onClick={() => onClear?.()}
+              />
             )
           )}
         </span>
-        {globalToggle !== undefined && (
-          <GlobalFilterToggle {...globalToggle} />
-        )}
+        {globalToggle !== undefined && <GlobalFilterToggle {...globalToggle} />}
       </span>
     </label>
   );
 }
 
-export interface AutocompleteFilterFieldProps
-  extends Omit<OnlineFilterFieldProps, "icon" | "onChange"> {
+export interface AutocompleteFilterFieldProps extends Omit<
+  OnlineFilterFieldProps,
+  "icon" | "onChange"
+> {
   onChange?: (value: string) => void;
   onSuggestionSelect?: (value: string) => void;
   onKeyDown?: KeyboardEventHandler<HTMLInputElement>;
@@ -286,10 +287,7 @@ export function AutocompleteFilterField({
             onSuggestionSelect={onSuggestionSelect}
             onKeyDown={onKeyDown}
             onClear={onClear}
-            className={cn(
-              "h-8 text-xs",
-              loading && "pr-7",
-            )}
+            className={cn("h-8 text-xs", loading && "pr-7")}
           />
           {loading && (
             <span
@@ -298,9 +296,7 @@ export function AutocompleteFilterField({
             />
           )}
         </span>
-        {globalToggle !== undefined && (
-          <GlobalFilterToggle {...globalToggle} />
-        )}
+        {globalToggle !== undefined && <GlobalFilterToggle {...globalToggle} />}
       </span>
     </label>
   );
@@ -383,7 +379,13 @@ export function MoreFiltersButton({
   style,
 }: MoreFiltersButtonProps) {
   return (
-    <Button type="button" variant="outline" size="sm" onClick={onClick} style={style}>
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={onClick}
+      style={style}
+    >
       <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
       {label}
       {count > 0 && (

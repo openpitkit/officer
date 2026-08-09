@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://openpit.dev and the OWNERS file for details.
+# Please see https://officer.openpit.dev and the OWNERS file for details.
 
 # Development shortcuts for the pit-officer module.
 #
@@ -216,8 +216,9 @@ lint-go-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
     just _go-tool-dev-mode release {{ quote(pit_checkout) }} "." "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
     just _go-tool-dev-mode release {{ quote(pit_checkout) }} "framework" "golangci-lint" "run" "--timeout=5m" "./..."
 
-# Lint and typecheck JS/TypeScript sources.
+# Check formatting, lint, and typecheck JS/TypeScript sources.
 lint-js:
+    cd web && npm run format:check
     cd web && npm run lint
     cd web && npm run typecheck
 
@@ -295,12 +296,16 @@ test: test-all
 
 # Format all.
 [parallel]
-fmt-all: fmt-go
+fmt-all: fmt-go fmt-js
 
 # Format Go.
 fmt-go:
     gofmt -w {{ go_dirs }}
     cd framework && gofmt -w .
+
+# Format JS/TypeScript sources.
+fmt-js:
+    cd web && npm run format
 
 # Run pit-officer in local stdio MCP mode.
 run-mcp: build-release

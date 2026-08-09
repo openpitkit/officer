@@ -44,7 +44,6 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -519,13 +518,10 @@ def _existing_limit_keys(base: str) -> set[tuple[str, str, str, str]]:
 
 
 # Orders: account, baseAsset, quoteAsset, side, amountKind, amountValue, price.
-# execution_reports: quantity, price, status. The fill's lockPrice is taken from
-# the order's single displayPrice restored from the engine lock.
-# leavesQuantity (FIX LeavesQty - the order's remaining open base quantity after
-# the fill) is computed per fill from the running cumulative filled quantity; it
-# is required by the engine to settle. Every filled order here is "quantity" kind,
-# so leaves is exact base units; a "volume" order with fills cannot derive
-# base-unit leaves and is rejected as a seed error.
+# execution_reports: quantity, price, leavesQuantity, status. leavesQuantity is
+# explicit caller-reported text; this fixture never derives or changes it.
+# The fill's lockPrice is taken from the order's single displayPrice restored
+# from the engine lock.
 # Some orders intentionally trip a limit or a block: the engine returns the order
 # in rejected status (still a 201), which is a feature of the demo, not an error.
 ORDERS = [
@@ -538,8 +534,18 @@ ORDERS = [
         "amountValue": "500",
         "price": "185.50",
         "execution_reports": [
-            {"quantity": "300", "price": "185.40", "status": "partially_filled"},
-            {"quantity": "200", "price": "185.50", "status": "filled"},
+            {
+                "quantity": "300",
+                "price": "185.40",
+                "leavesQuantity": "200",
+                "status": "partially_filled",
+            },
+            {
+                "quantity": "200",
+                "price": "185.50",
+                "leavesQuantity": "0",
+                "status": "filled",
+            },
         ],
     },
     {
@@ -551,7 +557,12 @@ ORDERS = [
         "amountValue": "1000",
         "price": "184.20",
         "execution_reports": [
-            {"quantity": "1000", "price": "184.10", "status": "filled"},
+            {
+                "quantity": "1000",
+                "price": "184.10",
+                "leavesQuantity": "0",
+                "status": "filled",
+            },
         ],
     },
     {
@@ -563,7 +574,12 @@ ORDERS = [
         "amountValue": "200",
         "price": "415.00",
         "execution_reports": [
-            {"quantity": "200", "price": "414.75", "status": "filled"},
+            {
+                "quantity": "200",
+                "price": "414.75",
+                "leavesQuantity": "0",
+                "status": "filled",
+            },
         ],
     },
     {
@@ -576,7 +592,12 @@ ORDERS = [
         "price": "5200.00",
         "execution_reports": [
             # Partial fill only — still open.
-            {"quantity": "4", "price": "5195.00", "status": "partially_filled"},
+            {
+                "quantity": "4",
+                "price": "5195.00",
+                "leavesQuantity": "6",
+                "status": "partially_filled",
+            },
         ],
     },
     {
@@ -599,7 +620,12 @@ ORDERS = [
         "amountValue": "100",
         "price": "410.00",
         "execution_reports": [
-            {"quantity": "100", "price": "409.50", "status": "filled"},
+            {
+                "quantity": "100",
+                "price": "409.50",
+                "leavesQuantity": "0",
+                "status": "filled",
+            },
         ],
     },
     {
@@ -633,7 +659,12 @@ ORDERS = [
         "amountValue": "5",
         "price": "5180.00",
         "execution_reports": [
-            {"quantity": "5", "price": "5181.00", "status": "filled"},
+            {
+                "quantity": "5",
+                "price": "5181.00",
+                "leavesQuantity": "0",
+                "status": "filled",
+            },
         ],
     },
     {
@@ -645,7 +676,12 @@ ORDERS = [
         "amountValue": "300",
         "price": "416.00",
         "execution_reports": [
-            {"quantity": "300", "price": "415.90", "status": "filled"},
+            {
+                "quantity": "300",
+                "price": "415.90",
+                "leavesQuantity": "0",
+                "status": "filled",
+            },
         ],
     },
     {
@@ -657,7 +693,12 @@ ORDERS = [
         "amountValue": "3",
         "price": "5000.00",
         "execution_reports": [
-            {"quantity": "3", "price": "4990.00", "status": "filled"},
+            {
+                "quantity": "3",
+                "price": "4990.00",
+                "leavesQuantity": "0",
+                "status": "filled",
+            },
         ],
     },
     # Infinite Loop Capital runaway-algo burst. The desk is blocked, so the
@@ -966,27 +1007,11 @@ def seed(base: str) -> None:
         )
 
         fills = order_def.get("execution_reports", [])
-        # leavesQuantity is base-unit remaining; we can only derive it for a
-        # quantity-kind order. A volume order with fills would need a per-fill
-        # base size the seed does not carry, so it is a defect, not demo data.
-        if fills and order_def["amountKind"] != "quantity":
-            msg = (
-                f"order {instrument} for '{acct_id}': cannot derive base-unit "
-                f"leavesQuantity for amountKind={order_def['amountKind']}"
-            )
-            print(f"  [!] {msg}", file=sys.stderr)
-            errors.append(msg)
-            continue
-
-        order_quantity = Decimal(order_def["amountValue"])
-        cumulative_filled = Decimal(0)
         for er in fills:
-            cumulative_filled += Decimal(er["quantity"])
-            leaves = order_quantity - cumulative_filled
             er_body: dict[str, Any] = {
                 "quantity": er["quantity"],
                 "price": er["price"],
-                "leavesQuantity": str(leaves),
+                "leavesQuantity": er["leavesQuantity"],
                 "status": er["status"],
             }
             if lock_price is not None:
@@ -1012,7 +1037,7 @@ def seed(base: str) -> None:
             status_tag = f" [{er['status']}]"
             print(
                 f"      fill qty={er['quantity']} px={er['price']}"
-                f" leaves={leaves} outcomes={len(outcomes)}{status_tag}"
+                f" leaves={er['leavesQuantity']} outcomes={len(outcomes)}{status_tag}"
             )
             trades_created += 1
 

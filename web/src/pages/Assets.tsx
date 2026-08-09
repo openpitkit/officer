@@ -30,13 +30,15 @@ import type {
 import { useAssets } from "@/api/useAssets";
 import { useAssetClasses } from "@/api/useAssetClasses";
 import { Autocomplete } from "@/components/Autocomplete";
-import { EmptyState, ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
+import {
+  EmptyState,
+  ErrorBanner,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
-import {
-  PageSizeSelect,
-  TablePagination,
-} from "@/components/TableControls";
+import { PageSizeSelect, TablePagination } from "@/components/TableControls";
 import {
   AUTOCOMPLETE_SUGGESTION_LIMIT,
   ApiError,
@@ -108,14 +110,20 @@ function sortFromParams(
 ): { sort?: string; order?: SortOrder } {
   const sort = params.get("sort");
   const order = params.get("order");
-  if (sort !== null && allowed.has(sort) && (order === "asc" || order === "desc")) {
+  if (
+    sort !== null &&
+    allowed.has(sort) &&
+    (order === "asc" || order === "desc")
+  ) {
     return { sort, order };
   }
   return {};
 }
 
 function sameStrings(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((value, i) => value === right[i]);
+  return (
+    left.length === right.length && left.every((value, i) => value === right[i])
+  );
 }
 
 function errMessage(err: unknown): string {
@@ -241,7 +249,9 @@ export function CreateAssetDialog({
             </p>
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -367,7 +377,9 @@ function CreateClassDialog({ onCreated }: { onCreated: () => void }) {
             </p>
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -482,7 +494,9 @@ function EditAssetDialog({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="asset-edit-title">{t("editAsset.titleLabel")}</Label>
+            <Label htmlFor="asset-edit-title">
+              {t("editAsset.titleLabel")}
+            </Label>
             <ClearableInput
               id="asset-edit-title"
               value={title}
@@ -494,7 +508,9 @@ function EditAssetDialog({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="asset-edit-class">{t("editAsset.classLabel")}</Label>
+            <Label htmlFor="asset-edit-class">
+              {t("editAsset.classLabel")}
+            </Label>
             <Autocomplete
               id="asset-edit-class"
               value={assetClass}
@@ -508,7 +524,9 @@ function EditAssetDialog({
             />
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -621,7 +639,9 @@ function EditClassDialog({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="class-edit-title">{t("editClass.titleLabel")}</Label>
+            <Label htmlFor="class-edit-title">
+              {t("editClass.titleLabel")}
+            </Label>
             <ClearableInput
               id="class-edit-title"
               value={title}
@@ -633,7 +653,9 @@ function EditClassDialog({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="class-edit-notes">{t("editClass.notesLabel")}</Label>
+            <Label htmlFor="class-edit-notes">
+              {t("editClass.notesLabel")}
+            </Label>
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_2rem]">
               <Textarea
                 id="class-edit-notes"
@@ -650,7 +672,9 @@ function EditClassDialog({
             </div>
           </div>
         </div>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <DialogFooter>
           <Button
             variant="outline"
@@ -719,9 +743,13 @@ function DeleteAssetConfirm({
             {t("deleteAsset.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{t("deleteAsset.cancel")}</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>
+            {t("deleteAsset.cancel")}
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -800,9 +828,13 @@ function DeleteClassConfirm({
               : t("deleteClass.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{t("deleteClass.cancel")}</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>
+            {t("deleteClass.cancel")}
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -969,7 +1001,8 @@ function AssetsTable({
                     className={cn(
                       "nums min-w-0 truncate",
                       asset.assetClass === "" && "italic",
-                      selectedClass !== null && selectedClass === asset.assetClass
+                      selectedClass !== null &&
+                        selectedClass === asset.assetClass
                         ? "text-accent"
                         : "text-muted-lt",
                     )}
@@ -1181,7 +1214,12 @@ function ClassesPanel({
                 className="text-xs text-muted-lt"
                 title={assetClass.notes || undefined}
               >
-                <span className={cn("min-w-0 truncate", assetClass.notes === "" && "italic")}>
+                <span
+                  className={cn(
+                    "min-w-0 truncate",
+                    assetClass.notes === "" && "italic",
+                  )}
+                >
                   {assetClass.notes || "—"}
                 </span>
               </TableCell>
@@ -1259,11 +1297,11 @@ export function Assets() {
 
   // A shared deep link (?class=<code>) seeds the initial exact-class filter,
   // matching the "filter by class" action; the operator owns it thereafter.
-  const [selectedClass, setSelectedClass] = useState<string | null>(
-    () => (seedAssets ? searchParams.get("class") : null),
+  const [selectedClass, setSelectedClass] = useState<string | null>(() =>
+    seedAssets ? searchParams.get("class") : null,
   );
-  const [selectedAsset, setSelectedAsset] = useState<string | null>(
-    () => (seedAssets ? searchParams.get("asset") : null),
+  const [selectedAsset, setSelectedAsset] = useState<string | null>(() =>
+    seedAssets ? searchParams.get("asset") : null,
   );
   const [search, setSearch] = useState(
     seedAssets ? (searchParams.get("code") ?? "") : "",
@@ -1281,8 +1319,12 @@ export function Assets() {
 
   const [editTarget, setEditTarget] = useState<Asset | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Asset | null>(null);
-  const [editClassTarget, setEditClassTarget] = useState<AssetClass | null>(null);
-  const [deleteClassTarget, setDeleteClassTarget] = useState<AssetClass | null>(null);
+  const [editClassTarget, setEditClassTarget] = useState<AssetClass | null>(
+    null,
+  );
+  const [deleteClassTarget, setDeleteClassTarget] = useState<AssetClass | null>(
+    null,
+  );
 
   const assetListFilters = useMemo<AssetListFilters>(() => {
     const filters: AssetListFilters = {
@@ -1292,7 +1334,8 @@ export function Assets() {
       offset: assetPage * assetSize,
     };
     const code = selectedAsset ?? debouncedSearch.trim();
-    const assetClass = (selectedClass ?? debouncedClassSearch.trim()) || undefined;
+    const assetClass =
+      (selectedClass ?? debouncedClassSearch.trim()) || undefined;
     if (code !== "") {
       return {
         ...filters,
@@ -1326,7 +1369,13 @@ export function Assets() {
       limit: classSize,
       offset: classPage * classSize,
     }),
-    [classPage, classSize, classSort.order, classSort.sort, debouncedClassSearch],
+    [
+      classPage,
+      classSize,
+      classSort.order,
+      classSort.sort,
+      debouncedClassSearch,
+    ],
   );
   const { load, reload } = useAssets(assetListFilters);
   const { load: classesLoad, reload: reloadClasses } = useAssetClasses(
@@ -1337,10 +1386,8 @@ export function Assets() {
   const classPageData = classesLoad.state === "ready" ? classesLoad.data : null;
   const assets = assetPageData?.items ?? null;
   const classes = classPageData?.items ?? null;
-  const classFilterValue =
-    selectedClass !== null ? selectedClass : classSearch;
-  const assetFilterValue =
-    selectedAsset !== null ? selectedAsset : search;
+  const classFilterValue = selectedClass !== null ? selectedClass : classSearch;
+  const assetFilterValue = selectedAsset !== null ? selectedAsset : search;
 
   const [classSuggestions, setClassSuggestions] = useState<string[]>([]);
   const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
@@ -1349,7 +1396,9 @@ export function Assets() {
       ? []
       : classSuggestions;
   const visibleAssetSuggestions =
-    debouncedSearch.trim() === "" && selectedAsset === null ? [] : assetSuggestions;
+    debouncedSearch.trim() === "" && selectedAsset === null
+      ? []
+      : assetSuggestions;
 
   useEffect(() => {
     const query = (selectedClass ?? debouncedClassSearch).trim();
@@ -1483,7 +1532,8 @@ export function Assets() {
       page={assetPage}
       canPrevious={assetPage > 0}
       canNext={
-        assetPageData !== null && (assetPage + 1) * assetSize < assetPageData.total
+        assetPageData !== null &&
+        (assetPage + 1) * assetSize < assetPageData.total
       }
       knownTotalPages={
         assetPageData !== null
@@ -1570,7 +1620,9 @@ export function Assets() {
       {/* Assets panel */}
       {tab === "assets" && (
         <div className="space-y-1">
-          <p className="text-xs font-medium text-muted">{t("assets.heading")}</p>
+          <p className="text-xs font-medium text-muted">
+            {t("assets.heading")}
+          </p>
 
           <FilterBar
             active={isFiltered}
@@ -1675,7 +1727,9 @@ export function Assets() {
                   navigate(`/positions?asset=${encodeURIComponent(asset.code)}`)
                 }
                 onOpenOrders={(asset) =>
-                  navigate(`/orders?baseAsset=${encodeURIComponent(asset.code)}`)
+                  navigate(
+                    `/orders?baseAsset=${encodeURIComponent(asset.code)}`,
+                  )
                 }
                 onOpenTrades={(asset) =>
                   navigate(
@@ -1696,7 +1750,9 @@ export function Assets() {
       {/* Classes panel */}
       {tab === "classes" && (
         <div className="space-y-1">
-          <p className="text-xs font-medium text-muted">{t("classes.heading")}</p>
+          <p className="text-xs font-medium text-muted">
+            {t("classes.heading")}
+          </p>
 
           <FilterBar
             active={isClassFiltered}

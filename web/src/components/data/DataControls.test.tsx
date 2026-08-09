@@ -142,7 +142,9 @@ describe("data controls", () => {
     expect(screen.getByDisplayValue("G-2")).toBeInTheDocument();
     expect(screen.getByText("Active filters")).toBeInTheDocument();
 
-    await user.click(screen.getAllByRole("button", { name: "Remove filter" })[0]);
+    await user.click(
+      screen.getAllByRole("button", { name: "Remove filter" })[0],
+    );
     expect(screen.getByLabelText("query")).toHaveTextContent("?group=G-2");
 
     await user.clear(screen.getByLabelText("Group"));
@@ -251,7 +253,10 @@ describe("data controls", () => {
     );
 
     const share = screen.getByRole("button", { name: "Copy account link" });
-    expect(share).toHaveAttribute("title", expect.stringContaining("Cmd-click"));
+    expect(share).toHaveAttribute(
+      "title",
+      expect.stringContaining("Cmd-click"),
+    );
     fireEvent.click(share, { ctrlKey: true });
     fireEvent.click(screen.getByRole("button", { name: "Filter by account" }), {
       metaKey: true,
@@ -284,10 +289,9 @@ describe("data controls", () => {
     const [copySvg, cloneSvg] = Array.from(container.querySelectorAll("svg"));
 
     expect(copySvg.innerHTML).not.toEqual(cloneSvg.innerHTML);
-    expect(screen.getByRole("button", { name: "Copy order ID" })).toHaveAttribute(
-      "title",
-      "Copy order ID",
-    );
+    expect(
+      screen.getByRole("button", { name: "Copy order ID" }),
+    ).toHaveAttribute("title", "Copy order ID");
     expect(screen.getByRole("button", { name: "Clone order" })).toHaveAttribute(
       "title",
       "Clone order",

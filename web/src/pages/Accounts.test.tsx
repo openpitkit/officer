@@ -15,7 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
@@ -48,14 +54,12 @@ vi.mock("@/api/useMarketData", () => ({
   }),
 }));
 vi.mock("@/components/TableControls", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/components/TableControls")>(
-      "@/components/TableControls",
-    );
-  const dialogs =
-    await vi.importActual<typeof import("@/components/BusinessCsvDialogs")>(
-      "@/components/BusinessCsvDialogs",
-    );
+  const actual = await vi.importActual<
+    typeof import("@/components/TableControls")
+  >("@/components/TableControls");
+  const dialogs = await vi.importActual<
+    typeof import("@/components/BusinessCsvDialogs")
+  >("@/components/BusinessCsvDialogs");
   return {
     ...actual,
     CsvTransferMenu: ({
@@ -122,7 +126,9 @@ function ready<T>(data: T): PollingResult<T> {
   return { load: { state: "ready", data, error: null }, reload: vi.fn() };
 }
 
-function readyPage<T>(items: T[]): PollingResult<{ items: T[]; total: number }> {
+function readyPage<T>(
+  items: T[],
+): PollingResult<{ items: T[]; total: number }> {
   return ready({ items, total: items.length });
 }
 
@@ -195,7 +201,10 @@ const groups: Group[] = [
 function renderDialog(onCreated = vi.fn()) {
   render(
     <I18nextProvider i18n={i18n}>
-      <CreateAccountDialog groupSuggestions={["equity-desks"]} onCreated={onCreated} />
+      <CreateAccountDialog
+        groupSuggestions={["equity-desks"]}
+        onCreated={onCreated}
+      />
     </I18nextProvider>,
     {
       api: {
@@ -266,7 +275,7 @@ beforeEach(async () => {
     currencyOrigin: "account",
     currencyCascade: { account: "EUR", group: "", default: "" },
     notes: "",
-        pnlHaltReason: "",
+    pnlHaltReason: "",
   });
   setGroupCurrencyMock.mockResolvedValue({
     code: "equity-desks",
@@ -344,7 +353,7 @@ describe("CreateAccountDialog", () => {
       currencyOrigin: "",
       currencyCascade: { account: "", group: "", default: "" },
       notes: "",
-        pnlHaltReason: "",
+      pnlHaltReason: "",
     });
     const onCreated = renderDialog();
 
@@ -380,7 +389,7 @@ describe("CreateAccountDialog", () => {
       currencyOrigin: "",
       currencyCascade: { account: "", group: "", default: "" },
       notes: "",
-        pnlHaltReason: "",
+      pnlHaltReason: "",
     });
     setAccountGroupMock.mockResolvedValue({
       code: "acc-spx",
@@ -393,7 +402,7 @@ describe("CreateAccountDialog", () => {
       currencyOrigin: "",
       currencyCascade: { account: "", group: "", default: "" },
       notes: "",
-        pnlHaltReason: "",
+      pnlHaltReason: "",
     });
     renderDialog();
 
@@ -453,7 +462,9 @@ describe("Accounts business CSV", () => {
     const user = userEvent.setup();
     renderAccounts();
 
-    await user.click(screen.getByRole("button", { name: /export groups csv/i }));
+    await user.click(
+      screen.getByRole("button", { name: /export groups csv/i }),
+    );
     await user.click(screen.getByRole("button", { name: /^export$/i }));
 
     await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
@@ -516,7 +527,9 @@ describe("Accounts business CSV", () => {
       },
     ].map(accountFixture);
     useAccountsMock.mockImplementation((filters) =>
-      readyPage(filters?.group === "equity-desks" ? [pagedAccounts[51]] : pagedAccounts),
+      readyPage(
+        filters?.group === "equity-desks" ? [pagedAccounts[51]] : pagedAccounts,
+      ),
     );
     renderAccounts();
 
@@ -595,22 +608,26 @@ describe("Accounts business CSV", () => {
 
   it("sets an account currency from the account currency dialog", async () => {
     const user = userEvent.setup();
-    useAccountsMock.mockReturnValue(readyPage([
-      {
-        code: "desk-alpha",
-        title: "Desk alpha",
-        blocked: false,
-        blockReason: "",
-        group: "equity-desks",
-        currency: "USD",
-        effectiveCurrency: "USD",
-        currencyOrigin: "account",
-        currencyCascade: { account: "USD", group: "", default: "" },
-        notes: "",
-        pnlHaltReason: "",
-        positionCount: 0,
-      },
-    ].map(accountFixture)));
+    useAccountsMock.mockReturnValue(
+      readyPage(
+        [
+          {
+            code: "desk-alpha",
+            title: "Desk alpha",
+            blocked: false,
+            blockReason: "",
+            group: "equity-desks",
+            currency: "USD",
+            effectiveCurrency: "USD",
+            currencyOrigin: "account",
+            currencyCascade: { account: "USD", group: "", default: "" },
+            notes: "",
+            pnlHaltReason: "",
+            positionCount: 0,
+          },
+        ].map(accountFixture),
+      ),
+    );
     renderAccounts();
 
     const row = screen.getByText("Desk alpha").closest("tr");
@@ -629,10 +646,7 @@ describe("Accounts business CSV", () => {
     await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
-      expect(setAccountCurrencyMock).toHaveBeenCalledWith(
-        "desk-alpha",
-        "EUR",
-      ),
+      expect(setAccountCurrencyMock).toHaveBeenCalledWith("desk-alpha", "EUR"),
     );
   });
 
@@ -640,22 +654,26 @@ describe("Accounts business CSV", () => {
     const user = userEvent.setup();
     const asset: Asset = { code: "EUR", title: "Euro", assetClass: "currency" };
     fetchAssetsMock.mockResolvedValue([asset]);
-    useAccountsMock.mockReturnValue(readyPage([
-      {
-        code: "desk-alpha",
-        title: "Desk alpha",
-        blocked: false,
-        blockReason: "",
-        group: "equity-desks",
-        currency: "USD",
-        effectiveCurrency: "USD",
-        currencyOrigin: "account",
-        currencyCascade: { account: "USD", group: "", default: "" },
-        notes: "",
-        pnlHaltReason: "",
-        positionCount: 0,
-      },
-    ].map(accountFixture)));
+    useAccountsMock.mockReturnValue(
+      readyPage(
+        [
+          {
+            code: "desk-alpha",
+            title: "Desk alpha",
+            blocked: false,
+            blockReason: "",
+            group: "equity-desks",
+            currency: "USD",
+            effectiveCurrency: "USD",
+            currencyOrigin: "account",
+            currencyCascade: { account: "USD", group: "", default: "" },
+            notes: "",
+            pnlHaltReason: "",
+            positionCount: 0,
+          },
+        ].map(accountFixture),
+      ),
+    );
     renderAccounts();
 
     const row = screen.getByText("Desk alpha").closest("tr");
@@ -690,22 +708,26 @@ describe("Accounts business CSV", () => {
 
   it("clears an already-set account currency", async () => {
     const user = userEvent.setup();
-    useAccountsMock.mockReturnValue(readyPage([
-      {
-        code: "desk-alpha",
-        title: "Desk alpha",
-        blocked: false,
-        blockReason: "",
-        group: "equity-desks",
-        currency: "USD",
-        effectiveCurrency: "USD",
-        currencyOrigin: "account",
-        currencyCascade: { account: "USD", group: "", default: "" },
-        notes: "",
-        pnlHaltReason: "",
-        positionCount: 0,
-      },
-    ].map(accountFixture)));
+    useAccountsMock.mockReturnValue(
+      readyPage(
+        [
+          {
+            code: "desk-alpha",
+            title: "Desk alpha",
+            blocked: false,
+            blockReason: "",
+            group: "equity-desks",
+            currency: "USD",
+            effectiveCurrency: "USD",
+            currencyOrigin: "account",
+            currencyCascade: { account: "USD", group: "", default: "" },
+            notes: "",
+            pnlHaltReason: "",
+            positionCount: 0,
+          },
+        ].map(accountFixture),
+      ),
+    );
     renderAccounts();
 
     const row = screen.getByText("Desk alpha").closest("tr");
@@ -778,17 +800,19 @@ describe("Accounts business CSV", () => {
 
   it("renders an account code once when the display title is empty", () => {
     useAccountsMock.mockReturnValue(
-      readyPage([
-        {
-          code: "empty-title",
-          title: "",
-          blocked: false,
-          blockReason: "",
-          group: "",
-          notes: "",
-          pnlHaltReason: "",
-        },
-      ].map(accountFixture)),
+      readyPage(
+        [
+          {
+            code: "empty-title",
+            title: "",
+            blocked: false,
+            blockReason: "",
+            group: "",
+            notes: "",
+            pnlHaltReason: "",
+          },
+        ].map(accountFixture),
+      ),
     );
 
     renderAccounts();
@@ -796,92 +820,94 @@ describe("Accounts business CSV", () => {
     const row = screen.getByText("empty-title").closest("tr");
 
     expect(row).not.toBeNull();
-    expect(
-      within(row as HTMLElement).getAllByText("empty-title"),
-    ).toHaveLength(1);
+    expect(within(row as HTMLElement).getAllByText("empty-title")).toHaveLength(
+      1,
+    );
   });
 
   it("renders exact account PnL values without a currency suffix", () => {
     useAccountsMock.mockReturnValue(
-      readyPage([
-        {
-          code: "pnl-positive",
-          title: "Positive PnL",
-          blocked: false,
-          blockReason: "",
-          group: "",
-          effectiveCurrency: "USD",
-          notes: "",
-          pnl: "123.4500",
-          pnlHaltReason: "",
-        },
-        {
-          code: "pnl-negative",
-          title: "Negative PnL",
-          blocked: false,
-          blockReason: "",
-          group: "",
-          effectiveCurrency: "USD",
-          notes: "",
-          pnl: "-0.1250",
-          pnlHaltReason: "",
-        },
-        {
-          code: "pnl-zero",
-          title: "Zero PnL",
-          blocked: false,
-          blockReason: "",
-          group: "",
-          effectiveCurrency: "USD",
-          notes: "",
-          pnl: "0.0000",
-          pnlHaltReason: "",
-        },
-        {
-          code: "pnl-empty",
-          title: "Empty PnL",
-          blocked: false,
-          blockReason: "",
-          group: "",
-          effectiveCurrency: "USD",
-          notes: "",
-          pnl: "",
-          pnlHaltReason: "",
-        },
-        {
-          code: "pnl-halted-known",
-          title: "Known halt",
-          blocked: false,
-          blockReason: "",
-          group: "",
-          effectiveCurrency: "USD",
-          notes: "",
-          pnl: "",
-          pnlHaltReason: "missing_cost_basis",
-        },
-        {
-          code: "pnl-halted-unknown",
-          title: "Unknown halt",
-          blocked: false,
-          blockReason: "",
-          group: "",
-          effectiveCurrency: "USD",
-          notes: "",
-          pnl: "",
-          pnlHaltReason: "future_reason",
-        },
-        {
-          code: "pnl-halted-stale-denomination",
-          title: "Stale denomination",
-          blocked: false,
-          blockReason: "",
-          group: "",
-          effectiveCurrency: "USD",
-          notes: "",
-          pnl: "",
-          pnlHaltReason: "stale_denomination",
-        },
-      ].map(accountFixture)),
+      readyPage(
+        [
+          {
+            code: "pnl-positive",
+            title: "Positive PnL",
+            blocked: false,
+            blockReason: "",
+            group: "",
+            effectiveCurrency: "USD",
+            notes: "",
+            pnl: "123.4500",
+            pnlHaltReason: "",
+          },
+          {
+            code: "pnl-negative",
+            title: "Negative PnL",
+            blocked: false,
+            blockReason: "",
+            group: "",
+            effectiveCurrency: "USD",
+            notes: "",
+            pnl: "-0.1250",
+            pnlHaltReason: "",
+          },
+          {
+            code: "pnl-zero",
+            title: "Zero PnL",
+            blocked: false,
+            blockReason: "",
+            group: "",
+            effectiveCurrency: "USD",
+            notes: "",
+            pnl: "0.0000",
+            pnlHaltReason: "",
+          },
+          {
+            code: "pnl-empty",
+            title: "Empty PnL",
+            blocked: false,
+            blockReason: "",
+            group: "",
+            effectiveCurrency: "USD",
+            notes: "",
+            pnl: "",
+            pnlHaltReason: "",
+          },
+          {
+            code: "pnl-halted-known",
+            title: "Known halt",
+            blocked: false,
+            blockReason: "",
+            group: "",
+            effectiveCurrency: "USD",
+            notes: "",
+            pnl: "",
+            pnlHaltReason: "missing_cost_basis",
+          },
+          {
+            code: "pnl-halted-unknown",
+            title: "Unknown halt",
+            blocked: false,
+            blockReason: "",
+            group: "",
+            effectiveCurrency: "USD",
+            notes: "",
+            pnl: "",
+            pnlHaltReason: "future_reason",
+          },
+          {
+            code: "pnl-halted-arithmetic-overflow",
+            title: "Arithmetic overflow",
+            blocked: false,
+            blockReason: "",
+            group: "",
+            effectiveCurrency: "USD",
+            notes: "",
+            pnl: "",
+            pnlHaltReason: "arithmetic_overflow",
+          },
+        ].map(accountFixture),
+      ),
     );
     renderAccounts();
 
@@ -902,15 +928,17 @@ describe("Accounts business CSV", () => {
     expect(cell("Zero PnL")).toHaveClass("text-[var(--pnl-flat)]");
     expect(cell("Empty PnL")).toHaveTextContent("—");
     expect(cell("Empty PnL")).toHaveClass("text-[var(--pnl-flat)]");
-    expect(within(row("Empty PnL")).queryByRole("note")).not.toBeInTheDocument();
+    expect(
+      within(row("Empty PnL")).queryByRole("note"),
+    ).not.toBeInTheDocument();
 
     const knownWarning = within(row("Known halt")).getByRole("note", {
       name: /position cost basis is unavailable/i,
     });
     expect(knownWarning).toHaveAttribute("tabindex", "0");
     expect(
-      within(row("Stale denomination")).getByRole("note", {
-        name: /uses a previous effective account currency/i,
+      within(row("Arithmetic overflow")).getByRole("note", {
+        name: /exact arithmetic exceeded the supported numeric range/i,
       }),
     ).toBeInTheDocument();
     expect(
@@ -923,17 +951,19 @@ describe("Accounts business CSV", () => {
   it("loads blocked-account audit with the account block action", async () => {
     const user = userEvent.setup();
     useAccountsMock.mockReturnValue(
-      readyPage([
-        {
-          code: "algo-infinite-loop",
-          title: "",
-          blocked: true,
-          blockReason: "Trading halt",
-          group: "",
-          notes: "",
-          pnlHaltReason: "",
-        },
-      ].map(accountFixture)),
+      readyPage(
+        [
+          {
+            code: "algo-infinite-loop",
+            title: "",
+            blocked: true,
+            blockReason: "Trading halt",
+            group: "",
+            notes: "",
+            pnlHaltReason: "",
+          },
+        ].map(accountFixture),
+      ),
     );
     fetchAuditMock.mockResolvedValue([
       {
@@ -967,17 +997,19 @@ describe("Accounts business CSV", () => {
   it("keeps blocked details open when unblock confirmation is cancelled", async () => {
     const user = userEvent.setup();
     useAccountsMock.mockReturnValue(
-      readyPage([
-        {
-          code: "algo-infinite-loop",
-          title: "",
-          blocked: true,
-          blockReason: "Trading halt",
-          group: "",
-          notes: "",
-          pnlHaltReason: "",
-        },
-      ].map(accountFixture)),
+      readyPage(
+        [
+          {
+            code: "algo-infinite-loop",
+            title: "",
+            blocked: true,
+            blockReason: "Trading halt",
+            group: "",
+            notes: "",
+            pnlHaltReason: "",
+          },
+        ].map(accountFixture),
+      ),
     );
 
     renderAccounts();
@@ -987,7 +1019,9 @@ describe("Accounts business CSV", () => {
     const details = await screen.findByRole("dialog", {
       name: /blocked account/i,
     });
-    await user.click(within(details).getByRole("button", { name: /^unblock$/i }));
+    await user.click(
+      within(details).getByRole("button", { name: /^unblock$/i }),
+    );
     const confirmation = screen.getByRole("alertdialog", {
       name: /unblock account/i,
     });
@@ -1008,17 +1042,19 @@ describe("Accounts business CSV", () => {
   it("closes blocked details after a successful unblock", async () => {
     const user = userEvent.setup();
     useAccountsMock.mockReturnValue(
-      readyPage([
-        {
-          code: "algo-infinite-loop",
-          title: "",
-          blocked: true,
-          blockReason: "Trading halt",
-          group: "",
-          notes: "",
-          pnlHaltReason: "",
-        },
-      ].map(accountFixture)),
+      readyPage(
+        [
+          {
+            code: "algo-infinite-loop",
+            title: "",
+            blocked: true,
+            blockReason: "Trading halt",
+            group: "",
+            notes: "",
+            pnlHaltReason: "",
+          },
+        ].map(accountFixture),
+      ),
     );
 
     renderAccounts();
@@ -1028,7 +1064,9 @@ describe("Accounts business CSV", () => {
     const details = await screen.findByRole("dialog", {
       name: /blocked account/i,
     });
-    await user.click(within(details).getByRole("button", { name: /^unblock$/i }));
+    await user.click(
+      within(details).getByRole("button", { name: /^unblock$/i }),
+    );
     const confirmation = screen.getByRole("alertdialog", {
       name: /unblock account/i,
     });
@@ -1077,7 +1115,9 @@ describe("Accounts business CSV", () => {
     renderAccounts();
     const row = screen.getByText("Desk alpha").closest("tr");
     expect(row).not.toBeNull();
-    expect(within(row as HTMLElement).getByText(/blocked/i)).toBeInTheDocument();
+    expect(
+      within(row as HTMLElement).getByText(/blocked/i),
+    ).toBeInTheDocument();
     expect(
       within(row as HTMLElement).getByRole("button", { name: /^block$/i }),
     ).toBeEnabled();
@@ -1312,7 +1352,9 @@ describe("Accounts business CSV", () => {
     const row = screen.getByText("Equity desks").closest("tr");
     expect(row).not.toBeNull();
     await user.click(
-      within(row as HTMLElement).getByRole("button", { name: /filter by equity-desks/i }),
+      within(row as HTMLElement).getByRole("button", {
+        name: /filter by equity-desks/i,
+      }),
     );
 
     expect(screen.getByText("Desk alpha")).toBeInTheDocument();
@@ -1426,12 +1468,15 @@ describe("Accounts business CSV", () => {
     );
     expect(screen.getByText(/Active filters/i)).toBeInTheDocument();
     expect(screen.getByText(/Position count: Equals 1/i)).toBeInTheDocument();
-    expect(screen.getByText(/Block reason: Contains halt/i)).toBeInTheDocument();
     expect(
-      screen.getAllByRole("button", { name: /Remove advanced filter/i })
-        .length,
+      screen.getByText(/Block reason: Contains halt/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Remove advanced filter/i }).length,
     ).toBeGreaterThan(0);
-    await user.click(screen.getByRole("button", { name: /clear all filters/i }));
+    await user.click(
+      screen.getByRole("button", { name: /clear all filters/i }),
+    );
     expect(screen.queryByText(/Active filters/i)).not.toBeInTheDocument();
     expect(lastAccountFilters()).not.toEqual(
       expect.objectContaining({ blockReason: expect.any(String) }),
@@ -1442,11 +1487,15 @@ describe("Accounts business CSV", () => {
 
     await user.click(screen.getByRole("button", { name: /more filters/i }));
     const reopened = screen.getByRole("dialog", { name: /find by fields/i });
-    expect(within(reopened).queryByLabelText(/^notes$/i)).not.toBeInTheDocument();
+    expect(
+      within(reopened).queryByLabelText(/^notes$/i),
+    ).not.toBeInTheDocument();
     expect(
       within(reopened).getByLabelText(/^block reason$/i, { selector: "input" }),
     ).toHaveValue("");
-    expect(within(reopened).getAllByPlaceholderText("Value")[0]).toHaveValue("");
+    expect(within(reopened).getAllByPlaceholderText("Value")[0]).toHaveValue(
+      "",
+    );
   });
 
   it("disables account advanced search while a numeric value is invalid", async () => {
@@ -1651,14 +1700,14 @@ describe("Accounts business CSV", () => {
       }),
     );
     expect(screen.getByText(/Active filters/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/account count: not equal 1/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/account count: not equal 1/i)).toBeInTheDocument();
   });
 
   it("does not synthesize the default group when the group response omits it", async () => {
     const user = userEvent.setup();
-    useGroupsMock.mockReturnValue(readyPage(groups.filter((g) => g.code !== "")));
+    useGroupsMock.mockReturnValue(
+      readyPage(groups.filter((g) => g.code !== "")),
+    );
 
     renderAccounts();
 
@@ -1670,17 +1719,19 @@ describe("Accounts business CSV", () => {
 
   it("does not render a group code as a title when the title is empty", async () => {
     const user = userEvent.setup();
-    useGroupsMock.mockReturnValue(readyPage([
-      {
-        code: "equity-desks",
-        title: "",
-        blocked: false,
-        blockReason: "",
-        notes: "",
-        accountCount: 1,
-        positionCount: 0,
-      },
-    ]));
+    useGroupsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "equity-desks",
+          title: "",
+          blocked: false,
+          blockReason: "",
+          notes: "",
+          accountCount: 1,
+          positionCount: 0,
+        },
+      ]),
+    );
 
     renderAccounts();
 
@@ -1688,32 +1739,36 @@ describe("Accounts business CSV", () => {
     const row = screen.getByText("equity-desks").closest("tr");
 
     expect(row).not.toBeNull();
-    expect(within(row as HTMLElement).getAllByText("equity-desks")).toHaveLength(1);
+    expect(
+      within(row as HTMLElement).getAllByText("equity-desks"),
+    ).toHaveLength(1);
   });
 
   it("sets a regular group currency from the group currency dialog", async () => {
     const user = userEvent.setup();
-    useGroupsMock.mockReturnValue(readyPage([
-      {
-        code: "",
-        title: "",
-        blocked: false,
-        blockReason: "",
-        notes: "",
-        accountCount: 1,
-        positionCount: 0,
-      },
-      {
-        code: "equity-desks",
-        title: "Equity desks",
-        blocked: false,
-        blockReason: "",
-        notes: "",
-        currency: "USD",
-        accountCount: 1,
-        positionCount: 2,
-      },
-    ]));
+    useGroupsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "",
+          title: "",
+          blocked: false,
+          blockReason: "",
+          notes: "",
+          accountCount: 1,
+          positionCount: 0,
+        },
+        {
+          code: "equity-desks",
+          title: "Equity desks",
+          blocked: false,
+          blockReason: "",
+          notes: "",
+          currency: "USD",
+          accountCount: 1,
+          positionCount: 2,
+        },
+      ]),
+    );
     renderAccounts();
 
     await user.click(screen.getByRole("button", { name: /^groups$/i }));
@@ -1738,27 +1793,26 @@ describe("Accounts business CSV", () => {
     await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
-      expect(setGroupCurrencyMock).toHaveBeenCalledWith(
-        "equity-desks",
-        "EUR",
-      ),
+      expect(setGroupCurrencyMock).toHaveBeenCalledWith("equity-desks", "EUR"),
     );
   });
 
   it("sets the default group currency from the group currency dialog", async () => {
     const user = userEvent.setup();
-    useGroupsMock.mockReturnValue(readyPage([
-      {
-        code: "",
-        title: "",
-        blocked: false,
-        blockReason: "",
-        notes: "",
-        currency: "USD",
-        accountCount: 1,
-        positionCount: 1,
-      },
-    ]));
+    useGroupsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "",
+          title: "",
+          blocked: false,
+          blockReason: "",
+          notes: "",
+          currency: "USD",
+          accountCount: 1,
+          positionCount: 1,
+        },
+      ]),
+    );
     renderAccounts();
 
     await user.click(screen.getByRole("button", { name: /^groups$/i }));
@@ -1783,21 +1837,25 @@ describe("Accounts business CSV", () => {
   });
 
   it("shows the source group name on inherited currency icons", () => {
-    useAccountsMock.mockReturnValue(readyPage([
-      {
-        code: "desk-alpha",
-        title: "Desk alpha",
-        blocked: false,
-        blockReason: "",
-        group: "equity-desks",
-        currency: "",
-        effectiveCurrency: "USD",
-        currencyOrigin: "group",
-        currencyCascade: { account: "", group: "USD", default: "" },
-        notes: "",
-        pnlHaltReason: "",
-      },
-    ].map(accountFixture)));
+    useAccountsMock.mockReturnValue(
+      readyPage(
+        [
+          {
+            code: "desk-alpha",
+            title: "Desk alpha",
+            blocked: false,
+            blockReason: "",
+            group: "equity-desks",
+            currency: "",
+            effectiveCurrency: "USD",
+            currencyOrigin: "group",
+            currencyCascade: { account: "", group: "USD", default: "" },
+            notes: "",
+            pnlHaltReason: "",
+          },
+        ].map(accountFixture),
+      ),
+    );
 
     renderAccounts();
 
@@ -1819,17 +1877,19 @@ describe("Accounts business CSV", () => {
   it("renders default group counts from the group response, not the accounts response", async () => {
     const user = userEvent.setup();
     useAccountsMock.mockReturnValue(readyPage([]));
-    useGroupsMock.mockReturnValue(readyPage([
-      {
-        code: "",
-        title: "",
-        blocked: false,
-        blockReason: "",
-        notes: "",
-        accountCount: 7,
-        positionCount: 4,
-      },
-    ]));
+    useGroupsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "",
+          title: "",
+          blocked: false,
+          blockReason: "",
+          notes: "",
+          accountCount: 7,
+          positionCount: 4,
+        },
+      ]),
+    );
 
     renderAccounts();
 

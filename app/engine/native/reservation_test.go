@@ -652,6 +652,7 @@ type executionLockSpy struct {
 	pushErr       error
 	rollbackPanic string
 	reportLocks   [][]byte
+	reportLeaves  []string
 	guard         sync.Mutex
 }
 
@@ -699,12 +700,17 @@ func (s *executionLockSpy) ApplyExecutionReport(
 ) []reject.AccountBlock {
 	// Copy: the report and its lock belong to the binding for this call only.
 	var lock []byte
+	var leaves string
 	if fill, ok := report.Fill().Get(); ok {
 		lock = append([]byte(nil), fill.Lock()...)
+		if quantity, ok := fill.LeavesQuantity().Get(); ok {
+			leaves = quantity.String()
+		}
 	}
 	s.guard.Lock()
 	defer s.guard.Unlock()
 	s.reportLocks = append(s.reportLocks, lock)
+	s.reportLeaves = append(s.reportLeaves, leaves)
 	return nil
 }
 
@@ -722,6 +728,12 @@ func (s *executionLockSpy) recordedReportLocks() [][]byte {
 	s.guard.Lock()
 	defer s.guard.Unlock()
 	return append([][]byte(nil), s.reportLocks...)
+}
+
+func (s *executionLockSpy) recordedReportLeaves() []string {
+	s.guard.Lock()
+	defer s.guard.Unlock()
+	return append([]string(nil), s.reportLeaves...)
 }
 
 func (s *executionLockSpy) pushError() error {
@@ -768,14 +780,14 @@ func newLockSpyTestEngine(t *testing.T, spy *executionLockSpy) *openPitEngine {
 	return adapter
 }
 
-// TestSubmitImmediate_ReportCarriesEngineLock pins the pre-trade lock the
-// execution report hands back to the engine. A lock is an opaque engine
-// artifact, so the report must carry the one this very operation produced;
-// rebuilding it from the settlement price yields a single default-group entry
-// and silently drops every other policy group's leg. The spy contributes such a
-// leg and reads the report the engine actually received, so the assertion holds
-// for both the regular pre-trade branch and the drop-copy branch.
-func TestSubmitImmediate_ReportCarriesEngineLock(t *testing.T) {
+// TestSubmitImmediate_ReportCarriesEngineLockAndLeaves pins the pre-trade lock
+// and explicit zero leaves that the immediate execution report hands back to
+// the engine. A lock is an opaque engine artifact, so the report must carry the
+// one this very operation produced; rebuilding it from the settlement price
+// yields a single default-group entry and silently drops every other policy
+// group's leg. The spy reads the report the engine actually received, so the
+// assertions hold for both the regular pre-trade and drop-copy branches.
+func TestSubmitImmediate_ReportCarriesEngineLockAndLeaves(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		dropCopy bool
@@ -807,6 +819,10 @@ func TestSubmitImmediate_ReportCarriesEngineLock(t *testing.T) {
 			locks := spy.recordedReportLocks()
 			if len(locks) != 1 {
 				t.Fatalf("execution reports reaching the engine = %d, want 1", len(locks))
+			}
+			leaves := spy.recordedReportLeaves()
+			if len(leaves) != 1 || leaves[0] != "0" {
+				t.Fatalf("engine leaves = %q, want explicit zero", leaves)
 			}
 			// The result carries the same serialized lock the report was built
 			// from, so the report's in-process lock must decode from it.
@@ -972,18 +988,17 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 	// A full fill of the 5-unit order at the reservation's settlement lock price
 	// nets the held quote to zero: leaves is 0 and the fill is final.
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
-		BaseAsset:       testBase,
-		QuoteAsset:      testQuote,
-		FillQuantity:    testQty,
-		FillPrice:       submitted.SettlementLockPrice,
-		LeavesQuantity:  "0",
-		ReleaseQuantity: "0",
-		LockPrice:       submitted.SettlementLockPrice,
-		Lock:            submitted.Lock,
-		Account:         domain.AccountID(testAccount),
-		Side:            domain.OrderSideBuy,
-		OrderStatus:     domain.OrderStatusFilled,
-	})
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   testQty,
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0")
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -1051,12 +1066,11 @@ func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		BaseAsset: testBase, QuoteAsset: testQuote,
 		FillQuantity: "1", FillPrice: "50000", LeavesQuantity: "0",
-		ReleaseQuantity: "0",
-		LockPrice:       submitted.SettlementLockPrice,
-		Lock:            submitted.Lock,
-		Account:         domain.AccountID(testAccount), Side: domain.OrderSideSell,
+		LockPrice: submitted.SettlementLockPrice,
+		Lock:      submitted.Lock,
+		Account:   domain.AccountID(testAccount), Side: domain.OrderSideSell,
 		OrderStatus: domain.OrderStatusFilled,
-	})
+	}, "0")
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -1175,19 +1189,18 @@ func TestApplyExecutionReport_CanceledContextDoesNotEnterLane(t *testing.T) {
 	reportCtx, cancel := context.WithCancel(ctx)
 	cancel()
 	if _, err := e.ApplyExecutionReport(reportCtx, domain.ExecutionReportInput{
-		BaseAsset:       testBase,
-		QuoteAsset:      testQuote,
-		FillQuantity:    testQty,
-		FillPrice:       submitted.SettlementLockPrice,
-		LeavesQuantity:  "0",
-		ReleaseQuantity: "0",
-		LockPrice:       submitted.SettlementLockPrice,
-		Lock:            submitted.Lock,
-		Account:         domain.AccountID(testAccount),
-		Side:            domain.OrderSideBuy,
-		Order:           "order-1",
-		OrderStatus:     domain.OrderStatusFilled,
-	}); !errors.Is(err, context.Canceled) {
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   testQty,
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		Order:          "order-1",
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ApplyExecutionReport with canceled context = %v, want context canceled", err)
 	}
 }
@@ -1205,15 +1218,14 @@ func TestApplyExecutionReport_NoTradeFinalReleasesStoredLeaves(t *testing.T) {
 	}
 
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
-		BaseAsset:       testBase,
-		QuoteAsset:      testQuote,
-		LeavesQuantity:  "0",
-		ReleaseQuantity: testQty,
-		Lock:            submitted.Lock,
-		Account:         domain.AccountID(testAccount),
-		Side:            domain.OrderSideBuy,
-		OrderStatus:     domain.OrderStatusCancelled,
-	})
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		LeavesQuantity: "0",
+		Lock:           submitted.Lock,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusCancelled,
+	}, testQty)
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -1319,19 +1331,18 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) 
 	}
 
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
-		BaseAsset:       testBase,
-		QuoteAsset:      testQuote,
-		FillQuantity:    "1",
-		FillPrice:       submitted.SettlementLockPrice,
-		LeavesQuantity:  "0",
-		ReleaseQuantity: "0",
-		LockPrice:       submitted.SettlementLockPrice,
-		Lock:            submitted.Lock,
-		Commission:      &domain.Commission{Amount: "2", Currency: testQuote},
-		Account:         domain.AccountID(testAccount),
-		Side:            domain.OrderSideBuy,
-		OrderStatus:     domain.OrderStatusFilled,
-	})
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   "1",
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0")
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport fee order: %v", err)
 	}
@@ -1370,19 +1381,18 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 	}
 
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
-		BaseAsset:       testBase,
-		QuoteAsset:      testQuote,
-		FillQuantity:    "1",
-		FillPrice:       submitted.SettlementLockPrice,
-		LeavesQuantity:  "0",
-		ReleaseQuantity: "0",
-		LockPrice:       submitted.SettlementLockPrice,
-		Lock:            submitted.Lock,
-		Commission:      &domain.Commission{Amount: "2", Currency: testQuote},
-		Account:         domain.AccountID(testAccount),
-		Side:            domain.OrderSideBuy,
-		OrderStatus:     domain.OrderStatusFilled,
-	})
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   "1",
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0")
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -1458,19 +1468,18 @@ func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) ExecutionReportResul
 		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
-		BaseAsset:       testBase,
-		QuoteAsset:      testQuote,
-		FillQuantity:    "1",
-		FillPrice:       submitted.SettlementLockPrice,
-		LeavesQuantity:  "0",
-		ReleaseQuantity: "0",
-		LockPrice:       submitted.SettlementLockPrice,
-		Lock:            submitted.Lock,
-		Commission:      &domain.Commission{Amount: "2", Currency: testQuote},
-		Account:         domain.AccountID(testAccount),
-		Side:            domain.OrderSideBuy,
-		OrderStatus:     domain.OrderStatusFilled,
-	})
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   "1",
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0")
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport fee order: %v", err)
 	}
@@ -1736,6 +1745,34 @@ func TestSubmitOrder_DropCopyVolumeDoesNotDeriveQuantity(t *testing.T) {
 	}
 }
 
+func TestSubmitOrder_DropCopyVolumeAtZeroPriceLeavesBaseInflowEmpty(t *testing.T) {
+	e := newTestEngine(t)
+	order := testOrder()
+	order.DropCopy = true
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500"
+	order.Price = "0"
+
+	result, err := e.SubmitOrder(context.Background(), order)
+	if err != nil {
+		t.Fatalf("SubmitOrder(drop-copy volume at zero price): %v", err)
+	}
+	if !result.Accepted {
+		t.Fatalf(
+			"SubmitOrder(drop-copy volume at zero price) rejected: %+v",
+			result.Rejects,
+		)
+	}
+	for _, outcome := range result.Outcomes {
+		if outcome.Asset == testBase && outcome.Outcome.IncomingDelta != "" {
+			t.Fatalf(
+				"drop-copy zero-price base inflow = %q, want empty",
+				outcome.Outcome.IncomingDelta,
+			)
+		}
+	}
+}
+
 func TestSubmitOrder_UnpricedVolumeDoesNotInventReject(t *testing.T) {
 	e := newUnpricedTestEngine(t)
 	order := testOrder()
@@ -1801,17 +1838,11 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SubmitImmediate(volume at zero price): %v", err)
 		}
-		if !result.Accepted {
+		if result.Accepted || len(result.Rejects) != 1 ||
+			result.Rejects[0].Code != "order_value_calculation_failed" {
 			t.Fatalf(
-				"SubmitImmediate(volume at zero price) rejected: %+v",
-				result.Rejects,
-			)
-		}
-		if result.TradePrice != "0" || result.FillQuantity != "0" {
-			t.Fatalf(
-				"zero-price volume fill = (%q, %q), want price 0 and engine delta 0",
-				result.TradePrice,
-				result.FillQuantity,
+				"SubmitImmediate(volume at zero price) = %+v, want order_value_calculation_failed",
+				result,
 			)
 		}
 	})
@@ -1835,13 +1866,43 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		if !result.Accepted {
 			t.Fatalf("SubmitImmediate(volume market) rejected: %+v", result.Rejects)
 		}
-		if result.TradePrice != testLimit || result.FillQuantity != testQty {
+		mark, err := param.NewPriceFromString(testLimit)
+		if err != nil {
+			t.Fatalf("parse market mark: %v", err)
+		}
+		lockPrice, err := mark.CheckedMulUint(
+			uint64(10_000 + defaultMarketOrderSlippageBps),
+		)
+		if err != nil {
+			t.Fatalf("apply market-order slippage: %v", err)
+		}
+		lockPrice, err = lockPrice.CheckedDivUint(10_000)
+		if err != nil {
+			t.Fatalf("scale market-order slippage: %v", err)
+		}
+		volume, err := param.NewVolumeFromString(order.AmountValue)
+		if err != nil {
+			t.Fatalf("parse market volume: %v", err)
+		}
+		fillQuantity, err := volume.CalculateQuantity(lockPrice)
+		if err != nil {
+			t.Fatalf("calculate market fill quantity: %v", err)
+		}
+		gotLockPrice, err := param.NewPriceFromString(result.TradePrice)
+		if err != nil {
+			t.Fatalf("parse market lock price: %v", err)
+		}
+		gotFillQuantity, err := param.NewQuantityFromString(result.FillQuantity)
+		if err != nil {
+			t.Fatalf("parse market fill quantity: %v", err)
+		}
+		if !gotLockPrice.Equal(lockPrice) || !gotFillQuantity.Equal(fillQuantity) {
 			t.Fatalf(
-				"volume market fill = (%q, %q), want lock price %q and engine delta %q",
+				"volume market fill = (%q, %q), want lock price %s and engine delta %s",
 				result.TradePrice,
 				result.FillQuantity,
-				testLimit,
-				testQty,
+				lockPrice,
+				fillQuantity,
 			)
 		}
 	})

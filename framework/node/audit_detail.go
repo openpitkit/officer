@@ -167,19 +167,26 @@ func submitOrderDetail(order domain.Order, accepted bool) string {
 // executionReportDetail renders one execution report and how many account
 // blocks it produced.
 func executionReportDetail(
-	in domain.ExecutionReportInput, status domain.OrderStatus, blocks int,
+	in domain.ExecutionReportInput,
+	sdkLeavesQuantity string,
+	status domain.OrderStatus,
+	blocks int,
 ) string {
-	return fmt.Sprintf(
-		"execution report order %s account %s %s/%s qty=%s releaseQty=%s %s blocks=%d",
+	detail := fmt.Sprintf(
+		"execution report order %s account %s %s/%s qty=%s leavesQty=%s %s blocks=%d",
 		in.Order,
 		in.Account,
 		in.BaseAsset,
 		in.QuoteAsset,
 		in.FillQuantity,
-		in.ReleaseQuantity,
+		in.LeavesQuantity,
 		status,
 		blocks,
 	)
+	if sdkLeavesQuantity != "" {
+		detail += fmt.Sprintf(" sdkLeavesQty=%s", sdkLeavesQuantity)
+	}
+	return detail
 }
 
 // blockDetail renders one operator-initiated account block. The reason is the

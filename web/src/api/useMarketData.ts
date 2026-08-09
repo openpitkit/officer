@@ -17,10 +17,7 @@
 
 import { useCallback } from "react";
 
-import type {
-  MarketDataStatus,
-  MarketDataSymbolSearch,
-} from "@/api/types";
+import type { MarketDataStatus, MarketDataSymbolSearch } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi, type MarketDataSymbolSearchInput } from "@/framework";
 

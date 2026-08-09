@@ -133,8 +133,9 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "cancel",
 			description: "Cancel an untouched workflow order by presenting its " +
 				"approval token. Optional caller-reported leavesQuantity is recorded " +
-				"when supplied. After execution-report " +
-				"activity, submit an explicit report. Protected and disabled by default.",
+				"verbatim when supplied; the SDK receives the order's previously recorded " +
+				"leaves. After execution-report activity, submit an explicit report. " +
+				"Protected and disabled by default.",
 		},
 	}
 	if len(list.Tools) != len(want) {

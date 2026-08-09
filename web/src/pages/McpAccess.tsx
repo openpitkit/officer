@@ -21,7 +21,11 @@ import { useTranslation } from "react-i18next";
 import type { McpCommand } from "@/api/types";
 import { useMcpAccess } from "@/api/useMcpAccess";
 import { ConnectAgent } from "@/components/ConnectAgent";
-import { ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
+import {
+  ErrorBanner,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import { Badge } from "@/components/ui/badge";
@@ -95,8 +99,7 @@ function ProtectiveEnableDialog({
               </p>
               <p>{t("dialog.body2")}</p>
               <p>
-                {t("dialog.body3Pre")}{" "}
-                <strong>{tc("actions.cancel")}</strong>{" "}
+                {t("dialog.body3Pre")} <strong>{tc("actions.cancel")}</strong>{" "}
                 {t("dialog.body3Post")}
               </p>
             </div>
@@ -133,90 +136,89 @@ function CommandsTable({
   const { t } = useTranslation("mcp");
   return (
     <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-8">
-              <ColumnHeader description={t("table.columnDescriptions.on")}>
-                {t("table.on")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <ColumnHeader description={t("table.columnDescriptions.command")}>
-                {t("table.command")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <ColumnHeader
-                description={t("table.columnDescriptions.description")}
-              >
-                {t("table.description")}
-              </ColumnHeader>
-            </TableHead>
-            <TableHead>
-              <ColumnHeader description={t("table.columnDescriptions.flags")}>
-                {t("table.flags")}
-              </ColumnHeader>
-            </TableHead>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="w-8">
+            <ColumnHeader description={t("table.columnDescriptions.on")}>
+              {t("table.on")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <ColumnHeader description={t("table.columnDescriptions.command")}>
+              {t("table.command")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <ColumnHeader
+              description={t("table.columnDescriptions.description")}
+            >
+              {t("table.description")}
+            </ColumnHeader>
+          </TableHead>
+          <TableHead>
+            <ColumnHeader description={t("table.columnDescriptions.flags")}>
+              {t("table.flags")}
+            </ColumnHeader>
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {commands.map((cmd) => (
+          <TableRow key={cmd.name}>
+            <TableCell>
+              <input
+                type="checkbox"
+                checked={cmd.enabled}
+                onChange={(e) => onToggle(cmd, e.target.checked)}
+                className="accent-[var(--accent)] h-4 w-4 cursor-pointer"
+                aria-label={t("table.enableAriaLabel", { name: cmd.name })}
+              />
+            </TableCell>
+
+            <TableCell>
+              <div className="space-y-0.5">
+                <p
+                  className={
+                    cmd.protective
+                      ? "text-sm font-semibold text-[var(--danger)]"
+                      : "text-sm font-medium text-text"
+                  }
+                >
+                  {cmd.title}
+                </p>
+                <p className="nums text-[0.6875rem] text-muted-lt">
+                  {cmd.name}
+                </p>
+                {!cmd.enabled && (
+                  <p className="text-[0.6875rem] text-muted-lt italic">
+                    {t("table.disabledNotice")}
+                  </p>
+                )}
+              </div>
+            </TableCell>
+
+            <TableCell className="max-w-xs text-xs text-muted-lt">
+              {t("command." + cmd.name + ".description", {
+                defaultValue: cmd.agentDescription || t("table.noDescription"),
+              })}
+            </TableCell>
+
+            <TableCell>
+              <div className="flex flex-wrap gap-1">
+                {cmd.protective && (
+                  <Badge variant="danger">{t("flags.protected")}</Badge>
+                )}
+                {cmd.mutating && (
+                  <Badge variant="warn">{t("flags.mutating")}</Badge>
+                )}
+                {!cmd.implemented && (
+                  <Badge variant="neutral">{t("flags.notImplemented")}</Badge>
+                )}
+              </div>
+            </TableCell>
           </TableRow>
-        </TableHeader>
-        <TableBody>
-          {commands.map((cmd) => (
-            <TableRow key={cmd.name}>
-              <TableCell>
-                <input
-                  type="checkbox"
-                  checked={cmd.enabled}
-                  onChange={(e) => onToggle(cmd, e.target.checked)}
-                  className="accent-[var(--accent)] h-4 w-4 cursor-pointer"
-                  aria-label={t("table.enableAriaLabel", { name: cmd.name })}
-                />
-              </TableCell>
-
-              <TableCell>
-                <div className="space-y-0.5">
-                  <p
-                    className={
-                      cmd.protective
-                        ? "text-sm font-semibold text-[var(--danger)]"
-                        : "text-sm font-medium text-text"
-                    }
-                  >
-                    {cmd.title}
-                  </p>
-                  <p className="nums text-[0.6875rem] text-muted-lt">
-                    {cmd.name}
-                  </p>
-                  {!cmd.enabled && (
-                    <p className="text-[0.6875rem] text-muted-lt italic">
-                      {t("table.disabledNotice")}
-                    </p>
-                  )}
-                </div>
-              </TableCell>
-
-              <TableCell className="max-w-xs text-xs text-muted-lt">
-                {t("command." + cmd.name + ".description", {
-                  defaultValue:
-                    cmd.agentDescription || t("table.noDescription"),
-                })}
-              </TableCell>
-
-              <TableCell>
-                <div className="flex flex-wrap gap-1">
-                  {cmd.protective && (
-                    <Badge variant="danger">{t("flags.protected")}</Badge>
-                  )}
-                  {cmd.mutating && (
-                    <Badge variant="warn">{t("flags.mutating")}</Badge>
-                  )}
-                  {!cmd.implemented && (
-                    <Badge variant="neutral">{t("flags.notImplemented")}</Badge>
-                  )}
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
+        ))}
+      </TableBody>
     </Table>
   );
 }
@@ -234,16 +236,15 @@ export function McpAccess() {
   const [error, setError] = useState<string | null>(null);
 
   // Pending protective enable confirmation.
-  const [pendingProtective, setPendingProtective] =
-    useState<McpCommand | null>(null);
+  const [pendingProtective, setPendingProtective] = useState<McpCommand | null>(
+    null,
+  );
 
-  const commands =
-    localCommands ?? (load.state === "ready" ? load.data : null);
+  const commands = localCommands ?? (load.state === "ready" ? load.data : null);
 
   function applyUpdate(updated: McpCommand) {
     setLocalCommands((prev) => {
-      const base =
-        prev ?? (load.state === "ready" ? load.data : []);
+      const base = prev ?? (load.state === "ready" ? load.data : []);
       return base.map((c) => (c.name === updated.name ? updated : c));
     });
   }
@@ -294,8 +295,7 @@ export function McpAccess() {
         <span className="font-medium text-[var(--danger)]">
           {t("access.descriptionProtected")}
         </span>{" "}
-        {t("access.descriptionPost")}{" "}
-        <span className="nums">/mcp</span>
+        {t("access.descriptionPost")} <span className="nums">/mcp</span>
         {t("access.descriptionEnd")}
       </p>
 

@@ -15,10 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import type {
-  AuthContextValue,
-  Permission,
-} from "./auth-context";
+import type { AuthContextValue, Permission } from "./auth-context";
 
 /**
  * The open-source default: no real user, every permission granted.

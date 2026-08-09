@@ -240,15 +240,11 @@ describe("Limits identity filters", () => {
       latestPolicyFiltersMatching(
         (filters) => filters?.policy === "spot_funds_pnl_bounds",
       ),
-    ).toEqual(
-      expect.objectContaining({ policy: "spot_funds_pnl_bounds" }),
-    );
+    ).toEqual(expect.objectContaining({ policy: "spot_funds_pnl_bounds" }));
   });
 
   it("accepts the SpotFunds account-group filter from the URL", () => {
-    renderLimits(
-      "/policies?policy=spot_funds_pnl_bounds&accountGroup=desk-a",
-    );
+    renderLimits("/policies?policy=spot_funds_pnl_bounds&accountGroup=desk-a");
 
     expect(
       latestPolicyFiltersMatching(
@@ -350,9 +346,7 @@ describe("LimitDialog framework controls", () => {
     fetchAssetsMock.mockResolvedValue([{ code: "AAPL" }]);
     renderLimits();
 
-    await user.click(
-      screen.getAllByRole("button", { name: "Add policy" })[0],
-    );
+    await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
     const maxOrders = within(dialog).getByLabelText("max orders");
     const maxOrdersControls = within(maxOrders.parentElement as HTMLElement);
@@ -416,9 +410,7 @@ describe("LimitDialog framework controls", () => {
     fetchGroupsMock.mockResolvedValue([{ code: "desk-alpha" }]);
     renderLimits("/policies", { includeGroupsApi: true });
 
-    await user.click(
-      screen.getAllByRole("button", { name: "Add policy" })[0],
-    );
+    await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
@@ -453,9 +445,7 @@ describe("LimitDialog framework controls", () => {
     ]);
     renderLimits();
 
-    await user.click(
-      screen.getAllByRole("button", { name: "Add policy" })[0],
-    );
+    await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
@@ -476,7 +466,9 @@ describe("LimitDialog framework controls", () => {
 
     await user.type(within(dialog).getByLabelText("lower bound"), "-100");
 
-    await user.click(within(dialog).getByRole("button", { name: "Add policy" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
     expect(
       screen.queryByRole("button", { name: "Rebuild and apply" }),
     ).not.toBeInTheDocument();
@@ -517,9 +509,7 @@ describe("LimitDialog framework controls", () => {
     });
     renderLimits();
 
-    await user.click(
-      screen.getAllByRole("button", { name: "Add policy" })[0],
-    );
+    await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
@@ -532,7 +522,9 @@ describe("LimitDialog framework controls", () => {
     await user.type(account, "acc-new");
     await user.type(within(dialog).getByLabelText("lower bound"), "-100");
 
-    await user.click(within(dialog).getByRole("button", { name: "Add policy" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
     // The PnL policy never requires an engine rebuild confirm, so this is the
     // account_missing confirm and only it.
     const confirmDialog = await screen.findByRole("alertdialog", {

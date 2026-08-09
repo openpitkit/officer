@@ -16,7 +16,11 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import * as LabelPrimitive from "@radix-ui/react-label";
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from "react";
+import {
+  forwardRef,
+  type ComponentPropsWithoutRef,
+  type ElementRef,
+} from "react";
 
 import { cn } from "@/lib/utils";
 

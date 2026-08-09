@@ -50,9 +50,9 @@ beforeAll(() => {
     unknown
   >;
   proto.hasPointerCapture = () => false;
-  proto.setPointerCapture = () => { };
-  proto.releasePointerCapture = () => { };
-  proto.scrollIntoView = () => { };
+  proto.setPointerCapture = () => {};
+  proto.releasePointerCapture = () => {};
+  proto.scrollIntoView = () => {};
 });
 
 const fetchMarketDataMock = vi.fn();
@@ -124,9 +124,7 @@ function status(instance: MarketDataInstance): MarketDataStatus {
 
 function renderCard(
   instance: MarketDataInstance,
-  handlers: Partial<
-    Parameters<typeof InstanceCard>[0]
-  > = {},
+  handlers: Partial<Parameters<typeof InstanceCard>[0]> = {},
 ) {
   const props = {
     instance,
@@ -470,16 +468,18 @@ describe("manual market-data numeric guards", () => {
     const onUpsertInstrument = vi.fn().mockResolvedValue(true);
     renderCard(
       manualInstance({
-        instruments: [{
-          instanceId: "manual-1",
-          externalSymbol: "AAPL",
-          baseAsset: "AAPL",
-          quoteAsset: "USD",
-          manualPrice: "150",
-          enabled: true,
-          syntheticInverse: false,
-          stale: false,
-        }],
+        instruments: [
+          {
+            instanceId: "manual-1",
+            externalSymbol: "AAPL",
+            baseAsset: "AAPL",
+            quoteAsset: "USD",
+            manualPrice: "150",
+            enabled: true,
+            syntheticInverse: false,
+            stale: false,
+          },
+        ],
       }),
       { onUpsertInstrument },
     );
@@ -572,20 +572,28 @@ describe("IB feed resolver", () => {
       within(dialog).getByLabelText("Resolve symbol in this feed"),
       "apple",
     );
-    await user.click(within(dialog).getByRole("button", { name: /^resolve$/i }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /^resolve$/i }),
+    );
 
     // The resolve stays scoped to this feed and sends only the typed query.
     expect(onSearchSymbols).toHaveBeenCalledTimes(1);
     const [, input] = onSearchSymbols.mock.calls[0];
     expect(input).toEqual({ query: "apple" });
 
-    await user.click(await within(dialog).findByRole("button", { name: /AAPL/ }));
+    await user.click(
+      await within(dialog).findByRole("button", { name: /AAPL/ }),
+    );
 
     // External symbol and quote pick up the resolved contract.
-    expect(within(dialog).getByLabelText("External symbol")).toHaveValue("AAPL");
+    expect(within(dialog).getByLabelText("External symbol")).toHaveValue(
+      "AAPL",
+    );
     expect(within(dialog).getByLabelText("Base")).toHaveValue("AAPL");
     expect(within(dialog).getByLabelText("Quote")).toHaveValue("USD");
-    expect(within(dialog).getByLabelText("Contract symbol")).toHaveValue("AAPL");
+    expect(within(dialog).getByLabelText("Contract symbol")).toHaveValue(
+      "AAPL",
+    );
     expect(within(dialog).getByLabelText("Con ID")).toHaveValue("265598");
     expect(within(dialog).getByLabelText("Primary exchange")).toHaveValue(
       "NASDAQ",
@@ -628,14 +636,18 @@ describe("IB feed resolver", () => {
       within(dialog).getByLabelText("Resolve symbol in this feed"),
       "BTC",
     );
-    await user.click(within(dialog).getByRole("button", { name: /^resolve$/i }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /^resolve$/i }),
+    );
 
     expect(onSearchSymbols).toHaveBeenCalledTimes(1);
     const [, input] = onSearchSymbols.mock.calls[0];
     expect(input).toEqual({ query: "BTC" });
 
     // The resolved listing exchange shows in the result row.
-    await user.click(await within(dialog).findByRole("button", { name: /PAXOS/ }));
+    await user.click(
+      await within(dialog).findByRole("button", { name: /PAXOS/ }),
+    );
     expect(within(dialog).getByLabelText("External symbol")).toHaveValue("BTC");
     expect(within(dialog).getByLabelText("Base")).toHaveValue("BTC");
     expect(within(dialog).getByLabelText("Quote")).toHaveValue("USD");
@@ -662,7 +674,9 @@ describe("IB feed resolver", () => {
       within(dialog).getByLabelText("Resolve symbol in this feed"),
       "es",
     );
-    await user.click(within(dialog).getByRole("button", { name: /^resolve$/i }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /^resolve$/i }),
+    );
 
     const [, input] = onSearchSymbols.mock.calls[0];
     expect(input).toEqual({ query: "es" });
@@ -799,7 +813,10 @@ describe("IB feed resolver", () => {
 
     await user.type(screen.getByPlaceholderText("Base"), "ETHEUR");
     await user.type(screen.getByPlaceholderText("Quote"), "USD");
-    await user.type(screen.getByLabelText("Resolve symbol in this feed"), "ETH");
+    await user.type(
+      screen.getByLabelText("Resolve symbol in this feed"),
+      "ETH",
+    );
     await user.click(screen.getByRole("button", { name: /^resolve$/i }));
     await user.click(await screen.findByRole("button", { name: /AEETH/ }));
 
@@ -899,7 +916,9 @@ describe("IB feed resolver", () => {
     expect(
       within(dialog).queryByText(/can't resolve symbols/i),
     ).not.toBeInTheDocument();
-    expect(within(dialog).getByLabelText("External symbol")).toBeInTheDocument();
+    expect(
+      within(dialog).getByLabelText("External symbol"),
+    ).toBeInTheDocument();
   });
 });
 
@@ -1168,40 +1187,40 @@ describe("synthetic inverse price rendering", () => {
   it.each(["0", "not-a-price"])(
     "falls through an uninvertible mark %s to bid-to-ask semantics",
     (mark) => {
-    renderCard(
-      ibInstance({
-        instruments: [
-          {
-            instanceId: "ib-1",
-            externalSymbol: "EURUSD",
-            baseAsset: "EUR",
-            quoteAsset: "USD",
-            manualPrice: "",
-            enabled: true,
-            syntheticInverse: true,
-            stale: false,
-            quote: {
-              asOf: new Date().toISOString(),
-              receivedAt: new Date().toISOString(),
-              mark,
-              bid: "4",
-              ask: "8",
+      renderCard(
+        ibInstance({
+          instruments: [
+            {
+              instanceId: "ib-1",
+              externalSymbol: "EURUSD",
+              baseAsset: "EUR",
+              quoteAsset: "USD",
+              manualPrice: "",
+              enabled: true,
+              syntheticInverse: true,
+              stale: false,
+              quote: {
+                asOf: new Date().toISOString(),
+                receivedAt: new Date().toISOString(),
+                mark,
+                bid: "4",
+                ask: "8",
+              },
+              inverseQuote: {
+                asOf: new Date().toISOString(),
+                receivedAt: new Date().toISOString(),
+                mark: "",
+                bid: "0.125",
+                ask: "0.25",
+              },
             },
-            inverseQuote: {
-              asOf: new Date().toISOString(),
-              receivedAt: new Date().toISOString(),
-              mark: "",
-              bid: "0.125",
-              ask: "0.25",
-            },
-          },
-        ],
-      }),
-    );
+          ],
+        }),
+      );
 
-    const row = screen.getByText("EURUSD").closest("tr") as HTMLElement;
-    expect(within(row).getByText("4 -> 0.25")).toBeInTheDocument();
-    expect(within(row).queryByText(`${mark} ->`)).not.toBeInTheDocument();
+      const row = screen.getByText("EURUSD").closest("tr") as HTMLElement;
+      expect(within(row).getByText("4 -> 0.25")).toBeInTheDocument();
+      expect(within(row).queryByText(`${mark} ->`)).not.toBeInTheDocument();
     },
   );
 
