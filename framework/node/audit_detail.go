@@ -70,6 +70,8 @@ func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) stri
 		Account:      limit.Account,
 		AccountGroup: limit.AccountGroup,
 	}))
+	b.WriteString(" currency=")
+	b.WriteString(limit.Currency)
 	if limit.LowerBound != "" {
 		b.WriteString(" lower_bound=")
 		b.WriteString(limit.LowerBound)

@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -138,6 +137,9 @@ func (s *Service) PutSpotFundsPnlBoundsLimit(
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	if err := domain.ValidateAsset(limit.Currency); err != nil {
+		return err
+	}
 	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
 		return err
 	}
@@ -181,30 +183,13 @@ func (s *Service) finishLimitChangeLocked(sink marketdata.Sink, err error) error
 	return restoreErr
 }
 
-// validateLimitTarget checks a delete target's policy, scope, and axes without a
-// value payload: it builds a minimal valid typed barrier for the target's policy
-// and validates only its scope/axes, so a delete addresses a barrier by its
-// (policy, scope, account, asset) composite alone. An unknown policy is invalid.
+// validateLimitTarget checks the delete target's policy, scope, and axes.
 func validateLimitTarget(target node.LimitTarget) error {
-	switch target.Policy {
-	case domain.PolicyRateLimit:
-		return domain.LimitRate{
-			Scope: target.Scope, Account: target.Account, Asset: target.Asset,
-			MaxOrders: 1, Window: time.Second,
-		}.Validate()
-	case domain.PolicyOrderSizeLimit:
-		return domain.LimitOrderSize{
-			Scope: target.Scope, Account: target.Account, Asset: target.Asset,
-			MaxQuantity: "1",
-		}.Validate()
-	case domain.PolicySpotFundsPnlBoundsKillSwitch:
-		return domain.LimitSpotFundsPnlBounds{
-			Scope:        target.Scope,
-			Account:      target.Account,
-			AccountGroup: target.AccountGroup,
-			LowerBound:   "0",
-		}.Validate()
-	default:
-		return fmt.Errorf("unknown policy %q: %w", target.Policy, domain.ErrInvalid)
-	}
+	return domain.ValidateLimitScopeAndAxes(
+		target.Policy,
+		target.Scope,
+		target.Account,
+		target.Asset,
+		target.AccountGroup,
+	)
 }

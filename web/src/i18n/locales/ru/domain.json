@@ -22,6 +22,7 @@
       "max_notional": "положительное десятичное число"
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": "код актива",
       "lower_bound": "десятичное число",
       "upper_bound": "десятичное число"
     }
@@ -62,6 +63,10 @@
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "валюта",
+        "hint": "код актива, например USD"
+      },
       "lower_bound": {
         "label": "нижняя граница",
         "hint": "десятичное число, например -1000"

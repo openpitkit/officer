@@ -204,6 +204,12 @@ func (s *Service) RestartMarketData(ctx context.Context) error {
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 
+	return s.restartMarketDataLocked()
+}
+
+// restartMarketDataLocked re-applies the current configuration while
+// marketDataMu is held.
+func (s *Service) restartMarketDataLocked() error {
 	if s.md == nil {
 		return nil
 	}
@@ -213,6 +219,16 @@ func (s *Service) RestartMarketData(ctx context.Context) error {
 	}
 	s.md.Stop()
 	return s.restoreMarketDataAfterBackup(n.CurrentMarketDataSink())
+}
+
+func (s *Service) restartMarketDataAfterDeleteLocked() error {
+	if err := s.restartMarketDataLocked(); err != nil {
+		return fmt.Errorf(
+			"configuration deletion is durable; market-data feeds need attention: %w",
+			err,
+		)
+	}
+	return nil
 }
 
 // MarketDataSymbolVerification is the outcome of a one-shot symbol check for

@@ -22,6 +22,7 @@
       "max_notional": "positive decimal"
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": "资产代码",
       "lower_bound": "小数",
       "upper_bound": "小数"
     }
@@ -62,6 +63,10 @@
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "货币",
+        "hint": "资产代码，例如 USD"
+      },
       "lower_bound": {
         "label": "下限",
         "hint": "小数，如 -1000"

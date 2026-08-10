@@ -235,6 +235,10 @@ func (n *localNode) PutOrderSizeLimit(
 // PutSpotFundsPnlBoundsLimit upserts the whole SpotFunds self-computed
 // P&L-bounds barrier and reconfigures the SpotFunds policy. missing is handled
 // as in PutRateLimit; only the account scope carries an account axis here.
+// Unlike other asset-code inputs, an unknown currency fails and must be created
+// first: it is a matcher, so a typo at global or account-group scope would
+// leave a kill-switch silently skipped by the engine, and only the asset
+// dictionary can catch it.
 func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	ctx context.Context, limit domain.LimitSpotFundsPnlBounds,
 	missing domain.MissingAccountPolicy, caller domain.Caller,

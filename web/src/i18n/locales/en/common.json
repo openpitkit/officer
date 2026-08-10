@@ -462,6 +462,9 @@
     "loading": "Loading",
     "copyableSnippet": "Copyable snippet"
   },
+  "suggestions": {
+    "assetLookupFailed": "Asset suggestions could not be loaded."
+  },
   "topBar": {
     "toggleNav": "Toggle navigation"
   }

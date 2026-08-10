@@ -715,6 +715,7 @@ describe("limits client", () => {
             asset: "",
             values: {
               spotFundsPnlBounds: {
+                currency: "USD",
                 lowerBound: "-1000",
                 upperBound: "",
               },
@@ -755,7 +756,7 @@ describe("limits client", () => {
         account: "",
         accountGroup: "desk-alpha",
         asset: "",
-        values: { lower_bound: "-1000", upper_bound: "" },
+        values: { currency: "USD", lower_bound: "-1000", upper_bound: "" },
       },
     ]);
   });
@@ -870,6 +871,7 @@ describe("limits client", () => {
           scope: "account_group",
           account: "",
           accountGroup: "desk-alpha",
+          currency: "USD",
           lowerBound: "-1000",
           upperBound: "",
         },
@@ -884,7 +886,7 @@ describe("limits client", () => {
         account: "",
         accountGroup: "desk-alpha",
         asset: "",
-        values: { lower_bound: "-1000", upper_bound: "" },
+        values: { currency: "USD", lower_bound: "-1000", upper_bound: "" },
       },
       "reject",
     );
@@ -921,6 +923,7 @@ describe("limits client", () => {
         spotFundsPnlBoundsLimit: {
           scope: "account",
           account: "desk-alpha",
+          currency: "USD",
           lowerBound: "-1000",
           upperBound: "500",
         },
@@ -935,6 +938,7 @@ describe("limits client", () => {
         account: "desk-alpha",
         asset: "",
         values: {
+          currency: "USD",
           lower_bound: "-1000",
           upper_bound: "500",
         },
@@ -950,6 +954,7 @@ describe("limits client", () => {
           scope: "account",
           account: "desk-alpha",
           accountGroup: "",
+          currency: "USD",
           lowerBound: "-1000",
           upperBound: "500",
         }),
@@ -960,6 +965,7 @@ describe("limits client", () => {
         policy: "spot_funds_pnl_bounds_kill_switch",
         account: "desk-alpha",
         values: {
+          currency: "USD",
           lower_bound: "-1000",
           upper_bound: "500",
         },

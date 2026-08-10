@@ -48,6 +48,7 @@ import { useAccountsPage } from "@/api/useAccounts";
 import { useGroupsPage } from "@/api/useGroups";
 import { validateAccountID } from "@/api/validate";
 import { Autocomplete } from "@/components/Autocomplete";
+import { AssetCodeSuggestionFailure } from "@/components/AssetCodeSuggestionFailure";
 import {
   EmptyState,
   ErrorBanner,
@@ -137,6 +138,7 @@ import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
 } from "@/lib/useDebounce";
+import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { cn } from "@/lib/utils";
 
 type AccountsTab = "accounts" | "groups";
@@ -1069,7 +1071,7 @@ export function CreateAccountDialog({
   const [currency, setCurrency] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const assetSuggestions = useAssetCodeSuggestions(currency, open);
+  const assetSuggestionResult = useAssetCodeSuggestions(currency, open);
 
   const validation = code.length > 0 ? validateAccountID(code) : null;
 
@@ -1178,7 +1180,7 @@ export function CreateAccountDialog({
               id="create-account-currency"
               value={currency}
               onChange={setCurrency}
-              suggestions={assetSuggestions}
+              suggestions={assetSuggestionResult.codes}
               disabled={busy}
               placeholder="USD"
               spellCheck={false}
@@ -1188,6 +1190,7 @@ export function CreateAccountDialog({
             <p className="text-[0.6875rem] text-muted">
               {ta("createAccount.currencyHint")}
             </p>
+            <AssetCodeSuggestionFailure failed={assetSuggestionResult.failed} />
           </div>
         </div>
         {error && (
@@ -1234,7 +1237,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const assetSuggestions = useAssetCodeSuggestions(currency, open);
+  const assetSuggestionResult = useAssetCodeSuggestions(currency, open);
 
   const codeTrimmed = code.trim();
   const titleTrimmed = title.trim();
@@ -1330,7 +1333,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
               id="create-group-currency"
               value={currency}
               onChange={setCurrency}
-              suggestions={assetSuggestions}
+              suggestions={assetSuggestionResult.codes}
               disabled={busy}
               placeholder="USD"
               spellCheck={false}
@@ -1340,6 +1343,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
             <p className="text-[0.6875rem] text-muted">
               {t("createGroup.currencyHint")}
             </p>
+            <AssetCodeSuggestionFailure failed={assetSuggestionResult.failed} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="group-notes">{t("createGroup.notesLabel")}</Label>
@@ -2383,7 +2387,7 @@ function AccountCurrencyDialog({
   const [currency, setCurrency] = useState(account.currency ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const assetSuggestions = useAssetCodeSuggestions(currency, open);
+  const assetSuggestionResult = useAssetCodeSuggestions(currency, open);
 
   const submit = async () => {
     setBusy(true);
@@ -2446,7 +2450,7 @@ function AccountCurrencyDialog({
               id="account-currency"
               value={currency}
               onChange={setCurrency}
-              suggestions={assetSuggestions}
+              suggestions={assetSuggestionResult.codes}
               disabled={busy}
               placeholder="USD"
               spellCheck={false}
@@ -2456,6 +2460,7 @@ function AccountCurrencyDialog({
             <p className="text-[0.6875rem] text-muted">
               {t("editCurrency.currencyHint")}
             </p>
+            <AssetCodeSuggestionFailure failed={assetSuggestionResult.failed} />
           </div>
         </div>
         {error && (
@@ -2495,7 +2500,7 @@ function GroupCurrencyDialog({
   const [currency, setCurrency] = useState(group.currency ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const assetSuggestions = useAssetCodeSuggestions(currency, open);
+  const assetSuggestionResult = useAssetCodeSuggestions(currency, open);
   const hasOpenPositions = (group.positionCount ?? 0) > 0;
 
   const submit = async () => {
@@ -2539,13 +2544,14 @@ function GroupCurrencyDialog({
               id="group-currency"
               value={currency}
               onChange={setCurrency}
-              suggestions={assetSuggestions}
+              suggestions={assetSuggestionResult.codes}
               disabled={busy}
               placeholder="USD"
               spellCheck={false}
               onClear={() => setCurrency("")}
               clearLabel={t("filters.clearField")}
             />
+            <AssetCodeSuggestionFailure failed={assetSuggestionResult.failed} />
           </div>
         </div>
         {error && (
@@ -3004,44 +3010,6 @@ function groupDisplayTitle(group: Group): string {
 
 function groupDisplayName(group: Group): string {
   return group.title !== "" ? group.title : group.code;
-}
-
-function useAssetCodeSuggestions(query: string, enabled: boolean): string[] {
-  const api = useOfficerApi();
-  const fetchAssets =
-    typeof api.fetchAssets === "function" ? api.fetchAssets : undefined;
-  const debouncedQuery = useDebouncedValue(query, DEFAULT_SEARCH_DEBOUNCE_MS);
-  const trimmed = debouncedQuery.trim();
-  const canFetch = enabled && fetchAssets && trimmed !== "";
-  const [codes, setCodes] = useState<string[]>([]);
-  useEffect(() => {
-    if (!canFetch) {
-      return;
-    }
-    const controller = new AbortController();
-    void fetchAssets(
-      {
-        code: trimmed,
-        codeMatch: "starts_with",
-        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-        sort: "code",
-      },
-      controller.signal,
-    )
-      .then((assets) => {
-        setCodes(assets.map((asset) => asset.code));
-      })
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) {
-          console.error(err);
-          setCodes([]);
-        }
-      });
-    return () => {
-      controller.abort();
-    };
-  }, [canFetch, fetchAssets, trimmed]);
-  return canFetch ? codes : [];
 }
 
 function currencyText(currency: string): string {

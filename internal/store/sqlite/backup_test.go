@@ -99,6 +99,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeAccount,
 		Account:    "acc-1",
+		Currency:   "USD",
 		LowerBound: "-250",
 		UpperBound: "500",
 	}); err != nil {
@@ -1312,6 +1313,65 @@ func TestRestoreValidatesDictionaryCodes(t *testing.T) {
 	}
 }
 
+func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
+	scope := backup.Scope{Sections: []backup.Section{backup.SectionRiskLimits}}
+	cases := []struct {
+		name string
+		data backup.Data
+		want []string
+	}{
+		{
+			name: "rate",
+			data: backup.Data{RateLimits: []domain.LimitRate{{
+				Scope: domain.ScopeAccount, Account: "acc-1", Window: time.Minute,
+			}}},
+			want: []string{"rate_limit", `scope "account"`, `account "acc-1"`},
+		},
+		{
+			name: "order-size",
+			data: backup.Data{OrderSizeLimits: []domain.LimitOrderSize{{
+				Scope: domain.ScopeAsset, Asset: "AAPL",
+			}}},
+			want: []string{"order_size_limit", `scope "asset"`, `asset "AAPL"`},
+		},
+		{
+			name: "spot-funds-pnl-bounds",
+			data: backup.Data{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+				Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a", LowerBound: "-1",
+			}}},
+			want: []string{
+				"spot_funds_pnl_bounds_kill_switch",
+				`scope "account_group"`,
+				`account group "desk-a"`,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, rs := newTestStore(t)
+			archive := backup.NewArchive(
+				time.Now().UTC(),
+				"test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)},
+				scope,
+				tc.data,
+			)
+			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: scope, Mode: backup.RestoreModeInsertMissing,
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestBackupRestoreReplaceAllKeepsLiveOnlyAccountInSelectedGroup(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -1683,6 +1743,7 @@ func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-a",
+		Currency:     "USD",
 		LowerBound:   "-1000",
 	}); err != nil {
 		t.Fatalf("dst PutSpotFundsPnlBoundsLimit(desk-a): %v", err)
@@ -1690,6 +1751,7 @@ func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-b",
+		Currency:     "USD",
 		LowerBound:   "-2000",
 	}); err != nil {
 		t.Fatalf("dst PutSpotFundsPnlBoundsLimit(desk-b): %v", err)
@@ -2248,6 +2310,7 @@ func assertRealmsEqualOnPublicIdentity(
 	dstSpotFunds, _ := dst.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if len(srcSpotFunds) != len(dstSpotFunds) || len(dstSpotFunds) != 1 ||
 		dstSpotFunds[0].Account != "acc-1" ||
+		dstSpotFunds[0].Currency != "USD" ||
 		dstSpotFunds[0].LowerBound != "-250" ||
 		dstSpotFunds[0].UpperBound != "500" {
 		t.Fatalf("spot funds pnl bounds differ: %v vs %v", srcSpotFunds, dstSpotFunds)

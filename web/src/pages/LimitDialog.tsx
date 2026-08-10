@@ -44,11 +44,13 @@ import {
   type MissingAccountPolicy,
 } from "@/framework";
 import { Autocomplete } from "@/components/Autocomplete";
+import { AssetCodeSuggestionFailure } from "@/components/AssetCodeSuggestionFailure";
 import { ErrorBanner } from "@/components/PageStates";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
 } from "@/lib/useDebounce";
+import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -287,9 +289,10 @@ export function LimitDialog({
   onSaved: () => void;
 }) {
   const { t } = useTranslation("policies");
+  const { t: tv } = useTranslation("validation");
   const { t: tc } = useTranslation();
   const officerApi = useOfficerApi();
-  const { fetchAccounts, fetchAssets, putLimit } = officerApi;
+  const { fetchAccounts, putLimit } = officerApi;
   const fetchGroups =
     "fetchGroups" in officerApi ? officerApi.fetchGroups : undefined;
   const [form, setForm] = useState<FormState>(() => emptyForm(initialAccount));
@@ -301,21 +304,22 @@ export function LimitDialog({
   const [dialogAccountSuggestions, setDialogAccountSuggestions] = useState<
     Account[]
   >([]);
-  const [dialogAssetSuggestions, setDialogAssetSuggestions] = useState<
-    string[]
-  >([]);
   const [dialogAccountGroupSuggestions, setDialogAccountGroupSuggestions] =
     useState<string[]>([]);
 
   const isEdit = editing !== null;
   const isSpotFundsPnl = form.policy === "spot_funds_pnl_bounds_kill_switch";
+  const currencySuggestionResult = useAssetCodeSuggestions(
+    form.values.currency ?? "",
+    open && isSpotFundsPnl,
+  );
+  const dialogAssetSuggestionResult = useAssetCodeSuggestions(
+    form.asset,
+    open && !isEdit && !isSpotFundsPnl && scopeHasAsset(form.scope),
+  );
   const hasAccountGroupAxis = isSpotFundsPnl && form.scope === "account_group";
   const accountSearch = useDebouncedValue(
     form.account.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
-  const assetSearch = useDebouncedValue(
-    form.asset.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
   const accountGroupSearch = useDebouncedValue(
@@ -372,39 +376,6 @@ export function LimitDialog({
     if (
       !open ||
       isEdit ||
-      isSpotFundsPnl ||
-      !scopeHasAsset(form.scope) ||
-      assetSearch === ""
-    ) {
-      return;
-    }
-    const controller = new AbortController();
-    void fetchAssets(
-      {
-        code: assetSearch,
-        codeMatch: "starts_with",
-        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-        sort: "code",
-      },
-      controller.signal,
-    )
-      .then((assets) => {
-        if (!controller.signal.aborted) {
-          setDialogAssetSuggestions(assets.map((asset) => asset.code));
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setDialogAssetSuggestions([]);
-        }
-      });
-    return () => controller.abort();
-  }, [assetSearch, fetchAssets, form.scope, isEdit, isSpotFundsPnl, open]);
-
-  useEffect(() => {
-    if (
-      !open ||
-      isEdit ||
       !hasAccountGroupAxis ||
       accountGroupSearch === "" ||
       typeof fetchGroups !== "function"
@@ -448,8 +419,8 @@ export function LimitDialog({
     [accountSuggestions, dialogAccountSuggestions],
   );
   const searchableAssetSuggestions = useMemo(
-    () => mergeSuggestions(dialogAssetSuggestions, assetSuggestions),
-    [assetSuggestions, dialogAssetSuggestions],
+    () => mergeSuggestions(dialogAssetSuggestionResult.codes, assetSuggestions),
+    [assetSuggestions, dialogAssetSuggestionResult.codes],
   );
   const searchableAccountGroupSuggestions = useMemo(
     () =>
@@ -508,7 +479,7 @@ export function LimitDialog({
 
   const requestSubmit = () => {
     if (validation) {
-      setError(t(validation.key, validation.values));
+      setError(tv(validation.key, validation.values));
       return;
     }
     if (requiresEngineRebuild) {
@@ -520,7 +491,7 @@ export function LimitDialog({
 
   const submit = async (missingAccount: MissingAccountPolicy = "reject") => {
     if (validation) {
-      setError(t(validation.key, validation.values));
+      setError(tv(validation.key, validation.values));
       setConfirmOpen(false);
       return;
     }
@@ -688,6 +659,9 @@ export function LimitDialog({
                       }
                       clearLabel={tc("filters.clearField")}
                     />
+                    <AssetCodeSuggestionFailure
+                      failed={dialogAssetSuggestionResult.failed}
+                    />
                   </div>
                 )}
               </div>
@@ -706,6 +680,11 @@ export function LimitDialog({
                 const catalogHint = policyFieldHint(t, form.policy, kind);
                 const fieldHint = catalogHint || kindHint(t, form.policy, kind);
                 const isDuration = kind === "window";
+                const isCurrency = kind === "currency";
+                const currencyValidationError =
+                  isCurrency &&
+                  (validation?.key === "limit.pnlCurrencyRequired" ||
+                    validation?.key.startsWith("asset."));
                 return (
                   <div key={kind} className="space-y-1.5">
                     <Label htmlFor={`kind-${kind}`}>{fieldLabel}</Label>
@@ -715,6 +694,32 @@ export function LimitDialog({
                         value={form.values[kind] ?? ""}
                         onChange={(v) => setValue(kind, v)}
                       />
+                    ) : isCurrency ? (
+                      <>
+                        <Autocomplete
+                          id={`kind-${kind}`}
+                          value={form.values[kind] ?? ""}
+                          onChange={(value) => setValue(kind, value)}
+                          suggestions={currencySuggestionResult.codes}
+                          disabled={busy}
+                          placeholder={t("dialog.currencyPlaceholder")}
+                          spellCheck={false}
+                          aria-invalid={currencyValidationError || undefined}
+                          aria-errormessage={
+                            currencyValidationError
+                              ? "kind-currency-error"
+                              : undefined
+                          }
+                          onClear={() => setValue(kind, "")}
+                          clearLabel={tc("filters.clearField")}
+                        />
+                        <AssetCodeSuggestionFailure
+                          failed={currencySuggestionResult.failed}
+                        />
+                        <p className="text-[0.6875rem] text-muted">
+                          {fieldHint}
+                        </p>
+                      </>
                     ) : (
                       <>
                         <NumberStepper
@@ -738,13 +743,18 @@ export function LimitDialog({
               <p className="text-[0.6875rem] text-muted">
                 {form.policy === "rate_limit"
                   ? t("dialog.rateLimitFootnote")
-                  : t("dialog.atLeastOneFootnote")}
+                  : isSpotFundsPnl
+                    ? t("dialog.pnlBoundsFootnote")
+                    : t("dialog.atLeastOneFootnote")}
               </p>
             </div>
 
             {validation && (
-              <p className="text-[0.6875rem] text-[var(--danger)]">
-                {t(validation.key, validation.values)}
+              <p
+                id="kind-currency-error"
+                className="text-[0.6875rem] text-[var(--danger)]"
+              >
+                {tv(validation.key, validation.values)}
               </p>
             )}
             {error && !confirmOpen && (

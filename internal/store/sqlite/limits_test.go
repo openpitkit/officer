@@ -38,6 +38,9 @@ func seedLimitFixtures(t *testing.T) (context.Context, RealmStore) {
 	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
 		t.Fatalf("CreateAsset(AAPL): %v", err)
 	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset(USD): %v", err)
+	}
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
 		t.Fatalf("CreateAccount(acc-1): %v", err)
 	}
@@ -326,7 +329,7 @@ func TestDeleteAccountWithoutForceRejectsSpotFundsPnlBoundsDependent(t *testing.
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
-		Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-100",
+		Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-100",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
@@ -355,7 +358,7 @@ func TestDeleteAccountForceCascadesSpotFundsPnlBoundsDependent(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
-		Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-100",
+		Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-100",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
@@ -537,11 +540,13 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 		{
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
+			Currency:     "USD",
 			LowerBound:   "-1000",
 		},
 		{
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-b",
+			Currency:     "USD",
 			LowerBound:   "-500",
 		},
 	} {
@@ -574,6 +579,196 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 	}
 	if row.SpotFundsPnlBounds.AccountGroup != "desk-a" {
 		t.Fatalf("payload axes = %+v", row.SpotFundsPnlBounds)
+	}
+	if row.SpotFundsPnlBounds.Currency != "USD" {
+		t.Fatalf("payload currency = %q, want USD", row.SpotFundsPnlBounds.Currency)
+	}
+}
+
+func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+	for _, code := range []string{"USD", "EUR"} {
+		if err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
+		t.Fatalf("CreateGroup(desk-a): %v", err)
+	}
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeAsset, Asset: "USD", MaxOrders: 10, Window: time.Minute,
+	}); err != nil {
+		t.Fatalf("PutRateLimit(USD): %v", err)
+	}
+	for _, limit := range []domain.LimitSpotFundsPnlBounds{
+		{
+			Scope: domain.ScopeAccount, Account: "acc-1",
+			Currency: "USD", LowerBound: "-100",
+		},
+		{
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			Currency:     "EUR",
+			LowerBound:   "-100",
+		},
+	} {
+		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", limit.Currency, err)
+		}
+	}
+
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
+		Asset: ExactTextMatcher("USD"),
+		Sort:  SortSpec{Column: "asset"},
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows(asset=USD): %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(
+		got,
+		[]string{
+			"rate_limit|",
+			"spot_funds_pnl_bounds_kill_switch|acc-1",
+		},
+	) {
+		t.Fatalf("asset=USD rows = %v", got)
+	}
+	if page.Rows[1].SpotFundsPnlBounds == nil ||
+		page.Rows[1].SpotFundsPnlBounds.Currency != "USD" {
+		t.Fatalf("asset=USD P&L barrier = %+v", page.Rows[1].SpotFundsPnlBounds)
+	}
+
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
+		Sort: SortSpec{Column: "asset"},
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows sort asset: %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(
+		got,
+		[]string{
+			"rate_limit|acc-1",
+			"rate_limit|acc-2",
+			"order_size_limit|acc-1",
+			"spot_funds_pnl_bounds_kill_switch|",
+			"rate_limit|",
+			"spot_funds_pnl_bounds_kill_switch|acc-1",
+		},
+	) {
+		t.Fatalf("asset order = %v", got)
+	}
+}
+
+func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+		t.Fatalf("CreateAsset(EUR): %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
+		t.Fatalf("CreateGroup(desk-a): %v", err)
+	}
+
+	for _, limit := range []domain.LimitSpotFundsPnlBounds{
+		{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+		{
+			Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
+			Currency: "EUR", LowerBound: "-2",
+		},
+		{
+			Scope: domain.ScopeAccount, Account: "acc-1",
+			Currency: "USD", LowerBound: "-3",
+		},
+	} {
+		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", limit.Scope, err)
+		}
+	}
+
+	limits, err := rs.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(limits) != 3 {
+		t.Fatalf("limits len = %d, want 3: %+v", len(limits), limits)
+	}
+	gotCurrency := make(map[domain.LimitScope]string, len(limits))
+	for _, limit := range limits {
+		gotCurrency[limit.Scope] = limit.Currency
+	}
+	for scope, want := range map[domain.LimitScope]string{
+		domain.ScopeGlobal:       "USD",
+		domain.ScopeAccountGroup: "EUR",
+		domain.ScopeAccount:      "USD",
+	} {
+		if got := gotCurrency[scope]; got != want {
+			t.Fatalf("%s currency = %q, want %q", scope, got, want)
+		}
+	}
+
+	err = rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeGlobal, Currency: "GHOST", LowerBound: "-4",
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit(unknown currency) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestSpotFundsPnlBoundsUpsertOverwritesCurrency(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+		t.Fatalf("CreateAsset(EUR): %v", err)
+	}
+	for _, currency := range []string{"USD", "EUR"} {
+		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Scope:      domain.ScopeAccount,
+			Account:    "acc-1",
+			Currency:   currency,
+			LowerBound: "-100",
+		}); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", currency, err)
+		}
+	}
+
+	limits, err := rs.ListSpotFundsPnlBoundsLimits(ctx, "acc-1")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(limits) != 1 {
+		t.Fatalf("limits len = %d, want 1: %+v", len(limits), limits)
+	}
+	if limits[0].Currency != "EUR" {
+		t.Fatalf("overwritten currency = %q, want EUR", limits[0].Currency)
+	}
+}
+
+func TestDeleteAssetRequiresForceForSpotFundsPnlBoundsCurrencyDependent(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
+	}); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+
+	err := rs.DeleteAsset(ctx, "USD", false)
+	var dependentErr domain.HasDependentsError
+	if !errors.As(err, &dependentErr) {
+		t.Fatalf("DeleteAsset(no force) error = %v, want HasDependentsError", err)
+	}
+	if len(dependentErr.Dependents) != 1 ||
+		dependentErr.Dependents[0] != (domain.DependentCount{
+			Kind: "limit_spot_funds_pnl_bound", Count: 1,
+		}) {
+		t.Fatalf("DeleteAsset(no force) dependents = %+v", dependentErr.Dependents)
+	}
+	if err := rs.DeleteAsset(ctx, "USD", true); err != nil {
+		t.Fatalf("DeleteAsset(force): %v", err)
+	}
+	limits, err := rs.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(limits) != 0 {
+		t.Fatalf("limits after forced asset delete = %+v, want none", limits)
 	}
 }
 

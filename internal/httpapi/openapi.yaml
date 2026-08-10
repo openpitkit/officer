@@ -2483,7 +2483,7 @@ paths:
             type: string
         - name: asset
           in: query
-          description: Filter by exact asset code.
+          description: Filter by exact asset code, including a P&L barrier's currency.
           schema:
             type: string
         - name: scope
@@ -5639,7 +5639,7 @@ components:
     SpotFundsPnlBoundsLimit:
       type: object
       additionalProperties: false
-      required: [scope, account, accountGroup, lowerBound, upperBound]
+      required: [scope, account, accountGroup, currency, lowerBound, upperBound]
       properties:
         scope:
           $ref: "#/components/schemas/SpotFundsPnlBoundsScope"
@@ -5649,6 +5649,9 @@ components:
         accountGroup:
           type: string
           description: Account group code this barrier applies to, or empty when not group-scoped.
+        currency:
+          type: string
+          description: Required asset code that denominates both P&L bounds.
         lowerBound:
           type: string
           description: Lower P&L bound - exact decimal string; empty when unset.
@@ -5732,8 +5735,11 @@ components:
               type: object
               description: >
                 Value payload for kind spot_funds_pnl_bounds_kill_switch.
-              required: [lowerBound, upperBound]
+              required: [currency, lowerBound, upperBound]
               properties:
+                currency:
+                  type: string
+                  description: Required asset code that denominates both P&L bounds.
                 lowerBound:
                   type: string
                   description: Lower P&L bound - exact decimal string; empty when unset.

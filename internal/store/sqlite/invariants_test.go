@@ -517,8 +517,10 @@ func TestLimitPolicyUnique_AllLimitTables(t *testing.T) {
 	_, rs := newTestStore(t)
 	r := rs.(*realmStore)
 
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
-		t.Fatalf("CreateAsset: %v", err)
+	for _, code := range []string{"AAPL", "USD", "EUR"} {
+		if err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
 	}
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
@@ -620,12 +622,14 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit(global): %v", err)
 	}
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeGlobal,
+		Currency:   "EUR",
 		LowerBound: "-200",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit(global, upsert): %v", err)
@@ -638,9 +642,12 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 	for _, limit := range spotFunds {
 		if limit.Scope == domain.ScopeGlobal {
 			globalSpotFunds++
-			if limit.LowerBound != "-200" {
-				t.Fatalf("spot funds upsert did not update lower_bound: got %q, want -200",
-					limit.LowerBound)
+			if limit.LowerBound != "-200" || limit.Currency != "EUR" {
+				t.Fatalf(
+					"spot funds upsert = lower_bound=%q currency=%q, want -200/EUR",
+					limit.LowerBound,
+					limit.Currency,
+				)
 			}
 		}
 	}
@@ -650,8 +657,9 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 	}
 	if _, err := r.rawDB().ExecContext(ctx, `
 INSERT INTO limit_spot_funds_pnl_bound
-       (scope, account_id, account_group_id, lower_bound)
-VALUES (?, NULL, NULL, ?)`, domain.ScopeGlobal, "-300"); err == nil {
+       (scope, account_id, account_group_id, currency_asset_id, lower_bound)
+VALUES (?, NULL, NULL, (SELECT id FROM asset WHERE code = 'USD'), ?)`,
+		domain.ScopeGlobal, "-300"); err == nil {
 		t.Fatal("raw duplicate limit_spot_funds_pnl_bounds global insert succeeded, want unique conflict")
 	} else if !isSQLiteUnique(err) {
 		t.Fatalf("raw duplicate limit_spot_funds_pnl_bounds global insert error = %v, want unique conflict", err)
@@ -686,6 +694,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 	groupLimit := domain.LimitSpotFundsPnlBounds{
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-a",
+		Currency:     "USD",
 		LowerBound:   "-1000",
 	}
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, groupLimit); err != nil {
@@ -694,6 +703,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 	accountLimit := domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeAccount,
 		Account:    "acc-1",
+		Currency:   "USD",
 		UpperBound: "500",
 	}
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, accountLimit); err != nil {
@@ -720,11 +730,13 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 		if row.AccountGroup == "desk-a" &&
 			row.Asset == "" &&
 			row.SpotFundsPnlBounds != nil &&
+			row.SpotFundsPnlBounds.Currency == "USD" &&
 			row.SpotFundsPnlBounds.LowerBound == "-1000" {
 			found = true
 		}
 		if row.Account == "acc-1" &&
 			row.SpotFundsPnlBounds != nil &&
+			row.SpotFundsPnlBounds.Currency == "USD" &&
 			row.SpotFundsPnlBounds.UpperBound == "500" {
 			foundAccount = true
 		}

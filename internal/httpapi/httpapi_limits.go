@@ -135,6 +135,7 @@ func handlePutSpotFundsPnlBoundsLimit(svc Service) http.HandlerFunc {
 			Scope:        req.Scope,
 			Account:      domain.AccountID(req.Account),
 			AccountGroup: req.AccountGroup,
+			Currency:     req.Currency,
 			LowerBound:   req.LowerBound,
 			UpperBound:   req.UpperBound,
 		}

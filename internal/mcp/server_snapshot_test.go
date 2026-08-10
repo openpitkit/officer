@@ -78,8 +78,8 @@ func TestServerToolSnapshot(t *testing.T) {
 		},
 		{
 			name: "get_limits",
-			description: "Return risk barriers, optionally filtered by account. " +
-				"Read-only - no secrets, no order-flow control.",
+			description: "Return risk barriers and P&L-bound currencies, optionally " +
+				"filtered by account. Read-only - no secrets, no order-flow control.",
 		},
 		{
 			name: "get_order",

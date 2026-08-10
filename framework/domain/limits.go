@@ -69,8 +69,10 @@ type LimitOrderSize struct {
 	MaxNotional string
 }
 
-// LimitSpotFundsPnlBounds is the Officer meta-policy barrier for the SDK
-// SpotFunds self-computed account-currency P&L bounds.
+// LimitSpotFundsPnlBounds configures a currency-valued SpotFunds P&L barrier.
+// The engine blocks an account-tier currency mismatch, but skips a nonmatching
+// account-group or global barrier. Bounds are never FX-converted; Officer
+// passes the currency through unchanged.
 type LimitSpotFundsPnlBounds struct {
 	// Scope is the cascade tier this barrier applies to.
 	Scope LimitScope
@@ -78,11 +80,11 @@ type LimitSpotFundsPnlBounds struct {
 	Account AccountID
 	// AccountGroup is required only for the account_group scope.
 	AccountGroup string
-	// LowerBound is the lower account-currency P&L bound (exact decimal); empty
-	// when unset.
+	// Currency is the required asset code that denominates both P&L bounds.
+	Currency string
+	// LowerBound is the lower P&L bound (exact decimal); empty when unset.
 	LowerBound string
-	// UpperBound is the upper account-currency P&L bound (exact decimal); empty
-	// when unset.
+	// UpperBound is the upper P&L bound (exact decimal); empty when unset.
 	UpperBound string
 }
 
@@ -101,7 +103,7 @@ var allowedScopes = map[string][]LimitScope{
 // for the rate policy, the account/asset axes present consistently with the
 // scope, and a positive order count over a positive, at-most-24h window.
 func (l LimitRate) Validate() error {
-	if err := validateScopeAndAxes(
+	if err := ValidateLimitScopeAndAxes(
 		PolicyRateLimit, l.Scope, l.Account, l.Asset, "",
 	); err != nil {
 		return err
@@ -125,7 +127,7 @@ func (l LimitRate) Validate() error {
 // scope for the order-size policy, consistent axes, and at least one positive
 // decimal ceiling.
 func (l LimitOrderSize) Validate() error {
-	if err := validateScopeAndAxes(
+	if err := ValidateLimitScopeAndAxes(
 		PolicyOrderSizeLimit, l.Scope, l.Account, l.Asset, "",
 	); err != nil {
 		return err
@@ -152,10 +154,13 @@ func (l LimitOrderSize) Validate() error {
 // Validate checks the SpotFunds self-computed P&L-bounds barrier against the
 // Officer meta-policy contract.
 func (l LimitSpotFundsPnlBounds) Validate() error {
-	if err := validateScopeAndAxes(
+	if err := ValidateLimitScopeAndAxes(
 		PolicySpotFundsPnlBoundsKillSwitch, l.Scope, l.Account, "", l.AccountGroup,
 	); err != nil {
 		return err
+	}
+	if l.Currency == "" {
+		return fmt.Errorf("currency is required: %w", ErrInvalid)
 	}
 	if l.LowerBound == "" && l.UpperBound == "" {
 		return fmt.Errorf(
@@ -169,10 +174,10 @@ func (l LimitSpotFundsPnlBounds) Validate() error {
 	return nil
 }
 
-// validateScopeAndAxes checks that scope is allowed for policy and that the
+// ValidateLimitScopeAndAxes checks that scope is allowed for policy and that the
 // account/asset/account-group axes are present exactly when the scope carries
 // them.
-func validateScopeAndAxes(
+func ValidateLimitScopeAndAxes(
 	policy string, scope LimitScope, account AccountID, asset string, accountGroup string,
 ) error {
 	allowed, ok := allowedScopes[policy]

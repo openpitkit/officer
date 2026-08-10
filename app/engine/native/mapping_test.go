@@ -468,8 +468,8 @@ func TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError(t *testing.T) {
 	t.Parallel()
 	_, _, _, err := spotFundsPnlBoundsAxes(
 		[]domain.LimitSpotFundsPnlBounds{
-			{Scope: domain.ScopeGlobal, LowerBound: "-1000"},
-			{Scope: domain.ScopeGlobal, LowerBound: "-10"},
+			{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000"},
+			{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
 		},
 		testResolver(),
 	)
@@ -494,16 +494,19 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 		[]domain.LimitSpotFundsPnlBounds{
 			{
 				Scope:      domain.ScopeGlobal,
+				Currency:   "USD",
 				LowerBound: "-1000",
 			},
 			{
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
+				Currency:     "EUR",
 				UpperBound:   "500",
 			},
 			{
 				Scope:      domain.ScopeAccount,
 				Account:    "acc-1",
+				Currency:   "GBP",
 				LowerBound: "-100",
 				UpperBound: "100",
 			},
@@ -528,11 +531,20 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 	if _, ok := globalBarrier.LowerBound.Get(); !ok {
 		t.Fatalf("global lower bound not mapped: %+v", globalBarrier)
 	}
+	if got := globalBarrier.Currency.String(); got != "USD" {
+		t.Fatalf("global currency = %q, want USD", got)
+	}
 	if _, ok := groups[0].Barrier.UpperBound.Get(); !ok {
 		t.Fatalf("account-group upper bound not mapped: %+v", groups[0])
 	}
+	if got := groups[0].Barrier.Currency.String(); got != "EUR" {
+		t.Fatalf("account-group currency = %q, want EUR", got)
+	}
 	if _, ok := accounts[0].Barrier.LowerBound.Get(); !ok {
 		t.Fatalf("P&L bounds not mapped: %+v %+v %+v", globalBarrier, groups, accounts)
+	}
+	if got := accounts[0].Barrier.Currency.String(); got != "GBP" {
+		t.Fatalf("account currency = %q, want GBP", got)
 	}
 }
 
@@ -1318,6 +1330,7 @@ func TestSpotFundsPnlBoundsAxes_UnsupportedScope(t *testing.T) {
 		[]domain.LimitSpotFundsPnlBounds{
 			{
 				Scope:      domain.ScopeAsset,
+				Currency:   "USD",
 				LowerBound: "-100",
 			},
 		},

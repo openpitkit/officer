@@ -253,6 +253,8 @@ export function validateKindValue(
       }
       return null;
     }
+    case "currency":
+      return validateAsset(value);
     default:
       return { key: "kind.unknown", values: { kind } };
   }
@@ -326,6 +328,9 @@ export function validateLimit(limit: Limit): FieldError | null {
       return { key: "limit.orderSizeRequires" };
     }
   } else if (policy === SPOT_FUNDS_PNL_POLICY) {
+    if ((limit.values.currency ?? "").trim() === "") {
+      return { key: "limit.pnlCurrencyRequired" };
+    }
     const hasBound =
       kinds.includes("lower_bound") || kinds.includes("upper_bound");
     if (!hasBound) {

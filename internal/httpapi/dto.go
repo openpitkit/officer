@@ -138,13 +138,13 @@ type orderSizeLimitDTO struct {
 	MaxNotional string `json:"maxNotional"`
 }
 
-// spotFundsPnlBoundsLimitDTO is the wire shape of a SpotFunds self-computed
-// P&L-bounds barrier. P&L is always in the account currency, so the barrier
-// has no separate currency or asset axis.
+// spotFundsPnlBoundsLimitDTO is the wire shape of a currency-valued SpotFunds
+// self-computed P&L-bounds barrier.
 type spotFundsPnlBoundsLimitDTO struct {
 	Scope        string `json:"scope"`
 	Account      string `json:"account"`
 	AccountGroup string `json:"accountGroup"`
+	Currency     string `json:"currency"`
 	LowerBound   string `json:"lowerBound"`
 	UpperBound   string `json:"upperBound"`
 }
@@ -174,6 +174,7 @@ type policyOrderSizeValuesDTO struct {
 // policyPnlBoundsValuesDTO carries the P&L-bounds-specific values of a policy
 // row. The bounds are exact decimal strings; an unset value is empty.
 type policyPnlBoundsValuesDTO struct {
+	Currency   string `json:"currency"`
 	LowerBound string `json:"lowerBound"`
 	UpperBound string `json:"upperBound"`
 }
@@ -333,6 +334,7 @@ func toSpotFundsPnlBoundsLimitDTO(
 		Scope:        l.Scope,
 		Account:      string(l.Account),
 		AccountGroup: l.AccountGroup,
+		Currency:     l.Currency,
 		LowerBound:   l.LowerBound,
 		UpperBound:   l.UpperBound,
 	}
@@ -388,6 +390,7 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 		}
 	case row.SpotFundsPnlBounds != nil:
 		dto.Values.SpotFundsPnlBounds = &policyPnlBoundsValuesDTO{
+			Currency:   row.SpotFundsPnlBounds.Currency,
 			LowerBound: row.SpotFundsPnlBounds.LowerBound,
 			UpperBound: row.SpotFundsPnlBounds.UpperBound,
 		}

@@ -66,7 +66,7 @@ func missingAccountRoutes() []missingAccountRoute {
 			name:   "limits.spot-funds-pnl-bounds",
 			method: http.MethodPut,
 			path:   "/api/v1/limits/spot-funds-pnl-bounds",
-			body:   `{"scope":"account","account":"acc-1","lowerBound":"-100"}`,
+			body:   `{"scope":"account","account":"acc-1","currency":"USD","lowerBound":"-100"}`,
 			ok:     http.StatusOK,
 		},
 		{
@@ -155,6 +155,7 @@ func newMissingAccountService() *fakeService {
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
 				Scope:      domain.ScopeAccount,
 				Account:    "acc-1",
+				Currency:   "USD",
 				LowerBound: "-100",
 			}},
 		},

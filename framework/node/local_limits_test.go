@@ -518,6 +518,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) 
 
 	limit := domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}
 	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.MissingAccountCreate, testCaller)
@@ -546,8 +547,12 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
-	if len(rows) != 2 || rows[0].Action != domain.AuditActionSetLimit {
-		t.Fatalf("want newest set_limit over startup hydrate, got %+v", rows)
+	if len(rows) != 2 || rows[0].Action != domain.AuditActionSetLimit ||
+		!strings.Contains(rows[0].Detail, "currency=USD") {
+		t.Fatalf(
+			"want newest set_limit with currency=USD over startup hydrate, got %+v",
+			rows,
+		)
 	}
 }
 
@@ -567,7 +572,7 @@ func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
 		Code: "pnl_bound_breached", Reason: "later SDK cause",
 	}}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
-		Scope: domain.ScopeGlobal, LowerBound: "-100",
+		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
@@ -612,6 +617,7 @@ func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterConfigure(t *testing.T) 
 
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope: domain.ScopeAccount, Account: "acc-1",
+		Currency:   "USD",
 		LowerBound: "-100",
 	}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, auditErr) {
@@ -674,6 +680,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore(t *testing.
 	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeAccount,
 		Account:    account,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}, domain.MissingAccountCreate, testCaller)
 	if err == nil {
@@ -721,6 +728,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeAccount,
 		Account:    account,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, configureErr) || !errors.Is(err, rebuildErr) {
@@ -746,6 +754,7 @@ func TestLocalNode_NotImplementedSpotFundsConfigureDoesNotRebuild(t *testing.T) 
 	eng.configureErr = fmt.Errorf("configure spot funds: %w", domain.ErrNotImplemented)
 	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, domain.ErrNotImplemented) {
@@ -782,6 +791,7 @@ func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
@@ -841,6 +851,7 @@ func TestLocalNode_PolicyConfigurationBlockReasonIsRestorable(t *testing.T) {
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
@@ -870,6 +881,7 @@ func TestLocalNode_DeleteLastSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *test
 
 	limit := domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
@@ -919,6 +931,7 @@ func TestLocalNode_DeleteSpotFundsPnlBoundsLimitNotImplementedRevertsWithoutRebu
 
 	limit := domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
 		LowerBound: "-100",
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {

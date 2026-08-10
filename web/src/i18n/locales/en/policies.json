@@ -72,9 +72,11 @@
     "accountGroupPlaceholder": "desk-a",
     "asset": "Asset",
     "assetPlaceholder": "AAPL",
+    "currencyPlaceholder": "USD",
     "values": "Values",
     "rateLimitFootnote": "Both max orders and window are required.",
     "atLeastOneFootnote": "At least one value is required.",
+    "pnlBoundsFootnote": "Currency and at least one PnL bound are required.",
     "fxFailSafeNote": "FX fail-safe: an account under PnL control is blocked when a required input is missing, for example an FX quote needed to value realized PnL in the account currency. FX is required only when needed, not for assets already in the account currency and not for accounts outside PnL control.",
     "save": "Save"
   },

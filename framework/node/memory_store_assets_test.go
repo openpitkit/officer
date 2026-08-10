@@ -142,6 +142,12 @@ func (r *memoryRealm) UpdateAsset(
 			limit.Asset = asset.Code
 			r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
 		}
+		for key, limit := range r.spotFundsPnlBoundsLimits {
+			if limit.Currency == oldCode {
+				limit.Currency = asset.Code
+				r.spotFundsPnlBoundsLimits[key] = limit
+			}
+		}
 		for id, order := range r.orders {
 			if order.BaseAsset == oldCode {
 				order.BaseAsset = asset.Code
@@ -182,12 +188,198 @@ func (r *memoryRealm) UpdateAsset(
 	return asset, nil
 }
 
-func (r *memoryRealm) DeleteAsset(_ context.Context, code string, _ bool) error {
+func (r *memoryRealm) DeleteAsset(_ context.Context, code string, force bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, ok := r.assets[code]; !ok {
 		return domain.ErrNotFound
 	}
-	delete(r.assets, code)
+	if dependents := r.assetCurrencyDependents(code); len(dependents) > 0 {
+		return domain.NewHasDependentsError(dependents)
+	}
+	if !force {
+		if dependents := r.assetDependents(code); len(dependents) > 0 {
+			return domain.NewHasDependentsError(dependents)
+		}
+	}
+	r.cascadeDeleteAsset(code)
 	return nil
+}
+
+func (r *memoryRealm) assetCurrencyDependents(code string) []domain.DependentCount {
+	var accounts, groups int
+	for _, account := range r.accounts {
+		if account.Currency == code {
+			accounts++
+		}
+	}
+	for _, group := range r.groups {
+		if group.Currency == code {
+			groups++
+		}
+	}
+	return memoryDependents(
+		[]memoryDependentCount{
+			{kind: "account_currency", count: accounts},
+			{kind: "account_group_currency", count: groups},
+		},
+	)
+}
+
+func (r *memoryRealm) assetDependents(code string) []domain.DependentCount {
+	var balances, adjustments, rateLimits, orderSizeLimits, pnlBounds int
+	var orders, trades, instruments int
+	for _, balance := range r.balances {
+		if balance.Asset == code {
+			balances++
+		}
+	}
+	for _, adjustment := range r.adjustments {
+		if adjustment.Asset == code {
+			adjustments++
+		}
+	}
+	for _, limit := range r.rateLimits {
+		if limit.Asset == code {
+			rateLimits++
+		}
+	}
+	for _, limit := range r.orderSizeLimits {
+		if limit.Asset == code {
+			orderSizeLimits++
+		}
+	}
+	for _, limit := range r.spotFundsPnlBoundsLimits {
+		if limit.Currency == code {
+			pnlBounds++
+		}
+	}
+	for _, order := range r.orders {
+		if order.BaseAsset == code || order.QuoteAsset == code {
+			orders++
+		}
+	}
+	for _, trade := range r.trades {
+		if trade.BaseAsset == code || trade.QuoteAsset == code {
+			trades++
+		}
+	}
+	for _, instrument := range r.instruments {
+		if instrument.BaseAsset == code || instrument.QuoteAsset == code {
+			instruments++
+		}
+	}
+	return memoryDependents(
+		[]memoryDependentCount{
+			{kind: "balance", count: balances},
+			{kind: "adjustment", count: adjustments},
+			{kind: "limit_rate", count: rateLimits},
+			{kind: "limit_order_size", count: orderSizeLimits},
+			{kind: "limit_spot_funds_pnl_bound", count: pnlBounds},
+			{kind: "order_record", count: orders},
+			{kind: "trade", count: trades},
+			{kind: "market_data_instrument", count: instruments},
+		},
+	)
+}
+
+type memoryDependentCount struct {
+	kind  string
+	count int
+}
+
+func memoryDependents(counts []memoryDependentCount) []domain.DependentCount {
+	dependents := make([]domain.DependentCount, 0, len(counts))
+	for _, dependent := range counts {
+		if dependent.count > 0 {
+			dependents = append(dependents, domain.DependentCount{
+				Kind: dependent.kind, Count: dependent.count,
+			})
+		}
+	}
+	return dependents
+}
+
+func (r *memoryRealm) cascadeDeleteAsset(code string) {
+	delete(r.assets, code)
+	for key, balance := range r.balances {
+		if balance.Asset == code {
+			delete(r.balances, key)
+		}
+	}
+	for key, limit := range r.rateLimits {
+		if limit.Asset == code {
+			delete(r.rateLimits, key)
+		}
+	}
+	for key, limit := range r.orderSizeLimits {
+		if limit.Asset == code {
+			delete(r.orderSizeLimits, key)
+		}
+	}
+	for key, limit := range r.spotFundsPnlBoundsLimits {
+		if limit.Currency == code {
+			delete(r.spotFundsPnlBoundsLimits, key)
+		}
+	}
+	r.adjustments = deleteMemoryAssetAdjustments(r.adjustments, code)
+
+	deletedOrders := make(map[domain.ExternalID]struct{})
+	for id, order := range r.orders {
+		if order.BaseAsset == code || order.QuoteAsset == code {
+			delete(r.orders, id)
+			deletedOrders[id] = struct{}{}
+		}
+	}
+	r.trades = deleteMemoryAssetTrades(r.trades, code, deletedOrders)
+	retainedEvents := r.events[:0]
+	for _, event := range r.events {
+		if _, deleted := deletedOrders[event.Order]; deleted {
+			delete(r.attestations, event.ExternalID)
+			continue
+		}
+		retainedEvents = append(retainedEvents, event)
+	}
+	r.events = retainedEvents
+	for reportID, orderID := range r.reports {
+		if _, deleted := deletedOrders[orderID]; deleted {
+			delete(r.reports, reportID)
+		}
+	}
+
+	for key, instrument := range r.instruments {
+		if instrument.BaseAsset == code || instrument.QuoteAsset == code {
+			delete(r.instruments, key)
+			delete(r.quotes, key)
+		}
+	}
+}
+
+func deleteMemoryAssetAdjustments(
+	adjustments []domain.AccountAdjustmentRecord, asset string,
+) []domain.AccountAdjustmentRecord {
+	retained := adjustments[:0]
+	for _, adjustment := range adjustments {
+		if adjustment.Asset != asset {
+			retained = append(retained, adjustment)
+		}
+	}
+	return retained
+}
+
+func deleteMemoryAssetTrades(
+	trades []domain.Trade,
+	asset string,
+	deletedOrders map[domain.ExternalID]struct{},
+) []domain.Trade {
+	retained := trades[:0]
+	for _, trade := range trades {
+		_, deletedOrder := deletedOrders[trade.Order]
+		if trade.BaseAsset != asset && trade.QuoteAsset != asset && !deletedOrder {
+			retained = append(retained, trade)
+		}
+	}
+	return retained
 }
 
 func (r *memoryRealm) CreateAssetClass(_ context.Context, class domain.AssetClass) error {

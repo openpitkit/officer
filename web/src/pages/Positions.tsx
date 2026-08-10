@@ -79,6 +79,7 @@ import type {
 import { useAdjustmentsPage } from "@/api/useAdjustments";
 import { useBalancesPage } from "@/api/useBalances";
 import { Autocomplete } from "@/components/Autocomplete";
+import { AssetCodeSuggestionFailure } from "@/components/AssetCodeSuggestionFailure";
 import { sortDirection } from "@/lib/sortDirection";
 import {
   EmptyState,
@@ -138,6 +139,7 @@ import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
 } from "@/lib/useDebounce";
+import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { operatorOptions } from "@/lib/dataControlLabels";
 import { isDecimalRangeValid } from "@/lib/numberStep";
@@ -460,44 +462,6 @@ function useAccountCodeSuggestions(query: string, enabled: boolean): string[] {
       });
     return () => controller.abort();
   }, [debouncedQuery, enabled, fetchAccounts]);
-
-  return enabled && debouncedQuery !== "" ? suggestions : [];
-}
-
-function useAssetCodeSuggestions(query: string, enabled: boolean): string[] {
-  const { fetchAssets } = useOfficerApi();
-  const debouncedQuery = useDebouncedValue(
-    query.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (!enabled || debouncedQuery === "") {
-      return;
-    }
-    const controller = new AbortController();
-    void fetchAssets(
-      {
-        code: debouncedQuery,
-        codeMatch: "starts_with",
-        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-        sort: "code",
-      },
-      controller.signal,
-    )
-      .then((assets) => {
-        const next = assets.map((asset) => asset.code);
-        setSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
-      })
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) {
-          console.error(err);
-          setSuggestions((prev) => (prev.length === 0 ? prev : []));
-        }
-      });
-    return () => controller.abort();
-  }, [debouncedQuery, enabled, fetchAssets]);
 
   return enabled && debouncedQuery !== "" ? suggestions : [];
 }
@@ -1464,14 +1428,18 @@ function AdjustmentPanel({
     account,
     !lockIdentity,
   );
-  const localAssetSuggestions = useAssetCodeSuggestions(asset, !lockIdentity);
+  const localAssetSuggestionResult = useAssetCodeSuggestions(
+    asset,
+    !lockIdentity,
+  );
   const mergedAccountSuggestions = useMemo(
     () => mergeCodeSuggestions(accountSuggestions, localAccountSuggestions),
     [accountSuggestions, localAccountSuggestions],
   );
   const mergedAssetSuggestions = useMemo(
-    () => mergeCodeSuggestions(assetSuggestions, localAssetSuggestions),
-    [assetSuggestions, localAssetSuggestions],
+    () =>
+      mergeCodeSuggestions(assetSuggestions, localAssetSuggestionResult.codes),
+    [assetSuggestions, localAssetSuggestionResult.codes],
   );
 
   const trimAccount = account.trim();
@@ -1705,6 +1673,9 @@ function AdjustmentPanel({
               onChange={setAsset}
               onClear={() => setAsset("")}
               clearLabel={t("common:filters.clearField")}
+            />
+            <AssetCodeSuggestionFailure
+              failed={localAssetSuggestionResult.failed}
             />
           </div>
         </div>
@@ -2686,14 +2657,15 @@ function AdjustDialog({
   const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
     useState(false);
   const localAccountSuggestions = useAccountCodeSuggestions(account, open);
-  const localAssetSuggestions = useAssetCodeSuggestions(asset, open);
+  const localAssetSuggestionResult = useAssetCodeSuggestions(asset, open);
   const mergedAccountSuggestions = useMemo(
     () => mergeCodeSuggestions(accountSuggestions, localAccountSuggestions),
     [accountSuggestions, localAccountSuggestions],
   );
   const mergedAssetSuggestions = useMemo(
-    () => mergeCodeSuggestions(assetSuggestions, localAssetSuggestions),
-    [assetSuggestions, localAssetSuggestions],
+    () =>
+      mergeCodeSuggestions(assetSuggestions, localAssetSuggestionResult.codes),
+    [assetSuggestions, localAssetSuggestionResult.codes],
   );
 
   // Reseed whenever the dialog opens.
@@ -2912,6 +2884,9 @@ function AdjustDialog({
                   disabled={busy}
                   onClear={() => setAsset("")}
                   clearLabel={t("common:filters.clearField")}
+                />
+                <AssetCodeSuggestionFailure
+                  failed={localAssetSuggestionResult.failed}
                 />
               </div>
             </div>

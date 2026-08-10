@@ -1326,16 +1326,19 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 	}{
 		{"global", domain.LimitSpotFundsPnlBounds{
 			Scope:      domain.ScopeGlobal,
+			Currency:   "USD",
 			LowerBound: "-1000",
 		}},
 		{"account_group", domain.LimitSpotFundsPnlBounds{
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
+			Currency:     "USD",
 			UpperBound:   "500",
 		}},
 		{"account", domain.LimitSpotFundsPnlBounds{
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
+			Currency:   "USD",
 			LowerBound: "-100",
 			UpperBound: "100",
 		}},
@@ -1355,21 +1358,39 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 	}{
 		{"missing group", domain.LimitSpotFundsPnlBounds{
 			Scope:      domain.ScopeAccountGroup,
+			Currency:   "USD",
 			LowerBound: "-1",
 		}},
 		{"account group on account rejected", domain.LimitSpotFundsPnlBounds{
 			Scope:        domain.ScopeAccount,
 			Account:      "acc-1",
 			AccountGroup: "desk-a",
+			Currency:     "USD",
 			LowerBound:   "-1",
 		}},
 		{"neither bound", domain.LimitSpotFundsPnlBounds{
-			Scope: domain.ScopeGlobal,
+			Scope:    domain.ScopeGlobal,
+			Currency: "USD",
 		}},
 		{"lower greater than upper", domain.LimitSpotFundsPnlBounds{
 			Scope:      domain.ScopeGlobal,
+			Currency:   "USD",
 			LowerBound: "10",
 			UpperBound: "1",
+		}},
+		{"global missing currency", domain.LimitSpotFundsPnlBounds{
+			Scope:      domain.ScopeGlobal,
+			LowerBound: "-1",
+		}},
+		{"account group missing currency", domain.LimitSpotFundsPnlBounds{
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			LowerBound:   "-1",
+		}},
+		{"account missing currency", domain.LimitSpotFundsPnlBounds{
+			Scope:      domain.ScopeAccount,
+			Account:    "acc-1",
+			LowerBound: "-1",
 		}},
 	}
 	for _, tc := range bad {

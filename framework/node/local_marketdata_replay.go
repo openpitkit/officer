@@ -52,11 +52,12 @@ type marketDataReplayCandidate struct {
 }
 
 type marketDataTransitionSink struct {
-	mu      sync.Mutex
-	route   marketDataTransitionRoute
-	current marketdata.Sink
-	next    marketdata.Sink
-	pending []marketDataTransitionOperation
+	mu            sync.Mutex
+	route         marketDataTransitionRoute
+	current       marketdata.Sink
+	next          marketdata.Sink
+	excludedAsset string
+	pending       []marketDataTransitionOperation
 }
 
 type marketDataTransitionOperation struct {
@@ -94,9 +95,11 @@ func (s *marketDataTransitionSink) Push(update marketdata.QuoteUpdate) error {
 		return s.next.Push(update)
 	default:
 		err := s.current.Push(update)
-		s.pending = append(s.pending, marketDataTransitionOperation{
-			kind: marketDataTransitionPush, update: update,
-		})
+		if !s.excludesAsset(update.Base, update.Quote) {
+			s.pending = append(s.pending, marketDataTransitionOperation{
+				kind: marketDataTransitionPush, update: update,
+			})
+		}
 		return err
 	}
 }
@@ -114,11 +117,40 @@ func (s *marketDataTransitionSink) Clear(base, quote string) error {
 		return clearMarketDataQuote(s.next, base, quote)
 	default:
 		err := clearMarketDataQuote(s.current, base, quote)
-		s.pending = append(s.pending, marketDataTransitionOperation{
-			kind: marketDataTransitionClear, base: base, quote: quote,
-		})
+		if !s.excludesAsset(base, quote) {
+			s.pending = append(s.pending, marketDataTransitionOperation{
+				kind: marketDataTransitionClear, base: base, quote: quote,
+			})
+		}
 		return err
 	}
+}
+
+func (s *marketDataTransitionSink) excludeAsset(asset string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.excludedAsset = asset
+	pending := s.pending[:0]
+	for _, operation := range s.pending {
+		if !s.excludesOperation(operation) {
+			pending = append(pending, operation)
+		}
+	}
+	s.pending = pending
+}
+
+func (s *marketDataTransitionSink) excludesAsset(base, quote string) bool {
+	return s.excludedAsset != "" &&
+		(base == s.excludedAsset || quote == s.excludedAsset)
+}
+
+func (s *marketDataTransitionSink) excludesOperation(
+	operation marketDataTransitionOperation,
+) bool {
+	if operation.kind == marketDataTransitionClear {
+		return s.excludesAsset(operation.base, operation.quote)
+	}
+	return s.excludesAsset(operation.update.Base, operation.update.Quote)
 }
 
 func clearMarketDataQuote(sink marketdata.Sink, base, quote string) error {
@@ -252,6 +284,12 @@ func (n *localNode) cancelMarketDataTransition(transition *marketDataTransitionS
 func (n *localNode) replayMarketDataInto(
 	ctx context.Context, next engine.Engine,
 ) error {
+	return n.replayMarketDataWithoutAssetInto(ctx, next, "")
+}
+
+func (n *localNode) replayMarketDataWithoutAssetInto(
+	ctx context.Context, next engine.Engine, asset string,
+) error {
 	instances, err := n.realm.ListMarketDataInstances(ctx)
 	if err != nil {
 		return fmt.Errorf("list market-data instances: %w", err)
@@ -268,6 +306,10 @@ func (n *localNode) replayMarketDataInto(
 			)
 		}
 		for _, instrument := range instruments {
+			if asset != "" &&
+				(instrument.BaseAsset == asset || instrument.QuoteAsset == asset) {
+				continue
+			}
 			configuredPairs[marketDataReplayPairKey{
 				base: instrument.BaseAsset, quote: instrument.QuoteAsset,
 			}] = struct{}{}

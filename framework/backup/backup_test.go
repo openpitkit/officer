@@ -346,11 +346,13 @@ func fixtureData() Data {
 			{
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "grp-1",
+				Currency:     "USD",
 				LowerBound:   "-100",
 			},
 			{
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "grp-2",
+				Currency:     "USD",
 				LowerBound:   "-200",
 			},
 		},

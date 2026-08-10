@@ -345,7 +345,7 @@ type Data struct {
 	RateLimits []domain.LimitRate `json:"rateLimits,omitempty"`
 	// OrderSizeLimits are order-size barriers, linked by scope+codes.
 	OrderSizeLimits []domain.LimitOrderSize `json:"orderSizeLimits,omitempty"`
-	// SpotFundsPnlBoundsLimits are SpotFunds self-computed P&L-bounds barriers,
+	// SpotFundsPnlBoundsLimits are currency-valued SpotFunds P&L-bounds barriers,
 	// linked by scope+codes.
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds `json:"spotFundsPnlBoundsLimits,omitempty"`
 	// Adjustments are spot-funds adjustment records (by external id).

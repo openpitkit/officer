@@ -502,9 +502,9 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 	return broker, assets, accountAssets, nil
 }
 
-// spotFundsPnlBoundsAxes maps SpotFunds self-computed account-currency P&L
-// bounds onto the runtime Configure axes. Every returned slice is non-nil so
-// Configure replaces all axes wholesale.
+// spotFundsPnlBoundsAxes maps currency-valued SpotFunds P&L bounds onto the
+// runtime Configure axes. Every returned slice is non-nil so Configure replaces
+// all axes wholesale.
 func spotFundsPnlBoundsAxes(
 	limits []domain.LimitSpotFundsPnlBounds,
 	res idResolver,
@@ -750,6 +750,10 @@ func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error
 func spotFundsPnlBoundsBarrier(
 	limit domain.LimitSpotFundsPnlBounds,
 ) (policies.SpotFundsPnlBoundsBarrier, error) {
+	currency, err := newAsset(limit.Currency)
+	if err != nil {
+		return policies.SpotFundsPnlBoundsBarrier{}, err
+	}
 	lower, upper, err := pnlBoundOptions(
 		limit.LowerBound,
 		limit.UpperBound,
@@ -759,6 +763,7 @@ func spotFundsPnlBoundsBarrier(
 		return policies.SpotFundsPnlBoundsBarrier{}, err
 	}
 	return policies.SpotFundsPnlBoundsBarrier{
+		Currency:   currency,
 		LowerBound: lower,
 		UpperBound: upper,
 	}, nil

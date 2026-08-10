@@ -29,6 +29,7 @@ import { SidebarProvider } from "@/components/SidebarContext";
 import { renderWithApi as render } from "@/test/apiClient";
 import { ApiError } from "@/framework";
 import i18n from "@/i18n";
+import { LimitDialog } from "@/pages/LimitDialog";
 import { Limits } from "@/pages/Limits";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -45,6 +46,7 @@ vi.mock("@/components/ui/select", async () => {
   interface SelectContextValue {
     value: string;
     onValueChange: (value: string) => void;
+    disabled: boolean;
     open: boolean;
     toggleOpen: () => void;
     close: () => void;
@@ -55,6 +57,7 @@ vi.mock("@/components/ui/select", async () => {
     onValueChange: (value) => {
       void value;
     },
+    disabled: false,
     open: false,
     toggleOpen: () => {},
     close: () => {},
@@ -63,10 +66,12 @@ vi.mock("@/components/ui/select", async () => {
   function Select({
     value,
     onValueChange,
+    disabled = false,
     children,
   }: {
     value: string;
     onValueChange: (value: string) => void;
+    disabled?: boolean;
     children?: ReactNode;
   }) {
     const [open, setOpen] = React.useState(false);
@@ -75,6 +80,7 @@ vi.mock("@/components/ui/select", async () => {
         value={{
           value,
           onValueChange,
+          disabled,
           open,
           toggleOpen: () => setOpen((current) => !current),
           close: () => setOpen(false),
@@ -90,15 +96,18 @@ vi.mock("@/components/ui/select", async () => {
     onClick,
     ...props
   }: ButtonHTMLAttributes<HTMLButtonElement>) {
-    const { toggleOpen } = React.useContext(SelectContext);
+    const { disabled, toggleOpen } = React.useContext(SelectContext);
     return (
       <button
         type="button"
         role="combobox"
         {...props}
+        disabled={disabled || props.disabled}
         onClick={(event) => {
           onClick?.(event);
-          toggleOpen();
+          if (!disabled) {
+            toggleOpen();
+          }
         }}
       >
         {children}
@@ -202,6 +211,26 @@ function renderLimits(
   );
 }
 
+function renderLimitDialog(editing: Limit) {
+  render(
+    <I18nextProvider i18n={i18n}>
+      <LimitDialog
+        open
+        editing={editing}
+        onOpenChange={() => {}}
+        onSaved={() => {}}
+      />
+    </I18nextProvider>,
+    {
+      api: {
+        fetchAccounts: fetchAccountsMock,
+        fetchAssets: fetchAssetsMock,
+        putLimit: putLimitMock,
+      },
+    },
+  );
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
   await i18n.changeLanguage("en");
@@ -222,7 +251,7 @@ describe("Limits identity filters", () => {
           account: "",
           accountGroup: "desk-a",
           asset: "",
-          values: { lower_bound: "-1000" },
+          values: { currency: "USD", lower_bound: "-1000" },
         },
       ]),
     );
@@ -231,6 +260,7 @@ describe("Limits identity filters", () => {
 
     expect(screen.getByText("PnL Kill Switch")).toBeInTheDocument();
     expect(screen.getByText("desk-a")).toBeInTheDocument();
+    expect(screen.getByText("USD")).toBeInTheDocument();
   });
 
   it("accepts the self-computed PnL policy filter from the URL", () => {
@@ -438,7 +468,7 @@ describe("LimitDialog framework controls", () => {
     expect(accountGroup).toHaveValue("");
   });
 
-  it("omits the account currency from the PnL payload", async () => {
+  it("requires an explicit PnL barrier currency without prefilling the account currency", async () => {
     const user = userEvent.setup();
     fetchAccountsMock.mockResolvedValue([
       { code: "acc-usd", effectiveCurrency: "USD" },
@@ -451,6 +481,24 @@ describe("LimitDialog framework controls", () => {
     await user.click(
       within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
     );
+    const currencyValidationMessage = within(dialog).getByText(
+      "spot_funds_pnl_bounds_kill_switch requires currency",
+    );
+    const currencyWithValidation = within(dialog).getByLabelText("currency");
+    expect(currencyValidationMessage).toHaveAttribute(
+      "id",
+      "kind-currency-error",
+    );
+    expect(currencyWithValidation).toHaveAttribute("aria-invalid", "true");
+    expect(currencyWithValidation).toHaveAttribute(
+      "aria-errormessage",
+      currencyValidationMessage.id,
+    );
+    expect(
+      within(dialog).getByText(
+        "Currency and at least one PnL bound are required.",
+      ),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getAllByRole("combobox")[1]);
     await user.click(within(dialog).getByRole("option", { name: "Account" }));
 
@@ -464,6 +512,9 @@ describe("LimitDialog framework controls", () => {
     );
     await user.click(await screen.findByRole("option", { name: "acc-usd" }));
 
+    const currency = within(dialog).getByLabelText("currency");
+    expect(currency).toHaveValue("");
+    await user.type(currency, "EUR");
     await user.type(within(dialog).getByLabelText("lower bound"), "-100");
 
     await user.click(
@@ -480,11 +531,33 @@ describe("LimitDialog framework controls", () => {
           account: "acc-usd",
           accountGroup: "",
           asset: "",
-          values: { lower_bound: "-100" },
+          values: { currency: "EUR", lower_bound: "-100" },
         },
         "reject",
       ),
     );
+  });
+
+  it("blocks a malformed PnL currency before submitting the form", async () => {
+    const user = userEvent.setup();
+    renderLimits();
+
+    await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
+    );
+    await user.type(within(dialog).getByLabelText("currency"), "US D");
+    await user.type(within(dialog).getByLabelText("lower bound"), "-100");
+
+    expect(
+      within(dialog).getByText("Asset must not contain whitespace"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    ).toBeDisabled();
+    expect(putLimitMock).not.toHaveBeenCalled();
   });
 
   it("offers to create a missing account and resubmits with missingAccount=create", async () => {
@@ -505,7 +578,7 @@ describe("LimitDialog framework controls", () => {
       account: "acc-new",
       accountGroup: "",
       asset: "",
-      values: { lower_bound: "-100" },
+      values: { currency: "USD", lower_bound: "-100" },
     });
     renderLimits();
 
@@ -520,6 +593,7 @@ describe("LimitDialog framework controls", () => {
 
     const account = within(dialog).getByLabelText("Account");
     await user.type(account, "acc-new");
+    await user.type(within(dialog).getByLabelText("currency"), "USD");
     await user.type(within(dialog).getByLabelText("lower bound"), "-100");
 
     await user.click(
@@ -550,9 +624,65 @@ describe("LimitDialog framework controls", () => {
         account: "acc-new",
         accountGroup: "",
         asset: "",
-        values: { lower_bound: "-100" },
+        values: { currency: "USD", lower_bound: "-100" },
       },
       "create",
     );
+  });
+
+  it("keeps the PnL currency editable while account barrier identity stays locked", async () => {
+    renderLimitDialog({
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      scope: "account",
+      account: "acc-usd",
+      accountGroup: "",
+      asset: "",
+      values: { currency: "USD", lower_bound: "-100" },
+    });
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).getAllByRole("combobox")[1]).toBeDisabled();
+    expect(within(dialog).getByLabelText("Account")).toBeDisabled();
+    expect(within(dialog).getByLabelText("currency")).toBeEnabled();
+  });
+
+  it("keeps the PnL currency editable while account-group identity stays locked", async () => {
+    renderLimitDialog({
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      scope: "account_group",
+      account: "",
+      accountGroup: "desk-a",
+      asset: "",
+      values: { currency: "USD", lower_bound: "-100" },
+    });
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).getAllByRole("combobox")[1]).toBeDisabled();
+    expect(within(dialog).getByLabelText("Account group")).toBeDisabled();
+    expect(within(dialog).getByLabelText("currency")).toBeEnabled();
+  });
+
+  it("shows the server validation error for an unknown PnL currency", async () => {
+    const user = userEvent.setup();
+    putLimitMock.mockRejectedValueOnce(
+      new ApiError("currency XYZ is unknown", "validation", 422),
+    );
+    renderLimits();
+
+    await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
+    );
+    await user.type(within(dialog).getByLabelText("currency"), "XYZ");
+    await user.type(within(dialog).getByLabelText("lower bound"), "-100");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
+
+    expect(
+      await screen.findByText("currency XYZ is unknown"),
+    ).toBeInTheDocument();
   });
 });

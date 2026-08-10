@@ -240,6 +240,7 @@ export interface SpotFundsPnlBoundsLimit {
   scope: string;
   account: string;
   accountGroup: string;
+  currency: string;
   lowerBound: string;
   upperBound: string;
 }
@@ -281,8 +282,9 @@ export interface PolicyOrderSizeValues {
   maxNotional: string;
 }
 
-/** P&L-bounds barrier values as exact decimal strings (empty when unset). */
+/** P&L-bounds values: an asset code and optional exact decimal bounds. */
 export interface PolicyPnlBoundsValues {
+  currency: string;
   lowerBound: string;
   upperBound: string;
 }

@@ -22,6 +22,7 @@
       "max_notional": "positive decimal"
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": "asset code",
       "lower_bound": "decimal",
       "upper_bound": "decimal"
     }
@@ -62,6 +63,10 @@
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "currency",
+        "hint": "asset code, e.g. USD"
+      },
       "lower_bound": {
         "label": "lower bound",
         "hint": "decimal, e.g. -1000"

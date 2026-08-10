@@ -28,19 +28,65 @@ describe("validateLimit", () => {
         account: "",
         accountGroup: "desk-a",
         asset: "",
-        values: { lower_bound: "-1000" },
+        values: { currency: "USD", lower_bound: "-1000" },
       }),
     ).toBeNull();
   });
 
-  it("does not require account currency for self-computed PnL limits", () => {
+  it("requires a PnL barrier currency independently of the account", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
         scope: "global",
         account: "",
         asset: "",
-        values: { upper_bound: "500" },
+        values: { currency: "USD", upper_bound: "500" },
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects an empty PnL barrier currency", () => {
+    expect(
+      validateLimit({
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        scope: "global",
+        account: "",
+        asset: "",
+        values: { currency: "", lower_bound: "-1000" },
+      }),
+    ).toEqual({ key: "limit.pnlCurrencyRequired" });
+  });
+
+  it("requires a PnL bound when the currency is present", () => {
+    expect(
+      validateLimit({
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        scope: "global",
+        account: "",
+        asset: "",
+        values: { currency: "USD" },
+      }),
+    ).toEqual({ key: "limit.pnlRequires" });
+  });
+
+  it("applies asset format validation to PnL currency values", () => {
+    expect(
+      validateLimit({
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        scope: "global",
+        account: "",
+        asset: "",
+        values: { currency: "US D", lower_bound: "-1000" },
+      }),
+    ).toEqual({ key: "asset.whitespace" });
+
+    expect(
+      validateLimit({
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        scope: "global",
+        account: "",
+        asset: "",
+        values: { currency: "USD", lower_bound: "-1000" },
       }),
     ).toBeNull();
   });

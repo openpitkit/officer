@@ -19,8 +19,10 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
@@ -234,6 +236,12 @@ func (r *memoryRealm) ListSpotFundsPnlBoundsLimits(
 func (r *memoryRealm) PutSpotFundsPnlBoundsLimit(
 	_ context.Context, limit domain.LimitSpotFundsPnlBounds,
 ) error {
+	if err := limit.Validate(); err != nil {
+		return err
+	}
+	if _, ok := r.assets[limit.Currency]; !ok {
+		return domain.ErrInvalid
+	}
 	r.spotFundsPnlBoundsLimits[spotFundsPnlBoundsLimitKey(
 		limit.Scope,
 		limit.Account,
@@ -254,4 +262,65 @@ func (r *memoryRealm) DeleteSpotFundsPnlBoundsLimit(
 	}
 	delete(r.spotFundsPnlBoundsLimits, key)
 	return nil
+}
+
+func TestMemoryRealmSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	realm := newMemoryStore("limits.db").realm
+	for _, code := range []string{"USD", "EUR"} {
+		if err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
+	}
+	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
+		t.Fatalf("CreateGroup(desk-a): %v", err)
+	}
+	if _, err := realm.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount(acc-1): %v", err)
+	}
+
+	for _, limit := range []domain.LimitSpotFundsPnlBounds{
+		{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+		{
+			Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
+			Currency: "EUR", LowerBound: "-2",
+		},
+		{
+			Scope: domain.ScopeAccount, Account: "acc-1",
+			Currency: "USD", LowerBound: "-3",
+		},
+	} {
+		if err := realm.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", limit.Scope, err)
+		}
+	}
+
+	limits, err := realm.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(limits) != 3 {
+		t.Fatalf("limits len = %d, want 3: %+v", len(limits), limits)
+	}
+	gotCurrency := make(map[domain.LimitScope]string, len(limits))
+	for _, limit := range limits {
+		gotCurrency[limit.Scope] = limit.Currency
+	}
+	for scope, want := range map[domain.LimitScope]string{
+		domain.ScopeGlobal:       "USD",
+		domain.ScopeAccountGroup: "EUR",
+		domain.ScopeAccount:      "USD",
+	} {
+		if got := gotCurrency[scope]; got != want {
+			t.Fatalf("%s currency = %q, want %q", scope, got, want)
+		}
+	}
+
+	err = realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeGlobal, Currency: "GHOST", LowerBound: "-4",
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit(unknown currency) error = %v, want ErrInvalid", err)
+	}
 }

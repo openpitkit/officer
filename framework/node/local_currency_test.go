@@ -105,6 +105,12 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 	}); err != nil {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
+	if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeAccount, Account: accountID,
+		Currency: "USD", LowerBound: "-1",
+	}); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
 	order, err := n.realm.CreateOrder(ctx, domain.Order{
 		Account:     accountID,
 		Source:      domain.SourceAPI,
@@ -216,6 +222,17 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 	}
 	if len(rebuilt.Balances) != 1 || rebuilt.Balances[0].Asset != "USDX" {
 		t.Fatalf("rebuilt snapshot balances = %+v, want USDX", rebuilt.Balances)
+	}
+	if len(rebuilt.SpotFundsPnlBoundsLimits) != 1 ||
+		rebuilt.SpotFundsPnlBoundsLimits[0].Currency != "USDX" {
+		t.Fatalf(
+			"rebuilt snapshot SpotFunds P&L bounds = %+v, want currency USDX",
+			rebuilt.SpotFundsPnlBoundsLimits,
+		)
+	}
+	limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, accountID)
+	if err != nil || len(limits) != 1 || limits[0].Currency != "USDX" {
+		t.Fatalf("SpotFunds P&L bounds after rename = %+v, err=%v", limits, err)
 	}
 	replayed := false
 	for _, update := range sink.updates {
@@ -662,7 +679,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		if err := st.PutSpotFundsPnlBoundsLimit(
 			ctx,
 			domain.LimitSpotFundsPnlBounds{
-				Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-10",
+				Scope: domain.ScopeAccount, Account: "acc-1", Currency: "EUR", LowerBound: "-10",
 			},
 		); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
@@ -700,6 +717,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 			ctx,
 			domain.LimitSpotFundsPnlBounds{
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
+				Currency:   "EUR",
 				UpperBound: "10",
 			},
 		); err != nil {
@@ -727,13 +745,14 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 			name: "group scope on default change",
 			limit: domain.LimitSpotFundsPnlBounds{
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
+				Currency:   "USD",
 				LowerBound: "-10",
 			},
 		},
 		{
 			name: "global scope on default change",
 			limit: domain.LimitSpotFundsPnlBounds{
-				Scope: domain.ScopeGlobal, UpperBound: "10",
+				Scope: domain.ScopeGlobal, Currency: "USD", UpperBound: "10",
 			},
 		},
 	} {

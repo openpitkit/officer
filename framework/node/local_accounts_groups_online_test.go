@@ -394,13 +394,13 @@ func TestLocalNode_ForcedDeleteGroupAuditsDetachedAccounts(t *testing.T) {
 		}
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
-		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", LowerBound: "-10",
+		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-10",
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{Scope: domain.ScopeGlobal, LowerBound: "-20"},
-		{Scope: domain.ScopeAccount, Account: "member-a", UpperBound: "20"},
+		{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-20"},
+		{Scope: domain.ScopeAccount, Account: "member-a", Currency: "USD", UpperBound: "20"},
 	} {
 		if _, err := n.PutSpotFundsPnlBoundsLimit(
 			ctx, limit, domain.MissingAccountCreate, testCaller,
@@ -481,7 +481,7 @@ func TestLocalNode_DeleteGroupBuildFailureLeavesStoreAndEngineUntouched(t *testi
 		t.Fatalf("CreateGroup: %v", err)
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
-		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", UpperBound: "10",
+		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", UpperBound: "10",
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}

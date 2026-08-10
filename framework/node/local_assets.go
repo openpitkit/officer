@@ -21,8 +21,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
 
@@ -219,28 +221,122 @@ func updateAssetDetail(previous string, next string) string {
 	return fmt.Sprintf("update asset %s -> %s", previous, next)
 }
 
-// DeleteAsset removes the asset, cascading its dependent rows when force is set,
-// and audits the action. The asset is store-only, so there is no engine
-// side-effect.
+// DeleteAsset removes the asset and audits the action. A forced delete rebuilds
+// the engine without the rows that the store cascades.
 func (n *localNode) DeleteAsset(
 	ctx context.Context, code string, force bool, caller domain.Caller,
 ) error {
-	if err := n.beginMutation(); err != nil {
+	if !force {
+		if err := n.beginMutation(); err != nil {
+			return err
+		}
+		defer n.endMutation()
+
+		if err := n.realm.DeleteAsset(ctx, code, false); err != nil {
+			return fmt.Errorf("delete asset: %w", err)
+		}
+		if err := n.audit(ctx, caller, store.AuditEntry{
+			Action: domain.AuditActionDeleteAsset,
+			Asset:  code,
+			Detail: fmt.Sprintf("delete asset %s", code),
+		}); err != nil {
+			return fmt.Errorf("audit delete asset: %w", err)
+		}
+		return nil
+	}
+
+	if err := n.beginEngineRestart(); err != nil {
 		return err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
-	if err := n.realm.DeleteAsset(ctx, code, force); err != nil {
-		return fmt.Errorf("delete asset: %w", err)
+	_, ok, err := n.realm.GetAsset(ctx, code)
+	if err != nil {
+		return fmt.Errorf("read asset for delete: %w", err)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
+	if !ok {
+		return fmt.Errorf("asset %q: %w", code, domain.ErrNotFound)
+	}
+
+	snapshot, _, err := n.loadSnapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("load snapshot for asset delete: %w", err)
+	}
+	snapshot = snapshotWithoutAsset(snapshot, code)
+	previousEngine := n.currentEngine()
+	next, err := n.build(snapshot)
+	if err != nil {
+		return fmt.Errorf("build engine for asset delete: %w", err)
+	}
+	if next == nil {
+		return fmt.Errorf("build engine for asset delete returned nil")
+	}
+	if next == previousEngine {
+		return fmt.Errorf("build engine for asset delete returned current engine")
+	}
+	transition, err := n.beginMarketDataTransition(next)
+	if err != nil {
+		next.Stop()
+		return fmt.Errorf("prepare asset delete market data: %w", err)
+	}
+	transition.excludeAsset(code)
+	if err := n.replayMarketDataWithoutAssetInto(ctx, next, code); err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return fmt.Errorf("replay market data for asset delete: %w", err)
+	}
+
+	durableCtx := context.WithoutCancel(ctx)
+	prev, err := n.commitMarketDataTransitionWithHook(transition, next, func() error {
+		if err := n.realm.DeleteAsset(durableCtx, code, true); err != nil {
+			return fmt.Errorf("delete asset: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return fmt.Errorf("commit asset delete engine transition: %w", err)
+	}
+	if prev != nil && prev != next {
+		prev.Stop()
+	}
+	if err := n.mirrorSeedAccountBlocks(durableCtx, next); err != nil {
+		return n.fatalPostEngineAuditByCode(
+			"mirror asset delete seed blocks", "asset", code,
+			fmt.Errorf("mirror asset delete seed blocks: %w", err),
+		)
+	}
+	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action: domain.AuditActionDeleteAsset,
 		Asset:  code,
 		Detail: fmt.Sprintf("delete asset %s", code),
 	}); err != nil {
-		return fmt.Errorf("audit delete asset: %w", err)
+		return n.fatalPostEngineAuditByCode(
+			"audit delete asset", "asset", code,
+			fmt.Errorf("audit delete asset: %w", err),
+		)
 	}
 	return nil
+}
+
+func snapshotWithoutAsset(snapshot engine.Snapshot, asset string) engine.Snapshot {
+	snapshot.Balances = slices.DeleteFunc(snapshot.Balances, func(row domain.Balance) bool {
+		return row.Asset == asset
+	})
+	snapshot.RateLimits = slices.DeleteFunc(
+		snapshot.RateLimits,
+		func(row domain.LimitRate) bool { return row.Asset == asset },
+	)
+	snapshot.OrderSizeLimits = slices.DeleteFunc(
+		snapshot.OrderSizeLimits,
+		func(row domain.LimitOrderSize) bool { return row.Asset == asset },
+	)
+	snapshot.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
+		snapshot.SpotFundsPnlBoundsLimits,
+		func(row domain.LimitSpotFundsPnlBounds) bool { return row.Currency == asset },
+	)
+	return snapshot
 }
 
 // ListAssetClasses returns every persisted asset class.

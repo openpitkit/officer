@@ -103,6 +103,7 @@ const createAdjustmentMock = vi.fn();
 const setBalanceRealizedPnlMock = vi.fn();
 const exportBusinessCsvMock = vi.fn();
 const fetchAdjustmentsMock = vi.fn();
+const fetchAssetsMock = vi.fn();
 
 function lastBalanceFilters(): BalanceListFilters | undefined {
   const calls = useBalancesMock.mock.calls;
@@ -215,9 +216,7 @@ function renderPositions(initialEntry = "/positions") {
         exportBusinessCsv: exportBusinessCsvMock,
         fetchAccounts: async () => [account],
         fetchAdjustmentsPage: fetchAdjustmentsMock,
-        fetchAssets: async () => [
-          { code: balance.asset, title: balance.asset, assetClass: "" },
-        ],
+        fetchAssets: fetchAssetsMock,
         fetchGroups: async () => [group],
       },
     },
@@ -255,6 +254,9 @@ beforeEach(async () => {
     blob: new Blob(["csv"]),
     filename: "positions.csv",
   });
+  fetchAssetsMock.mockResolvedValue([
+    { code: balance.asset, title: balance.asset, assetClass: "" },
+  ]);
   fetchAdjustmentsMock.mockResolvedValue({ items: [], total: 0 });
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
@@ -869,6 +871,36 @@ describe("Positions adjustment panel", () => {
     await user.type(assetInput, "AA");
     await user.click(await screen.findByRole("option", { name: "AAPL" }));
     expect(assetInput).toHaveValue("AAPL");
+  });
+
+  it("reports an asset-suggestion lookup failure until a later lookup succeeds", async () => {
+    const user = userEvent.setup();
+    const error = new Error("asset lookup failed");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    fetchAssetsMock.mockRejectedValueOnce(error);
+    renderPositions();
+
+    await user.click(
+      screen.getAllByRole("button", { name: /^adjustment$/i })[0],
+    );
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    const asset = within(panel).getByLabelText("Asset");
+    await user.type(asset, "AA");
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalledWith(error));
+    expect(
+      await within(panel).findByText("Asset suggestions could not be loaded."),
+    ).toBeInTheDocument();
+
+    await user.type(asset, "P");
+    await waitFor(() =>
+      expect(
+        within(panel).queryByText("Asset suggestions could not be loaded."),
+      ).not.toBeInTheDocument(),
+    );
+    consoleError.mockRestore();
   });
 });
 

@@ -818,6 +818,12 @@ function normalizeSpotFundsPnlBoundsLimit(v: unknown): SpotFundsPnlBoundsLimit {
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
+    currency: requireStringField(
+      o,
+      "P&L bounds currency",
+      "currency",
+      "Currency",
+    ),
     lowerBound: asString(pick(o, "lowerBound", "LowerBound", "lower_bound")),
     upperBound: asString(pick(o, "upperBound", "UpperBound", "upper_bound")),
   };
@@ -875,6 +881,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
       accountGroup: limit.accountGroup,
       asset: "",
       values: {
+        currency: limit.currency,
         lower_bound: limit.lowerBound,
         upper_bound: limit.upperBound,
       },
@@ -940,6 +947,12 @@ function normalizePolicy(v: unknown): Policy {
   );
   if (isObject(spotFundsPnlBounds)) {
     policy.values.spotFundsPnlBounds = {
+      currency: requireStringField(
+        spotFundsPnlBounds,
+        "P&L bounds currency",
+        "currency",
+        "Currency",
+      ),
       lowerBound: asString(
         pick(spotFundsPnlBounds, "lowerBound", "LowerBound", "lower_bound"),
       ),
@@ -985,12 +998,19 @@ function policyToLimit(policy: Policy): Limit {
     }
     case "spot_funds_pnl_bounds_kill_switch": {
       const pnlBounds = policy.values.spotFundsPnlBounds;
+      if (pnlBounds === undefined) {
+        throw new ApiError(
+          "P&L bounds are missing from the API response",
+          "internal",
+        );
+      }
       return {
         ...base,
         asset: "",
         values: {
-          lower_bound: pnlBounds?.lowerBound ?? "",
-          upper_bound: pnlBounds?.upperBound ?? "",
+          currency: pnlBounds.currency,
+          lower_bound: pnlBounds.lowerBound,
+          upper_bound: pnlBounds.upperBound,
         },
       };
     }
@@ -1065,6 +1085,7 @@ function limitEndpointBody(
           scope: limit.scope,
           account: limit.account,
           accountGroup: limit.accountGroup ?? "",
+          currency: limit.values.currency,
           lowerBound: limit.values.lower_bound ?? "",
           upperBound: limit.values.upper_bound ?? "",
         },

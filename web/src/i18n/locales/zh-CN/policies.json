@@ -72,9 +72,11 @@
     "accountGroupPlaceholder": "desk-a",
     "asset": "资产",
     "assetPlaceholder": "AAPL",
+    "currencyPlaceholder": "USD",
     "values": "参数值",
     "rateLimitFootnote": "最大订单数和时间窗口均为必填项。",
     "atLeastOneFootnote": "至少需填写一个参数值。",
+    "pnlBoundsFootnote": "必须填写货币和至少一个 PnL 边界。",
     "fxFailSafeNote": "FX 故障安全模式：处于 PnL 控制下的账户在缺少必要输入时会被封锁，例如缺少用于按账户币种估值已实现 PnL 的 FX 报价。仅在实际需要时才要求 FX：资产已使用账户币种时不需要，未处于 PnL 控制下的账户也不需要。",
     "save": "保存"
   },

@@ -462,6 +462,9 @@
     "loading": "正在加载",
     "copyableSnippet": "可复制片段"
   },
+  "suggestions": {
+    "assetLookupFailed": "无法加载资产建议。"
+  },
   "topBar": {
     "toggleNav": "切换导航"
   }

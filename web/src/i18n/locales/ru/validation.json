@@ -39,6 +39,8 @@
     "policyNoAccountGroup": "{{policy}} не должна содержать группу счетов",
     "rateLimitRequires": "rate_limit требует указания max_orders и window",
     "orderSizeRequires": "order_size_limit требует max_quantity или max_notional",
+    "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch требует указать валюту",
+    "pnlRequires": "spot_funds_pnl_bounds_kill_switch требует lower_bound или upper_bound",
     "pnlBoundOrder": "lower_bound должен быть <= upper_bound"
   }
 }

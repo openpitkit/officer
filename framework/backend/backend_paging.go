@@ -260,7 +260,10 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 		case "account":
 			cmp = strings.Compare(left.Account.String(), right.Account.String())
 		case "asset":
-			cmp = strings.Compare(left.Asset, right.Asset)
+			cmp = strings.Compare(
+				policyEffectiveAsset(left),
+				policyEffectiveAsset(right),
+			)
 		case "accountGroup":
 			cmp = strings.Compare(left.AccountGroup, right.AccountGroup)
 		case "lowerBound":
@@ -309,6 +312,17 @@ func policyMaxNotional(row store.PolicyListRow) string {
 	return row.OrderSize.MaxNotional
 }
 
+// policyEffectiveAsset mirrors the connector's COALESCE asset ordering.
+func policyEffectiveAsset(row store.PolicyListRow) string {
+	if row.Asset != "" {
+		return row.Asset
+	}
+	if row.SpotFundsPnlBounds != nil {
+		return row.SpotFundsPnlBounds.Currency
+	}
+	return ""
+}
+
 func policyLowerBound(row store.PolicyListRow) string {
 	switch {
 	case row.SpotFundsPnlBounds != nil:
@@ -342,7 +356,10 @@ func policyCompositeCompare(left, right store.PolicyListRow) int {
 	if cmp := strings.Compare(left.AccountGroup, right.AccountGroup); cmp != 0 {
 		return cmp
 	}
-	if cmp := strings.Compare(left.Asset, right.Asset); cmp != 0 {
+	if cmp := strings.Compare(
+		policyEffectiveAsset(left),
+		policyEffectiveAsset(right),
+	); cmp != 0 {
 		return cmp
 	}
 	return 0

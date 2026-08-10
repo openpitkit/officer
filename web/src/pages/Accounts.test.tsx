@@ -706,6 +706,64 @@ describe("Accounts business CSV", () => {
     ).toBeInTheDocument();
   });
 
+  it("reports a currency asset-suggestion lookup failure", async () => {
+    const user = userEvent.setup();
+    const error = new Error("asset lookup failed");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    fetchAssetsMock.mockRejectedValueOnce(error);
+    useAccountsMock.mockReturnValue(
+      readyPage(
+        [
+          {
+            code: "desk-alpha",
+            title: "Desk alpha",
+            blocked: false,
+            blockReason: "",
+            group: "equity-desks",
+            currency: "USD",
+            effectiveCurrency: "USD",
+            currencyOrigin: "account",
+            currencyCascade: { account: "USD", group: "", default: "" },
+            notes: "",
+            pnlHaltReason: "",
+            positionCount: 0,
+          },
+        ].map(accountFixture),
+      ),
+    );
+    renderAccounts();
+
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /edit account currency/i,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: /edit account currency/i,
+    });
+    const currency = within(dialog).getByLabelText(/^account currency$/i);
+    await user.clear(currency);
+    await user.type(currency, "EU");
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalledWith(error));
+    expect(within(dialog).queryByRole("option")).not.toBeInTheDocument();
+    expect(
+      await within(dialog).findByText("Asset suggestions could not be loaded."),
+    ).toBeInTheDocument();
+
+    await user.type(currency, "R");
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByText("Asset suggestions could not be loaded."),
+      ).not.toBeInTheDocument(),
+    );
+    consoleError.mockRestore();
+  });
+
   it("clears an already-set account currency", async () => {
     const user = userEvent.setup();
     useAccountsMock.mockReturnValue(

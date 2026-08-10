@@ -393,6 +393,15 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []domain.Bala
 
 func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error {
 	for _, l := range data.RateLimits {
+		if err := l.Validate(); err != nil {
+			return fmt.Errorf(
+				"store: restore rate_limit scope %q account %q asset %q: %w",
+				l.Scope,
+				l.Account,
+				l.Asset,
+				err,
+			)
+		}
 		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
 		if err != nil {
 			return err
@@ -408,6 +417,15 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
 	for _, l := range data.OrderSizeLimits {
+		if err := l.Validate(); err != nil {
+			return fmt.Errorf(
+				"store: restore order_size_limit scope %q account %q asset %q: %w",
+				l.Scope,
+				l.Account,
+				l.Asset,
+				err,
+			)
+		}
 		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
 		if err != nil {
 			return err
@@ -424,6 +442,16 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
 	for _, l := range data.SpotFundsPnlBoundsLimits {
+		if err := l.Validate(); err != nil {
+			return fmt.Errorf(
+				"store: restore spot_funds_pnl_bounds_kill_switch scope %q "+
+					"account %q account group %q: %w",
+				l.Scope,
+				l.Account,
+				l.AccountGroup,
+				err,
+			)
+		}
 		accountID, groupID, err := resolveSpotFundsPnlBoundsAxes(
 			ctx,
 			rt.tx,
@@ -433,16 +461,20 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		if err != nil {
 			return err
 		}
+		currencyID, err := resolveAssetID(ctx, rt.tx, l.Currency)
+		if err != nil {
+			return err
+		}
 		applied, err := rt.putSpotFundsPnlBoundsLimit(
 			ctx,
 			l.Scope,
 			accountID,
 			groupID,
 			`INSERT INTO limit_spot_funds_pnl_bound
-				 (scope, account_id, account_group_id, lower_bound, upper_bound)
-				 VALUES (?, ?, ?, ?, ?)`,
+				 (scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
 			[]any{
-				l.Scope, accountID, groupID,
+				l.Scope, accountID, groupID, currencyID,
 				nullableString(l.LowerBound), nullableString(l.UpperBound),
 			},
 		)

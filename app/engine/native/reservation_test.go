@@ -1108,6 +1108,7 @@ func TestBuildOpenPitEngine_PersistedPnlKeepsBoundsClear(t *testing.T) {
 	limits := []domain.LimitSpotFundsPnlBounds{{
 		Scope:      domain.ScopeAccount,
 		Account:    testAccount,
+		Currency:   testQuote,
 		LowerBound: "-3",
 	}}
 	built, err := BuildOpenPitEngine("", Snapshot{
@@ -1278,16 +1279,19 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
 				Scope:      domain.ScopeGlobal,
+				Currency:   testQuote,
 				LowerBound: "-1000000",
 			},
 			{
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
+				Currency:     testQuote,
 				LowerBound:   "-1000000",
 			},
 			{
 				Scope:      domain.ScopeAccount,
 				Account:    domain.AccountID(testAccount),
+				Currency:   testQuote,
 				LowerBound: "-6",
 			},
 		},
@@ -1433,11 +1437,13 @@ func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
 				Scope:      domain.ScopeGlobal,
+				Currency:   testQuote,
 				LowerBound: "-1000000",
 			},
 			{
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
+				Currency:     testQuote,
 				LowerBound:   "-1000000",
 			},
 		},
@@ -1504,16 +1510,19 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierReportsLivePnlBlock(
 	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 		{
 			Scope:      domain.ScopeGlobal,
+			Currency:   testQuote,
 			LowerBound: "-1000000",
 		},
 		{
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
+			Currency:     testQuote,
 			LowerBound:   "-1000000",
 		},
 		{
 			Scope:      domain.ScopeAccount,
 			Account:    domain.AccountID(testAccount),
+			Currency:   testQuote,
 			LowerBound: "-1",
 		},
 	}}

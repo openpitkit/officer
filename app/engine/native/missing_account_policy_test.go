@@ -220,6 +220,7 @@ func TestPutSpotFundsPnlBoundsLimit_CreatedAccountBarrierIsEnforced(t *testing.T
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeAccount,
 		Account:    account,
+		Currency:   "USDT",
 		LowerBound: "-1",
 	}, domain.MissingAccountCreate, caller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
@@ -266,6 +267,7 @@ func TestPutSpotFundsPnlBoundsLimit_RejectLeavesNoAccount(t *testing.T) {
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope:      domain.ScopeAccount,
 		Account:    account,
+		Currency:   "USDT",
 		LowerBound: "-1",
 	}, domain.MissingAccountReject, caller)
 	if err == nil {

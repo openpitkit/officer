@@ -829,11 +829,12 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"limit_spot_funds_pnl_bound": {
 		backup: map[string]string{
-			"scope":            "Scope",
-			"account_id":       "Account",
-			"account_group_id": "AccountGroup",
-			"lower_bound":      "LowerBound",
-			"upper_bound":      "UpperBound",
+			"scope":             "Scope",
+			"account_id":        "Account",
+			"account_group_id":  "AccountGroup",
+			"currency_asset_id": "Currency",
+			"lower_bound":       "LowerBound",
+			"upper_bound":       "UpperBound",
 		},
 	},
 	"adjustment": {
@@ -1410,6 +1411,7 @@ func seedClientDataDriftRealm(
 		domain.LimitSpotFundsPnlBounds{
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
+			Currency:   "USD",
 			LowerBound: "-50.25",
 			UpperBound: "100.75",
 		},
@@ -1419,6 +1421,7 @@ func seedClientDataDriftRealm(
 		domain.LimitSpotFundsPnlBounds{
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "grp-1",
+			Currency:     "USD",
 			LowerBound:   "-25.00",
 			UpperBound:   "75.00",
 		},

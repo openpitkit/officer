@@ -428,13 +428,14 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 		{
 			name: "account PnL bounds",
 			limit: domain.LimitSpotFundsPnlBounds{
-				Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-10",
+				Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-10",
 			},
 		},
 		{
 			name: "group PnL bounds",
 			limit: domain.LimitSpotFundsPnlBounds{
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
+				Currency:   "USD",
 				UpperBound: "10",
 			},
 			seed: func(ctx context.Context, rs RealmStore) {
@@ -449,7 +450,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 		{
 			name: "global PnL bounds",
 			limit: domain.LimitSpotFundsPnlBounds{
-				Scope: domain.ScopeGlobal, LowerBound: "-100",
+				Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 			},
 		},
 	} {

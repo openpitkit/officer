@@ -125,14 +125,19 @@ func TestDeleteGroupRequiresForceForGroupScopedPnlBound(t *testing.T) {
 	_, realm := newTestStore(t)
 	db := realm.(*realmStore).rawDB()
 
+	if err := realm.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset(USD): %v", err)
+	}
 	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "owned"}); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 	groupID := queryRowID(
 		t, ctx, db, `SELECT id FROM account_group WHERE code = 'owned'`,
 	)
+	currencyAssetID := queryRowID(t, ctx, db, `SELECT id FROM asset WHERE code = 'USD'`)
 	if _, err := db.ExecContext(ctx, `INSERT INTO limit_spot_funds_pnl_bound
-		(scope, account_group_id, lower_bound) VALUES ('account_group', ?, '-2')`, groupID); err != nil {
+		(scope, account_group_id, currency_asset_id, lower_bound)
+		VALUES ('account_group', ?, ?, '-2')`, groupID, currencyAssetID); err != nil {
 		t.Fatalf("seed group P&L bound: %v", err)
 	}
 
@@ -209,9 +214,11 @@ func seedAccountOperationalRows(
 	exec(`INSERT INTO limit_order_size
 		(scope, account_id, max_quantity) VALUES ('account', ?, '1')`, accountID)
 	exec(`INSERT INTO limit_spot_funds_pnl_bound
-		(scope, account_id, lower_bound) VALUES ('account', ?, '-1')`, accountID)
+		(scope, account_id, currency_asset_id, lower_bound)
+		VALUES ('account', ?, ?, '-1')`, accountID, quoteID)
 	exec(`INSERT INTO limit_spot_funds_pnl_bound
-		(scope, account_group_id, lower_bound) VALUES ('account_group', ?, '-2')`, groupID)
+		(scope, account_group_id, currency_asset_id, lower_bound)
+		VALUES ('account_group', ?, ?, '-2')`, groupID, quoteID)
 	exec(`INSERT INTO adjustment
 		(external_id, account_id, asset_id, at, source_id, status_id, request, outcome)
 		VALUES (?, ?, ?, '2026-08-01T00:00:00Z',

@@ -212,9 +212,18 @@ func (s *Service) DeleteAsset(ctx context.Context, code string, force bool) erro
 	if err := domain.ValidateAsset(code); err != nil {
 		return err
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	n, err := s.groupNode()
 	if err != nil {
 		return err
 	}
-	return n.DeleteAsset(ctx, code, force, auth.CallerFromContext(ctx))
+	if err := n.DeleteAsset(ctx, code, force, auth.CallerFromContext(ctx)); err != nil {
+		return err
+	}
+	if !force {
+		return nil
+	}
+	return s.restartMarketDataAfterDeleteLocked()
 }

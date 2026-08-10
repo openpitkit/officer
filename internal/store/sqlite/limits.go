@@ -48,7 +48,7 @@ import (
 const policyUnion = `
 SELECT 'rate_limit' AS kind, lr.scope AS scope,
        a.code AS account_code, NULL AS account_group_code,
-       ast.code AS asset_code,
+       ast.code AS asset_code, NULL AS currency_code,
        lr.max_orders AS max_orders, lr.window AS window,
        NULL AS max_quantity, NULL AS max_notional,
 	       NULL AS lower_bound, NULL AS upper_bound,
@@ -59,7 +59,7 @@ LEFT JOIN asset   ast ON ast.id = lr.asset_id
 UNION ALL
 SELECT 'order_size_limit' AS kind, los.scope AS scope,
        a.code AS account_code, NULL AS account_group_code,
-       ast.code AS asset_code,
+       ast.code AS asset_code, NULL AS currency_code,
        NULL AS max_orders, NULL AS window,
        los.max_quantity AS max_quantity, los.max_notional AS max_notional,
 	       NULL AS lower_bound, NULL AS upper_bound,
@@ -70,14 +70,15 @@ LEFT JOIN asset   ast ON ast.id = los.asset_id
 UNION ALL
 SELECT 'spot_funds_pnl_bounds_kill_switch' AS kind, lsfpb.scope AS scope,
        a.code AS account_code, g.code AS account_group_code,
-       NULL AS asset_code,
+       NULL AS asset_code, c.code AS currency_code,
        NULL AS max_orders, NULL AS window,
        NULL AS max_quantity, NULL AS max_notional,
 	       lsfpb.lower_bound AS lower_bound, lsfpb.upper_bound AS upper_bound,
        'spot_funds_pnl_bounds_kill_switch:' || lsfpb.id AS stable_id
 FROM limit_spot_funds_pnl_bound lsfpb
 LEFT JOIN account       a  ON a.id  = lsfpb.account_id
-LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id`
+LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id
+JOIN asset               c  ON c.id  = lsfpb.currency_asset_id`
 
 // ListPolicyRows returns the typed barrier tables flattened into one sorted,
 // paged list with the pre-paging total. It applies filters in SQL and
@@ -104,7 +105,7 @@ func (r *realmStore) ListPolicyRows(
 
 	queryArgs := append([]any{}, args...)
 	query := `SELECT kind, scope, account_code, account_group_code,
-		       asset_code,
+		       asset_code, currency_code,
 	       max_orders, window, max_quantity, max_notional,
 	       lower_bound, upper_bound` + from + policyListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
@@ -137,7 +138,7 @@ func policyListWhere(filter fwstore.PolicyListFilter) (string, []any, error) {
 	args := make([]any, 0, 5)
 	appendMatcher(&clauses, &args, "account_code", filter.Account)
 	appendMatcher(&clauses, &args, "account_group_code", filter.AccountGroup)
-	appendMatcher(&clauses, &args, "asset_code", filter.Asset)
+	appendMatcher(&clauses, &args, "COALESCE(asset_code, currency_code)", filter.Asset)
 	if filter.Scope != "" {
 		switch filter.Scope {
 		case domain.ScopeBroker, domain.ScopeGlobal, domain.ScopeAsset,
@@ -164,7 +165,7 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 	columns := map[string]string{
 		"account":      "account_code",
 		"accountGroup": "account_group_code",
-		"asset":        "asset_code",
+		"asset":        "COALESCE(asset_code, currency_code)",
 		"lowerBound":   "lower_bound COLLATE DECIMAL",
 		"maxNotional":  "max_notional COLLATE DECIMAL",
 		"maxOrders":    "max_orders",
@@ -190,7 +191,7 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 	tie := "kind " + tieDirection + ", scope " + tieDirection +
 		", account_code " + tieDirection +
 		", account_group_code " + tieDirection +
-		", asset_code " + tieDirection +
+		", COALESCE(asset_code, currency_code) " + tieDirection +
 		", stable_id " + tieDirection
 	return " ORDER BY " + column + " " + direction + ", " + tie
 }
@@ -200,7 +201,7 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 		kind                          string
 		scope                         string
 		accountCode, accountGroupCode sql.NullString
-		assetCode                     sql.NullString
+		assetCode, currencyCode       sql.NullString
 		maxOrders                     sql.NullInt64
 		windowStr                     sql.NullString
 		maxQuantity                   sql.NullString
@@ -209,7 +210,7 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 	)
 	if err := rows.Scan(
 		&kind, &scope, &accountCode, &accountGroupCode,
-		&assetCode,
+		&assetCode, &currencyCode,
 		&maxOrders, &windowStr, &maxQuantity, &maxNotional,
 		&lowerBound, &upperBound,
 	); err != nil {
@@ -251,6 +252,7 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 			Scope:        scope,
 			Account:      account,
 			AccountGroup: accountGroupCode.String,
+			Currency:     currencyCode.String,
 			LowerBound:   lowerBound.String,
 			UpperBound:   upperBound.String,
 		}
@@ -523,11 +525,12 @@ func (r *realmStore) ListSpotFundsPnlBoundsLimits(
 	ctx context.Context, account domain.AccountID,
 ) ([]domain.LimitSpotFundsPnlBounds, error) {
 	q := `
-	SELECT lsfpb.scope, a.code, g.code,
+	SELECT lsfpb.scope, a.code, g.code, c.code,
 	       lsfpb.lower_bound, lsfpb.upper_bound
 FROM limit_spot_funds_pnl_bound lsfpb
 LEFT JOIN account       a  ON a.id  = lsfpb.account_id
-LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id`
+LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id
+JOIN asset               c  ON c.id  = lsfpb.currency_asset_id`
 	args := make([]any, 0, 1)
 	if account != "" {
 		q += ` WHERE a.code = ?`
@@ -573,7 +576,13 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 	if err != nil {
 		return err
 	}
-	accountID, groupID, err := resolveSpotFundsPnlBoundsAxes(ctx, db, limit.Account, limit.AccountGroup)
+	accountID, groupID, err := resolveSpotFundsPnlBoundsAxes(
+		ctx, db, limit.Account, limit.AccountGroup,
+	)
+	if err != nil {
+		return err
+	}
+	currencyID, err := resolveAssetID(ctx, db, limit.Currency)
 	if err != nil {
 		return err
 	}
@@ -583,9 +592,9 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 			_, err := exec.ExecContext(
 				ctx,
 				`INSERT INTO limit_spot_funds_pnl_bound
-					 (scope, account_id, account_group_id, lower_bound, upper_bound)
-					 VALUES (?, ?, ?, ?, ?)`,
-				limit.Scope, accountID, groupID,
+					 (scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
+					 VALUES (?, ?, ?, ?, ?, ?)`,
+				limit.Scope, accountID, groupID, currencyID,
 				nullableString(limit.LowerBound),
 				nullableString(limit.UpperBound),
 			)
@@ -630,10 +639,12 @@ func scanSpotFundsPnlBoundsLimit(
 	var (
 		scope                         string
 		accountCode, accountGroupCode sql.NullString
+		currencyCode                  string
 		lowerBound, upperBound        sql.NullString
 	)
 	if err := rows.Scan(
 		&scope, &accountCode, &accountGroupCode,
+		&currencyCode,
 		&lowerBound, &upperBound,
 	); err != nil {
 		return domain.LimitSpotFundsPnlBounds{}, fmt.Errorf(
@@ -644,6 +655,7 @@ func scanSpotFundsPnlBoundsLimit(
 		Scope:        scope,
 		Account:      domain.AccountID(accountCode.String),
 		AccountGroup: accountGroupCode.String,
+		Currency:     currencyCode,
 		LowerBound:   lowerBound.String,
 		UpperBound:   upperBound.String,
 	}, nil

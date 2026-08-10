@@ -46,8 +46,8 @@ const getAccountStateToolDescription = "Return account row and its " +
 	"control."
 
 const getLimitsToolName = "get_limits"
-const getLimitsToolDescription = "Return risk barriers, optionally filtered " +
-	"by account. Read-only - no secrets, no order-flow control."
+const getLimitsToolDescription = "Return risk barriers and P&L-bound currencies, " +
+	"optionally filtered by account. Read-only - no secrets, no order-flow control."
 
 const getOrderToolName = "get_order"
 const getOrderToolDescription = "Return one order addressed by its id: " +
@@ -483,6 +483,7 @@ type spotFundsPnlBoundsLimitDTO struct {
 	Scope        string `json:"scope"`
 	Account      string `json:"account"`
 	AccountGroup string `json:"accountGroup"`
+	Currency     string `json:"currency"`
 	LowerBound   string `json:"lowerBound"`
 	UpperBound   string `json:"upperBound"`
 }
@@ -621,6 +622,7 @@ func toLimitsDTO(l node.AccountLimits) limitsDTO {
 			Scope:        p.Scope,
 			Account:      string(p.Account),
 			AccountGroup: p.AccountGroup,
+			Currency:     p.Currency,
 			LowerBound:   p.LowerBound,
 			UpperBound:   p.UpperBound,
 		})

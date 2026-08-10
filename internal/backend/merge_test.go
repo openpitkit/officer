@@ -164,6 +164,20 @@ func ratePolicyRow(account domain.AccountID) store.PolicyListRow {
 	}
 }
 
+func ratePolicyRowWithAsset(
+	account domain.AccountID, asset string,
+) store.PolicyListRow {
+	return store.PolicyListRow{
+		Kind:    store.PolicyKindRate,
+		Scope:   domain.ScopeAccountAsset,
+		Account: account,
+		Asset:   asset,
+		Rate: &domain.LimitRate{
+			Scope: domain.ScopeAccountAsset, Account: account, Asset: asset,
+		},
+	}
+}
+
 func orderSizePolicyRow(account domain.AccountID, asset string) store.PolicyListRow {
 	return store.PolicyListRow{
 		Kind:    store.PolicyKindOrderSize,
@@ -172,6 +186,19 @@ func orderSizePolicyRow(account domain.AccountID, asset string) store.PolicyList
 		Asset:   asset,
 		OrderSize: &domain.LimitOrderSize{
 			Scope: domain.ScopeAccountAsset, Account: account, Asset: asset,
+		},
+	}
+}
+
+func spotFundsPnlBoundsPolicyRow(
+	account domain.AccountID, currency string,
+) store.PolicyListRow {
+	return store.PolicyListRow{
+		Kind:    store.PolicyKindSpotFundsPnlBounds,
+		Scope:   domain.ScopeAccount,
+		Account: account,
+		SpotFundsPnlBounds: &domain.LimitSpotFundsPnlBounds{
+			Scope: domain.ScopeAccount, Account: account, Currency: currency,
 		},
 	}
 }
@@ -233,4 +260,95 @@ func TestListPolicyRowsMergesNodesInGlobalOrder(t *testing.T) {
 			t.Fatalf("node %s fetched page = %+v, want {Limit:4 Offset:0}", name, seen)
 		}
 	}
+}
+
+func TestListPolicyRowsMergesNodesByEffectiveAsset(t *testing.T) {
+	rateCAD := ratePolicyRowWithAsset("rate-cad", "CAD")
+	pnlUSD := spotFundsPnlBoundsPolicyRow("pnl-usd", "USD")
+	orderZAR := orderSizePolicyRow("order-zar", "ZAR")
+
+	for _, tc := range []struct {
+		name        string
+		descending  bool
+		nodeARows   []store.PolicyListRow
+		nodeAPrefix []store.PolicyListRow
+		want        string
+	}{
+		{
+			name:        "ascending",
+			nodeARows:   []store.PolicyListRow{rateCAD, pnlUSD},
+			nodeAPrefix: []store.PolicyListRow{rateCAD},
+			want:        "rate-cad,pnl-usd,order-zar",
+		},
+		{
+			name:        "descending",
+			descending:  true,
+			nodeARows:   []store.PolicyListRow{pnlUSD, rateCAD},
+			nodeAPrefix: []store.PolicyListRow{pnlUSD},
+			want:        "order-zar,pnl-usd,rate-cad",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodeA := &fakeNode{policyRowsPage: store.PolicyListPage{
+				Rows: tc.nodeARows, Total: len(tc.nodeARows),
+			}}
+			nodeB := &fakeNode{policyRowsPage: store.PolicyListPage{
+				Rows: []store.PolicyListRow{orderZAR}, Total: 1,
+			}}
+			svc := backend.New(
+				&twoNodeRouter{nodes: []node.Node{nodeA, nodeB}}, nil, nil,
+			)
+			filter := store.PolicyListFilter{
+				Sort: store.SortSpec{Column: "asset", Descending: tc.descending},
+			}
+
+			unpaged, err := svc.ListPolicyRows(context.Background(), filter)
+			if err != nil {
+				t.Fatalf("ListPolicyRows unpaged: %v", err)
+			}
+			if unpaged.Total != 3 {
+				t.Fatalf("unpaged total = %d, want 3", unpaged.Total)
+			}
+			if got := policyRowAccounts(unpaged.Rows); got != tc.want {
+				t.Fatalf("unpaged order = %q, want %q", got, tc.want)
+			}
+			if unpaged.Rows[1].Asset != "" ||
+				unpaged.Rows[1].SpotFundsPnlBounds == nil ||
+				unpaged.Rows[1].SpotFundsPnlBounds.Currency != "USD" {
+				t.Fatalf(
+					"P&L barrier wire asset = %+v, want empty Asset and USD currency",
+					unpaged.Rows[1],
+				)
+			}
+
+			nodeA.policyRowsPage.Rows = tc.nodeAPrefix
+			paged, err := svc.ListPolicyRows(
+				context.Background(),
+				store.PolicyListFilter{
+					Sort: store.SortSpec{Column: "asset", Descending: tc.descending},
+					Page: store.PageSpec{Limit: 1},
+				},
+			)
+			if err != nil {
+				t.Fatalf("ListPolicyRows paged: %v", err)
+			}
+			got := policyRowAccounts(paged.Rows)
+			want := policyRowAccounts(unpaged.Rows[:1])
+			if got != want {
+				t.Fatalf("paged order = %q, want unpaged prefix %q", got, want)
+			}
+			seen := nodeA.lastPolicyFilter.Page
+			if seen != (store.PageSpec{Limit: 1}) {
+				t.Fatalf("node A page = %+v, want {Limit:1 Offset:0}", seen)
+			}
+		})
+	}
+}
+
+func policyRowAccounts(rows []store.PolicyListRow) string {
+	accounts := make([]string, 0, len(rows))
+	for _, row := range rows {
+		accounts = append(accounts, row.Account.String())
+	}
+	return strings.Join(accounts, ",")
 }

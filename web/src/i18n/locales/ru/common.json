@@ -462,6 +462,9 @@
     "loading": "Загрузка",
     "copyableSnippet": "Копируемый фрагмент"
   },
+  "suggestions": {
+    "assetLookupFailed": "Не удалось загрузить подсказки по активам."
+  },
   "topBar": {
     "toggleNav": "Переключить навигацию"
   }

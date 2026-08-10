@@ -228,23 +228,26 @@ CREATE INDEX idx_limit_order_size_asset ON limit_order_size (asset_id);
 CREATE UNIQUE INDEX uq_limit_order_size
     ON limit_order_size (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
 
--- SpotFunds self-computed account-currency P&L-bounds barriers. This Officer
--- meta-policy maps to the SDK SpotFunds policy and cascades by
--- global/account-group/account. P&L is always in the account currency, so the
--- barrier has no asset or currency axis.
+-- SpotFunds self-computed P&L-bounds barriers. This Officer meta-policy maps
+-- to the SDK SpotFunds policy and cascades by global/account-group/account.
+-- Currency is a required asset reference. Officer stores and passes it through
+-- without converting P&L bounds.
 CREATE TABLE limit_spot_funds_pnl_bound (
-    id               {{PK}},
-    scope            TEXT NOT NULL,
-    account_id       INTEGER REFERENCES account(id)       ON DELETE CASCADE,
-    account_group_id INTEGER REFERENCES account_group(id) ON DELETE CASCADE,
-    lower_bound      TEXT,
-    upper_bound      TEXT
+    id                {{PK}},
+    scope             TEXT NOT NULL,
+    account_id        INTEGER REFERENCES account(id)       ON DELETE CASCADE,
+    account_group_id  INTEGER REFERENCES account_group(id) ON DELETE CASCADE,
+    currency_asset_id INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    lower_bound       TEXT,
+    upper_bound       TEXT
 );
 
 CREATE INDEX idx_limit_spot_funds_pnl_bounds_account
     ON limit_spot_funds_pnl_bound (account_id);
 CREATE INDEX idx_limit_spot_funds_pnl_bounds_account_group
     ON limit_spot_funds_pnl_bound (account_group_id);
+CREATE INDEX idx_limit_spot_funds_pnl_bounds_currency_asset
+    ON limit_spot_funds_pnl_bound (currency_asset_id);
 CREATE UNIQUE INDEX uq_limit_spot_funds_pnl_bounds
     ON limit_spot_funds_pnl_bound (
         scope,
