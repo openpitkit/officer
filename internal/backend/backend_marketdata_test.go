@@ -211,7 +211,7 @@ func TestService_ListMarketDataSurfacesAppliedSyntheticInverse(t *testing.T) {
 			mdID("mock-1").String(): {
 				Provider: domain.MarketDataProviderMock,
 				Subscriptions: []marketdata.Subscription{{
-					External: "EURUSD", Base: "EUR", Quote: "USD",
+					External: "EURUSD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"),
 					SyntheticInverse: true,
 				}},
 			},
@@ -262,7 +262,7 @@ func TestService_ListMarketDataSuppressesInverseForConfiguredDisabledReverse(t *
 			mdID("mock-1").String(): {
 				Provider: domain.MarketDataProviderMock,
 				Subscriptions: []marketdata.Subscription{{
-					External: "EURUSD", Base: "EUR", Quote: "USD",
+					External: "EURUSD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"),
 				}},
 			},
 		},
@@ -359,7 +359,7 @@ func TestService_ListMarketDataDetectsRestartRequired(t *testing.T) {
 				Provider: domain.MarketDataProviderMock,
 				Subscriptions: []marketdata.Subscription{
 					{
-						External: "AAPL", Base: "AAPL", Quote: "USD",
+						External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"),
 						SyntheticInverse: true,
 					},
 				},
@@ -623,7 +623,7 @@ func TestService_ListMarketDataManualPriceDoesNotRequireRestart(t *testing.T) {
 				Provider: domain.MarketDataProviderBYO,
 				Subscriptions: []marketdata.Subscription{
 					{
-						External: "USDT/USD", Base: "USDT", Quote: "USD",
+						External: "USDT/USD", Base: testMarketDataAssetID("USDT"), Quote: testMarketDataAssetID("USD"),
 						SyntheticInverse: true,
 					},
 				},
@@ -667,7 +667,7 @@ func TestService_ListMarketDataClearedManualHidesHistoricalQuote(t *testing.T) {
 			instanceID.String(): {
 				Provider: domain.MarketDataProviderBYO,
 				Subscriptions: []marketdata.Subscription{{
-					External: "Z/USD", Base: "Z", Quote: "USD",
+					External: "Z/USD", Base: testMarketDataAssetID("Z"), Quote: testMarketDataAssetID("USD"),
 					SyntheticInverse: true,
 				}},
 			},

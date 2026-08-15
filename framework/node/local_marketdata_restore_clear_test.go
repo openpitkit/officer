@@ -43,19 +43,28 @@ func restoreMarketDataArchive(
 	instruments []domain.MarketDataInstrument,
 	quotes []domain.MarketDataQuote,
 ) backup.Archive {
-	assets := make(map[string]domain.Asset)
+	assets := make(map[string]backup.Asset)
+	archiveInstruments := make([]backup.MarketDataInstrument, 0, len(instruments))
 	for _, instrument := range instruments {
-		assets[instrument.BaseAsset] = domain.Asset{Code: instrument.BaseAsset}
-		assets[instrument.QuoteAsset] = domain.Asset{Code: instrument.QuoteAsset}
+		assets[instrument.BaseAsset] = backup.Asset{Code: instrument.BaseAsset}
+		assets[instrument.QuoteAsset] = backup.Asset{Code: instrument.QuoteAsset}
+		archiveInstruments = append(archiveInstruments, backup.MarketDataInstrument{
+			Instance:       instrument.Instance,
+			ExternalSymbol: instrument.ExternalSymbol,
+			BaseAsset:      instrument.BaseAsset,
+			QuoteAsset:     instrument.QuoteAsset,
+			ManualPrice:    instrument.ManualPrice,
+			Enabled:        instrument.Enabled,
+		})
 	}
-	assetRows := make([]domain.Asset, 0, len(assets))
+	assetRows := make([]backup.Asset, 0, len(assets))
 	for _, asset := range assets {
 		assetRows = append(assetRows, asset)
 	}
 	return testArchive(backup.Scope{All: true}, backup.Data{
 		Assets:                assetRows,
 		MarketDataInstances:   []domain.MarketDataInstance{instance},
-		MarketDataInstruments: instruments,
+		MarketDataInstruments: archiveInstruments,
 		MarketDataQuotes:      quotes,
 	})
 }
@@ -102,13 +111,15 @@ func TestRestoreMarketDataFreshToStalePublishesLastKnownOnline(t *testing.T) {
 		t.Fatalf("restore rebuilt engine: summary=%+v builds=%d sink=%T", summary, builds, returnedSink)
 	}
 	wantCleared := []marketDataReplayPairKey{
-		{base: "EUR", quote: "USD"},
-		{base: "USD", quote: "EUR"},
+		{base: instrument.QuoteAssetID, quote: instrument.BaseAssetID},
+		{base: instrument.BaseAssetID, quote: instrument.QuoteAssetID},
 	}
 	if !equalReplayPairs(sink.cleared, wantCleared) {
 		t.Fatalf("cleared pairs = %+v, want %+v", sink.cleared, wantCleared)
 	}
-	assertStaleLastKnownReplay(t, sink.updates, stale.AsOf)
+	assertStaleLastKnownReplay(
+		t, sink.updates, stale.AsOf, instrument.BaseAssetID, instrument.QuoteAssetID,
+	)
 }
 
 func TestRestoreMarketDataQuoteRemovalClearsOnline(t *testing.T) {
@@ -189,8 +200,8 @@ func TestRestoreMarketDataExplicitReverseSuppressesOldSyntheticOnline(t *testing
 	if len(sink.cleared) != 2 {
 		t.Fatalf("topology clear pairs = %+v, want both directions", sink.cleared)
 	}
-	if len(sink.updates) != 1 || sink.updates[0].Base != "EUR" ||
-		sink.updates[0].Quote != "USD" || sink.updates[0].Mark != "2" {
+	if len(sink.updates) != 1 || sink.updates[0].Base != forward.BaseAssetID ||
+		sink.updates[0].Quote != forward.QuoteAssetID || sink.updates[0].Mark != "2" {
 		t.Fatalf("topology replay = %+v, want explicit forward only", sink.updates)
 	}
 }

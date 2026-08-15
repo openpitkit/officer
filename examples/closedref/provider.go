@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -32,39 +33,64 @@ func privateProvider() marketdata.Provider {
 		Type:  privateProviderID,
 		Title: "Example private provider",
 		Build: func(domain.MarketDataInstance) (marketdata.Connector, error) {
-			return privateConnector{}, nil
+			return newPrivateConnector(), nil
 		},
 	}
 }
 
-type privateConnector struct{}
+func newPrivateConnector() *privateConnector {
+	return &privateConnector{stop: make(chan struct{})}
+}
 
-func (privateConnector) Subscribe(
+// privateConnector streams one quote and then stays subscribed. Its stop
+// channel is what Close signals, so the constructor is mandatory.
+type privateConnector struct {
+	stop      chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *privateConnector) Subscribe(
 	ctx context.Context,
 	subs []marketdata.Subscription,
 ) (<-chan marketdata.QuoteUpdate, error) {
 	ch := make(chan marketdata.QuoteUpdate, 1)
+	if len(subs) == 0 {
+		// An empty subscription has nothing to stream.
+		close(ch)
+		return ch, nil
+	}
 	update := marketdata.QuoteUpdate{
 		AsOf:  time.Unix(1, 0).UTC(),
-		Base:  "AAPL",
-		Quote: "USD",
+		Base:  subs[0].Base,
+		Quote: subs[0].Quote,
 		Mark:  "185.00",
 	}
-	if len(subs) > 0 {
-		update.Base = subs[0].Base
-		update.Quote = subs[0].Quote
-	}
-	select {
-	case <-ctx.Done():
-	case ch <- update:
-	}
-	close(ch)
+	go func() {
+		defer close(ch)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.stop:
+			return
+		case ch <- update:
+		}
+
+		select {
+		case <-ctx.Done():
+		case <-c.stop:
+		}
+	}()
 	return ch, nil
 }
 
-func (privateConnector) Close() {}
+func (c *privateConnector) Close() {
+	c.closeOnce.Do(func() {
+		close(c.stop)
+	})
+}
 
-func (privateConnector) References() (marketdata.ProviderReferences, bool) {
+func (*privateConnector) References() (marketdata.ProviderReferences, bool) {
 	return marketdata.ProviderReferences{
 		DocsURL:    "https://openpit.dev/docs/examples/private-provider",
 		SymbolsURL: "https://openpit.dev/docs/examples/private-symbols",

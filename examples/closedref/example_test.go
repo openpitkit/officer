@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/app"
@@ -75,6 +76,107 @@ func TestReferenceCompositionAddReplaceHideRemove(t *testing.T) {
 	assertRouteAndToolReplacement(t, ctx, router, service)
 	assertRouteAndToolHidden(t, router, composition.Authorizer, service)
 	assertRouteAndToolRemoved(t, router, service)
+}
+
+func TestPrivateConnectorSubscribeEmptyClosesImmediately(t *testing.T) {
+	t.Parallel()
+	updates, err := newPrivateConnector().Subscribe(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	select {
+	case _, ok := <-updates:
+		if ok {
+			t.Fatal("empty subscription produced an update")
+		}
+	default:
+		t.Fatal("empty subscription channel is not closed")
+	}
+}
+
+func TestPrivateConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
+	t.Parallel()
+	const (
+		base  domain.EngineAssetID = 17
+		quote domain.EngineAssetID = 29
+	)
+	cases := []struct {
+		name string
+		stop func(*privateConnector, context.CancelFunc)
+	}{
+		{
+			name: "context cancellation",
+			stop: func(_ *privateConnector, cancel context.CancelFunc) {
+				cancel()
+			},
+		},
+		{
+			name: "Close",
+			stop: func(connector *privateConnector, _ context.CancelFunc) {
+				connector.Close()
+				connector.Close()
+			},
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			connector := newPrivateConnector()
+			updates, err := connector.Subscribe(
+				ctx,
+				[]marketdata.Subscription{{
+					External: "AAPL",
+					Base:     base,
+					Quote:    quote,
+				}},
+			)
+			if err != nil {
+				t.Fatalf("Subscribe: %v", err)
+			}
+			waitCtx, stopWaiting := context.WithTimeout(t.Context(), time.Second)
+			defer stopWaiting()
+			select {
+			case update, ok := <-updates:
+				if !ok {
+					t.Fatal("subscription channel closed before its update")
+				}
+				if update.Base != base || update.Quote != quote {
+					t.Fatalf(
+						"update asset ids = %d/%d, want %d/%d",
+						update.Base,
+						update.Quote,
+						base,
+						quote,
+					)
+				}
+			case <-waitCtx.Done():
+				t.Fatal("timed out waiting for subscription update")
+			}
+			select {
+			case _, ok := <-updates:
+				if !ok {
+					t.Fatal("subscription channel closed after its update")
+				}
+				t.Fatal("subscription produced an unexpected extra update")
+			default:
+			}
+			test.stop(connector, cancel)
+			closeWaitCtx, stopCloseWait := context.WithTimeout(
+				t.Context(),
+				time.Second,
+			)
+			defer stopCloseWait()
+			select {
+			case _, ok := <-updates:
+				if ok {
+					t.Fatal("subscription channel remained open after stop")
+				}
+			case <-closeWaitCtx.Done():
+				t.Fatal("timed out waiting for subscription channel close")
+			}
+		})
+	}
 }
 
 func assertPrivateRouteAdded(t *testing.T, router http.Handler) {

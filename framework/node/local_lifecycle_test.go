@@ -41,7 +41,11 @@ func TestNewLocalNode_SeedsBuildAndAudits(t *testing.T) {
 		t.Fatalf("ForRealm: %v", err)
 	}
 
-	// Pre-seed the store: one account and one rate-limit barrier.
+	// Pre-seed the store: one asset, one account and one rate-limit barrier.
+	createdAsset, err := realm.CreateAsset(ctx, domain.Asset{Code: "AAPL"})
+	if err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
 	if _, err := realm.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -60,8 +64,11 @@ func TestNewLocalNode_SeedsBuildAndAudits(t *testing.T) {
 	}
 
 	// The build must be seeded from the store snapshot.
-	if len(seed.Accounts) != 1 || len(seed.RateLimits) != 1 {
+	if len(seed.Assets) != 1 || len(seed.Accounts) != 1 || len(seed.RateLimits) != 1 {
 		t.Fatalf("build not seeded from store: %+v", seed)
+	}
+	if seed.Assets[0] != createdAsset {
+		t.Fatalf("seeded wrong asset: %+v", seed.Assets)
 	}
 	if seed.Accounts[0].Code != "acc-1" {
 		t.Fatalf("seeded wrong account: %+v", seed.Accounts)

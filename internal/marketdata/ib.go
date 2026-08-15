@@ -422,7 +422,7 @@ func (c *ibConnector) Diagnose(context.Context) ([]Diagnostic, error) {
 			Title:       "No IB quote received",
 			Detail:      "Interactive Brokers has not emitted a quote for this subscription.",
 			Remediation: "Check TWS/Gateway contract resolution, market-data permissions, and the requested marketDataType.",
-			Instrument:  sub.Base + "/" + sub.Quote,
+			Instrument:  sub.External,
 			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 		})
 	}
@@ -786,7 +786,7 @@ func (w *ibWrapper) Error(
 		diag.Remediation = "Configure a unique clientId for this Officer IB provider instance, then Restart feeds."
 	}
 	if sub, ok := w.subscription(reqID); ok {
-		diag.Instrument = sub.Base + "/" + sub.Quote
+		diag.Instrument = sub.External
 		if code == 200 {
 			diag.Code = CodeUnknownSymbol
 			diag.Kind = DiagKindConfig
@@ -941,7 +941,7 @@ func (w *ibWrapper) reportTickNoData(reqID ibapi.TickerID, tickType ibapi.TickTy
 		Actions:     []DiagnosticAction{{Type: ActionOpenDocs}},
 	}
 	if hasSub {
-		diag.Instrument = sub.Base + "/" + sub.Quote
+		diag.Instrument = sub.External
 	}
 	w.reportDiag(diag)
 }
@@ -1006,7 +1006,7 @@ func (w *ibWrapper) instrumentName(reqID ibapi.TickerID) string {
 	if !ok {
 		return ""
 	}
-	return sub.Base + "/" + sub.Quote
+	return sub.External
 }
 
 func (w *ibWrapper) signalLost(err error) {
@@ -1298,14 +1298,12 @@ func normalizeIBSubscriptions(
 ) ([]ibSubscription, error) {
 	normalized := make([]ibSubscription, 0, len(subs))
 	for i, sub := range subs {
-		base := strings.ToUpper(strings.TrimSpace(sub.Base))
-		quote := strings.ToUpper(strings.TrimSpace(sub.Quote))
 		external := strings.TrimSpace(sub.External)
 		if external == "" {
-			external = base
+			return nil, missingExternalSymbolError("ib", sub)
 		}
-		if base == "" || quote == "" || external == "" {
-			return nil, fmt.Errorf("ib subscription %s/%s: empty instrument", sub.Base, sub.Quote)
+		if sub.Base == 0 || sub.Quote == 0 {
+			return nil, fmt.Errorf("ib subscription %q: asset key is incomplete", external)
 		}
 		contractCfg := cfg.ContractDefaults
 		if cfg.Contracts != nil {
@@ -1316,15 +1314,22 @@ func normalizeIBSubscriptions(
 		if strings.TrimSpace(contractCfg.Symbol) == "" {
 			contractCfg.Symbol = external
 		}
-		if strings.TrimSpace(contractCfg.Currency) == "" {
-			contractCfg.Currency = quote
+		contractCfg.Symbol = strings.ToUpper(strings.TrimSpace(contractCfg.Symbol))
+		currency := strings.TrimSpace(contractCfg.Currency)
+		if currency == "" {
+			return nil, fmt.Errorf(
+				"ib subscription %q: IB contract currency is not configured",
+				external,
+			)
 		}
+		contractCfg.Currency = strings.ToUpper(currency)
 		contract, err := ibContractFromConfig(contractCfg)
 		if err != nil {
 			return nil, err
 		}
+		sub.External = external
 		normalized = append(normalized, ibSubscription{
-			Subscription: Subscription{External: external, Base: base, Quote: quote},
+			Subscription: sub,
 			contract:     contract,
 			reqID:        ibapi.TickerID(i + 1),
 		})

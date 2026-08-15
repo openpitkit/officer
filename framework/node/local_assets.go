@@ -48,26 +48,60 @@ func (n *localNode) ListAssetRows(
 	return page, nil
 }
 
-// CreateAsset persists a new asset dictionary row and audits the action.
+// CreateAsset persists and publishes a new asset dictionary row, then audits
+// the action.
 func (n *localNode) CreateAsset(
 	ctx context.Context, asset domain.Asset, caller domain.Caller,
 ) (domain.Asset, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginLiveIdentityPublication(); err != nil {
 		return domain.Asset{}, err
 	}
-	defer n.endMutation()
+	defer n.endLiveIdentityPublication()
 
-	if err := n.realm.CreateAsset(ctx, asset); err != nil {
+	// Deliberately checked before the store write: no point persisting an
+	// asset the engine cannot publish. This also means a missing resolver
+	// capability now surfaces as ErrNotImplemented ahead of the store's own
+	// duplicate-code ErrAlreadyExists.
+	resolver, err := requireDictionaryResolver(n.currentEngine())
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	created, err := n.realm.CreateAsset(ctx, asset)
+	if err != nil {
 		return domain.Asset{}, fmt.Errorf("create asset: %w", err)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action: domain.AuditActionCreateAsset,
-		Asset:  asset.Code,
-		Detail: fmt.Sprintf("create asset %s", asset.Code),
-	}); err != nil {
-		return domain.Asset{}, fmt.Errorf("audit create asset: %w", err)
+	if err := resolver.AddAssetResolverEntry(created); err != nil {
+		mutationCtx := context.WithoutCancel(ctx)
+		if rollbackErr := n.realm.DeleteAsset(
+			mutationCtx, created.Code, false,
+		); rollbackErr != nil {
+			cause := errors.Join(
+				fmt.Errorf("publish asset resolver: %w", err),
+				fmt.Errorf("rollback asset create: %w", rollbackErr),
+			)
+			return domain.Asset{}, internalPostCommitNodeMutationError(
+				n.reconcileEngineAfterFailure(
+					mutationCtx,
+					"reconcile engine after asset creation failure",
+					cause,
+				).err,
+			)
+		}
+		return domain.Asset{}, internalPostCommitNodeMutationError(
+			fmt.Errorf("publish asset resolver: %w", err),
+		)
 	}
-	return asset, nil
+	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
+		Action: domain.AuditActionCreateAsset,
+		Asset:  created.Code,
+		Detail: fmt.Sprintf("create asset %s", created.Code),
+	}); err != nil {
+		return domain.Asset{}, n.fatalPostEngineAuditByCode(
+			"audit create asset", "asset", created.Code,
+			fmt.Errorf("audit create asset: %w", err),
+		)
+	}
+	return created, nil
 }
 
 // UpdateAsset replaces the asset's public code and mutable fields and
@@ -99,21 +133,16 @@ func (n *localNode) UpdateAsset(
 	return updated, nil
 }
 
-// renameAsset writes the new code first and rebuilds from the renamed store,
-// unlike the delete paths that mutate inside the transition commit hook. The
-// rename cascades through every row that names the asset, so the snapshot
-// cannot be rewritten in memory; a failed rebuild restores the old code
-// instead. The window this leaves is a process death between the store write
-// and its restore: the rename survives without its audit entry, and the next
-// start builds the engine from that renamed store. The state stays consistent,
-// the audit trail loses one entry.
+// renameAsset updates the persisted code and atomically publishes the new
+// alias. The stable engine asset id keeps SDK state attached to the same ready
+// asset while the operator-facing code changes.
 func (n *localNode) renameAsset(
 	ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
 ) (domain.Asset, error) {
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLiveIdentityPublication(); err != nil {
 		return domain.Asset{}, err
 	}
-	defer n.endEngineRestart()
+	defer n.endLiveIdentityPublication()
 
 	previous, ok, err := n.realm.GetAsset(ctx, oldCode)
 	if err != nil {
@@ -122,69 +151,36 @@ func (n *localNode) renameAsset(
 	if !ok {
 		return domain.Asset{}, fmt.Errorf("asset %q: %w", oldCode, domain.ErrNotFound)
 	}
+	// Same deliberate precedence as CreateAsset: checked ahead of the store
+	// write, so a missing resolver capability surfaces as ErrNotImplemented
+	// ahead of the store's own duplicate-code ErrAlreadyExists.
+	resolver, err := requireDictionaryResolver(n.currentEngine())
+	if err != nil {
+		return domain.Asset{}, err
+	}
 
 	durableCtx := context.WithoutCancel(ctx)
 	updated, err := n.realm.UpdateAsset(durableCtx, oldCode, asset)
 	if err != nil {
 		return domain.Asset{}, fmt.Errorf("update asset: %w", err)
 	}
-	rollback := func(cause error) (domain.Asset, error) {
-		if _, rollbackErr := n.realm.UpdateAsset(
-			durableCtx, updated.Code, previous,
-		); rollbackErr != nil {
-			return domain.Asset{}, n.fatalReconciliation(
-				"rollback asset rename",
-				errors.Join(
+	if err := resolver.RenameAssetResolverEntry(previous.Code, updated); err != nil {
+		_, rollbackErr := n.realm.UpdateAsset(durableCtx, updated.Code, previous)
+		if rollbackErr != nil {
+			cause := errors.Join(
+				fmt.Errorf("publish asset resolver rename: %w", err),
+				fmt.Errorf("rollback asset rename: %w", rollbackErr),
+			)
+			return domain.Asset{}, internalPostCommitNodeMutationError(
+				n.reconcileEngineAfterFailure(
+					durableCtx,
+					"reconcile engine after asset rename failure",
 					cause,
-					fmt.Errorf("restore asset %q: %w", oldCode, rollbackErr),
-				),
+				).err,
 			)
 		}
-		return domain.Asset{}, cause
-	}
-
-	snapshot, _, err := n.loadSnapshot(durableCtx)
-	if err != nil {
-		return rollback(fmt.Errorf("load snapshot for asset rename: %w", err))
-	}
-	previousEngine := n.currentEngine()
-	next, err := n.build(snapshot)
-	if err != nil {
-		return rollback(fmt.Errorf("build engine for asset rename: %w", err))
-	}
-	if next == nil {
-		return rollback(fmt.Errorf("build engine for asset rename returned nil"))
-	}
-	if next == previousEngine {
-		return rollback(fmt.Errorf(
-			"build engine for asset rename returned current engine",
-		))
-	}
-	transition, err := n.beginMarketDataTransition(next)
-	if err != nil {
-		next.Stop()
-		return rollback(fmt.Errorf("prepare asset rename market data: %w", err))
-	}
-	if err := n.replayMarketDataInto(durableCtx, next); err != nil {
-		n.cancelMarketDataTransition(transition)
-		next.Stop()
-		return rollback(fmt.Errorf("replay market data for asset rename: %w", err))
-	}
-	prev, err := n.commitMarketDataTransition(transition, next)
-	if err != nil {
-		n.cancelMarketDataTransition(transition)
-		next.Stop()
-		return rollback(fmt.Errorf("commit asset rename engine transition: %w", err))
-	}
-	if prev != nil && prev != next {
-		prev.Stop()
-	}
-	if err := n.mirrorSeedAccountBlocks(durableCtx, next); err != nil {
-		return domain.Asset{}, n.fatalPostEngineAuditByCode(
-			"mirror asset rename seed blocks",
-			"asset",
-			updated.Code,
-			fmt.Errorf("mirror asset rename seed blocks: %w", err),
+		return domain.Asset{}, internalPostCommitNodeMutationError(
+			fmt.Errorf("publish asset resolver rename: %w", err),
 		)
 	}
 	detail := updateAssetDetail(oldCode, updated.Code)
@@ -227,20 +223,99 @@ func (n *localNode) DeleteAsset(
 	ctx context.Context, code string, force bool, caller domain.Caller,
 ) error {
 	if !force {
-		if err := n.beginMutation(); err != nil {
+		if err := n.beginLiveIdentityPublication(); err != nil {
 			return err
 		}
-		defer n.endMutation()
+		defer n.endLiveIdentityPublication()
 
-		if err := n.realm.DeleteAsset(ctx, code, false); err != nil {
+		asset, ok, err := n.realm.GetAsset(ctx, code)
+		if err != nil {
+			return fmt.Errorf("read asset for delete: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("asset %q: %w", code, domain.ErrNotFound)
+		}
+		resolver, err := requireDictionaryResolver(n.currentEngine())
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		durableCtx := context.WithoutCancel(ctx)
+		if err := n.realm.DeleteAsset(durableCtx, code, false); err != nil {
 			return fmt.Errorf("delete asset: %w", err)
 		}
-		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action: domain.AuditActionDeleteAsset,
-			Asset:  code,
-			Detail: fmt.Sprintf("delete asset %s", code),
-		}); err != nil {
-			return fmt.Errorf("audit delete asset: %w", err)
+		auditDelete := func(detail string) error {
+			if err := n.audit(durableCtx, caller, store.AuditEntry{
+				Action: domain.AuditActionDeleteAsset,
+				Asset:  code,
+				Detail: detail,
+			}); err != nil {
+				return fmt.Errorf("audit delete asset: %w", err)
+			}
+			return nil
+		}
+
+		if err := resolver.RemoveAssetResolverEntry(asset); err != nil {
+			cause := fmt.Errorf(
+				"asset %q delete is durable, but resolver removal failed: %w",
+				code,
+				err,
+			)
+			failureDetail := fmt.Sprintf(
+				"delete asset %s "+
+					"(resolver removal failed)",
+				code,
+			)
+			if auditErr := auditDelete(failureDetail); auditErr != nil {
+				resultErr := errors.Join(cause, auditErr)
+				if rebuildErr := n.rebuildEngineFromStore(durableCtx); rebuildErr != nil {
+					resultErr = errors.Join(
+						resultErr,
+						fmt.Errorf(
+							"rebuild engine from current store: %w",
+							rebuildErr,
+						),
+					)
+				}
+				return n.fatalPostEngineAuditByCode(
+					"audit delete asset", "asset", code, resultErr,
+				)
+			}
+			reconciliation := n.reconcileEngineAfterFailure(
+				durableCtx,
+				"reconcile engine after asset delete failure",
+				cause,
+			)
+			if !reconciliation.reconciled {
+				return internalPostCommitNodeMutationError(reconciliation.err)
+			}
+			reconciliation.err = fmt.Errorf(
+				"engine resolver was reconciled after asset delete failure: %w",
+				reconciliation.err,
+			)
+			// Failure of the first write is fatal because it would leave the
+			// committed delete unrecorded. This corrective write only records
+			// successful reconciliation, so its failure is returned.
+			reconciledDetail := fmt.Sprintf(
+				"delete asset %s "+
+					"(resolver removal failed, reconciled)",
+				code,
+			)
+			if auditErr := auditDelete(reconciledDetail); auditErr != nil {
+				return internalPostCommitNodeMutationError(
+					errors.Join(reconciliation.err, auditErr),
+				)
+			}
+			return internalPostCommitNodeMutationError(reconciliation.err)
+		}
+		if auditErr := auditDelete(
+			fmt.Sprintf("delete asset %s", code),
+		); auditErr != nil {
+			return n.fatalPostEngineAuditByCode(
+				"audit delete asset", "asset", code, auditErr,
+			)
 		}
 		return nil
 	}
@@ -250,7 +325,7 @@ func (n *localNode) DeleteAsset(
 	}
 	defer n.endEngineRestart()
 
-	_, ok, err := n.realm.GetAsset(ctx, code)
+	asset, ok, err := n.realm.GetAsset(ctx, code)
 	if err != nil {
 		return fmt.Errorf("read asset for delete: %w", err)
 	}
@@ -261,6 +336,9 @@ func (n *localNode) DeleteAsset(
 	snapshot, _, err := n.loadSnapshot(ctx)
 	if err != nil {
 		return fmt.Errorf("load snapshot for asset delete: %w", err)
+	}
+	if dependents := snapshotAssetCurrencyDependents(snapshot, code); len(dependents) > 0 {
+		return domain.NewHasDependentsError(dependents)
 	}
 	snapshot = snapshotWithoutAsset(snapshot, code)
 	previousEngine := n.currentEngine()
@@ -279,7 +357,7 @@ func (n *localNode) DeleteAsset(
 		next.Stop()
 		return fmt.Errorf("prepare asset delete market data: %w", err)
 	}
-	transition.excludeAsset(code)
+	transition.excludeAsset(asset.EngineAssetID)
 	if err := n.replayMarketDataWithoutAssetInto(ctx, next, code); err != nil {
 		n.cancelMarketDataTransition(transition)
 		next.Stop()
@@ -321,6 +399,9 @@ func (n *localNode) DeleteAsset(
 }
 
 func snapshotWithoutAsset(snapshot engine.Snapshot, asset string) engine.Snapshot {
+	snapshot.Assets = slices.DeleteFunc(snapshot.Assets, func(row domain.Asset) bool {
+		return row.Code == asset
+	})
 	snapshot.Balances = slices.DeleteFunc(snapshot.Balances, func(row domain.Balance) bool {
 		return row.Asset == asset
 	})
@@ -337,6 +418,39 @@ func snapshotWithoutAsset(snapshot engine.Snapshot, asset string) engine.Snapsho
 		func(row domain.LimitSpotFundsPnlBounds) bool { return row.Currency == asset },
 	)
 	return snapshot
+}
+
+func snapshotAssetCurrencyDependents(
+	snapshot engine.Snapshot,
+	asset string,
+) []domain.DependentCount {
+	accountCount := 0
+	for _, account := range snapshot.Accounts {
+		if account.Currency == asset {
+			accountCount++
+		}
+	}
+	groupCount := 0
+	for _, group := range snapshot.Groups {
+		if group.Currency == asset {
+			groupCount++
+		}
+	}
+
+	dependents := make([]domain.DependentCount, 0, 2)
+	if accountCount > 0 {
+		dependents = append(dependents, domain.DependentCount{
+			Kind:  "account_currency",
+			Count: accountCount,
+		})
+	}
+	if groupCount > 0 {
+		dependents = append(dependents, domain.DependentCount{
+			Kind:  "account_group_currency",
+			Count: groupCount,
+		})
+	}
+	return dependents
 }
 
 // ListAssetClasses returns every persisted asset class.

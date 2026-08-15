@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
@@ -283,7 +284,7 @@ func TestMemoryRealmListBalanceRowsValidatesAndDerivesCurrency(t *testing.T) {
 	ctx := context.Background()
 	realm := newMemoryStore("node.db").realm
 	for _, code := range []string{"AAPL", "EUR", "USD"} {
-		if err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}
@@ -435,24 +436,24 @@ func (r *memoryRealm) RecordAccountAdjustment(
 	snapshot := r.exportData(ctx)
 	if in.UpsertBalance != nil {
 		if err := r.UpsertBalance(ctx, *in.UpsertBalance); err != nil {
-			r.restoreData(snapshot)
+			r.restoreData(snapshot, backup.RestoreModeOverwrite)
 			return domain.AccountAdjustmentRecord{}, err
 		}
 	}
 	if in.DeleteBalance != nil {
 		if err := r.DeleteBalance(ctx, in.DeleteBalance.Account, in.DeleteBalance.Asset); err != nil &&
 			!errors.Is(err, domain.ErrNotFound) {
-			r.restoreData(snapshot)
+			r.restoreData(snapshot, backup.RestoreModeOverwrite)
 			return domain.AccountAdjustmentRecord{}, err
 		}
 	}
 	stored, err := r.AppendAdjustment(ctx, in.Adjustment)
 	if err != nil {
-		r.restoreData(snapshot)
+		r.restoreData(snapshot, backup.RestoreModeOverwrite)
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	if err := r.AppendAudit(ctx, in.Audit); err != nil {
-		r.restoreData(snapshot)
+		r.restoreData(snapshot, backup.RestoreModeOverwrite)
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	return stored, nil

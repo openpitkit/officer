@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,8 +33,8 @@ func TestNormalizeBinanceSubscriptions(t *testing.T) {
 	t.Parallel()
 
 	subs, err := normalizeBinanceSubscriptions([]Subscription{
-		{External: "btcusdt", Base: "BTC", Quote: "USDT"},
-		{Base: "Eth", Quote: "Usd"},
+		{External: "btcusdt", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
+		{External: "ethusd", Base: testMarketDataAssetID("Eth"), Quote: testMarketDataAssetID("Usd")},
 	})
 	if err != nil {
 		t.Fatalf("normalizeBinanceSubscriptions: %v", err)
@@ -53,7 +54,7 @@ func TestParseBinanceQuoteUpdate(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	payload := []byte(`{"stream":"btcusdt@ticker","data":{"E":1710000000123,"s":"BTCUSDT","c":"65000.10","b":"65000.01","a":"65000.02"}}`)
 
@@ -64,8 +65,8 @@ func TestParseBinanceQuoteUpdate(t *testing.T) {
 	if !update.AsOf.Equal(time.UnixMilli(1710000000123).UTC()) {
 		t.Fatalf("AsOf = %s", update.AsOf)
 	}
-	if update.Base != "BTC" || update.Quote != "USDT" {
-		t.Fatalf("instrument = %s/%s", update.Base, update.Quote)
+	if update.Base != testMarketDataAssetID("BTC") || update.Quote != testMarketDataAssetID("USDT") {
+		t.Fatalf("instrument = %d/%d", update.Base, update.Quote)
 	}
 	if update.Mark != "65000.10" || update.Bid != "65000.01" || update.Ask != "65000.02" {
 		t.Fatalf("prices = %+v", update)
@@ -76,7 +77,7 @@ func TestBinanceConnector_ReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	first := &fakeBinanceConn{
 		messages: [][]byte{
@@ -148,7 +149,7 @@ func TestBinanceConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conns := []*fakeBinanceConn{
 		{
@@ -224,7 +225,7 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
-		{External: "NOPEUSDT", Base: "NOPE", Quote: "USDT"},
+		{External: "NOPEUSDT", Base: testMarketDataAssetID("NOPE"), Quote: testMarketDataAssetID("USDT")},
 	})
 	var (
 		statusOK bool
@@ -257,6 +258,43 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 	}
 }
 
+func TestBinanceConnector_DiagnoseUnknownSymbolSuggestsExternalPrefix(t *testing.T) {
+	t.Parallel()
+
+	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{{
+		External: "BTCUSDTT",
+		Base:     testMarketDataAssetID("opaque-base-key"),
+		Quote:    testMarketDataAssetID("opaque-quote-key"),
+	}})
+	connector := &binanceConnector{
+		subs: subs,
+		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+			return map[string]struct{}{
+				"BTC":     {},
+				"BTCU":    {},
+				"BTCUS":   {},
+				"BTCUSDT": {},
+			}, nil
+		},
+	}
+
+	findings, err := connector.Diagnose(context.Background())
+	if err != nil {
+		t.Fatalf("Diagnose: %v", err)
+	}
+	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol {
+		t.Fatalf("findings = %+v, want one unknown_symbol", findings)
+	}
+	remediation := findings[0].Remediation
+	if !strings.Contains(remediation, "Did you mean: BTCUSDT, BTCUS, BTCU?") {
+		t.Fatalf("remediation = %q, want three closest external suggestions", remediation)
+	}
+	if strings.Contains(remediation, "opaque-base-key") ||
+		strings.Contains(remediation, "opaque-quote-key") {
+		t.Fatalf("remediation = %q, must not use asset keys", remediation)
+	}
+}
+
 func TestBinanceConnector_CloseStopsSubscription(t *testing.T) {
 	t.Parallel()
 
@@ -274,7 +312,7 @@ func TestBinanceConnector_CloseStopsSubscription(t *testing.T) {
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -308,7 +346,7 @@ func TestBinanceConnector_CloseBeforeSubscribeDoesNotBreakLaterClose(t *testing.
 
 	connector.Close()
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)

@@ -94,7 +94,7 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 		return MarketDataStatus{}, fmt.Errorf("backend: list market-data instances: %w", err)
 	}
 	instrumentsByInstance := make(map[string][]domain.MarketDataInstrument, len(instances))
-	configuredPairs := make(map[string]struct{})
+	configuredPairs := make(map[marketDataPairKey]struct{})
 	for _, instance := range instances {
 		instruments, err := n.ListMarketDataInstruments(ctx, instance.ExternalID)
 		if err != nil {
@@ -102,8 +102,8 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 		}
 		instrumentsByInstance[instance.ExternalID.String()] = instruments
 		for _, instrument := range instruments {
-			configuredPairs[marketDataPairKey(
-				instrument.BaseAsset, instrument.QuoteAsset,
+			configuredPairs[newMarketDataPairKey(
+				instrument.BaseAssetID, instrument.QuoteAssetID,
 			)] = struct{}{}
 		}
 	}
@@ -165,7 +165,7 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 			instStatuses = append(instStatuses, MarketDataInstrumentStatus{
 				Instrument:       instrument,
 				Quote:            quotePtr,
-				InverseQuote:     marketDataInverseQuote(quotePtr, syntheticInverse),
+				InverseQuote:     marketDataInverseQuote(quotePtr, instrument, syntheticInverse),
 				UpdateInterval:   interval,
 				SyntheticInverse: syntheticInverse,
 				Stale:            stale,
@@ -417,20 +417,20 @@ func marketDataInstanceState(
 func marketDataAppliedConfig(
 	instance domain.MarketDataInstance,
 	instruments []domain.MarketDataInstrument,
-	configuredPairs map[string]struct{},
+	configuredPairs map[marketDataPairKey]struct{},
 ) marketdata.AppliedInstanceConfig {
 	subs := make([]marketdata.Subscription, 0, len(instruments))
 	for _, instrument := range instruments {
 		if !instrument.Enabled {
 			continue
 		}
-		_, reverseConfigured := configuredPairs[marketDataPairKey(
-			instrument.QuoteAsset, instrument.BaseAsset,
+		_, reverseConfigured := configuredPairs[newMarketDataPairKey(
+			instrument.QuoteAssetID, instrument.BaseAssetID,
 		)]
 		subs = append(subs, marketdata.Subscription{
 			External:         instrument.ExternalSymbol,
-			Base:             instrument.BaseAsset,
-			Quote:            instrument.QuoteAsset,
+			Base:             instrument.BaseAssetID,
+			Quote:            instrument.QuoteAssetID,
 			SyntheticInverse: !reverseConfigured,
 		})
 	}
@@ -440,8 +440,15 @@ func marketDataAppliedConfig(
 	}
 }
 
-func marketDataPairKey(base, quote string) string {
-	return base + "\x00" + quote
+type marketDataPairKey struct {
+	base  domain.EngineAssetID
+	quote domain.EngineAssetID
+}
+
+func newMarketDataPairKey(
+	base, quote domain.EngineAssetID,
+) marketDataPairKey {
+	return marketDataPairKey{base: base, quote: quote}
 }
 
 func marketDataSyntheticInverseApplied(
@@ -450,8 +457,8 @@ func marketDataSyntheticInverseApplied(
 ) bool {
 	for _, sub := range applied.Subscriptions {
 		if sub.External == instrument.ExternalSymbol &&
-			sub.Base == instrument.BaseAsset &&
-			sub.Quote == instrument.QuoteAsset {
+			sub.Base == instrument.BaseAssetID &&
+			sub.Quote == instrument.QuoteAssetID {
 			return sub.SyntheticInverse
 		}
 	}
@@ -460,6 +467,7 @@ func marketDataSyntheticInverseApplied(
 
 func marketDataInverseQuote(
 	quote *domain.MarketDataQuote,
+	instrument domain.MarketDataInstrument,
 	syntheticInverse bool,
 ) *domain.MarketDataQuote {
 	if quote == nil || !syntheticInverse {
@@ -467,8 +475,8 @@ func marketDataInverseQuote(
 	}
 	inverted, ok := marketdata.InvertQuote(marketdata.QuoteUpdate{
 		AsOf:  quote.AsOf,
-		Base:  quote.BaseAsset,
-		Quote: quote.QuoteAsset,
+		Base:  instrument.BaseAssetID,
+		Quote: instrument.QuoteAssetID,
 		Mark:  quote.Mark,
 		Bid:   quote.Bid,
 		Ask:   quote.Ask,
@@ -481,8 +489,8 @@ func marketDataInverseQuote(
 		ReceivedAt:     quote.ReceivedAt,
 		Instance:       quote.Instance,
 		ExternalSymbol: quote.ExternalSymbol,
-		BaseAsset:      inverted.Base,
-		QuoteAsset:     inverted.Quote,
+		BaseAsset:      instrument.QuoteAsset,
+		QuoteAsset:     instrument.BaseAsset,
 		Mark:           inverted.Mark,
 		Bid:            inverted.Bid,
 		Ask:            inverted.Ask,
@@ -530,18 +538,35 @@ func sameMarketDataSubscriptions(a, b []marketdata.Subscription) bool {
 	return true
 }
 
-func marketDataSubscriptionKeys(subs []marketdata.Subscription) []string {
-	keys := make([]string, 0, len(subs))
+type marketDataSubscriptionKey struct {
+	external  string
+	base      domain.EngineAssetID
+	quote     domain.EngineAssetID
+	synthetic bool
+}
+
+func marketDataSubscriptionKeys(
+	subs []marketdata.Subscription,
+) []marketDataSubscriptionKey {
+	keys := make([]marketDataSubscriptionKey, 0, len(subs))
 	for _, sub := range subs {
-		synthetic := "0"
-		if sub.SyntheticInverse {
-			synthetic = "1"
-		}
-		keys = append(keys,
-			sub.External+"\x00"+sub.Base+"\x00"+sub.Quote+"\x00"+synthetic,
-		)
+		keys = append(keys, marketDataSubscriptionKey{
+			external: sub.External, base: sub.Base, quote: sub.Quote,
+			synthetic: sub.SyntheticInverse,
+		})
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].external != keys[j].external {
+			return keys[i].external < keys[j].external
+		}
+		if keys[i].base != keys[j].base {
+			return keys[i].base < keys[j].base
+		}
+		if keys[i].quote != keys[j].quote {
+			return keys[i].quote < keys[j].quote
+		}
+		return !keys[i].synthetic && keys[j].synthetic
+	})
 	return keys
 }
 
@@ -698,6 +723,24 @@ func (s *Service) UpsertMarketDataInstrument(
 		return err
 	}
 	if s.md != nil {
+		stored, err := n.ListMarketDataInstruments(ctx, instrument.Instance)
+		if err != nil {
+			return fmt.Errorf("list persisted market-data instrument: %w", err)
+		}
+		found := false
+		for _, candidate := range stored {
+			if candidate.ExternalSymbol == instrument.ExternalSymbol {
+				instrument = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf(
+				"persisted market-data instrument %q not found: %w",
+				instrument.ExternalSymbol, domain.ErrNotFound,
+			)
+		}
 		if err := s.md.PushManual(ctx, instrument.Instance.String(), instrument); err != nil {
 			return fmt.Errorf(
 				"market-data instrument configuration saved; live manual update pending reconciliation: %w",

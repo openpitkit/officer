@@ -163,7 +163,7 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.AssetClasses, err = r.ListAssetClasses(ctx); err != nil {
 		return backup.Data{}, err
 	}
-	if data.Assets, err = r.ListAssets(ctx); err != nil {
+	if data.Assets, err = r.exportAssets(ctx); err != nil {
 		return backup.Data{}, err
 	}
 	if data.Principals, err = r.ListPrincipals(ctx); err != nil {
@@ -180,7 +180,7 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.Accounts, err = r.exportAccounts(ctx); err != nil {
 		return backup.Data{}, err
 	}
-	if data.Balances, err = r.ListBalances(ctx, "", ""); err != nil {
+	if data.Balances, err = r.exportBalances(ctx); err != nil {
 		return backup.Data{}, err
 	}
 	if data.RateLimits, err = r.ListRateLimits(ctx, ""); err != nil {

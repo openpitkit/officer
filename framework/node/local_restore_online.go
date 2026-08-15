@@ -27,6 +27,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/framework/store"
 )
 
 // restoreRuntimeSnapshot is the persisted runtime shape on one side of a
@@ -35,6 +36,7 @@ import (
 type restoreRuntimeSnapshot struct {
 	data     backup.Data
 	accounts map[domain.AccountID]domain.Account
+	assets   map[string]domain.Asset
 	groups   map[string]domain.AccountGroup
 }
 
@@ -42,6 +44,7 @@ type restoreRuntimePlan struct {
 	rebuild              bool
 	reason               string
 	runtimeChanged       bool
+	assetsChanged        bool
 	rateChanged          bool
 	orderSizeChanged     bool
 	spotFundsChanged     bool
@@ -79,18 +82,50 @@ func (n *localNode) captureRestoreRuntimeSnapshot(
 			groups = append(groups, defaultGroup)
 		}
 	}
+	assets, err := n.realm.ListAssets(ctx)
+	if err != nil {
+		return restoreRuntimeSnapshot{}, backup.Archive{}, err
+	}
 	snapshot := restoreRuntimeSnapshot{
 		data:     archive.Data,
 		accounts: make(map[domain.AccountID]domain.Account, len(accounts)),
+		assets:   make(map[string]domain.Asset, len(assets)),
 		groups:   make(map[string]domain.AccountGroup, len(groups)),
 	}
 	for _, account := range accounts {
 		snapshot.accounts[account.Code] = account
 	}
+	for _, asset := range assets {
+		snapshot.assets[asset.Code] = asset
+	}
 	for _, group := range groups {
 		snapshot.groups[group.Code] = group
 	}
 	return snapshot, archive, nil
+}
+
+func restoreAddsAssets(
+	ctx context.Context,
+	assets []backup.Asset,
+	realm store.RealmStore,
+) (bool, error) {
+	if len(assets) == 0 {
+		return false, nil
+	}
+	stored, err := realm.ListAssets(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list stored assets: %w", err)
+	}
+	existing := make(map[string]struct{}, len(stored))
+	for _, asset := range stored {
+		existing[asset.Code] = struct{}{}
+	}
+	for _, asset := range assets {
+		if _, ok := existing[asset.Code]; !ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func classifyRestoreRuntimeDelta(
@@ -142,6 +177,9 @@ func classifyRestoreRuntimeDelta(
 		}
 	}
 
+	plan.assetsChanged = len(
+		sortedNewAssetCodes(before.data.Assets, after.data.Assets),
+	) > 0
 	plan.rateChanged = !reflect.DeepEqual(
 		rateLimitMap(before.data.RateLimits), rateLimitMap(after.data.RateLimits),
 	)
@@ -171,8 +209,8 @@ func classifyRestoreRuntimeDelta(
 	plan.marketDataNeedsClear = plan.marketDataChanged
 	plan.forceAllAccountPnls = plan.spotFundsChanged
 	plan.runtimeChanged = restoreRuntimeShapeChanged(before, after) ||
-		plan.rateChanged || plan.orderSizeChanged || plan.spotFundsChanged ||
-		plan.marketDataChanged
+		plan.assetsChanged || plan.rateChanged || plan.orderSizeChanged ||
+		plan.spotFundsChanged || plan.marketDataChanged
 	return plan
 }
 
@@ -230,11 +268,20 @@ func groupRuntimeMap(
 	return out
 }
 
-func balanceRuntimeMap(balances []domain.Balance) map[string]domain.Balance {
+func balanceRuntimeMap(balances []backup.Balance) map[string]domain.Balance {
 	out := make(map[string]domain.Balance, len(balances))
 	for _, balance := range balances {
-		balance.UpdatedAt = balance.UpdatedAt.UTC()
-		out[restoreBalanceKey(balance.Account, balance.Asset)] = balance
+		out[restoreBalanceKey(balance.Account, balance.Asset)] = domain.Balance{
+			UpdatedAt:             balance.UpdatedAt.UTC(),
+			Available:             balance.Available,
+			Held:                  balance.Held,
+			Incoming:              balance.Incoming,
+			RealizedPnl:           balance.RealizedPnl,
+			RealizedPnlHaltReason: balance.RealizedPnlHaltReason,
+			AverageEntryPrice:     balance.AverageEntryPrice,
+			Asset:                 balance.Asset,
+			Account:               balance.Account,
+		}
 	}
 	return out
 }
@@ -267,14 +314,14 @@ func spotFundsLimitMap(
 
 type restoreMarketDataShape struct {
 	instances   map[domain.ExternalID]domain.MarketDataInstance
-	instruments map[string]domain.MarketDataInstrument
+	instruments map[string]backup.MarketDataInstrument
 	quotes      map[string]domain.MarketDataQuote
 }
 
 func marketDataRuntimeShape(data backup.Data) restoreMarketDataShape {
 	shape := restoreMarketDataShape{
 		instances:   make(map[domain.ExternalID]domain.MarketDataInstance, len(data.MarketDataInstances)),
-		instruments: make(map[string]domain.MarketDataInstrument, len(data.MarketDataInstruments)),
+		instruments: make(map[string]backup.MarketDataInstrument, len(data.MarketDataInstruments)),
 		quotes:      make(map[string]domain.MarketDataQuote, len(data.MarketDataQuotes)),
 	}
 	for _, instance := range data.MarketDataInstances {
@@ -310,6 +357,18 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		return err
 	}
 
+	for _, code := range sortedNewAssetCodes(before.data.Assets, after.data.Assets) {
+		asset, ok, err := n.realm.GetAsset(ctx, code)
+		if err != nil {
+			return fmt.Errorf("read restored asset %q: %w", code, err)
+		}
+		if !ok {
+			return fmt.Errorf("restored asset %q: %w", code, domain.ErrNotFound)
+		}
+		if err := resolver.AddAssetResolverEntry(asset); err != nil {
+			return fmt.Errorf("publish restored asset %q: %w", code, err)
+		}
+	}
 	for _, code := range sortedNewGroupCodes(before.groups, after.groups) {
 		if err := resolver.AddGroupResolverEntry(after.groups[code]); err != nil {
 			return fmt.Errorf("publish restored group %q: %w", code, err)
@@ -527,9 +586,7 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		}
 	}
 	if plan.marketDataChanged {
-		if err := clearRestoredMarketData(
-			eng.MarketDataSink(), before.data, after.data,
-		); err != nil {
+		if err := clearRestoredMarketData(eng.MarketDataSink(), before, after); err != nil {
 			return fmt.Errorf("clear restored market data: %w", err)
 		}
 		if err := n.replayMarketDataInto(ctx, eng); err != nil {
@@ -540,26 +597,46 @@ func (n *localNode) applyRestoreRuntimeDelta(
 }
 
 func clearRestoredMarketData(
-	sink marketdata.Sink, before, after backup.Data,
+	sink marketdata.Sink, before, after restoreRuntimeSnapshot,
 ) error {
 	clearer, ok := sink.(marketdata.QuoteClearer)
 	if !ok {
 		return fmt.Errorf("live market-data sink does not support quote clear")
 	}
 	pairs := make(map[marketDataReplayPairKey]struct{})
-	addPair := func(base, quote string) {
+	addPair := func(
+		assets map[string]domain.Asset, base, quote string,
+	) error {
 		if base == "" || quote == "" {
-			return
+			return nil
 		}
-		pairs[marketDataReplayPairKey{base: base, quote: quote}] = struct{}{}
-		pairs[marketDataReplayPairKey{base: quote, quote: base}] = struct{}{}
+		baseAsset, ok := assets[base]
+		if !ok {
+			return fmt.Errorf("restore market-data base asset %q: %w", base, domain.ErrNotFound)
+		}
+		quoteAsset, ok := assets[quote]
+		if !ok {
+			return fmt.Errorf("restore market-data quote asset %q: %w", quote, domain.ErrNotFound)
+		}
+		pairs[marketDataReplayPairKey{
+			base: baseAsset.EngineAssetID, quote: quoteAsset.EngineAssetID,
+		}] = struct{}{}
+		pairs[marketDataReplayPairKey{
+			base: quoteAsset.EngineAssetID, quote: baseAsset.EngineAssetID,
+		}] = struct{}{}
+		return nil
 	}
-	for _, data := range []backup.Data{before, after} {
+	for _, snapshot := range []restoreRuntimeSnapshot{before, after} {
+		data := snapshot.data
 		for _, instrument := range data.MarketDataInstruments {
-			addPair(instrument.BaseAsset, instrument.QuoteAsset)
+			if err := addPair(snapshot.assets, instrument.BaseAsset, instrument.QuoteAsset); err != nil {
+				return err
+			}
 		}
 		for _, quote := range data.MarketDataQuotes {
-			addPair(quote.BaseAsset, quote.QuoteAsset)
+			if err := addPair(snapshot.assets, quote.BaseAsset, quote.QuoteAsset); err != nil {
+				return err
+			}
 		}
 	}
 	ordered := make([]marketDataReplayPairKey, 0, len(pairs))
@@ -574,7 +651,7 @@ func clearRestoredMarketData(
 	})
 	for _, pair := range ordered {
 		if err := clearer.Clear(pair.base, pair.quote); err != nil {
-			return fmt.Errorf("clear quote %s/%s: %w", pair.base, pair.quote, err)
+			return fmt.Errorf("clear quote %d/%d: %w", pair.base, pair.quote, err)
 		}
 	}
 	return nil
@@ -583,8 +660,8 @@ func clearRestoredMarketData(
 func (n *localNode) applyRestoredBalances(
 	ctx context.Context,
 	eng engine.Engine,
-	before []domain.Balance,
-	after []domain.Balance,
+	before []backup.Balance,
+	after []backup.Balance,
 ) ([]domain.AccountBlock, error) {
 	left := balanceRuntimeMap(before)
 	right := balanceRuntimeMap(after)
@@ -697,6 +774,21 @@ func sortedNewGroupCodes(
 	for code := range after {
 		if _, ok := before[code]; !ok {
 			codes = append(codes, code)
+		}
+	}
+	sort.Strings(codes)
+	return codes
+}
+
+func sortedNewAssetCodes(before, after []backup.Asset) []string {
+	previous := make(map[string]struct{}, len(before))
+	for _, asset := range before {
+		previous[asset.Code] = struct{}{}
+	}
+	codes := make([]string, 0)
+	for _, asset := range after {
+		if _, ok := previous[asset.Code]; !ok {
+			codes = append(codes, asset.Code)
 		}
 	}
 	sort.Strings(codes)

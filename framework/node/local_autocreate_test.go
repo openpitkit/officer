@@ -20,6 +20,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -230,7 +231,12 @@ func TestAutoCreateInheritsDefaultCurrencyWithoutAccountOverride(t *testing.T) {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	n := nn.(*localNode)
-	seedTestPrincipal(t, n.realm)
+	if err := n.realm.CreatePrincipal(ctx, domain.Principal{Code: testCaller.Principal}); err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreatePrincipal(%s): %v", testCaller.Principal, err)
+	}
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "USD"}, testCaller); err != nil {
+		t.Fatalf("CreateAsset(USD): %v", err)
+	}
 	if err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller); err != nil {
 		t.Fatalf("SetDefaultGroupCurrency: %v", err)
 	}
@@ -303,6 +309,7 @@ func TestAutoCreateDoesNotTouchAccountCurrencyOverride(t *testing.T) {
 
 func TestAutoCreatePublishesAccountWithoutRebuild(t *testing.T) {
 	t.Parallel()
+	const assetCode = "AUTOUSD"
 	eng := newFakeEngine()
 	eng.enforceResolver = true
 	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{BalanceResult: "10"}
@@ -316,7 +323,7 @@ func TestAutoCreatePublishesAccountWithoutRebuild(t *testing.T) {
 		Key{Account: "fresh"},
 		"",
 		domain.AdjustmentRequest{
-			Asset: "USD",
+			Asset: assetCode,
 			Balance: &domain.AdjustmentAmount{
 				Mode: domain.AdjustmentModeAbsolute, Value: "10",
 			},
@@ -339,9 +346,71 @@ func TestAutoCreatePublishesAccountWithoutRebuild(t *testing.T) {
 	if got := eng.accountResolverIDs["fresh"]; got != account.EngineAccountID {
 		t.Fatalf("fresh resolver id = %d, want %d", got, account.EngineAccountID)
 	}
+	asset, ok, err := n.realm.GetAsset(ctx, assetCode)
+	if err != nil || !ok {
+		t.Fatalf("GetAsset(%s): asset=%+v ok=%v err=%v", assetCode, asset, ok, err)
+	}
+	if got := eng.assetResolverIDs[assetCode]; got != asset.EngineAssetID {
+		t.Fatalf("%s resolver id = %d, want %d", assetCode, got, asset.EngineAssetID)
+	}
 	if len(eng.adjustmentBatchCalls) != 1 ||
 		eng.adjustmentBatchCalls[0].account != "fresh" {
 		t.Fatalf("adjustment batches = %+v, want fresh account lane", eng.adjustmentBatchCalls)
+	}
+}
+
+type accountMutationProbeRealm struct {
+	store.RealmStore
+	createCalls int
+}
+
+func (r *accountMutationProbeRealm) CreateAccount(
+	ctx context.Context, account domain.Account,
+) (domain.Account, error) {
+	r.createCalls++
+	return r.RealmStore.CreateAccount(ctx, account)
+}
+
+func TestLocalNode_SetAccountGroupRejectsUnsupportedAccountAutoCreateBeforeStoreWrite(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	base := newMemoryStore("auto-create-account-capability.db")
+	var probe *accountMutationProbeRealm
+	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
+		probe = &accountMutationProbeRealm{RealmStore: realm}
+		return probe
+	})
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	n := newResolverCapabilityTestNode(t, st)
+	if probe == nil {
+		t.Fatal("account mutation probe was not installed")
+	}
+	probe.createCalls = 0
+
+	err := n.SetAccountGroup(
+		ctx,
+		testKey("fresh"),
+		"",
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if !errors.Is(err, domain.ErrNotImplemented) {
+		t.Fatalf("SetAccountGroup = %v, want ErrNotImplemented", err)
+	}
+	if probe.createCalls != 0 {
+		t.Fatalf("CreateAccount store calls = %d, want 0", probe.createCalls)
+	}
+	if _, ok, getErr := n.realm.GetAccount(ctx, "fresh"); getErr != nil || ok {
+		t.Fatalf(
+			"GetAccount(fresh) = ok %v err %v, want absent",
+			ok,
+			getErr,
+		)
 	}
 }
 
@@ -403,7 +472,7 @@ func TestAutoCreateResolverRollbackFailureReconcilesAndFailsStop(t *testing.T) {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	n := nn.(*localNode)
-	seedTestPrincipal(t, n.realm)
+	seedTestPrincipal(t, n)
 
 	err = n.ensureAccountAndAssetsRegisteredExclusive(
 		ctx, "fresh", domain.MissingAccountCreate, "test", testCaller, "USD",
@@ -423,5 +492,75 @@ func TestAutoCreateResolverRollbackFailureReconcilesAndFailsStop(t *testing.T) {
 	}
 	if got := base.accountResolverIDs["fresh"]; got != account.EngineAccountID {
 		t.Fatalf("reconciled resolver id = %d, want %d", got, account.EngineAccountID)
+	}
+}
+
+// TestAutoCreateResolverRollbackSuccessIsInternal covers the
+// successful-rollback branch of rollbackAutoCreatedAccountPublication: the
+// store write for the auto-created account already committed before the
+// resolver publish failed, so even though the compensating delete restores a
+// consistent state, the failure is Officer's to own. The caller must not see
+// it classified as the domain sentinel the resolver failure carried (which
+// would surface as a 409 for a request that merely referenced an unknown
+// account code), while the underlying diagnostic cause must still be reachable
+// for logs.
+func TestAutoCreateResolverRollbackSuccessIsInternal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	baseStore := newMemoryStore("auto-create-resolver-rollback-success.db")
+	if err := baseStore.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = baseStore.Close() })
+	base := newFakeEngine()
+	diagnosticCause := errors.New("account dictionary desync detail")
+	resolverErr := fmt.Errorf(
+		"engine: account resolver alias %q already exists: %w: %w",
+		"fresh", domain.ErrAlreadyExists, diagnosticCause,
+	)
+	wrapper := &failingAccountResolverEngine{fakeEngine: base, err: resolverErr}
+	var captured engine.Snapshot
+	inner := fakeBuild(base, &captured)
+	nn, _, err := NewLocalNode(
+		ctx,
+		baseStore,
+		func(snap engine.Snapshot) (engine.Engine, error) {
+			if _, buildErr := inner(snap); buildErr != nil {
+				return nil, buildErr
+			}
+			return wrapper, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nn.(*localNode)
+	seedTestPrincipal(t, n)
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	err = n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, "fresh", domain.MissingAccountCreate, "test", testCaller, "USD",
+	)
+	if err == nil {
+		t.Fatal("auto-create succeeded, want resolver publication failure")
+	}
+	if errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf(
+			"auto-create error = %v, must not expose the domain sentinel after a "+
+				"committed auto-create rollback",
+			err,
+		)
+	}
+	if !errors.Is(err, diagnosticCause) {
+		t.Fatalf("auto-create error = %v, want diagnostic cause preserved", err)
+	}
+	if _, ok, getErr := n.realm.GetAccount(ctx, "fresh"); getErr != nil || ok {
+		t.Fatalf("GetAccount(fresh) after rollback: ok=%v err=%v, want removed", ok, getErr)
+	}
+	if fatalErr != nil {
+		t.Fatalf(
+			"fatal error = %v, want successful rollback without a fatal", fatalErr,
+		)
 	}
 }

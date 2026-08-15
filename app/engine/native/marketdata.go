@@ -27,14 +27,15 @@ import (
 	bindmd "go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/param"
 
+	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
 )
 
 // instrumentKey identifies one instrument by its (base, quote) pair, the cache
 // key for the first-sight register.
 type instrumentKey struct {
-	base  string
-	quote string
+	base  domain.EngineAssetID
+	quote domain.EngineAssetID
 }
 
 // marketDataSink adapts the binding's market-data service to the connector
@@ -44,6 +45,7 @@ type instrumentKey struct {
 // guarded by mu.
 type marketDataSink struct {
 	service *bindmd.Service
+	res     idResolver
 	now     func() time.Time
 
 	mu  sync.Mutex
@@ -59,9 +61,10 @@ type marketDataSink struct {
 }
 
 // newMarketDataSink wraps service into a Sink with an empty id cache.
-func newMarketDataSink(service *bindmd.Service) *marketDataSink {
+func newMarketDataSink(service *bindmd.Service, res idResolver) *marketDataSink {
 	return &marketDataSink{
 		service:   service,
+		res:       res,
 		now:       time.Now,
 		ids:       make(map[instrumentKey]bindmd.InstrumentID),
 		lifetimes: make(map[instrumentKey]time.Duration),
@@ -77,7 +80,7 @@ func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
 	s.publishMu.Lock()
 	defer s.publishMu.Unlock()
 
-	instrument, err := instrumentFrom(update.Base, update.Quote)
+	instrument, err := instrumentFrom(update.Base, update.Quote, s.res)
 	if err != nil {
 		return err
 	}
@@ -112,14 +115,14 @@ func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
 		if !sourced {
 			if err := s.service.ClearInstrumentTTL(id); err != nil {
 				return fmt.Errorf(
-					"engine: restore quote ttl %s/%s: %w", update.Base, update.Quote, err,
+					"engine: restore quote ttl %d/%d: %w", update.Base, update.Quote, err,
 				)
 			}
 			return nil
 		}
 		if err := s.service.SetInstrumentTTL(id, bindmd.WithinTTL(ttl)); err != nil {
 			return fmt.Errorf(
-				"engine: set source quote ttl %s/%s: %w", update.Base, update.Quote, err,
+				"engine: set source quote ttl %d/%d: %w", update.Base, update.Quote, err,
 			)
 		}
 		return nil
@@ -127,7 +130,7 @@ func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
 	push := func() error {
 		if err := s.service.Push(id, quote); err != nil {
 			return fmt.Errorf(
-				"engine: push quote %s/%s: %w", update.Base, update.Quote, err,
+				"engine: push quote %d/%d: %w", update.Base, update.Quote, err,
 			)
 		}
 		return nil
@@ -190,11 +193,11 @@ func quoteSourceTTL(asOf, now time.Time) (time.Duration, bool) {
 
 // Clear removes the live quote for one instrument without unregistering its
 // stable service id. An instrument this sink has never observed is a no-op.
-func (s *marketDataSink) Clear(base, quote string) error {
+func (s *marketDataSink) Clear(base, quote domain.EngineAssetID) error {
 	s.publishMu.Lock()
 	defer s.publishMu.Unlock()
 
-	instrument, err := instrumentFrom(base, quote)
+	instrument, err := instrumentFrom(base, quote, s.res)
 	if err != nil {
 		return err
 	}
@@ -219,7 +222,7 @@ func (s *marketDataSink) Clear(base, quote string) error {
 // ErrAlreadyRegistered, which is resolved to the existing id. The whole
 // lookup-register-cache runs under mu so two goroutines never both register.
 func (s *marketDataSink) resolveID(
-	base, quote string, instrument param.Instrument,
+	base, quote domain.EngineAssetID, instrument param.Instrument,
 ) (bindmd.InstrumentID, error) {
 	key := instrumentKey{base: base, quote: quote}
 
@@ -234,27 +237,28 @@ func (s *marketDataSink) resolveID(
 		resolved, ok := s.service.Resolve(instrument)
 		if !ok {
 			return bindmd.InstrumentID{}, fmt.Errorf(
-				"engine: instrument %s/%s already registered but unresolvable", base, quote)
+				"engine: instrument %d/%d already registered but unresolvable", base, quote)
 		}
 		id = resolved
 	} else if err != nil {
 		return bindmd.InstrumentID{}, fmt.Errorf(
-			"engine: register instrument %s/%s: %w", base, quote, err)
+			"engine: register instrument %d/%d: %w", base, quote, err)
 	}
 	s.ids[key] = id
 	return id, nil
 }
 
-// instrumentFrom builds a binding instrument from the base and quote asset
-// names.
-func instrumentFrom(base, quote string) (param.Instrument, error) {
-	baseAsset, err := param.NewAsset(base)
+// instrumentFrom builds a binding instrument from stable asset identifiers.
+func instrumentFrom(
+	base, quote domain.EngineAssetID, res idResolver,
+) (param.Instrument, error) {
+	baseAsset, err := res.assetByID(base)
 	if err != nil {
-		return param.Instrument{}, fmt.Errorf("engine: base asset %q: %w", base, err)
+		return param.Instrument{}, fmt.Errorf("engine: base asset %d: %w", base, err)
 	}
-	quoteAsset, err := param.NewAsset(quote)
+	quoteAsset, err := res.assetByID(quote)
 	if err != nil {
-		return param.Instrument{}, fmt.Errorf("engine: quote asset %q: %w", quote, err)
+		return param.Instrument{}, fmt.Errorf("engine: quote asset %d: %w", quote, err)
 	}
 	return param.NewInstrument(baseAsset, quoteAsset), nil
 }

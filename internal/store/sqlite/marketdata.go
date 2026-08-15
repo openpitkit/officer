@@ -301,10 +301,11 @@ func resolveInstanceID(
 
 // mdInstrumentSelect is the shared projection for instrument reads. The
 // instance reference is surfaced as the instance external id; base/quote are
-// surfaced as asset codes; the instrument surrogate id is never surfaced.
+// surfaced as human codes with their stable internal identifiers for runtime
+// consumers; the instrument surrogate id is never surfaced.
 const mdInstrumentSelect = `
 SELECT i.external_id AS instance_xid, mdi.external_symbol,
-       ba.code, qa.code, mdi.enabled, mdi.manual_price
+       ba.code, qa.code, ba.id, qa.id, mdi.enabled, mdi.manual_price
 FROM market_data_instrument mdi
 JOIN market_data_instance i ON i.id = mdi.instance_id
 JOIN asset ba               ON ba.id = mdi.base_asset_id
@@ -462,6 +463,7 @@ func scanMDInstrument(rows *sql.Rows) (domain.MarketDataInstrument, error) {
 	if err := rows.Scan(
 		&rawXID, &instr.ExternalSymbol,
 		&instr.BaseAsset, &instr.QuoteAsset,
+		&instr.BaseAssetID, &instr.QuoteAssetID,
 		&instr.Enabled, &instr.ManualPrice,
 	); err != nil {
 		return domain.MarketDataInstrument{}, fmt.Errorf("store: scan market data instrument: %w", err)

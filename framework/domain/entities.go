@@ -131,8 +131,9 @@ type AccountGroup struct {
 	BlockReason string
 	// EngineGroupID is the integer id the engine runs this group on: the group
 	// row's surrogate id. It is internal and never serialized on the wire
-	// (json:"-"); zero means unassigned. The engine layer consumes it on read
-	// paths, but it is never a public handle.
+	// (json:"-"); zero means unassigned. The engine adapter maps codes to this
+	// identifier on inputs and maps it back to codes on outputs; it is never a
+	// public handle.
 	EngineGroupID EngineGroupID `json:"-"`
 	// Blocked reports whether the group is currently kill-switched.
 	Blocked bool
@@ -140,8 +141,9 @@ type AccountGroup struct {
 
 // Asset is a dictionary entity naming one tradable asset, addressed by its Code
 // (e.g. "AAPL", "USD"), displayed under a Title, and optionally classified by
-// AssetClass. All three fields are operator-editable. The surrogate key never
-// appears here.
+// AssetClass. Those three fields are operator-editable. EngineAssetID carries
+// the row's surrogate key for internal engine use; it is never a public handle
+// or wire field.
 type Asset struct {
 	// Code is the operator-chosen asset code, unique per realm and mutable.
 	Code string
@@ -150,6 +152,12 @@ type Asset struct {
 	// AssetClass is an optional classification (e.g. "equity", "fx"); empty
 	// when unset.
 	AssetClass string
+	// EngineAssetID is the integer id the engine runs this asset on: the asset
+	// row's surrogate id. It is internal and never serialized on the wire
+	// (json:"-"); zero means unassigned. The engine adapter maps codes to this
+	// identifier on inputs and maps it back to codes on outputs; it is never a
+	// public handle.
+	EngineAssetID EngineAssetID `json:"-"`
 }
 
 // AssetClass is a dictionary entity naming one asset classification (e.g.
@@ -485,6 +493,12 @@ type MarketDataInstrument struct {
 	BaseAsset string
 	// QuoteAsset is the code of the instrument settlement asset (e.g. "USD").
 	QuoteAsset string
+	// BaseAssetID is the underlying asset row's stable internal identifier. It
+	// is never serialized on the wire (json:"-").
+	BaseAssetID EngineAssetID `json:"-"`
+	// QuoteAssetID is the settlement asset row's stable internal identifier. It
+	// is never serialized on the wire (json:"-").
+	QuoteAssetID EngineAssetID `json:"-"`
 	// ManualPrice is the operator-set mark price as an exact decimal string;
 	// empty when none. It applies only to bring-your-own (manual) instruments:
 	// the operator sets it once and the manager pushes it into the engine as a

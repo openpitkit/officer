@@ -80,7 +80,7 @@ func (rt *restoreTx) restoreAssetClasses(
 	return nil
 }
 
-func (rt *restoreTx) restoreAssets(ctx context.Context, assets []domain.Asset) error {
+func (rt *restoreTx) restoreAssets(ctx context.Context, assets []backup.Asset) error {
 	for _, a := range assets {
 		if err := domain.ValidateAsset(a.Code); err != nil {
 			return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
@@ -339,7 +339,7 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 
 // --- Restore: positions -----------------------------------------------------
 
-func (rt *restoreTx) restoreBalances(ctx context.Context, balances []domain.Balance) error {
+func (rt *restoreTx) restoreBalances(ctx context.Context, balances []backup.Balance) error {
 	for _, b := range balances {
 		if err := domain.ValidatePnlHaltReason(b.RealizedPnlHaltReason); err != nil {
 			return fmt.Errorf("store: restore balance %q/%q: %w", b.Account, b.Asset, err)

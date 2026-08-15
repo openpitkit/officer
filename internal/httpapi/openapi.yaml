@@ -4550,7 +4550,7 @@ components:
 
     BackupManifest:
       type: object
-      required: [formatVersion, createdAt, realm, sections]
+      required: [formatVersion, createdAt, source, realm, sections]
       properties:
         formatVersion:
           type: integer
@@ -4561,7 +4561,10 @@ components:
           description: Time the backup archive was created.
         source:
           type: string
-          description: Source service or deployment that produced the archive.
+          description: >
+            Source service or deployment that produced the archive. Presence
+            alone is not enough: a blank or whitespace-only value is rejected
+            at restore.
         realm:
           description: Realm the archive was produced for.
           $ref: "#/components/schemas/RealmLabel"
@@ -4575,6 +4578,21 @@ components:
       type: object
       additionalProperties: false
       properties:
+        assetClasses:
+          type: array
+          description: Serialized asset-class dictionary rows.
+          items:
+            type: object
+        assets:
+          type: array
+          description: Serialized asset dictionary rows.
+          items:
+            type: object
+        principals:
+          type: array
+          description: Serialized principal dictionary rows.
+          items:
+            type: object
         mcpAccess:
           type: object
           description: Persisted MCP command enablement overrides.
@@ -4590,9 +4608,22 @@ components:
           description: Serialized account group rows.
           items:
             type: object
-        limits:
+        defaultGroupCurrency:
+          type: string
+          description: Currency of the reserved default account group.
+        rateLimits:
           type: array
-          description: Serialized risk limit rows.
+          description: Serialized rate-limit rows.
+          items:
+            type: object
+        orderSizeLimits:
+          type: array
+          description: Serialized order-size limit rows.
+          items:
+            type: object
+        spotFundsPnlBoundsLimits:
+          type: array
+          description: Serialized SpotFunds P&L-bounds limit rows.
           items:
             type: object
         balances:
@@ -4648,6 +4679,21 @@ components:
         marketDataQuotes:
           type: array
           description: Serialized latest market-data quote rows.
+          items:
+            type: object
+        signingKeys:
+          type: array
+          description: Serialized signing key rows.
+          items:
+            type: object
+        signingConfig:
+          type: array
+          description: Serialized signing configuration rows.
+          items:
+            type: object
+        userSettings:
+          type: array
+          description: Serialized user setting rows.
           items:
             type: object
 

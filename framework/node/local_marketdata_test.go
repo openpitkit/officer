@@ -40,15 +40,18 @@ func TestUpsertMarketDataInstrumentKeepsEngineAndSink(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	buildCalls := 0
+	var fake *fakeEngine
 	wantSink := &marketDataTestSink{}
 	build := func(engine.Snapshot) (engine.Engine, error) {
 		buildCalls++
 		if buildCalls > 1 {
 			return nil, fmt.Errorf("unexpected market-data engine rebuild")
 		}
+		fake = newFakeEngine()
 		return &marketDataTestEngine{
-			Engine: newFakeEngine(),
-			sink:   wantSink,
+			Engine:             fake,
+			DictionaryResolver: fake,
+			sink:               wantSink,
 		}, nil
 	}
 	nodeValue, _, err := NewLocalNode(ctx, st, build)
@@ -56,7 +59,7 @@ func TestUpsertMarketDataInstrumentKeepsEngineAndSink(t *testing.T) {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	n := nodeValue.(*localNode)
-	seedTestPrincipal(t, n.realm)
+	seedTestPrincipal(t, n)
 
 	instance, err := n.realm.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
 		Provider: domain.MarketDataProviderBinance,
@@ -96,6 +99,14 @@ func TestUpsertMarketDataInstrumentKeepsEngineAndSink(t *testing.T) {
 		if asset.AssetClass != autoCreatedAssetClassCode {
 			t.Fatalf("asset %s class = %q, want %q", code, asset.AssetClass,
 				autoCreatedAssetClassCode)
+		}
+		if got := fake.assetResolverIDs[code]; got != asset.EngineAssetID {
+			t.Fatalf("live resolver id for %s = %d, want %d", code, got, asset.EngineAssetID)
+		}
+		if code == instrument.BaseAsset {
+			instrument.BaseAssetID = asset.EngineAssetID
+		} else {
+			instrument.QuoteAssetID = asset.EngineAssetID
 		}
 	}
 	instruments, err := n.realm.ListMarketDataInstruments(ctx, instance.ExternalID)
@@ -201,6 +212,7 @@ func assertMarketDataAssetAudits(
 
 type marketDataTestEngine struct {
 	engine.Engine
+	engine.DictionaryResolver
 	sink marketdata.Sink
 }
 

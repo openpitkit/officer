@@ -1040,6 +1040,177 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAsset(t *testing.T) {
 	}
 }
 
+func TestLocalNode_SubmitOrderRejectsUnsupportedAssetAutoCreateBeforeStoreWrite(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	base := newMemoryStore("auto-create-asset-capability.db")
+	var probe *assetMutationProbeRealm
+	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
+		probe = &assetMutationProbeRealm{RealmStore: realm}
+		return probe
+	})
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedTestAccount(t, base.realm, "acc-1")
+	n := newResolverCapabilityTestNode(t, st)
+	if probe == nil {
+		t.Fatal("asset mutation probe was not installed")
+	}
+	probe.createCalls = 0
+
+	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "GOLD",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, domain.MissingAccountCreate, testCaller)
+	if !errors.Is(err, domain.ErrNotImplemented) {
+		t.Fatalf("SubmitOrder = %v, want ErrNotImplemented", err)
+	}
+	if probe.createCalls != 0 {
+		t.Fatalf("CreateAsset store calls = %d, want 0", probe.createCalls)
+	}
+	if order.ExternalID != "" {
+		t.Fatalf("SubmitOrder returned order %q, want no order", order.ExternalID)
+	}
+	if _, ok, getErr := n.realm.GetAsset(ctx, "GOLD"); getErr != nil || ok {
+		t.Fatalf("GetAsset(GOLD) = ok %v err %v, want absent", ok, getErr)
+	}
+	if _, ok, getErr := n.realm.GetAssetClass(
+		ctx, autoCreatedAssetClassCode,
+	); getErr != nil || ok {
+		t.Fatalf(
+			"GetAssetClass(auto-created) = ok %v err %v, want absent",
+			ok,
+			getErr,
+		)
+	}
+}
+
+// failingAssetResolverEngine forces AddAssetResolverEntry to fail with a
+// caller-supplied error while delegating everything else to the wrapped fake,
+// so a test can drive the auto-created asset publication failure without
+// disturbing the rest of the engine's dictionary state.
+type failingAssetResolverEngine struct {
+	*fakeEngine
+	err error
+}
+
+func (e *failingAssetResolverEngine) AddAssetResolverEntry(domain.Asset) error {
+	return e.err
+}
+
+// TestLocalNode_SubmitOrderAutoCreateAssetRollbackSuccessIsInternal covers the
+// successful-rollback branch of rollbackAutoCreatedAssetPublication: the store
+// write for the auto-created asset already committed before the resolver
+// publish failed, so even though the compensating delete restores a consistent
+// state, the failure is Officer's to own. The caller must not see it classified
+// as the domain sentinel the resolver failure carried (which would surface as a
+// 409 for an order that referenced a perfectly fine, if unknown, asset code),
+// while the underlying diagnostic cause must still be reachable for logs.
+func TestLocalNode_SubmitOrderAutoCreateAssetRollbackSuccessIsInternal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newMemoryStore("auto-create-asset-rollback.db")
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	base := newFakeEngine()
+	diagnosticCause := errors.New("asset dictionary desync detail")
+	resolverErr := fmt.Errorf(
+		"engine: asset resolver alias %q already exists: %w: %w",
+		"GOLD", domain.ErrAlreadyExists, diagnosticCause,
+	)
+	var captured engine.Snapshot
+	inner := fakeBuild(base, &captured)
+	nn, _, err := NewLocalNode(ctx, st, func(snap engine.Snapshot) (engine.Engine, error) {
+		if _, buildErr := inner(snap); buildErr != nil {
+			return nil, buildErr
+		}
+		return &failingAssetResolverEngine{fakeEngine: base, err: resolverErr}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nn.(*localNode)
+	seedTestPrincipal(t, n)
+	seedTestAccount(t, n.realm, "acc-1")
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	_, submitErr := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "GOLD",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, domain.MissingAccountCreate, testCaller)
+	if submitErr == nil {
+		t.Fatal("SubmitOrder succeeded, want asset resolver publication failure")
+	}
+	if errors.Is(submitErr, domain.ErrAlreadyExists) {
+		t.Fatalf(
+			"SubmitOrder error = %v, must not expose the domain sentinel after a "+
+				"committed auto-create rollback",
+			submitErr,
+		)
+	}
+	if !errors.Is(submitErr, diagnosticCause) {
+		t.Fatalf("SubmitOrder error = %v, want diagnostic cause preserved", submitErr)
+	}
+	if _, ok, getErr := n.realm.GetAsset(ctx, "GOLD"); getErr != nil || ok {
+		t.Fatalf("GetAsset(GOLD) after rollback: ok=%v err=%v, want removed", ok, getErr)
+	}
+	if fatalErr != nil {
+		t.Fatalf(
+			"fatal error = %v, want successful rollback without a fatal", fatalErr,
+		)
+	}
+}
+
+func TestLocalNode_AutoCreatedAssetAuditSurvivesRequestCancellation(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng := newFakeEngine()
+	eng.afterAssetResolverAdd = cancel
+	n, _ := newTestNode(t, eng)
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:     "asset-audit-cancel",
+		Currency: "GOLD",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount after request cancellation: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("asset resolver publication did not cancel the request context")
+	}
+	if fatalErr != nil {
+		t.Fatalf("auto-created asset audit triggered fatal path: %v", fatalErr)
+	}
+	rows, err := n.ListAudit(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	for _, row := range rows {
+		if row.Action == domain.AuditActionCreateAsset && row.Asset == "GOLD" {
+			return
+		}
+	}
+	t.Fatalf("audit rows = %+v, want auto-created GOLD asset", rows)
+}
+
 // TestLocalNode_SubmitOrderAutoCreatesUnknownAccount checks that an order
 // submitted for an account Officer does not know yet auto-creates it (like a
 // fresh adjustment target), so the engine resolves the account and the order

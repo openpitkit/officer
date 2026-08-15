@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -53,18 +54,26 @@ type idResolverState struct {
 
 	accounts       map[domain.AccountID]param.AccountID
 	accountAliases map[uint64]domain.AccountID
-	groups         map[string]param.AccountGroupID
-	groupAliases   map[uint32]string
+	// Resolver asset ids are copied with Safe; Unsafe borrows finalizer-backed
+	// C memory and must not back resolver comparisons or map keys.
+	assets       map[string]param.Asset
+	assetIDs     map[domain.EngineAssetID]param.Asset
+	assetAliases map[string]string
+	groups       map[string]param.AccountGroupID
+	groupAliases map[uint32]string
 }
 
-// newIDResolver builds the resolver from the snapshot's accounts and groups,
-// converting each stored engine id with the binding's integer constructors
-// (param.NewAccountIDFromUint64 / NewAccountGroupIDFromUint32). An account whose
-// engine id is unassigned (zero) or out of range, or a group whose engine id is
-// unassigned/out of range, is corruption of our own persisted ids and aborts the
-// build.
-func newIDResolver(accounts []domain.Account, groups []domain.AccountGroup) (idResolver, error) {
-	r := newEmptyIDResolver(len(accounts), len(groups))
+// newIDResolver builds the resolver from the snapshot's complete dictionary,
+// converting persisted account and group ids with the binding's integer
+// constructors and constructing each asset once from its decimal engine id. An
+// unassigned or out-of-range persisted id is corruption of our own dictionary
+// and aborts the build.
+func newIDResolver(
+	accounts []domain.Account,
+	groups []domain.AccountGroup,
+	assets []domain.Asset,
+) (idResolver, error) {
+	r := newEmptyIDResolver(len(accounts), len(groups), len(assets))
 	for _, account := range accounts {
 		if err := r.addAccountResolverEntry(account); err != nil {
 			return idResolver{}, err
@@ -75,13 +84,21 @@ func newIDResolver(accounts []domain.Account, groups []domain.AccountGroup) (idR
 			return idResolver{}, err
 		}
 	}
+	for _, asset := range assets {
+		if err := r.addAssetResolverEntry(asset); err != nil {
+			return idResolver{}, err
+		}
+	}
 	return r, nil
 }
 
-func newEmptyIDResolver(accountCount, groupCount int) idResolver {
+func newEmptyIDResolver(accountCount, groupCount, assetCount int) idResolver {
 	return idResolver{shared: &idResolverState{
 		accounts:       make(map[domain.AccountID]param.AccountID, accountCount),
 		accountAliases: make(map[uint64]domain.AccountID, accountCount),
+		assets:         make(map[string]param.Asset, assetCount),
+		assetIDs:       make(map[domain.EngineAssetID]param.Asset, assetCount),
+		assetAliases:   make(map[string]string, assetCount),
 		groups:         make(map[string]param.AccountGroupID, groupCount),
 		groupAliases:   make(map[uint32]string, groupCount),
 	}}
@@ -89,7 +106,7 @@ func newEmptyIDResolver(accountCount, groupCount int) idResolver {
 
 func (r *idResolver) ensureInitialized() {
 	if r.shared == nil {
-		*r = newEmptyIDResolver(0, 0)
+		*r = newEmptyIDResolver(0, 0, 0)
 	}
 }
 
@@ -136,6 +153,52 @@ func (r idResolver) accountIDSnapshot() map[domain.AccountID]param.AccountID {
 	return accounts
 }
 
+// asset resolves a human asset code to the immutable ready asset held by the
+// adapter. An unknown code is caller input and therefore wraps domain.ErrInvalid.
+func (r idResolver) asset(code string) (param.Asset, error) {
+	if r.shared == nil {
+		return param.Asset{}, unknownAssetAliasError(code)
+	}
+	r.shared.mu.RLock()
+	asset, ok := r.shared.assets[code]
+	r.shared.mu.RUnlock()
+	if !ok {
+		return param.Asset{}, unknownAssetAliasError(code)
+	}
+	return asset, nil
+}
+
+// assetByID resolves an immutable asset id to the ready asset constructed when
+// the dictionary was published. Quote routing uses it to avoid any code lookup
+// on the hot path.
+func (r idResolver) assetByID(id domain.EngineAssetID) (param.Asset, error) {
+	if r.shared == nil {
+		return param.Asset{}, unknownAssetIDError(id)
+	}
+	r.shared.mu.RLock()
+	asset, ok := r.shared.assetIDs[id]
+	r.shared.mu.RUnlock()
+	if !ok {
+		return param.Asset{}, unknownAssetIDError(id)
+	}
+	return asset, nil
+}
+
+// assetAlias translates an asset returned by the engine back to its human code.
+// A missing entry is our corrupt published dictionary, not caller input.
+func (r idResolver) assetAlias(asset param.Asset) (string, error) {
+	if r.shared == nil {
+		return "", unknownAssetReadyIDError(asset)
+	}
+	r.shared.mu.RLock()
+	code, ok := r.shared.assetAliases[asset.Safe()]
+	r.shared.mu.RUnlock()
+	if !ok {
+		return "", unknownAssetReadyIDError(asset)
+	}
+	return code, nil
+}
+
 // group resolves a group code to its engine group id. An unknown code is caller
 // input and wraps domain.ErrInvalid.
 func (r idResolver) group(code string) (param.AccountGroupID, error) {
@@ -157,6 +220,18 @@ func unknownAccountAliasError(code domain.AccountID) error {
 
 func unknownAccountIDError(id param.AccountID) error {
 	return fmt.Errorf("engine: unknown account engine id %d", id.Handle())
+}
+
+func unknownAssetAliasError(code string) error {
+	return fmt.Errorf("engine: unknown asset resolver alias %q: %w", code, domain.ErrInvalid)
+}
+
+func unknownAssetIDError(id domain.EngineAssetID) error {
+	return fmt.Errorf("engine: unknown asset engine id %d", id)
+}
+
+func unknownAssetReadyIDError(id param.Asset) error {
+	return fmt.Errorf("engine: unknown asset engine id %q", id.String())
 }
 
 func unknownGroupAliasError(code string) error {
@@ -189,6 +264,42 @@ func (r idResolver) addAccountResolverEntry(account domain.Account) error {
 	}
 	r.shared.accounts[account.Code] = id
 	r.shared.accountAliases[idKey] = account.Code
+	return nil
+}
+
+func (r idResolver) addAssetResolverEntry(asset domain.Asset) error {
+	ready, err := engineAsset(asset.EngineAssetID, asset.Code)
+	if err != nil {
+		return err
+	}
+	if r.shared == nil {
+		return fmt.Errorf("engine: asset resolver is not initialized")
+	}
+
+	id := ready.Safe()
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	if _, exists := r.shared.assets[asset.Code]; exists {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q already exists: %w",
+			asset.Code, domain.ErrAlreadyExists,
+		)
+	}
+	if alias, exists := r.shared.assetAliases[id]; exists {
+		return fmt.Errorf(
+			"engine: asset engine id %d already belongs to resolver alias %q: %w",
+			asset.EngineAssetID, alias, domain.ErrInvalid,
+		)
+	}
+	if _, exists := r.shared.assetIDs[asset.EngineAssetID]; exists {
+		return fmt.Errorf(
+			"engine: asset engine id %d already exists: %w",
+			asset.EngineAssetID, domain.ErrInvalid,
+		)
+	}
+	r.shared.assets[asset.Code] = ready
+	r.shared.assetIDs[asset.EngineAssetID] = ready
+	r.shared.assetAliases[id] = asset.Code
 	return nil
 }
 
@@ -228,6 +339,84 @@ func (r idResolver) renameAccountResolverEntry(
 	delete(r.shared.accounts, oldCode)
 	r.shared.accounts[account.Code] = currentID
 	r.shared.accountAliases[uint64(currentID.Handle())] = account.Code
+	return nil
+}
+
+func (r idResolver) renameAssetResolverEntry(oldCode string, asset domain.Asset) error {
+	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
+		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, err)
+	}
+	if r.shared == nil {
+		return fmt.Errorf("engine: asset resolver is not initialized")
+	}
+
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	current, exists := r.shared.assets[oldCode]
+	if !exists {
+		return unknownAssetAliasError(oldCode)
+	}
+	id := current.Safe()
+	if id != strconv.FormatUint(asset.EngineAssetID.Uint64(), 10) {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q has engine id %q, target %q has %d: %w",
+			oldCode, id, asset.Code, asset.EngineAssetID, domain.ErrInvalid,
+		)
+	}
+	if oldCode == asset.Code {
+		return nil
+	}
+	if _, exists := r.shared.assets[asset.Code]; exists {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q already exists: %w",
+			asset.Code, domain.ErrAlreadyExists,
+		)
+	}
+	if alias, exists := r.shared.assetAliases[id]; !exists || alias != oldCode {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q has corrupt engine id mapping: %w",
+			oldCode, domain.ErrInvalid,
+		)
+	}
+
+	delete(r.shared.assets, oldCode)
+	r.shared.assets[asset.Code] = current
+	r.shared.assetAliases[id] = asset.Code
+	return nil
+}
+
+func (r idResolver) removeAssetResolverEntry(asset domain.Asset) error {
+	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
+		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, err)
+	}
+	if r.shared == nil {
+		return fmt.Errorf("engine: asset resolver is not initialized")
+	}
+
+	expectedID := strconv.FormatUint(asset.EngineAssetID.Uint64(), 10)
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	current, exists := r.shared.assets[asset.Code]
+	if !exists {
+		return unknownAssetAliasError(asset.Code)
+	}
+	currentID := current.Safe()
+	if currentID != expectedID {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q has engine id %q, removal target has %d: %w",
+			asset.Code, currentID, asset.EngineAssetID, domain.ErrInvalid,
+		)
+	}
+	if alias, exists := r.shared.assetAliases[expectedID]; !exists || alias != asset.Code {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q has corrupt engine id mapping: %w",
+			asset.Code, domain.ErrInvalid,
+		)
+	}
+
+	delete(r.shared.assets, asset.Code)
+	delete(r.shared.assetIDs, asset.EngineAssetID)
+	delete(r.shared.assetAliases, expectedID)
 	return nil
 }
 
@@ -366,6 +555,20 @@ func engineGroupID(id domain.EngineGroupID, code string) (param.AccountGroupID, 
 	return group, nil
 }
 
+// engineAsset converts a persisted asset surrogate into the decimal opaque
+// asset string accepted by the engine. It is called only while publishing an
+// entry, so the C-backed param.Asset is constructed once per asset.
+func engineAsset(id domain.EngineAssetID, code string) (param.Asset, error) {
+	if err := domain.ValidateEngineAssetID(id); err != nil {
+		return param.Asset{}, fmt.Errorf("engine: asset %q engine id: %w", code, err)
+	}
+	asset, err := param.NewAsset(strconv.FormatUint(id.Uint64(), 10))
+	if err != nil {
+		return param.Asset{}, fmt.Errorf("engine: asset %q engine id %d: %w", code, id, err)
+	}
+	return asset, nil
+}
+
 // --- rate-limit translation -------------------------------------------------
 
 // rateLimitAxes maps a rate-limit barrier set onto the public Configure axes:
@@ -402,7 +605,7 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 			}
 			broker = &policies.RateLimitBrokerBarrier{Limit: rate}
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Asset)
+			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
@@ -424,7 +627,7 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
-			asset, err := newAsset(limit.Asset)
+			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
@@ -472,7 +675,7 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 			}
 			broker = &policies.OrderSizeBrokerBarrier{Limit: size}
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Asset)
+			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -485,7 +688,7 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			asset, err := newAsset(limit.Asset)
+			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -523,7 +726,7 @@ func spotFundsPnlBoundsAxes(
 	accounts := []policies.SpotFundsPnlBoundsAccountBarrier{}
 
 	for _, limit := range limits {
-		barrier, err := spotFundsPnlBoundsBarrier(limit)
+		barrier, err := spotFundsPnlBoundsBarrier(limit, res)
 		if err != nil {
 			return global, nil, nil, err
 		}
@@ -593,7 +796,7 @@ func rateLimitReady(limits []domain.LimitRate, res idResolver) (*policies.RateLi
 			}
 			broker = &policies.RateLimitBrokerBarrier{Limit: rate}
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Asset)
+			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -615,7 +818,7 @@ func rateLimitReady(limits []domain.LimitRate, res idResolver) (*policies.RateLi
 			if err != nil {
 				return nil, err
 			}
-			asset, err := newAsset(limit.Asset)
+			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -662,7 +865,7 @@ func orderSizeReady(limits []domain.LimitOrderSize, res idResolver) (*policies.O
 			}
 			broker = &policies.OrderSizeBrokerBarrier{Limit: size}
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Asset)
+			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -675,7 +878,7 @@ func orderSizeReady(limits []domain.LimitOrderSize, res idResolver) (*policies.O
 			if err != nil {
 				return nil, err
 			}
-			asset, err := newAsset(limit.Asset)
+			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -749,8 +952,9 @@ func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error
 
 func spotFundsPnlBoundsBarrier(
 	limit domain.LimitSpotFundsPnlBounds,
+	res idResolver,
 ) (policies.SpotFundsPnlBoundsBarrier, error) {
-	currency, err := newAsset(limit.Currency)
+	currency, err := res.asset(limit.Currency)
 	if err != nil {
 		return policies.SpotFundsPnlBoundsBarrier{}, err
 	}
@@ -795,16 +999,6 @@ func pnlBoundOptions(
 	return lower, upper, nil
 }
 
-// newAsset parses a caller-supplied asset code into a param.Asset. A bad format
-// is caller input, so it wraps domain.ErrInvalid (HTTP 400).
-func newAsset(code string) (param.Asset, error) {
-	asset, err := param.NewAsset(code)
-	if err != nil {
-		return param.Asset{}, fmt.Errorf("engine: asset %q: %w: %w", code, err, domain.ErrInvalid)
-	}
-	return asset, nil
-}
-
 // --- account adjustment translation ----------------------------------------
 
 // accountAdjustmentFromRequest maps one domain adjustment request onto a single
@@ -812,8 +1006,9 @@ func newAsset(code string) (param.Asset, error) {
 // average-entry-price, per-field absolute|delta amounts, and optional bounds.
 func accountAdjustmentFromRequest(
 	req domain.AdjustmentRequest,
+	res idResolver,
 ) (model.AccountAdjustment, error) {
-	asset, err := newAsset(req.Asset)
+	asset, err := res.asset(req.Asset)
 	if err != nil {
 		return model.AccountAdjustment{}, err
 	}
@@ -1011,20 +1206,24 @@ func adjustmentBoundsValues(
 // and combining them would invent an answer (summing deltas and reconciling
 // absolutes is a model rework across the engine adapter and node persistence).
 func outcomeAcceptedFromList(
-	outcomes []accountadjustment.Outcome, asset string,
+	outcomes []accountadjustment.Outcome, asset string, res idResolver,
 ) (domain.AdjustmentOutcomeAccepted, bool, error) {
 	var result domain.AdjustmentOutcomeAccepted
 	found := false
 	for _, outcome := range outcomes {
 		entry := outcome.Entry
-		if entry.Asset.String() != asset {
+		entryAsset, err := res.assetAlias(entry.Asset)
+		if err != nil {
+			return domain.AdjustmentOutcomeAccepted{}, false, err
+		}
+		if entryAsset != asset {
 			continue
 		}
 		if found {
 			return domain.AdjustmentOutcomeAccepted{}, false, fmt.Errorf(
 				"engine: account adjustment returned several outcomes for asset %q", asset)
 		}
-		accepted, err := outcomeAcceptedFromEntry(entry)
+		accepted, err := outcomeAcceptedFromEntry(entry, res)
 		if err != nil {
 			return domain.AdjustmentOutcomeAccepted{}, false, err
 		}
@@ -1038,15 +1237,20 @@ func outcomeAcceptedFromList(
 // performs no per-asset dedup; mergeBalanceOutcomes combines the phases.
 func balanceOutcomesFromList(
 	outcomes []accountadjustment.Outcome,
+	res idResolver,
 ) ([]BalanceOutcome, error) {
 	result := make([]BalanceOutcome, 0, len(outcomes))
 	for _, outcome := range outcomes {
 		entry := outcome.Entry
-		asset := entry.Asset.String()
-		if asset == "" {
+		// Empty comparison reads only length, never the C buffer; Safe is unnecessary.
+		if entry.Asset.Unsafe() == "" {
 			continue
 		}
-		accepted, err := outcomeAcceptedFromEntry(entry)
+		asset, err := res.assetAlias(entry.Asset)
+		if err != nil {
+			return nil, err
+		}
+		accepted, err := outcomeAcceptedFromEntry(entry, res)
 		if err != nil {
 			return nil, err
 		}
@@ -1139,6 +1343,7 @@ func mergeOutcomeDelta(current, next string) (string, error) {
 
 func outcomeAcceptedFromEntry(
 	entry accountadjustment.AccountOutcomeEntry,
+	res idResolver,
 ) (domain.AdjustmentOutcomeAccepted, error) {
 	var result domain.AdjustmentOutcomeAccepted
 	if amt, ok := entry.Balance.Get(); ok {
@@ -1155,10 +1360,14 @@ func outcomeAcceptedFromEntry(
 	}
 	if pnlOutcome, ok := entry.RealizedPnl.Get(); ok {
 		if haltReason, halted := pnlOutcome.HaltReason(); halted {
+			asset, err := res.assetAlias(entry.Asset)
+			if err != nil {
+				return domain.AdjustmentOutcomeAccepted{}, err
+			}
 			reason, err := pnlHaltReasonFromSDK(haltReason)
 			if err != nil {
 				return domain.AdjustmentOutcomeAccepted{}, fmt.Errorf(
-					"engine: outcome for asset %q: %w", entry.Asset.String(), err,
+					"engine: outcome for asset %q: %w", asset, err,
 				)
 			}
 			result.RealizedPnlHaltReason = reason
@@ -1297,15 +1506,19 @@ func orderModelFrom(o domain.Order, res idResolver) (model.Order, error) {
 	if err != nil {
 		return model.Order{}, err
 	}
-	return orderModelFromAccount(o, account)
+	return orderModelFromAccount(o, account, res)
 }
 
-func orderModelFromAccount(o domain.Order, account param.AccountID) (model.Order, error) {
-	base, err := newAsset(o.BaseAsset)
+func orderModelFromAccount(
+	o domain.Order,
+	account param.AccountID,
+	res idResolver,
+) (model.Order, error) {
+	base, err := res.asset(o.BaseAsset)
 	if err != nil {
 		return model.Order{}, err
 	}
-	quote, err := newAsset(o.QuoteAsset)
+	quote, err := res.asset(o.QuoteAsset)
 	if err != nil {
 		return model.Order{}, err
 	}
@@ -1402,19 +1615,20 @@ func executionReportFrom(
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	return executionReportFromAccount(in, account, leavesQuantity)
+	return executionReportFromAccount(in, account, leavesQuantity, res)
 }
 
 func executionReportFromAccount(
 	in domain.ExecutionReportInput,
 	account param.AccountID,
 	leavesQuantity string,
+	res idResolver,
 ) (model.ExecutionReport, error) {
-	base, err := newAsset(in.BaseAsset)
+	base, err := res.asset(in.BaseAsset)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	quote, err := newAsset(in.QuoteAsset)
+	quote, err := res.asset(in.QuoteAsset)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
@@ -1477,7 +1691,7 @@ func executionReportFromAccount(
 	// Commission is execution-report payload, not a LastTrade attribute. Keep
 	// this outside hasFill so commission-only corrections reach SpotFunds.
 	if in.Commission != nil {
-		commission, err := commissionFrom(*in.Commission)
+		commission, err := commissionFrom(*in.Commission, res)
 		if err != nil {
 			return model.ExecutionReport{}, err
 		}
@@ -1597,12 +1811,12 @@ func sdkFeeFromContractAmount(field, s string) (param.Fee, error) {
 	return fee, nil
 }
 
-func commissionFrom(c domain.Commission) (param.MonetaryAmount, error) {
+func commissionFrom(c domain.Commission, res idResolver) (param.MonetaryAmount, error) {
 	amount, err := sdkFeeFromContractAmount("commission amount", c.Amount)
 	if err != nil {
 		return param.MonetaryAmount{}, err
 	}
-	currency, err := newAsset(c.Currency)
+	currency, err := res.asset(c.Currency)
 	if err != nil {
 		return param.MonetaryAmount{}, fmt.Errorf(
 			"engine: commission currency %q: %w", c.Currency, err)

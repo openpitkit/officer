@@ -21,8 +21,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -675,6 +679,49 @@ func TestValidateEngineAccountID(t *testing.T) {
 		if err := domain.ValidateEngineAccountID(id); !errors.Is(err, domain.ErrInvalid) {
 			t.Errorf("ValidateEngineAccountID(%d): expected ErrInvalid, got %v", id, err)
 		}
+	}
+}
+
+func TestValidateEngineAssetID(t *testing.T) {
+	t.Parallel()
+	ok := []domain.EngineAssetID{
+		domain.EngineAssetID(domain.EngineAssetIDMin),
+		1,
+		1234567890,
+		domain.EngineAssetID(domain.EngineAssetIDMax),
+	}
+	for _, id := range ok {
+		if err := domain.ValidateEngineAssetID(id); err != nil {
+			t.Errorf("ValidateEngineAssetID(%d): unexpected error %v", id, err)
+		}
+	}
+	bad := []domain.EngineAssetID{
+		0,
+		domain.EngineAssetID(domain.EngineAssetIDMax) + 1,
+		domain.EngineAssetID(1 << 63),
+	}
+	for _, id := range bad {
+		if err := domain.ValidateEngineAssetID(id); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("ValidateEngineAssetID(%d): expected ErrInvalid, got %v", id, err)
+		}
+	}
+}
+
+func TestAssetEngineIDIsNotSerialized(t *testing.T) {
+	t.Parallel()
+
+	payload, err := json.Marshal(domain.Asset{
+		Code:          "AAPL",
+		Title:         "Apple Inc.",
+		AssetClass:    "equity",
+		EngineAssetID: domain.EngineAssetID(domain.EngineAssetIDMin),
+	})
+	if err != nil {
+		t.Fatalf("Marshal Asset: %v", err)
+	}
+	const want = `{"Code":"AAPL","Title":"Apple Inc.","AssetClass":"equity"}`
+	if string(payload) != want {
+		t.Fatalf("Asset JSON = %s, want %s", payload, want)
 	}
 }
 
@@ -1505,4 +1552,102 @@ func TestValidateMarketDataMark(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEveryDomainSentinelIsRegistered(t *testing.T) {
+	t.Parallel()
+
+	sentinels := map[string]error{
+		"ErrAccountMissing":          domain.ErrAccountMissing,
+		"ErrAlreadyExists":           domain.ErrAlreadyExists,
+		"ErrConflict":                domain.ErrConflict,
+		"ErrEngineRestarting":        domain.ErrEngineRestarting,
+		"ErrExecutionReportRequired": domain.ErrExecutionReportRequired,
+		"ErrForbidden":               domain.ErrForbidden,
+		"ErrHasDependents":           domain.ErrHasDependents,
+		"ErrInvalid":                 domain.ErrInvalid,
+		"ErrNoChange":                domain.ErrNoChange,
+		"ErrNotFound":                domain.ErrNotFound,
+		"ErrNotImplemented":          domain.ErrNotImplemented,
+		"ErrReservedGroup":           domain.ErrReservedGroup,
+		"ErrTerminalOrder":           domain.ErrTerminalOrder,
+		"ErrTooLarge":                domain.ErrTooLarge,
+		"ErrUpstream":                domain.ErrUpstream,
+	}
+	declared := exportedDomainErrorVariableNames(t)
+	registered := make([]string, 0, len(sentinels))
+	for name := range sentinels {
+		registered = append(registered, name)
+	}
+	sort.Strings(registered)
+	if strings.Join(declared, "\x00") != strings.Join(registered, "\x00") {
+		t.Fatalf(
+			"exported domain Err variables = %v, runtime sentinel table = %v",
+			declared,
+			registered,
+		)
+	}
+	for _, name := range registered {
+		if !domain.IsSentinel(sentinels[name]) {
+			t.Errorf("domain.%s is not registered as a sentinel", name)
+		}
+	}
+}
+
+func exportedDomainErrorVariableNames(t *testing.T) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read domain package directory: %v", err)
+	}
+	fileSet := token.NewFileSet()
+	var sourceFiles []*ast.File
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() ||
+			!strings.HasSuffix(name, ".go") ||
+			strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(
+			fileSet,
+			name,
+			nil,
+			parser.SkipObjectResolution,
+		)
+		if err != nil {
+			t.Fatalf("parse domain source %q: %v", name, err)
+		}
+		if file.Name.Name == "domain" {
+			sourceFiles = append(sourceFiles, file)
+		}
+	}
+	if len(sourceFiles) == 0 {
+		t.Fatal("parse domain package: package domain is missing")
+	}
+
+	var names []string
+	for _, file := range sourceFiles {
+		for _, declaration := range file.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.VAR {
+				continue
+			}
+			for _, specification := range general.Specs {
+				values, ok := specification.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, name := range values.Names {
+					if ast.IsExported(name.Name) &&
+						strings.HasPrefix(name.Name, "Err") {
+						names = append(names, name.Name)
+					}
+				}
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
 }

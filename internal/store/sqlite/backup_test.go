@@ -24,8 +24,10 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -163,7 +165,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 
 func mustCreateAsset(t *testing.T, ctx context.Context, rs RealmStore, asset domain.Asset) {
 	t.Helper()
-	if err := rs.CreateAsset(ctx, asset); err != nil {
+	if _, err := rs.CreateAsset(ctx, asset); err != nil {
 		t.Fatalf("CreateAsset(%s): %v", asset.Code, err)
 	}
 }
@@ -236,6 +238,111 @@ func TestBackupExportIncludesAccountCurrency(t *testing.T) {
 	}
 }
 
+func TestBackupArchiveRoundTripCarriesNoRuntimeIdentifiers(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedRealm(t, ctx, src)
+
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup source: %v", err)
+	}
+	assertBackupDataHasNoRuntimeIdentifierType(t, reflect.TypeOf(archive.Data), "Data")
+	assertBackupDataHasNoRuntimeIdentifierValue(t, reflect.ValueOf(archive.Data), "Data")
+
+	raw, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatalf("marshal archive: %v", err)
+	}
+	var transported backup.Archive
+	if err := json.Unmarshal(raw, &transported); err != nil {
+		t.Fatalf("unmarshal archive: %v", err)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	if _, err := dst.RestoreBackup(ctx, transported, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup target: %v", err)
+	}
+	restored, err := dst.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup target: %v", err)
+	}
+	assertBackupDataHasNoRuntimeIdentifierValue(t, reflect.ValueOf(restored.Data), "Data")
+}
+
+func assertBackupDataHasNoRuntimeIdentifierType(
+	t *testing.T, valueType reflect.Type, path string,
+) {
+	t.Helper()
+	if runtimeIDType(valueType) {
+		t.Fatalf("backup archive carries runtime identifier type at %s: %s", path, valueType)
+	}
+	switch valueType.Kind() {
+	case reflect.Array, reflect.Pointer, reflect.Slice:
+		assertBackupDataHasNoRuntimeIdentifierType(t, valueType.Elem(), path)
+	case reflect.Map:
+		assertBackupDataHasNoRuntimeIdentifierType(t, valueType.Key(), path+" key")
+		assertBackupDataHasNoRuntimeIdentifierType(t, valueType.Elem(), path)
+	case reflect.Struct:
+		for index := 0; index < valueType.NumField(); index++ {
+			field := valueType.Field(index)
+			if field.IsExported() {
+				assertBackupDataHasNoRuntimeIdentifierType(
+					t, field.Type, path+"."+field.Name,
+				)
+			}
+		}
+	}
+}
+
+func assertBackupDataHasNoRuntimeIdentifierValue(
+	t *testing.T, value reflect.Value, path string,
+) {
+	t.Helper()
+	if runtimeIDType(value.Type()) {
+		if !value.IsZero() {
+			t.Fatalf("backup archive carries runtime identifier at %s: %v", path, value)
+		}
+		return
+	}
+	switch value.Kind() {
+	case reflect.Array, reflect.Slice:
+		for index := 0; index < value.Len(); index++ {
+			assertBackupDataHasNoRuntimeIdentifierValue(
+				t, value.Index(index), path,
+			)
+		}
+	case reflect.Map:
+		for _, key := range value.MapKeys() {
+			assertBackupDataHasNoRuntimeIdentifierValue(t, key, path+" key")
+			assertBackupDataHasNoRuntimeIdentifierValue(t, value.MapIndex(key), path)
+		}
+	case reflect.Pointer:
+		if !value.IsNil() {
+			assertBackupDataHasNoRuntimeIdentifierValue(t, value.Elem(), path)
+		}
+	case reflect.Struct:
+		valueType := value.Type()
+		for index := 0; index < value.NumField(); index++ {
+			field := valueType.Field(index)
+			if field.IsExported() {
+				assertBackupDataHasNoRuntimeIdentifierValue(
+					t, value.Field(index), path+"."+field.Name,
+				)
+			}
+		}
+	}
+}
+
+func runtimeIDType(valueType reflect.Type) bool {
+	domainPackage := reflect.TypeOf(domain.EngineAssetID(0)).PkgPath()
+	return valueType.PkgPath() == domainPackage &&
+		strings.HasPrefix(valueType.Name(), "Engine") &&
+		strings.HasSuffix(valueType.Name(), "ID")
+}
+
 func TestBackupExportUsesOneSQLiteSnapshotAcrossSettlementWrites(t *testing.T) {
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
@@ -281,7 +388,7 @@ func TestBackupExportUsesOneSQLiteSnapshotAcrossSettlementWrites(t *testing.T) {
 	if len(archive.Data.Accounts) != 1 || archive.Data.Accounts[0].Pnl != "10" {
 		t.Fatalf("snapshot accounts = %+v, want pre-write P&L 10", archive.Data.Accounts)
 	}
-	var usd *domain.Balance
+	var usd *backup.Balance
 	for i := range archive.Data.Balances {
 		if archive.Data.Balances[i].Account == "acc-1" &&
 			archive.Data.Balances[i].Asset == "USD" {
@@ -1075,7 +1182,7 @@ func TestBackupRestoreInsertMissingSkipsExisting(t *testing.T) {
 
 	_, dst := newRealmStore(t, domain.DefaultRealm)
 	// Pre-create the asset under a different title; insert-missing must leave it.
-	if err := dst.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Preexisting"}); err != nil {
+	if _, err := dst.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Preexisting"}); err != nil {
 		t.Fatalf("dst CreateAsset: %v", err)
 	}
 	summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -1105,7 +1212,8 @@ func TestBackupRestoreOverwriteUpdatesExisting(t *testing.T) {
 	}
 
 	_, dst := newRealmStore(t, domain.DefaultRealm)
-	if err := dst.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Stale"}); err != nil {
+	created, err := dst.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Stale"})
+	if err != nil {
 		t.Fatalf("dst CreateAsset: %v", err)
 	}
 	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -1113,8 +1221,11 @@ func TestBackupRestoreOverwriteUpdatesExisting(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
-	got, _, _ := dst.GetAsset(ctx, "AAPL")
-	if got.Title != "Apple" {
+	got, ok, err := dst.GetAsset(ctx, "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetAsset after restore: ok=%v err=%v", ok, err)
+	}
+	if got.Title != "Apple" || got.EngineAssetID != created.EngineAssetID {
 		t.Fatalf("overwrite did not update existing asset: %+v", got)
 	}
 }
@@ -1271,7 +1382,7 @@ func TestRestoreValidatesDictionaryCodes(t *testing.T) {
 			}},
 		}},
 		{"asset nul", backup.Data{
-			Assets: []domain.Asset{{Code: "US\x00D"}},
+			Assets: []backup.Asset{{Code: "US\x00D"}},
 		}},
 		{"asset class dot segment", backup.Data{
 			AssetClasses: []domain.AssetClass{{Code: ".."}},

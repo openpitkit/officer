@@ -50,7 +50,9 @@ func (s *marketDataReplaySink) Push(update marketdata.QuoteUpdate) error {
 	return nil
 }
 
-func (s *marketDataReplaySink) Clear(base, quote string) error {
+func (s *marketDataReplaySink) Clear(
+	base, quote domain.EngineAssetID,
+) error {
 	if s.clearErr != nil {
 		return s.clearErr
 	}
@@ -59,13 +61,18 @@ func (s *marketDataReplaySink) Clear(base, quote string) error {
 }
 
 func assertStaleLastKnownReplay(
-	t *testing.T, updates []marketdata.QuoteUpdate, asOf time.Time,
+	t *testing.T,
+	updates []marketdata.QuoteUpdate,
+	asOf time.Time,
+	base, quote domain.EngineAssetID,
 ) {
 	t.Helper()
 	if len(updates) != 2 ||
-		updates[0].Base != "EUR" || updates[0].Quote != "USD" ||
+		updates[0].Base != base ||
+		updates[0].Quote != quote ||
 		updates[0].Mark != "2" || !updates[0].AsOf.Equal(asOf) ||
-		updates[1].Base != "USD" || updates[1].Quote != "EUR" ||
+		updates[1].Base != quote ||
+		updates[1].Quote != base ||
 		updates[1].Mark != "0.5" || !updates[1].AsOf.Equal(asOf) {
 		t.Fatalf(
 			"replayed updates = %+v, want stale direct and inverse last-known quotes at %v",
@@ -83,7 +90,7 @@ func seedReplayInstrument(
 	t.Helper()
 	ctx := context.Background()
 	for _, code := range []string{base, quote} {
-		if err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil &&
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil &&
 			!errors.Is(err, domain.ErrAlreadyExists) {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
@@ -99,7 +106,17 @@ func seedReplayInstrument(
 	if err := realm.UpsertMarketDataInstrument(ctx, instrument); err != nil {
 		t.Fatalf("UpsertMarketDataInstrument(%s): %v", external, err)
 	}
-	return instrument
+	instruments, err := realm.ListMarketDataInstruments(ctx, instance)
+	if err != nil {
+		t.Fatalf("ListMarketDataInstruments(%s): %v", instance, err)
+	}
+	for _, stored := range instruments {
+		if stored.ExternalSymbol == external {
+			return stored
+		}
+	}
+	t.Fatalf("ListMarketDataInstruments(%s) omitted %q", instance, external)
+	return domain.MarketDataInstrument{}
 }
 
 func seedReplayInstance(
@@ -165,8 +182,8 @@ func TestDeleteAccountReplaysPersistedFXAndSyntheticInverse(t *testing.T) {
 			n.currentEngine(), next.running, old.running)
 	}
 	want := []marketdata.QuoteUpdate{
-		{Base: "Z", Quote: "USD", Mark: "2"},
-		{Base: "USD", Quote: "Z", Mark: "0.5"},
+		{Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID, Mark: "2"},
+		{Base: instrument.QuoteAssetID, Quote: instrument.BaseAssetID, Mark: "0.5"},
 	}
 	if len(sink.updates) != len(want) {
 		t.Fatalf("replayed updates = %+v, want %+v", sink.updates, want)
@@ -194,7 +211,9 @@ func TestRebuildReplaysManualPriceWithoutPersistedQuote(t *testing.T) {
 	old := newFakeEngine()
 	n, realm := newTestNode(t, old)
 	instance := seedReplayInstance(t, realm)
-	seedReplayInstrument(t, realm, instance.ExternalID, "EURUSD", "EUR", "USD", "4")
+	instrument := seedReplayInstrument(
+		t, realm, instance.ExternalID, "EURUSD", "EUR", "USD", "4",
+	)
 
 	sink := &marketDataReplaySink{}
 	next := newFakeEngine()
@@ -205,8 +224,8 @@ func TestRebuildReplaysManualPriceWithoutPersistedQuote(t *testing.T) {
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
 	want := []marketdata.QuoteUpdate{
-		{Base: "EUR", Quote: "USD", Mark: "4"},
-		{Base: "USD", Quote: "EUR", Mark: "0.25"},
+		{Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID, Mark: "4"},
+		{Base: instrument.QuoteAssetID, Quote: instrument.BaseAssetID, Mark: "0.25"},
 	}
 	if len(sink.updates) != len(want) {
 		t.Fatalf("replayed updates = %+v, want %+v", sink.updates, want)
@@ -244,8 +263,8 @@ func TestRebuildReplaysConfiguredBYOMarkInsteadOfPersistedSnapshot(t *testing.T)
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
 	want := []marketdata.QuoteUpdate{
-		{Base: "EUR", Quote: "USD", Mark: "3"},
-		{Base: "USD", Quote: "EUR", Mark: "0.3333333333333333"},
+		{Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID, Mark: "3"},
+		{Base: instrument.QuoteAssetID, Quote: instrument.BaseAssetID, Mark: "0.3333333333333333"},
 	}
 	if len(sink.updates) != len(want) {
 		t.Fatalf("replayed updates = %+v, want %+v", sink.updates, want)
@@ -315,7 +334,9 @@ func TestRebuildReplaysStaleStreamingSnapshotAsLastKnown(t *testing.T) {
 	if err := n.rebuildEngineFromStore(ctx); err != nil {
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
-	assertStaleLastKnownReplay(t, sink.updates, staleAt)
+	assertStaleLastKnownReplay(
+		t, sink.updates, staleAt, instrument.BaseAssetID, instrument.QuoteAssetID,
+	)
 }
 
 func TestRebuildReplaysFreshStreamingSnapshot(t *testing.T) {
@@ -347,8 +368,8 @@ func TestRebuildReplaysFreshStreamingSnapshot(t *testing.T) {
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
 	want := []marketdata.QuoteUpdate{
-		{AsOf: freshAt, Base: "EUR", Quote: "USD", Mark: "2"},
-		{AsOf: freshAt, Base: "USD", Quote: "EUR", Mark: "0.5"},
+		{AsOf: freshAt, Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID, Mark: "2"},
+		{AsOf: freshAt, Base: instrument.QuoteAssetID, Quote: instrument.BaseAssetID, Mark: "0.5"},
 	}
 	if len(sink.updates) != len(want) {
 		t.Fatalf("replayed updates = %+v, want %+v", sink.updates, want)
@@ -401,8 +422,8 @@ func TestRebuildDoesNotInferOverConfiguredReverseFeed(t *testing.T) {
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
 	if len(sink.updates) != 2 ||
-		sink.updates[0].Base != "EUR" || sink.updates[0].Mark != "2" ||
-		sink.updates[1].Base != "USD" || sink.updates[1].Mark != "0.4" {
+		sink.updates[0].Base != forward.BaseAssetID || sink.updates[0].Mark != "2" ||
+		sink.updates[1].Base != reverse.BaseAssetID || sink.updates[1].Mark != "0.4" {
 		t.Fatalf("replayed updates = %+v, want only two explicit directions", sink.updates)
 	}
 }
@@ -466,7 +487,7 @@ func TestMarketDataTransitionBuffersThenFlushesProviderUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("beginMarketDataTransition: %v", err)
 	}
-	update := marketdata.QuoteUpdate{Base: "EUR", Quote: "USD", Mark: "2"}
+	update := marketdata.QuoteUpdate{Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "2"}
 	if err := n.CurrentMarketDataSink().Push(update); err != nil {
 		t.Fatalf("transition Push: %v", err)
 	}
@@ -497,7 +518,7 @@ func TestRebuildBuffersManualClearAfterReplayAndCommitsIt(t *testing.T) {
 	old.sink = oldSink
 	n, realm := newTestNode(t, old)
 	instance := seedReplayInstance(t, realm)
-	seedReplayInstrument(
+	zInstrument := seedReplayInstrument(
 		t, realm, instance.ExternalID, "Z/USD", "Z", "USD", "",
 	)
 	seedReplayInstrument(
@@ -514,10 +535,10 @@ func TestRebuildBuffersManualClearAfterReplayAndCommitsIt(t *testing.T) {
 		if !ok {
 			t.Fatal("transition sink does not expose QuoteClearer")
 		}
-		if err := clearer.Clear("Z", "USD"); err != nil {
+		if err := clearer.Clear(zInstrument.BaseAssetID, zInstrument.QuoteAssetID); err != nil {
 			t.Fatalf("Clear direct during transition: %v", err)
 		}
-		if err := clearer.Clear("USD", "Z"); err != nil {
+		if err := clearer.Clear(zInstrument.QuoteAssetID, zInstrument.BaseAssetID); err != nil {
 			t.Fatalf("Clear synthetic during transition: %v", err)
 		}
 	}
@@ -526,8 +547,8 @@ func TestRebuildBuffersManualClearAfterReplayAndCommitsIt(t *testing.T) {
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
 	wantCleared := []marketDataReplayPairKey{
-		{base: "Z", quote: "USD"},
-		{base: "USD", quote: "Z"},
+		{base: zInstrument.BaseAssetID, quote: zInstrument.QuoteAssetID},
+		{base: zInstrument.QuoteAssetID, quote: zInstrument.BaseAssetID},
 	}
 	if !equalReplayPairs(oldSink.cleared, wantCleared) {
 		t.Fatalf("old sink clears = %+v, want %+v", oldSink.cleared, wantCleared)
@@ -549,7 +570,7 @@ func TestRebuildBufferedManualClearFailureKeepsClearedOldEngine(t *testing.T) {
 	old.sink = oldSink
 	n, realm := newTestNode(t, old)
 	instance := seedReplayInstance(t, realm)
-	seedReplayInstrument(
+	zInstrument := seedReplayInstrument(
 		t, realm, instance.ExternalID, "Z/USD", "Z", "USD", "",
 	)
 	seedReplayInstrument(
@@ -567,10 +588,10 @@ func TestRebuildBufferedManualClearFailureKeepsClearedOldEngine(t *testing.T) {
 		if !ok {
 			t.Fatal("transition sink does not expose QuoteClearer")
 		}
-		if err := clearer.Clear("Z", "USD"); err != nil {
+		if err := clearer.Clear(zInstrument.BaseAssetID, zInstrument.QuoteAssetID); err != nil {
 			t.Fatalf("Clear direct during transition: %v", err)
 		}
-		if err := clearer.Clear("USD", "Z"); err != nil {
+		if err := clearer.Clear(zInstrument.QuoteAssetID, zInstrument.BaseAssetID); err != nil {
 			t.Fatalf("Clear synthetic during transition: %v", err)
 		}
 	}
@@ -580,8 +601,8 @@ func TestRebuildBufferedManualClearFailureKeepsClearedOldEngine(t *testing.T) {
 		t.Fatalf("rebuildEngineFromStore error = %v, want clear failure", err)
 	}
 	wantCleared := []marketDataReplayPairKey{
-		{base: "Z", quote: "USD"},
-		{base: "USD", quote: "Z"},
+		{base: zInstrument.BaseAssetID, quote: zInstrument.QuoteAssetID},
+		{base: zInstrument.QuoteAssetID, quote: zInstrument.BaseAssetID},
 	}
 	if !equalReplayPairs(oldSink.cleared, wantCleared) {
 		t.Fatalf("old sink clears = %+v, want %+v", oldSink.cleared, wantCleared)
@@ -629,7 +650,7 @@ func TestRebuildFlushesNewerTickAfterOlderPersistedReplay(t *testing.T) {
 	var snapshot engine.Snapshot
 	n.build = fakeBuild(next, &snapshot)
 	newer := marketdata.QuoteUpdate{
-		AsOf: asOf.Add(time.Second), Base: "EUR", Quote: "USD", Mark: "3",
+		AsOf: asOf.Add(time.Second), Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID, Mark: "3",
 	}
 	nextSink.beforePush = func(replayed marketdata.QuoteUpdate) {
 		if replayed.Mark != "2" {
@@ -638,7 +659,7 @@ func TestRebuildFlushesNewerTickAfterOlderPersistedReplay(t *testing.T) {
 		if err := realm.UpsertMarketDataQuote(ctx, domain.MarketDataQuote{
 			AsOf: newer.AsOf, ReceivedAt: newer.AsOf,
 			Instance: instance.ExternalID, ExternalSymbol: instrument.ExternalSymbol,
-			BaseAsset: newer.Base, QuoteAsset: newer.Quote, Mark: newer.Mark,
+			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset, Mark: newer.Mark,
 		}); err != nil {
 			t.Fatalf("UpsertMarketDataQuote(newer): %v", err)
 		}
@@ -658,10 +679,10 @@ func TestRebuildFlushesNewerTickAfterOlderPersistedReplay(t *testing.T) {
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
 	if len(nextSink.updates) != 4 ||
-		nextSink.updates[0].Mark != "2" || nextSink.updates[0].Base != "EUR" ||
-		nextSink.updates[1].Mark != "0.5" || nextSink.updates[1].Base != "USD" ||
+		nextSink.updates[0].Mark != "2" || nextSink.updates[0].Base != instrument.BaseAssetID ||
+		nextSink.updates[1].Mark != "0.5" || nextSink.updates[1].Base != instrument.QuoteAssetID ||
 		nextSink.updates[2] != newer ||
-		nextSink.updates[3].Base != "USD" || nextSink.updates[3].Mark == "0.5" {
+		nextSink.updates[3].Base != instrument.QuoteAssetID || nextSink.updates[3].Mark == "0.5" {
 		t.Fatalf("new sink updates = %+v, want old replay followed by newer tick", nextSink.updates)
 	}
 	if n.currentEngine() != next || !next.running || old.running {
@@ -704,13 +725,13 @@ func TestRebuildBufferedFlushFailureKeepsOldEngineCurrent(t *testing.T) {
 	var snapshot engine.Snapshot
 	n.build = fakeBuild(next, &snapshot)
 	newer := marketdata.QuoteUpdate{
-		AsOf: asOf.Add(time.Second), Base: "EUR", Quote: "USD", Mark: "3",
+		AsOf: asOf.Add(time.Second), Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID, Mark: "3",
 	}
 	nextSink.beforePush = func(marketdata.QuoteUpdate) {
 		if err := realm.UpsertMarketDataQuote(ctx, domain.MarketDataQuote{
 			AsOf: newer.AsOf, ReceivedAt: newer.AsOf,
 			Instance: instance.ExternalID, ExternalSymbol: instrument.ExternalSymbol,
-			BaseAsset: newer.Base, QuoteAsset: newer.Quote, Mark: newer.Mark,
+			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset, Mark: newer.Mark,
 		}); err != nil {
 			t.Fatalf("UpsertMarketDataQuote(newer): %v", err)
 		}
@@ -738,7 +759,7 @@ func TestRebuildBufferedFlushFailureKeepsOldEngineCurrent(t *testing.T) {
 		t.Fatal("flush failure did not keep the old sink current")
 	}
 	if len(oldSink.updates) != 2 || oldSink.updates[0] != newer ||
-		oldSink.updates[1].Base != "USD" || oldSink.updates[1].Mark == "0.5" {
+		oldSink.updates[1].Base != instrument.QuoteAssetID || oldSink.updates[1].Mark == "0.5" {
 		t.Fatalf("old sink updates = %+v, want newer source and inverse", oldSink.updates)
 	}
 	quotes, listErr := realm.ListMarketDataQuotes(ctx, instance.ExternalID)
@@ -784,13 +805,13 @@ func TestDeleteAccountBufferedFlushFailureDoesNotCommitStoreDelete(t *testing.T)
 	var snapshot engine.Snapshot
 	n.build = fakeBuild(next, &snapshot)
 	newer := marketdata.QuoteUpdate{
-		AsOf: asOf.Add(time.Second), Base: "EUR", Quote: "USD", Mark: "3",
+		AsOf: asOf.Add(time.Second), Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID, Mark: "3",
 	}
 	nextSink.beforePush = func(marketdata.QuoteUpdate) {
 		if err := realm.UpsertMarketDataQuote(ctx, domain.MarketDataQuote{
 			AsOf: newer.AsOf, ReceivedAt: newer.AsOf,
 			Instance: instance.ExternalID, ExternalSymbol: instrument.ExternalSymbol,
-			BaseAsset: newer.Base, QuoteAsset: newer.Quote, Mark: newer.Mark,
+			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset, Mark: newer.Mark,
 		}); err != nil {
 			t.Fatalf("UpsertMarketDataQuote(newer): %v", err)
 		}

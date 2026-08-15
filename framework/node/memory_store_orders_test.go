@@ -23,6 +23,7 @@ import (
 	"sort"
 	"time"
 
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
@@ -373,13 +374,13 @@ func (r *memoryRealm) RecordOrderSubmission(
 		submitted.Order = order.ExternalID
 	}
 	if _, err := r.AppendOrderEvent(ctx, submitted); err != nil {
-		r.restoreData(snapshot)
+		r.restoreData(snapshot, backup.RestoreModeOverwrite)
 		return domain.Order{}, err
 	}
 
 	settlement, err := apply(order)
 	if err != nil {
-		r.restoreData(snapshot)
+		r.restoreData(snapshot, backup.RestoreModeOverwrite)
 		return domain.Order{}, err
 	}
 	if settlement.Order.IsZero() {
@@ -389,7 +390,7 @@ func (r *memoryRealm) RecordOrderSubmission(
 		settlement.Account = order.Account
 	}
 	if _, err := r.RecordOrderSettlement(ctx, settlement); err != nil {
-		r.restoreData(snapshot)
+		r.restoreData(snapshot, backup.RestoreModeOverwrite)
 		return domain.Order{}, err
 	}
 

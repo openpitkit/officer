@@ -24,23 +24,27 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // FreshnessTTL is the officer-wide quote freshness window: a quote whose
 // source AsOf is older than this is displayed as absent.
 const FreshnessTTL = 70 * time.Second
 
-// QuoteUpdate is one quote normalized to an instrument, ready for the sink.
-// Price fields are exact decimal strings (empty means absent), matching
-// param.NewPriceFromString; only the fields the engine consumes are carried
-// (mark/bid/ask + timestamp). AsOf is the source observation time.
+// QuoteUpdate is one quote normalized to an opaque asset key, ready for the
+// sink. Connectors return Base and Quote verbatim from Subscription; they never
+// derive them from a provider symbol. Price fields are exact decimal strings
+// (empty means absent), matching param.NewPriceFromString; only the fields the
+// engine consumes are carried (mark/bid/ask + timestamp). AsOf is the source
+// observation time.
 type QuoteUpdate struct {
 	// AsOf is the source observation time of the quote.
 	AsOf time.Time
-	// Base is the instrument underlying asset (e.g. "AAPL").
-	Base string
-	// Quote is the instrument settlement asset (e.g. "USD").
-	Quote string
+	// Base is the stable internal identifier of the underlying asset.
+	Base domain.EngineAssetID
+	// Quote is the stable internal identifier of the settlement asset.
+	Quote domain.EngineAssetID
 	// Mark is the mark price as an exact decimal string; empty when absent.
 	Mark string
 	// Bid is the best-bid price as an exact decimal string; empty when absent.
@@ -116,5 +120,5 @@ type Sink interface {
 type QuoteClearer interface {
 	// Clear removes the stored quote for the identified instrument. Clearing an
 	// instrument that has never been registered is a no-op.
-	Clear(base, quote string) error
+	Clear(base, quote domain.EngineAssetID) error
 }

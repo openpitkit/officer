@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +54,45 @@ func TestLocalNode_ExportBackupAudits(t *testing.T) {
 	}
 }
 
+func TestRestoreAddsAssets(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, realm := newTestNode(t, newFakeEngine())
+	if _, err := realm.CreateAsset(ctx, domain.Asset{Code: "existing"}); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+
+	adds, err := restoreAddsAssets(
+		ctx, []backup.Asset{{Code: "existing"}}, realm,
+	)
+	if err != nil {
+		t.Fatalf("restoreAddsAssets existing: %v", err)
+	}
+	if adds {
+		t.Fatal("restoreAddsAssets existing = true, want false")
+	}
+
+	adds, err = restoreAddsAssets(
+		ctx, []backup.Asset{{Code: "inserted"}}, realm,
+	)
+	if err != nil {
+		t.Fatalf("restoreAddsAssets inserted: %v", err)
+	}
+	if !adds {
+		t.Fatal("restoreAddsAssets inserted = false, want true")
+	}
+
+	wantErr := errors.New("list assets")
+	_, err = restoreAddsAssets(
+		ctx,
+		[]backup.Asset{{Code: "inserted"}},
+		assetListErrorRealm{RealmStore: realm, err: wantErr},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("restoreAddsAssets error = %v, want %v", err, wantErr)
+	}
+}
+
 // testArchive builds a portable archive carrying data, labelled with the default
 // realm, for the restore tests.
 func testArchive(scope backup.Scope, data backup.Data) backup.Archive {
@@ -68,6 +108,34 @@ func testArchive(scope backup.Scope, data backup.Data) backup.Archive {
 type restoreCommitProbeRealm struct {
 	store.RealmStore
 	afterCommit func()
+}
+
+type assetListErrorRealm struct {
+	store.RealmStore
+	err error
+}
+
+func (r assetListErrorRealm) ListAssets(context.Context) ([]domain.Asset, error) {
+	return nil, r.err
+}
+
+type assetClassificationProbeRealm struct {
+	store.RealmStore
+	classified     chan<- struct{}
+	classifiedOnce sync.Once
+	release        <-chan struct{}
+}
+
+func (r *assetClassificationProbeRealm) ListAssets(
+	ctx context.Context,
+) ([]domain.Asset, error) {
+	assets, err := r.RealmStore.ListAssets(ctx)
+	if err != nil || r.classified == nil {
+		return assets, err
+	}
+	r.classifiedOnce.Do(func() { close(r.classified) })
+	<-r.release
+	return assets, nil
 }
 
 func (r *restoreCommitProbeRealm) ExportBackup(
@@ -129,7 +197,13 @@ func TestLocalNode_RestoreBackupPublishesInsertedAccountOnline(t *testing.T) {
 	}
 	archive := testArchive(
 		backup.Scope{All: true},
-		backup.Data{Accounts: []backup.Account{{Code: "restored"}}},
+		backup.Data{
+			Assets:   []backup.Asset{{Code: "restored-asset"}},
+			Accounts: []backup.Account{{Code: "restored"}},
+			Balances: []backup.Balance{{
+				Account: "restored", Asset: "restored-asset", Available: "1",
+			}},
+		},
 	)
 
 	summary, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -154,12 +228,243 @@ func TestLocalNode_RestoreBackupPublishesInsertedAccountOnline(t *testing.T) {
 	if _, ok := oldEngine.knownAccounts["restored"]; !ok {
 		t.Fatalf("live resolver missing restored account: %+v", oldEngine.knownAccounts)
 	}
+	if _, ok := oldEngine.knownAssets["restored-asset"]; !ok {
+		t.Fatalf("live resolver missing restored asset: %+v", oldEngine.knownAssets)
+	}
 	rows, err := st.ListAudit(ctx, 10)
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
 	if rows[0].Action != domain.AuditActionRestoreBackup {
 		t.Fatalf("latest action = %q, want restore_backup", rows[0].Action)
+	}
+	if _, err := n.ApplyAdjustment(
+		ctx,
+		testKey("restored"),
+		"",
+		domain.AdjustmentRequest{
+			Asset: "restored-asset",
+			Balance: &domain.AdjustmentAmount{
+				Mode:  domain.AdjustmentModeAbsolute,
+				Value: "2",
+			},
+		},
+		domain.MissingAccountReject,
+		testCaller,
+	); err != nil {
+		t.Fatalf("ApplyAdjustment after restore: %v", err)
+	}
+}
+
+func TestLocalNode_RestoreBackupSettingsOnlyPublishesInsertedAssetOnline(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	oldEngine := newFakeEngine()
+	oldEngine.enforceResolver = true
+	n, _ := newTestNode(t, oldEngine)
+	if _, err := n.CreateAccount(ctx, testAccount("restored"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	oldSink := oldEngine.MarketDataSink()
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+
+	archive := testArchive(
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{Assets: []backup.Asset{{Code: "restored-asset"}}},
+	)
+	summary, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{
+			backup.SectionGeneralSettings,
+		}},
+		Mode: backup.RestoreModeInsertMissing,
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if summary.RestartRequired {
+		t.Fatalf("RestartRequired = true, want online publication")
+	}
+	if !oldEngine.running || n.currentEngine() != oldEngine || builds != 0 {
+		t.Fatalf("settings restore replaced the engine: builds=%d", builds)
+	}
+	if n.currentMarketDataSink() != oldSink {
+		t.Fatal("settings restore replaced market-data sink")
+	}
+	if _, err := n.ApplyAdjustment(
+		ctx,
+		testKey("restored"),
+		"",
+		domain.AdjustmentRequest{
+			Asset: "restored-asset",
+			Balance: &domain.AdjustmentAmount{
+				Mode:  domain.AdjustmentModeAbsolute,
+				Value: "2",
+			},
+		},
+		domain.MissingAccountReject,
+		testCaller,
+	); err != nil {
+		t.Fatalf("ApplyAdjustment after settings restore: %v", err)
+	}
+}
+
+func TestLocalNode_RestoreBackupSerializesAssetClassificationWithDelete(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	base := newMemoryStore("restore-asset-classification.db")
+	t.Cleanup(func() { _ = base.Close() })
+	var probe *assetClassificationProbeRealm
+	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
+		probe = &assetClassificationProbeRealm{RealmStore: realm}
+		return probe
+	})
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n := newTestNodeWithStore(t, st, eng)
+	asset, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller)
+	if err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	classified := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseClassification := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	t.Cleanup(releaseClassification)
+	probe.classified = classified
+	probe.release = release
+
+	type restoreResult struct {
+		summary backup.RestoreSummary
+		err     error
+	}
+	restored := make(chan restoreResult, 1)
+	go func() {
+		summary, _, err := n.RestoreBackup(
+			ctx,
+			testArchive(
+				backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+				backup.Data{Assets: []backup.Asset{{Code: asset.Code}}},
+			),
+			backup.RestoreOptions{
+				Scope: backup.Scope{Sections: []backup.Section{
+					backup.SectionGeneralSettings,
+				}},
+				Mode: backup.RestoreModeInsertMissing,
+			},
+			testCaller,
+		)
+		restored <- restoreResult{summary: summary, err: err}
+	}()
+	<-classified
+
+	// TryLock only observes ownership; it never serializes this test.
+	if n.laneGate.TryLock() {
+		n.laneGate.Unlock()
+		t.Fatal("RestoreBackup asset classification did not hold the lane")
+	}
+	deleted := make(chan error, 1)
+	go func() {
+		deleted <- n.DeleteAsset(ctx, asset.Code, false, testCaller)
+	}()
+	releaseClassification()
+	result := <-restored
+	if result.err != nil {
+		t.Fatalf("RestoreBackup: %v", result.err)
+	}
+	if result.summary.RestartRequired {
+		t.Fatal("RestoreBackup required an engine restart")
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteAsset: %v", err)
+	}
+
+	_, stored, err := n.realm.GetAsset(ctx, asset.Code)
+	if err != nil {
+		t.Fatalf("GetAsset: %v", err)
+	}
+	eng.resolverMu.RLock()
+	_, resolved := eng.assetResolverIDs[asset.Code]
+	eng.resolverMu.RUnlock()
+	if stored != resolved {
+		t.Fatalf("asset store presence=%v resolver presence=%v", stored, resolved)
+	}
+	if stored {
+		t.Fatal("delete completed before restore despite serialized classification")
+	}
+}
+
+func TestLocalNode_RestoreBackupAssetOnlyRuntimeDeltaPublishesOnline(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	oldEngine := newFakeEngine()
+	oldEngine.enforceResolver = true
+	n, _ := newTestNode(t, oldEngine)
+	if _, err := n.CreateAccount(ctx, testAccount("restored"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	before, err := n.realm.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	before.Data.Assets = append(
+		before.Data.Assets,
+		backup.Asset{Code: "restored-asset"},
+	)
+	oldSink := oldEngine.MarketDataSink()
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+
+	summary, _, err := n.RestoreBackup(
+		ctx,
+		testArchive(backup.Scope{All: true}, before.Data),
+		backup.RestoreOptions{
+			Scope: backup.Scope{All: true},
+			Mode:  backup.RestoreModeInsertMissing,
+		},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if summary.RestartRequired {
+		t.Fatalf("RestartRequired = true, want online publication")
+	}
+	if !oldEngine.running || n.currentEngine() != oldEngine || builds != 0 {
+		t.Fatalf("asset-only runtime restore rebuilt the engine: builds=%d", builds)
+	}
+	if n.currentMarketDataSink() != oldSink {
+		t.Fatal("asset-only runtime restore replaced market-data sink")
+	}
+	if _, err := n.ApplyAdjustment(
+		ctx,
+		testKey("restored"),
+		"",
+		domain.AdjustmentRequest{
+			Asset: "restored-asset",
+			Balance: &domain.AdjustmentAmount{
+				Mode:  domain.AdjustmentModeAbsolute,
+				Value: "2",
+			},
+		},
+		domain.MissingAccountReject,
+		testCaller,
+	); err != nil {
+		t.Fatalf("ApplyAdjustment after asset-only runtime restore: %v", err)
 	}
 }
 
@@ -238,7 +543,7 @@ func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
 		return newFakeEngine(), nil
 	}
 	archive := testArchive(backup.Scope{All: true}, backup.Data{
-		Assets: []domain.Asset{{Code: "USD"}},
+		Assets: []backup.Asset{{Code: "USD"}},
 		Groups: []backup.AccountGroup{{
 			Code: "desk", Blocked: true, BlockReason: "restored group block",
 		}},
@@ -249,7 +554,7 @@ func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
 			},
 			{Code: "added", Pnl: "3"},
 		},
-		Balances: []domain.Balance{{
+		Balances: []backup.Balance{{
 			Account: "existing", Asset: "USD", Available: "12",
 			Held: "2", Incoming: "1", RealizedPnl: "4",
 		}},
@@ -427,7 +732,7 @@ func TestLocalNode_RestoreBackupPublishesDefaultCurrencyOnline(t *testing.T) {
 	summary, sink, err := n.RestoreBackup(
 		ctx,
 		testArchive(backup.Scope{All: true}, backup.Data{
-			Assets:               []domain.Asset{{Code: "EUR"}},
+			Assets:               []backup.Asset{{Code: "EUR"}},
 			DefaultGroupCurrency: "EUR",
 		}),
 		backup.RestoreOptions{
@@ -463,7 +768,7 @@ func TestLocalNode_RestoreBackupClearsDefaultCurrencyWithoutRemovingResolver(t *
 	if _, _, err := n.RestoreBackup(
 		ctx,
 		testArchive(backup.Scope{All: true}, backup.Data{
-			Assets:               []domain.Asset{{Code: "EUR"}},
+			Assets:               []backup.Asset{{Code: "EUR"}},
 			DefaultGroupCurrency: "EUR",
 		}),
 		backup.RestoreOptions{
@@ -500,18 +805,21 @@ func TestMemoryRealmRestoreDefaultGroupSemantics(t *testing.T) {
 	t.Parallel()
 	realm := newMemoryStore("memory-default-restore.db").realm
 
-	realm.restoreData(backup.Data{})
+	realm.restoreData(backup.Data{}, backup.RestoreModeOverwrite)
 	if _, ok := realm.groups[""]; ok {
 		t.Fatal("empty restore invented an absent default group")
 	}
 
-	realm.restoreData(backup.Data{DefaultGroupCurrency: "USD"})
+	realm.restoreData(
+		backup.Data{DefaultGroupCurrency: "USD"},
+		backup.RestoreModeOverwrite,
+	)
 	group, ok := realm.groups[""]
 	if !ok || group.Currency != "USD" || group.EngineGroupID != 0 {
 		t.Fatalf("non-empty default restore = %+v ok=%v, want USD with id 0", group, ok)
 	}
 
-	realm.restoreData(backup.Data{})
+	realm.restoreData(backup.Data{}, backup.RestoreModeOverwrite)
 	group, ok = realm.groups[""]
 	if !ok || group.Currency != "" || group.EngineGroupID != 0 {
 		t.Fatalf("cleared default restore = %+v ok=%v, want retained row with id 0", group, ok)
@@ -749,7 +1057,7 @@ func TestLocalNode_RestoreBackupAuditFailureKeepsCommittedRuntimeAndFatals(t *te
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	n := nn.(*localNode)
-	seedTestPrincipal(t, n.realm)
+	seedTestPrincipal(t, n)
 	if _, err := n.CreateAccount(ctx, testAccount("keep"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -839,6 +1147,91 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnAuditFailureWithoutRuntime(t *te
 	}
 	if _, ok, err := realm0.GetAccount(ctx, "keep-runtime"); err != nil || !ok {
 		t.Fatalf("runtime account after settings-only restore: ok=%v err=%v", ok, err)
+	}
+	access, err := realm0.ListMcpAccess(ctx)
+	if err != nil {
+		t.Fatalf("ListMcpAccess: %v", err)
+	}
+	if access["submit_order"] != true {
+		t.Fatalf("mcp access = %+v, want rollback to true", access)
+	}
+}
+
+// failRestoreAuditDomainSentinelRealm fails the restore_backup audit append
+// with a caller-supplied cause, so a test can drive rollbackStore's
+// successful-rollback branch with a cause that wraps a domain sentinel.
+type failRestoreAuditDomainSentinelRealm struct {
+	store.RealmStore
+	cause error
+}
+
+func (s *failRestoreAuditDomainSentinelRealm) AppendAudit(
+	ctx context.Context, entry store.AuditEntry,
+) error {
+	if entry.Action == domain.AuditActionRestoreBackup {
+		return s.cause
+	}
+	return s.RealmStore.AppendAudit(ctx, entry)
+}
+
+// TestLocalNode_RestoreBackupRollbackSuccessIsInternal covers the
+// successful-rollback branch of rollbackStore: the non-runtime restore already
+// committed before the final audit write failed, so even though the
+// compensating restore-to-rollback-archive restores a consistent state, the
+// failure is Officer's to own. The caller must not see it classified as the
+// domain sentinel the underlying store failure carried, while the diagnostic
+// cause must still be reachable for logs.
+func TestLocalNode_RestoreBackupRollbackSuccessIsInternal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	oldEngine := newFakeEngine()
+
+	real := newMemoryStore("node.db")
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+	realm0, err := real.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm: %v", err)
+	}
+	if err := realm0.SetMcpAccess(ctx, "submit_order", true); err != nil {
+		t.Fatalf("SetMcpAccess: %v", err)
+	}
+	diagnosticCause := errors.New("audit backend rejected the restore row")
+	auditErr := fmt.Errorf(
+		"audit store constraint: %w: %w", domain.ErrAlreadyExists, diagnosticCause,
+	)
+	st := newRealmWrapStore(real, func(r store.RealmStore) store.RealmStore {
+		return &failRestoreAuditDomainSentinelRealm{RealmStore: r, cause: auditErr}
+	})
+	n := newTestNodeWithStore(t, st, oldEngine)
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+	archive := testArchive(
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
+	)
+
+	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		// All means every section available in this archive, not every possible
+		// section. The manifest carries only general settings, so this restore is
+		// non-runtime and remains safely rollback-capable.
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller); err == nil {
+		t.Fatal("RestoreBackup succeeded, want audit failure")
+	} else if errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf(
+			"RestoreBackup error = %v, must not expose the domain sentinel after a "+
+				"committed restore rollback",
+			err,
+		)
+	} else if !errors.Is(err, diagnosticCause) {
+		t.Fatalf("RestoreBackup error = %v, want diagnostic cause preserved", err)
+	}
+	if fatalErr != nil {
+		t.Fatalf("fatal error = %v, want non-runtime rollback without a fatal", fatalErr)
 	}
 	access, err := realm0.ListMcpAccess(ctx)
 	if err != nil {
@@ -1001,7 +1394,7 @@ func TestLocalNode_ResetDatabaseDetachesReconciliationAfterCommit(t *testing.T) 
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	n := nn.(*localNode)
-	seedTestPrincipal(t, n.realm)
+	seedTestPrincipal(t, n)
 	st.cancel = cancel
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
@@ -1046,7 +1439,7 @@ func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	n := nn.(*localNode)
-	seedTestPrincipal(t, n.realm)
+	seedTestPrincipal(t, n)
 	if _, err := n.CreateAccount(ctx, testAccount("reset-me"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}

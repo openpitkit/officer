@@ -304,29 +304,20 @@ func (c *krakenConnector) validateSymbols(
 	return valid
 }
 
-func krakenUnknownSymbolDiag(sub krakenSubscription, known map[string]struct{}) Diagnostic {
+func krakenUnknownSymbolDiag(
+	sub krakenSubscription, known map[string]struct{},
+) Diagnostic {
 	remediation := "Remove this instrument and add one with a valid Kraken WS symbol" +
 		" (e.g. BTC/USD). See the valid symbols list."
-	base := canonicalKrakenAsset(sub.Base)
-	if base != "" {
-		var suggestions []string
-		for sym := range known {
-			if strings.HasPrefix(sym, base+"/") {
-				suggestions = append(suggestions, sym)
-				if len(suggestions) == 3 {
-					break
-				}
-			}
-		}
-		if len(suggestions) > 0 {
-			remediation += " Did you mean: " + strings.Join(suggestions, ", ") + "?"
-		}
+	suggestions := symbolPrefixSuggestionsFromSet(known, sub.External)
+	if len(suggestions) > 0 {
+		remediation += " Did you mean: " + strings.Join(suggestions, ", ") + "?"
 	}
 	return Diagnostic{
 		Level:       DiagError,
 		Code:        CodeUnknownSymbol,
 		Kind:        DiagKindConfig,
-		Instrument:  sub.Base + "/" + sub.Quote,
+		Instrument:  sub.External,
 		Title:       fmt.Sprintf("Symbol %q not found on Kraken", sub.External),
 		Detail:      fmt.Sprintf("The configured external symbol %q is not a Kraken WS ticker symbol.", sub.External),
 		Remediation: remediation,
@@ -462,16 +453,11 @@ func normalizeKrakenSubscriptions(
 	for _, sub := range subs {
 		symbol := strings.TrimSpace(sub.External)
 		if symbol == "" {
-			base := canonicalKrakenAsset(sub.Base)
-			quote := canonicalKrakenAsset(sub.Quote)
-			if base != "" && quote != "" {
-				symbol = base + "/" + quote
-			}
-		} else {
-			symbol = canonicalKrakenSymbol(symbol)
+			return nil, missingExternalSymbolError("kraken", sub)
 		}
+		symbol = canonicalKrakenSymbol(symbol)
 		if symbol == "" {
-			return nil, fmt.Errorf("kraken subscription %s/%s: empty symbol", sub.Base, sub.Quote)
+			return nil, invalidExternalSymbolError("kraken", sub.External)
 		}
 		normalized = append(normalized, krakenSubscription{
 			Subscription: sub,

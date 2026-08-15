@@ -59,7 +59,7 @@ func (l accountLane) SubmitImmediate(
 	if err != nil {
 		return ImmediateResult{}, err
 	}
-	order, err := orderModelFromAccount(o, accountID)
+	order, err := orderModelFromAccount(o, accountID, l.owner.res)
 	if err != nil {
 		return ImmediateResult{}, err
 	}
@@ -98,7 +98,7 @@ func (l accountLane) SubmitImmediate(
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
-	reservationOutcomes, err := balanceOutcomesFromList(adjustments)
+	reservationOutcomes, err := balanceOutcomesFromList(adjustments, l.owner.res)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -128,7 +128,7 @@ func (l accountLane) SubmitImmediate(
 		OrderStatus:    domain.OrderStatusFilled,
 	}
 
-	report, err := executionReportFromAccount(reportInput, accountID, "0")
+	report, err := executionReportFromAccount(reportInput, accountID, "0", l.owner.res)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -208,7 +208,7 @@ func (l accountLane) submitImmediateDropCopy(
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
-			outcomes, err := balanceOutcomesFromList(adjustments)
+			outcomes, err := balanceOutcomesFromList(adjustments, l.owner.res)
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
@@ -233,7 +233,9 @@ func (l accountLane) submitImmediateDropCopy(
 				Order:          o.ExternalID,
 				OrderStatus:    domain.OrderStatusFilled,
 			}
-			report, err := executionReportFromAccount(reportInput, accountID, "0")
+			report, err := executionReportFromAccount(
+				reportInput, accountID, "0", l.owner.res,
+			)
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
@@ -282,7 +284,9 @@ func (l accountLane) settleImmediateApplied(
 			o, state, "the execution report failed and the fill is unsettled", err,
 		)
 	}
-	postTradeOutcomes, err := balanceOutcomesFromList(postTrade.AccountAdjustments)
+	postTradeOutcomes, err := balanceOutcomesFromList(
+		postTrade.AccountAdjustments, l.owner.res,
+	)
 	if err != nil {
 		return ImmediateResult{}, immediateReconciliationError(
 			o, state, "the settled outcome is unmappable", err,

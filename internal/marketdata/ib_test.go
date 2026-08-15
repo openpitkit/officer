@@ -25,6 +25,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestParseIBConfigAndContractOverrides(t *testing.T) {
 		"marketDataType": "delayed",
 		"contracts": {
 			"EUR.USD": {"symbol": "EUR", "secType": "CASH", "exchange": "IDEALPRO", "currency": "USD"},
-			"AAPL": {"secType": "STK", "exchange": "SMART", "primaryExchange": "NASDAQ"}
+			"AAPL": {"secType": "STK", "exchange": "SMART", "primaryExchange": "NASDAQ", "currency": "USD"}
 		}
 	}`)
 	if err != nil {
@@ -58,8 +59,8 @@ func TestParseIBConfigAndContractOverrides(t *testing.T) {
 	}
 
 	subs, err := normalizeIBSubscriptions(cfg, []Subscription{
-		{External: "EUR.USD", Base: "EUR", Quote: "USD"},
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "EUR.USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("normalizeIBSubscriptions: %v", err)
@@ -74,6 +75,96 @@ func TestParseIBConfigAndContractOverrides(t *testing.T) {
 		aapl.Exchange != "SMART" || aapl.PrimaryExchange != "NASDAQ" ||
 		aapl.Currency != "USD" {
 		t.Fatalf("AAPL contract = %+v", aapl)
+	}
+}
+
+func TestNormalizeIBSubscriptions_PreservesAssetKeys(t *testing.T) {
+	t.Parallel()
+
+	subs, err := normalizeIBSubscriptions(ibConfig{ContractDefaults: ibContractConfig{
+		Currency: "provider.currency",
+	}}, []Subscription{{
+		External: "provider.symbol",
+		Base:     testMarketDataAssetID("asset.base"),
+		Quote:    testMarketDataAssetID("asset.quote"),
+	}})
+	if err != nil {
+		t.Fatalf("normalizeIBSubscriptions: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("subscription count = %d, want 1", len(subs))
+	}
+	if got := subs[0].Base; got != testMarketDataAssetID("asset.base") {
+		t.Fatalf("subscription Base = %d, want caller key", got)
+	}
+	if got := subs[0].Quote; got != testMarketDataAssetID("asset.quote") {
+		t.Fatalf("subscription Quote = %d, want caller key", got)
+	}
+	if got := subs[0].contract.Symbol; got != "PROVIDER.SYMBOL" {
+		t.Fatalf("contract Symbol = %q, want uppercased provider value", got)
+	}
+	if got := subs[0].contract.Currency; got != "PROVIDER.CURRENCY" {
+		t.Fatalf("contract Currency = %q, want uppercased provider value", got)
+	}
+}
+
+func TestNormalizeIBSubscriptions_PerContractCurrencyOverrideWins(t *testing.T) {
+	t.Parallel()
+
+	subs, err := normalizeIBSubscriptions(ibConfig{
+		ContractDefaults: ibContractConfig{Currency: "default.currency"},
+		Contracts: map[string]ibContractConfig{
+			"provider.symbol": {Currency: "contract.currency"},
+		},
+	}, []Subscription{{
+		External: "provider.symbol",
+		Base:     testMarketDataAssetID("asset.base"),
+		Quote:    testMarketDataAssetID("asset.quote"),
+	}})
+	if err != nil {
+		t.Fatalf("normalizeIBSubscriptions: %v", err)
+	}
+	if got := subs[0].contract.Currency; got != "CONTRACT.CURRENCY" {
+		t.Fatalf("contract Currency = %q, want per-contract override", got)
+	}
+}
+
+func TestNormalizeIBSubscriptions_PreservesSyntheticInverse(t *testing.T) {
+	t.Parallel()
+
+	subs, err := normalizeIBSubscriptions(ibConfig{
+		ContractDefaults: ibContractConfig{Currency: "USD"},
+	}, []Subscription{{
+		External:         "AAPL",
+		Base:             testMarketDataAssetID("asset.base"),
+		Quote:            testMarketDataAssetID("asset.quote"),
+		SyntheticInverse: true,
+	}})
+	if err != nil {
+		t.Fatalf("normalizeIBSubscriptions: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("subscription count = %d, want 1", len(subs))
+	}
+	if !subs[0].SyntheticInverse {
+		t.Fatal("subscription SyntheticInverse = false, want true")
+	}
+}
+
+func TestNormalizeIBSubscriptions_RequiresContractCurrency(t *testing.T) {
+	t.Parallel()
+
+	_, err := normalizeIBSubscriptions(ibConfig{}, []Subscription{{
+		External: "AAPL",
+		Base:     testMarketDataAssetID("opaque-base-key"),
+		Quote:    testMarketDataAssetID("opaque-quote-key"),
+	}})
+	if err == nil {
+		t.Fatal("normalizeIBSubscriptions error = nil, want missing currency error")
+	}
+	if !strings.Contains(err.Error(), "AAPL") ||
+		!strings.Contains(err.Error(), "IB contract currency is not configured") {
+		t.Fatalf("normalizeIBSubscriptions error = %q", err)
 	}
 }
 
@@ -129,7 +220,7 @@ func TestIBWrapperTickPriceEmitsNormalizedUpdates(t *testing.T) {
 	at := time.Unix(1710000000, 0).UTC()
 	sourceAt := time.Unix(1710000100, 0).UTC()
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(
@@ -152,7 +243,7 @@ func TestIBWrapperTickPriceEmitsNormalizedUpdates(t *testing.T) {
 		t.Fatalf("second update = %+v", second)
 	}
 	third := <-out
-	if !third.AsOf.Equal(sourceAt) || third.Base != "AAPL" || third.Quote != "USD" ||
+	if !third.AsOf.Equal(sourceAt) || third.Base != testMarketDataAssetID("AAPL") || third.Quote != testMarketDataAssetID("USD") ||
 		third.Bid != "181.11" || third.Ask != "181.13" || third.Mark != "181.12" {
 		t.Fatalf("third update = %+v", third)
 	}
@@ -177,7 +268,7 @@ func TestIBWrapperTickPriceClearsNoQuoteAndReportsNoData(t *testing.T) {
 	out := make(chan QuoteUpdate, 4)
 	diags := make(chan Diagnostic, 2)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(
@@ -203,7 +294,7 @@ func TestIBWrapperTickPriceClearsNoQuoteAndReportsNoData(t *testing.T) {
 	}
 	select {
 	case diag := <-diags:
-		if diag.Code != CodeNoData || diag.Instrument != "AAPL/USD" {
+		if diag.Code != CodeNoData || diag.Instrument != "AAPL" {
 			t.Fatalf("diag = %+v", diag)
 		}
 	case <-time.After(time.Second):
@@ -224,7 +315,7 @@ func TestIBWrapperIgnoresInvalidTickPrice(t *testing.T) {
 	defer cancel()
 	out := make(chan QuoteUpdate, 1)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(ctx, subs, out, time.Now, nil, nil)
@@ -249,7 +340,7 @@ func TestIBWrapperIgnoresInvalidTickStringTimestamp(t *testing.T) {
 	out := make(chan QuoteUpdate, 1)
 	at := time.Unix(1710000000, 0).UTC()
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(
@@ -273,7 +364,8 @@ func TestIBConnectorSubscribesThroughClient(t *testing.T) {
 		"host": "127.0.0.1",
 		"port": 7496,
 		"clientId": 109,
-		"marketDataType": "delayed"
+		"marketDataType": "delayed",
+		"contracts": {"AAPL": {"currency": "USD"}}
 	}`)
 	connector.now = func() time.Time { return time.Unix(1710000001, 0).UTC() }
 	clients := make(chan *fakeIBClient, 1)
@@ -286,7 +378,7 @@ func TestIBConnectorSubscribesThroughClient(t *testing.T) {
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -311,7 +403,7 @@ func TestIBConnectorSubscribesThroughClient(t *testing.T) {
 	go client.wrapper.TickPrice(1, ibapi.LAST, 181.12, ibapi.TickAttrib{})
 	select {
 	case update := <-ch:
-		if update.Mark != "181.12" || update.Base != "AAPL" || update.Quote != "USD" {
+		if update.Mark != "181.12" || update.Base != testMarketDataAssetID("AAPL") || update.Quote != testMarketDataAssetID("USD") {
 			t.Fatalf("update = %+v", update)
 		}
 	case <-time.After(time.Second):
@@ -323,13 +415,13 @@ func TestIBConnectorSubscribesThroughClient(t *testing.T) {
 func TestIBConnectorDiagnoseReportsActiveSubscriptions(t *testing.T) {
 	t.Parallel()
 
-	connector := NewIBConnector("ib-test", `{"clientId":109}`)
+	connector := NewIBConnector("ib-test", `{"clientId":109,"contracts":{"AAPL":{"currency":"USD"}}}`)
 	connector.newClient = func(wrapper ibapi.EWrapper) ibClient {
 		return newFakeIBClient(wrapper)
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -342,7 +434,7 @@ func TestIBConnectorDiagnoseReportsActiveSubscriptions(t *testing.T) {
 		t.Fatalf("Diagnose: %v", err)
 	}
 	if len(findings) != 1 || findings[0].Code != CodeNoData ||
-		findings[0].Instrument != "AAPL/USD" {
+		findings[0].Instrument != "AAPL" {
 		t.Fatalf("findings = %+v", findings)
 	}
 	connector.Close()
@@ -358,7 +450,7 @@ func TestIBConnectorDiagnoseReportsActiveSubscriptions(t *testing.T) {
 func TestIBConnectorReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
-	connector := NewIBConnector("ib-test", `{"clientId":109}`)
+	connector := NewIBConnector("ib-test", `{"clientId":109,"contracts":{"AAPL":{"currency":"USD"}}}`)
 	connector.sleep = func(context.Context, time.Duration) error { return nil }
 	clients := make(chan *fakeIBClient, 2)
 	connector.newClient = func(wrapper ibapi.EWrapper) ibClient {
@@ -368,7 +460,7 @@ func TestIBConnectorReconnectsAndResubscribes(t *testing.T) {
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -403,7 +495,7 @@ func TestIBConnectorResetsBackoffAfterDelivery(t *testing.T) {
 		mu     sync.Mutex
 		delays []time.Duration
 	)
-	connector := NewIBConnector("ib-test", `{"clientId":109}`)
+	connector := NewIBConnector("ib-test", `{"clientId":109,"contracts":{"AAPL":{"currency":"USD"}}}`)
 	connector.sleep = func(_ context.Context, delay time.Duration) error {
 		mu.Lock()
 		delays = append(delays, delay)
@@ -418,7 +510,7 @@ func TestIBConnectorResetsBackoffAfterDelivery(t *testing.T) {
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -462,7 +554,7 @@ func TestIBConnectorResetsBackoffAfterDelivery(t *testing.T) {
 func TestIBConnectorCloseStopsSubscription(t *testing.T) {
 	t.Parallel()
 
-	connector := NewIBConnector("ib-test", `{"clientId":109}`)
+	connector := NewIBConnector("ib-test", `{"clientId":109,"contracts":{"AAPL":{"currency":"USD"}}}`)
 	clients := make(chan *fakeIBClient, 1)
 	connector.newClient = func(wrapper ibapi.EWrapper) ibClient {
 		client := newFakeIBClient(wrapper)
@@ -471,7 +563,7 @@ func TestIBConnectorCloseStopsSubscription(t *testing.T) {
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -499,7 +591,7 @@ func TestIBConnectorCloseStopsSubscription(t *testing.T) {
 func TestIBConnectorConnectErrorDisconnectsAndRetries(t *testing.T) {
 	t.Parallel()
 
-	connector := NewIBConnector("ib-test", `{"clientId":109}`)
+	connector := NewIBConnector("ib-test", `{"clientId":109,"contracts":{"AAPL":{"currency":"USD"}}}`)
 	connector.sleep = func(context.Context, time.Duration) error { return nil }
 	clients := make(chan *fakeIBClient, 2)
 	created := 0
@@ -514,7 +606,7 @@ func TestIBConnectorConnectErrorDisconnectsAndRetries(t *testing.T) {
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -541,7 +633,7 @@ func TestIBConnectorConnectErrorDisconnectsAndRetries(t *testing.T) {
 func TestIBConnectorConnectTimeoutIsInterruptible(t *testing.T) {
 	t.Parallel()
 
-	connector := NewIBConnector("ib-test", `{"clientId":109}`)
+	connector := NewIBConnector("ib-test", `{"clientId":109,"contracts":{"AAPL":{"currency":"USD"}}}`)
 	connector.connectTimeout = time.Millisecond
 	var client *fakeIBClient
 	connector.newClient = func(wrapper ibapi.EWrapper) ibClient {
@@ -551,7 +643,7 @@ func TestIBConnectorConnectTimeoutIsInterruptible(t *testing.T) {
 		return client
 	}
 	subs, err := normalizeIBSubscriptions(connector.cfg, []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("normalizeIBSubscriptions: %v", err)
@@ -571,7 +663,7 @@ func TestIBConnectorInvalidCredentials(t *testing.T) {
 
 	connector := NewIBConnector("ib-test", `{"port":70000}`)
 	_, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err == nil {
 		t.Fatal("Subscribe err = nil, want invalid credentials error")
@@ -585,7 +677,7 @@ func TestIBWrapperReportsContractErrorDiagnostic(t *testing.T) {
 	defer cancel()
 	diags := make(chan Diagnostic, 1)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag Diagnostic) {
@@ -597,7 +689,7 @@ func TestIBWrapperReportsContractErrorDiagnostic(t *testing.T) {
 	select {
 	case diag := <-diags:
 		if diag.Code != CodeUnknownSymbol || diag.Kind != DiagKindConfig ||
-			diag.Instrument != "AAPL/USD" {
+			diag.Instrument != "AAPL" {
 			t.Fatalf("diag = %+v", diag)
 		}
 	case <-time.After(time.Second):
@@ -612,7 +704,7 @@ func TestIBWrapperReportsMarketDataTypeFreshness(t *testing.T) {
 	defer cancel()
 	diags := make(chan Diagnostic, 2)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag Diagnostic) {
@@ -624,12 +716,12 @@ func TestIBWrapperReportsMarketDataTypeFreshness(t *testing.T) {
 
 	realtime := <-diags
 	if realtime.Level != DiagInfo || realtime.Code != CodeDataFreshness ||
-		realtime.Instrument != "AAPL/USD" {
+		realtime.Instrument != "AAPL" {
 		t.Fatalf("realtime diag = %+v", realtime)
 	}
 	delayed := <-diags
 	if delayed.Level != DiagWarn || delayed.Code != CodeDataFreshness ||
-		delayed.Instrument != "AAPL/USD" {
+		delayed.Instrument != "AAPL" {
 		t.Fatalf("delayed diag = %+v", delayed)
 	}
 }
@@ -658,7 +750,7 @@ func TestIBWrapperClassifiesIBErrorDiagnostics(t *testing.T) {
 	defer cancel()
 	diags := make(chan Diagnostic, 4)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag Diagnostic) {
@@ -680,7 +772,7 @@ func TestIBWrapperClassifiesIBErrorDiagnostics(t *testing.T) {
 	}
 	noData := <-diags
 	if noData.Level != DiagWarn || noData.Code != CodeNoData ||
-		noData.Kind != DiagKindConfig || noData.Instrument != "AAPL/USD" {
+		noData.Kind != DiagKindConfig || noData.Instrument != "AAPL" {
 		t.Fatalf("no-data diag = %+v", noData)
 	}
 	clientID := <-diags
@@ -1269,7 +1361,11 @@ func TestIBConnectorLiveConnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if _, err := connector.Subscribe(ctx, []Subscription{
-		{External: symbol, Base: symbol, Quote: quote},
+		{
+			External: symbol,
+			Base:     testMarketDataAssetID(symbol),
+			Quote:    testMarketDataAssetID(quote),
+		},
 	}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}

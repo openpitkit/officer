@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -75,9 +76,117 @@ func TestLocalNode_SetAccountCurrencyAuditsAndGuardsOpenBalances(t *testing.T) {
 	}
 }
 
-func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T) {
+func TestLocalNode_CreateAssetPublishesLiveResolver(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, st := newTestNode(t, eng)
+
+	asset, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller)
+	if err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	if got := eng.assetResolverIDs[asset.Code]; got != asset.EngineAssetID {
+		t.Fatalf("live asset resolver id = %d, want %d", got, asset.EngineAssetID)
+	}
+	const account domain.AccountID = "asset-create-account"
+	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := n.ApplyAdjustment(
+		ctx,
+		testKey(account),
+		"",
+		domain.AdjustmentRequest{
+			Asset: "GOLD",
+			Balance: &domain.AdjustmentAmount{
+				Mode:  domain.AdjustmentModeAbsolute,
+				Value: "1",
+			},
+		},
+		domain.MissingAccountReject,
+		testCaller,
+	); err != nil {
+		t.Fatalf("ApplyAdjustment with created asset: %v", err)
+	}
+	if _, ok, err := st.GetAsset(ctx, "GOLD"); err != nil || !ok {
+		t.Fatalf("GetAsset(GOLD) = ok %v, err %v", ok, err)
+	}
+}
+
+func TestLocalNode_CreateAssetAuditSurvivesRequestCancellation(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng := newFakeEngine()
+	eng.afterAssetResolverAdd = cancel
+	n, _ := newTestNode(t, eng)
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); err != nil {
+		t.Fatalf("CreateAsset after request cancellation: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("asset resolver publication did not cancel the request context")
+	}
+	if fatalErr != nil {
+		t.Fatalf("create asset audit triggered fatal path: %v", fatalErr)
+	}
+	rows, err := n.ListAudit(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	for _, row := range rows {
+		if row.Action == domain.AuditActionCreateAsset && row.Asset == "GOLD" {
+			return
+		}
+	}
+	t.Fatalf("audit rows = %+v, want created GOLD asset", rows)
+}
+
+func TestLocalNode_CreateAssetAuditFailureFatals(t *testing.T) {
+	t.Parallel()
+	auditErr := errors.New("create asset audit failed")
+	st := newRealmWrapStore(newMemoryStore("create-asset-audit.db"), func(
+		realm store.RealmStore,
+	) store.RealmStore {
+		return &failActionAuditRealm{
+			RealmStore: realm,
+			action:     domain.AuditActionCreateAsset,
+			err:        auditErr,
+		}
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	n := newTestNodeWithStore(t, st, newFakeEngine())
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); !errors.Is(err, auditErr) {
+		t.Fatalf("CreateAsset = %v, want audit failure", err)
+	}
+	if fatalErr == nil {
+		t.Fatal("create asset audit failure did not invoke the fatal hook")
+	}
+	if !strings.Contains(fatalErr.Error(), `operation="audit create asset"`) ||
+		!strings.Contains(fatalErr.Error(), "asset=GOLD") {
+		t.Fatalf("fatal error = %q, want operation and asset", fatalErr)
+	}
+}
+
+func TestLocalNode_UpdateAssetRenameKeepsEngineStateWithOrdersAndMarketData(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const (
+		baseAsset         = "RENBASE"
+		quoteAsset        = "RENQUOTE"
+		renamedQuoteAsset = "RENQUOTEX"
+	)
 	base := newMemoryStore("asset-update-rename.db")
 	t.Cleanup(func() { _ = base.Close() })
 	probe := &assetUpdateProbeRealm{}
@@ -86,28 +195,33 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 		return probe
 	})
 	original := newFakeEngine()
+	original.enforceResolver = true
 	n := newTestNodeWithStore(t, st, original)
-	createCurrencyAssets(t, n.realm, "AAPL", "USD")
+	for _, code := range []string{baseAsset, quoteAsset} {
+		if _, err := n.CreateAsset(ctx, domain.Asset{Code: code}, testCaller); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
+	}
 
-	if _, err := n.realm.CreateGroup(ctx, domain.AccountGroup{
-		Code: "desk", Currency: "USD",
-	}); err != nil {
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{
+		Code: "desk", Currency: quoteAsset,
+	}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 	const accountID domain.AccountID = "account-1"
-	if _, err := n.realm.CreateAccount(ctx, domain.Account{
+	if _, err := n.CreateAccount(ctx, domain.Account{
 		Code: accountID, GroupCode: "desk",
-	}); err != nil {
+	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if err := n.realm.UpsertBalance(ctx, domain.Balance{
-		Account: accountID, Asset: "USD", Available: "1",
+		Account: accountID, Asset: quoteAsset, Available: "1",
 	}); err != nil {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 	if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope: domain.ScopeAccount, Account: accountID,
-		Currency: "USD", LowerBound: "-1",
+		Currency: quoteAsset, LowerBound: "-1",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
@@ -115,8 +229,8 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 		Account:     accountID,
 		Source:      domain.SourceAPI,
 		Principal:   "operator",
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
+		BaseAsset:   baseAsset,
+		QuoteAsset:  quoteAsset,
 		Side:        domain.OrderSideBuy,
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
@@ -142,9 +256,9 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 		ctx,
 		domain.MarketDataInstrument{
 			Instance:       instance.ExternalID,
-			ExternalSymbol: "AAPLUSD",
-			BaseAsset:      "AAPL",
-			QuoteAsset:     "USD",
+			ExternalSymbol: "RENBASE/RENQUOTE",
+			BaseAsset:      baseAsset,
+			QuoteAsset:     quoteAsset,
 			ManualPrice:    "400",
 			Enabled:        true,
 		},
@@ -156,21 +270,46 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 		t.Fatalf("ListAudit before rename: %v", err)
 	}
 
-	next := newFakeEngine()
-	sink := &marketDataReplaySink{}
-	next.sink = sink
-	var rebuilt engine.Snapshot
 	buildCalls := 0
-	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
 		buildCalls++
-		rebuilt = snapshot
-		return fakeBuild(next, &rebuilt)(snapshot)
+		return nil, errors.New("unexpected asset rename rebuild")
 	}
+	sinkBefore := n.currentMarketDataSink()
+	assetIDBefore := original.assetResolverIDs[quoteAsset]
+	engineStateBefore := struct {
+		accountCurrencies map[domain.AccountID]string
+		groupCurrencies   map[string]string
+		accountGroups     map[domain.AccountID]string
+		submitCalls       []domain.Order
+		adjustmentCalls   []adjustmentBatchCall
+	}{
+		accountCurrencies: maps.Clone(original.accountCurrencies),
+		groupCurrencies:   maps.Clone(original.groupCurrencies),
+		accountGroups:     maps.Clone(original.accountGroups),
+		submitCalls: []domain.Order{{
+			Account: accountID, BaseAsset: baseAsset, QuoteAsset: quoteAsset, Leaves: "2",
+		}},
+		adjustmentCalls: []adjustmentBatchCall{{
+			account: accountID,
+			reqs: []domain.AdjustmentRequest{{
+				Asset: quoteAsset,
+				Balance: &domain.AdjustmentAmount{
+					Mode:  domain.AdjustmentModeAbsolute,
+					Value: "1",
+				},
+			}},
+		}},
+	}
+	original.submitCalls = append([]domain.Order(nil), engineStateBefore.submitCalls...)
+	original.adjustmentBatchCalls = append(
+		[]adjustmentBatchCall(nil), engineStateBefore.adjustmentCalls...,
+	)
 
 	updated, err := n.UpdateAsset(
-		ctx, "USD", domain.Asset{Code: "USDX"}, testCaller,
+		ctx, quoteAsset, domain.Asset{Code: renamedQuoteAsset}, testCaller,
 	)
-	if err != nil || updated.Code != "USDX" {
+	if err != nil || updated.Code != renamedQuoteAsset {
 		t.Fatalf("UpdateAsset = %+v, %v", updated, err)
 	}
 	if probe.updateCalls != 1 {
@@ -184,8 +323,8 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 		t.Fatalf("asset rename audit = %+v", rows)
 	}
 	wants := map[string]string{
-		"USD":  "update asset USD -> USDX (record under old code)",
-		"USDX": "update asset USD -> USDX (record under new code)",
+		quoteAsset:        "update asset RENQUOTE -> RENQUOTEX (record under old code)",
+		renamedQuoteAsset: "update asset RENQUOTE -> RENQUOTEX (record under new code)",
 	}
 	for code, want := range wants {
 		matches := 0
@@ -199,64 +338,45 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 			t.Fatalf("asset rename audits for %q = %+v", code, rows)
 		}
 	}
-	if buildCalls != 1 || n.currentEngine() != next || original.running {
+	if buildCalls != 0 || n.currentEngine() != original || !original.running {
 		t.Fatalf(
-			"asset rename builds=%d current-next=%v original-running=%v",
-			buildCalls,
-			n.currentEngine() == next,
-			original.running,
+			"asset rename builds=%d current-original=%v original-running=%v",
+			buildCalls, n.currentEngine() == original, original.running,
 		)
 	}
-
-	rebuiltUSD := false
-	for _, group := range rebuilt.Groups {
-		if group.Code == "desk" && group.Currency == "USDX" {
-			rebuiltUSD = true
-		}
+	if n.currentMarketDataSink() != sinkBefore {
+		t.Fatal("asset rename replaced the market-data sink")
 	}
-	if !rebuiltUSD {
+	if original.assetResolverIDs[renamedQuoteAsset] != assetIDBefore {
 		t.Fatalf(
-			"rebuilt snapshot does not carry renamed group currency: %+v",
-			rebuilt,
+			"renamed asset engine id = %d, want %d",
+			original.assetResolverIDs[renamedQuoteAsset], assetIDBefore,
 		)
 	}
-	if len(rebuilt.Balances) != 1 || rebuilt.Balances[0].Asset != "USDX" {
-		t.Fatalf("rebuilt snapshot balances = %+v, want USDX", rebuilt.Balances)
+	if _, ok := original.assetResolverIDs[quoteAsset]; ok {
+		t.Fatalf("old asset resolver alias survived: %+v", original.assetResolverIDs)
 	}
-	if len(rebuilt.SpotFundsPnlBoundsLimits) != 1 ||
-		rebuilt.SpotFundsPnlBoundsLimits[0].Currency != "USDX" {
-		t.Fatalf(
-			"rebuilt snapshot SpotFunds P&L bounds = %+v, want currency USDX",
-			rebuilt.SpotFundsPnlBoundsLimits,
-		)
+	if !reflect.DeepEqual(original.accountCurrencies, engineStateBefore.accountCurrencies) ||
+		!reflect.DeepEqual(original.groupCurrencies, engineStateBefore.groupCurrencies) ||
+		!reflect.DeepEqual(original.accountGroups, engineStateBefore.accountGroups) ||
+		!reflect.DeepEqual(original.submitCalls, engineStateBefore.submitCalls) ||
+		!reflect.DeepEqual(original.adjustmentBatchCalls, engineStateBefore.adjustmentCalls) {
+		t.Fatalf("asset rename changed engine-visible state: %+v", original)
 	}
 	limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, accountID)
-	if err != nil || len(limits) != 1 || limits[0].Currency != "USDX" {
+	if err != nil || len(limits) != 1 || limits[0].Currency != renamedQuoteAsset {
 		t.Fatalf("SpotFunds P&L bounds after rename = %+v, err=%v", limits, err)
 	}
-	replayed := false
-	for _, update := range sink.updates {
-		if update.Base == "AAPL" && update.Quote == "USDX" && update.Mark == "400" {
-			replayed = true
-		}
-	}
-	if !replayed {
-		t.Fatalf(
-			"rebuilt engine did not replay renamed market data: %+v",
-			sink.updates,
-		)
-	}
-
 	account, ok, err := n.realm.GetAccount(ctx, accountID)
-	if err != nil || !ok || account.EffectiveCurrency != "USDX" {
+	if err != nil || !ok || account.EffectiveCurrency != renamedQuoteAsset {
 		t.Fatalf("account after rename = %+v ok=%v err=%v", account, ok, err)
 	}
 	detail, err := n.realm.GetOrder(ctx, order.ExternalID)
-	if err != nil || detail.Order.QuoteAsset != "USDX" {
+	if err != nil || detail.Order.QuoteAsset != renamedQuoteAsset {
 		t.Fatalf("order after rename = %+v err=%v", detail.Order, err)
 	}
 	instruments, err := n.realm.ListMarketDataInstruments(ctx, instance.ExternalID)
-	if err != nil || len(instruments) != 1 || instruments[0].QuoteAsset != "USDX" {
+	if err != nil || len(instruments) != 1 || instruments[0].QuoteAsset != renamedQuoteAsset {
 		t.Fatalf(
 			"market-data instruments after rename = %+v err=%v",
 			instruments,
@@ -265,29 +385,34 @@ func TestLocalNode_UpdateAssetRenameRebuildsWithOrdersAndMarketData(t *testing.T
 	}
 }
 
-func TestLocalNode_UpdateAssetRenameRollsBackFailedRebuild(t *testing.T) {
+func TestLocalNode_UpdateAssetRenameRollsBackFailedPublication(t *testing.T) {
 	t.Parallel()
-	n, st := newTestNode(t, newFakeEngine())
+	eng := newFakeEngine()
+	eng.renameAssetResolverErr = errors.New("asset resolver rename failed")
+	n, st := newTestNode(t, eng)
 	ctx := context.Background()
-	createCurrencyAssets(t, st, "USD")
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
 
-	buildErr := errors.New("asset rename build failed")
-	n.build = func(engine.Snapshot) (engine.Engine, error) { return nil, buildErr }
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		return nil, errors.New("unexpected asset rename rebuild")
+	}
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 
 	if _, err := n.UpdateAsset(
-		ctx, "USD", domain.Asset{Code: "USDX"}, testCaller,
-	); !errors.Is(err, buildErr) {
-		t.Fatalf("UpdateAsset = %v, want the build failure", err)
+		ctx, "GOLD", domain.Asset{Code: "GOLDX"}, testCaller,
+	); !errors.Is(err, eng.renameAssetResolverErr) {
+		t.Fatalf("UpdateAsset = %v, want the publication failure", err)
 	}
 	if fatalErr != nil {
 		t.Fatalf("recovered rollback escalated: %v", fatalErr)
 	}
-	if _, ok, err := st.GetAsset(ctx, "USD"); err != nil || !ok {
+	if _, ok, err := st.GetAsset(ctx, "GOLD"); err != nil || !ok {
 		t.Fatalf("asset not restored: ok=%v err=%v", ok, err)
 	}
-	if _, ok, err := st.GetAsset(ctx, "USDX"); err != nil || ok {
+	if _, ok, err := st.GetAsset(ctx, "GOLDX"); err != nil || ok {
 		t.Fatalf("renamed asset survived the rollback: ok=%v err=%v", ok, err)
 	}
 }
@@ -301,17 +426,22 @@ func TestLocalNode_UpdateAssetRenameFailedRollbackEscalates(t *testing.T) {
 	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
 		return &failAssetRestoreRealm{RealmStore: realm, err: restoreErr}
 	})
-	n := newTestNodeWithStore(t, st, newFakeEngine())
-	createCurrencyAssets(t, n.realm, "USD")
+	eng := newFakeEngine()
+	eng.renameAssetResolverErr = errors.New("asset resolver rename failed")
+	n := newTestNodeWithStore(t, st, eng)
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
 
 	buildErr := errors.New("asset rename build failed")
 	n.build = func(engine.Snapshot) (engine.Engine, error) { return nil, buildErr }
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 
-	_, err := n.UpdateAsset(ctx, "USD", domain.Asset{Code: "USDX"}, testCaller)
-	if !errors.Is(err, buildErr) || !errors.Is(err, restoreErr) {
-		t.Fatalf("UpdateAsset = %v, want both the build and restore failure", err)
+	_, err := n.UpdateAsset(ctx, "GOLD", domain.Asset{Code: "GOLDX"}, testCaller)
+	if !errors.Is(err, eng.renameAssetResolverErr) ||
+		!errors.Is(err, restoreErr) || !errors.Is(err, buildErr) {
+		t.Fatalf("UpdateAsset = %v, want publication, restore, and build failures", err)
 	}
 	if fatalErr == nil || !errors.Is(fatalErr, restoreErr) {
 		t.Fatalf("fatal error = %v, want the failed restore", fatalErr)
@@ -322,16 +452,18 @@ func TestLocalNode_UpdateAssetRenameRejectsEngineRestarting(t *testing.T) {
 	t.Parallel()
 	n, st := newTestNode(t, newFakeEngine())
 	ctx := context.Background()
-	createCurrencyAssets(t, st, "USD")
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
 	n.restarting.Store(true)
 	t.Cleanup(func() { n.restarting.Store(false) })
 
 	if _, err := n.UpdateAsset(
-		ctx, "USD", domain.Asset{Code: "USDX"}, testCaller,
+		ctx, "GOLD", domain.Asset{Code: "GOLDX"}, testCaller,
 	); !errors.Is(err, domain.ErrEngineRestarting) {
 		t.Fatalf("UpdateAsset = %v, want ErrEngineRestarting", err)
 	}
-	if _, ok, err := st.GetAsset(ctx, "USD"); err != nil || !ok {
+	if _, ok, err := st.GetAsset(ctx, "GOLD"); err != nil || !ok {
 		t.Fatalf("asset changed during restart rejection: ok=%v err=%v", ok, err)
 	}
 }
@@ -340,7 +472,9 @@ func TestLocalNode_UpdateAssetSameCodeAuditsPlainDetail(t *testing.T) {
 	t.Parallel()
 	n, st := newTestNode(t, newFakeEngine())
 	ctx := context.Background()
-	createCurrencyAssets(t, st, "USD")
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
 	auditsBefore, err := st.ListAudit(ctx, 100)
 	if err != nil {
 		t.Fatalf("ListAudit before update: %v", err)
@@ -348,11 +482,11 @@ func TestLocalNode_UpdateAssetSameCodeAuditsPlainDetail(t *testing.T) {
 
 	updated, err := n.UpdateAsset(
 		ctx,
-		"USD",
-		domain.Asset{Code: "USD", Title: "US Dollar"},
+		"GOLD",
+		domain.Asset{Code: "GOLD", Title: "Gold"},
 		testCaller,
 	)
-	if err != nil || updated.Title != "US Dollar" {
+	if err != nil || updated.Title != "Gold" {
 		t.Fatalf("UpdateAsset = %+v, %v", updated, err)
 	}
 	rows, err := st.ListAudit(ctx, 100)
@@ -361,8 +495,8 @@ func TestLocalNode_UpdateAssetSameCodeAuditsPlainDetail(t *testing.T) {
 	}
 	if len(rows) != len(auditsBefore)+1 ||
 		rows[0].Action != domain.AuditActionUpdateAsset ||
-		rows[0].Asset != "USD" ||
-		rows[0].Detail != "update asset USD" {
+		rows[0].Asset != "GOLD" ||
+		rows[0].Detail != "update asset GOLD" {
 		t.Fatalf("same-code asset update audit = %+v", rows)
 	}
 }
@@ -380,7 +514,7 @@ type failAssetRestoreRealm struct {
 func (r *failAssetRestoreRealm) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset,
 ) (domain.Asset, error) {
-	if oldCode != asset.Code && oldCode == "USDX" {
+	if oldCode != asset.Code && oldCode == "GOLDX" {
 		return domain.Asset{}, r.err
 	}
 	return r.RealmStore.UpdateAsset(ctx, oldCode, asset)
@@ -1149,9 +1283,10 @@ func assertAccountPnlCurrencyGuard(t *testing.T, err error, _ string) {
 	}
 }
 
-func TestLocalNode_SetAccountCurrencyGuardDoesNotAutoCreateAsset(t *testing.T) {
+func TestLocalNode_SetAccountCurrencyGuardLeavesNoAssetBeforeLane(t *testing.T) {
 	t.Parallel()
-	n, st := newTestNode(t, newFakeEngine())
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 	createCurrencyAssets(t, st, "USD")
 
@@ -1171,12 +1306,150 @@ func TestLocalNode_SetAccountCurrencyGuardDoesNotAutoCreateAsset(t *testing.T) {
 	}
 
 	err := n.SetAccountCurrency(ctx, testKey(id), "CHF", testCaller)
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict", err)
+	var blocked domain.CurrencyChangeBlockedError
+	if !errors.Is(err, domain.ErrConflict) || !errors.As(err, &blocked) ||
+		blocked.Scope != domain.ScopeAccount || blocked.TargetID != id.String() {
+		t.Fatalf("SetAccountCurrency guarded = %#v, want blocked account currency", err)
 	}
-	if _, ok, err := st.GetAsset(ctx, "CHF"); err != nil || ok {
-		t.Fatalf("GetAsset(CHF) = ok %v err %v, want absent", ok, err)
+	if _, ok, getErr := st.GetAsset(ctx, "CHF"); getErr != nil || ok {
+		t.Fatalf("GetAsset(CHF) = ok %v err %v, want absent", ok, getErr)
 	}
+	eng.resolverMu.RLock()
+	_, resolverOK := eng.assetResolverIDs["CHF"]
+	eng.resolverMu.RUnlock()
+	if resolverOK {
+		t.Fatal("CHF resolver alias exists after blocked currency change")
+	}
+	rows, err := n.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	for _, row := range rows {
+		if row.Action == domain.AuditActionCreateAsset && row.Asset == "CHF" {
+			t.Fatalf("audit rows = %+v, must not contain CHF asset creation", rows)
+		}
+	}
+}
+
+type accountCurrencyAssetLookupFailureRealm struct {
+	store.RealmStore
+	asset string
+	err   error
+}
+
+func (r *accountCurrencyAssetLookupFailureRealm) GetAsset(
+	ctx context.Context,
+	code string,
+) (domain.Asset, bool, error) {
+	if code == r.asset {
+		return domain.Asset{}, false, r.err
+	}
+	return r.RealmStore.GetAsset(ctx, code)
+}
+
+func TestLocalNode_SetAccountCurrencyUnchangedSkipsAssetRegistration(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "USD")
+
+	const id domain.AccountID = "unchanged-currency-account"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+		t.Fatalf("SetAccountCurrency initial: %v", err)
+	}
+	rowsBefore, err := n.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit before no-op: %v", err)
+	}
+	lookupErr := errors.New("unchanged currency asset lookup must not run")
+	n.realm = &accountCurrencyAssetLookupFailureRealm{
+		RealmStore: n.realm,
+		asset:      "USD",
+		err:        lookupErr,
+	}
+
+	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+		t.Fatalf("SetAccountCurrency unchanged: %v", err)
+	}
+	rowsAfter, err := n.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit after no-op: %v", err)
+	}
+	if len(rowsAfter) != len(rowsBefore) {
+		t.Fatalf("audit rows after no-op = %d, want %d", len(rowsAfter), len(rowsBefore))
+	}
+}
+
+func TestLocalNode_SetAccountCurrencyRejectsUnknownAccountBeforeAssetCreation(t *testing.T) {
+	t.Parallel()
+	n, _ := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	err := n.SetAccountCurrency(ctx, testKey("missing"), "CHF", testCaller)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("SetAccountCurrency = %v, want ErrNotFound", err)
+	}
+	assets, err := n.ListAssets(ctx)
+	if err != nil {
+		t.Fatalf("ListAssets: %v", err)
+	}
+	for _, asset := range assets {
+		if asset.Code == "CHF" {
+			t.Fatalf("assets = %+v, must not create CHF for missing account", assets)
+		}
+	}
+}
+
+func TestLocalNode_SetAccountCurrencyCreatesAndPublishesMissingAsset(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, _ := newTestNode(t, eng)
+	const id domain.AccountID = "currency-asset-account"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	if err := n.SetAccountCurrency(ctx, testKey(id), "CHF", testCaller); err != nil {
+		t.Fatalf("SetAccountCurrency: %v", err)
+	}
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if account.Currency != "CHF" || account.EffectiveCurrency != "CHF" {
+		t.Fatalf("account currency = %+v, want CHF", account)
+	}
+	assets, err := n.ListAssets(ctx)
+	if err != nil {
+		t.Fatalf("ListAssets: %v", err)
+	}
+	for _, asset := range assets {
+		if asset.Code == "CHF" {
+			if _, err := n.ApplyAdjustment(
+				ctx,
+				testKey(id),
+				"",
+				domain.AdjustmentRequest{
+					Asset: "CHF",
+					Balance: &domain.AdjustmentAmount{
+						Mode:  domain.AdjustmentModeAbsolute,
+						Value: "1",
+					},
+				},
+				domain.MissingAccountReject,
+				testCaller,
+			); err != nil {
+				t.Fatalf("ApplyAdjustment with published CHF asset: %v", err)
+			}
+			return
+		}
+	}
+	t.Fatalf("assets = %+v, want CHF", assets)
 }
 
 func TestLocalNode_SetAccountCurrencyPreservesEngineInvalid(t *testing.T) {
@@ -1226,7 +1499,7 @@ func TestLocalNode_SetAccountCurrencyRevertFailureFatals(t *testing.T) {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	n := nRaw.(*localNode)
-	seedTestPrincipal(t, n.realm)
+	seedTestPrincipal(t, n)
 	createCurrencyAssets(t, n.realm, "EUR", "USD")
 
 	const id domain.AccountID = "acc-1"
@@ -1238,21 +1511,27 @@ func TestLocalNode_SetAccountCurrencyRevertFailureFatals(t *testing.T) {
 	}
 
 	err = n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
-	if !errors.Is(err, revertErr) {
-		t.Fatalf("SetAccountCurrency error = %v, want revert failure", err)
+	if !errors.Is(err, applyErr) || !errors.Is(err, revertErr) {
+		t.Fatalf(
+			"SetAccountCurrency error = %v, want apply and revert failures",
+			err,
+		)
 	}
-	if errors.Is(err, applyErr) {
-		t.Fatalf("SetAccountCurrency error = %v, want fatal revert failure", err)
-	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire on account currency revert failure")
+	if fatalErr == nil ||
+		!errors.Is(fatalErr, applyErr) ||
+		!errors.Is(fatalErr, revertErr) {
+		t.Fatalf(
+			"fatal error = %v, want apply and revert failures",
+			fatalErr,
+		)
 	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="revert account currency"`) ||
 		!strings.Contains(msg, "account=acc-1") ||
 		!strings.Contains(msg, "post-engine persistence failure") ||
+		!strings.Contains(msg, "engine apply account currency failed") ||
 		!strings.Contains(msg, "engine revert account currency failed") {
-		t.Fatalf("fatal error = %q, want operation, account code, and cause", msg)
+		t.Fatalf("fatal error = %q, want operation, account code, and both causes", msg)
 	}
 	if strings.Contains(msg, "account_id=") {
 		t.Fatalf("fatal error = %q, must not leak the engine surrogate", msg)
@@ -1630,11 +1909,11 @@ func TestLocalNode_CurrencyAutoCreatesAssets(t *testing.T) {
 }
 
 func createCurrencyAssets(t *testing.T, st interface {
-	CreateAsset(context.Context, domain.Asset) error
+	CreateAsset(context.Context, domain.Asset) (domain.Asset, error)
 }, codes ...string) {
 	t.Helper()
 	for _, code := range codes {
-		if err := st.CreateAsset(context.Background(), domain.Asset{Code: code}); err != nil &&
+		if _, err := st.CreateAsset(context.Background(), domain.Asset{Code: code}); err != nil &&
 			!errors.Is(err, domain.ErrAlreadyExists) {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}

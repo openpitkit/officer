@@ -19,7 +19,8 @@
   "instrumentDialog": {
     "ibTitle": "Добавить инструмент Interactive Brokers",
     "ibDescription": "Выберите найденный контракт или заполните поля контракта вручную перед добавлением инструмента.",
-    "contract": "Контракт"
+    "contract": "Контракт",
+    "currencyRequired": "Укажите валюту контракта IB."
   },
   "actions": {
     "addInstance": "Добавить источник",

@@ -36,7 +36,7 @@ func seedAdjustmentFixtures(t *testing.T) (context.Context, RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
 	}
 	if err := rs.CreatePrincipal(ctx, domain.Principal{Code: "operator"}); err != nil {

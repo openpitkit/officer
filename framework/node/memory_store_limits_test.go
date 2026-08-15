@@ -269,7 +269,7 @@ func TestMemoryRealmSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 	ctx := context.Background()
 	realm := newMemoryStore("limits.db").realm
 	for _, code := range []string{"USD", "EUR"} {
-		if err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}

@@ -76,6 +76,7 @@ type memoryRealm struct {
 	mcpAccess     map[string]bool
 	userSettings  map[string]domain.UserSetting
 	nextAccountID domain.EngineAccountID
+	nextAssetID   domain.EngineAssetID
 	nextGroupID   int
 }
 

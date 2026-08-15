@@ -38,13 +38,18 @@ type fakeEngine struct {
 
 	enforceResolver    bool
 	knownAccounts      map[domain.AccountID]struct{}
+	knownAssets        map[string]struct{}
 	knownGroups        map[string]struct{}
 	accountResolverIDs map[domain.AccountID]domain.EngineAccountID
+	assetResolverIDs   map[string]domain.EngineAssetID
 	groupResolverIDs   map[string]domain.EngineGroupID
 	accountCurrencies  map[domain.AccountID]string
 	groupCurrencies    map[string]string
 	accountGroups      map[domain.AccountID]string
 	resolverMu         sync.RWMutex
+	// Callbacks run under resolverMu; they must not re-enter the fake's resolver.
+	afterAssetResolverAdd    func()
+	afterAssetResolverRemove func()
 
 	// accountPnlCalls records every engine P&L assignment in order, and
 	// accountPnlBlocks are the blocks the engine reports back for an account.
@@ -108,17 +113,18 @@ type fakeEngine struct {
 	groupCurrencyCalls int
 	accountPnlErr      error
 
-	failConfigure     bool
-	failBlock         bool
-	failAdjustment    bool
-	failSubmit        bool
-	failExecReport    bool
-	failGroup         bool
-	failRegisterGroup string
-	submitEntered     chan domain.AccountID
-	submitRelease     <-chan struct{}
-	blockGroupEntered chan string
-	blockGroupRelease <-chan struct{}
+	failConfigure          bool
+	failBlock              bool
+	failAdjustment         bool
+	failSubmit             bool
+	failExecReport         bool
+	failGroup              bool
+	failRegisterGroup      string
+	renameAssetResolverErr error
+	submitEntered          chan domain.AccountID
+	submitRelease          <-chan struct{}
+	blockGroupEntered      chan string
+	blockGroupRelease      <-chan struct{}
 }
 
 type configureCall struct {
@@ -208,6 +214,16 @@ func TestFakeEngineDictionaryResolverMutations(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RenameAccountResolverEntry: %v", err)
 	}
+	if err := eng.AddAssetResolverEntry(domain.Asset{
+		Code: "asset-old", EngineAssetID: 11,
+	}); err != nil {
+		t.Fatalf("AddAssetResolverEntry: %v", err)
+	}
+	if err := eng.RenameAssetResolverEntry("asset-old", domain.Asset{
+		Code: "asset-new", EngineAssetID: 11,
+	}); err != nil {
+		t.Fatalf("RenameAssetResolverEntry: %v", err)
+	}
 	if err := eng.RenameGroupResolverEntry("group-old", domain.AccountGroup{
 		Code: "group-new", EngineGroupID: 9,
 	}); err != nil {
@@ -223,6 +239,26 @@ func TestFakeEngineDictionaryResolverMutations(t *testing.T) {
 		context.Background(), "group-new", func(engine.GroupLane) error { return nil },
 	); err != nil {
 		t.Fatalf("RunGroupSynchronized renamed alias: %v", err)
+	}
+	if _, ok := eng.knownAssets["asset-old"]; ok ||
+		eng.assetResolverIDs["asset-new"] != 11 {
+		t.Fatalf("renamed asset resolver = %+v", eng.assetResolverIDs)
+	}
+	if err := eng.RemoveAssetResolverEntry(domain.Asset{
+		Code: "asset-new", EngineAssetID: 12,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("mismatched asset removal error = %v, want ErrInvalid", err)
+	}
+	if err := eng.RemoveAssetResolverEntry(domain.Asset{
+		Code: "asset-new", EngineAssetID: 11,
+	}); err != nil {
+		t.Fatalf("RemoveAssetResolverEntry: %v", err)
+	}
+	if _, ok := eng.knownAssets["asset-new"]; ok {
+		t.Fatalf("removed asset resolver alias survived: %+v", eng.knownAssets)
+	}
+	if _, ok := eng.assetResolverIDs["asset-new"]; ok {
+		t.Fatalf("removed asset resolver id survived: %+v", eng.assetResolverIDs)
 	}
 	if err := eng.RenameAccountResolverEntry("account-new", domain.Account{
 		Code: "account-bad", EngineAccountID: 99,
@@ -256,6 +292,191 @@ func TestFakeEngineDictionaryResolverMutations(t *testing.T) {
 	}
 	if got := eng.MarketDataSink(); got != sinkBefore {
 		t.Fatal("fake resolver mutation replaced MarketDataSink")
+	}
+}
+
+func TestFakeEngineRejectsUnpublishedAssetOnEveryResolverPath(t *testing.T) {
+	t.Parallel()
+
+	const (
+		account     = domain.AccountID("account")
+		group       = "group"
+		unpublished = "unpublished"
+	)
+	ctx := context.Background()
+	newEngine := func(t *testing.T) *fakeEngine {
+		t.Helper()
+		eng := newFakeEngine()
+		eng.enforceResolver = true
+		var captured engine.Snapshot
+		if _, err := fakeBuild(eng, &captured)(engine.Snapshot{
+			Accounts: []domain.Account{{Code: account, EngineAccountID: 1}},
+			Groups:   []domain.AccountGroup{{Code: group, EngineGroupID: 1}},
+		}); err != nil {
+			t.Fatalf("fakeBuild: %v", err)
+		}
+		return eng
+	}
+	withinAccountLane := func(
+		eng *fakeEngine, fn func(engine.AccountLane) error,
+	) error {
+		return eng.RunAccountSynchronized(ctx, account, fn)
+	}
+	withinGroupLane := func(
+		eng *fakeEngine, fn func(engine.GroupLane) error,
+	) error {
+		return eng.RunGroupSynchronized(ctx, group, fn)
+	}
+
+	tests := []struct {
+		name string
+		run  func(*fakeEngine) error
+	}{
+		{
+			name: "rate limit policy",
+			run: func(eng *fakeEngine) error {
+				_, err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, engine.LimitSet{
+					RateLimits: []domain.LimitRate{{
+						Scope: domain.ScopeAsset,
+						Asset: unpublished,
+					}},
+				})
+				return err
+			},
+		},
+		{
+			name: "order size policy",
+			run: func(eng *fakeEngine) error {
+				_, err := eng.ConfigurePolicy(ctx, domain.PolicyOrderSizeLimit,
+					engine.LimitSet{OrderSizeLimits: []domain.LimitOrderSize{{
+						Scope: domain.ScopeAsset,
+						Asset: unpublished,
+					}}})
+				return err
+			},
+		},
+		{
+			name: "spot funds PnL policy",
+			run: func(eng *fakeEngine) error {
+				_, err := eng.ConfigurePolicy(ctx,
+					domain.PolicySpotFundsPnlBoundsKillSwitch,
+					engine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+						Currency: unpublished,
+					}}})
+				return err
+			},
+		},
+		{
+			name: "account currency",
+			run: func(eng *fakeEngine) error {
+				return withinAccountLane(eng, func(lane engine.AccountLane) error {
+					return lane.SetAccountCurrency(ctx, account, unpublished)
+				})
+			},
+		},
+		{
+			name: "group currency",
+			run: func(eng *fakeEngine) error {
+				return withinGroupLane(eng, func(lane engine.GroupLane) error {
+					return lane.SetGroupCurrency(ctx, group, unpublished)
+				})
+			},
+		},
+		{
+			name: "account adjustment",
+			run: func(eng *fakeEngine) error {
+				return withinAccountLane(eng, func(lane engine.AccountLane) error {
+					_, err := lane.ApplyAccountAdjustment(ctx, account,
+						domain.AdjustmentRequest{Asset: unpublished})
+					return err
+				})
+			},
+		},
+		{
+			name: "submit order",
+			run: func(eng *fakeEngine) error {
+				return withinAccountLane(eng, func(lane engine.AccountLane) error {
+					_, err := lane.SubmitOrder(ctx, domain.Order{
+						Account:    account,
+						BaseAsset:  unpublished,
+						QuoteAsset: unpublished,
+					})
+					return err
+				})
+			},
+		},
+		{
+			name: "submit immediate",
+			run: func(eng *fakeEngine) error {
+				return withinAccountLane(eng, func(lane engine.AccountLane) error {
+					_, err := lane.SubmitImmediate(ctx, domain.Order{
+						Account:    account,
+						BaseAsset:  unpublished,
+						QuoteAsset: unpublished,
+					})
+					return err
+				})
+			},
+		},
+		{
+			name: "execution report instrument",
+			run: func(eng *fakeEngine) error {
+				return withinAccountLane(eng, func(lane engine.AccountLane) error {
+					_, err := lane.ApplyExecutionReport(ctx,
+						domain.ExecutionReportInput{
+							Account:    account,
+							BaseAsset:  unpublished,
+							QuoteAsset: unpublished,
+						}, "")
+					return err
+				})
+			},
+		},
+		{
+			name: "execution report commission",
+			run: func(eng *fakeEngine) error {
+				for _, asset := range []domain.Asset{
+					{Code: "published-base", EngineAssetID: 2},
+					{Code: "published-quote", EngineAssetID: 3},
+				} {
+					if err := eng.AddAssetResolverEntry(asset); err != nil {
+						return err
+					}
+				}
+				return withinAccountLane(eng, func(lane engine.AccountLane) error {
+					_, err := lane.ApplyExecutionReport(ctx,
+						domain.ExecutionReportInput{
+							Account:    account,
+							BaseAsset:  "published-base",
+							QuoteAsset: "published-quote",
+							Commission: &domain.Commission{Currency: unpublished},
+						}, "")
+					return err
+				})
+			},
+		},
+		{
+			name: "dry run",
+			run: func(eng *fakeEngine) error {
+				return withinAccountLane(eng, func(lane engine.AccountLane) error {
+					_, err := lane.CheckOrder(ctx, domain.OrderProbe{
+						Account:    account,
+						BaseAsset:  unpublished,
+						QuoteAsset: unpublished,
+					})
+					return err
+				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tt.run(newEngine(t)); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("error = %v, want ErrInvalid", err)
+			}
+		})
 	}
 }
 
@@ -360,6 +581,12 @@ func fakeBuild(eng *fakeEngine, captured *engine.Snapshot) engine.BuildFunc {
 			eng.knownAccounts[account.Code] = struct{}{}
 			eng.accountResolverIDs[account.Code] = account.EngineAccountID
 		}
+		eng.knownAssets = map[string]struct{}{}
+		eng.assetResolverIDs = map[string]domain.EngineAssetID{}
+		for _, asset := range snap.Assets {
+			eng.knownAssets[asset.Code] = struct{}{}
+			eng.assetResolverIDs[asset.Code] = asset.EngineAssetID
+		}
 		eng.knownGroups = map[string]struct{}{}
 		eng.groupResolverIDs = map[string]domain.EngineGroupID{}
 		for _, group := range snap.Groups {
@@ -400,6 +627,59 @@ func (e *fakeEngine) checkKnownAccounts(accounts []domain.AccountID) error {
 	for _, account := range accounts {
 		if err := e.checkKnownAccount(account); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (e *fakeEngine) checkKnownAsset(asset string) error {
+	if !e.enforceResolver {
+		return nil
+	}
+	e.resolverMu.RLock()
+	defer e.resolverMu.RUnlock()
+	if _, ok := e.knownAssets[asset]; !ok {
+		return fmt.Errorf("engine: unknown asset %q: %w", asset, domain.ErrInvalid)
+	}
+	return nil
+}
+
+func (e *fakeEngine) checkKnownOrderAssets(base, quote string) error {
+	if err := e.checkKnownAsset(base); err != nil {
+		return err
+	}
+	return e.checkKnownAsset(quote)
+}
+
+func (e *fakeEngine) checkKnownPolicyAssets(
+	policy string, limits engine.LimitSet,
+) error {
+	switch policy {
+	case domain.PolicyRateLimit:
+		for _, limit := range limits.RateLimits {
+			if limit.Scope != domain.ScopeAsset &&
+				limit.Scope != domain.ScopeAccountAsset {
+				continue
+			}
+			if err := e.checkKnownAsset(limit.Asset); err != nil {
+				return err
+			}
+		}
+	case domain.PolicyOrderSizeLimit:
+		for _, limit := range limits.OrderSizeLimits {
+			if limit.Scope != domain.ScopeAsset &&
+				limit.Scope != domain.ScopeAccountAsset {
+				continue
+			}
+			if err := e.checkKnownAsset(limit.Asset); err != nil {
+				return err
+			}
+		}
+	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+		for _, limit := range limits.SpotFundsPnlBoundsLimits {
+			if err := e.checkKnownAsset(limit.Currency); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -452,6 +732,40 @@ func (e *fakeEngine) AddAccountResolverEntry(account domain.Account) error {
 	return nil
 }
 
+func (e *fakeEngine) AddAssetResolverEntry(asset domain.Asset) error {
+	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
+		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, err)
+	}
+	e.resolverMu.Lock()
+	defer e.resolverMu.Unlock()
+	if _, exists := e.knownAssets[asset.Code]; exists {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q already exists: %w",
+			asset.Code, domain.ErrAlreadyExists,
+		)
+	}
+	for alias, id := range e.assetResolverIDs {
+		if id == asset.EngineAssetID {
+			return fmt.Errorf(
+				"engine: asset engine id %d already belongs to resolver alias %q: %w",
+				id, alias, domain.ErrInvalid,
+			)
+		}
+	}
+	if e.knownAssets == nil {
+		e.knownAssets = map[string]struct{}{}
+	}
+	if e.assetResolverIDs == nil {
+		e.assetResolverIDs = map[string]domain.EngineAssetID{}
+	}
+	e.knownAssets[asset.Code] = struct{}{}
+	e.assetResolverIDs[asset.Code] = asset.EngineAssetID
+	if e.afterAssetResolverAdd != nil {
+		e.afterAssetResolverAdd()
+	}
+	return nil
+}
+
 func (e *fakeEngine) RenameAccountResolverEntry(
 	oldCode domain.AccountID, account domain.Account,
 ) error {
@@ -493,6 +807,71 @@ func (e *fakeEngine) RenameAccountResolverEntry(
 	if group, ok := e.accountGroups[oldCode]; ok {
 		delete(e.accountGroups, oldCode)
 		e.accountGroups[account.Code] = group
+	}
+	return nil
+}
+
+func (e *fakeEngine) RenameAssetResolverEntry(oldCode string, asset domain.Asset) error {
+	if e.renameAssetResolverErr != nil {
+		return e.renameAssetResolverErr
+	}
+	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
+		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, err)
+	}
+	e.resolverMu.Lock()
+	defer e.resolverMu.Unlock()
+	currentID, exists := e.assetResolverIDs[oldCode]
+	if !exists {
+		return fmt.Errorf(
+			"engine: unknown asset resolver alias %q: %w",
+			oldCode, domain.ErrInvalid,
+		)
+	}
+	if currentID != asset.EngineAssetID {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q has engine id %d, target %q has %d: %w",
+			oldCode, currentID, asset.Code, asset.EngineAssetID, domain.ErrInvalid,
+		)
+	}
+	if oldCode == asset.Code {
+		return nil
+	}
+	if _, exists := e.knownAssets[asset.Code]; exists {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q already exists: %w",
+			asset.Code, domain.ErrAlreadyExists,
+		)
+	}
+	delete(e.knownAssets, oldCode)
+	delete(e.assetResolverIDs, oldCode)
+	e.knownAssets[asset.Code] = struct{}{}
+	e.assetResolverIDs[asset.Code] = currentID
+	return nil
+}
+
+func (e *fakeEngine) RemoveAssetResolverEntry(asset domain.Asset) error {
+	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
+		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, err)
+	}
+	e.resolverMu.Lock()
+	defer e.resolverMu.Unlock()
+	currentID, exists := e.assetResolverIDs[asset.Code]
+	if !exists {
+		return fmt.Errorf(
+			"engine: unknown asset resolver alias %q: %w",
+			asset.Code, domain.ErrInvalid,
+		)
+	}
+	if currentID != asset.EngineAssetID {
+		return fmt.Errorf(
+			"engine: asset resolver alias %q has engine id %d, removal target has %d: %w",
+			asset.Code, currentID, asset.EngineAssetID, domain.ErrInvalid,
+		)
+	}
+	delete(e.knownAssets, asset.Code)
+	delete(e.assetResolverIDs, asset.Code)
+	if e.afterAssetResolverRemove != nil {
+		e.afterAssetResolverRemove()
 	}
 	return nil
 }
@@ -611,6 +990,9 @@ func validateFakeResolverGroup(group domain.AccountGroup) error {
 func (e *fakeEngine) ConfigurePolicy(
 	_ context.Context, policy string, limits engine.LimitSet,
 ) (engine.PolicyConfigurationResult, error) {
+	if err := e.checkKnownPolicyAssets(policy, limits); err != nil {
+		return engine.PolicyConfigurationResult{}, err
+	}
 	if e.configureErr != nil {
 		return engine.PolicyConfigurationResult{}, e.configureErr
 	}
@@ -653,6 +1035,9 @@ func (e *fakeEngine) SetAccountCurrency(
 	if err := e.checkKnownAccount(id); err != nil {
 		return err
 	}
+	if err := e.checkKnownAsset(currency); err != nil {
+		return err
+	}
 	if e.accountCurrencyErr != nil {
 		return e.accountCurrencyErr
 	}
@@ -677,6 +1062,9 @@ func (e *fakeEngine) SetGroupCurrency(
 	_ context.Context, groupID, currency string,
 ) error {
 	if err := e.checkKnownGroup(groupID); err != nil {
+		return err
+	}
+	if err := e.checkKnownAsset(currency); err != nil {
 		return err
 	}
 	e.groupCurrencyCalls++
@@ -790,6 +1178,11 @@ func (e *fakeEngine) ApplyAccountAdjustmentBatch(
 	if err := e.checkKnownAccount(account); err != nil {
 		return nil, nil, err
 	}
+	for _, req := range reqs {
+		if err := e.checkKnownAsset(req.Asset); err != nil {
+			return nil, nil, err
+		}
+	}
 	if e.failAdjustment {
 		return nil, nil, errors.New("adjustment failed")
 	}
@@ -828,6 +1221,9 @@ func (e *fakeEngine) SubmitOrder(
 	if err := e.checkKnownAccount(o.Account); err != nil {
 		return engine.OrderResult{}, err
 	}
+	if err := e.checkKnownOrderAssets(o.BaseAsset, o.QuoteAsset); err != nil {
+		return engine.OrderResult{}, err
+	}
 	if e.failSubmit {
 		return engine.OrderResult{}, errors.New("submit failed")
 	}
@@ -857,6 +1253,9 @@ func (e *fakeEngine) SubmitImmediate(
 ) (engine.ImmediateResult, error) {
 	e.requireAccountSync()
 	if err := e.checkKnownAccount(o.Account); err != nil {
+		return engine.ImmediateResult{}, err
+	}
+	if err := e.checkKnownOrderAssets(o.BaseAsset, o.QuoteAsset); err != nil {
 		return engine.ImmediateResult{}, err
 	}
 	if e.failSubmit {
@@ -997,6 +1396,14 @@ func (e *fakeEngine) ApplyExecutionReport(
 	}
 	if err := e.checkKnownAccount(in.Account); err != nil {
 		return engine.ExecutionReportResult{}, err
+	}
+	if err := e.checkKnownOrderAssets(in.BaseAsset, in.QuoteAsset); err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	if in.Commission != nil {
+		if err := e.checkKnownAsset(in.Commission.Currency); err != nil {
+			return engine.ExecutionReportResult{}, err
+		}
 	}
 	if e.failExecReport {
 		return engine.ExecutionReportResult{}, errors.New("exec report failed")
@@ -1149,6 +1556,12 @@ func (e *fakeEngine) CheckOrder(
 	_ context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
 	e.requireAccountSync()
+	if err := e.checkKnownAccount(probe.Account); err != nil {
+		return domain.CheckResult{}, err
+	}
+	if err := e.checkKnownOrderAssets(probe.BaseAsset, probe.QuoteAsset); err != nil {
+		return domain.CheckResult{}, err
+	}
 	e.checkProbes = append(e.checkProbes, probe)
 	return e.checkResult, nil
 }
@@ -1277,6 +1690,37 @@ func (s *failActionAuditRealm) AppendAuditBatch(
 		}
 	}
 	return s.RealmStore.AppendAuditBatch(ctx, entries)
+}
+
+// failNthActionAuditRealm fails the Nth (1-based) AppendAudit write for one
+// specific audit action, delegating every earlier write for that action - and
+// every write for any other action - to the wrapped realm store. Unlike
+// failActionAuditRealm, which rejects every write for the action, this lets an
+// earlier row for the action commit so a later corrective or follow-up row for
+// the same action can be attempted and observed to fail on its own.
+type failNthActionAuditRealm struct {
+	store.RealmStore
+	action domain.AuditAction
+	n      int
+	err    error
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *failNthActionAuditRealm) AppendAudit(
+	ctx context.Context, entry store.AuditEntry,
+) error {
+	if entry.Action == s.action {
+		s.mu.Lock()
+		s.calls++
+		fail := s.calls == s.n
+		s.mu.Unlock()
+		if fail {
+			return s.err
+		}
+	}
+	return s.RealmStore.AppendAudit(ctx, entry)
 }
 
 // failRollbackRestoreRealm fails the rollback RestoreBackup (the second restore
@@ -1457,7 +1901,7 @@ func newTestNode(t *testing.T, eng *fakeEngine) (*localNode, store.RealmStore) {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	local := n.(*localNode)
-	seedTestPrincipal(t, local.realm)
+	seedTestPrincipal(t, local)
 	return local, local.realm
 }
 
@@ -1474,7 +1918,7 @@ func newTestNodeWithStore(
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	local := n.(*localNode)
-	seedTestPrincipal(t, local.realm)
+	seedTestPrincipal(t, local)
 	return local
 }
 
@@ -1485,15 +1929,24 @@ func newTestNodeWithStore(
 // rejected. The dictionary rows must therefore be present before any audited
 // mutation or machine-record write runs. ErrAlreadyExists is tolerated so the
 // helper is idempotent across re-seeds (e.g. after a ResetDatabase rebind).
-func seedTestPrincipal(t *testing.T, realm store.RealmStore) {
+func seedTestPrincipal(t *testing.T, n *localNode) {
 	t.Helper()
 	ctx := context.Background()
-	err := realm.CreatePrincipal(ctx, domain.Principal{Code: testCaller.Principal})
+	err := n.realm.CreatePrincipal(ctx, domain.Principal{Code: testCaller.Principal})
 	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreatePrincipal(%s): %v", testCaller.Principal, err)
 	}
+	if eng, ok := n.currentEngine().(*fakeEngine); ok && eng.enforceResolver {
+		for _, code := range []string{"USD", "EUR", "AAPL"} {
+			if _, err := n.CreateAsset(ctx, domain.Asset{Code: code}, testCaller); err != nil &&
+				!errors.Is(err, domain.ErrAlreadyExists) {
+				t.Fatalf("CreateAsset(%s): %v", code, err)
+			}
+		}
+		return
+	}
 	for _, code := range []string{"USD", "EUR", "AAPL"} {
-		if err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil &&
+		if _, err := n.realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil &&
 			!errors.Is(err, domain.ErrAlreadyExists) {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}

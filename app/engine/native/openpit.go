@@ -167,7 +167,7 @@ func newOpenPitEngine(
 		eng:               eng,
 		async:             async,
 		res:               res,
-		sink:              newMarketDataSink(service),
+		sink:              newMarketDataSink(service, res),
 		marketDataService: service,
 		registered:        registered,
 		seedAccountBlocks: seedAccountBlocks,
@@ -183,12 +183,33 @@ func (e *openPitEngine) AddAccountResolverEntry(account domain.Account) error {
 	return e.res.addAccountResolverEntry(account)
 }
 
+// AddAssetResolverEntry publishes a newly persisted asset alias and its stable
+// engine id before any engine call may use the human code.
+func (e *openPitEngine) AddAssetResolverEntry(asset domain.Asset) error {
+	return e.res.addAssetResolverEntry(asset)
+}
+
 // RenameAccountResolverEntry atomically replaces an account alias while
 // preserving the persisted engine id.
 func (e *openPitEngine) RenameAccountResolverEntry(
 	oldCode domain.AccountID, account domain.Account,
 ) error {
 	return e.res.renameAccountResolverEntry(oldCode, account)
+}
+
+// RenameAssetResolverEntry atomically replaces an asset alias while reusing
+// the ready engine asset built for its unchanged persisted engine id.
+func (e *openPitEngine) RenameAssetResolverEntry(
+	oldCode string, asset domain.Asset,
+) error {
+	return e.res.renameAssetResolverEntry(oldCode, asset)
+}
+
+// RemoveAssetResolverEntry removes a persisted asset alias from Officer's
+// resolver. It does not remove SDK state held under the asset's ready id or
+// replace the engine handle.
+func (e *openPitEngine) RemoveAssetResolverEntry(asset domain.Asset) error {
+	return e.res.removeAssetResolverEntry(asset)
 }
 
 // AddGroupResolverEntry publishes a newly persisted group alias and its stable
@@ -256,7 +277,7 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 	// Build the code-to-engine-id resolver from the snapshot's stored engine ids
 	// before any binding call so seeding and the hot path both use the stored
 	// integer ids, never a hashed string.
-	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +548,7 @@ func (l accountLane) SetAccountCurrency(
 	if err != nil {
 		return fmt.Errorf("engine: set account currency %q: %w", id, err)
 	}
-	asset, err := newAsset(currency)
+	asset, err := l.owner.res.asset(currency)
 	if err != nil {
 		return fmt.Errorf("engine: account currency %q: %w", currency, err)
 	}
@@ -632,7 +653,7 @@ func (l accountLane) ApplyAccountAdjustmentBatch(
 	}
 	adjustments := make([]model.AccountAdjustment, 0, len(reqs))
 	for _, req := range reqs {
-		adjustment, err := accountAdjustmentFromRequest(req)
+		adjustment, err := accountAdjustmentFromRequest(req, l.owner.res)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -665,7 +686,7 @@ func (l accountLane) ApplyAccountAdjustmentBatch(
 	results := make([]AdjustmentResult, 0, len(reqs))
 	for _, req := range reqs {
 		result := AdjustmentResult{AccountBlocks: blocks}
-		accepted, ok, err := outcomeAcceptedFromList(outcomes, req.Asset)
+		accepted, ok, err := outcomeAcceptedFromList(outcomes, req.Asset, l.owner.res)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -739,7 +760,7 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 	if err != nil {
 		return OrderResult{}, err
 	}
-	order, err := orderModelFromAccount(o, accountID)
+	order, err := orderModelFromAccount(o, accountID, l.owner.res)
 	if err != nil {
 		return OrderResult{}, err
 	}
@@ -773,7 +794,7 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		reservation.RollbackAndClose()
 		return OrderResult{}, err
 	}
-	outcomes, err := balanceOutcomesFromList(adjustments)
+	outcomes, err := balanceOutcomesFromList(adjustments, l.owner.res)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return OrderResult{}, err
@@ -822,7 +843,7 @@ func (l accountLane) submitDropCopyOrder(
 		if err != nil {
 			return OrderResult{}, err
 		}
-		outcomes, err := balanceOutcomesFromList(adjustments)
+		outcomes, err := balanceOutcomesFromList(adjustments, l.owner.res)
 		if err != nil {
 			return OrderResult{}, err
 		}
@@ -997,7 +1018,7 @@ func (l accountLane) ApplyExecutionReport(
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
-	report, err := executionReportFromAccount(in, accountID, leavesQuantity)
+	report, err := executionReportFromAccount(in, accountID, leavesQuantity, l.owner.res)
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
@@ -1008,7 +1029,7 @@ func (l accountLane) ApplyExecutionReport(
 	}
 
 	blocks := executionBlocksFrom(result.AccountBlocks, in.Account)
-	outcomes, err := balanceOutcomesFromList(result.AccountAdjustments)
+	outcomes, err := balanceOutcomesFromList(result.AccountAdjustments, l.owner.res)
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
@@ -1141,7 +1162,7 @@ func (l groupLane) SetGroupCurrency(
 	if err != nil {
 		return err
 	}
-	asset, err := param.NewAsset(currency)
+	asset, err := l.owner.res.asset(currency)
 	if err != nil {
 		return fmt.Errorf("engine: group %q currency %q: %w", groupID, currency, err)
 	}
@@ -1202,7 +1223,7 @@ func (l accountLane) CheckOrder(
 		AmountKind:  probe.AmountKind,
 		AmountValue: probe.AmountValue,
 		Price:       probe.Price,
-	}, accountID)
+	}, accountID, l.owner.res)
 	if err != nil {
 		return domain.CheckResult{}, err
 	}
@@ -1505,7 +1526,7 @@ func applyCurrencies(
 		if err != nil {
 			return err
 		}
-		asset, err := param.NewAsset(group.Currency)
+		asset, err := res.asset(group.Currency)
 		if err != nil {
 			return fmt.Errorf("engine: group %q currency %q: %w", group.Code, group.Currency, err)
 		}
@@ -1521,7 +1542,7 @@ func applyCurrencies(
 		if err != nil {
 			return err
 		}
-		asset, err := param.NewAsset(account.Currency)
+		asset, err := res.asset(account.Currency)
 		if err != nil {
 			return fmt.Errorf(
 				"engine: account %q currency %q: %w",
@@ -1548,7 +1569,7 @@ func seedBalances(eng *openpit.Engine, balances []domain.Balance, res idResolver
 		if err != nil {
 			return fmt.Errorf("engine: seed balance account %q: %w", balance.Account, err)
 		}
-		adjustment, err := balanceSeedAdjustment(balance)
+		adjustment, err := balanceSeedAdjustment(balance, res)
 		if err != nil {
 			return err
 		}
@@ -1648,7 +1669,10 @@ func seedSpotFundsAccountPnls(
 // pointer as not set, so the binding never sees an empty string). This guards
 // against legacy rows where INSERT OR REPLACE wrote "" before the orZero write
 // chokepoint was added.
-func balanceSeedAdjustment(balance domain.Balance) (model.AccountAdjustment, error) {
+func balanceSeedAdjustment(
+	balance domain.Balance,
+	res idResolver,
+) (model.AccountAdjustment, error) {
 	absField := func(v string) *domain.AdjustmentAmount {
 		if v == "" {
 			return nil
@@ -1664,7 +1688,7 @@ func balanceSeedAdjustment(balance domain.Balance) (model.AccountAdjustment, err
 		Held:                  absField(balance.Held),
 		Incoming:              absField(balance.Incoming),
 	}
-	return accountAdjustmentFromRequest(req)
+	return accountAdjustmentFromRequest(req, res)
 }
 
 // seedRejectReason renders the first reject of a seed batch error for the

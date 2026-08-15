@@ -81,8 +81,8 @@ func (s *Service) CheckOrder(
 	ctx context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
 	// Officer applies no boundary id/asset format checks; the engine seam parses
-	// the account and assets and enforces the real trading rules. Existence is
-	// never checked.
+	// the account and assets and enforces the real trading rules. An asset missing
+	// from the live engine dictionary is invalid input and is never auto-created.
 	n, err := s.router.Route(keyFor(probe.Account))
 	if err != nil {
 		return domain.CheckResult{}, fmt.Errorf("backend: route check: %w", err)

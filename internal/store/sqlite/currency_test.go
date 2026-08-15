@@ -30,7 +30,7 @@ func TestSQLiteAccountCurrencyCascadeAndAssetDependents(t *testing.T) {
 	_, rs := newTestStore(t)
 
 	for _, asset := range []string{"USD", "EUR", "JPY"} {
-		if err := rs.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
+		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", asset, err)
 		}
 	}

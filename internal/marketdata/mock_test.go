@@ -31,7 +31,7 @@ func TestMockConnector_EmitsDeterministicQuotes(t *testing.T) {
 	c := NewMockConnector(time.Millisecond)
 	defer c.Close()
 
-	subs := []Subscription{{External: "AAPL", Base: "AAPL", Quote: "USD"}}
+	subs := []Subscription{{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}}
 	ch, err := c.Subscribe(context.Background(), subs)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -39,8 +39,8 @@ func TestMockConnector_EmitsDeterministicQuotes(t *testing.T) {
 
 	select {
 	case got := <-ch:
-		if got.Base != "AAPL" || got.Quote != "USD" {
-			t.Fatalf("instrument tag = %s/%s, want AAPL/USD", got.Base, got.Quote)
+		if got.Base != testMarketDataAssetID("AAPL") || got.Quote != testMarketDataAssetID("USD") {
+			t.Fatalf("instrument tag = %d/%d, want AAPL/USD", got.Base, got.Quote)
 		}
 		// First tick: mark 101, bid 100, ask 102.
 		if got.Mark != "101" || got.Bid != "100" || got.Ask != "102" {
@@ -57,7 +57,7 @@ func TestMockConnector_EmitsDeterministicQuotes(t *testing.T) {
 func TestMockConnector_CloseStopsAndClosesChannel(t *testing.T) {
 	t.Parallel()
 	c := NewMockConnector(time.Millisecond)
-	subs := []Subscription{{External: "AAPL", Base: "AAPL", Quote: "USD"}}
+	subs := []Subscription{{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}}
 	ch, err := c.Subscribe(context.Background(), subs)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)

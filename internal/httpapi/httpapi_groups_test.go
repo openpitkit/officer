@@ -601,7 +601,7 @@ func newCurrencyChangeBlockedRouter(t *testing.T, group string) http.Handler {
 	if _, err := realm.CreateAccount(ctx, domain.Account{Code: "acc-1", GroupCode: group}); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := realm.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+	if _, err := realm.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
 	}
 	if err := realm.UpsertBalance(ctx, domain.Balance{

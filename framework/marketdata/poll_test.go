@@ -50,13 +50,13 @@ func (f *fakeFetch) fetch(_ context.Context, _ []Subscription) ([]QuoteUpdate, e
 	return batch, nil
 }
 
-var pollSubs = []Subscription{{External: "AAPL", Base: "AAPL", Quote: "USD"}}
+var pollSubs = []Subscription{{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}}
 
 // TestPoller_EmitsImmediatelyAndCoalesces verifies the immediate fetch emits and
 // an unchanged second fetch is coalesced away (no re-emit).
 func TestPoller_EmitsImmediatelyAndCoalesces(t *testing.T) {
 	t.Parallel()
-	q := QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "100"}
+	q := QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100"}
 	f := &fakeFetch{batches: [][]QuoteUpdate{{q}, {q}}}
 
 	// A short interval drives at least a second tick within the deadline.
@@ -91,8 +91,8 @@ func TestPoller_EmitsImmediatelyAndCoalesces(t *testing.T) {
 // emitted.
 func TestPoller_EmitsChangedQuote(t *testing.T) {
 	t.Parallel()
-	first := QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "100"}
-	second := QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "101"}
+	first := QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100"}
+	second := QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "101"}
 	f := &fakeFetch{batches: [][]QuoteUpdate{{first}, {second}}}
 
 	p := NewPoller(f.fetch, time.Millisecond, nil)

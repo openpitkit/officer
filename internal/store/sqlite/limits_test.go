@@ -35,10 +35,10 @@ func seedLimitFixtures(t *testing.T) (context.Context, RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
 		t.Fatalf("CreateAsset(AAPL): %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
@@ -393,7 +393,7 @@ func seedPolicyFixtures(t *testing.T) (context.Context, RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
 		t.Fatalf("CreateAsset(AAPL): %v", err)
 	}
 	for _, code := range []domain.AccountID{"acc-1", "acc-2"} {
@@ -527,7 +527,7 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
@@ -588,7 +588,7 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
 	ctx, rs := seedPolicyFixtures(t)
 	for _, code := range []string{"USD", "EUR"} {
-		if err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}
@@ -661,7 +661,7 @@ func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
 
 func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
 	}
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
@@ -715,7 +715,7 @@ func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 
 func TestSpotFundsPnlBoundsUpsertOverwritesCurrency(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
 	}
 	for _, currency := range []string{"USD", "EUR"} {

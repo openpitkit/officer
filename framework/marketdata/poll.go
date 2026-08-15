@@ -20,6 +20,8 @@ package marketdata
 import (
 	"context"
 	"time"
+
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // FetchFunc fetches the current quotes for subs from a REST source. It returns
@@ -49,8 +51,8 @@ type Poller struct {
 // instrumentKey identifies one instrument by its (base, quote) pair for the
 // last-quote cache.
 type instrumentKey struct {
-	base  string
-	quote string
+	base  domain.EngineAssetID
+	quote domain.EngineAssetID
 }
 
 // NewPoller builds a poller over fetch at interval. errFn, when non-nil, is

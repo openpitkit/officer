@@ -20,17 +20,45 @@ package node
 import (
 	"context"
 	"sort"
+	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
 
-func (r *memoryRealm) CreateAsset(_ context.Context, asset domain.Asset) error {
+func (r *memoryRealm) CreateAsset(
+	_ context.Context, asset domain.Asset,
+) (domain.Asset, error) {
 	if _, ok := r.assets[asset.Code]; ok {
-		return domain.ErrAlreadyExists
+		return domain.Asset{}, domain.ErrAlreadyExists
 	}
+	r.nextAssetID++
+	asset.EngineAssetID = r.nextAssetID
 	r.assets[asset.Code] = asset
-	return nil
+	return asset, nil
+}
+
+func TestMemoryRealmCreateAssetAssignsEngineID(t *testing.T) {
+	t.Parallel()
+	realm := newMemoryRealm(nil)
+
+	created, err := realm.CreateAsset(context.Background(), domain.Asset{Code: "AAPL"})
+	if err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	if created.EngineAssetID != domain.EngineAssetID(domain.EngineAssetIDMin) {
+		t.Fatalf("CreateAsset engine id = %d", created.EngineAssetID)
+	}
+	got, ok, err := realm.GetAsset(context.Background(), "AAPL")
+	if err != nil || !ok || got.EngineAssetID != created.EngineAssetID {
+		t.Fatalf("GetAsset = %+v ok=%v err=%v", got, ok, err)
+	}
+	updated, err := realm.UpdateAsset(
+		context.Background(), "AAPL", domain.Asset{Code: "AAPL.US"},
+	)
+	if err != nil || updated.EngineAssetID != created.EngineAssetID {
+		t.Fatalf("UpdateAsset = %+v err=%v", updated, err)
+	}
 }
 
 func (r *memoryRealm) GetAsset(_ context.Context, code string) (domain.Asset, bool, error) {
@@ -98,9 +126,11 @@ func (r *memoryRealm) ListAssetRows(
 func (r *memoryRealm) UpdateAsset(
 	_ context.Context, oldCode string, asset domain.Asset,
 ) (domain.Asset, error) {
-	if _, ok := r.assets[oldCode]; !ok {
+	existing, ok := r.assets[oldCode]
+	if !ok {
 		return domain.Asset{}, domain.ErrNotFound
 	}
+	asset.EngineAssetID = existing.EngineAssetID
 	if oldCode != asset.Code {
 		if _, ok := r.assets[asset.Code]; ok {
 			return domain.Asset{}, domain.ErrAlreadyExists

@@ -205,8 +205,6 @@ func (c *coinbaseConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) 
 		findings = append(findings, providerUnknownSymbolDiag(
 			"Coinbase",
 			sub.External,
-			sub.Base,
-			sub.Quote,
 		))
 	}
 	return findings, nil
@@ -291,8 +289,6 @@ func (c *coinbaseConnector) validateSymbols(
 		c.reportDiag(providerUnknownSymbolDiag(
 			"Coinbase",
 			sub.External,
-			sub.Base,
-			sub.Quote,
 		))
 	}
 	return valid
@@ -365,13 +361,11 @@ func normalizeCoinbaseSubscriptions(
 	for _, sub := range subs {
 		productID := strings.TrimSpace(sub.External)
 		if productID == "" {
-			base := strings.TrimSpace(sub.Base)
-			quote := strings.TrimSpace(sub.Quote)
-			productID = base + "-" + quote
+			return nil, missingExternalSymbolError("coinbase", sub)
 		}
 		productID = strings.ToUpper(productID)
 		if strings.Trim(productID, "-") == "" {
-			return nil, fmt.Errorf("coinbase subscription %s/%s: empty symbol", sub.Base, sub.Quote)
+			return nil, invalidExternalSymbolError("coinbase", sub.External)
 		}
 		normalized = append(normalized, coinbaseSubscription{
 			Subscription: sub,

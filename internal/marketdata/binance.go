@@ -349,31 +349,21 @@ func (c *binanceConnector) validateSymbols(
 }
 
 // binanceUnknownSymbolDiag builds a structured unknown-symbol diagnostic for a
-// subscription that is not listed on Binance. It optionally appends up to three
-// candidate symbols that share the same base asset as a suggestion.
-func binanceUnknownSymbolDiag(sub binanceSubscription, known map[string]struct{}) Diagnostic {
+// subscription that is not listed on Binance, with close external candidates.
+func binanceUnknownSymbolDiag(
+	sub binanceSubscription, known map[string]struct{},
+) Diagnostic {
 	remediation := "Remove this instrument and add one with a valid Binance symbol" +
 		" (e.g. ETHUSDT). See the valid symbols list."
-	base := strings.ToUpper(sub.Base)
-	if base != "" {
-		var suggestions []string
-		for sym := range known {
-			if strings.HasPrefix(sym, base) {
-				suggestions = append(suggestions, sym)
-				if len(suggestions) == 3 {
-					break
-				}
-			}
-		}
-		if len(suggestions) > 0 {
-			remediation += " Did you mean: " + strings.Join(suggestions, ", ") + "?"
-		}
+	suggestions := symbolPrefixSuggestionsFromSet(known, sub.External)
+	if len(suggestions) > 0 {
+		remediation += " Did you mean: " + strings.Join(suggestions, ", ") + "?"
 	}
 	return Diagnostic{
 		Level:       DiagError,
 		Code:        CodeUnknownSymbol,
 		Kind:        DiagKindConfig,
-		Instrument:  sub.Base + "/" + sub.Quote,
+		Instrument:  sub.External,
 		Title:       fmt.Sprintf("Symbol %q not found on Binance", sub.External),
 		Detail:      fmt.Sprintf("The configured external symbol %q is not a Binance trading symbol.", sub.External),
 		Remediation: remediation,
@@ -533,12 +523,11 @@ func normalizeBinanceSubscriptions(
 	for _, sub := range subs {
 		symbol := strings.TrimSpace(sub.External)
 		if symbol == "" {
-			symbol = strings.ToUpper(strings.TrimSpace(sub.Base) + strings.TrimSpace(sub.Quote))
-		} else {
-			symbol = strings.ToUpper(symbol)
+			return nil, missingExternalSymbolError("binance", sub)
 		}
+		symbol = strings.ToUpper(symbol)
 		if symbol == "" {
-			return nil, fmt.Errorf("binance subscription %s/%s: empty symbol", sub.Base, sub.Quote)
+			return nil, invalidExternalSymbolError("binance", sub.External)
 		}
 		normalized = append(normalized, binanceSubscription{
 			Subscription: sub,

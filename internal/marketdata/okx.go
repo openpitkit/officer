@@ -209,8 +209,6 @@ func (c *okxConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 		findings = append(findings, providerUnknownSymbolDiag(
 			"OKX",
 			sub.External,
-			sub.Base,
-			sub.Quote,
 		))
 	}
 	return findings, nil
@@ -295,8 +293,6 @@ func (c *okxConnector) validateSymbols(
 		c.reportDiag(providerUnknownSymbolDiag(
 			"OKX",
 			sub.External,
-			sub.Base,
-			sub.Quote,
 		))
 	}
 	return valid
@@ -379,13 +375,11 @@ func normalizeOKXSubscriptions(subs []Subscription) ([]okxSubscription, error) {
 	for _, sub := range subs {
 		instID := strings.TrimSpace(sub.External)
 		if instID == "" {
-			base := strings.TrimSpace(sub.Base)
-			quote := strings.TrimSpace(sub.Quote)
-			instID = base + "-" + quote
+			return nil, missingExternalSymbolError("okx", sub)
 		}
 		instID = strings.ToUpper(instID)
 		if strings.Trim(instID, "-") == "" {
-			return nil, fmt.Errorf("okx subscription %s/%s: empty symbol", sub.Base, sub.Quote)
+			return nil, invalidExternalSymbolError("okx", sub.External)
 		}
 		normalized = append(normalized, okxSubscription{
 			Subscription: sub,

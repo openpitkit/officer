@@ -179,6 +179,7 @@ describe("IB secType matrix (pure)", () => {
     expect(patch.lastTradeDateOrContractMonth).toBeUndefined();
     expect(patch.strike).toBeUndefined();
     expect(patch.right).toBeUndefined();
+    expect(patch.currency).toBeUndefined();
   });
 
   it("reveals expiry for FUT and strike+right for OPT", () => {
@@ -518,7 +519,7 @@ describe("IB feed resolver", () => {
     );
   });
 
-  it("blocks add while visible IB contract numeric fields are invalid", async () => {
+  it("requires a configured IB contract currency and valid numeric fields", async () => {
     const user = userEvent.setup();
     const onUpsertIBInstrument = vi.fn().mockResolvedValue(true);
     renderCard(ibInstance(), { onUpsertIBInstrument });
@@ -527,6 +528,12 @@ describe("IB feed resolver", () => {
     await user.type(within(dialog).getByLabelText("External symbol"), "AAPL");
     await user.type(within(dialog).getByLabelText("Base"), "AAPL");
     const add = within(dialog).getByRole("button", { name: /add instrument/i });
+    expect(add).toBeDisabled();
+    expect(
+      within(dialog).getByText("IB contract currency is required."),
+    ).toBeInTheDocument();
+
+    await user.type(within(dialog).getByLabelText("Currency"), "usd");
     expect(add).toBeEnabled();
 
     await user.type(within(dialog).getByLabelText("Con ID"), "1.5");
@@ -961,6 +968,7 @@ describe("IB instrument persistence (full-map send)", () => {
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("External symbol"), "AAPL");
     await user.type(within(dialog).getByLabelText("Base"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Currency"), "USD");
     await user.click(
       within(dialog).getByRole("button", { name: /add instrument/i }),
     );

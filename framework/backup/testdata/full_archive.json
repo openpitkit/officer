@@ -27,14 +27,13 @@
     ],
     "assets": [
       {
-        "Code": "AAPL",
-        "Title": "Apple",
-        "AssetClass": "equity"
+        "code": "AAPL",
+        "title": "Apple",
+        "assetClass": "equity"
       },
       {
-        "Code": "USD",
-        "Title": "US Dollar",
-        "AssetClass": ""
+        "code": "USD",
+        "title": "US Dollar"
       }
     ],
     "principals": [
@@ -59,14 +58,14 @@
     ],
     "balances": [
       {
-        "UpdatedAt": "2026-06-22T10:00:00Z",
-        "Available": "1000",
-        "Held": "",
-        "Incoming": "",
-        "RealizedPnl": "",
-        "AverageEntryPrice": "",
-        "Asset": "USD",
-        "Account": "acc-1"
+        "updatedAt": "2026-06-22T10:00:00Z",
+        "available": "1000",
+        "held": "",
+        "incoming": "",
+        "realizedPnl": "",
+        "averageEntryPrice": "",
+        "asset": "USD",
+        "account": "acc-1"
       }
     ],
     "orderSizeLimits": [
@@ -170,12 +169,12 @@
     ],
     "marketDataInstruments": [
       {
-        "Instance": "VVVVVVVVVVVVVVVVVVVVVQ",
-        "ExternalSymbol": "AAPLUSD",
-        "BaseAsset": "AAPL",
-        "QuoteAsset": "USD",
-        "ManualPrice": "",
-        "Enabled": true
+        "instance": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "externalSymbol": "AAPLUSD",
+        "baseAsset": "AAPL",
+        "quoteAsset": "USD",
+        "manualPrice": "",
+        "enabled": true
       }
     ],
     "signingConfig": [

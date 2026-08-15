@@ -39,20 +39,16 @@ func (n *localNode) ensureAutoCreatedAccount(
 	if err := domain.ValidateAccountID(id); err != nil {
 		return err
 	}
+	resolver, err := requireDictionaryResolver(n.currentEngine())
+	if err != nil {
+		return fmt.Errorf("resolve live account dictionary for %s: %w", operation, err)
+	}
 	account, err := n.realm.CreateAccount(ctx, domain.Account{Code: id})
 	if err != nil {
 		if errors.Is(err, domain.ErrAlreadyExists) {
 			return nil
 		}
 		return fmt.Errorf("create account for %s: %w", operation, err)
-	}
-	resolver, err := requireDictionaryResolver(n.currentEngine())
-	if err != nil {
-		return n.rollbackAutoCreatedAccountPublication(
-			ctx,
-			account,
-			fmt.Errorf("resolve live account dictionary for %s: %w", operation, err),
-		)
 	}
 	if err := resolver.AddAccountResolverEntry(account); err != nil {
 		return n.rollbackAutoCreatedAccountPublication(
@@ -80,7 +76,11 @@ func (n *localNode) rollbackAutoCreatedAccountPublication(
 ) error {
 	durableCtx := context.WithoutCancel(ctx)
 	if err := n.realm.DeleteAccount(durableCtx, account.Code, false); err == nil {
-		return cause
+		// The auto-create store write already committed before publication failed,
+		// so this is a post-commit failure even though the rollback restored a
+		// consistent state: ErrAlreadyExists from the resolver describes an internal
+		// store/engine desync, not something the caller did wrong.
+		return internalPostCommitNodeMutationError(cause)
 	} else {
 		reconcileErr := n.rebuildEngineFromStore(durableCtx)
 		combined := errors.Join(

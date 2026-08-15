@@ -328,9 +328,10 @@ func TestBackupRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	source := "  raw test source  "
 	archive := backup.NewArchive(
 		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
-		"test",
+		source,
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
@@ -356,7 +357,7 @@ func TestBackupRestore(t *testing.T) {
 	if applied[string(backup.SectionAccountsGroups)] != float64(1) {
 		t.Fatalf("unexpected summary: %v", got)
 	}
-	if svc.restoreArchive.Manifest.Source != "test" ||
+	if svc.restoreArchive.Manifest.Source != source ||
 		svc.restoreOptions.Mode != backup.RestoreModeOverwrite ||
 		!svc.restoreOptions.Scope.All {
 		t.Fatalf("restore call = archive %+v options %+v",
@@ -787,6 +788,102 @@ func TestBackupRestoreFilePayloadOverridesInlineArchive(t *testing.T) {
 	if svc.restoreArchive.Manifest.Source != "file" {
 		t.Fatalf("restore archive source = %q, want file",
 			svc.restoreArchive.Manifest.Source)
+	}
+}
+
+// TestBackupRestoreParsingConvergesAcrossShapes checks the handler's parsing
+// convergence: an inline archive, a base64-encoded JSON file, and a
+// base64-encoded ZIP file all reach svc.RestoreBackup as the identical parsed
+// archive - compared whole, not by a couple of manifest fields, so a shape
+// that silently drops Data or Manifest.Realm or Manifest.CreatedAt would fail
+// it. The comparison marshals both sides back to JSON rather than using
+// reflect.DeepEqual on the Go structs: Archive is defined (see backup.go) as
+// "the single JSON document copied between Officer realms", and its slice
+// fields carry `omitempty`, so a field FilterData leaves as a non-nil empty
+// slice (e.g. Data.Balances) marshals identically to, and is indistinguishable
+// on the wire from, one left nil - a difference reflect.DeepEqual would flag
+// but which is not a parsing defect. It does not exercise the manifest-source
+// validation rule itself - the fake service cannot; that rule lives in the
+// backend package and is covered by its own tests.
+func TestBackupRestoreParsingConvergesAcrossShapes(t *testing.T) {
+	archive := backup.NewArchive(
+		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+		"  convergence test source  ",
+		backup.RealmLabel{Code: "test"},
+		backup.Scope{All: true},
+		backup.Data{Accounts: []backup.Account{{Code: "acc-converge"}}},
+	)
+	jsonPayload, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zipPayload, zipFilename, err := zipBackupArchive(archive, "backup.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shapes := []struct {
+		name string
+		body map[string]any
+	}{
+		{
+			name: "inline archive",
+			body: map[string]any{
+				"archive": archive,
+				"scope":   backup.Scope{All: true},
+				"mode":    backup.RestoreModeOverwrite,
+			},
+		},
+		{
+			name: "base64 JSON file",
+			body: map[string]any{
+				"archiveFile":     base64.StdEncoding.EncodeToString(jsonPayload),
+				"archiveFilename": "backup.json",
+				"scope":           backup.Scope{All: true},
+				"mode":            backup.RestoreModeOverwrite,
+			},
+		},
+		{
+			name: "base64 ZIP file",
+			body: map[string]any{
+				"archiveFile":     base64.StdEncoding.EncodeToString(zipPayload),
+				"archiveFilename": zipFilename,
+				"scope":           backup.Scope{All: true},
+				"mode":            backup.RestoreModeOverwrite,
+			},
+		},
+	}
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			svc := &fakeService{backupSummary: backup.NewSummary()}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(shape.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+			))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			gotJSON, err := json.MarshalIndent(svc.restoreArchive, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantJSON, err := json.MarshalIndent(archive, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotJSON) != string(wantJSON) {
+				t.Fatalf("parsed archive does not match submitted archive:\n"+
+					"got:\n%s\nwant:\n%s", gotJSON, wantJSON)
+			}
+		})
 	}
 }
 

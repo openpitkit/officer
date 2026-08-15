@@ -47,10 +47,10 @@ func seedOrderFixtures(t *testing.T) (context.Context, RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple"}); err != nil {
 		t.Fatalf("CreateAsset(AAPL): %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "Dollar"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "Dollar"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	if err := rs.CreatePrincipal(ctx, domain.Principal{Code: "operator"}); err != nil {

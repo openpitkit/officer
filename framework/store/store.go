@@ -569,9 +569,11 @@ type Store interface {
 type RealmStore interface {
 	// --- Assets (dictionary, addressed by code) ---
 
-	// CreateAsset persists a new asset dictionary row. Returns
-	// domain.ErrAlreadyExists when the code already exists.
-	CreateAsset(ctx context.Context, asset domain.Asset) error
+	// CreateAsset persists a new asset, assigning a collision-free engine asset
+	// id. It returns the stored asset with EngineAssetID populated so the engine
+	// layer can build its resolver. Returns domain.ErrAlreadyExists when the code
+	// already exists.
+	CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error)
 
 	// GetAsset returns the asset with the given code. The bool is false when no
 	// such asset exists.

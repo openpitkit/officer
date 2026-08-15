@@ -483,9 +483,14 @@ func TestAssetRoundTrip(t *testing.T) {
 		t.Fatalf("CreateAssetClass: %v", err)
 	}
 	asset := domain.Asset{Code: "AAPL", Title: "Apple", AssetClass: "equity"}
-	if err := rs.CreateAsset(ctx, asset); err != nil {
+	created, err := rs.CreateAsset(ctx, asset)
+	if err != nil {
 		t.Fatalf("CreateAsset: %v", err)
 	}
+	if err := domain.ValidateEngineAssetID(created.EngineAssetID); err != nil {
+		t.Fatalf("CreateAsset engine id: %v", err)
+	}
+	asset = created
 
 	got, ok, err := rs.GetAsset(ctx, "AAPL")
 	if err != nil || !ok {
@@ -496,12 +501,12 @@ func TestAssetRoundTrip(t *testing.T) {
 	}
 
 	// An unknown class code is rejected: the link is a real foreign key.
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT", AssetClass: "ghost"}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT", AssetClass: "ghost"}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CreateAsset(unknown class) error = %v, want ErrInvalid", err)
 	}
 
 	// Duplicate code is ErrAlreadyExists.
-	if err := rs.CreateAsset(ctx, asset); !errors.Is(err, domain.ErrAlreadyExists) {
+	if _, err := rs.CreateAsset(ctx, asset); !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreateAsset(dup) error = %v, want ErrAlreadyExists", err)
 	}
 
@@ -525,7 +530,7 @@ func TestAssetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateAsset rename: %v", err)
 	}
-	if updated.Code != "AAPL.US" {
+	if updated.Code != "AAPL.US" || updated.EngineAssetID != asset.EngineAssetID {
 		t.Fatalf("UpdateAsset rename result = %+v", updated)
 	}
 	if _, ok, _ := rs.GetAsset(ctx, "AAPL"); ok {
@@ -536,7 +541,7 @@ func TestAssetRoundTrip(t *testing.T) {
 	}
 
 	// Rename onto an existing code is a conflict.
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset USD: %v", err)
 	}
 	if _, err := rs.UpdateAsset(ctx, "AAPL.US", domain.Asset{Code: "USD"}); !errors.Is(err, domain.ErrAlreadyExists) {
@@ -555,6 +560,11 @@ func TestAssetRoundTrip(t *testing.T) {
 	if len(assets) != 2 {
 		t.Fatalf("ListAssets len = %d, want 2", len(assets))
 	}
+	for _, listed := range assets {
+		if err := domain.ValidateEngineAssetID(listed.EngineAssetID); err != nil {
+			t.Fatalf("ListAssets engine id for %s: %v", listed.Code, err)
+		}
+	}
 
 	// Delete removes it.
 	if err := rs.DeleteAsset(ctx, "AAPL.US", true); err != nil {
@@ -572,7 +582,7 @@ func TestAssetRoundTrip(t *testing.T) {
 func TestUpdateAssetAllowsCurrencyRenameWithReferences(t *testing.T) {
 	ctx := context.Background()
 	_, store := newTestStore(t)
-	if err := store.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+	if _, err := store.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset USD: %v", err)
 	}
 	if _, err := store.CreateAccount(ctx, domain.Account{
@@ -667,13 +677,13 @@ func TestAssetClassLinkIsForeignKey(t *testing.T) {
 	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity"}); err != nil {
 		t.Fatalf("CreateAssetClass: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", AssetClass: "equity"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", AssetClass: "equity"}); err != nil {
 		t.Fatalf("CreateAsset AAPL: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT", AssetClass: "equity"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT", AssetClass: "equity"}); err != nil {
 		t.Fatalf("CreateAsset MSFT: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset USD: %v", err)
 	}
 
@@ -729,7 +739,7 @@ func TestAssetClassListFiltersAndCounts(t *testing.T) {
 	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "fx", Title: "Foreign Exchange", Notes: "currency pairs"}); err != nil {
 		t.Fatalf("CreateAssetClass fx: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", AssetClass: "equity"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", AssetClass: "equity"}); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
 	}
 
@@ -781,10 +791,10 @@ func TestAssetListFilters(t *testing.T) {
 	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "crypto", Title: "Crypto"}); err != nil {
 		t.Fatalf("CreateAssetClass crypto: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple Inc.", AssetClass: "equity"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple Inc.", AssetClass: "equity"}); err != nil {
 		t.Fatalf("CreateAsset AAPL: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "BTC", Title: "Bitcoin", AssetClass: "crypto"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "BTC", Title: "Bitcoin", AssetClass: "crypto"}); err != nil {
 		t.Fatalf("CreateAsset BTC: %v", err)
 	}
 
@@ -925,7 +935,7 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 	_, rs := newTestStore(t)
 
 	for _, code := range []string{"EUR", "USD"} {
-		if err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}
@@ -1088,10 +1098,10 @@ func TestListAccountRowsFiltersAndCounts(t *testing.T) {
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-beta"}); err != nil {
 		t.Fatalf("CreateGroup beta: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
 		t.Fatalf("CreateAsset AAPL: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT"}); err != nil {
 		t.Fatalf("CreateAsset MSFT: %v", err)
 	}
 	for _, account := range []domain.Account{
@@ -1386,7 +1396,7 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "empty"}); err != nil {
 		t.Fatalf("CreateGroup empty: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
 	}
 	for _, account := range []domain.Account{

@@ -38,37 +38,45 @@ import (
 
 // --- Assets -----------------------------------------------------------------
 
-// assetSelect is the shared projection for asset reads. The LEFT JOIN surfaces
-// the class's code (NULL when the asset has no class) so the surrogate class id
-// never leaves the store.
+// assetSelect is the shared projection for asset reads. It includes the asset's
+// engine id and surfaces the class's code (NULL when the asset has no class) so
+// the surrogate class id never leaves the store.
 const assetSelect = `
-SELECT a.code, a.title, c.code
+SELECT a.id, a.code, a.title, c.code
 FROM asset a
 LEFT JOIN asset_class c ON c.id = a.class_id`
 
 // CreateAsset persists a new asset dictionary row, resolving an optional class
 // code to its surrogate id (an empty code leaves the link NULL).
-func (r *realmStore) CreateAsset(ctx context.Context, asset domain.Asset) error {
+func (r *realmStore) CreateAsset(
+	ctx context.Context, asset domain.Asset,
+) (domain.Asset, error) {
 	db, err := r.db()
 	if err != nil {
-		return err
+		return domain.Asset{}, err
 	}
 	classID, err := optionalClassID(ctx, db, asset.AssetClass)
 	if err != nil {
-		return err
+		return domain.Asset{}, err
 	}
-	_, err = db.ExecContext(
+	res, err := db.ExecContext(
 		ctx,
 		`INSERT INTO asset (code, title, class_id) VALUES (?, ?, ?)`,
 		asset.Code, asset.Title, classID,
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
-			return fmt.Errorf("asset %q: %w", asset.Code, domain.ErrAlreadyExists)
+			return domain.Asset{},
+				fmt.Errorf("asset %q: %w", asset.Code, domain.ErrAlreadyExists)
 		}
-		return fmt.Errorf("store: create asset: %w", err)
+		return domain.Asset{}, fmt.Errorf("store: create asset: %w", err)
 	}
-	return nil
+	id, err := res.LastInsertId()
+	if err != nil {
+		return domain.Asset{}, fmt.Errorf("store: create asset id: %w", err)
+	}
+	asset.EngineAssetID = domain.EngineAssetID(id)
+	return asset, nil
 }
 
 // GetAsset returns the asset with the given code.
@@ -284,7 +292,9 @@ func (r *realmStore) DeleteAsset(ctx context.Context, code string, force bool) e
 func scanAsset(rows *sql.Rows) (domain.Asset, error) {
 	var asset domain.Asset
 	var assetClass sql.NullString
-	if err := rows.Scan(&asset.Code, &asset.Title, &assetClass); err != nil {
+	if err := rows.Scan(
+		&asset.EngineAssetID, &asset.Code, &asset.Title, &assetClass,
+	); err != nil {
 		return domain.Asset{}, fmt.Errorf("store: scan asset: %w", err)
 	}
 	asset.AssetClass = assetClass.String
@@ -294,7 +304,9 @@ func scanAsset(rows *sql.Rows) (domain.Asset, error) {
 func scanAssetRow(row *sql.Row) (domain.Asset, error) {
 	var asset domain.Asset
 	var assetClass sql.NullString
-	if err := row.Scan(&asset.Code, &asset.Title, &assetClass); err != nil {
+	if err := row.Scan(
+		&asset.EngineAssetID, &asset.Code, &asset.Title, &assetClass,
+	); err != nil {
 		return domain.Asset{}, err
 	}
 	asset.AssetClass = assetClass.String

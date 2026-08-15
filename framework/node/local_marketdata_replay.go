@@ -35,8 +35,8 @@ type marketDataReplayInstrumentKey struct {
 }
 
 type marketDataReplayPairKey struct {
-	base  string
-	quote string
+	base  domain.EngineAssetID
+	quote domain.EngineAssetID
 }
 
 type marketDataReplayInstrument struct {
@@ -56,15 +56,15 @@ type marketDataTransitionSink struct {
 	route         marketDataTransitionRoute
 	current       marketdata.Sink
 	next          marketdata.Sink
-	excludedAsset string
+	excludedAsset domain.EngineAssetID
 	pending       []marketDataTransitionOperation
 }
 
 type marketDataTransitionOperation struct {
 	kind   marketDataTransitionOperationKind
 	update marketdata.QuoteUpdate
-	base   string
-	quote  string
+	base   domain.EngineAssetID
+	quote  domain.EngineAssetID
 }
 
 type marketDataTransitionOperationKind uint8
@@ -107,7 +107,9 @@ func (s *marketDataTransitionSink) Push(update marketdata.QuoteUpdate) error {
 // Clear keeps a live manual clear ordered with provider pushes during an engine
 // transition. While buffering it clears the current service immediately and
 // records the same operation after persisted replay on the fresh service.
-func (s *marketDataTransitionSink) Clear(base, quote string) error {
+func (s *marketDataTransitionSink) Clear(
+	base, quote domain.EngineAssetID,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch s.route {
@@ -126,7 +128,7 @@ func (s *marketDataTransitionSink) Clear(base, quote string) error {
 	}
 }
 
-func (s *marketDataTransitionSink) excludeAsset(asset string) {
+func (s *marketDataTransitionSink) excludeAsset(asset domain.EngineAssetID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.excludedAsset = asset
@@ -139,8 +141,10 @@ func (s *marketDataTransitionSink) excludeAsset(asset string) {
 	s.pending = pending
 }
 
-func (s *marketDataTransitionSink) excludesAsset(base, quote string) bool {
-	return s.excludedAsset != "" &&
+func (s *marketDataTransitionSink) excludesAsset(
+	base, quote domain.EngineAssetID,
+) bool {
+	return s.excludedAsset != 0 &&
 		(base == s.excludedAsset || quote == s.excludedAsset)
 }
 
@@ -153,7 +157,9 @@ func (s *marketDataTransitionSink) excludesOperation(
 	return s.excludesAsset(operation.update.Base, operation.update.Quote)
 }
 
-func clearMarketDataQuote(sink marketdata.Sink, base, quote string) error {
+func clearMarketDataQuote(
+	sink marketdata.Sink, base, quote domain.EngineAssetID,
+) error {
 	clearer, ok := sink.(marketdata.QuoteClearer)
 	if !ok {
 		return fmt.Errorf("market-data sink does not support quote clear")
@@ -251,7 +257,7 @@ func applyMarketDataTransitionOperation(
 	case marketDataTransitionClear:
 		if err := clearMarketDataQuote(sink, operation.base, operation.quote); err != nil {
 			return fmt.Errorf(
-				"flush buffered market-data clear %s/%s: %w",
+				"flush buffered market-data clear %d/%d: %w",
 				operation.base, operation.quote, err,
 			)
 		}
@@ -259,7 +265,7 @@ func applyMarketDataTransitionOperation(
 	default:
 		if err := sink.Push(operation.update); err != nil {
 			return fmt.Errorf(
-				"flush buffered market-data quote %s/%s: %w",
+				"flush buffered market-data quote %d/%d: %w",
 				operation.update.Base, operation.update.Quote, err,
 			)
 		}
@@ -311,7 +317,7 @@ func (n *localNode) replayMarketDataWithoutAssetInto(
 				continue
 			}
 			configuredPairs[marketDataReplayPairKey{
-				base: instrument.BaseAsset, quote: instrument.QuoteAsset,
+				base: instrument.BaseAssetID, quote: instrument.QuoteAssetID,
 			}] = struct{}{}
 			if !instance.Enabled || !instrument.Enabled {
 				continue
@@ -351,7 +357,7 @@ func (n *localNode) replayMarketDataWithoutAssetInto(
 			}
 			candidates = append(candidates, marketDataReplayCandidate{
 				update: marketdata.QuoteUpdate{
-					Base: instrument.BaseAsset, Quote: instrument.QuoteAsset,
+					Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID,
 					Mark: instrument.ManualPrice,
 				},
 				instance: key.instance,
@@ -368,8 +374,8 @@ func (n *localNode) replayMarketDataWithoutAssetInto(
 		candidates = append(candidates, marketDataReplayCandidate{
 			update: marketdata.QuoteUpdate{
 				AsOf:  quote.AsOf,
-				Base:  quote.BaseAsset,
-				Quote: quote.QuoteAsset,
+				Base:  instrument.BaseAssetID,
+				Quote: instrument.QuoteAssetID,
 				Mark:  quote.Mark,
 				Bid:   quote.Bid,
 				Ask:   quote.Ask,
@@ -401,7 +407,7 @@ func (n *localNode) replayMarketDataWithoutAssetInto(
 	for _, candidate := range candidates {
 		if err := sink.Push(candidate.update); err != nil {
 			return fmt.Errorf(
-				"push market-data quote %s/%s from %s/%s: %w",
+				"push market-data quote %d/%d from %s/%s: %w",
 				candidate.update.Base, candidate.update.Quote,
 				candidate.instance, candidate.external, err,
 			)
@@ -417,7 +423,7 @@ func (n *localNode) replayMarketDataWithoutAssetInto(
 		if inverted, ok := marketdata.InvertQuote(candidate.update); ok {
 			if err := sink.Push(inverted); err != nil {
 				return fmt.Errorf(
-					"push synthetic market-data quote %s/%s from %s/%s: %w",
+					"push synthetic market-data quote %d/%d from %s/%s: %w",
 					inverted.Base, inverted.Quote,
 					candidate.instance, candidate.external, err,
 				)

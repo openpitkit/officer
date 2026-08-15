@@ -345,11 +345,11 @@ func normalizeAlpacaSubscriptions(
 	for _, sub := range subs {
 		symbol := strings.TrimSpace(sub.External)
 		if symbol == "" {
-			symbol = strings.TrimSpace(sub.Base)
+			return nil, missingExternalSymbolError("alpaca", sub)
 		}
 		symbol = strings.ToUpper(symbol)
 		if symbol == "" {
-			return nil, fmt.Errorf("alpaca subscription %s/%s: empty symbol", sub.Base, sub.Quote)
+			return nil, missingExternalSymbolError("alpaca", sub)
 		}
 		normalized = append(normalized, alpacaSubscription{
 			Subscription: sub,

@@ -486,8 +486,6 @@ func (c *finnhubConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 			findings = append(findings, providerUnknownSymbolDiag(
 				"Finnhub",
 				sub.External,
-				sub.Base,
-				sub.Quote,
 			))
 		}
 	}
@@ -652,10 +650,10 @@ func normalizeFinnhubSubscriptions(
 	for _, sub := range subs {
 		symbol := strings.TrimSpace(sub.External)
 		if symbol == "" {
-			symbol = strings.TrimSpace(sub.Base)
+			return nil, missingExternalSymbolError("finnhub", sub)
 		}
 		if symbol == "" {
-			return nil, fmt.Errorf("finnhub subscription %s/%s: empty symbol", sub.Base, sub.Quote)
+			return nil, missingExternalSymbolError("finnhub", sub)
 		}
 		normalized = append(normalized, finnhubSubscription{
 			Subscription: sub,

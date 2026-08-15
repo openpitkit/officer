@@ -66,7 +66,7 @@ func appliedDropCopyOperation(
 	if err != nil {
 		t.Fatalf("resolve drop-copy account: %v", err)
 	}
-	order, err := orderModelFromAccount(o, accountID)
+	order, err := orderModelFromAccount(o, accountID, e.res)
 	if err != nil {
 		t.Fatalf("map drop-copy order: %v", err)
 	}

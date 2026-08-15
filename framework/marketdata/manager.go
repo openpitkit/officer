@@ -453,10 +453,12 @@ func (m *Manager) startInstanceLocked(
 		return
 	}
 
-	// Build the set of expected instrument keys for the watchdog.
-	expectedKeys := make([]string, 0, len(instruments))
+	// Build the set of expected stable instrument keys for the watchdog.
+	expectedKeys := make([]quoteInstrumentKey, 0, len(instruments))
 	for _, inst := range instruments {
-		expectedKeys = append(expectedKeys, inst.BaseAsset+"\x00"+inst.QuoteAsset)
+		expectedKeys = append(expectedKeys, quoteInstrumentKey{
+			base: inst.BaseAssetID, quote: inst.QuoteAssetID,
+		})
 	}
 
 	// received tracks which instrument keys have delivered at least one update.
@@ -466,7 +468,7 @@ func (m *Manager) startInstanceLocked(
 	m.connectors = append(m.connectors, connector)
 	runWG.Add(1)
 	go m.drain(
-		ctx, runWG, generation, instanceID, symbols, m.syntheticPairs, ch, received,
+		ctx, runWG, generation, instance.ExternalID, symbols, m.syntheticPairs, ch, received,
 		sinkBarrier,
 	)
 	m.statuses[instanceID] = InstanceRuntimeStatus{
@@ -488,7 +490,7 @@ func (m *Manager) startInstanceLocked(
 		m.manualSynthetic[instanceID] = make(map[quoteInstrumentKey]bool, len(instruments))
 		for _, inst := range instruments {
 			key := quoteInstrumentKey{
-				base: inst.BaseAsset, quote: inst.QuoteAsset,
+				base: inst.BaseAssetID, quote: inst.QuoteAssetID,
 			}
 			m.manualMarks[instanceID][key] = inst.ManualPrice
 			m.manualTokens[instanceID][key] = m.nextManualTokenLocked()
@@ -790,7 +792,7 @@ func (m *Manager) drain(
 	ctx context.Context,
 	runWG *sync.WaitGroup,
 	generation uint64,
-	instanceID string,
+	instance domain.ExternalID,
 	symbols map[quoteInstrumentKey]string,
 	syntheticPairs map[quoteInstrumentKey]struct{},
 	ch <-chan QuoteUpdate,
@@ -798,6 +800,7 @@ func (m *Manager) drain(
 	sinkBarrier <-chan struct{},
 ) {
 	defer runWG.Done()
+	instanceID := instance.String()
 	for update := range ch {
 		if !waitForSinkBarrier(ctx, sinkBarrier) {
 			continue
@@ -817,11 +820,11 @@ func (m *Manager) drain(
 			m.releaseGate(m.sinkApplyGate)
 			continue
 		}
-		received.Store(update.Base+"\x00"+update.Quote, true)
+		received.Store(quoteInstrumentKey{base: update.Base, quote: update.Quote}, true)
 		external := symbols[quoteInstrumentKey{base: update.Base, quote: update.Quote}]
 		m.recordQuoteArrival(generation, instanceID, external, time.Now())
 		if err := m.store.UpsertMarketDataQuote(
-			ctx, quoteSnapshot(instanceID, symbols, update),
+			ctx, quoteSnapshot(instance, symbols, update),
 		); err != nil {
 			m.recordDiagForGeneration(generation, instanceID, Diagnostic{
 				Level:       DiagWarn,
@@ -938,7 +941,7 @@ func (m *Manager) applyManualClear(
 	if update.clearDirect {
 		if err := clearer.Clear(update.Base, update.Quote); err != nil {
 			return fmt.Errorf(
-				"marketdata: clear manual quote %s/%s for %s: %w",
+				"marketdata: clear manual quote %d/%d for %s: %w",
 				update.Base, update.Quote, instanceID, err,
 			)
 		}
@@ -946,7 +949,7 @@ func (m *Manager) applyManualClear(
 	if update.clearSynthetic {
 		if err := clearer.Clear(update.Quote, update.Base); err != nil {
 			return fmt.Errorf(
-				"marketdata: clear synthetic manual quote %s/%s for %s: %w",
+				"marketdata: clear synthetic manual quote %d/%d for %s: %w",
 				update.Quote, update.Base, instanceID, err,
 			)
 		}
@@ -1017,24 +1020,18 @@ func (m *Manager) pushToSink(
 }
 
 func quoteSnapshot(
-	instanceID string, symbols map[quoteInstrumentKey]string, update QuoteUpdate,
+	instance domain.ExternalID, symbols map[quoteInstrumentKey]string, update QuoteUpdate,
 ) domain.MarketDataQuote {
 	receivedAt := time.Now().UTC()
 	asOf := update.AsOf
 	if asOf.IsZero() {
 		asOf = receivedAt
 	}
-	// instanceID is the string form; parse it back to the typed handle. The value
-	// was produced by ExternalID.String() so parsing always succeeds; a parse
-	// failure yields a zero ExternalID which is the safe fallback.
-	instance, _ := domain.ParseExternalID(instanceID)
 	return domain.MarketDataQuote{
 		AsOf:           asOf.UTC(),
 		ReceivedAt:     receivedAt,
 		Instance:       instance,
 		ExternalSymbol: symbols[quoteInstrumentKey{base: update.Base, quote: update.Quote}],
-		BaseAsset:      update.Base,
-		QuoteAsset:     update.Quote,
 		Mark:           update.Mark,
 		Bid:            update.Bid,
 		Ask:            update.Ask,
@@ -1294,7 +1291,7 @@ func (m *Manager) PushManual(
 		m.mu.Unlock()
 		return nil
 	}
-	key := quoteInstrumentKey{base: instrument.BaseAsset, quote: instrument.QuoteAsset}
+	key := quoteInstrumentKey{base: instrument.BaseAssetID, quote: instrument.QuoteAssetID}
 	marks := m.manualMarks[instanceID]
 	if marks == nil {
 		marks = make(map[quoteInstrumentKey]string)
@@ -1369,7 +1366,7 @@ func (m *Manager) pushManualClear(
 	defer cancel()
 	done := make(chan error, 1)
 	update := manualClearUpdate(quoteInstrumentKey{
-		base: instrument.BaseAsset, quote: instrument.QuoteAsset,
+		base: instrument.BaseAssetID, quote: instrument.QuoteAssetID,
 	}, state)
 	update.clearDone = done
 	if err := pushable.Push(pushCtx, update); err != nil {
@@ -1624,7 +1621,7 @@ func (m *Manager) refreshManualMarksOnce(ctx context.Context) {
 				continue
 			}
 			key := quoteInstrumentKey{
-				base: instrument.BaseAsset, quote: instrument.QuoteAsset,
+				base: instrument.BaseAssetID, quote: instrument.QuoteAssetID,
 			}
 			identity := manualQuoteIdentity{instanceID: instanceID, pair: key}
 			if instrument.ManualPrice == "" {
@@ -1714,7 +1711,9 @@ func (m *Manager) retryPendingManualClears(ctx context.Context) {
 		); err != nil {
 			m.recordManualReconciliationPending(
 				clear.state.generation, clear.identity.instanceID,
-				clear.identity.pair.base+"/"+clear.identity.pair.quote,
+				fmt.Sprintf(
+					"%d/%d", clear.identity.pair.base, clear.identity.pair.quote,
+				),
 				err,
 			)
 		}
@@ -1726,8 +1725,8 @@ func (m *Manager) retryPendingManualClears(ctx context.Context) {
 // matching a fresh push.
 func manualQuote(instrument domain.MarketDataInstrument) QuoteUpdate {
 	return QuoteUpdate{
-		Base:  instrument.BaseAsset,
-		Quote: instrument.QuoteAsset,
+		Base:  instrument.BaseAssetID,
+		Quote: instrument.QuoteAssetID,
 		Mark:  instrument.ManualPrice,
 	}
 }
@@ -1741,12 +1740,12 @@ func subscriptionsFor(
 	subs := make([]Subscription, 0, len(instruments))
 	for _, instrument := range instruments {
 		_, syntheticInverse := syntheticPairs[quoteInstrumentKey{
-			base: instrument.BaseAsset, quote: instrument.QuoteAsset,
+			base: instrument.BaseAssetID, quote: instrument.QuoteAssetID,
 		}]
 		subs = append(subs, Subscription{
 			External:         instrument.ExternalSymbol,
-			Base:             instrument.BaseAsset,
-			Quote:            instrument.QuoteAsset,
+			Base:             instrument.BaseAssetID,
+			Quote:            instrument.QuoteAssetID,
 			SyntheticInverse: syntheticInverse,
 		})
 	}
@@ -1771,7 +1770,7 @@ func (m *Manager) syntheticPairPlan(
 		}
 		for _, instrument := range instruments {
 			pairs[quoteInstrumentKey{
-				base: instrument.BaseAsset, quote: instrument.QuoteAsset,
+				base: instrument.BaseAssetID, quote: instrument.QuoteAssetID,
 			}] = struct{}{}
 		}
 	}
@@ -1796,8 +1795,8 @@ func cloneSubscriptions(subs []Subscription) []Subscription {
 }
 
 type quoteInstrumentKey struct {
-	base  string
-	quote string
+	base  domain.EngineAssetID
+	quote domain.EngineAssetID
 }
 
 func externalSymbolsFor(subs []Subscription) map[quoteInstrumentKey]string {
@@ -1811,8 +1810,8 @@ func externalSymbolsFor(subs []Subscription) map[quoteInstrumentKey]string {
 func hasSubscription(subs []Subscription, instrument domain.MarketDataInstrument) bool {
 	for _, sub := range subs {
 		if sub.External == instrument.ExternalSymbol &&
-			sub.Base == instrument.BaseAsset &&
-			sub.Quote == instrument.QuoteAsset {
+			sub.Base == instrument.BaseAssetID &&
+			sub.Quote == instrument.QuoteAssetID {
 			return true
 		}
 	}

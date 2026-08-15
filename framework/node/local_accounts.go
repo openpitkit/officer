@@ -70,9 +70,9 @@ func (n *localNode) CreateAccount(
 				context.WithoutCancel(ctx),
 				"reconcile engine after account rollback failure",
 				resultErr,
-			)
+			).err
 		}
-		return domain.Account{}, resultErr
+		return domain.Account{}, internalPostCommitNodeMutationError(resultErr)
 	}
 
 	applyErr := eng.RunAccountSynchronized(ctx, created.Code, func(lane engine.AccountLane) error {
@@ -101,8 +101,10 @@ func (n *localNode) CreateAccount(
 			fmt.Errorf("apply created account runtime state: %w", applyErr),
 			optionalOperationError("rollback created account", rollbackErr),
 		)
-		return domain.Account{}, n.reconcileEngineAfterFailure(
-			mutationCtx, "reconcile engine after account create failure", cause,
+		return domain.Account{}, internalPostCommitNodeMutationError(
+			n.reconcileEngineAfterFailure(
+				mutationCtx, "reconcile engine after account create failure", cause,
+			).err,
 		)
 	}
 
@@ -244,10 +246,12 @@ func (n *localNode) SetAccountBlocked(
 		)
 	}
 	defer n.endEngineRestart()
-	return n.reconcileEngineAfterFailure(
-		context.WithoutCancel(ctx),
-		"reconcile engine after account block failure",
-		reconcileErr.cause,
+	return internalPostCommitNodeMutationError(
+		n.reconcileEngineAfterFailure(
+			context.WithoutCancel(ctx),
+			"reconcile engine after account block failure",
+			reconcileErr.cause,
+		).err,
 	)
 }
 
@@ -532,10 +536,12 @@ func (n *localNode) SetAccountGroup(
 	})
 	var reconcileErr *liveIdentityReconcileError
 	if errors.As(runErr, &reconcileErr) {
-		return n.reconcileEngineAfterFailure(
-			context.WithoutCancel(ctx),
-			"reconcile engine after account group failure",
-			reconcileErr.cause,
+		return internalPostCommitNodeMutationError(
+			n.reconcileEngineAfterFailure(
+				context.WithoutCancel(ctx),
+				"reconcile engine after account group failure",
+				reconcileErr.cause,
+			).err,
 		)
 	}
 	return runErr
@@ -657,8 +663,10 @@ func (n *localNode) UpdateAccount(
 				fmt.Errorf("publish account resolver rename: %w", err),
 				fmt.Errorf("rollback account rename: %w", rollbackErr),
 			)
-			return domain.Account{}, n.reconcileEngineAfterFailure(
-				mutationCtx, "reconcile engine after account rename failure", cause,
+			return domain.Account{}, internalPostCommitNodeMutationError(
+				n.reconcileEngineAfterFailure(
+					mutationCtx, "reconcile engine after account rename failure", cause,
+				).err,
 			)
 		}
 		return domain.Account{}, fmt.Errorf("publish account resolver rename: %w", err)

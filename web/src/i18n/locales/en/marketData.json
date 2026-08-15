@@ -19,7 +19,8 @@
   "instrumentDialog": {
     "ibTitle": "Add Interactive Brokers instrument",
     "ibDescription": "Choose a resolved contract or fill the contract fields manually before adding the instrument.",
-    "contract": "Contract"
+    "contract": "Contract",
+    "currencyRequired": "IB contract currency is required."
   },
   "actions": {
     "addInstance": "Add source",

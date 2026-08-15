@@ -29,6 +29,6 @@ import "fmt"
 // but the operation is categorically forbidden for this resource in every
 // state, so a surface without a dedicated mapping still answers 403 instead of
 // a generic failure.
-var ErrReservedGroup = fmt.Errorf(
+var ErrReservedGroup = registerSentinel(fmt.Errorf(
 	"the default account group is reserved: %w", ErrForbidden,
-)
+))

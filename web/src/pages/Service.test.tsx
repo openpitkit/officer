@@ -304,10 +304,9 @@ describe("BackupCard", () => {
         [
           JSON.stringify({
             manifest: {
-              format: "openpit.officer.backup",
               formatVersion: 1,
-              schemaVersion: 2,
               createdAt: "2026-06-22T10:00:00Z",
+              realm: { code: "test", title: "Test" },
               sections: ["accounts_groups"],
             },
             data: {},

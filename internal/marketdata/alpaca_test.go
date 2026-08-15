@@ -81,7 +81,7 @@ func TestNormalizeAlpacaSubscriptionsLimit(t *testing.T) {
 
 	subs := make([]Subscription, alpacaSymbolLimit+1)
 	for i := range subs {
-		subs[i] = Subscription{External: "AAPL", Base: "AAPL", Quote: "USD"}
+		subs[i] = Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}
 	}
 	if _, err := normalizeAlpacaSubscriptions(subs); err == nil {
 		t.Fatal("normalizeAlpacaSubscriptions err = nil, want limit error")
@@ -92,8 +92,8 @@ func TestWriteAlpacaSubscriptionShape(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
-		{External: "aapl", Base: "AAPL", Quote: "USD"},
-		{External: "msft", Base: "MSFT", Quote: "USD"},
+		{External: "aapl", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+		{External: "msft", Base: testMarketDataAssetID("MSFT"), Quote: testMarketDataAssetID("USD")},
 	})
 	conn := &fakeAlpacaConn{}
 	if err := writeAlpacaSubscribe(context.Background(), conn, subs); err != nil {
@@ -119,7 +119,7 @@ func TestParseAlpacaQuoteUpdates(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`[
 		{"T":"q","S":"AAPL","bp":12345678901234567890.123456789,"ap":12345678901234567890.223456789,"t":"2026-06-20T10:11:12.123456789Z"},
@@ -146,7 +146,7 @@ func TestParseAlpacaQuoteUpdatesStringPrices(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`[
 		{"T":"q","S":"AAPL","bp":"191.01","ap":"191.03","t":"2026-06-20T10:11:12Z"},
@@ -169,7 +169,7 @@ func TestAlpacaConnector_ReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := &fakeAlpacaConn{
 		messages: [][]byte{
@@ -239,7 +239,7 @@ func TestAlpacaConnector_AuthFailureDoesNotReportConnected(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	conn := &fakeAlpacaConn{
 		messages: [][]byte{[]byte(`[{"T":"error","code":401,"msg":"auth failed"}]`)},
@@ -273,7 +273,7 @@ func TestAlpacaConnector_ReportsErrorFrame(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	conn := &fakeAlpacaConn{
 		messages: [][]byte{
@@ -310,7 +310,7 @@ func TestAlpacaConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
-		{External: "AAPL", Base: "AAPL", Quote: "USD"},
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	conns := []*fakeAlpacaConn{
 		{

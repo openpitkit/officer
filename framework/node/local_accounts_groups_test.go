@@ -293,7 +293,8 @@ func TestLocalNode_SetGroupBlockedAutoCreatesUnknownGroup(t *testing.T) {
 // identifier the audit row stores.
 func TestLocalNode_SetAccountBlockedAuditFailureFatals(t *testing.T) {
 	t.Parallel()
-	auditErr := errors.New("account block audit failed")
+	auditCause := errors.New("account block audit failed")
+	auditErr := errors.Join(domain.ErrNotFound, auditCause)
 	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
 		return &failActionAuditRealm{
 			RealmStore: r, action: domain.AuditActionBlock, err: auditErr,
@@ -315,16 +316,26 @@ func TestLocalNode_SetAccountBlockedAuditFailureFatals(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller)
-	if !errors.Is(err, auditErr) {
-		t.Fatalf("SetAccountBlocked error = %v, want audit failure", err)
+	err := n.SetAccountBlocked(
+		ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller,
+	)
+	if errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("SetAccountBlocked error = %v, must hide domain sentinel", err)
+	}
+	if !errors.Is(err, auditCause) {
+		t.Fatalf("SetAccountBlocked error = %v, want audit cause", err)
 	}
 	// Engine block applied before the audit write failed.
 	if len(eng.blockCalls) != 1 {
 		t.Fatalf("engine block calls = %+v, want one", eng.blockCalls)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire on post-engine account-block audit failure")
+	if fatalErr == nil ||
+		!errors.Is(fatalErr, domain.ErrNotFound) ||
+		!errors.Is(fatalErr, auditCause) {
+		t.Fatalf(
+			"fatal error = %v, want sentinel and non-domain audit cause",
+			fatalErr,
+		)
 	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="audit account block"`) ||
@@ -334,6 +345,33 @@ func TestLocalNode_SetAccountBlockedAuditFailureFatals(t *testing.T) {
 	}
 	if strings.Contains(msg, "account_id=") {
 		t.Fatalf("fatal error = %q, must not leak the engine surrogate", msg)
+	}
+}
+
+func TestFatalReconciliationReturnsIdempotentTerminalError(t *testing.T) {
+	t.Parallel()
+	reconciliationCause := errors.New("store reconciliation failed")
+	raw := errors.Join(domain.ErrConflict, reconciliationCause)
+	var fatalErr error
+	n := &localNode{fatal: func(err error) { fatalErr = err }}
+
+	err := n.fatalReconciliation("reconcile mutation", raw)
+	if errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("returned error = %v, must hide domain sentinel", err)
+	}
+	if !errors.Is(err, reconciliationCause) {
+		t.Fatalf("returned error = %v, want reconciliation cause", err)
+	}
+	if fatalErr == nil ||
+		!errors.Is(fatalErr, domain.ErrConflict) ||
+		!errors.Is(fatalErr, reconciliationCause) {
+		t.Fatalf(
+			"fatal error = %v, want sentinel and reconciliation cause",
+			fatalErr,
+		)
+	}
+	if rewrapped := internalPostCommitNodeMutationError(err); rewrapped != err {
+		t.Fatalf("rewrapped error = %T, want unchanged %T", rewrapped, err)
 	}
 }
 
@@ -532,7 +570,8 @@ func TestLocalNode_BlockRevertFailureAndRebuildFailureIsFatal(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 	t.Cleanup(func() { _ = real.Close() })
-	revertErr := errors.New("account block store revert failed")
+	revertCause := errors.New("account block store revert failed")
+	revertErr := errors.Join(domain.ErrInvalid, revertCause)
 	st := newRealmWrapStore(real, func(realm store.RealmStore) store.RealmStore {
 		return &failAccountBlockRevertRealm{
 			RealmStore: realm,
@@ -553,12 +592,26 @@ func TestLocalNode_BlockRevertFailureAndRebuildFailureIsFatal(t *testing.T) {
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 
-	err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller)
-	if !errors.Is(err, revertErr) || !errors.Is(err, rebuildErr) {
-		t.Fatalf("SetAccountBlocked error = %v, want revert and rebuild failures", err)
+	err := n.SetAccountBlocked(
+		ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller,
+	)
+	if errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetAccountBlocked error = %v, must hide domain sentinel", err)
 	}
-	if fatalErr == nil || !errors.Is(fatalErr, rebuildErr) {
-		t.Fatalf("fatal error = %v, want rebuild failure", fatalErr)
+	if !errors.Is(err, revertCause) || !errors.Is(err, rebuildErr) {
+		t.Fatalf(
+			"SetAccountBlocked error = %v, want revert cause and rebuild failure",
+			err,
+		)
+	}
+	if fatalErr == nil ||
+		!errors.Is(fatalErr, domain.ErrInvalid) ||
+		!errors.Is(fatalErr, revertCause) ||
+		!errors.Is(fatalErr, rebuildErr) {
+		t.Fatalf(
+			"fatal error = %v, want sentinel, revert cause, and rebuild failure",
+			fatalErr,
+		)
 	}
 }
 

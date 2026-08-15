@@ -121,7 +121,7 @@ func TestUpdateAccountPreservesStableIdentityAndDependents(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	for _, asset := range []string{"AAPL", "USD"} {
-		if err := rs.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
+		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", asset, err)
 		}
 	}

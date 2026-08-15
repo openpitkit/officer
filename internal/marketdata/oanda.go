@@ -329,11 +329,11 @@ func normalizeOANDASubscriptions(
 	for _, sub := range subs {
 		instrument := strings.TrimSpace(sub.External)
 		if instrument == "" {
-			instrument = strings.TrimSpace(sub.Base) + "_" + strings.TrimSpace(sub.Quote)
+			return nil, missingExternalSymbolError("oanda", sub)
 		}
 		instrument = strings.ToUpper(instrument)
 		if instrument == "" || instrument == "_" {
-			return nil, fmt.Errorf("oanda subscription %s/%s: empty instrument", sub.Base, sub.Quote)
+			return nil, invalidExternalSymbolError("oanda", sub.External)
 		}
 		normalized = append(normalized, oandaSubscription{
 			Subscription: sub,

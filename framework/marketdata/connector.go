@@ -25,6 +25,8 @@ package marketdata
 import (
 	"context"
 	"time"
+
+	"go.openpit.dev/officer/framework/domain"
 )
 
 const (
@@ -83,17 +85,19 @@ type Diagnostic struct {
 	Routine bool
 }
 
-// Subscription is one enabled instrument of an instance: the external source
-// symbol and the instrument (base, quote) it maps to. The manager builds these
-// from the stored instrument rows; connectors tag emitted QuoteUpdates with
-// Base/Quote.
+// Subscription is one enabled instrument of an instance. External is the
+// provider symbol and must be supplied by configuration. Base and Quote form an
+// opaque asset key: connectors return them verbatim in QuoteUpdate and never
+// derive provider values from them.
 type Subscription struct {
-	// External is the source-side symbol (e.g. "AAPL").
+	// External is the configured provider-side symbol (e.g. "AAPL").
 	External string
-	// Base is the instrument underlying asset the symbol maps to.
-	Base string
-	// Quote is the instrument settlement asset the symbol maps to.
-	Quote string
+	// Base is the stable internal identifier of the underlying asset. Connectors
+	// must return it unchanged and must never derive provider values from it.
+	Base domain.EngineAssetID
+	// Quote is the stable internal identifier of the settlement asset. Connectors
+	// must return it unchanged and must never derive provider values from it.
+	Quote domain.EngineAssetID
 	// SyntheticInverse reports whether the applied runtime also emits the
 	// reverse pair for this subscription.
 	SyntheticInverse bool

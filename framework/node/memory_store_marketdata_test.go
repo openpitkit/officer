@@ -105,6 +105,19 @@ func (r *memoryRealm) DeleteMarketDataInstance(
 func (r *memoryRealm) UpsertMarketDataInstrument(
 	_ context.Context, instrument domain.MarketDataInstrument,
 ) error {
+	if _, ok := r.instances[instrument.Instance]; !ok {
+		return domain.ErrNotFound
+	}
+	base, ok := r.assets[instrument.BaseAsset]
+	if !ok {
+		return domain.ErrInvalid
+	}
+	quote, ok := r.assets[instrument.QuoteAsset]
+	if !ok {
+		return domain.ErrInvalid
+	}
+	instrument.BaseAssetID = base.EngineAssetID
+	instrument.QuoteAssetID = quote.EngineAssetID
 	r.instruments[instrumentKey(instrument.Instance, instrument.ExternalSymbol)] = instrument
 	return nil
 }

@@ -48,7 +48,7 @@ func TestUpdateAccountRenamesIdentityWithDependentsAndImmutableAudit(t *testing.
 		t.Fatalf("ForRealm: %v", err)
 	}
 	for _, asset := range []string{"AAPL", "USD"} {
-		if err := realm.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", asset, err)
 		}
 	}
@@ -209,6 +209,10 @@ func (e *accountRenameHTTPTestEngine) AddAccountResolverEntry(account domain.Acc
 	return nil
 }
 
+func (*accountRenameHTTPTestEngine) AddAssetResolverEntry(domain.Asset) error {
+	return nil
+}
+
 func (e *accountRenameHTTPTestEngine) RenameAccountResolverEntry(
 	oldCode domain.AccountID,
 	account domain.Account,
@@ -219,6 +223,17 @@ func (e *accountRenameHTTPTestEngine) RenameAccountResolverEntry(
 	}
 	delete(e.accounts, oldCode)
 	e.accounts[account.Code] = engineID
+	return nil
+}
+
+func (*accountRenameHTTPTestEngine) RenameAssetResolverEntry(
+	string,
+	domain.Asset,
+) error {
+	return nil
+}
+
+func (*accountRenameHTTPTestEngine) RemoveAssetResolverEntry(domain.Asset) error {
 	return nil
 }
 

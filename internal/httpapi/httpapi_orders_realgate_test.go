@@ -365,7 +365,7 @@ func seedRealAccountAndAssets(t *testing.T, realm store.RealmStore, id domain.Ac
 		t.Fatalf("CreateAccount(%s): %v", id, err)
 	}
 	for _, code := range []string{"AAPL", "USD"} {
-		if err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}
@@ -381,9 +381,27 @@ type realGateEngine struct {
 	executionReportLeaves []string
 }
 
-func (e *realGateEngine) Version() string      { return "fake" }
-func (e *realGateEngine) BuildProfile() string { return "test" }
-func (e *realGateEngine) Running() bool        { return e.running }
+func (e *realGateEngine) Version() string                            { return "fake" }
+func (e *realGateEngine) BuildProfile() string                       { return "test" }
+func (e *realGateEngine) Running() bool                              { return e.running }
+func (*realGateEngine) AddAccountResolverEntry(domain.Account) error { return nil }
+func (*realGateEngine) AddAssetResolverEntry(domain.Asset) error     { return nil }
+func (*realGateEngine) RenameAccountResolverEntry(
+	domain.AccountID,
+	domain.Account,
+) error {
+	return nil
+}
+func (*realGateEngine) RenameAssetResolverEntry(string, domain.Asset) error { return nil }
+func (*realGateEngine) RemoveAssetResolverEntry(domain.Asset) error         { return nil }
+func (*realGateEngine) AddGroupResolverEntry(domain.AccountGroup) error     { return nil }
+func (*realGateEngine) RenameGroupResolverEntry(
+	string,
+	domain.AccountGroup,
+) error {
+	return nil
+}
+func (*realGateEngine) RemoveGroupResolverEntry(domain.AccountGroup) error { return nil }
 func (e *realGateEngine) ConfigurePolicy(
 	context.Context, string, engine.LimitSet,
 ) (engine.PolicyConfigurationResult, error) {

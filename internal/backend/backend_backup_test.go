@@ -289,13 +289,18 @@ func TestService_RestoreBackupQuotesOnlyKeepsUnchangedFeedsRunning(t *testing.T)
 		instance.ExternalID.String(): {instrument},
 	}
 	archive := backup.Archive{
-		Manifest: backup.Manifest{Sections: []backup.Section{
-			backup.SectionMarketData,
-			backup.SectionMarketDataQuotes,
-		}},
+		Manifest: backup.Manifest{
+			Source: "test",
+			Sections: []backup.Section{
+				backup.SectionMarketData,
+				backup.SectionMarketDataQuotes,
+			},
+		},
 		Data: backup.Data{
-			MarketDataInstances:   []domain.MarketDataInstance{instance},
-			MarketDataInstruments: []domain.MarketDataInstrument{instrument},
+			MarketDataInstances: []domain.MarketDataInstance{instance},
+			MarketDataInstruments: []backup.MarketDataInstrument{
+				backupMarketDataInstrument(instrument),
+			},
 			MarketDataQuotes: []domain.MarketDataQuote{{
 				Instance: instance.ExternalID, ExternalSymbol: instrument.ExternalSymbol,
 				BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
@@ -329,10 +334,15 @@ func TestService_RestoreBackupManualPriceReconcilesOnline(t *testing.T) {
 		instance.ExternalID.String(): {currentInstrument},
 	}
 	archive := backup.Archive{
-		Manifest: backup.Manifest{Sections: []backup.Section{backup.SectionMarketData}},
+		Manifest: backup.Manifest{
+			Source:   "test",
+			Sections: []backup.Section{backup.SectionMarketData},
+		},
 		Data: backup.Data{
-			MarketDataInstances:   []domain.MarketDataInstance{instance},
-			MarketDataInstruments: []domain.MarketDataInstrument{restoredInstrument},
+			MarketDataInstances: []domain.MarketDataInstance{instance},
+			MarketDataInstruments: []backup.MarketDataInstrument{
+				backupMarketDataInstrument(restoredInstrument),
+			},
 		},
 	}
 	_, err := svc.RestoreBackup(context.Background(), archive, backup.RestoreOptions{
@@ -346,8 +356,20 @@ func TestService_RestoreBackupManualPriceReconcilesOnline(t *testing.T) {
 		t.Fatalf("market-data lifecycle stops=%d restarts=%d",
 			md.stops, md.restarts)
 	}
-	if len(md.pushed) != 1 || md.pushed[0] != restoredInstrument {
-		t.Fatalf("manual updates = %+v, want cleared restored instrument", md.pushed)
+	if len(md.pushed) != 1 {
+		t.Fatalf("manual updates = %+v, want one cleared restored instrument",
+			md.pushed)
+	}
+	pushed := md.pushed[0]
+	if pushed.BaseAssetID == 0 || pushed.QuoteAssetID == 0 {
+		t.Fatalf("pushed instrument asset IDs = %d/%d, want target IDs",
+			pushed.BaseAssetID, pushed.QuoteAssetID)
+	}
+	if pushed.ManualPrice != "" {
+		t.Fatalf("pushed manual price = %q, want cleared", pushed.ManualPrice)
+	}
+	if pushed != restoredInstrument {
+		t.Fatalf("manual update = %+v, want %+v", pushed, restoredInstrument)
 	}
 }
 
@@ -439,10 +461,15 @@ func TestService_RestoreBackupManualReconciliationErrorReturnsSummary(t *testing
 		Skipped: map[backup.Section]int{},
 	}
 	archive := backup.Archive{
-		Manifest: backup.Manifest{Sections: []backup.Section{backup.SectionMarketData}},
+		Manifest: backup.Manifest{
+			Source:   "test",
+			Sections: []backup.Section{backup.SectionMarketData},
+		},
 		Data: backup.Data{
-			MarketDataInstances:   []domain.MarketDataInstance{instance},
-			MarketDataInstruments: []domain.MarketDataInstrument{restoredInstrument},
+			MarketDataInstances: []domain.MarketDataInstance{instance},
+			MarketDataInstruments: []backup.MarketDataInstrument{
+				backupMarketDataInstrument(restoredInstrument),
+			},
 		},
 	}
 	summary, err := svc.RestoreBackup(context.Background(), archive, backup.RestoreOptions{
@@ -458,12 +485,15 @@ func TestService_RestoreBackupManualReconciliationErrorReturnsSummary(t *testing
 }
 
 func restoreArchive(sections ...backup.Section) backup.Archive {
-	return backup.Archive{Manifest: backup.Manifest{Sections: sections}}
+	return backup.Archive{Manifest: backup.Manifest{Source: "test", Sections: sections}}
 }
 
 func marketDataTopologyArchive() backup.Archive {
 	return backup.Archive{
-		Manifest: backup.Manifest{Sections: []backup.Section{backup.SectionMarketData}},
+		Manifest: backup.Manifest{
+			Source:   "test",
+			Sections: []backup.Section{backup.SectionMarketData},
+		},
 		Data: backup.Data{
 			MarketDataInstances: []domain.MarketDataInstance{restoredMarketDataInstance()},
 		},
@@ -485,7 +515,22 @@ func restoredMarketDataInstrument(instance domain.ExternalID) domain.MarketDataI
 		ExternalSymbol: "Z\\USD",
 		BaseAsset:      "Z",
 		QuoteAsset:     "USD",
+		BaseAssetID:    101,
+		QuoteAssetID:   202,
 		ManualPrice:    "2",
 		Enabled:        true,
+	}
+}
+
+func backupMarketDataInstrument(
+	instrument domain.MarketDataInstrument,
+) backup.MarketDataInstrument {
+	return backup.MarketDataInstrument{
+		Instance:       instrument.Instance,
+		ExternalSymbol: instrument.ExternalSymbol,
+		BaseAsset:      instrument.BaseAsset,
+		QuoteAsset:     instrument.QuoteAsset,
+		ManualPrice:    instrument.ManualPrice,
+		Enabled:        instrument.Enabled,
 	}
 }

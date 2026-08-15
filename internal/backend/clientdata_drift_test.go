@@ -130,6 +130,34 @@ var clientDataAllowlist = []clientDataAllow{
 		Why:     "engine runtime id is reallocated by the target store",
 	},
 	{
+		Surface: driftBackup,
+		Entity:  "assets",
+		Field:   "EngineAssetID",
+		Kind:    "uncovered",
+		Why:     "engine runtime id is reallocated by the target store",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "positions",
+		Field:   "AccountCurrency",
+		Kind:    "uncovered",
+		Why:     "derived from the target account-group currency cascade on read",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "market-data-instruments",
+		Field:   "BaseAssetID",
+		Kind:    "uncovered",
+		Why:     "engine runtime id is resolved from the target asset dictionary",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "market-data-instruments",
+		Field:   "QuoteAssetID",
+		Kind:    "uncovered",
+		Why:     "engine runtime id is resolved from the target asset dictionary",
+	},
+	{
 		Surface: driftBusinessCSV,
 		Entity:  "accounts",
 		Field:   "EffectiveCurrency",
@@ -455,7 +483,7 @@ var backupParitySpecs = []paritySpec{
 		surface: driftBackup,
 		entity:  "assets",
 		source:  reflect.TypeOf(domain.Asset{}),
-		target:  reflect.TypeOf(domain.Asset{}),
+		target:  reflect.TypeOf(backup.Asset{}),
 	},
 	{
 		surface: driftBackup,
@@ -479,7 +507,7 @@ var backupParitySpecs = []paritySpec{
 		surface: driftBackup,
 		entity:  "positions",
 		source:  reflect.TypeOf(domain.Balance{}),
-		target:  reflect.TypeOf(domain.Balance{}),
+		target:  reflect.TypeOf(backup.Balance{}),
 	},
 	{
 		surface: driftBackup,
@@ -586,7 +614,7 @@ var backupParitySpecs = []paritySpec{
 		surface: driftBackup,
 		entity:  "market-data-instruments",
 		source:  reflect.TypeOf(domain.MarketDataInstrument{}),
-		target:  reflect.TypeOf(domain.MarketDataInstrument{}),
+		target:  reflect.TypeOf(backup.MarketDataInstrument{}),
 	},
 	{
 		surface: driftBackup,
@@ -1319,16 +1347,20 @@ func seedClientDataDriftRealm(
 		Title: "Equity Sentinel",
 		Notes: "asset class notes sentinel",
 	}))
-	must(t, "CreateAsset USD", rs.CreateAsset(ctx, domain.Asset{
+	if _, err := rs.CreateAsset(ctx, domain.Asset{
 		Code:       "USD",
 		Title:      "US Dollar Sentinel",
 		AssetClass: "equity",
-	}))
-	must(t, "CreateAsset AAPL", rs.CreateAsset(ctx, domain.Asset{
+	}); err != nil {
+		t.Fatalf("CreateAsset USD: %v", err)
+	}
+	if _, err := rs.CreateAsset(ctx, domain.Asset{
 		Code:       "AAPL",
 		Title:      "Apple Sentinel",
 		AssetClass: "equity",
-	}))
+	}); err != nil {
+		t.Fatalf("CreateAsset AAPL: %v", err)
+	}
 	mustAllowExists(t, "CreatePrincipal", rs.CreatePrincipal(ctx, domain.Principal{
 		Code:  "operator",
 		Title: "Operator Sentinel",
@@ -1859,6 +1891,9 @@ func nonZeroFindings(
 	var findings []clientDataDrift
 	for _, finding := range walk.zeros {
 		normalized := normalizeSentinelPath(finding.Field)
+		if isAllowed(surface, entity, normalized, "excluded-sentinel") {
+			continue
+		}
 		if isAllowed(surface, entity, normalized, "optional-sentinel") &&
 			walk.nonZero[normalized] {
 			continue

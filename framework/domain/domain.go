@@ -53,58 +53,76 @@ type UserSetting struct {
 	Value  string
 }
 
+var sentinelErrors []error
+
+func registerSentinel(err error) error {
+	sentinelErrors = append(sentinelErrors, err)
+	return err
+}
+
 // Sentinel errors returned by all layers; callers check with errors.Is.
 var (
-	ErrNotFound      = errors.New("not found")
-	ErrAlreadyExists = errors.New("already exists")
-	ErrInvalid       = errors.New("invalid")
+	ErrNotFound      = registerSentinel(errors.New("not found"))
+	ErrAlreadyExists = registerSentinel(errors.New("already exists"))
+	ErrInvalid       = registerSentinel(errors.New("invalid"))
 	// ErrForbidden marks a request whose caller is known but not authorized for
 	// the requested route or command.
-	ErrForbidden = errors.New("forbidden")
+	ErrForbidden = registerSentinel(errors.New("forbidden"))
 	// ErrTooLarge marks an input that exceeds a hard server-side size limit.
 	// HTTP surfaces map it to 413 so callers can split bulk payloads instead of
 	// retrying the same request.
-	ErrTooLarge = errors.New("too large")
+	ErrTooLarge = registerSentinel(errors.New("too large"))
 	// ErrConflict marks an operation that cannot proceed because the target is
 	// already in a terminal or incompatible state. The surface layer maps it to
 	// an HTTP 409.
-	ErrConflict = errors.New("conflict")
+	ErrConflict = registerSentinel(errors.New("conflict"))
 	// ErrExecutionReportRequired marks an order whose recorded execution-report
 	// activity makes an inferred lifecycle shortcut unsafe. The caller must submit
 	// a complete execution report instead.
-	ErrExecutionReportRequired = errors.New(
+	ErrExecutionReportRequired = registerSentinel(errors.New(
 		"order has execution-report activity; submit an explicit execution report",
-	)
+	))
 	// ErrHasDependents marks a delete that would cascade-delete dependent rows
 	// without an explicit force flag. The concrete error carries the blockers.
-	ErrHasDependents = errors.New("has dependents")
+	ErrHasDependents = registerSentinel(errors.New("has dependents"))
 	// ErrAccountMissing marks a request that named an account code Officer does
 	// not know and asked to reject rather than create it (see
 	// MissingAccountPolicy). It is deliberately not an ErrNotFound: the account
 	// is a request parameter the same call could have created, not an addressed
 	// resource that turned out to be absent. The concrete error carries the code.
-	ErrAccountMissing = errors.New("account does not exist")
+	ErrAccountMissing = registerSentinel(errors.New("account does not exist"))
 	// ErrTerminalOrder marks the remaining Officer safety net for terminal
 	// orders; callers can bypass it with force and route straight to the engine.
-	ErrTerminalOrder = errors.New("order in terminal status")
+	ErrTerminalOrder = registerSentinel(errors.New("order in terminal status"))
 	// ErrNoChange marks a successful engine command that produced no account
 	// modifications for Officer to persist.
-	ErrNoChange = errors.New("no change")
+	ErrNoChange = registerSentinel(errors.New("no change"))
 	// ErrNotImplemented marks an operation that needs an engine SDK capability
 	// that is not available yet and cannot be represented as a full engine
 	// rebuild from persisted state.
-	ErrNotImplemented = errors.New("not implemented")
+	ErrNotImplemented = registerSentinel(errors.New("not implemented"))
 	// ErrEngineRestarting marks a short administrative restart window where the
 	// live engine is being rebuilt from persisted state. Mutating surfaces reject
 	// new requests during that window instead of queuing work behind the restart.
-	ErrEngineRestarting = errors.New("engine restarting")
+	ErrEngineRestarting = registerSentinel(errors.New("engine restarting"))
 	// ErrUpstream marks a failure to reach or get a usable answer from an
 	// external provider (e.g. a market-data REST call returning 403/429 or
 	// timing out). It is an expected operational condition, not a server bug, so
 	// handlers surface it as a 502 with a plain message instead of a 500
 	// "unhandled internal error".
-	ErrUpstream = errors.New("upstream provider error")
+	ErrUpstream = registerSentinel(errors.New("upstream provider error"))
 )
+
+// IsSentinel reports whether err is one of the domain sentinel values.
+// It compares identity and does not inspect wrapped causes.
+func IsSentinel(err error) bool {
+	for _, sentinel := range sentinelErrors {
+		if err == sentinel {
+			return true
+		}
+	}
+	return false
+}
 
 // DependentCount names one dependent row kind that blocks a destructive delete.
 type DependentCount struct {

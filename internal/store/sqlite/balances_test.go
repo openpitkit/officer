@@ -39,10 +39,10 @@ func seedBalanceFixtures(t *testing.T) (context.Context, RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple"}); err != nil {
 		t.Fatalf("CreateAsset(AAPL): %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "Dollar"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "Dollar"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
@@ -673,10 +673,10 @@ func TestBalanceUnknownAssetIsInvalid(t *testing.T) {
 // cascade must denominate the row exactly as a directly assigned currency does.
 func TestBalanceAccountCurrencyResolvesEveryCascadeTier(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR", Title: "Euro"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR", Title: "Euro"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "GBP", Title: "Pound"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "GBP", Title: "Pound"}); err != nil {
 		t.Fatalf("CreateAsset(GBP): %v", err)
 	}
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "grp-1"}); err != nil {
@@ -740,7 +740,7 @@ func TestBalanceAccountCurrencyResolvesEveryCascadeTier(t *testing.T) {
 // threshold names selects which rows the numeric bounds even apply to.
 func TestBalanceListRowsComparesOnlyWithinNamedCurrency(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR", Title: "Euro"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR", Title: "Euro"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
 	}
 	for _, seed := range []struct {
@@ -851,7 +851,7 @@ func TestBalanceListRowsRejectsDenominatedRangeWithoutCurrency(t *testing.T) {
 
 func TestBalanceListRowsSortsRealizedPnlWithinCurrency(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
 	}
 	seeds := []struct {
@@ -954,7 +954,7 @@ func TestBalanceListRowsComparesAgainstInheritedCurrency(t *testing.T) {
 func TestBalanceListRowsUsesEveryCurrencyCascadeTier(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
 	for _, code := range []string{"EUR", "GBP"} {
-		if err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}

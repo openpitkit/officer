@@ -28,7 +28,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -147,9 +150,9 @@ func TestSettlementPrice_MultiplePricesWarnAndEmptyIsSilent(t *testing.T) {
 // asset and carrying no adjusted field; the mapping tests only need the tag.
 func testAdjustmentOutcome(t *testing.T, asset string) accountadjustment.Outcome {
 	t.Helper()
-	tag, err := param.NewAsset(asset)
+	tag, err := testResolver().asset(asset)
 	if err != nil {
-		t.Fatalf("param.NewAsset(%q): %v", asset, err)
+		t.Fatalf("resolver asset %q: %v", asset, err)
 	}
 	return accountadjustment.Outcome{
 		Entry: accountadjustment.AccountOutcomeEntry{Asset: tag},
@@ -167,12 +170,31 @@ func TestOutcomeAcceptedFromList_DuplicateAssetIsError(t *testing.T) {
 			testAdjustmentOutcome(t, "USD"),
 		},
 		"USD",
+		testResolver(),
 	)
 	if err == nil {
 		t.Fatal("want error for several outcomes on one asset, got nil")
 	}
 	if !strings.Contains(err.Error(), "several outcomes") {
 		t.Fatalf("error = %v, want several outcomes", err)
+	}
+}
+
+func TestBalanceOutcomesFromList_ReturnsHumanAssetCode(t *testing.T) {
+	t.Parallel()
+	res := testResolver()
+	outcomes, err := balanceOutcomesFromList(
+		[]accountadjustment.Outcome{testAdjustmentOutcome(t, "USD")}, res,
+	)
+	if err != nil {
+		t.Fatalf("balanceOutcomesFromList: %v", err)
+	}
+	if len(outcomes) != 1 || outcomes[0].Asset != "USD" {
+		t.Fatalf("balance outcomes = %+v, want human USD asset code", outcomes)
+	}
+	settlements := executionBalanceSettlementsFrom(outcomes)
+	if len(settlements) != 1 || settlements[0].Asset != "USD" {
+		t.Fatalf("balance settlements = %+v, want human USD asset code", settlements)
 	}
 }
 
@@ -186,6 +208,7 @@ func TestOutcomeAcceptedFromList_OtherAssetsAreNotDuplicates(t *testing.T) {
 			testAdjustmentOutcome(t, "USD"),
 		},
 		"USD",
+		testResolver(),
 	)
 	if err != nil {
 		t.Fatalf("outcomeAcceptedFromList: %v", err)
@@ -260,12 +283,44 @@ func account(code string) domain.Account {
 	return domain.Account{Code: domain.AccountID(code), EngineAccountID: testEngineAccountID(code)}
 }
 
+func testAsset(code string) domain.Asset {
+	ids := map[string]domain.EngineAssetID{
+		"AAPL": 1,
+		"USD":  2,
+		"BTC":  3,
+		"USDT": 4,
+		"EUR":  5,
+		"MSFT": 6,
+		"GBP":  7,
+	}
+	id, ok := ids[code]
+	if !ok {
+		id = 100
+		for _, char := range code {
+			id = id*131 + domain.EngineAssetID(char)
+		}
+	}
+	return domain.Asset{Code: code, EngineAssetID: id}
+}
+
 // blockedAccount builds a blocked snapshot account with a stored engine id.
 func blockedAccount(code, reason string) domain.Account {
 	a := account(code)
 	a.Blocked = true
 	a.BlockReason = reason
 	return a
+}
+
+func testAssets() []domain.Asset {
+	return []domain.Asset{
+		testAsset("AAPL"),
+		testAsset("USD"),
+		testAsset("BTC"),
+		testAsset("USDT"),
+		testAsset("EUR"),
+		testAsset("MSFT"),
+		testAsset("GBP"),
+	}
 }
 
 // testResolver builds an idResolver covering the given account codes, mirroring
@@ -276,7 +331,7 @@ func testResolver(codes ...string) idResolver {
 	for _, code := range codes {
 		accounts = append(accounts, account(code))
 	}
-	res, err := newIDResolver(accounts, nil)
+	res, err := newIDResolver(accounts, nil, testAssets())
 	if err != nil {
 		panic(err)
 	}
@@ -486,6 +541,7 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 	res, err := newIDResolver(
 		[]domain.Account{account("acc-1")},
 		[]domain.AccountGroup{{Code: "desk-a", EngineGroupID: 7}},
+		testAssets(),
 	)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
@@ -531,31 +587,32 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 	if _, ok := globalBarrier.LowerBound.Get(); !ok {
 		t.Fatalf("global lower bound not mapped: %+v", globalBarrier)
 	}
-	if got := globalBarrier.Currency.String(); got != "USD" {
-		t.Fatalf("global currency = %q, want USD", got)
+	if got := globalBarrier.Currency.String(); got != "2" {
+		t.Fatalf("global currency = %q, want decimal engine id 2", got)
 	}
 	if _, ok := groups[0].Barrier.UpperBound.Get(); !ok {
 		t.Fatalf("account-group upper bound not mapped: %+v", groups[0])
 	}
-	if got := groups[0].Barrier.Currency.String(); got != "EUR" {
-		t.Fatalf("account-group currency = %q, want EUR", got)
+	if got := groups[0].Barrier.Currency.String(); got != "5" {
+		t.Fatalf("account-group currency = %q, want decimal engine id 5", got)
 	}
 	if _, ok := accounts[0].Barrier.LowerBound.Get(); !ok {
 		t.Fatalf("P&L bounds not mapped: %+v %+v %+v", globalBarrier, groups, accounts)
 	}
-	if got := accounts[0].Barrier.Currency.String(); got != "GBP" {
-		t.Fatalf("account currency = %q, want GBP", got)
+	if got := accounts[0].Barrier.Currency.String(); got != "7" {
+		t.Fatalf("account currency = %q, want decimal engine id 7", got)
 	}
 }
 
 func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:          testAssets(),
 		Accounts:        []domain.Account{account("acc-1")},
 		RateLimits:      []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
 	}
-	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
@@ -599,23 +656,22 @@ func TestAccountLaneSetAccountCurrency_InvalidCurrencyIsDomainInvalid(t *testing
 func TestNewIDResolver_RejectsUnassignedEngineID(t *testing.T) {
 	t.Parallel()
 	_, err := newIDResolver(
-		[]domain.Account{{Code: "acc-1", EngineAccountID: 0}}, nil)
+		[]domain.Account{{Code: "acc-1", EngineAccountID: 0}}, nil, nil)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for unassigned engine id, got %v", err)
 	}
 }
 
-// TestNewIDResolver_UsesStoredEngineIDs checks the resolver maps a code to a
-// param.AccountID built from the stored uint engine id (param.NewAccountIDFromUint64),
-// not a hash of the code: the engine id string form is the decimal of the stored
-// integer.
+// TestNewIDResolver_UsesStoredEngineIDs checks the resolver maps dictionary
+// codes to values constructed from their stored engine ids, never hashes. Asset
+// ids become the decimal opaque strings accepted by the native engine.
 func TestNewIDResolver_UsesStoredEngineIDs(t *testing.T) {
 	t.Parallel()
 	res, err := newIDResolver([]domain.Account{
 		{Code: "acc-1", EngineAccountID: 7},
 	}, []domain.AccountGroup{
 		{Code: "grp-1", EngineGroupID: 9},
-	})
+	}, []domain.Asset{{Code: "human-usd", EngineAssetID: 42}})
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
@@ -637,6 +693,56 @@ func TestNewIDResolver_UsesStoredEngineIDs(t *testing.T) {
 	if grp.String() != want.String() {
 		t.Fatalf("group engine id = %s, want %s", grp, want)
 	}
+	asset, err := res.asset("human-usd")
+	if err != nil {
+		t.Fatalf("resolve asset: %v", err)
+	}
+	if got := asset.String(); got != "42" {
+		t.Fatalf("asset engine id = %q, want decimal stored id 42", got)
+	}
+	if alias, err := res.assetAlias(asset); err != nil || alias != "human-usd" {
+		t.Fatalf("reverse asset alias = (%q, %v), want human-usd", alias, err)
+	}
+}
+
+func TestIDResolver_RejectsInvalidAssetPublicationsWithoutPartialChange(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver(nil, nil, []domain.Asset{{Code: "usd", EngineAssetID: 2}})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	for _, mutation := range []struct {
+		name  string
+		asset domain.Asset
+		want  error
+	}{
+		{
+			name:  "duplicate alias",
+			asset: domain.Asset{Code: "usd", EngineAssetID: 3},
+			want:  domain.ErrAlreadyExists,
+		},
+		{
+			name:  "duplicate engine id",
+			asset: domain.Asset{Code: "eur", EngineAssetID: 2},
+			want:  domain.ErrInvalid,
+		},
+		{
+			name:  "unassigned engine id",
+			asset: domain.Asset{Code: "eur", EngineAssetID: 0},
+			want:  domain.ErrInvalid,
+		},
+	} {
+		if err := res.addAssetResolverEntry(mutation.asset); !errors.Is(err, mutation.want) {
+			t.Errorf("%s error = %v, want %v", mutation.name, err, mutation.want)
+		}
+	}
+	asset, err := res.asset("usd")
+	if err != nil || asset.String() != "2" {
+		t.Fatalf("published asset = (%q, %v), want decimal id 2", asset.String(), err)
+	}
+	if _, err := res.asset("eur"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("partial asset publication error = %v, want ErrInvalid", err)
+	}
 }
 
 func TestIDResolver_AddsAndRenamesAliases(t *testing.T) {
@@ -644,6 +750,7 @@ func TestIDResolver_AddsAndRenamesAliases(t *testing.T) {
 	res, err := newIDResolver(
 		[]domain.Account{{Code: "account-old", EngineAccountID: 7}},
 		[]domain.AccountGroup{{Code: "group-old", EngineGroupID: 9}},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
@@ -667,6 +774,27 @@ func TestIDResolver_AddsAndRenamesAliases(t *testing.T) {
 		Code: "group-new", EngineGroupID: 9,
 	}); err != nil {
 		t.Fatalf("rename group resolver entry: %v", err)
+	}
+	if err := res.addAssetResolverEntry(domain.Asset{
+		Code: "asset-old", EngineAssetID: 11,
+	}); err != nil {
+		t.Fatalf("add asset resolver entry: %v", err)
+	}
+	assetBefore, err := res.asset("asset-old")
+	if err != nil {
+		t.Fatalf("resolve asset before rename: %v", err)
+	}
+	if err := res.renameAssetResolverEntry("asset-old", domain.Asset{
+		Code: "asset-new", EngineAssetID: 11,
+	}); err != nil {
+		t.Fatalf("rename asset resolver entry: %v", err)
+	}
+	assetAfter, err := res.asset("asset-new")
+	if err != nil {
+		t.Fatalf("resolve renamed asset: %v", err)
+	}
+	if !assetAfter.Equal(assetBefore) {
+		t.Fatal("asset rename rebuilt the ready engine asset")
 	}
 
 	for code, want := range map[domain.AccountID]uint64{
@@ -699,6 +827,49 @@ func TestIDResolver_AddsAndRenamesAliases(t *testing.T) {
 	if _, err := res.group("group-old"); !errors.Is(err, domain.ErrInvalid) {
 		t.Errorf("old group alias error = %v, want ErrInvalid", err)
 	}
+	if _, err := res.asset("asset-old"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("old asset alias error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestIDResolver_AssetRenameRejectsWithoutChangingAliases(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver(nil, nil, []domain.Asset{
+		{Code: "asset-a", EngineAssetID: 11},
+		{Code: "asset-b", EngineAssetID: 12},
+	})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	original, err := res.asset("asset-a")
+	if err != nil {
+		t.Fatalf("resolve original asset: %v", err)
+	}
+
+	for _, rename := range []struct {
+		oldCode string
+		asset   domain.Asset
+	}{
+		{oldCode: "missing", asset: domain.Asset{Code: "asset-c", EngineAssetID: 11}},
+		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 99}},
+		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-b", EngineAssetID: 11}},
+		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 0}},
+	} {
+		if err := res.renameAssetResolverEntry(rename.oldCode, rename.asset); err == nil {
+			t.Errorf("rename %+v: want error", rename)
+		}
+	}
+
+	current, err := res.asset("asset-a")
+	if err != nil || !current.Equal(original) {
+		t.Fatalf("asset-a after failed renames = (%v, %v)", current, err)
+	}
+	if alias, err := res.assetAlias(original); err != nil || alias != "asset-a" {
+		t.Fatalf("asset-a reverse alias after failed renames = (%q, %v)", alias, err)
+	}
+	if _, err := res.asset("asset-c"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("partial asset alias published: %v", err)
+	}
 }
 
 func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
@@ -712,6 +883,7 @@ func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
 			{Code: "group-a", EngineGroupID: 9},
 			{Code: "group-b", EngineGroupID: 10},
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
@@ -812,11 +984,358 @@ func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
 	}
 }
 
+func TestIDResolver_RemovesAssetAliasWithStableIDValidation(t *testing.T) {
+	t.Parallel()
+	asset := domain.Asset{Code: "asset-a", EngineAssetID: 11}
+	res, err := newIDResolver(nil, nil, []domain.Asset{asset})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	ready, err := res.asset(asset.Code)
+	if err != nil {
+		t.Fatalf("resolve asset: %v", err)
+	}
+
+	if err := res.removeAssetResolverEntry(domain.Asset{
+		Code: asset.Code, EngineAssetID: 12,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("mismatched removal error = %v, want ErrInvalid", err)
+	}
+	current, err := res.asset(asset.Code)
+	if err != nil || !current.Equal(ready) {
+		t.Fatalf("mismatched removal changed code alias = (%v, %v)", current, err)
+	}
+	byID, err := res.assetByID(asset.EngineAssetID)
+	if err != nil || !byID.Equal(ready) {
+		t.Fatalf("mismatched removal changed id alias = (%v, %v)", byID, err)
+	}
+	if alias, err := res.assetAlias(ready); err != nil || alias != asset.Code {
+		t.Fatalf("mismatched removal changed reverse alias = (%q, %v)", alias, err)
+	}
+
+	if err := res.removeAssetResolverEntry(asset); err != nil {
+		t.Fatalf("remove asset resolver entry: %v", err)
+	}
+	if _, err := res.asset(asset.Code); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("removed code alias error = %v, want ErrInvalid", err)
+	}
+	if _, err := res.assetByID(asset.EngineAssetID); err == nil {
+		t.Fatal("removed id alias lookup succeeded")
+	}
+	if _, err := res.assetAlias(ready); err == nil {
+		t.Fatal("removed reverse alias lookup succeeded")
+	}
+}
+
+func TestIDResolver_AssetRemovalRejectsWithoutChangingAliases(t *testing.T) {
+	t.Parallel()
+	asset := domain.Asset{Code: "asset-a", EngineAssetID: 11}
+	res, err := newIDResolver(nil, nil, []domain.Asset{asset})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	ready, err := res.asset(asset.Code)
+	if err != nil {
+		t.Fatalf("resolve asset: %v", err)
+	}
+
+	for _, removal := range []domain.Asset{
+		{Code: "missing", EngineAssetID: asset.EngineAssetID},
+		{Code: asset.Code, EngineAssetID: 12},
+	} {
+		if err := res.removeAssetResolverEntry(removal); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("remove %+v error = %v, want ErrInvalid", removal, err)
+		}
+	}
+	current, err := res.asset(asset.Code)
+	if err != nil || !current.Equal(ready) {
+		t.Fatalf("failed removals changed code alias = (%v, %v)", current, err)
+	}
+	byID, err := res.assetByID(asset.EngineAssetID)
+	if err != nil || !byID.Equal(ready) {
+		t.Fatalf("failed removals changed id alias = (%v, %v)", byID, err)
+	}
+	if alias, err := res.assetAlias(ready); err != nil || alias != asset.Code {
+		t.Fatalf("failed removals changed reverse alias = (%q, %v)", alias, err)
+	}
+}
+
+func TestIDResolver_UninitializedAssetMutationsAreInternalErrors(t *testing.T) {
+	t.Parallel()
+	var res idResolver
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "rename",
+			err: res.renameAssetResolverEntry("asset-a", domain.Asset{
+				Code: "asset-b", EngineAssetID: 11,
+			}),
+		},
+		{
+			name: "remove",
+			err: res.removeAssetResolverEntry(domain.Asset{
+				Code: "asset-a", EngineAssetID: 11,
+			}),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.err == nil {
+				t.Fatal("error = nil, want internal initialization error")
+			}
+			if errors.Is(test.err, domain.ErrInvalid) {
+				t.Fatalf("error = %v, must not wrap ErrInvalid", test.err)
+			}
+			const want = "engine: asset resolver is not initialized"
+			if test.err.Error() != want {
+				t.Fatalf("error = %q, want %q", test.err, want)
+			}
+		})
+	}
+}
+
+func TestIDResolver_AssetRemovalRejectsCorruptReverseAlias(t *testing.T) {
+	t.Parallel()
+	asset := domain.Asset{Code: "asset-a", EngineAssetID: 11}
+	res, err := newIDResolver(nil, nil, []domain.Asset{asset})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	ready, err := res.asset(asset.Code)
+	if err != nil {
+		t.Fatalf("resolve asset: %v", err)
+	}
+
+	res.shared.mu.Lock()
+	res.shared.assetAliases[ready.Safe()] = "asset-b"
+	res.shared.mu.Unlock()
+	before := captureAssetResolverState(res)
+
+	err = res.removeAssetResolverEntry(asset)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("remove error = %v, want ErrInvalid", err)
+	}
+	if !strings.Contains(err.Error(), "corrupt engine id mapping") {
+		t.Fatalf("remove error = %q, want corrupt mapping detail", err)
+	}
+	after := captureAssetResolverState(res)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("corrupt removal changed resolver: before=%v after=%v", before, after)
+	}
+}
+
+type assetResolverMutationKind uint8
+
+const (
+	assetResolverAdd assetResolverMutationKind = iota
+	assetResolverRename
+	assetResolverRemove
+)
+
+type assetResolverMutation struct {
+	kind    assetResolverMutationKind
+	oldCode string
+	asset   domain.Asset
+}
+
+func (m assetResolverMutation) String() string {
+	names := [...]string{"add", "rename", "remove"}
+	return fmt.Sprintf(
+		"%s old=%q code=%q id=%d",
+		names[m.kind], m.oldCode, m.asset.Code, m.asset.EngineAssetID,
+	)
+}
+
+type assetResolverStateSnapshot struct {
+	assets       map[string]string
+	assetIDs     map[domain.EngineAssetID]string
+	assetAliases map[string]string
+}
+
+func captureAssetResolverState(res idResolver) assetResolverStateSnapshot {
+	res.shared.mu.RLock()
+	defer res.shared.mu.RUnlock()
+
+	snapshot := assetResolverStateSnapshot{
+		assets:       make(map[string]string, len(res.shared.assets)),
+		assetIDs:     make(map[domain.EngineAssetID]string, len(res.shared.assetIDs)),
+		assetAliases: make(map[string]string, len(res.shared.assetAliases)),
+	}
+	for code, ready := range res.shared.assets {
+		snapshot.assets[code] = ready.Safe()
+	}
+	for id, ready := range res.shared.assetIDs {
+		snapshot.assetIDs[id] = ready.Safe()
+	}
+	for id, code := range res.shared.assetAliases {
+		snapshot.assetAliases[id] = code
+	}
+	return snapshot
+}
+
+func assertAssetResolverMatchesModel(
+	t *testing.T,
+	res idResolver,
+	model map[string]domain.EngineAssetID,
+) {
+	t.Helper()
+	snapshot := captureAssetResolverState(res)
+	if len(snapshot.assets) != len(model) ||
+		len(snapshot.assetIDs) != len(model) ||
+		len(snapshot.assetAliases) != len(model) {
+		t.Fatalf(
+			"resolver map sizes = (%d, %d, %d), want %d",
+			len(snapshot.assets),
+			len(snapshot.assetIDs),
+			len(snapshot.assetAliases),
+			len(model),
+		)
+	}
+	for code, id := range model {
+		readyID := strconv.FormatUint(id.Uint64(), 10)
+		if got, ok := snapshot.assets[code]; !ok || got != readyID {
+			t.Fatalf("assets[%q] = (%q, %t), want %q", code, got, ok, readyID)
+		}
+		if got, ok := snapshot.assetIDs[id]; !ok || got != readyID {
+			t.Fatalf("assetIDs[%d] = (%q, %t), want %q", id, got, ok, readyID)
+		}
+		if got, ok := snapshot.assetAliases[readyID]; !ok || got != code {
+			t.Fatalf(
+				"assetAliases[%q] = (%q, %t), want %q",
+				readyID, got, ok, code,
+			)
+		}
+	}
+}
+
+func assetResolverModelContainsID(
+	model map[string]domain.EngineAssetID,
+	target domain.EngineAssetID,
+) bool {
+	for _, id := range model {
+		if id == target {
+			return true
+		}
+	}
+	return false
+}
+
+func applyAssetResolverMutation(
+	t *testing.T,
+	res idResolver,
+	model map[string]domain.EngineAssetID,
+	mutation assetResolverMutation,
+) {
+	t.Helper()
+	before := captureAssetResolverState(res)
+	idValid := domain.ValidateEngineAssetID(mutation.asset.EngineAssetID) == nil
+	var wantSuccess bool
+	var err error
+
+	switch mutation.kind {
+	case assetResolverAdd:
+		_, codeExists := model[mutation.asset.Code]
+		wantSuccess = idValid &&
+			!codeExists &&
+			!assetResolverModelContainsID(model, mutation.asset.EngineAssetID)
+		err = res.addAssetResolverEntry(mutation.asset)
+	case assetResolverRename:
+		currentID, oldExists := model[mutation.oldCode]
+		_, targetExists := model[mutation.asset.Code]
+		wantSuccess = idValid &&
+			oldExists &&
+			currentID == mutation.asset.EngineAssetID &&
+			(mutation.oldCode == mutation.asset.Code || !targetExists)
+		err = res.renameAssetResolverEntry(mutation.oldCode, mutation.asset)
+	case assetResolverRemove:
+		currentID, codeExists := model[mutation.asset.Code]
+		wantSuccess = idValid &&
+			codeExists &&
+			currentID == mutation.asset.EngineAssetID
+		err = res.removeAssetResolverEntry(mutation.asset)
+	default:
+		t.Fatalf("unknown mutation kind %d", mutation.kind)
+	}
+
+	if (err == nil) != wantSuccess {
+		t.Fatalf("%s error = %v, want success %t", mutation, err, wantSuccess)
+	}
+	if err != nil {
+		after := captureAssetResolverState(res)
+		if !reflect.DeepEqual(after, before) {
+			t.Fatalf(
+				"failed %s changed resolver: before=%v after=%v",
+				mutation, before, after,
+			)
+		}
+		assertAssetResolverMatchesModel(t, res, model)
+		return
+	}
+
+	switch mutation.kind {
+	case assetResolverAdd:
+		model[mutation.asset.Code] = mutation.asset.EngineAssetID
+	case assetResolverRename:
+		delete(model, mutation.oldCode)
+		model[mutation.asset.Code] = mutation.asset.EngineAssetID
+	case assetResolverRemove:
+		delete(model, mutation.asset.Code)
+		if _, err := res.asset(mutation.asset.Code); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("removed code %q resolves with error %v", mutation.asset.Code, err)
+		}
+	}
+	assertAssetResolverMatchesModel(t, res, model)
+}
+
+func TestIDResolver_RandomizedAssetMutationsPreserveInvariants(t *testing.T) {
+	t.Parallel()
+	codes := []string{"asset-a", "asset-b", "asset-c", "asset-d"}
+	ids := []domain.EngineAssetID{0, 11, 12, 13}
+
+	for _, seed := range []int64{1, 23, 101, 4099} {
+		t.Run(fmt.Sprintf("seed_%d", seed), func(t *testing.T) {
+			res := newEmptyIDResolver(0, 0, len(codes))
+			model := make(map[string]domain.EngineAssetID, len(codes))
+
+			original := domain.Asset{Code: codes[0], EngineAssetID: ids[1]}
+			applyAssetResolverMutation(t, res, model, assetResolverMutation{
+				kind: assetResolverAdd, asset: original,
+			})
+			applyAssetResolverMutation(t, res, model, assetResolverMutation{
+				kind: assetResolverRemove, asset: original,
+			})
+			readded := domain.Asset{Code: codes[1], EngineAssetID: ids[1]}
+			applyAssetResolverMutation(t, res, model, assetResolverMutation{
+				kind: assetResolverAdd, asset: readded,
+			})
+			if _, err := res.asset(codes[0]); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("removed code %q resolves with error %v", codes[0], err)
+			}
+			if _, err := res.assetByID(ids[1]); err != nil {
+				t.Fatalf("re-added engine id %d: %v", ids[1], err)
+			}
+
+			random := rand.New(rand.NewSource(seed))
+			for step := 0; step < 250; step++ {
+				applyAssetResolverMutation(t, res, model, assetResolverMutation{
+					kind:    assetResolverMutationKind(random.Intn(3)),
+					oldCode: codes[random.Intn(len(codes))],
+					asset: domain.Asset{
+						Code:          codes[random.Intn(len(codes))],
+						EngineAssetID: ids[random.Intn(len(ids))],
+					},
+				})
+			}
+		})
+	}
+}
+
 func TestIDResolver_RemovesGroupAliasWithStableIDValidation(t *testing.T) {
 	t.Parallel()
 	res, err := newIDResolver(nil, []domain.AccountGroup{{
 		Code: "group-a", EngineGroupID: 9,
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
@@ -855,6 +1374,7 @@ func TestIDResolver_ConcurrentLookupAndMutation(t *testing.T) {
 			{Code: "stable-group", EngineGroupID: 9},
 			{Code: "moving-group-a", EngineGroupID: 10},
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
@@ -917,6 +1437,7 @@ func TestApplyCurrenciesCallsAccountAndGroupTiers(t *testing.T) {
 		t.Fatalf("group id: %v", err)
 	}
 	snap := Snapshot{
+		Assets: testAssets(),
 		Accounts: []domain.Account{
 			{
 				Code:            "acc-1",
@@ -934,7 +1455,7 @@ func TestApplyCurrenciesCallsAccountAndGroupTiers(t *testing.T) {
 			{Code: "desk-b", EngineGroupID: 8},
 		},
 	}
-	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
@@ -944,13 +1465,13 @@ func TestApplyCurrenciesCallsAccountAndGroupTiers(t *testing.T) {
 	}
 	accountID := param.NewAccountIDFromUint64(11)
 	wantGroups := []currencyCall{
-		{id: param.DefaultAccountGroup.String(), currency: "USD"},
-		{id: groupID.String(), currency: "EUR"},
+		{id: param.DefaultAccountGroup.String(), currency: "2"},
+		{id: groupID.String(), currency: "5"},
 	}
 	if !slices.Equal(handle.groupCalls, wantGroups) {
 		t.Fatalf("group currency calls = %+v, want %+v", handle.groupCalls, wantGroups)
 	}
-	wantAccounts := []currencyCall{{id: accountID.String(), currency: "GBP"}}
+	wantAccounts := []currencyCall{{id: accountID.String(), currency: "7"}}
 	if !slices.Equal(handle.accountCalls, wantAccounts) {
 		t.Fatalf(
 			"account currency calls = %+v, want %+v",
@@ -998,6 +1519,7 @@ func (h *fakeCurrencyAccounts) SetCurrency(
 func TestBuildOpenPitEngine_SeedsFromSnapshot(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:     testAssets(),
 		Accounts:   []domain.Account{blockedAccount("acc-1", "risk"), account("acc-2")},
 		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
@@ -1036,6 +1558,7 @@ func TestBuildOpenPitEngine_SeedsFromSnapshot(t *testing.T) {
 func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets: testAssets(),
 		RateLimits: []domain.LimitRate{
 			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
 			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
@@ -1062,6 +1585,7 @@ func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:          testAssets(),
 		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
@@ -1085,6 +1609,7 @@ func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets: testAssets(),
 		OrderSizeLimits: []domain.LimitOrderSize{
 			orderSize(domain.ScopeBroker, "", "", "10", ""),
 			orderSize(domain.ScopeAsset, "", "USD", "5", ""),
@@ -1115,6 +1640,7 @@ func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:          testAssets(),
 		Accounts:        []domain.Account{account("acc-1")},
 		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")},
 	}
@@ -1139,6 +1665,7 @@ func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets: testAssets(),
 		RateLimits: []domain.LimitRate{
 			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
 		},
@@ -1163,6 +1690,7 @@ func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets: testAssets(),
 		RateLimits: []domain.LimitRate{
 			rateLimit(domain.ScopeAsset, "", "USD", 100, time.Second),
 		},
@@ -1184,6 +1712,7 @@ func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:     testAssets(),
 		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
@@ -1212,6 +1741,7 @@ func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets: testAssets(),
 		RateLimits: []domain.LimitRate{
 			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
 			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
@@ -1264,7 +1794,7 @@ func TestPolicyConfigurationBlocksFromCarriesAccountAndFallbackPolicy(t *testing
 
 func TestPolicyConfigurationBlockOutcomesFromResolvesAccount(t *testing.T) {
 	t.Parallel()
-	resolver, err := newIDResolver([]domain.Account{account("acc-1")}, nil)
+	resolver, err := newIDResolver([]domain.Account{account("acc-1")}, nil, nil)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
@@ -1296,7 +1826,7 @@ func TestPolicyConfigurationBlockOutcomesFromReportsUnknownAccountAsInternal(
 	t *testing.T,
 ) {
 	t.Parallel()
-	resolver, err := newIDResolver([]domain.Account{account("acc-1")}, nil)
+	resolver, err := newIDResolver([]domain.Account{account("acc-1")}, nil, nil)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
@@ -1411,6 +1941,7 @@ func submitOrderOnLane(
 func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:   testAssets(),
 		Accounts: []domain.Account{account("acc-1")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
@@ -1435,9 +1966,28 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	}
 }
 
+func TestEngine_CheckOrderUnknownAssetIsInvalid(t *testing.T) {
+	t.Parallel()
+	eng, err := BuildOpenPitEngine("", Snapshot{
+		Accounts: []domain.Account{account("acc-1")},
+		Assets:   []domain.Asset{testAsset("AAPL"), testAsset("USD")},
+	})
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	defer eng.Stop()
+
+	probe := checkProbe("acc-1", domain.OrderSideBuy, "1", "100")
+	probe.BaseAsset = "unknown"
+	if _, err := checkOrderOnLane(context.Background(), eng, probe); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("CheckOrder unknown asset = %v, want ErrInvalid", err)
+	}
+}
+
 func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:   testAssets(),
 		Accounts: []domain.Account{account("acc-1")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
@@ -1455,7 +2005,7 @@ func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 
 	if err := adapter.sink.Push(marketdata.QuoteUpdate{
 		AsOf: now.Add(-MarketDataFreshnessTTL),
-		Base: "AAPL", Quote: "USD", Mark: "100",
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100",
 	}); err != nil {
 		t.Fatalf("Push stale boundary quote: %v", err)
 	}
@@ -1474,7 +2024,7 @@ func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 
 	if err := adapter.sink.Push(marketdata.QuoteUpdate{
 		AsOf: now.Add(-MarketDataFreshnessTTL + time.Second),
-		Base: "AAPL", Quote: "USD", Mark: "100",
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100",
 	}); err != nil {
 		t.Fatalf("Push aged fresh quote: %v", err)
 	}
@@ -1522,7 +2072,10 @@ func TestEngine_CheckOrderMultiplePricesUsesDryRunIdentifier(t *testing.T) {
 // checks it rejects with a structured reject (insufficient funds), not an error.
 func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 	t.Parallel()
-	eng, err := BuildOpenPitEngine("", Snapshot{Accounts: []domain.Account{account("acc-1")}})
+	eng, err := BuildOpenPitEngine("", Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{account("acc-1")},
+	})
 	if err != nil {
 		t.Fatalf("BuildOpenPitEngine: %v", err)
 	}
@@ -1550,6 +2103,7 @@ func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 func TestEngine_CheckOrderStandingBlockIsRejectOnly(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:   testAssets(),
 		Accounts: []domain.Account{blockedAccount("acc-1", "risk")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
@@ -1586,6 +2140,7 @@ func TestEngine_CheckOrderStandingBlockIsRejectOnly(t *testing.T) {
 func TestEngine_CheckOrderKeepsShortRejectText(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:   testAssets(),
 		Accounts: []domain.Account{blockedAccount("acc-1", "-5%")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
@@ -1648,6 +2203,7 @@ func TestAccountBlockFrom_OnlyTranscribesLatchedBlock(t *testing.T) {
 func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:     testAssets(),
 		Accounts:   []domain.Account{account("acc-1")},
 		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 1, time.Minute)},
 		Balances: []domain.Balance{
@@ -1701,6 +2257,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 func TestEngine_CheckOrderMatchesSubmitOrderSizeVerdict(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Assets:   testAssets(),
 		Accounts: []domain.Account{account("acc-1")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
@@ -1781,11 +2338,11 @@ func hasRejectCode(rejects []domain.OrderReject, code string) bool {
 	return false
 }
 
-// TestNewAsset_BadFormatIsInvalid checks a core-rejected asset code (caller
-// input) wraps domain.ErrInvalid so the HTTP surface reports 400, not 500.
-func TestNewAsset_BadFormatIsInvalid(t *testing.T) {
+// TestResolverUnknownAssetIsInvalid checks a caller asset missing from the
+// live dictionary wraps domain.ErrInvalid instead of being passed to the engine.
+func TestResolverUnknownAssetIsInvalid(t *testing.T) {
 	t.Parallel()
-	if _, err := newAsset(" "); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := testResolver().asset(" "); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for blank asset, got %v", err)
 	}
 }
@@ -2095,8 +2652,8 @@ func TestExecutionReportFrom_CommissionPreservesPositiveFeeSign(t *testing.T) {
 	if commission.Amount.String() != "2" {
 		t.Fatalf("commission amount = %q, want SDK fee 2", commission.Amount.String())
 	}
-	if commission.Currency.String() != "GBP" {
-		t.Fatalf("commission currency = %q, want GBP", commission.Currency.String())
+	if commission.Currency.String() != "7" {
+		t.Fatalf("commission currency = %q, want decimal engine id 7", commission.Currency.String())
 	}
 }
 
@@ -2133,8 +2690,8 @@ func TestExecutionReportFrom_NoTradeCommissionPreservesNegativeRebateSign(t *tes
 	if commission.Amount.String() != "-0.50" {
 		t.Fatalf("commission amount = %q, want SDK fee -0.50", commission.Amount.String())
 	}
-	if commission.Currency.String() != "USD" {
-		t.Fatalf("commission currency = %q, want USD", commission.Currency.String())
+	if commission.Currency.String() != "2" {
+		t.Fatalf("commission currency = %q, want decimal engine id 2", commission.Currency.String())
 	}
 }
 
@@ -2196,8 +2753,8 @@ func TestExecutionReportFrom_CommissionFill(t *testing.T) {
 	if !ok {
 		t.Fatal("Fill.Fee unset")
 	}
-	if commission.Amount.String() != "1" || commission.Currency.String() != "USD" {
-		t.Fatalf("commission = %+v, want USD 1", commission)
+	if commission.Amount.String() != "1" || commission.Currency.String() != "2" {
+		t.Fatalf("commission = %+v, want decimal engine id 2 and fee 1", commission)
 	}
 }
 
@@ -2252,21 +2809,21 @@ func TestAccountAdjustmentFromRequest_InvalidInputs(t *testing.T) {
 	}
 
 	badAsset := domain.AdjustmentRequest{Asset: " ", Balance: delta("1")}
-	if _, err := accountAdjustmentFromRequest(badAsset); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := accountAdjustmentFromRequest(badAsset, testResolver()); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for blank asset, got %v", err)
 	}
 
 	badPrice := domain.AdjustmentRequest{
 		Asset: "USD", Balance: delta("1"), AverageEntryPrice: "not-a-number",
 	}
-	if _, err := accountAdjustmentFromRequest(badPrice); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := accountAdjustmentFromRequest(badPrice, testResolver()); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad average entry price, got %v", err)
 	}
 
 	badRealizedPnl := domain.AdjustmentRequest{
 		Asset: "USD", Balance: delta("1"), RealizedPnl: "not-a-number",
 	}
-	if _, err := accountAdjustmentFromRequest(badRealizedPnl); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := accountAdjustmentFromRequest(badRealizedPnl, testResolver()); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad realized pnl, got %v", err)
 	}
 
@@ -2274,7 +2831,7 @@ func TestAccountAdjustmentFromRequest_InvalidInputs(t *testing.T) {
 		Asset: "USD", Balance: delta("1"),
 		BalanceBounds: &domain.AdjustmentBounds{Lower: "not-a-number"},
 	}
-	if _, err := accountAdjustmentFromRequest(badBound); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := accountAdjustmentFromRequest(badBound, testResolver()); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad bound, got %v", err)
 	}
 }
@@ -2308,7 +2865,8 @@ func TestExecutionBalanceSettlementsFrom_KeepsPositionPnl(t *testing.T) {
 
 func TestOutcomeAcceptedFromEntry_PreservesComputedZeroAndAbsence(t *testing.T) {
 	t.Parallel()
-	asset, err := param.NewAsset("AAPL")
+	res := testResolver()
+	asset, err := res.asset("AAPL")
 	if err != nil {
 		t.Fatalf("NewAsset: %v", err)
 	}
@@ -2326,6 +2884,7 @@ func TestOutcomeAcceptedFromEntry_PreservesComputedZeroAndAbsence(t *testing.T) 
 				},
 			)),
 		},
+		res,
 	)
 	if err != nil {
 		t.Fatalf("outcomeAcceptedFromEntry(computed): %v", err)
@@ -2336,6 +2895,7 @@ func TestOutcomeAcceptedFromEntry_PreservesComputedZeroAndAbsence(t *testing.T) 
 
 	absent, err := outcomeAcceptedFromEntry(
 		accountadjustment.AccountOutcomeEntry{Asset: asset},
+		res,
 	)
 	if err != nil {
 		t.Fatalf("outcomeAcceptedFromEntry(absent): %v", err)
@@ -2354,7 +2914,7 @@ func TestAccountAdjustmentFromRequest_ForwardsRealizedPnl(t *testing.T) {
 		Balance: &domain.AdjustmentAmount{
 			Mode: domain.AdjustmentModeAbsolute, Value: "1",
 		},
-	})
+	}, testResolver())
 	if err != nil {
 		t.Fatalf("accountAdjustmentFromRequest: %v", err)
 	}
@@ -2376,7 +2936,7 @@ func TestBalanceSeedAdjustment_RestoresHaltedRealizedPnl(t *testing.T) {
 		Available:             "1",
 		RealizedPnl:           "not-a-number",
 		RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
-	})
+	}, testResolver())
 	if err != nil {
 		t.Fatalf("balanceSeedAdjustment: %v", err)
 	}

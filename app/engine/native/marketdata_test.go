@@ -33,6 +33,7 @@ import (
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
 
+	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -46,7 +47,7 @@ func newTestSink(t *testing.T) (*marketDataSink, *bindmd.Service) {
 		t.Fatalf("build market-data service: %v", err)
 	}
 	t.Cleanup(service.Close)
-	return newMarketDataSink(service), service
+	return newMarketDataSink(service, testResolver()), service
 }
 
 // readMark resolves instrument and reads its mark price as a decimal string,
@@ -79,16 +80,88 @@ func TestMarketDataSink_PushRegistersAndPushes(t *testing.T) {
 	t.Parallel()
 	sink, service := newTestSink(t)
 
-	update := marketdata.QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "100.5", Bid: "100", Ask: "101"}
+	update := marketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100.5", Bid: "100", Ask: "101"}
 	if err := sink.Push(update); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 
-	aapl, _ := param.NewAsset("AAPL")
-	usd, _ := param.NewAsset("USD")
+	aapl, err := testResolver().asset("AAPL")
+	if err != nil {
+		t.Fatalf("resolve AAPL: %v", err)
+	}
+	usd, err := testResolver().asset("USD")
+	if err != nil {
+		t.Fatalf("resolve USD: %v", err)
+	}
 	instrument := param.NewInstrument(aapl, usd)
 	if got := readMark(t, service, instrument); got != "100.5" {
 		t.Fatalf("mark = %q, want 100.5", got)
+	}
+}
+
+func TestMarketDataSink_RenameKeepsLiveFeedFlowing(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver(nil, nil, []domain.Asset{
+		{Code: "asset-old", EngineAssetID: 41},
+		{Code: "USD", EngineAssetID: 42},
+	})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	service, err := openpit.NewEngineBuilder().FullSync().MarketData(defaultQuoteTTL).Build()
+	if err != nil {
+		t.Fatalf("build market-data service: %v", err)
+	}
+	t.Cleanup(service.Close)
+	sink := newMarketDataSink(service, res)
+
+	if err := sink.Push(marketdata.QuoteUpdate{
+		Base: 41, Quote: 42, Mark: "100",
+	}); err != nil {
+		t.Fatalf("Push before rename: %v", err)
+	}
+	if err := res.renameAssetResolverEntry("asset-old", domain.Asset{
+		Code: "asset-new", EngineAssetID: 41,
+	}); err != nil {
+		t.Fatalf("rename asset resolver entry: %v", err)
+	}
+
+	if err := sink.Push(marketdata.QuoteUpdate{
+		Base: 41, Quote: 42, Mark: "101",
+	}); err != nil {
+		t.Fatalf("Push after rename: %v", err)
+	}
+	if got := len(sink.ids); got != 1 {
+		t.Fatalf("instrument cache entries = %d, want 1", got)
+	}
+	base, err := res.assetByID(41)
+	if err != nil {
+		t.Fatalf("resolve base asset id: %v", err)
+	}
+	quote, err := res.assetByID(42)
+	if err != nil {
+		t.Fatalf("resolve quote asset id: %v", err)
+	}
+	if got := readMark(t, service, param.NewInstrument(base, quote)); got != "101" {
+		t.Fatalf("mark after rename = %q, want 101", got)
+	}
+}
+
+func TestInstrumentFrom_UsesDecimalEngineAssetIDs(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver(nil, nil, []domain.Asset{
+		{Code: "base-code", EngineAssetID: 41},
+		{Code: "quote-code", EngineAssetID: 42},
+	})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	instrument, err := instrumentFrom(41, 42, res)
+	if err != nil {
+		t.Fatalf("instrumentFrom: %v", err)
+	}
+	if got := instrument.String(); got != "41/42" {
+		t.Fatalf("engine instrument = %q, want decimal engine ids 41/42", got)
 	}
 }
 
@@ -99,15 +172,21 @@ func TestMarketDataSink_PushSecondQuoteSameInstrument(t *testing.T) {
 	t.Parallel()
 	sink, service := newTestSink(t)
 
-	if err := sink.Push(marketdata.QuoteUpdate{Base: "MSFT", Quote: "USD", Mark: "2000"}); err != nil {
+	if err := sink.Push(marketdata.QuoteUpdate{Base: testMarketDataAssetID("MSFT"), Quote: testMarketDataAssetID("USD"), Mark: "2000"}); err != nil {
 		t.Fatalf("first Push: %v", err)
 	}
-	if err := sink.Push(marketdata.QuoteUpdate{Base: "MSFT", Quote: "USD", Mark: "2100"}); err != nil {
+	if err := sink.Push(marketdata.QuoteUpdate{Base: testMarketDataAssetID("MSFT"), Quote: testMarketDataAssetID("USD"), Mark: "2100"}); err != nil {
 		t.Fatalf("second Push: %v", err)
 	}
 
-	msft, _ := param.NewAsset("MSFT")
-	usd, _ := param.NewAsset("USD")
+	msft, err := testResolver().asset("MSFT")
+	if err != nil {
+		t.Fatalf("resolve MSFT: %v", err)
+	}
+	usd, err := testResolver().asset("USD")
+	if err != nil {
+		t.Fatalf("resolve USD: %v", err)
+	}
 	if got := readMark(t, service, param.NewInstrument(msft, usd)); got != "2100" {
 		t.Fatalf("mark = %q, want 2100 (replaced)", got)
 	}
@@ -118,14 +197,16 @@ func TestMarketDataSink_SourceFreshnessPreservesExpiredQuote(t *testing.T) {
 	sink, service := newTestSink(t)
 	now := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
 	sink.now = func() time.Time { return now }
-	instrument, err := instrumentFrom("AAPL", "USD")
+	instrument, err := instrumentFrom(
+		testMarketDataAssetID("AAPL"), testMarketDataAssetID("USD"), testResolver(),
+	)
 	if err != nil {
 		t.Fatalf("instrumentFrom: %v", err)
 	}
 
 	if err := sink.Push(marketdata.QuoteUpdate{
 		AsOf: now.Add(-MarketDataFreshnessTTL + time.Second),
-		Base: "AAPL", Quote: "USD", Mark: "100",
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100",
 	}); err != nil {
 		t.Fatalf("Push aged fresh quote: %v", err)
 	}
@@ -135,7 +216,7 @@ func TestMarketDataSink_SourceFreshnessPreservesExpiredQuote(t *testing.T) {
 
 	if err := sink.Push(marketdata.QuoteUpdate{
 		AsOf: now.Add(-MarketDataFreshnessTTL),
-		Base: "AAPL", Quote: "USD", Mark: "101",
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "101",
 	}); err != nil {
 		t.Fatalf("Push stale boundary quote: %v", err)
 	}
@@ -159,7 +240,7 @@ func TestMarketDataSink_SourceFreshnessPreservesExpiredQuote(t *testing.T) {
 
 	if err := sink.Push(marketdata.QuoteUpdate{
 		AsOf: now,
-		Base: "AAPL", Quote: "USD", Mark: "102",
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "102",
 	}); err != nil {
 		t.Fatalf("Push fresh quote after stale: %v", err)
 	}
@@ -179,11 +260,13 @@ func TestMarketDataSink_PushKeepsInstrumentContinuouslyQuoted(t *testing.T) {
 	sink, service := newTestSink(t)
 
 	if err := sink.Push(marketdata.QuoteUpdate{
-		AsOf: time.Now(), Base: "EUR", Quote: "USD", Mark: "1.10",
+		AsOf: time.Now(), Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "1.10",
 	}); err != nil {
 		t.Fatalf("seed Push: %v", err)
 	}
-	instrument, err := instrumentFrom("EUR", "USD")
+	instrument, err := instrumentFrom(
+		testMarketDataAssetID("EUR"), testMarketDataAssetID("USD"), testResolver(),
+	)
 	if err != nil {
 		t.Fatalf("instrumentFrom: %v", err)
 	}
@@ -197,7 +280,7 @@ func TestMarketDataSink_PushKeepsInstrumentContinuouslyQuoted(t *testing.T) {
 		var err error
 		for i := 0; i < publishes && err == nil; i++ {
 			err = sink.Push(marketdata.QuoteUpdate{
-				AsOf: time.Now(), Base: "EUR", Quote: "USD", Mark: "1.11",
+				AsOf: time.Now(), Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "1.11",
 			})
 		}
 		published <- err
@@ -250,19 +333,21 @@ func TestMarketDataSink_PushNeverServesAgedQuoteAsFresh(t *testing.T) {
 	agedUpdate := func() marketdata.QuoteUpdate {
 		return marketdata.QuoteUpdate{
 			AsOf: time.Now().Add(-2 * MarketDataFreshnessTTL),
-			Base: "EUR", Quote: "USD", Mark: agedMark,
+			Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: agedMark,
 		}
 	}
 	freshUpdate := func() marketdata.QuoteUpdate {
 		return marketdata.QuoteUpdate{
-			AsOf: time.Now(), Base: "EUR", Quote: "USD", Mark: freshMark,
+			AsOf: time.Now(), Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: freshMark,
 		}
 	}
 
 	if err := sink.Push(agedUpdate()); err != nil {
 		t.Fatalf("seed aged Push: %v", err)
 	}
-	instrument, err := instrumentFrom("EUR", "USD")
+	instrument, err := instrumentFrom(
+		testMarketDataAssetID("EUR"), testMarketDataAssetID("USD"), testResolver(),
+	)
 	if err != nil {
 		t.Fatalf("instrumentFrom: %v", err)
 	}
@@ -383,21 +468,27 @@ func TestMarketDataSink_ClearRemovesStoredQuote(t *testing.T) {
 	sink, service := newTestSink(t)
 
 	if err := sink.Push(marketdata.QuoteUpdate{
-		Base: "EUR", Quote: "USD", Mark: "2",
+		Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "2",
 	}); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
-	if err := sink.Clear("EUR", "USD"); err != nil {
+	if err := sink.Clear(testMarketDataAssetID("EUR"), testMarketDataAssetID("USD")); err != nil {
 		t.Fatalf("Clear: %v", err)
 	}
 
-	eur, _ := param.NewAsset("EUR")
-	usd, _ := param.NewAsset("USD")
+	eur, err := testResolver().asset("EUR")
+	if err != nil {
+		t.Fatalf("resolve EUR: %v", err)
+	}
+	usd, err := testResolver().asset("USD")
+	if err != nil {
+		t.Fatalf("resolve USD: %v", err)
+	}
 	id, ok := service.Resolve(param.NewInstrument(eur, usd))
 	if !ok {
 		t.Fatal("Resolve: cleared instrument was unregistered")
 	}
-	_, err := service.Get(
+	_, err = service.Get(
 		id,
 		param.NewAccountIDFromUint64(1),
 		noGroupAccountInfo{},
@@ -411,7 +502,7 @@ func TestMarketDataSink_ClearRemovesStoredQuote(t *testing.T) {
 func TestMarketDataSink_ClearUnknownInstrumentIsNoop(t *testing.T) {
 	t.Parallel()
 	sink, _ := newTestSink(t)
-	if err := sink.Clear("EUR", "USD"); err != nil {
+	if err := sink.Clear(testMarketDataAssetID("EUR"), testMarketDataAssetID("USD")); err != nil {
 		t.Fatalf("Clear unknown instrument: %v", err)
 	}
 }
@@ -422,7 +513,7 @@ func TestMarketDataSink_InvalidAssetErrors(t *testing.T) {
 	t.Parallel()
 	sink, _ := newTestSink(t)
 
-	if err := sink.Push(marketdata.QuoteUpdate{Base: "", Quote: "USD", Mark: "1"}); err == nil {
+	if err := sink.Push(marketdata.QuoteUpdate{Base: 0, Quote: testMarketDataAssetID("USD"), Mark: "1"}); err == nil {
 		t.Fatal("Push with empty base asset: want error")
 	}
 }
@@ -433,7 +524,7 @@ func TestMarketDataSink_InvalidPriceErrors(t *testing.T) {
 	t.Parallel()
 	sink, _ := newTestSink(t)
 
-	if err := sink.Push(marketdata.QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "not-a-number"}); err == nil {
+	if err := sink.Push(marketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "not-a-number"}); err == nil {
 		t.Fatal("Push with malformed mark price: want error")
 	}
 }

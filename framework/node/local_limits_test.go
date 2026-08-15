@@ -656,7 +656,7 @@ func newRebuildProbeNode(t *testing.T, eng *fakeEngine) (*localNode, *rebuildPro
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	local := n.(*localNode)
-	seedTestPrincipal(t, local.realm)
+	seedTestPrincipal(t, local)
 	return local, probe
 }
 

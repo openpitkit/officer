@@ -35,7 +35,7 @@ func TestDeleteGroupDetachesMembersAndPreservesHistory(t *testing.T) {
 
 	assertAccountGroupDeleteSetsNull(t, ctx, db)
 	for _, asset := range []string{"AAPL", "USD"} {
-		if err := realm.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", asset, err)
 		}
 	}
@@ -125,7 +125,7 @@ func TestDeleteGroupRequiresForceForGroupScopedPnlBound(t *testing.T) {
 	_, realm := newTestStore(t)
 	db := realm.(*realmStore).rawDB()
 
-	if err := realm.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+	if _, err := realm.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "owned"}); err != nil {

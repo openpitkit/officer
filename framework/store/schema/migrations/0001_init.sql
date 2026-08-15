@@ -91,9 +91,10 @@ CREATE TABLE attestation_mode (
     code TEXT NOT NULL UNIQUE
 );
 
--- Tradable asset dictionary. code is the mutable human handle, unique per realm;
--- title is the mutable display string; class_id is the optional foreign key into
--- asset_class, cleared (SET NULL) when the class is deleted.
+-- Tradable asset dictionary. The engine runs the asset on its surrogate id, so
+-- there is no separate engine id column. code is the mutable human handle,
+-- unique per realm; title is the mutable display string; class_id is the optional
+-- foreign key into asset_class, cleared (SET NULL) when the class is deleted.
 CREATE TABLE asset (
     id       {{PK}},
     code     TEXT NOT NULL UNIQUE,

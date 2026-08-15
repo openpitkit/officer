@@ -50,6 +50,9 @@ import (
 // into an engine id. Persisted dictionary additions and alias renames can then
 // be published through DictionaryResolver without replacing the engine.
 type Snapshot struct {
+	// Assets are the persisted assets, carrying their stored engine asset ids so
+	// the adapter can build a code-to-id resolver from them.
+	Assets []domain.Asset
 	// Accounts are the accounts to apply, including their stored engine account
 	// id, blocked state and block reason. Group membership is read from each
 	// account's GroupCode.
@@ -309,7 +312,10 @@ type BuildFunc func(snap Snapshot) (Engine, error)
 // account registry and must not replace the engine or its market-data sink.
 type DictionaryResolver interface {
 	AddAccountResolverEntry(account domain.Account) error
+	AddAssetResolverEntry(asset domain.Asset) error
 	RenameAccountResolverEntry(oldCode domain.AccountID, account domain.Account) error
+	RenameAssetResolverEntry(oldCode string, asset domain.Asset) error
+	RemoveAssetResolverEntry(asset domain.Asset) error
 	AddGroupResolverEntry(group domain.AccountGroup) error
 	RenameGroupResolverEntry(oldCode string, group domain.AccountGroup) error
 	RemoveGroupResolverEntry(group domain.AccountGroup) error

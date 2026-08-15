@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
@@ -52,10 +53,9 @@ func (r *memoryRealm) RestoreBackup(
 	if writesRuntime {
 		previousAccounts := r.accounts
 		previousGroups := r.groups
-		// Runtime sections are replaced wholesale in the test store. This is
-		// enough for LocalNode rollback/rebuild tests and keeps the fake honest
-		// about the restart signal.
-		r.restoreData(data)
+		// Runtime sections replace data except assets, which restore by code to
+		// match SQLite's non-pruning contract.
+		r.restoreData(data, opts.Mode)
 		// The real connector updates dictionary rows by code and preserves their
 		// stable engine ids in every restore mode. Keep the memory connector honest
 		// about that identity contract so online-restore tests do not manufacture an
@@ -78,6 +78,7 @@ func (r *memoryRealm) RestoreBackup(
 			}
 		}
 	} else {
+		r.restoreAssets(data.Assets, opts.Mode)
 		for key := range r.mcpAccess {
 			delete(r.mcpAccess, key)
 		}
@@ -98,11 +99,11 @@ func (r *memoryRealm) RestoreBackup(
 
 func (r *memoryRealm) exportData(context.Context) backup.Data {
 	data := backup.Data{
-		Assets:          make([]domain.Asset, 0, len(r.assets)),
+		Assets:          make([]backup.Asset, 0, len(r.assets)),
 		Principals:      make([]domain.Principal, 0, len(r.principals)),
 		Groups:          make([]backup.AccountGroup, 0, len(r.groups)),
 		Accounts:        make([]backup.Account, 0, len(r.accounts)),
-		Balances:        make([]domain.Balance, 0, len(r.balances)),
+		Balances:        make([]backup.Balance, 0, len(r.balances)),
 		RateLimits:      make([]domain.LimitRate, 0, len(r.rateLimits)),
 		OrderSizeLimits: make([]domain.LimitOrderSize, 0, len(r.orderSizeLimits)),
 		SpotFundsPnlBoundsLimits: make(
@@ -116,7 +117,7 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		Trades:                append([]domain.Trade(nil), r.trades...),
 		Audit:                 append([]domain.AuditRow(nil), r.audit...),
 		MarketDataInstances:   make([]domain.MarketDataInstance, 0, len(r.instances)),
-		MarketDataInstruments: make([]domain.MarketDataInstrument, 0, len(r.instruments)),
+		MarketDataInstruments: make([]backup.MarketDataInstrument, 0, len(r.instruments)),
 		MarketDataQuotes:      make([]domain.MarketDataQuote, 0, len(r.quotes)),
 		SigningKeys:           make([]backup.SigningKey, 0, len(r.signingKeys)),
 		SigningConfig:         make([]backup.SigningConfigEntry, 0, len(r.signingConfig)),
@@ -124,7 +125,9 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		UserSettings:          make([]domain.UserSetting, 0, len(r.userSettings)),
 	}
 	for _, asset := range r.assets {
-		data.Assets = append(data.Assets, asset)
+		data.Assets = append(data.Assets, backup.Asset{
+			Code: asset.Code, Title: asset.Title, AssetClass: asset.AssetClass,
+		})
 	}
 	for _, principal := range r.principals {
 		data.Principals = append(data.Principals, principal)
@@ -149,7 +152,17 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		})
 	}
 	for _, balance := range r.balances {
-		data.Balances = append(data.Balances, balance)
+		data.Balances = append(data.Balances, backup.Balance{
+			UpdatedAt:             balance.UpdatedAt,
+			Available:             balance.Available,
+			Held:                  balance.Held,
+			Incoming:              balance.Incoming,
+			RealizedPnl:           balance.RealizedPnl,
+			RealizedPnlHaltReason: balance.RealizedPnlHaltReason,
+			AverageEntryPrice:     balance.AverageEntryPrice,
+			Asset:                 balance.Asset,
+			Account:               balance.Account,
+		})
 	}
 	for _, limit := range r.rateLimits {
 		data.RateLimits = append(data.RateLimits, limit)
@@ -167,7 +180,16 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		data.MarketDataInstances = append(data.MarketDataInstances, instance)
 	}
 	for _, instrument := range r.instruments {
-		data.MarketDataInstruments = append(data.MarketDataInstruments, instrument)
+		data.MarketDataInstruments = append(data.MarketDataInstruments,
+			backup.MarketDataInstrument{
+				Instance:       instrument.Instance,
+				ExternalSymbol: instrument.ExternalSymbol,
+				BaseAsset:      instrument.BaseAsset,
+				QuoteAsset:     instrument.QuoteAsset,
+				ManualPrice:    instrument.ManualPrice,
+				Enabled:        instrument.Enabled,
+			},
+		)
 	}
 	for _, quote := range r.quotes {
 		data.MarketDataQuotes = append(data.MarketDataQuotes, quote)
@@ -192,12 +214,36 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 	return data
 }
 
-func (r *memoryRealm) restoreData(data backup.Data) {
-	defaultGroup, hadDefaultGroup := r.groups[""]
-	r.assets = map[string]domain.Asset{}
-	for _, asset := range data.Assets {
-		r.assets[asset.Code] = asset
+func (r *memoryRealm) restoreAssets(
+	assets []backup.Asset,
+	mode backup.RestoreMode,
+) {
+	for _, asset := range assets {
+		stored, ok := r.assets[asset.Code]
+		if ok && mode == backup.RestoreModeInsertMissing {
+			continue
+		}
+		if !ok {
+			r.nextAssetID++
+			stored.EngineAssetID = r.nextAssetID
+		}
+		r.assets[asset.Code] = domain.Asset{
+			Code:          asset.Code,
+			Title:         asset.Title,
+			AssetClass:    asset.AssetClass,
+			EngineAssetID: stored.EngineAssetID,
+		}
 	}
+}
+
+func (r *memoryRealm) restoreData(data backup.Data, mode backup.RestoreMode) {
+	defaultGroup, hadDefaultGroup := r.groups[""]
+	previousAssets := r.assets
+	r.assets = make(map[string]domain.Asset, len(previousAssets))
+	for code, asset := range previousAssets {
+		r.assets[code] = asset
+	}
+	r.restoreAssets(data.Assets, mode)
 	r.principals = map[string]domain.Principal{}
 	for _, principal := range data.Principals {
 		r.principals[principal.Code] = principal
@@ -234,7 +280,17 @@ func (r *memoryRealm) restoreData(data backup.Data) {
 	}
 	r.balances = map[string]domain.Balance{}
 	for _, balance := range data.Balances {
-		r.balances[balanceKey(balance.Account, balance.Asset)] = balance
+		r.balances[balanceKey(balance.Account, balance.Asset)] = domain.Balance{
+			UpdatedAt:             balance.UpdatedAt,
+			Available:             balance.Available,
+			Held:                  balance.Held,
+			Incoming:              balance.Incoming,
+			RealizedPnl:           balance.RealizedPnl,
+			RealizedPnlHaltReason: balance.RealizedPnlHaltReason,
+			AverageEntryPrice:     balance.AverageEntryPrice,
+			Asset:                 balance.Asset,
+			Account:               balance.Account,
+		}
 	}
 	r.rateLimits = map[string]domain.LimitRate{}
 	for _, limit := range data.RateLimits {
@@ -274,7 +330,23 @@ func (r *memoryRealm) restoreData(data backup.Data) {
 	}
 	r.instruments = map[string]domain.MarketDataInstrument{}
 	for _, instrument := range data.MarketDataInstruments {
-		r.instruments[instrumentKey(instrument.Instance, instrument.ExternalSymbol)] = instrument
+		base, baseOK := r.assets[instrument.BaseAsset]
+		quote, quoteOK := r.assets[instrument.QuoteAsset]
+		stored := domain.MarketDataInstrument{
+			Instance:       instrument.Instance,
+			ExternalSymbol: instrument.ExternalSymbol,
+			BaseAsset:      instrument.BaseAsset,
+			QuoteAsset:     instrument.QuoteAsset,
+			ManualPrice:    instrument.ManualPrice,
+			Enabled:        instrument.Enabled,
+		}
+		if baseOK {
+			stored.BaseAssetID = base.EngineAssetID
+		}
+		if quoteOK {
+			stored.QuoteAssetID = quote.EngineAssetID
+		}
+		r.instruments[instrumentKey(instrument.Instance, instrument.ExternalSymbol)] = stored
 	}
 	r.quotes = map[string]domain.MarketDataQuote{}
 	for _, quote := range data.MarketDataQuotes {
@@ -324,5 +396,126 @@ func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) in
 		return len(r.audit)
 	default:
 		return 0
+	}
+}
+
+func TestMemoryRealmRestoreAssetsHonorsMode(t *testing.T) {
+	t.Parallel()
+	modes := []struct {
+		name              string
+		mode              backup.RestoreMode
+		wantExistingTitle string
+		wantExistingClass string
+	}{
+		{
+			name: "insert missing", mode: backup.RestoreModeInsertMissing,
+			wantExistingTitle: "old title", wantExistingClass: "old-class",
+		},
+		{
+			name: "overwrite", mode: backup.RestoreModeOverwrite,
+			wantExistingTitle: "new title", wantExistingClass: "new-class",
+		},
+		{
+			name: "replace all", mode: backup.RestoreModeReplaceAll,
+			wantExistingTitle: "new title", wantExistingClass: "new-class",
+		},
+	}
+	paths := []struct {
+		name  string
+		scope backup.Scope
+	}{
+		{
+			name: "non runtime",
+			scope: backup.Scope{Sections: []backup.Section{
+				backup.SectionGeneralSettings,
+			}},
+		},
+		{name: "runtime", scope: backup.Scope{All: true}},
+	}
+	for _, path := range paths {
+		for _, mode := range modes {
+			t.Run(path.name+"/"+mode.name, func(t *testing.T) {
+				ctx := context.Background()
+				realm := newMemoryStore(
+					"restore-assets-" + path.name + "-" + string(mode.mode) + ".db",
+				).realm
+				for _, class := range []string{"old-class", "new-class"} {
+					if err := realm.CreateAssetClass(
+						ctx,
+						domain.AssetClass{Code: class},
+					); err != nil {
+						t.Fatalf("CreateAssetClass(%s): %v", class, err)
+					}
+				}
+				existing, err := realm.CreateAsset(ctx, domain.Asset{
+					Code: "existing", Title: "old title", AssetClass: "old-class",
+				})
+				if err != nil {
+					t.Fatalf("CreateAsset(existing): %v", err)
+				}
+
+				_, err = realm.RestoreBackup(
+					ctx,
+					testArchive(
+						backup.Scope{Sections: []backup.Section{
+							backup.SectionGeneralSettings,
+						}},
+						backup.Data{Assets: []backup.Asset{
+							{
+								Code: "existing", Title: "new title",
+								AssetClass: "new-class",
+							},
+							{
+								Code: "missing", Title: "missing title",
+								AssetClass: "new-class",
+							},
+						}},
+					),
+					backup.RestoreOptions{Scope: path.scope, Mode: mode.mode},
+				)
+				if err != nil {
+					t.Fatalf("RestoreBackup: %v", err)
+				}
+
+				gotExisting, ok, err := realm.GetAsset(ctx, existing.Code)
+				if err != nil || !ok {
+					t.Fatalf(
+						"GetAsset(existing) = %+v, ok=%v, err=%v",
+						gotExisting,
+						ok,
+						err,
+					)
+				}
+				if gotExisting.Title != mode.wantExistingTitle ||
+					gotExisting.AssetClass != mode.wantExistingClass ||
+					gotExisting.EngineAssetID != existing.EngineAssetID {
+					t.Fatalf(
+						"existing asset = %+v, want title=%q class=%q id=%d",
+						gotExisting,
+						mode.wantExistingTitle,
+						mode.wantExistingClass,
+						existing.EngineAssetID,
+					)
+				}
+				gotMissing, ok, err := realm.GetAsset(ctx, "missing")
+				if err != nil || !ok {
+					t.Fatalf(
+						"GetAsset(missing) = %+v, ok=%v, err=%v",
+						gotMissing,
+						ok,
+						err,
+					)
+				}
+				if gotMissing.Title != "missing title" ||
+					gotMissing.AssetClass != "new-class" ||
+					gotMissing.EngineAssetID == 0 ||
+					gotMissing.EngineAssetID == existing.EngineAssetID {
+					t.Fatalf(
+						"missing asset = %+v, want inserted with a fresh stable id",
+						gotMissing,
+					)
+				}
+			})
+		}
 	}
 }

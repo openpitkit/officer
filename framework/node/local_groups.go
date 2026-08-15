@@ -78,9 +78,9 @@ func (n *localNode) CreateGroup(
 				context.WithoutCancel(ctx),
 				"reconcile engine after group rollback failure",
 				resultErr,
-			)
+			).err
 		}
-		return domain.AccountGroup{}, resultErr
+		return domain.AccountGroup{}, internalPostCommitNodeMutationError(resultErr)
 	}
 	if created.Currency != "" || created.Blocked {
 		err = eng.RunGroupSynchronized(ctx, created.Code, func(lane engine.GroupLane) error {
@@ -106,8 +106,10 @@ func (n *localNode) CreateGroup(
 				optionalOperationError("rollback created group resolver", resolverErr),
 				optionalOperationError("rollback created group", rollbackErr),
 			)
-			return domain.AccountGroup{}, n.reconcileEngineAfterFailure(
-				mutationCtx, "reconcile engine after group create failure", cause,
+			return domain.AccountGroup{}, internalPostCommitNodeMutationError(
+				n.reconcileEngineAfterFailure(
+					mutationCtx, "reconcile engine after group create failure", cause,
+				).err,
 			)
 		}
 	}
@@ -242,8 +244,10 @@ func (n *localNode) UpdateGroup(
 				fmt.Errorf("publish group resolver rename: %w", err),
 				fmt.Errorf("rollback group rename: %w", rollbackErr),
 			)
-			return domain.AccountGroup{}, n.reconcileEngineAfterFailure(
-				mutationCtx, "reconcile engine after group rename failure", cause,
+			return domain.AccountGroup{}, internalPostCommitNodeMutationError(
+				n.reconcileEngineAfterFailure(
+					mutationCtx, "reconcile engine after group rename failure", cause,
+				).err,
 			)
 		}
 		return domain.AccountGroup{}, fmt.Errorf("publish group resolver rename: %w", err)
@@ -330,8 +334,10 @@ func (n *localNode) SetGroupBlocked(
 				optionalOperationError("revert group block runtime", revertEngineErr),
 				optionalOperationError("revert group block store", revertStoreErr),
 			)
-			return n.reconcileEngineAfterFailure(
-				mutationCtx, "reconcile engine after group block failure", cause,
+			return internalPostCommitNodeMutationError(
+				n.reconcileEngineAfterFailure(
+					mutationCtx, "reconcile engine after group block failure", cause,
+				).err,
 			)
 		}
 		return fmt.Errorf("apply group block: %w", applyErr)
@@ -388,9 +394,10 @@ func (n *localNode) ensureGroupRegisteredLocked(
 				context.WithoutCancel(ctx),
 				"reconcile engine after group ensure rollback failure",
 				resultErr,
-			)
+			).err
 		}
-		return domain.AccountGroup{}, false, resultErr
+		return domain.AccountGroup{}, false,
+			internalPostCommitNodeMutationError(resultErr)
 	}
 	return group, true, nil
 }

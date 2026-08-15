@@ -111,6 +111,68 @@ type setSymbolMatch struct {
 	score  int
 }
 
+type symbolSuggestionCandidate struct {
+	symbol       string
+	prefixLength int
+}
+
+const unknownSymbolSuggestionLimit = 3
+
+// symbolPrefixSuggestionsFromSet returns deterministic candidates ranked by
+// their normalized prefix shared with the configured external symbol.
+func symbolPrefixSuggestionsFromSet(
+	known map[string]struct{}, external string,
+) []string {
+	normalizedExternal := normalizedSymbolSearchKey(external)
+	if normalizedExternal == "" {
+		return nil
+	}
+
+	candidates := make([]symbolSuggestionCandidate, 0)
+	for symbol := range known {
+		normalizedSymbol := normalizedSymbolSearchKey(symbol)
+		prefixLength := sharedSymbolPrefixLength(
+			normalizedExternal,
+			normalizedSymbol,
+		)
+		if prefixLength == 0 {
+			continue
+		}
+		candidates = append(candidates, symbolSuggestionCandidate{
+			symbol:       symbol,
+			prefixLength: prefixLength,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].prefixLength == candidates[j].prefixLength {
+			return candidates[i].symbol < candidates[j].symbol
+		}
+		return candidates[i].prefixLength > candidates[j].prefixLength
+	})
+	if len(candidates) > unknownSymbolSuggestionLimit {
+		candidates = candidates[:unknownSymbolSuggestionLimit]
+	}
+
+	suggestions := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		suggestions = append(suggestions, candidate.symbol)
+	}
+	return suggestions
+}
+
+func sharedSymbolPrefixLength(left, right string) int {
+	length := len(left)
+	if len(right) < length {
+		length = len(right)
+	}
+	for i := 0; i < length; i++ {
+		if left[i] != right[i] {
+			return i
+		}
+	}
+	return length
+}
+
 func searchSymbolsFromSet(
 	known map[string]struct{}, query SymbolSearchQuery, secType string,
 ) []SymbolMatch {
@@ -220,14 +282,12 @@ func splitSymbolPair(value string) (base, quote string, ok bool) {
 	return base, quote, true
 }
 
-func providerUnknownSymbolDiag(
-	provider, external, base, quote string,
-) Diagnostic {
+func providerUnknownSymbolDiag(provider, external string) Diagnostic {
 	return Diagnostic{
 		Level:      DiagError,
 		Code:       CodeUnknownSymbol,
 		Kind:       DiagKindConfig,
-		Instrument: base + "/" + quote,
+		Instrument: external,
 		Title:      fmt.Sprintf("Symbol %q not found on %s", external, provider),
 		Detail: fmt.Sprintf(
 			"The configured external symbol %q is not a %s instrument.",
@@ -240,6 +300,19 @@ func providerUnknownSymbolDiag(
 			{Type: ActionOpenSymbols},
 		},
 	}
+}
+
+func missingExternalSymbolError(provider string, sub Subscription) error {
+	return fmt.Errorf(
+		"%s subscription for asset key %d/%d: external symbol is missing",
+		provider,
+		sub.Base,
+		sub.Quote,
+	)
+}
+
+func invalidExternalSymbolError(provider, external string) error {
+	return fmt.Errorf("%s subscription external symbol %q is invalid", provider, external)
 }
 
 type DiagnosticReporter = fwmarketdata.DiagnosticReporter

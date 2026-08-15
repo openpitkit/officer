@@ -212,11 +212,12 @@ const IB_SEC_TYPE_DEFAULTS: Record<string, Partial<IBContract>> = {
   OPT: { exchange: "", right: "" },
 };
 
-const emptyIBContract: IBContract = {
-  secType: "STK",
-  exchange: "SMART",
-  currency: "USD",
-};
+function newEmptyIBContract(): IBContract {
+  return {
+    secType: "STK",
+    exchange: "SMART",
+  };
+}
 
 // Provider type whose instruments carry an operator-set manual mark price. Only
 // this (bring-your-own / manual) provider exposes the price input; streaming
@@ -1240,7 +1241,7 @@ export function ibSecTypePatch(
     strike: undefined,
     right: undefined,
     ...(IB_SEC_TYPE_DEFAULTS[secType] ?? {}),
-    currency: currentCurrency ?? "USD",
+    currency: currentCurrency,
   };
 }
 
@@ -1284,6 +1285,8 @@ function IBContractFields({
 }) {
   const { t } = useTranslation("marketData");
   const fields = ibSecTypeFields(contract.secType);
+  const currencyMissing = !contract.currency?.trim();
+  const currencyErrorID = `${idPrefix}-currency-error`;
   return (
     <div className="grid gap-3 md:grid-cols-2">
       <div className="space-y-2">
@@ -1313,9 +1316,17 @@ function IBContractFields({
           id={`${idPrefix}-currency`}
           value={contract.currency ?? ""}
           placeholder="USD"
+          required
+          aria-describedby={currencyMissing ? currencyErrorID : undefined}
+          aria-invalid={currencyMissing}
           onChange={(e) => onChange({ currency: e.target.value })}
           disabled={busy}
         />
+        {currencyMissing && (
+          <p id={currencyErrorID} className="text-xs text-[var(--danger)]">
+            {t("instrumentDialog.currencyRequired")}
+          </p>
+        )}
       </div>
       {fields.exchange && (
         <div className="space-y-2">
@@ -2652,7 +2663,7 @@ export function InstanceCard({
   // IB-only structured contract for the draft instrument plus the live-search
   // state. Both are presentation-only and reset after a successful add.
   const [contractDraft, setContractDraft] =
-    useState<IBContract>(emptyIBContract);
+    useState<IBContract>(newEmptyIBContract);
   const [resolveQuery, setResolveQuery] = useState("");
   const [resolveResults, setResolveResults] = useState<MarketDataSymbolMatch[]>(
     [],
@@ -2688,11 +2699,13 @@ export function InstanceCard({
   );
   const instrumentDraftValid = isInstrumentDraftValid(draft, isManual);
   const ibContractNumericValid = isIBContractNumericValid(contractDraft);
+  const ibContractValid =
+    ibContractNumericValid && !!contractDraft.currency?.trim();
 
   const resetDraft = () => {
     setDraft(emptyInstrument);
     setDraftVerify(null);
-    setContractDraft(emptyIBContract);
+    setContractDraft(newEmptyIBContract());
     setResolveQuery("");
     setResolveResults([]);
     setResolveFilterQuery("");
@@ -2717,7 +2730,7 @@ export function InstanceCard({
   // IB add: hand the draft and the structured contract to the page handler,
   // which persists the instrument first and then PUTs the full contracts map.
   const submitIBInstrument = async () => {
-    if (!instrumentDraftValid || !ibContractNumericValid) {
+    if (!instrumentDraftValid || !ibContractValid) {
       return;
     }
     const symbol = contractDraft.symbol?.trim() || draft.externalSymbol.trim();
@@ -3191,9 +3204,7 @@ export function InstanceCard({
                   onClick={() => {
                     void submitIBInstrument();
                   }}
-                  disabled={
-                    busy || !instrumentDraftValid || !ibContractNumericValid
-                  }
+                  disabled={busy || !instrumentDraftValid || !ibContractValid}
                 >
                   <Plus />
                   {t("actions.addInstrument")}

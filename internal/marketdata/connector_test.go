@@ -94,16 +94,105 @@ func TestSearchSymbolsFromSetMatchesBaseOrSubstring(t *testing.T) {
 func TestProviderUnknownSymbolDiag(t *testing.T) {
 	t.Parallel()
 
-	diag := providerUnknownSymbolDiag("Provider", "BAD", "BAD", "USD")
+	diag := providerUnknownSymbolDiag("Provider", "BAD")
 	if diag.Code != CodeUnknownSymbol || diag.Kind != DiagKindConfig {
 		t.Fatalf("diag = %+v", diag)
 	}
-	if diag.Instrument != "BAD/USD" {
-		t.Fatalf("instrument = %q, want BAD/USD", diag.Instrument)
+	if diag.Instrument != "BAD" {
+		t.Fatalf("instrument = %q, want BAD", diag.Instrument)
 	}
 	if len(diag.Actions) != 2 || diag.Actions[0].Type != ActionRemoveInstrument ||
 		diag.Actions[0].Target != "BAD" || diag.Actions[1].Type != ActionOpenSymbols {
 		t.Fatalf("actions = %+v", diag.Actions)
+	}
+}
+
+func TestSubscriptionNormalizersRequireExternalSymbol(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		normalize func(Subscription) error
+	}{
+		{
+			name: "alpaca",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeAlpacaSubscriptions([]Subscription{sub})
+				return err
+			},
+		},
+		{
+			name: "binance",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeBinanceSubscriptions([]Subscription{sub})
+				return err
+			},
+		},
+		{
+			name: "bybit",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeBybitSubscriptions([]Subscription{sub})
+				return err
+			},
+		},
+		{
+			name: "coinbase",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeCoinbaseSubscriptions([]Subscription{sub})
+				return err
+			},
+		},
+		{
+			name: "finnhub",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeFinnhubSubscriptions([]Subscription{sub})
+				return err
+			},
+		},
+		{
+			name: "ib",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeIBSubscriptions(ibConfig{}, []Subscription{sub})
+				return err
+			},
+		},
+		{
+			name: "kraken",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeKrakenSubscriptions([]Subscription{sub})
+				return err
+			},
+		},
+		{
+			name: "oanda",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeOANDASubscriptions([]Subscription{sub})
+				return err
+			},
+		},
+		{
+			name: "okx",
+			normalize: func(sub Subscription) error {
+				_, err := normalizeOKXSubscriptions([]Subscription{sub})
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.normalize(Subscription{Base: 41, Quote: 42})
+			if err == nil {
+				t.Fatal("normalize error = nil, want missing external symbol")
+			}
+			if !strings.Contains(err.Error(), "external symbol is missing") {
+				t.Fatalf("normalize error = %q, want missing external symbol", err)
+			}
+			if !strings.Contains(err.Error(), "41/42") {
+				t.Fatalf("normalize error = %q, want decimal asset ids 41/42", err)
+			}
+		})
 	}
 }
 

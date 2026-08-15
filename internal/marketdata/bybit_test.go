@@ -33,8 +33,8 @@ func TestNormalizeBybitSubscriptions(t *testing.T) {
 	t.Parallel()
 
 	subs, err := normalizeBybitSubscriptions([]Subscription{
-		{External: "btcusdt", Base: "BTC", Quote: "USDT"},
-		{Base: "Eth", Quote: "Usd"},
+		{External: "btcusdt", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
+		{External: "ethusd", Base: testMarketDataAssetID("Eth"), Quote: testMarketDataAssetID("Usd")},
 	})
 	if err != nil {
 		t.Fatalf("normalizeBybitSubscriptions: %v", err)
@@ -77,7 +77,7 @@ func TestBybitSubscribePayload(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	payload, err := bybitSubscribePayload(subs)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestParseBybitQuoteUpdate(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	payload := []byte(`{"topic":"tickers.BTCUSDT","type":"snapshot","ts":1710000000123,"data":{"symbol":"BTCUSDT","lastPrice":"65000.10","bid1Price":"65000.01","ask1Price":"65000.02"}}`)
 
@@ -109,8 +109,8 @@ func TestParseBybitQuoteUpdate(t *testing.T) {
 	if !update.AsOf.Equal(time.UnixMilli(1710000000123).UTC()) {
 		t.Fatalf("AsOf = %s", update.AsOf)
 	}
-	if update.Base != "BTC" || update.Quote != "USDT" {
-		t.Fatalf("instrument = %s/%s", update.Base, update.Quote)
+	if update.Base != testMarketDataAssetID("BTC") || update.Quote != testMarketDataAssetID("USDT") {
+		t.Fatalf("instrument = %d/%d", update.Base, update.Quote)
 	}
 	if update.Mark != "65000.10" || update.Bid != "65000.01" || update.Ask != "65000.02" {
 		t.Fatalf("prices = %+v", update)
@@ -121,7 +121,7 @@ func TestParseBybitDeltaMergesSnapshot(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	state := make(map[string]bybitTickerSnapshot)
 	snapshot := []byte(`{"topic":"tickers.BTCUSDT","type":"snapshot","ts":1710000000000,"data":{"symbol":"BTCUSDT","lastPrice":"65000.10","bid1Price":"65000.01","ask1Price":"65000.02"}}`)
@@ -143,7 +143,7 @@ func TestBybitConnector_ReportsControlError(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeBybitConn{
 		messages: [][]byte{[]byte(`{"success":false,"op":"subscribe","ret_msg":"invalid symbol"}`)},
@@ -177,7 +177,7 @@ func TestBybitConnector_ControlFramesDoNotReportUnparsable(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeBybitConn{
 		messages: [][]byte{
@@ -234,7 +234,7 @@ func TestBybitConnector_CloseStopsSubscription(t *testing.T) {
 		diagReport:   func(Diagnostic) {},
 	}
 	out, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -329,8 +329,8 @@ func TestBybitDiagnoseUnknownSymbol(t *testing.T) {
 		return map[string]struct{}{"BTCUSDT": {}}, nil
 	}
 	connector.subs = mustNormalizeBybitSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
-		{External: "BADUSDT", Base: "BAD", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
+		{External: "BADUSDT", Base: testMarketDataAssetID("BAD"), Quote: testMarketDataAssetID("USDT")},
 	})
 
 	findings, err := connector.Diagnose(context.Background())
@@ -338,7 +338,7 @@ func TestBybitDiagnoseUnknownSymbol(t *testing.T) {
 		t.Fatalf("Diagnose: %v", err)
 	}
 	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol ||
-		findings[0].Instrument != "BAD/USDT" {
+		findings[0].Instrument != "BADUSDT" {
 		t.Fatalf("findings = %+v", findings)
 	}
 }
@@ -347,7 +347,7 @@ func TestBybitConnector_PingsAndUsesCategoryURL(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeBybitConn{blockRead: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -390,7 +390,7 @@ func TestBybitConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
-		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	snapshot := []byte(`{"topic":"tickers.BTCUSDT","type":"snapshot","ts":1710000000000,"data":{"symbol":"BTCUSDT","lastPrice":"65000","bid1Price":"65000","ask1Price":"65001"}}`)
 	conns := []*fakeBybitConn{

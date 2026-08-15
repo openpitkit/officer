@@ -263,6 +263,60 @@ type AccountGroup struct {
 	Blocked bool `json:"blocked,omitempty"`
 }
 
+// Asset is the portable archive form of an asset dictionary row. The engine
+// asset id is intentionally absent: the target connector assigns a fresh,
+// collision-free engine id on restore while this code is preserved.
+type Asset struct {
+	// Code is the immutable, operator-chosen asset code.
+	Code string `json:"code"`
+	// Title is the mutable display name; may be empty.
+	Title string `json:"title,omitempty"`
+	// AssetClass is the optional asset-class link by code.
+	AssetClass string `json:"assetClass,omitempty"`
+}
+
+// Balance is the portable archive form of a spot-funds balance snapshot. The
+// target derives AccountCurrency from its own account-group currency cascade on
+// read, so the archive carries only persisted balance state.
+type Balance struct {
+	// UpdatedAt is the wall-clock time this snapshot was last written.
+	UpdatedAt time.Time `json:"updatedAt"`
+	// Available is the portion freely available for new orders.
+	Available string `json:"available"`
+	// Held is the amount currently reserved by open orders.
+	Held string `json:"held"`
+	// Incoming is funds in-flight (e.g. pending settlement).
+	Incoming string `json:"incoming"`
+	// RealizedPnl is the cumulative realized P&L in the account currency.
+	RealizedPnl string `json:"realizedPnl"`
+	// RealizedPnlHaltReason explains why the engine stopped calculating P&L.
+	RealizedPnlHaltReason domain.PnlHaltReason `json:"realizedPnlHaltReason,omitempty"`
+	// AverageEntryPrice is optional; empty when not applicable.
+	AverageEntryPrice string `json:"averageEntryPrice,omitempty"`
+	// Asset is the code of the asset this balance holds.
+	Asset string `json:"asset"`
+	// Account is the code of the account that owns this balance.
+	Account domain.AccountID `json:"account"`
+}
+
+// MarketDataInstrument is the portable archive form of a configured market-data
+// instrument. Asset codes identify its pair: the target connector resolves and
+// assigns fresh, collision-free engine asset ids on restore.
+type MarketDataInstrument struct {
+	// Instance is the owning instance's opaque public handle.
+	Instance domain.ExternalID `json:"instance"`
+	// ExternalSymbol is the source-side symbol.
+	ExternalSymbol string `json:"externalSymbol"`
+	// BaseAsset is the code of the instrument underlying asset.
+	BaseAsset string `json:"baseAsset"`
+	// QuoteAsset is the code of the instrument settlement asset.
+	QuoteAsset string `json:"quoteAsset"`
+	// ManualPrice is the operator-set mark price as an exact decimal string.
+	ManualPrice string `json:"manualPrice,omitempty"`
+	// Enabled reports whether this instrument is subscribed at runtime.
+	Enabled bool `json:"enabled"`
+}
+
 // SigningKey is the portable archive form of a signing key. The key_id UUID is
 // the key's own external handle and is preserved; the private and public key
 // material travel as raw bytes (JSON base64). The surrogate id is never carried.
@@ -328,7 +382,7 @@ type Data struct {
 	AssetClasses []domain.AssetClass `json:"assetClasses,omitempty"`
 	// Assets is the asset dictionary (by code). Always carried so fact foreign
 	// keys resolve.
-	Assets []domain.Asset `json:"assets,omitempty"`
+	Assets []Asset `json:"assets,omitempty"`
 	// Principals is the principal dictionary (by code). Always carried so
 	// optional principal references resolve.
 	Principals []domain.Principal `json:"principals,omitempty"`
@@ -340,7 +394,7 @@ type Data struct {
 	// Accounts is the account dictionary (by code).
 	Accounts []Account `json:"accounts,omitempty"`
 	// Balances are per-(account, asset) snapshots, linked by codes.
-	Balances []domain.Balance `json:"balances,omitempty"`
+	Balances []Balance `json:"balances,omitempty"`
 	// RateLimits are rate-limit barriers, linked by scope+codes.
 	RateLimits []domain.LimitRate `json:"rateLimits,omitempty"`
 	// OrderSizeLimits are order-size barriers, linked by scope+codes.
@@ -368,7 +422,7 @@ type Data struct {
 	MarketDataInstances []domain.MarketDataInstance `json:"marketDataInstances,omitempty"`
 	// MarketDataInstruments are per-instance instruments, linked by the instance
 	// external id and asset codes.
-	MarketDataInstruments []domain.MarketDataInstrument `json:"marketDataInstruments,omitempty"`
+	MarketDataInstruments []MarketDataInstrument `json:"marketDataInstruments,omitempty"`
 	// MarketDataQuotes are latest per-instrument quotes, linked by instance
 	// external id and external symbol.
 	MarketDataQuotes []domain.MarketDataQuote `json:"marketDataQuotes,omitempty"`
@@ -426,8 +480,10 @@ func Filename(createdAt time.Time) string {
 // online and does not by itself imply an engine replacement.
 //
 // The shared support dictionaries (asset classes, assets, principals) are NOT a
-// runtime section: they travel with every restore for foreign-key resolution but
-// are not part of the engine snapshot, so writing one never rebuilds the engine.
+// runtime section: they travel with every restore for foreign-key resolution.
+// Asset classes and principals are not part of the engine snapshot. Assets carry
+// live resolver aliases and are in engine.Snapshot, so a restore that adds one
+// is an identity publication even though assets are not a runtime section.
 func RuntimeSection(section Section) bool {
 	switch section {
 	case SectionAccountsGroups,
@@ -569,7 +625,7 @@ func FilterData(data Data, scope Scope) Data {
 	// reference; they always travel so foreign keys resolve on import, regardless
 	// of section.
 	out.AssetClasses = append([]domain.AssetClass(nil), data.AssetClasses...)
-	out.Assets = append([]domain.Asset(nil), data.Assets...)
+	out.Assets = append([]Asset(nil), data.Assets...)
 	out.Principals = append([]domain.Principal(nil), data.Principals...)
 
 	if scope.Included(SectionAccountsGroups) {
@@ -592,7 +648,7 @@ func FilterData(data Data, scope Scope) Data {
 	if scope.Included(SectionMarketData) {
 		out.MarketDataInstances = append([]domain.MarketDataInstance(nil),
 			data.MarketDataInstances...)
-		out.MarketDataInstruments = append([]domain.MarketDataInstrument(nil),
+		out.MarketDataInstruments = append([]MarketDataInstrument(nil),
 			data.MarketDataInstruments...)
 	}
 	if scope.Included(SectionMarketDataQuotes) {
@@ -738,11 +794,11 @@ func filterGroups(
 }
 
 func filterBalances(
-	balances []domain.Balance,
+	balances []Balance,
 	selector EntitySelector,
 	groupByAccount map[domain.AccountID]string,
-) []domain.Balance {
-	out := make([]domain.Balance, 0, len(balances))
+) []Balance {
+	out := make([]Balance, 0, len(balances))
 	for _, balance := range balances {
 		if selectorMatchesAccount(selector, balance.Account, groupByAccount) {
 			out = append(out, balance)

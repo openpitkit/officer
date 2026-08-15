@@ -19,7 +19,8 @@
   "instrumentDialog": {
     "ibTitle": "添加 Interactive Brokers 工具",
     "ibDescription": "选择解析出的合约，或在添加工具前手动填写合约字段。",
-    "contract": "合约"
+    "contract": "合约",
+    "currencyRequired": "必须配置 IB 合约货币。"
   },
   "actions": {
     "addInstance": "添加来源",

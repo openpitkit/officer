@@ -342,7 +342,7 @@ func (n *fakeNode) ExportBackup(
 
 func (n *fakeNode) RestoreBackup(
 	_ context.Context,
-	_ backup.Archive,
+	archive backup.Archive,
 	opts backup.RestoreOptions,
 	_ domain.Caller,
 ) (backup.RestoreSummary, marketdata.Sink, error) {
@@ -350,6 +350,37 @@ func (n *fakeNode) RestoreBackup(
 	summary := n.restoreSummary
 	if summary.Applied == nil {
 		summary = backup.NewSummary()
+	}
+	if n.restoreErr == nil {
+		restoreMarketData := opts.Scope.All
+		for _, section := range opts.Scope.Sections {
+			if section == backup.SectionMarketData {
+				restoreMarketData = true
+				break
+			}
+		}
+		if restoreMarketData {
+			for _, restored := range archive.Data.MarketDataInstruments {
+				key := restored.Instance.String()
+				for index := range n.mdInstruments[key] {
+					current := n.mdInstruments[key][index]
+					if current.ExternalSymbol != restored.ExternalSymbol {
+						continue
+					}
+					n.mdInstruments[key][index] = domain.MarketDataInstrument{
+						Instance:       restored.Instance,
+						ExternalSymbol: restored.ExternalSymbol,
+						BaseAsset:      restored.BaseAsset,
+						QuoteAsset:     restored.QuoteAsset,
+						BaseAssetID:    current.BaseAssetID,
+						QuoteAssetID:   current.QuoteAssetID,
+						ManualPrice:    restored.ManualPrice,
+						Enabled:        restored.Enabled,
+					}
+					break
+				}
+			}
+		}
 	}
 	return summary, n.restoreSink, n.restoreErr
 }
@@ -1383,7 +1414,18 @@ func (n *fakeNode) DeleteMarketDataInstance(
 func (n *fakeNode) ListMarketDataInstruments(
 	_ context.Context, instance domain.ExternalID,
 ) ([]domain.MarketDataInstrument, error) {
-	return n.mdInstruments[instance.String()], nil
+	instruments := append(
+		[]domain.MarketDataInstrument(nil), n.mdInstruments[instance.String()]...,
+	)
+	for index := range instruments {
+		if instruments[index].BaseAssetID == 0 {
+			instruments[index].BaseAssetID = testMarketDataAssetID(instruments[index].BaseAsset)
+		}
+		if instruments[index].QuoteAssetID == 0 {
+			instruments[index].QuoteAssetID = testMarketDataAssetID(instruments[index].QuoteAsset)
+		}
+	}
+	return instruments, nil
 }
 
 func (n *fakeNode) UpsertMarketDataInstrument(

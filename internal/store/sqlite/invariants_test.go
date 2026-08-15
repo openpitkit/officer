@@ -79,10 +79,10 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity", Title: "Equity"}); err != nil {
 		t.Fatalf("CreateAssetClass: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple", AssetClass: "equity"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple", AssetClass: "equity"}); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "Dollar"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "Dollar"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	if err := rs.CreatePrincipal(ctx, domain.Principal{Code: "operator", Title: "Desk Operator"}); err != nil {
@@ -352,10 +352,10 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
 		t.Fatalf("CreateAsset(AAPL): %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
@@ -518,7 +518,7 @@ func TestLimitPolicyUnique_AllLimitTables(t *testing.T) {
 	r := rs.(*realmStore)
 
 	for _, code := range []string{"AAPL", "USD", "EUR"} {
-		if err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}
@@ -681,7 +681,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "US Dollar"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "US Dollar"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {

@@ -206,7 +206,7 @@ func (rt *restoreTx) accountCodeGroups(ctx context.Context) ([]codePair, error) 
 // positions scope decides which balance are in scope; an All/empty selector
 // prunes the whole realm.
 func (rt *restoreTx) prunePositions(
-	ctx context.Context, positions accountScope, balances []domain.Balance,
+	ctx context.Context, positions accountScope, balances []backup.Balance,
 ) error {
 	keep := make(map[string]bool, len(balances))
 	for _, b := range balances {

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backup"
@@ -60,6 +61,12 @@ func (s *Service) RestoreBackup(
 		return backup.RestoreSummary{},
 			fmt.Errorf("backup restore mode: %w", domain.ErrInvalid)
 	}
+	// Trimming decides only whether the field is meaningful; the stored value
+	// keeps the archive's Source exactly as it arrived.
+	if strings.TrimSpace(archive.Manifest.Source) == "" {
+		return backup.RestoreSummary{},
+			fmt.Errorf("backup manifest source is required: %w", domain.ErrInvalid)
+	}
 	n, err := s.groupNode()
 	if err != nil {
 		return backup.RestoreSummary{}, err
@@ -95,7 +102,16 @@ func (s *Service) RestoreBackup(
 			)
 		}
 	} else if s.md != nil {
-		for _, instrument := range mdPlan.manualUpdates {
+		manualUpdates, err := listRestoredManualUpdates(
+			ctx, n, mdPlan.manualUpdates,
+		)
+		if err != nil {
+			return summary, fmt.Errorf(
+				"backend: backup restored; live manual market-data update pending reconciliation: %w",
+				err,
+			)
+		}
+		for _, instrument := range manualUpdates {
 			if err := s.md.PushManual(
 				ctx, instrument.Instance.String(), instrument,
 			); err != nil {
@@ -220,7 +236,7 @@ func projectMarketDataRestore(
 	currentInstances []domain.MarketDataInstance,
 	currentInstruments []domain.MarketDataInstrument,
 	archivedInstances []domain.MarketDataInstance,
-	archivedInstruments []domain.MarketDataInstrument,
+	archivedInstruments []backup.MarketDataInstrument,
 	mode backup.RestoreMode,
 ) ([]domain.MarketDataInstance, []domain.MarketDataInstrument) {
 	instances := make(map[domain.ExternalID]domain.MarketDataInstance)
@@ -239,7 +255,15 @@ func projectMarketDataRestore(
 		}
 		instances[instance.ExternalID] = instance
 	}
-	for _, instrument := range archivedInstruments {
+	for _, archived := range archivedInstruments {
+		instrument := domain.MarketDataInstrument{
+			Instance:       archived.Instance,
+			ExternalSymbol: archived.ExternalSymbol,
+			BaseAsset:      archived.BaseAsset,
+			QuoteAsset:     archived.QuoteAsset,
+			ManualPrice:    archived.ManualPrice,
+			Enabled:        archived.Enabled,
+		}
 		key := marketDataInstrumentKey(instrument)
 		if _, exists := instruments[key]; mode == backup.RestoreModeInsertMissing && exists {
 			continue
@@ -327,6 +351,49 @@ func equalMarketDataInstanceRuntime(
 
 func marketDataInstrumentKey(instrument domain.MarketDataInstrument) string {
 	return instrument.Instance.String() + "\x00" + instrument.ExternalSymbol
+}
+
+func listRestoredManualUpdates(
+	ctx context.Context,
+	n interface {
+		ListMarketDataInstruments(
+			context.Context, domain.ExternalID,
+		) ([]domain.MarketDataInstrument, error)
+	},
+	planned []domain.MarketDataInstrument,
+) ([]domain.MarketDataInstrument, error) {
+	storedByKey := make(map[string]domain.MarketDataInstrument, len(planned))
+	listedInstances := make(map[domain.ExternalID]struct{})
+	for _, update := range planned {
+		if _, listed := listedInstances[update.Instance]; listed {
+			continue
+		}
+		instruments, err := n.ListMarketDataInstruments(ctx, update.Instance)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"backend: list market-data instruments for %s after restore: %w",
+				update.Instance, err,
+			)
+		}
+		listedInstances[update.Instance] = struct{}{}
+		for _, instrument := range instruments {
+			storedByKey[marketDataInstrumentKey(instrument)] = instrument
+		}
+	}
+
+	updates := make([]domain.MarketDataInstrument, 0, len(planned))
+	for _, update := range planned {
+		key := marketDataInstrumentKey(update)
+		stored, ok := storedByKey[key]
+		if !ok {
+			return nil, fmt.Errorf(
+				"backend: restored market-data instrument %q for instance %s not found: %w",
+				update.ExternalSymbol, update.Instance, domain.ErrNotFound,
+			)
+		}
+		updates = append(updates, stored)
+	}
+	return updates, nil
 }
 
 // ResetDatabase recreates the store from scratch and reconnects market-data

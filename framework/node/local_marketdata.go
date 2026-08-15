@@ -141,14 +141,13 @@ func (n *localNode) ListMarketDataInstruments(
 func (n *localNode) UpsertMarketDataInstrument(
 	ctx context.Context, instrument domain.MarketDataInstrument, caller domain.Caller,
 ) error {
+	if err := n.ensureMarketDataAssetsRegisteredExclusive(ctx, instrument, caller); err != nil {
+		return err
+	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
-
-	if err := n.ensureMarketDataAssets(ctx, instrument, caller); err != nil {
-		return err
-	}
 	if err := n.realm.UpsertMarketDataInstrument(ctx, instrument); err != nil {
 		return fmt.Errorf("upsert market-data instrument: %w", err)
 	}
@@ -160,6 +159,32 @@ func (n *localNode) UpsertMarketDataInstrument(
 		return fmt.Errorf("audit upsert market-data instrument: %w", err)
 	}
 	return nil
+}
+
+func (n *localNode) ensureMarketDataAssetsRegisteredExclusive(
+	ctx context.Context,
+	instrument domain.MarketDataInstrument,
+	caller domain.Caller,
+) error {
+	needed := false
+	for _, code := range []string{instrument.BaseAsset, instrument.QuoteAsset} {
+		if code == "" {
+			continue
+		}
+		if _, ok, err := n.realm.GetAsset(ctx, code); err != nil {
+			return fmt.Errorf("read asset for auto-create check: %w", err)
+		} else if !ok {
+			needed = true
+		}
+	}
+	if !needed {
+		return nil
+	}
+	if err := n.beginLiveIdentityPublication(); err != nil {
+		return err
+	}
+	defer n.endLiveIdentityPublication()
+	return n.ensureMarketDataAssets(ctx, instrument, caller)
 }
 
 func (n *localNode) ensureMarketDataAssets(

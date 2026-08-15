@@ -33,12 +33,16 @@ import (
 func (n *localNode) SetAccountCurrency(
 	ctx context.Context, key Key, currency string, caller domain.Caller,
 ) error {
-	eng, done, err := n.beginLane()
+	if err := n.ensureAccountCurrencyAssetRegisteredExclusive(
+		ctx, key.Account, currency, caller,
+	); err != nil {
+		return err
+	}
+	eng, endLane, err := n.beginLane()
 	if err != nil {
 		return err
 	}
-	defer done()
-
+	defer endLane()
 	return eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
 		prev, ok, err := n.realm.GetAccount(ctx, key.Account)
 		if err != nil {
@@ -67,11 +71,6 @@ func (n *localNode) SetAccountCurrency(
 		}
 		if prev.Currency == currency {
 			return nil
-		}
-		if err := n.ensureCurrencyAsset(
-			ctx, currency, "set account currency", caller,
-		); err != nil {
-			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -112,6 +111,72 @@ func (n *localNode) SetAccountCurrency(
 	})
 }
 
+// ensureAccountCurrencyAssetRegisteredExclusive publishes a missing currency
+// asset before the account lane opens. Its guard call is a best-effort filter,
+// not a duplicate of the lane's: publication cannot happen inside the lane, so
+// without it a change the lane rejects would still leave an asset, a resolver
+// alias and an audit row behind. The lane repeats the check under
+// serialization and stays the authority.
+func (n *localNode) ensureAccountCurrencyAssetRegisteredExclusive(
+	ctx context.Context,
+	account domain.AccountID,
+	currency string,
+	caller domain.Caller,
+) error {
+	if currency == "" {
+		return nil
+	}
+	previous, ok, err := n.realm.GetAccount(ctx, account)
+	if err != nil {
+		return fmt.Errorf("read account for currency: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("account %q: %w", account, domain.ErrNotFound)
+	}
+	if previous.Currency == currency {
+		return nil
+	}
+	nextEffective, _ := domain.ResolveCurrencyCascade(
+		currency,
+		previous.GroupCurrency,
+		previous.DefaultCurrency,
+	)
+	if err := n.guardEffectiveCurrencyChange(
+		ctx,
+		[]domain.AccountID{account},
+		previous.EffectiveCurrency,
+		nextEffective,
+	); err != nil {
+		if !errors.Is(err, domain.ErrConflict) {
+			return err
+		}
+		return domain.NewCurrencyChangeBlockedError(
+			domain.ScopeAccount, account.String(), err,
+		)
+	}
+	if _, ok, err := n.realm.GetAsset(ctx, currency); err != nil {
+		return fmt.Errorf("read currency asset for registration: %w", err)
+	} else if ok {
+		return nil
+	}
+	if err := n.beginLiveIdentityPublication(); err != nil {
+		return err
+	}
+	defer n.endLiveIdentityPublication()
+	return n.ensureCurrencyAsset(ctx, currency, "set account currency", caller)
+}
+
+// revertAccountCurrency undoes a persisted currency write once applying it to
+// the live engine has failed. A successful revert restores only the account's
+// currency in engine and store to the value it held before the attempt - any
+// currency asset that ensureAccountCurrencyAssetRegisteredExclusive registered
+// earlier in the same request stays committed - so cause keeps the
+// classification the engine reported for it: the caller really did submit the
+// currency the engine rejected. When the revert itself fails, engine and store
+// are left disagreeing about the account's currency instead: the original
+// apply cause and the revert failure both flow into the fatal-shutdown hook
+// and into the error handed back to the caller, and that returned error is
+// terminal so neither cause can be reclassified as a caller fault.
 func (n *localNode) revertAccountCurrency(
 	ctx context.Context,
 	lane engine.AccountLane,
@@ -127,7 +192,10 @@ func (n *localNode) revertAccountCurrency(
 	if revertErr := errors.Join(revertEngineErr, revertStoreErr); revertErr != nil {
 		return n.fatalPostEngineAuditByCode(
 			"revert account currency", "account", account.String(),
-			fmt.Errorf("revert account currency: %w", revertErr),
+			errors.Join(
+				cause,
+				fmt.Errorf("revert account currency: %w", revertErr),
+			),
 		)
 	}
 	return cause
@@ -240,8 +308,10 @@ func (n *localNode) setGroupCurrency(
 				optionalOperationError("restore group currency runtime", revertRuntimeErr),
 				optionalOperationError("restore group currency store", revertStoreErr),
 			)
-			return n.reconcileEngineAfterFailure(
-				mutationCtx, "reconcile engine after group currency failure", cause,
+			return internalPostCommitNodeMutationError(
+				n.reconcileEngineAfterFailure(
+					mutationCtx, "reconcile engine after group currency failure", cause,
+				).err,
 			)
 		}
 		return fmt.Errorf("apply group currency: %w", applyErr)

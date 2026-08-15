@@ -860,29 +860,44 @@ export interface BackupScope {
   positions?: BackupEntitySelector;
 }
 
+export interface RealmLabel {
+  code: string;
+  title?: string;
+}
+
 export interface BackupManifest {
-  format: "openpit.officer.backup";
   formatVersion: number;
-  schemaVersion: number;
   createdAt: string;
-  source?: string;
+  source: string;
+  realm: RealmLabel;
   sections: BackupSection[];
 }
 
 export interface BackupData {
-  mcpAccess?: Record<string, boolean>;
-  accounts?: Record<string, unknown>[];
+  assetClasses?: Record<string, unknown>[];
+  assets?: Record<string, unknown>[];
+  principals?: Record<string, unknown>[];
   groups?: Record<string, unknown>[];
-  limits?: Record<string, unknown>[];
+  defaultGroupCurrency?: string;
+  accounts?: Record<string, unknown>[];
   balances?: Record<string, unknown>[];
+  rateLimits?: Record<string, unknown>[];
+  orderSizeLimits?: Record<string, unknown>[];
+  spotFundsPnlBoundsLimits?: Record<string, unknown>[];
   adjustments?: Record<string, unknown>[];
   orders?: Record<string, unknown>[];
   orderEvents?: Record<string, unknown>[];
+  executionReports?: Record<string, unknown>[];
+  executionReportEvents?: Record<string, unknown>[];
   trades?: Record<string, unknown>[];
   audit?: Record<string, unknown>[];
   marketDataInstances?: Record<string, unknown>[];
   marketDataInstruments?: Record<string, unknown>[];
   marketDataQuotes?: Record<string, unknown>[];
+  signingKeys?: Record<string, unknown>[];
+  signingConfig?: Record<string, unknown>[];
+  mcpAccess?: Record<string, boolean>;
+  userSettings?: Record<string, unknown>[];
 }
 
 export interface BackupArchive {

@@ -21,14 +21,21 @@ import "fmt"
 
 // Engine-id bounds. The engine id is the row's surrogate key, a monotonic
 // autoincrement rowid that starts at one and grows. The engine runs accounts on
-// a uint64 and groups on a uint32, so the usable range excludes zero (reserved
-// as "unassigned") and caps each id at the width the engine constructor accepts.
+// a uint64 and groups on a uint32. EngineAssetID is Officer's internal asset
+// surrogate, rendered in decimal string form and handed to the engine as an
+// ordinary opaque param.Asset that the engine never interprets. The usable range
+// excludes zero (reserved as "unassigned") and fits the persisted id width.
 const (
 	// EngineAccountIDMin is the smallest assignable engine account id.
 	EngineAccountIDMin uint64 = 1
 	// EngineAccountIDMax is the largest engine account id that still fits a
 	// signed 64-bit column.
 	EngineAccountIDMax uint64 = 1<<63 - 1
+	// EngineAssetIDMin is the smallest assignable engine asset id.
+	EngineAssetIDMin uint64 = 1
+	// EngineAssetIDMax is the largest engine asset id that still fits a signed
+	// 64-bit column.
+	EngineAssetIDMax uint64 = 1<<63 - 1
 	// EngineGroupIDMin is the smallest assignable engine group id.
 	EngineGroupIDMin uint32 = 1
 	// EngineGroupIDMax is the largest engine group id; the full uint32 range
@@ -44,6 +51,16 @@ type EngineAccountID uint64
 
 // Uint64 returns the raw engine account id.
 func (id EngineAccountID) Uint64() uint64 { return uint64(id) }
+
+// EngineAssetID is Officer's internal surrogate for a single asset. It is the
+// asset row's surrogate id, rendered in decimal string form and handed to the
+// engine as an ordinary opaque param.Asset that the engine never interprets. It
+// is internal: it is never the public handle and never leaves the store on the
+// wire. Zero means "unassigned".
+type EngineAssetID uint64
+
+// Uint64 returns the raw engine asset id.
+func (id EngineAssetID) Uint64() uint64 { return uint64(id) }
 
 // EngineGroupID is the integer id the engine runs an account group on. It is the
 // group row's surrogate id, passed straight to the engine via its uint32 group-id
@@ -62,6 +79,19 @@ func ValidateEngineAccountID(id EngineAccountID) error {
 		return fmt.Errorf(
 			"engine account id %d out of range [%d, %d]: %w",
 			v, EngineAccountIDMin, EngineAccountIDMax, ErrInvalid,
+		)
+	}
+	return nil
+}
+
+// ValidateEngineAssetID returns an error wrapping ErrInvalid when id is outside
+// the assignable range [1, 2^63-1].
+func ValidateEngineAssetID(id EngineAssetID) error {
+	v := uint64(id)
+	if v < EngineAssetIDMin || v > EngineAssetIDMax {
+		return fmt.Errorf(
+			"engine asset id %d out of range [%d, %d]: %w",
+			v, EngineAssetIDMin, EngineAssetIDMax, ErrInvalid,
 		)
 	}
 	return nil

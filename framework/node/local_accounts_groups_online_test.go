@@ -20,6 +20,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -38,11 +39,38 @@ func (r *rejectAccountRereadRealm) GetAccount(
 	return domain.Account{}, false, errors.New("unexpected account reread")
 }
 
+type failFirstGroupBlockEngine struct {
+	*fakeEngine
+	blockErr error
+}
+
+func (e *failFirstGroupBlockEngine) RunGroupSynchronized(
+	ctx context.Context,
+	groupID string,
+	fn func(engine.GroupLane) error,
+) error {
+	return e.fakeEngine.RunGroupSynchronized(
+		ctx, groupID, func(engine.GroupLane) error { return fn(e) },
+	)
+}
+
+func (e *failFirstGroupBlockEngine) BlockGroup(
+	ctx context.Context, groupID, reason string,
+) error {
+	if e.blockErr != nil {
+		err := e.blockErr
+		e.blockErr = nil
+		return err
+	}
+	return e.fakeEngine.BlockGroup(ctx, groupID, reason)
+}
+
 func TestLocalNode_GroupCreateEmergencyRebuildFailureIsFatal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	groupCause := errors.New("group currency mutation failed")
 	eng := newFakeEngine()
-	eng.groupCurrencyErr = errors.New("group currency mutation failed")
+	eng.groupCurrencyErr = errors.Join(domain.ErrInvalid, groupCause)
 	n, _ := newTestNode(t, eng)
 	rebuildErr := errors.New("group reconciliation rebuild failed")
 	n.build = func(engine.Snapshot) (engine.Engine, error) {
@@ -55,17 +83,32 @@ func TestLocalNode_GroupCreateEmergencyRebuildFailureIsFatal(t *testing.T) {
 		Code:     "desk",
 		Currency: "USD",
 	}, testCaller)
-	if !errors.Is(err, rebuildErr) {
-		t.Fatalf("CreateGroup error = %v, want rebuild failure", err)
+	if errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("CreateGroup error = %v, must hide domain sentinel", err)
 	}
-	if fatalErr == nil || !errors.Is(fatalErr, rebuildErr) {
-		t.Fatalf("fatal error = %v, want rebuild failure", fatalErr)
+	if !errors.Is(err, groupCause) || !errors.Is(err, rebuildErr) {
+		t.Fatalf(
+			"CreateGroup error = %v, want mutation cause and rebuild failure",
+			err,
+		)
+	}
+	if fatalErr == nil ||
+		!errors.Is(fatalErr, domain.ErrInvalid) ||
+		!errors.Is(fatalErr, groupCause) ||
+		!errors.Is(fatalErr, rebuildErr) {
+		t.Fatalf(
+			"fatal error = %v, want sentinel, mutation cause, and rebuild failure",
+			fatalErr,
+		)
 	}
 }
 
 func TestLocalNode_GroupCurrencyFailureCompensatesWithoutRebuild(t *testing.T) {
 	t.Parallel()
-	applyErr := errors.New("set group currency failed")
+	applyErr := fmt.Errorf(
+		"set group currency failed: %w",
+		domain.ErrReservedGroup,
+	)
 	eng := newFakeEngine()
 	eng.groupCurrencyFails = map[int]error{2: applyErr}
 	st := newMemoryStore("group-currency-online.db")
@@ -87,9 +130,11 @@ func TestLocalNode_GroupCurrencyFailureCompensatesWithoutRebuild(t *testing.T) {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	n := nodeRaw.(*localNode)
-	seedTestPrincipal(t, n.realm)
+	seedTestPrincipal(t, n)
 
-	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}, testCaller); err != nil {
+	if _, err := n.CreateGroup(
+		ctx, domain.AccountGroup{Code: "desk"}, testCaller,
+	); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 	if _, err := n.CreateAccount(ctx, domain.Account{
@@ -100,8 +145,13 @@ func TestLocalNode_GroupCurrencyFailureCompensatesWithoutRebuild(t *testing.T) {
 	if err := n.SetGroupCurrency(ctx, "desk", "EUR", testCaller); err != nil {
 		t.Fatalf("SetGroupCurrency initial: %v", err)
 	}
-	if err := n.SetGroupCurrency(ctx, "desk", "USD", testCaller); !errors.Is(err, applyErr) {
-		t.Fatalf("SetGroupCurrency error = %v, want apply failure", err)
+	err = n.SetGroupCurrency(ctx, "desk", "USD", testCaller)
+	if !errors.Is(err, applyErr) ||
+		!errors.Is(err, domain.ErrReservedGroup) {
+		t.Fatalf(
+			"SetGroupCurrency error = %v, want classifiable apply failure",
+			err,
+		)
 	}
 	group, ok, err := n.realm.GetGroup(ctx, "desk")
 	if err != nil || !ok {
@@ -115,6 +165,137 @@ func TestLocalNode_GroupCurrencyFailureCompensatesWithoutRebuild(t *testing.T) {
 	}
 	if builds != 1 {
 		t.Fatalf("engine builds = %d, want initial build only", builds)
+	}
+}
+
+func TestLocalNode_GroupBlockFailureCompensatesWithoutRebuild(t *testing.T) {
+	t.Parallel()
+	applyErr := fmt.Errorf(
+		"block reserved group: %w",
+		domain.ErrReservedGroup,
+	)
+	fake := newFakeEngine()
+	eng := &failFirstGroupBlockEngine{
+		fakeEngine: fake,
+		blockErr:   applyErr,
+	}
+	st := newMemoryStore("group-block-online.db")
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var seed engine.Snapshot
+	baseBuild := fakeBuild(fake, &seed)
+	var fatalErr error
+	nodeRaw, _, err := NewLocalNode(
+		ctx,
+		st,
+		func(snapshot engine.Snapshot) (engine.Engine, error) {
+			if _, err := baseBuild(snapshot); err != nil {
+				return nil, err
+			}
+			return eng, nil
+		},
+		WithFatalShutdownHook(func(err error) { fatalErr = err }),
+	)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nodeRaw.(*localNode)
+	seedTestPrincipal(t, n)
+	if _, err := n.CreateGroup(
+		ctx, domain.AccountGroup{Code: "desk"}, testCaller,
+	); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	err = n.SetGroupBlocked(ctx, "desk", true, "risk", testCaller)
+	if !errors.Is(err, applyErr) ||
+		!errors.Is(err, domain.ErrReservedGroup) {
+		t.Fatalf(
+			"SetGroupBlocked error = %v, want classifiable apply failure",
+			err,
+		)
+	}
+	if fatalErr != nil {
+		t.Fatalf("fatal error = %v, want successful compensation", fatalErr)
+	}
+	group, ok, getErr := n.realm.GetGroup(ctx, "desk")
+	if getErr != nil || !ok || group.Blocked {
+		t.Fatalf(
+			"compensated group = %+v ok=%v err=%v, want unblocked",
+			group, ok, getErr,
+		)
+	}
+	if !slices.Equal(eng.unblockGroupCalls, []string{"desk"}) {
+		t.Fatalf(
+			"unblock group calls = %+v, want compensation for desk",
+			eng.unblockGroupCalls,
+		)
+	}
+}
+
+func TestLocalNode_AccountRenameFailureCompensatesWithoutRebuild(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(
+		ctx, domain.Account{Code: "account-old"}, testCaller,
+	); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	eng.resolverMu.Lock()
+	eng.knownAccounts["account-new"] = struct{}{}
+	eng.resolverMu.Unlock()
+
+	_, err := n.UpdateAccount(
+		ctx,
+		testKey("account-old"),
+		domain.Account{Code: "account-new"},
+		testCaller,
+	)
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("UpdateAccount error = %v, want ErrAlreadyExists", err)
+	}
+	if _, ok, getErr := st.GetAccount(ctx, "account-old"); getErr != nil || !ok {
+		t.Fatalf("old account ok=%v err=%v, want restored", ok, getErr)
+	}
+	if _, ok, getErr := st.GetAccount(ctx, "account-new"); getErr != nil || ok {
+		t.Fatalf("new account ok=%v err=%v, want rolled back", ok, getErr)
+	}
+}
+
+func TestLocalNode_GroupRenameFailureCompensatesWithoutRebuild(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateGroup(
+		ctx, domain.AccountGroup{Code: "desk-old"}, testCaller,
+	); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	eng.resolverMu.Lock()
+	eng.knownGroups["desk-new"] = struct{}{}
+	eng.resolverMu.Unlock()
+
+	_, err := n.UpdateGroup(
+		ctx,
+		"desk-old",
+		domain.AccountGroup{Code: "desk-new"},
+		testCaller,
+	)
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("UpdateGroup error = %v, want ErrAlreadyExists", err)
+	}
+	if _, ok, getErr := st.GetGroup(ctx, "desk-old"); getErr != nil || !ok {
+		t.Fatalf("old group ok=%v err=%v, want restored", ok, getErr)
+	}
+	if _, ok, getErr := st.GetGroup(ctx, "desk-new"); getErr != nil || ok {
+		t.Fatalf("new group ok=%v err=%v, want rolled back", ok, getErr)
 	}
 }
 

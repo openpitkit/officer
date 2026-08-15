@@ -142,13 +142,13 @@ func TestLocalNode_OperatorPrincipalSurvivesReset(t *testing.T) {
 
 func TestLocalNode_AdjustmentUnderOperatorCallerOnColdStore(t *testing.T) {
 	t.Parallel()
-	n, realm := newColdStartTestNode(t, newFakeEngine())
+	n, _ := newColdStartTestNode(t, newFakeEngine())
 	ctx := context.Background()
 
 	if _, err := n.CreateAccount(ctx, testAccount("cold"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := realm.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "USD"}, testCaller); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
 	rec, err := n.ApplyAdjustment(ctx, testKey("cold"), domain.ExternalID(""),
@@ -174,14 +174,14 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
 		BalanceResult: "10000",
 	}
-	n, realm := newColdStartTestNode(t, eng)
+	n, _ := newColdStartTestNode(t, eng)
 	ctx := context.Background()
 
 	if _, err := n.CreateAccount(ctx, testAccount("cold"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	for _, asset := range []string{"USD", "AAPL"} {
-		if err := realm.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
+		if _, err := n.CreateAsset(ctx, domain.Asset{Code: asset}, testCaller); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", asset, err)
 		}
 	}

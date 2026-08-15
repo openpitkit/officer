@@ -19,7 +19,6 @@ package backend
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -48,9 +47,6 @@ func (n *assetUpdateTestNode) UpdateAsset(
 	n.updateCalls++
 	if n.updateErr != nil {
 		return domain.Asset{}, n.updateErr
-	}
-	if n.updated.Code != oldCode {
-		n.engineHandle++
 	}
 	return n.updated, nil
 }
@@ -92,18 +88,11 @@ func assetUpdateTestAsset(code string) domain.Asset {
 	}
 }
 
-func TestServiceUpdateAssetRenameRestartsMarketData(t *testing.T) {
+func TestServiceUpdateAssetRenameDoesNotRestartMarketData(t *testing.T) {
 	t.Parallel()
 
 	n := &assetUpdateTestNode{updated: assetUpdateTestAsset("USDX")}
-	md := &assetUpdateTestMarketDataRuntime{restartAfter: func() {
-		if n.engineHandle != 1 {
-			t.Fatalf(
-				"market-data restarted before renamed engine was rebuilt: handle=%d",
-				n.engineHandle,
-			)
-		}
-	}}
+	md := &assetUpdateTestMarketDataRuntime{}
 	svc := newAssetUpdateTestService(t, n, md)
 
 	updated, err := svc.UpdateAsset(
@@ -115,15 +104,11 @@ func TestServiceUpdateAssetRenameRestartsMarketData(t *testing.T) {
 	if updated.Code != "USDX" {
 		t.Fatalf("updated code = %q, want USDX", updated.Code)
 	}
-	if n.updateCalls != 1 || n.engineHandle != 1 {
-		t.Fatalf(
-			"node update calls=%d engine handle=%d, want one rebuilt handle",
-			n.updateCalls,
-			n.engineHandle,
-		)
+	if n.updateCalls != 1 || n.engineHandle != 0 {
+		t.Fatalf("node update calls=%d engine handle=%d, want unchanged handle", n.updateCalls, n.engineHandle)
 	}
-	if md.restarts != 1 {
-		t.Fatalf("market-data restarts = %d, want 1", md.restarts)
+	if md.restarts != 0 {
+		t.Fatalf("market-data restarts = %d, want 0", md.restarts)
 	}
 }
 
@@ -148,31 +133,5 @@ func TestServiceUpdateAssetSameCodeDoesNotRestartMarketData(t *testing.T) {
 	}
 	if n.engineHandle != 0 {
 		t.Fatalf("engine handle = %d, want unchanged", n.engineHandle)
-	}
-}
-
-func TestServiceUpdateAssetRenameKeepsSuccessfulUpdateOnRestartFailure(t *testing.T) {
-	t.Parallel()
-
-	restartErr := errors.New("feed startup failed")
-	n := &assetUpdateTestNode{updated: assetUpdateTestAsset("USDX")}
-	md := &assetUpdateTestMarketDataRuntime{restartErr: restartErr}
-	svc := newAssetUpdateTestService(t, n, md)
-
-	updated, err := svc.UpdateAsset(
-		context.Background(), "USD", assetUpdateTestAsset("USDX"),
-	)
-	if err != nil {
-		t.Fatalf("UpdateAsset: %v, want completed rename", err)
-	}
-	if updated.Code != "USDX" || n.engineHandle != 1 {
-		t.Fatalf(
-			"rename state = %+v engine handle=%d, want renamed rebuilt engine",
-			updated,
-			n.engineHandle,
-		)
-	}
-	if md.restarts != 1 {
-		t.Fatalf("market-data restarts = %d, want 1", md.restarts)
 	}
 }

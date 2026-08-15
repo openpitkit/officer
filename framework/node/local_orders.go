@@ -791,9 +791,8 @@ func executionReportInputFromRequest(
 	}
 }
 
-// ensureAutoCreatedAssets creates the base and quote assets when missing and
-// reports whether either was newly created. It is a pure store helper: it never
-// touches the engine because assets are Officer dictionary state.
+// ensureAutoCreatedAssets creates and publishes missing base and quote assets,
+// then reports whether either was newly created.
 func (n *localNode) ensureAutoCreatedAssets(
 	ctx context.Context, baseAsset string, quoteAsset string,
 	operation string, caller domain.Caller,
@@ -823,6 +822,12 @@ func (n *localNode) ensureAutoCreatedAsset(
 	if err := domain.ValidateAsset(code); err != nil {
 		return false, err
 	}
+	resolver, err := requireDictionaryResolver(n.currentEngine())
+	if err != nil {
+		return false, fmt.Errorf(
+			"resolve live asset dictionary for %s: %w", operation, err,
+		)
+	}
 	if err := n.realm.CreateAssetClass(ctx, domain.AssetClass{
 		Code:  autoCreatedAssetClassCode,
 		Title: autoCreatedAssetClassTitle,
@@ -830,21 +835,60 @@ func (n *localNode) ensureAutoCreatedAsset(
 	}); err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
 		return false, fmt.Errorf("create auto-created asset class: %w", err)
 	}
-	if err := n.realm.CreateAsset(ctx, domain.Asset{
+	asset, err := n.realm.CreateAsset(ctx, domain.Asset{
 		Code:       code,
 		AssetClass: autoCreatedAssetClassCode,
-	}); err != nil {
+	})
+	if err != nil {
 		if errors.Is(err, domain.ErrAlreadyExists) {
 			return false, nil
 		}
 		return false, fmt.Errorf("create auto-created asset %s: %w", code, err)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
+	if err := resolver.AddAssetResolverEntry(asset); err != nil {
+		return n.rollbackAutoCreatedAssetPublication(
+			ctx,
+			asset,
+			fmt.Errorf("publish auto-created asset for %s: %w", operation, err),
+		)
+	}
+	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionCreateAsset,
 		Asset:  code,
 		Detail: fmt.Sprintf("auto-created asset %s by %s", code, operation),
 	}); err != nil {
-		return false, fmt.Errorf("audit auto-created asset: %w", err)
+		return false, n.fatalPostEngineAuditByCode(
+			"audit auto-created asset", "asset", asset.Code,
+			fmt.Errorf("audit auto-created asset: %w", err),
+		)
 	}
 	return true, nil
+}
+
+func (n *localNode) rollbackAutoCreatedAssetPublication(
+	ctx context.Context,
+	asset domain.Asset,
+	cause error,
+) (bool, error) {
+	durableCtx := context.WithoutCancel(ctx)
+	if err := n.realm.DeleteAsset(durableCtx, asset.Code, false); err == nil {
+		// The auto-create store write already committed before publication failed,
+		// so this is a post-commit failure even though the rollback restored a
+		// consistent state: ErrAlreadyExists from the resolver describes an internal
+		// store/engine desync, not something the caller did wrong.
+		return false, internalPostCommitNodeMutationError(cause)
+	} else {
+		reconcileErr := n.rebuildEngineFromStore(durableCtx)
+		combined := errors.Join(
+			cause,
+			fmt.Errorf("rollback auto-created asset %q: %w", asset.Code, err),
+			reconcileErr,
+		)
+		return false, n.fatalPostEngineAuditByCode(
+			"rollback auto-created asset publication",
+			"asset",
+			asset.Code,
+			combined,
+		)
+	}
 }

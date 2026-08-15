@@ -234,8 +234,6 @@ func (c *bybitConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 		findings = append(findings, providerUnknownSymbolDiag(
 			"Bybit",
 			sub.External,
-			sub.Base,
-			sub.Quote,
 		))
 	}
 	return findings, nil
@@ -321,8 +319,6 @@ func (c *bybitConnector) validateSymbols(
 		c.reportDiag(providerUnknownSymbolDiag(
 			"Bybit",
 			sub.External,
-			sub.Base,
-			sub.Quote,
 		))
 	}
 	return valid
@@ -434,11 +430,11 @@ func normalizeBybitSubscriptions(
 	for _, sub := range subs {
 		symbol := strings.TrimSpace(sub.External)
 		if symbol == "" {
-			symbol = strings.TrimSpace(sub.Base) + strings.TrimSpace(sub.Quote)
+			return nil, missingExternalSymbolError("bybit", sub)
 		}
 		symbol = strings.ToUpper(symbol)
 		if symbol == "" {
-			return nil, fmt.Errorf("bybit subscription %s/%s: empty symbol", sub.Base, sub.Quote)
+			return nil, missingExternalSymbolError("bybit", sub)
 		}
 		topic := "tickers." + symbol
 		normalized = append(normalized, bybitSubscription{

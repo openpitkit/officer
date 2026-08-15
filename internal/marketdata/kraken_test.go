@@ -31,28 +31,30 @@ import (
 	"github.com/coder/websocket"
 )
 
-func TestNormalizeKrakenSubscriptions(t *testing.T) {
+func TestNormalizeKrakenSubscriptionsPreservesAssetKeys(t *testing.T) {
 	t.Parallel()
 
 	subs, err := normalizeKrakenSubscriptions([]Subscription{
-		{External: "xbt/usd", Base: "BTC", Quote: "USD"},
-		{Base: "XDG", Quote: "Usd"},
-		{Base: "Eth", Quote: "Usd"},
+		{External: "xbt/usd", Base: testMarketDataAssetID("opaque-base"), Quote: testMarketDataAssetID("opaque-quote")},
+		{External: "XDG/USD", Base: testMarketDataAssetID("another-base"), Quote: testMarketDataAssetID("another-quote")},
 	})
 	if err != nil {
 		t.Fatalf("normalizeKrakenSubscriptions: %v", err)
 	}
-	if len(subs) != 3 {
-		t.Fatalf("len(subs) = %d, want 3", len(subs))
+	if len(subs) != 2 {
+		t.Fatalf("len(subs) = %d, want 2", len(subs))
 	}
 	if subs[0].symbol != "BTC/USD" {
 		t.Fatalf("first symbol = %q, want BTC/USD", subs[0].symbol)
 	}
+	if subs[0].Base != testMarketDataAssetID("opaque-base") || subs[0].Quote != testMarketDataAssetID("opaque-quote") {
+		t.Fatalf("first asset key = %q/%q, want caller values", subs[0].Base, subs[0].Quote)
+	}
 	if subs[1].symbol != "DOGE/USD" {
 		t.Fatalf("second symbol = %q, want DOGE/USD", subs[1].symbol)
 	}
-	if subs[2].symbol != "ETH/USD" {
-		t.Fatalf("third symbol = %q, want ETH/USD", subs[2].symbol)
+	if subs[1].Base != testMarketDataAssetID("another-base") || subs[1].Quote != testMarketDataAssetID("another-quote") {
+		t.Fatalf("second asset key = %q/%q, want caller values", subs[1].Base, subs[1].Quote)
 	}
 }
 
@@ -60,8 +62,8 @@ func TestKrakenSubscribePayload(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
-		{External: "ETH/USD", Base: "ETH", Quote: "USD"},
-		{External: "XBT/USD", Base: "BTC", Quote: "USD"},
+		{External: "ETH/USD", Base: testMarketDataAssetID("ETH"), Quote: testMarketDataAssetID("USD")},
+		{External: "XBT/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 
 	payload, err := krakenSubscribePayload(subs)
@@ -107,7 +109,7 @@ func TestParseKrakenQuoteUpdates(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
-		{External: "XBT/USD", Base: "BTC", Quote: "USD"},
+		{External: "XBT/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{"channel":"ticker","type":"snapshot","data":[` +
 		`{"symbol":"BTC/USD","bid":65000.01,"ask":65000.02,` +
@@ -126,8 +128,8 @@ func TestParseKrakenQuoteUpdates(t *testing.T) {
 	)) {
 		t.Fatalf("AsOf = %s", update.AsOf)
 	}
-	if update.Base != "BTC" || update.Quote != "USD" {
-		t.Fatalf("instrument = %s/%s", update.Base, update.Quote)
+	if update.Base != testMarketDataAssetID("BTC") || update.Quote != testMarketDataAssetID("USD") {
+		t.Fatalf("instrument = %d/%d", update.Base, update.Quote)
 	}
 	if update.Mark != "65000.10" ||
 		update.Bid != "65000.01" ||
@@ -158,7 +160,7 @@ func TestKrakenConnector_ReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
-		{External: "XBT/USD", Base: "BTC", Quote: "USD"},
+		{External: "XBT/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := &fakeKrakenConn{
 		messages: [][]byte{
@@ -248,7 +250,7 @@ func TestKrakenConnector_CloseStopsSubscription(t *testing.T) {
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "XBT/USD", Base: "BTC", Quote: "USD"},
+		{External: "XBT/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -355,8 +357,12 @@ func TestKrakenConnector_ValidateSymbolsDropsUnknown(t *testing.T) {
 		},
 	}
 	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
-		{External: "BTC/USD", Base: "BTC", Quote: "USD"},
-		{External: "DOGE/EUR", Base: "DOGE", Quote: "EUR"},
+		{External: "BTC/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
+		{
+			External: "DOGE/EUR",
+			Base:     testMarketDataAssetID("opaque-base-key"),
+			Quote:    testMarketDataAssetID("opaque-quote-key"),
+		},
 	})
 
 	valid := connector.validateSymbols(context.Background(), subs)
@@ -366,8 +372,13 @@ func TestKrakenConnector_ValidateSymbolsDropsUnknown(t *testing.T) {
 	if len(diags) != 1 || diags[0].Code != CodeUnknownSymbol {
 		t.Fatalf("diags = %+v, want one unknown_symbol", diags)
 	}
-	if !strings.Contains(diags[0].Remediation, "DOGE/USD") {
-		t.Fatalf("remediation = %q, want DOGE/USD suggestion", diags[0].Remediation)
+	remediation := diags[0].Remediation
+	if !strings.Contains(remediation, "Did you mean: DOGE/USD?") {
+		t.Fatalf("remediation = %q, want external symbol suggestion", remediation)
+	}
+	if strings.Contains(remediation, "opaque-base-key") ||
+		strings.Contains(remediation, "opaque-quote-key") {
+		t.Fatalf("remediation = %q, must not use asset keys", remediation)
 	}
 }
 
@@ -375,7 +386,11 @@ func TestKrakenConnector_DiagnoseUnknownSymbol(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
-		{External: "BTC/EUR", Base: "BTC", Quote: "EUR"},
+		{
+			External: "BTC/USDXX",
+			Base:     testMarketDataAssetID("opaque-base-key"),
+			Quote:    testMarketDataAssetID("opaque-quote-key"),
+		},
 	})
 	connector := &krakenConnector{
 		subs: subs,
@@ -391,13 +406,21 @@ func TestKrakenConnector_DiagnoseUnknownSymbol(t *testing.T) {
 	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol {
 		t.Fatalf("findings = %+v, want one unknown_symbol", findings)
 	}
+	remediation := findings[0].Remediation
+	if !strings.Contains(remediation, "Did you mean: BTC/USD?") {
+		t.Fatalf("remediation = %q, want external symbol suggestion", remediation)
+	}
+	if strings.Contains(remediation, "opaque-base-key") ||
+		strings.Contains(remediation, "opaque-quote-key") {
+		t.Fatalf("remediation = %q, must not use asset keys", remediation)
+	}
 }
 
 func TestKrakenConnector_ReconnectBackoffResetsAfterData(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
-		{External: "BTC/USD", Base: "BTC", Quote: "USD"},
+		{External: "BTC/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	conns := []*fakeKrakenConn{
 		{err: errors.New("first")},

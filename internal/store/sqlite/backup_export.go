@@ -29,6 +29,46 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+// exportAssets lists every asset as a portable archive asset (engine id
+// dropped).
+func (r *realmStore) exportAssets(ctx context.Context) ([]backup.Asset, error) {
+	assets, err := r.ListAssets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]backup.Asset, 0, len(assets))
+	for _, asset := range assets {
+		out = append(out, backup.Asset{
+			Code: asset.Code, Title: asset.Title, AssetClass: asset.AssetClass,
+		})
+	}
+	return out, nil
+}
+
+// exportBalances lists every balance as a portable archive snapshot, excluding
+// the account-currency read projection that the target derives for itself.
+func (r *realmStore) exportBalances(ctx context.Context) ([]backup.Balance, error) {
+	balances, err := r.ListBalances(ctx, "", "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]backup.Balance, 0, len(balances))
+	for _, balance := range balances {
+		out = append(out, backup.Balance{
+			UpdatedAt:             balance.UpdatedAt,
+			Available:             balance.Available,
+			Held:                  balance.Held,
+			Incoming:              balance.Incoming,
+			RealizedPnl:           balance.RealizedPnl,
+			RealizedPnlHaltReason: balance.RealizedPnlHaltReason,
+			AverageEntryPrice:     balance.AverageEntryPrice,
+			Asset:                 balance.Asset,
+			Account:               balance.Account,
+		})
+	}
+	return out, nil
+}
+
 // exportGroups lists every group as a portable archive group (engine id dropped).
 func (r *realmStore) exportGroups(ctx context.Context) ([]backup.AccountGroup, error) {
 	groups, err := r.ListGroups(ctx)
@@ -268,22 +308,31 @@ func (r *realmStore) exportAudit(ctx context.Context) ([]domain.AuditRow, error)
 	return out, nil
 }
 
-// exportInstruments lists every instrument of every instance, linked back to its
-// instance by the instance external id.
+// exportInstruments lists every instrument of every instance in its portable
+// archive form, linked back to its instance by the instance external id.
 func (r *realmStore) exportInstruments(
 	ctx context.Context,
-) ([]domain.MarketDataInstrument, error) {
+) ([]backup.MarketDataInstrument, error) {
 	instances, err := r.ListMarketDataInstances(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]domain.MarketDataInstrument, 0)
+	out := make([]backup.MarketDataInstrument, 0)
 	for _, inst := range instances {
 		instruments, err := r.ListMarketDataInstruments(ctx, inst.ExternalID)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, instruments...)
+		for _, instrument := range instruments {
+			out = append(out, backup.MarketDataInstrument{
+				Instance:       instrument.Instance,
+				ExternalSymbol: instrument.ExternalSymbol,
+				BaseAsset:      instrument.BaseAsset,
+				QuoteAsset:     instrument.QuoteAsset,
+				ManualPrice:    instrument.ManualPrice,
+				Enabled:        instrument.Enabled,
+			})
+		}
 	}
 	return out, nil
 }

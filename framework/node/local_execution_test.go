@@ -162,10 +162,12 @@ func TestLocalNode_ApplyExecutionReportLeavesAccountPnlUnchangedWithoutMatch(t *
 // execution-report settlement write is a post-engine persistence step: the
 // engine applies the report first (execReportCalls==1), then the atomic
 // RecordOrderSettlement fails, so the node must fail-stop with the "record
-// execution report" operation label, the real account id, and the wrapped cause.
+// execution report" operation label, the real account id, and the raw cause.
+// The returned error must hide domain sentinels after the engine commits.
 func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T) {
 	t.Parallel()
-	storeErr := errors.New("record execution report failed")
+	storeCause := errors.New("record execution report failed")
+	storeErr := errors.Join(domain.ErrInvalid, storeCause)
 	real := newMemoryStore("node.db")
 	ctx := context.Background()
 	if err := real.Migrate(ctx); err != nil {
@@ -202,14 +204,20 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 		LockPrice:      "400",
 		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
-	if !errors.Is(err, storeErr) {
-		t.Fatalf("ApplyExecutionReport error = %v, want store failure", err)
+	if errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyExecutionReport error = %v, must hide domain.ErrInvalid", err)
+	}
+	if !errors.Is(err, storeCause) {
+		t.Fatalf("ApplyExecutionReport error = %v, want non-domain store cause", err)
 	}
 	if len(eng.execReportCalls) != 1 {
 		t.Fatalf("engine report calls = %+v, want one engine apply", eng.execReportCalls)
 	}
 	if fatalErr == nil {
 		t.Fatal("fatal hook did not fire on post-engine execution-report persistence failure")
+	}
+	if !errors.Is(fatalErr, domain.ErrInvalid) || !errors.Is(fatalErr, storeCause) {
+		t.Fatalf("fatal error = %v, want complete raw store error chain", fatalErr)
 	}
 	account, ok, err := realm.GetAccount(ctx, "acc-1")
 	if err != nil || !ok {
@@ -279,7 +287,8 @@ func TestLocalNode_ApplyExecutionReportWorkflowAuditFailureFatalsAfterCommit(
 	t *testing.T,
 ) {
 	t.Parallel()
-	auditErr := errors.New("workflow execution report audit failed")
+	auditCause := errors.New("workflow execution report audit failed")
+	auditErr := errors.Join(domain.ErrInvalid, auditCause)
 	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
 		return &failActionAuditRealm{
 			RealmStore: r,
@@ -305,14 +314,19 @@ func TestLocalNode_ApplyExecutionReportWorkflowAuditFailureFatalsAfterCommit(
 		Order:       order.ExternalID,
 		OrderStatus: domain.OrderStatusAccepted,
 	}, testCaller)
-	if !errors.Is(err, auditErr) {
-		t.Fatalf("ApplyExecutionReport error = %v, want audit failure", err)
+	if errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyExecutionReport error = %v, must hide domain sentinel", err)
+	}
+	if !errors.Is(err, auditCause) {
+		t.Fatalf("ApplyExecutionReport error = %v, want audit cause", err)
 	}
 	if len(eng.execReportCalls) != 0 {
 		t.Fatalf("workflow status reached engine: %+v", eng.execReportCalls)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire after committed workflow audit failure")
+	if fatalErr == nil ||
+		!errors.Is(fatalErr, domain.ErrInvalid) ||
+		!errors.Is(fatalErr, auditCause) {
+		t.Fatalf("fatal error = %v, want sentinel-bearing audit chain", fatalErr)
 	}
 	account, ok, err := realm.GetAccount(ctx, "acc-1")
 	if err != nil || !ok {
@@ -322,7 +336,7 @@ func TestLocalNode_ApplyExecutionReportWorkflowAuditFailureFatalsAfterCommit(
 	if !strings.Contains(msg, `operation="audit workflow execution report"`) ||
 		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
 		!strings.Contains(msg, "post-commit audit failure") ||
-		!strings.Contains(msg, auditErr.Error()) {
+		!strings.Contains(msg, auditCause.Error()) {
 		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
 	}
 	detail, err := realm.GetOrder(ctx, order.ExternalID)

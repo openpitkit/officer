@@ -41,6 +41,7 @@ type marketDataDeleteTestNode struct {
 	deleteInstanceCalls   int
 	deleteInstrumentCalls int
 	upsertCalls           int
+	instrument            domain.MarketDataInstrument
 }
 
 func (n *marketDataDeleteTestNode) Owns(node.Key) bool {
@@ -73,10 +74,22 @@ func (n *marketDataDeleteTestNode) DeleteMarketDataInstrument(
 }
 
 func (n *marketDataDeleteTestNode) UpsertMarketDataInstrument(
-	context.Context, domain.MarketDataInstrument, domain.Caller,
+	_ context.Context, instrument domain.MarketDataInstrument, _ domain.Caller,
 ) error {
 	n.upsertCalls++
+	instrument.BaseAssetID = 1
+	instrument.QuoteAssetID = 2
+	n.instrument = instrument
 	return nil
+}
+
+func (n *marketDataDeleteTestNode) ListMarketDataInstruments(
+	_ context.Context, instance domain.ExternalID,
+) ([]domain.MarketDataInstrument, error) {
+	if n.instrument.Instance != instance {
+		return nil, nil
+	}
+	return []domain.MarketDataInstrument{n.instrument}, nil
 }
 
 type marketDataDeleteTestRuntime struct {
@@ -153,7 +166,8 @@ func TestServiceDeleteAssetForceRestartsMarketData(t *testing.T) {
 	}
 }
 
-func TestServiceDeleteAssetWithoutForceDoesNotRestartMarketData(t *testing.T) {
+// A non-forced delete restarts feeds with no instrument referencing the asset.
+func TestServiceDeleteAssetWithoutForceRestartsMarketData(t *testing.T) {
 	t.Parallel()
 
 	n := &marketDataDeleteTestNode{sink: marketDataDeleteTestSink{}}
@@ -166,9 +180,9 @@ func TestServiceDeleteAssetWithoutForceDoesNotRestartMarketData(t *testing.T) {
 	if n.deleteAssetCalls != 1 {
 		t.Fatalf("asset delete calls = %d, want 1", n.deleteAssetCalls)
 	}
-	if md.stops != 0 || md.restarts != 0 || md.uses != 0 {
+	if md.stops != 1 || md.restarts != 1 || md.uses != 1 {
 		t.Fatalf(
-			"market-data calls stop=%d restart=%d use-sink=%d, want 0 each",
+			"market-data calls stop=%d restart=%d use-sink=%d, want 1 each",
 			md.stops, md.restarts, md.uses,
 		)
 	}

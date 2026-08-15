@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -288,15 +289,53 @@ func TestNewArchiveOmitsVersionAndCarriesRealmLabel(t *testing.T) {
 }
 
 func TestNewArchiveExcludesBalanceAccountCurrency(t *testing.T) {
-	data := fixtureData()
-	data.Balances[0].AccountCurrency = "USD"
-	archive := NewArchive(time.Now(), "src", RealmLabel{}, Scope{All: true}, data)
+	if _, found := reflect.TypeOf(Balance{}).FieldByName("AccountCurrency"); found {
+		t.Fatal("portable balance carries derived account currency")
+	}
+	archive := NewArchive(time.Now(), "src", RealmLabel{}, Scope{All: true}, fixtureData())
 	raw, err := json.Marshal(archive)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	if strings.Contains(string(raw), "AccountCurrency") {
 		t.Fatalf("archive leaks derived balance currency: %s", raw)
+	}
+}
+
+func TestArchiveUsesPortableLowerCamelCaseKeys(t *testing.T) {
+	raw, err := json.Marshal(Data{
+		Balances: []Balance{{
+			UpdatedAt:             time.Unix(1, 0).UTC(),
+			Available:             "100",
+			Held:                  "20",
+			Incoming:              "30",
+			RealizedPnl:           "40",
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+			AverageEntryPrice:     "185.00",
+			Asset:                 "AAPL",
+			Account:               "acc-1",
+		}},
+		MarketDataInstruments: []MarketDataInstrument{{
+			Instance:       mustXID(t1Bytes()),
+			ExternalSymbol: "AAPLUSD",
+			BaseAsset:      "AAPL",
+			QuoteAsset:     "USD",
+			ManualPrice:    "185.00",
+			Enabled:        true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal archive: %v", err)
+	}
+	for _, key := range []string{
+		`"updatedAt"`, `"available"`, `"held"`, `"incoming"`, `"realizedPnl"`,
+		`"realizedPnlHaltReason"`, `"averageEntryPrice"`, `"asset"`, `"account"`,
+		`"instance"`, `"externalSymbol"`, `"baseAsset"`, `"quoteAsset"`,
+		`"manualPrice"`, `"enabled"`,
+	} {
+		if !strings.Contains(string(raw), key) {
+			t.Fatalf("archive omits portable key %s: %s", key, raw)
+		}
 	}
 }
 
@@ -317,7 +356,7 @@ func fixtureData() Data {
 		AssetClasses: []domain.AssetClass{
 			{Code: "equity", Title: "Equity"},
 		},
-		Assets: []domain.Asset{
+		Assets: []Asset{
 			{Code: "AAPL", Title: "Apple", AssetClass: "equity"},
 			{Code: "USD", Title: "US Dollar"},
 		},
@@ -332,7 +371,7 @@ func fixtureData() Data {
 			{Code: "grp-2"},
 			{Code: "grp-unused"},
 		},
-		Balances: []domain.Balance{
+		Balances: []Balance{
 			{Account: "acc-1", Asset: "USD", Available: "10"},
 			{Account: "acc-2", Asset: "USD", Available: "20"},
 			{Account: "acc-3", Asset: "USD", Available: "30"},
@@ -434,7 +473,7 @@ func groupCodes(groups []AccountGroup) []string {
 	return out
 }
 
-func balanceAccounts(balances []domain.Balance) []string {
+func balanceAccounts(balances []Balance) []string {
 	out := make([]string, 0, len(balances))
 	for _, b := range balances {
 		out = append(out, b.Account.String())

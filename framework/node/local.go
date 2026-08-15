@@ -229,7 +229,7 @@ func (n *localNode) fatalPostEnginePersistence(
 		"operation=%q account_id=%s: post-engine persistence failure: %w",
 		operation, accountID, err,
 	))
-	return err
+	return internalPostCommitNodeMutationError(err)
 }
 
 // fatalPostCommitAudit routes an audit failure after a durable store mutation
@@ -249,7 +249,7 @@ func (n *localNode) fatalPostCommitAudit(
 		"operation=%q account_id=%s: post-commit audit failure: %w",
 		operation, accountID, err,
 	))
-	return err
+	return internalPostCommitNodeMutationError(err)
 }
 
 // fatalPostEngineAuditByCode routes a post-engine audit-write failure into the
@@ -273,7 +273,7 @@ func (n *localNode) fatalPostEngineAuditByCode(
 		"operation=%q %s=%s: post-engine persistence failure: %w",
 		operation, subjectKind, code, err,
 	))
-	return err
+	return internalPostCommitNodeMutationError(err)
 }
 
 func (n *localNode) fatalReconciliation(operation string, err error) error {
@@ -284,20 +284,63 @@ func (n *localNode) fatalReconciliation(operation string, err error) error {
 		"operation=%q: engine/store reconciliation failure: %w",
 		operation, err,
 	))
-	return err
+	return internalPostCommitNodeMutationError(err)
+}
+
+type engineReconciliationResult struct {
+	err        error
+	reconciled bool
+}
+
+// internalPostCommitNodeMutationFailure is terminal so its domain causes
+// cannot be reclassified as caller errors. A custom Is cannot stop errors.Is
+// from unwrapping after it returns false, so this type deliberately has no
+// Unwrap or As method.
+type internalPostCommitNodeMutationFailure struct {
+	err error
+}
+
+func (e internalPostCommitNodeMutationFailure) Error() string {
+	return e.err.Error()
+}
+
+func (e internalPostCommitNodeMutationFailure) Is(target error) bool {
+	if domain.IsSentinel(target) {
+		return false
+	}
+	return errors.Is(e.err, target)
+}
+
+// internalPostCommitNodeMutationError hides domain sentinels after a committed
+// store mutation when they describe internal store/engine desync. Engine
+// rejections of caller-submitted values keep their original classification.
+func internalPostCommitNodeMutationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch err.(type) {
+	case internalPostCommitNodeMutationFailure,
+		*internalPostCommitNodeMutationFailure:
+		return err
+	default:
+		return internalPostCommitNodeMutationFailure{err: err}
+	}
 }
 
 func (n *localNode) reconcileEngineAfterFailure(
 	ctx context.Context, operation string, cause error,
-) error {
+) engineReconciliationResult {
 	rebuildErr := n.rebuildEngineFromStore(ctx)
 	if rebuildErr == nil {
-		return cause
+		return engineReconciliationResult{err: cause, reconciled: true}
 	}
-	return n.fatalReconciliation(operation, errors.Join(
-		cause,
-		fmt.Errorf("rebuild engine from current store: %w", rebuildErr),
-	))
+	return engineReconciliationResult{err: n.fatalReconciliation(
+		operation,
+		errors.Join(
+			cause,
+			fmt.Errorf("rebuild engine from current store: %w", rebuildErr),
+		),
+	)}
 }
 
 // loadSnapshot reads the full engine seed from the bound realm: accounts (with
@@ -306,6 +349,10 @@ func (n *localNode) reconcileEngineAfterFailure(
 // counts summary for the hydrate audit detail. It runs once at NewLocalNode and
 // again on every administrative engine rebuild.
 func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, error) {
+	assets, err := n.realm.ListAssets(ctx)
+	if err != nil {
+		return engine.Snapshot{}, "", fmt.Errorf("load assets for build: %w", err)
+	}
 	accounts, err := n.realm.ListAccounts(ctx)
 	if err != nil {
 		return engine.Snapshot{}, "", fmt.Errorf("load accounts for build: %w", err)
@@ -339,6 +386,7 @@ func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, 
 	}
 
 	snap := engine.Snapshot{
+		Assets:                   assets,
 		Accounts:                 accounts,
 		RateLimits:               rateLimits,
 		OrderSizeLimits:          orderSizeLimits,
@@ -348,8 +396,8 @@ func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, 
 	}
 	barriers := len(rateLimits) + len(orderSizeLimits) + len(spotFundsPnlBoundsLimits)
 	counts := fmt.Sprintf(
-		"hydrate %d accounts %d barriers %d groups %d balances",
-		len(accounts), barriers, len(groups), len(balances),
+		"hydrate %d assets %d accounts %d barriers %d groups %d balances",
+		len(assets), len(accounts), barriers, len(groups), len(balances),
 	)
 	return snap, counts, nil
 }
@@ -480,27 +528,44 @@ func (n *localNode) RestoreBackup(
 	normalizedScope := effectiveRestoreScope(
 		opts.Scope, archive.Manifest.Sections,
 	)
-	runtimeScope := backup.TouchesRuntime(normalizedScope)
+	// Take the lane before asset classification and hold it until the restore
+	// finishes or upgrades to the exclusive restart gate below, so a concurrent
+	// dictionary change cannot invalidate the classification. A non-runtime
+	// restore keeps the lane for its whole duration, and a long one blocks every
+	// account lane once identity publication waits: that writer stops new readers.
+	_, endLane, err := n.beginLane()
+	if err != nil {
+		return backup.RestoreSummary{}, n.currentMarketDataSink(), err
+	}
+	addsAssets, err := restoreAddsAssets(ctx, archive.Data.Assets, n.realm)
+	if err != nil {
+		endLane()
+		return backup.RestoreSummary{}, n.currentMarketDataSink(),
+			fmt.Errorf("check restore asset additions: %w", err)
+	}
+	runtimeScope := backup.TouchesRuntime(normalizedScope) || addsAssets
 	if runtimeScope {
 		// Reserve restart ownership before waiting for the exclusive gates. A
 		// concurrent rebuild must reject instead of reserving restarting while this
 		// restore commits and then forcing a fatal post-commit collision. The
 		// reservation does not itself require an engine replacement: expressible
 		// deltas still publish into the current engine below.
-		if err := n.beginEngineRestart(); err != nil {
+		// beginEngineRestartFromLane consumes endLane on both outcomes.
+		if err := n.beginEngineRestartFromLane(endLane); err != nil {
 			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
 		}
 		defer n.endEngineRestart()
 	} else {
 		if err := n.beginMutation(); err != nil {
+			endLane()
 			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
 		}
+		defer endLane()
 		defer n.endMutation()
 	}
 
 	var beforeRuntime restoreRuntimeSnapshot
 	var rollback backup.Archive
-	var err error
 	if runtimeScope {
 		beforeRuntime, _, err = n.captureRestoreRuntimeSnapshot(ctx)
 	} else {
@@ -901,7 +966,12 @@ func (n *localNode) rollbackStore(
 			errors.Join(err, fmt.Errorf("rollback restore backup: %w", restoreErr)),
 		)
 	}
-	return err
+	// rollbackStore only runs for a non-runtime restore, so the engine was
+	// never touched and the restore had already committed before the final
+	// audit write failed; the rollback above restored the prior scoped store
+	// state, but the commit itself makes this a post-commit failure rather
+	// than a caller fault.
+	return internalPostCommitNodeMutationError(err)
 }
 
 // localRouter is the single-node NodeRouter for the single-binary deployment.

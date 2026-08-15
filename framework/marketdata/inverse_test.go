@@ -29,13 +29,13 @@ func TestInvertQuoteUsesMarketConvention(t *testing.T) {
 	t.Parallel()
 	asOf := time.Date(2026, time.July, 17, 10, 30, 0, 0, time.UTC)
 	got, ok := InvertQuote(QuoteUpdate{
-		AsOf: asOf, Base: "EUR", Quote: "USD", Mark: "2", Bid: "4", Ask: "8",
+		AsOf: asOf, Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "2", Bid: "4", Ask: "8",
 	})
 	if !ok {
 		t.Fatal("InvertQuote ok = false, want true")
 	}
 	want := QuoteUpdate{
-		AsOf: asOf, Base: "USD", Quote: "EUR", Mark: "0.5", Bid: "0.125", Ask: "0.25",
+		AsOf: asOf, Base: testMarketDataAssetID("USD"), Quote: testMarketDataAssetID("EUR"), Mark: "0.5", Bid: "0.125", Ask: "0.25",
 	}
 	if got != want {
 		t.Fatalf("InvertQuote = %+v, want %+v", got, want)
@@ -52,38 +52,38 @@ func TestInvertQuoteOmitsMissingZeroAndInvalidFields(t *testing.T) {
 	}{
 		{
 			name:   "bid becomes ask",
-			update: QuoteUpdate{Base: "A", Quote: "B", Bid: "5"},
-			want:   QuoteUpdate{Base: "B", Quote: "A", Ask: "0.2"},
+			update: QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B"), Bid: "5"},
+			want:   QuoteUpdate{Base: testMarketDataAssetID("B"), Quote: testMarketDataAssetID("A"), Ask: "0.2"},
 			ok:     true,
 		},
 		{
 			name:   "ask becomes bid",
-			update: QuoteUpdate{Base: "A", Quote: "B", Ask: "4"},
-			want:   QuoteUpdate{Base: "B", Quote: "A", Bid: "0.25"},
+			update: QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B"), Ask: "4"},
+			want:   QuoteUpdate{Base: testMarketDataAssetID("B"), Quote: testMarketDataAssetID("A"), Bid: "0.25"},
 			ok:     true,
 		},
 		{
 			name:   "zero and invalid skipped beside valid field",
-			update: QuoteUpdate{Base: "A", Quote: "B", Mark: "0", Bid: "bad", Ask: "10"},
-			want:   QuoteUpdate{Base: "B", Quote: "A", Bid: "0.1"},
+			update: QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B"), Mark: "0", Bid: "bad", Ask: "10"},
+			want:   QuoteUpdate{Base: testMarketDataAssetID("B"), Quote: testMarketDataAssetID("A"), Bid: "0.1"},
 			ok:     true,
 		},
 		{
 			name:   "no invertible fields",
-			update: QuoteUpdate{Base: "A", Quote: "B", Mark: "0", Bid: "bad"},
-			want:   QuoteUpdate{Base: "B", Quote: "A"},
+			update: QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B"), Mark: "0", Bid: "bad"},
+			want:   QuoteUpdate{Base: testMarketDataAssetID("B"), Quote: testMarketDataAssetID("A")},
 			ok:     false,
 		},
 		{
 			name:   "negative prices are not invertible",
-			update: QuoteUpdate{Base: "A", Quote: "B", Mark: "-2"},
-			want:   QuoteUpdate{Base: "B", Quote: "A"},
+			update: QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B"), Mark: "-2"},
+			want:   QuoteUpdate{Base: testMarketDataAssetID("B"), Quote: testMarketDataAssetID("A")},
 			ok:     false,
 		},
 		{
 			name:   "empty quote",
-			update: QuoteUpdate{Base: "A", Quote: "B"},
-			want:   QuoteUpdate{Base: "B", Quote: "A"},
+			update: QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B")},
+			want:   QuoteUpdate{Base: testMarketDataAssetID("B"), Quote: testMarketDataAssetID("A")},
 			ok:     false,
 		},
 	}
@@ -101,13 +101,38 @@ func TestInvertQuoteOmitsMissingZeroAndInvalidFields(t *testing.T) {
 func TestInvertQuotePreservesHugePriceReciprocal(t *testing.T) {
 	t.Parallel()
 	got, ok := InvertQuote(QuoteUpdate{
-		Base: "A", Quote: "B", Mark: "100000000000000000",
+		Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B"), Mark: "100000000000000000",
 	})
 	if !ok {
 		t.Fatal("InvertQuote ok = false, want a representable reciprocal")
 	}
 	if got.Mark != "0.00000000000000001" {
 		t.Fatalf("inverted mark = %q, want exact non-zero reciprocal", got.Mark)
+	}
+}
+
+func TestSubscriptionsForSwapsAssetIDsForInversePair(t *testing.T) {
+	t.Parallel()
+	original := testMarketDataInstrumentWithAssetIDs(domain.MarketDataInstrument{
+		ExternalSymbol: "EURUSD",
+		BaseAsset:      "EUR",
+		QuoteAsset:     "USD",
+	})
+	inverse := testMarketDataInstrumentWithAssetIDs(domain.MarketDataInstrument{
+		ExternalSymbol: "USDEUR",
+		BaseAsset:      original.QuoteAsset,
+		QuoteAsset:     original.BaseAsset,
+		BaseAssetID:    original.QuoteAssetID,
+		QuoteAssetID:   original.BaseAssetID,
+	})
+
+	subs := subscriptionsFor([]domain.MarketDataInstrument{original, inverse}, nil)
+	if len(subs) != 2 {
+		t.Fatalf("subscription count = %d, want 2", len(subs))
+	}
+	if got := subs[1]; got.Base != subs[0].Quote ||
+		got.Quote != subs[0].Base {
+		t.Fatalf("inverse subscription = %+v, original = %+v", got, subs[0])
 	}
 }
 
@@ -121,6 +146,7 @@ func TestManagerDeliversOriginalAndSyntheticAndStoresOnlyOriginal(t *testing.T) 
 		Instance: instanceID, ExternalSymbol: "EURUSD",
 		BaseAsset: "EUR", QuoteAsset: "USD", Enabled: true,
 	}
+	instrument = testMarketDataInstrumentWithAssetIDs(instrument)
 	connector := newFakeConnector()
 	registry := NewRegistry()
 	if err := registry.Register(Provider{
@@ -145,17 +171,17 @@ func TestManagerDeliversOriginalAndSyntheticAndStoresOnlyOriginal(t *testing.T) 
 	defer manager.Stop()
 
 	mustPush(t, connector, QuoteUpdate{
-		Base: "EUR", Quote: "USD", Mark: "2", Bid: "4", Ask: "8",
+		Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "2", Bid: "4", Ask: "8",
 	})
 	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
 	got := sink.snapshot()
-	if got[0].Base != "EUR" || got[1].Base != "USD" ||
+	if got[0].Base != testMarketDataAssetID("EUR") || got[1].Base != testMarketDataAssetID("USD") ||
 		got[1].Mark != "0.5" || got[1].Bid != "0.125" || got[1].Ask != "0.25" {
 		t.Fatalf("sink updates = %+v", got)
 	}
 
 	mustPush(t, connector, QuoteUpdate{
-		Base: "EUR", Quote: "USD", Mark: "100000000000000000",
+		Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "100000000000000000",
 	})
 	waitFor(t, time.Second, func() bool { return sink.count() == 4 })
 	got = sink.snapshot()
@@ -184,6 +210,7 @@ func TestManagerConfiguredReverseSuppressesUntilRemovalAndRestart(t *testing.T) 
 		Instance: instanceID, ExternalSymbol: "EURUSD",
 		BaseAsset: "EUR", QuoteAsset: "USD", Enabled: true,
 	}
+	instrument = testMarketDataInstrumentWithAssetIDs(instrument)
 	reverse := domain.MarketDataInstrument{
 		Instance: reverseID, ExternalSymbol: "USD/EUR",
 		BaseAsset: "USD", QuoteAsset: "EUR", Enabled: false,
@@ -231,7 +258,7 @@ func TestManagerConfiguredReverseSuppressesUntilRemovalAndRestart(t *testing.T) 
 	}
 	waitFor(t, time.Second, func() bool { return sink.count() == 3 })
 	got := sink.snapshot()
-	if got[1].Mark != "2" || got[2].Base != "USD" || got[2].Quote != "EUR" ||
+	if got[1].Mark != "2" || got[2].Base != testMarketDataAssetID("USD") || got[2].Quote != testMarketDataAssetID("EUR") ||
 		got[2].Mark != "0.5" {
 		t.Fatalf("post-restart sink updates = %+v", got)
 	}
@@ -273,10 +300,10 @@ func TestManagerDoesNotEmitEmptySyntheticQuote(t *testing.T) {
 	}
 	defer manager.Stop()
 
-	mustPush(t, connector, QuoteUpdate{Base: "A", Quote: "B"})
-	mustPush(t, connector, QuoteUpdate{Base: "A", Quote: "B", Mark: "0", Bid: "bad"})
+	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B")})
+	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B"), Mark: "0", Bid: "bad"})
 	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
-	if got := sink.snapshot(); got[0].Base != "A" || got[1].Base != "A" {
+	if got := sink.snapshot(); got[0].Base != testMarketDataAssetID("A") || got[1].Base != testMarketDataAssetID("A") {
 		t.Fatalf("sink updates = %+v, want originals only", got)
 	}
 }

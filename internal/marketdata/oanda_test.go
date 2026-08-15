@@ -79,8 +79,8 @@ func TestOANDAPricingStreamURL(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
-		{External: "GBP_USD", Base: "GBP", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
+		{External: "GBP_USD", Base: testMarketDataAssetID("GBP"), Quote: testMarketDataAssetID("USD")},
 	})
 	got := oandaPricingStreamURL(oandaCredentials{
 		AccountID:   "101-001-123",
@@ -106,7 +106,7 @@ func TestParseOANDAQuoteUpdate(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{
 		"type":"PRICE",
@@ -132,7 +132,7 @@ func TestParseOANDAQuoteUpdateSkipsHeartbeat(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	if _, ok := parseOANDAQuoteUpdate([]byte(`{"type":"HEARTBEAT"}`), subs); ok {
 		t.Fatal("parseOANDAQuoteUpdate heartbeat ok=true, want false")
@@ -143,7 +143,7 @@ func TestParseOANDAQuoteUpdateSkipsEmptyPrice(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{
 		"type":"PRICE",
@@ -161,7 +161,7 @@ func TestOANDAConnector_AllowsLongPriceLine(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	line := `{"type":"PRICE","instrument":"EUR_USD","time":"2026-06-20T10:11:12Z","bids":[{"price":"1"}],"asks":[{"price":"1.1"}],"extra":"` +
 		strings.Repeat("x", oandaScannerInitialSize+1024) + `"}`
@@ -216,7 +216,7 @@ func TestOANDAConnector_SubscribeCloseLifecycle(t *testing.T) {
 	}
 
 	ch, err := connector.Subscribe(context.Background(), []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -237,7 +237,7 @@ func TestOANDAConnector_SubscribeCloseLifecycle(t *testing.T) {
 		t.Fatal("subscription did not deliver first quote")
 	}
 	if update.Bid != "1" || update.Ask != "1.1" ||
-		update.Base != "EUR" || update.Quote != "USD" {
+		update.Base != testMarketDataAssetID("EUR") || update.Quote != testMarketDataAssetID("USD") {
 		t.Fatalf("update = %+v", update)
 	}
 
@@ -316,7 +316,7 @@ func TestOANDAConnector_ReconnectsWithBackoff(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := io.NopCloser(strings.NewReader(strings.Join([]string{
 		`{"type":"PRICE","instrument":"EUR_USD","time":"2026-06-20T10:11:12Z","bids":[{"price":"1"}],"asks":[{"price":"1.1"}]}`,
@@ -395,7 +395,7 @@ func TestOANDAConnector_RetriesStreamOpenError(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	wantErr := errors.New("temporary")
 
@@ -429,7 +429,7 @@ func TestOANDAConnector_IdleTimeoutClosesStream(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	var body *blockingOANDABody
 	connector := &oandaConnector{
@@ -476,7 +476,7 @@ func TestOANDAConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
-		{External: "EUR_USD", Base: "EUR", Quote: "USD"},
+		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := io.NopCloser(strings.NewReader(
 		`{"type":"PRICE","instrument":"EUR_USD","time":"2026-06-20T10:11:12Z","bids":[{"price":"1"}],"asks":[{"price":"1.1"}]}`,

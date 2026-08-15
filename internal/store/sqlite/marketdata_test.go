@@ -39,10 +39,10 @@ func seedMDFixtures(t *testing.T) (context.Context, RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple"}); err != nil {
 		t.Fatalf("CreateAsset AAPL: %v", err)
 	}
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "US Dollar"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "US Dollar"}); err != nil {
 		t.Fatalf("CreateAsset USD: %v", err)
 	}
 	return ctx, rs
@@ -428,6 +428,20 @@ func TestMDInstrumentUpsertAndList(t *testing.T) {
 	if got.QuoteAsset != instr.QuoteAsset {
 		t.Fatalf("QuoteAsset = %q, want %q", got.QuoteAsset, instr.QuoteAsset)
 	}
+	base, ok, err := rs.GetAsset(ctx, instr.BaseAsset)
+	if err != nil || !ok {
+		t.Fatalf("GetAsset(%s): ok=%v err=%v", instr.BaseAsset, ok, err)
+	}
+	quote, ok, err := rs.GetAsset(ctx, instr.QuoteAsset)
+	if err != nil || !ok {
+		t.Fatalf("GetAsset(%s): ok=%v err=%v", instr.QuoteAsset, ok, err)
+	}
+	if got.BaseAssetID != base.EngineAssetID || got.QuoteAssetID != quote.EngineAssetID {
+		t.Fatalf(
+			"asset ids = %d/%d, want %d/%d",
+			got.BaseAssetID, got.QuoteAssetID, base.EngineAssetID, quote.EngineAssetID,
+		)
+	}
 	if got.ManualPrice != instr.ManualPrice {
 		t.Fatalf("ManualPrice = %q, want %q", got.ManualPrice, instr.ManualPrice)
 	}
@@ -442,7 +456,7 @@ func TestMDInstrumentUpsertReplaceOnConflict(t *testing.T) {
 	ctx, rs := seedMDFixtures(t)
 
 	// Add a second base asset to replace with.
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "BTC"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "BTC"}); err != nil {
 		t.Fatalf("CreateAsset BTC: %v", err)
 	}
 
@@ -669,6 +683,15 @@ func TestMDQuoteUpsertAndList(t *testing.T) {
 	if !got.ReceivedAt.Equal(q.ReceivedAt) {
 		t.Fatalf("ReceivedAt = %v, want %v", got.ReceivedAt, q.ReceivedAt)
 	}
+	if _, err := rs.UpdateAsset(ctx, "AAPL", domain.Asset{Code: "AAPL.NEW"}); err != nil {
+		t.Fatalf("UpdateAsset(AAPL): %v", err)
+	}
+	quotesAfterRename, err := rs.ListMarketDataQuotes(ctx, inst.ExternalID)
+	if err != nil || len(quotesAfterRename) != 1 ||
+		quotesAfterRename[0].BaseAsset != "AAPL.NEW" ||
+		quotesAfterRename[0].QuoteAsset != "USD" {
+		t.Fatalf("quotes after asset rename = %+v, err=%v", quotesAfterRename, err)
+	}
 }
 
 // TestMDQuoteUpsertReplace confirms that upserting a second quote for the same
@@ -717,7 +740,7 @@ func TestMDQuoteUpsertReplace(t *testing.T) {
 func TestMDQuoteListAllInstances(t *testing.T) {
 	ctx, rs := seedMDFixtures(t)
 
-	if err := rs.CreateAsset(ctx, domain.Asset{Code: "BTC"}); err != nil {
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "BTC"}); err != nil {
 		t.Fatalf("CreateAsset BTC: %v", err)
 	}
 

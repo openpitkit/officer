@@ -66,5 +66,5 @@ func newReferenceComposition() referenceComposition {
 	}
 }
 
-var _ marketdata.Connector = privateConnector{}
+var _ marketdata.Connector = (*privateConnector)(nil)
 var _ http.HandlerFunc = privateRoute
