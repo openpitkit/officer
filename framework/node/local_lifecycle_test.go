@@ -20,12 +20,102 @@ package node
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 )
+
+type lifecycleMarketDataServiceOwner struct {
+	once  sync.Once
+	calls int
+}
+
+func (o *lifecycleMarketDataServiceOwner) Close() {
+	o.once.Do(func() { o.calls++ })
+}
+
+type lifecycleMarketDataEngine struct {
+	engine.Engine
+	owner *lifecycleMarketDataServiceOwner
+}
+
+func (e lifecycleMarketDataEngine) CloseMarketDataService() {
+	e.owner.Close()
+}
+
+func TestLocalNode_SharedMarketDataServiceClosesOnlyAtFinalShutdown(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newMemoryStore("shared-market-data-lifecycle.db")
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = st.Close()
+		}
+	})
+
+	owner := &lifecycleMarketDataServiceOwner{}
+	first := newFakeEngine()
+	second := newFakeEngine()
+	builds := 0
+	build := func(snapshot engine.Snapshot) (engine.Engine, error) {
+		var next *fakeEngine
+		switch builds {
+		case 0:
+			next = first
+		case 1:
+			next = second
+		default:
+			t.Fatalf("unexpected build %d", builds+1)
+		}
+		builds++
+		built, err := fakeBuild(next, new(engine.Snapshot))(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		return lifecycleMarketDataEngine{Engine: built, owner: owner}, nil
+	}
+
+	nodeValue, _, err := NewLocalNode(ctx, st, build)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nodeValue.(*localNode)
+	if err := n.realm.CreatePrincipal(
+		ctx, domain.Principal{Code: testCaller.Principal},
+	); err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreatePrincipal: %v", err)
+	}
+	if _, err := n.realm.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	if err := n.DeleteAsset(ctx, "AAPL", true, testCaller); err != nil {
+		t.Fatalf("DeleteAsset: %v", err)
+	}
+	if first.running || !second.running {
+		t.Fatalf("engine rebuild state: first=%v second=%v", first.running, second.running)
+	}
+	if owner.calls != 0 {
+		t.Fatalf("service closes after intermediate replacement = %d, want 0", owner.calls)
+	}
+
+	if err := n.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	closed = true
+	if second.running {
+		t.Fatal("final engine is still running after node shutdown")
+	}
+	if owner.calls != 1 {
+		t.Fatalf("service closes after final shutdown = %d, want 1", owner.calls)
+	}
+}
 
 func TestNewLocalNode_SeedsBuildAndAudits(t *testing.T) {
 	t.Parallel()

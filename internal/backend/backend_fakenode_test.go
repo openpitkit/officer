@@ -71,7 +71,6 @@ type fakeNode struct {
 	userSettings     map[string]string
 	mdInstances      []domain.MarketDataInstance
 	mdInstruments    map[string][]domain.MarketDataInstrument
-	mdQuotes         []domain.MarketDataQuote
 
 	backupArchive           backup.Archive
 	backupScope             backup.Scope
@@ -1435,6 +1434,12 @@ func (n *fakeNode) UpsertMarketDataInstrument(
 		n.mdInstruments = make(map[string][]domain.MarketDataInstrument)
 	}
 	key := instrument.Instance.String()
+	for index := range n.mdInstruments[key] {
+		if n.mdInstruments[key][index].ExternalSymbol == instrument.ExternalSymbol {
+			n.mdInstruments[key][index] = instrument
+			return nil
+		}
+	}
 	n.mdInstruments[key] = append(n.mdInstruments[key], instrument)
 	return nil
 }
@@ -1466,21 +1471,6 @@ func (n *fakeNode) DeleteMarketDataInstrument(
 	return domain.ErrNotFound
 }
 
-func (n *fakeNode) ListMarketDataQuotes(
-	_ context.Context, instance domain.ExternalID,
-) ([]domain.MarketDataQuote, error) {
-	if instance.IsZero() {
-		return n.mdQuotes, nil
-	}
-	out := make([]domain.MarketDataQuote, 0)
-	for _, quote := range n.mdQuotes {
-		if quote.Instance == instance {
-			out = append(out, quote)
-		}
-	}
-	return out, nil
-}
-
 func (n *fakeNode) Close() error { return nil }
 
 // fakeRouter routes every key to the single fake node.
@@ -1510,6 +1500,7 @@ type fakeMarketDataRuntime struct {
 	sink       marketdata.Sink
 	restartErr error
 	useSinkErr error
+	snapshots  []marketdata.QuoteSnapshot
 }
 
 type backendTestSink struct{}
@@ -1522,6 +1513,10 @@ func (r *fakeMarketDataRuntime) InstanceStatuses() map[string]marketdata.Instanc
 
 func (r *fakeMarketDataRuntime) AppliedConfig() map[string]marketdata.AppliedInstanceConfig {
 	return r.applied
+}
+
+func (r *fakeMarketDataRuntime) QuoteSnapshots() []marketdata.QuoteSnapshot {
+	return append([]marketdata.QuoteSnapshot(nil), r.snapshots...)
 }
 
 func (r *fakeMarketDataRuntime) Registry() *marketdata.Registry {

@@ -118,7 +118,6 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		Audit:                 append([]domain.AuditRow(nil), r.audit...),
 		MarketDataInstances:   make([]domain.MarketDataInstance, 0, len(r.instances)),
 		MarketDataInstruments: make([]backup.MarketDataInstrument, 0, len(r.instruments)),
-		MarketDataQuotes:      make([]domain.MarketDataQuote, 0, len(r.quotes)),
 		SigningKeys:           make([]backup.SigningKey, 0, len(r.signingKeys)),
 		SigningConfig:         make([]backup.SigningConfigEntry, 0, len(r.signingConfig)),
 		McpAccess:             make(map[string]bool, len(r.mcpAccess)),
@@ -190,9 +189,6 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 				Enabled:        instrument.Enabled,
 			},
 		)
-	}
-	for _, quote := range r.quotes {
-		data.MarketDataQuotes = append(data.MarketDataQuotes, quote)
 	}
 	for _, key := range r.signingKeys {
 		data.SigningKeys = append(data.SigningKeys, backup.SigningKey{
@@ -348,10 +344,6 @@ func (r *memoryRealm) restoreData(data backup.Data, mode backup.RestoreMode) {
 		}
 		r.instruments[instrumentKey(instrument.Instance, instrument.ExternalSymbol)] = stored
 	}
-	r.quotes = map[string]domain.MarketDataQuote{}
-	for _, quote := range data.MarketDataQuotes {
-		r.quotes[instrumentKey(quote.Instance, quote.ExternalSymbol)] = quote
-	}
 	r.signingKeys = map[string]domain.SigningKey{}
 	for _, key := range data.SigningKeys {
 		r.signingKeys[key.KeyID] = domain.SigningKey{
@@ -384,8 +376,6 @@ func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) in
 		return len(r.rateLimits) + len(r.orderSizeLimits) + len(r.spotFundsPnlBoundsLimits)
 	case backup.SectionMarketData:
 		return len(r.instances) + len(r.instruments)
-	case backup.SectionMarketDataQuotes:
-		return len(r.quotes)
 	case backup.SectionGeneralSettings:
 		return len(r.mcpAccess) + len(r.signingConfig)
 	case backup.SectionUserSettings:

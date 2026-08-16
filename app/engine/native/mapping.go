@@ -37,6 +37,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/marketdata"
 )
 
 // --- engine-id resolution ---------------------------------------------------
@@ -227,7 +228,7 @@ func unknownAssetAliasError(code string) error {
 }
 
 func unknownAssetIDError(id domain.EngineAssetID) error {
-	return fmt.Errorf("engine: unknown asset engine id %d", id)
+	return fmt.Errorf("engine: unknown asset engine id %d: %w", id, marketdata.ErrUnknownAsset)
 }
 
 func unknownAssetReadyIDError(id param.Asset) error {

@@ -35,11 +35,12 @@ var (
 )
 
 type memoryStore struct {
-	mu      sync.Mutex
-	realm   *memoryRealm
-	path    string
-	version int
-	closed  bool
+	mu       sync.Mutex
+	realm    *memoryRealm
+	path     string
+	version  int
+	closed   bool
+	resetErr error
 }
 
 type memoryRealm struct {
@@ -69,7 +70,6 @@ type memoryRealm struct {
 
 	instances   map[domain.ExternalID]domain.MarketDataInstance
 	instruments map[string]domain.MarketDataInstrument
-	quotes      map[string]domain.MarketDataQuote
 
 	signingKeys   map[string]domain.SigningKey
 	signingConfig map[string]string
@@ -103,7 +103,6 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		attestations:             map[domain.ExternalID]domain.EventAttestation{},
 		instances:                map[domain.ExternalID]domain.MarketDataInstance{},
 		instruments:              map[string]domain.MarketDataInstrument{},
-		quotes:                   map[string]domain.MarketDataQuote{},
 		signingKeys:              map[string]domain.SigningKey{},
 		signingConfig:            map[string]string{},
 		mcpAccess:                map[string]bool{},
@@ -133,6 +132,9 @@ func (s *memoryStore) Path() string { return s.path }
 func (s *memoryStore) Reset(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.resetErr != nil {
+		return s.resetErr
+	}
 	s.realm = newMemoryRealm(s)
 	return nil
 }

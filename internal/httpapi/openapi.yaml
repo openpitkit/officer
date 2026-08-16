@@ -4445,7 +4445,6 @@ components:
         - positions
         - risk_limits
         - market_data_settings
-        - market_data_quotes
         - general_settings
         - activity_history
         - audit_log
@@ -4674,11 +4673,6 @@ components:
         marketDataInstruments:
           type: array
           description: Serialized market-data instrument mapping rows.
-          items:
-            type: object
-        marketDataQuotes:
-          type: array
-          description: Serialized latest market-data quote rows.
           items:
             type: object
         signingKeys:

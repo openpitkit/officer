@@ -839,7 +839,6 @@ export type BackupSection =
   | "positions"
   | "risk_limits"
   | "market_data_settings"
-  | "market_data_quotes"
   | "general_settings"
   | "user_settings"
   | "activity_history"
@@ -893,7 +892,6 @@ export interface BackupData {
   audit?: Record<string, unknown>[];
   marketDataInstances?: Record<string, unknown>[];
   marketDataInstruments?: Record<string, unknown>[];
-  marketDataQuotes?: Record<string, unknown>[];
   signingKeys?: Record<string, unknown>[];
   signingConfig?: Record<string, unknown>[];
   mcpAccess?: Record<string, boolean>;

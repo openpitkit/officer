@@ -731,34 +731,12 @@ func (n *localNode) DeleteAccount(
 	if next == previousEngine {
 		return fmt.Errorf("build engine for account delete returned current engine")
 	}
-	transition, err := n.beginMarketDataTransition(next)
-	if err != nil {
-		next.Stop()
-		return fmt.Errorf("prepare account delete market data: %w", err)
-	}
-	if err := n.replayMarketDataInto(ctx, next); err != nil {
-		n.cancelMarketDataTransition(transition)
-		next.Stop()
-		return fmt.Errorf("replay market data for account delete: %w", err)
-	}
-
-	// DeleteAccount is the durable commit point. The transition flushes every
-	// provider update first, then executes this hook while both sink-routing
-	// locks are held. A failed store transaction restores the old sink route and
-	// leaves the old engine current. A successful transaction is followed only
-	// by the infallible engine/sink pointer swap.
 	durableCtx := context.WithoutCancel(ctx)
-	prev, err := n.commitMarketDataTransitionWithHook(transition, next, func() error {
-		if err := n.realm.DeleteAccount(durableCtx, account.Code, force); err != nil {
-			return fmt.Errorf("delete account: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		n.cancelMarketDataTransition(transition)
+	if err := n.realm.DeleteAccount(durableCtx, account.Code, force); err != nil {
 		next.Stop()
-		return fmt.Errorf("commit account delete engine transition: %w", err)
+		return fmt.Errorf("delete account: %w", err)
 	}
+	prev := n.swapEngine(next)
 	if prev != nil && prev != next {
 		prev.Stop()
 	}

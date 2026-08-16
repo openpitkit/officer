@@ -24,6 +24,7 @@
 package native
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -192,7 +193,7 @@ func TestMarketDataSink_PushSecondQuoteSameInstrument(t *testing.T) {
 	}
 }
 
-func TestMarketDataSink_SourceFreshnessPreservesExpiredQuote(t *testing.T) {
+func TestMarketDataSink_SourceAgeExpiresOldQuoteImmediately(t *testing.T) {
 	t.Parallel()
 	sink, service := newTestSink(t)
 	now := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
@@ -215,7 +216,7 @@ func TestMarketDataSink_SourceFreshnessPreservesExpiredQuote(t *testing.T) {
 	}
 
 	if err := sink.Push(marketdata.QuoteUpdate{
-		AsOf: now.Add(-MarketDataFreshnessTTL),
+		AsOf: now.Add(-MarketDataFreshnessTTL - time.Second),
 		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "101",
 	}); err != nil {
 		t.Fatalf("Push stale boundary quote: %v", err)
@@ -246,220 +247,6 @@ func TestMarketDataSink_SourceFreshnessPreservesExpiredQuote(t *testing.T) {
 	}
 	if got := readMark(t, service, instrument); got != "102" {
 		t.Fatalf("fresh quote after stale mark = %q, want 102", got)
-	}
-}
-
-// TestMarketDataSink_PushKeepsInstrumentContinuouslyQuoted pins that a publish
-// never clears a live quote to make room for its successor: a concurrent
-// account-lane reader must always find a quote, because SpotFunds still values
-// positions off the last one even once it expires. Clearing before the push
-// reopens that window, and this read loop lands in it.
-func TestMarketDataSink_PushKeepsInstrumentContinuouslyQuoted(t *testing.T) {
-	t.Parallel()
-	const publishes = 200
-	sink, service := newTestSink(t)
-
-	if err := sink.Push(marketdata.QuoteUpdate{
-		AsOf: time.Now(), Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "1.10",
-	}); err != nil {
-		t.Fatalf("seed Push: %v", err)
-	}
-	instrument, err := instrumentFrom(
-		testMarketDataAssetID("EUR"), testMarketDataAssetID("USD"), testResolver(),
-	)
-	if err != nil {
-		t.Fatalf("instrumentFrom: %v", err)
-	}
-	id, ok := service.Resolve(instrument)
-	if !ok {
-		t.Fatal("Resolve: instrument not registered")
-	}
-
-	published := make(chan error, 1)
-	go func() {
-		var err error
-		for i := 0; i < publishes && err == nil; i++ {
-			err = sink.Push(marketdata.QuoteUpdate{
-				AsOf: time.Now(), Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "1.11",
-			})
-		}
-		published <- err
-	}()
-
-	// Never fail inside the loop: the publisher still holds the service, which
-	// t.Cleanup closes as soon as this goroutine leaves.
-	var readErr error
-	for {
-		select {
-		case err := <-published:
-			if err != nil {
-				t.Fatalf("concurrent Push: %v", err)
-			}
-			if readErr != nil {
-				t.Fatalf("read during publish: %v, want a quote throughout", readErr)
-			}
-			return
-		default:
-		}
-		if _, err := service.Get(
-			id,
-			param.NewAccountIDFromUint64(1),
-			noGroupAccountInfo{},
-			bindmd.QuoteResolutionAccountThenGroupThenDefault,
-		); err != nil && readErr == nil {
-			readErr = err
-		}
-	}
-}
-
-// TestMarketDataSink_PushNeverServesAgedQuoteAsFresh covers the other half of
-// the publish order. The quote and its lifetime move in separate SDK calls, so
-// one is always visible before the other, and the engine service is
-// synchronous: an account lane really does read inside that window. A
-// source-aged quote that becomes readable under the lifetime of its successor
-// is a stale price served as a live one, which is what the read loop hunts for.
-// The publisher alternates an already-expired source quote with a current one,
-// so every publish moves the lifetime in one direction or the other; the loop
-// is a probe and only fails when it lands in a bad window, so the deterministic
-// end states are asserted first.
-func TestMarketDataSink_PushNeverServesAgedQuoteAsFresh(t *testing.T) {
-	t.Parallel()
-	const (
-		publishes = 200
-		agedMark  = "1"
-		freshMark = "2"
-	)
-	sink, service := newTestSink(t)
-	agedUpdate := func() marketdata.QuoteUpdate {
-		return marketdata.QuoteUpdate{
-			AsOf: time.Now().Add(-2 * MarketDataFreshnessTTL),
-			Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: agedMark,
-		}
-	}
-	freshUpdate := func() marketdata.QuoteUpdate {
-		return marketdata.QuoteUpdate{
-			AsOf: time.Now(), Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: freshMark,
-		}
-	}
-
-	if err := sink.Push(agedUpdate()); err != nil {
-		t.Fatalf("seed aged Push: %v", err)
-	}
-	instrument, err := instrumentFrom(
-		testMarketDataAssetID("EUR"), testMarketDataAssetID("USD"), testResolver(),
-	)
-	if err != nil {
-		t.Fatalf("instrumentFrom: %v", err)
-	}
-	id, ok := service.Resolve(instrument)
-	if !ok {
-		t.Fatal("Resolve: instrument not registered")
-	}
-	read := func() (string, error) {
-		quote, err := service.Get(
-			id,
-			param.NewAccountIDFromUint64(1),
-			noGroupAccountInfo{},
-			bindmd.QuoteResolutionAccountThenGroupThenDefault,
-		)
-		if err != nil {
-			return "", err
-		}
-		mark, ok := quote.Mark().Get()
-		if !ok {
-			return "", errors.New("quote has no mark")
-		}
-		return mark.String(), nil
-	}
-
-	if _, err := read(); !errors.Is(err, bindmd.ErrQuoteExpired) {
-		t.Fatalf("aged seed read error = %v, want ErrQuoteExpired", err)
-	}
-	if err := sink.Push(freshUpdate()); err != nil {
-		t.Fatalf("fresh Push: %v", err)
-	}
-	if mark, err := read(); err != nil || mark != freshMark {
-		t.Fatalf("fresh read = (%q, %v), want (%q, nil)", mark, err, freshMark)
-	}
-
-	published := make(chan error, 1)
-	go func() {
-		var err error
-		for i := 0; i < publishes && err == nil; i++ {
-			if i%2 == 0 {
-				err = sink.Push(agedUpdate())
-				continue
-			}
-			err = sink.Push(freshUpdate())
-		}
-		published <- err
-	}()
-
-	// Never fail inside the loop: the publisher still holds the service, which
-	// t.Cleanup closes as soon as this goroutine leaves.
-	served := ""
-	for {
-		select {
-		case err := <-published:
-			if err != nil {
-				t.Fatalf("concurrent Push: %v", err)
-			}
-			if served != "" {
-				t.Fatalf(
-					"read during publish served mark %q as fresh, want only %q",
-					served, freshMark,
-				)
-			}
-			return
-		default:
-		}
-		if mark, err := read(); err == nil && mark != freshMark && served == "" {
-			served = mark
-		}
-	}
-}
-
-func TestQuoteSourceTTL(t *testing.T) {
-	t.Parallel()
-	now := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
-	tests := []struct {
-		name      string
-		asOf      time.Time
-		want      time.Duration
-		wantBound bool
-	}{
-		{name: "missing source time uses default"},
-		{
-			name: "future source time is clamped to full source lifetime",
-			asOf: now.Add(time.Second), want: MarketDataFreshnessTTL, wantBound: true,
-		},
-		{
-			name: "fresh source keeps only its remaining lifetime",
-			asOf: now.Add(-MarketDataFreshnessTTL + time.Second),
-			want: time.Second, wantBound: true,
-		},
-		{
-			name:      "source boundary is expired",
-			asOf:      now.Add(-MarketDataFreshnessTTL),
-			wantBound: true,
-		},
-		{
-			name:      "older source is expired",
-			asOf:      now.Add(-MarketDataFreshnessTTL - time.Second),
-			wantBound: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			got, bound := quoteSourceTTL(test.asOf, now)
-			if got != test.want || bound != test.wantBound {
-				t.Fatalf(
-					"quoteSourceTTL() = (%s, %t), want (%s, %t)",
-					got, bound, test.want, test.wantBound,
-				)
-			}
-		})
 	}
 }
 
@@ -496,6 +283,262 @@ func TestMarketDataSink_ClearRemovesStoredQuote(t *testing.T) {
 	)
 	if !errors.Is(err, bindmd.ErrQuoteUnavailable) {
 		t.Fatalf("Get after Clear error = %v, want ErrQuoteUnavailable", err)
+	}
+}
+
+func TestOpenPitBuildFunc_RebuildPreservesPublishedQuoteWithoutStore(t *testing.T) {
+	t.Parallel()
+	build := NewOpenPitEngineBuildFunc("")
+	snapshot := Snapshot{Assets: testAssets()}
+
+	firstEngine, err := build(snapshot)
+	if err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+	first := firstEngine.(*openPitEngine)
+	current := first
+	t.Cleanup(func() {
+		current.Stop()
+		current.CloseMarketDataService()
+	})
+
+	if err := first.sink.Push(marketdata.QuoteUpdate{
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "185",
+	}); err != nil {
+		t.Fatalf("Push before rebuild: %v", err)
+	}
+
+	secondEngine, err := build(snapshot)
+	if err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+	second := secondEngine.(*openPitEngine)
+	current = second
+	first.Stop()
+
+	instrument, err := instrumentFrom(
+		testMarketDataAssetID("AAPL"), testMarketDataAssetID("USD"), testResolver(),
+	)
+	if err != nil {
+		t.Fatalf("instrumentFrom: %v", err)
+	}
+	if got := readMark(t, second.marketDataService.service, instrument); got != "185" {
+		t.Fatalf("mark after rebuild = %q, want 185", got)
+	}
+}
+
+func TestOpenPitBuildFunc_RebuildUsesPublishedQuoteForMarketOrder(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		asOf     time.Time
+		wantPass bool
+	}{
+		{name: "fresh", wantPass: true},
+		{
+			name: "expired",
+			asOf: time.Now().Add(-MarketDataFreshnessTTL - time.Minute),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			build := NewOpenPitEngineBuildFunc("")
+			firstSnapshot := Snapshot{
+				Assets:   testAssets(),
+				Accounts: []domain.Account{account("acc-1")},
+				Balances: []domain.Balance{
+					fundedBalance("acc-1", "USD", "1000000"),
+					fundedBalance("acc-1", "AAPL", "1000000"),
+				},
+			}
+
+			firstEngine, err := build(firstSnapshot)
+			if err != nil {
+				t.Fatalf("first build: %v", err)
+			}
+			serviceCloser, ok := firstEngine.(interface {
+				CloseMarketDataService()
+			})
+			if !ok {
+				firstEngine.Stop()
+				t.Fatal("first engine cannot close shared market-data service")
+			}
+			current := firstEngine
+			t.Cleanup(func() {
+				current.Stop()
+				serviceCloser.CloseMarketDataService()
+			})
+
+			if err := firstEngine.MarketDataSink().Push(marketdata.QuoteUpdate{
+				AsOf: test.asOf,
+				Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "185",
+			}); err != nil {
+				t.Fatalf("Push before rebuild: %v", err)
+			}
+
+			secondSnapshot := firstSnapshot
+			secondSnapshot.Accounts = append(
+				append([]domain.Account(nil), firstSnapshot.Accounts...),
+				account("acc-2"),
+			)
+			secondEngine, err := build(secondSnapshot)
+			if err != nil {
+				t.Fatalf("second build: %v", err)
+			}
+			current = secondEngine
+			firstEngine.Stop()
+
+			result, err := checkOrderOnLane(
+				context.Background(), secondEngine,
+				checkProbe("acc-1", domain.OrderSideBuy, "1", ""),
+			)
+			if err != nil {
+				t.Fatalf("CheckOrder after rebuild: %v", err)
+			}
+			if test.wantPass {
+				if !result.Passed || result.WouldLockPrice == "" {
+					t.Fatalf(
+						"fresh market order after rebuild = %+v, want priced pass",
+						result,
+					)
+				}
+				return
+			}
+			if result.Passed || !hasRejectCode(
+				result.Rejects, "mark_price_unavailable",
+			) {
+				t.Fatalf(
+					"expired market order after rebuild = %+v, want mark_price_unavailable reject",
+					result,
+				)
+			}
+		})
+	}
+}
+
+func TestOpenPitBuildFunc_SharedServiceClosesOnlyAtFinalShutdown(t *testing.T) {
+	t.Parallel()
+	build := NewOpenPitEngineBuildFunc("")
+	snapshot := Snapshot{Assets: testAssets()}
+
+	firstEngine, err := build(snapshot)
+	if err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+	first := firstEngine.(*openPitEngine)
+	secondEngine, err := build(snapshot)
+	if err != nil {
+		first.Stop()
+		first.CloseMarketDataService()
+		t.Fatalf("second build: %v", err)
+	}
+	second := secondEngine.(*openPitEngine)
+	first.Stop()
+
+	update := marketdata.QuoteUpdate{
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "186",
+	}
+	if err := second.sink.Push(update); err != nil {
+		second.Stop()
+		second.CloseMarketDataService()
+		t.Fatalf("Push after intermediate Stop: %v", err)
+	}
+
+	second.Stop()
+	second.CloseMarketDataService()
+	second.CloseMarketDataService()
+	if err := second.sink.Push(update); !errors.Is(err, bindmd.ErrServiceClosed) {
+		t.Fatalf("Push after final shutdown = %v, want ErrServiceClosed", err)
+	}
+}
+
+func TestOpenPitBuildFunc_ReplacesClosedSharedService(t *testing.T) {
+	t.Parallel()
+	build := NewOpenPitEngineBuildFunc("")
+	snapshot := Snapshot{Assets: testAssets()}
+	var engines []*openPitEngine
+	t.Cleanup(func() {
+		for _, eng := range engines {
+			eng.Stop()
+		}
+		for _, eng := range engines {
+			eng.CloseMarketDataService()
+		}
+	})
+
+	firstEngine, err := build(snapshot)
+	if err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+	first := firstEngine.(*openPitEngine)
+	engines = append(engines, first)
+	firstService := first.marketDataService
+	first.CloseMarketDataService()
+	if !firstService.isClosed() {
+		t.Fatal("first service did not report closed")
+	}
+
+	secondEngine, err := build(snapshot)
+	if err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+	second := secondEngine.(*openPitEngine)
+	engines = append(engines, second)
+	if second.marketDataService == firstService {
+		t.Fatal("second build reused the closed service")
+	}
+	if second.marketDataService.isClosed() {
+		t.Fatal("replacement service reports closed")
+	}
+
+	thirdEngine, err := build(snapshot)
+	if err != nil {
+		t.Fatalf("third build: %v", err)
+	}
+	third := thirdEngine.(*openPitEngine)
+	engines = append(engines, third)
+	if third.marketDataService != second.marketDataService {
+		t.Fatal("builds after rotation did not share the replacement service")
+	}
+}
+
+func TestOpenPitBuildFunc_FailedRebuildKeepsSharedServiceLive(t *testing.T) {
+	t.Parallel()
+	build := NewOpenPitEngineBuildFunc("")
+	snapshot := Snapshot{Assets: testAssets()}
+
+	firstEngine, err := build(snapshot)
+	if err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+	first := firstEngine.(*openPitEngine)
+	t.Cleanup(func() {
+		first.Stop()
+		first.CloseMarketDataService()
+	})
+	if err := first.sink.Push(marketdata.QuoteUpdate{
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "185",
+	}); err != nil {
+		t.Fatalf("Push before failed rebuild: %v", err)
+	}
+
+	invalid := snapshot
+	invalid.RateLimits = []domain.LimitRate{
+		rateLimit(domain.ScopeAccount, "missing", "", 1, time.Second),
+	}
+	if _, err := build(invalid); err == nil {
+		t.Fatal("failed rebuild succeeded")
+	}
+
+	instrument, err := instrumentFrom(
+		testMarketDataAssetID("AAPL"), testMarketDataAssetID("USD"), testResolver(),
+	)
+	if err != nil {
+		t.Fatalf("instrumentFrom: %v", err)
+	}
+	if got := readMark(t, first.marketDataService.service, instrument); got != "185" {
+		t.Fatalf("mark after failed rebuild = %q, want 185", got)
 	}
 }
 

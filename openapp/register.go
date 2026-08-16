@@ -48,9 +48,7 @@ func Register(b *frameworkapp.Builder) {
 		return sqlite.New(path)
 	})
 	b.SetEngineBuildFactory(func(cfg frameworkapp.Config) engine.BuildFunc {
-		return func(snap engine.Snapshot) (engine.Engine, error) {
-			return enginenative.BuildOpenPitEngine(cfg.RuntimeLibraryPath, snap)
-		}
+		return enginenative.NewOpenPitEngineBuildFunc(cfg.RuntimeLibraryPath)
 	})
 	b.SetNodeBuilder(func(
 		ctx context.Context,

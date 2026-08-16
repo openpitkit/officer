@@ -40,13 +40,15 @@ func TestLocalNode_BrokerBarrierRemovalKeepsNativeEngineAndSink(t *testing.T) {
 	}
 
 	builds := 0
+	build := NewOpenPitEngineBuildFunc("")
+	countingBuild := func(snapshot engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return build(snapshot)
+	}
 	n, _, err := node.NewLocalNode(
 		ctx,
 		store,
-		func(snapshot engine.Snapshot) (engine.Engine, error) {
-			builds++
-			return BuildOpenPitEngine("", snapshot)
-		},
+		countingBuild,
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)

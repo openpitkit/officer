@@ -83,6 +83,17 @@ func testAsyncEngine(t *testing.T, eng *openpit.Engine) *asyncengine.AsyncEngine
 	return async
 }
 
+func newTestSharedMarketDataService(t *testing.T) *sharedMarketDataService {
+	t.Helper()
+	service, err := openpit.NewEngineBuilder().FullSync().
+		MarketData(defaultQuoteTTL).
+		Build()
+	if err != nil {
+		t.Fatalf("build market-data service: %v", err)
+	}
+	return &sharedMarketDataService{service: service}
+}
+
 // newTestEngine builds a real engine adapter with one account ("1") that carries
 // a stored engine id and is seeded with testQuoteFund of the quote asset, enough
 // to reserve exactly two test orders. The adapter is stopped via t.Cleanup.
@@ -96,14 +107,22 @@ func newTestEngine(t *testing.T) *openPitEngine {
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
-	eng, service, registered, _, err := buildEngine(snap, res)
+	eng, service, registered, _, _, err := buildEngine(snap, res, nil)
 	if err != nil {
 		t.Fatalf("build engine: %v", err)
 	}
 	adapter := newOpenPitEngine(
-		eng, testAsyncEngine(t, eng), service, registered, nil, res,
+		eng,
+		testAsyncEngine(t, eng),
+		&sharedMarketDataService{service: service},
+		registered,
+		nil,
+		res,
 	).(*openPitEngine)
-	t.Cleanup(adapter.Stop)
+	t.Cleanup(func() {
+		adapter.Stop()
+		adapter.CloseMarketDataService()
+	})
 
 	if err := seedBalances(eng, []domain.Balance{{
 		Account:   domain.AccountID(testAccount),
@@ -136,12 +155,15 @@ func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 	adapter := newOpenPitEngine(
 		eng,
 		testAsyncEngine(t, eng),
-		nil,
+		newTestSharedMarketDataService(t),
 		map[string]struct{}{},
 		nil,
 		res,
 	).(*openPitEngine)
-	t.Cleanup(adapter.Stop)
+	t.Cleanup(func() {
+		adapter.Stop()
+		adapter.CloseMarketDataService()
+	})
 	return adapter
 }
 
@@ -644,12 +666,12 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 func TestSubmitImmediate_DropCopySettlesWhileAccountIsBlocked(t *testing.T) {
 	acct := blockedAccount(testAccount, "account block")
 	acct.Currency = testQuote
-	eng, err := BuildOpenPitEngine("", Snapshot{
+	eng, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
 		Assets:   testAssets(),
 		Accounts: []domain.Account{acct},
 	})
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	e := eng.(*openPitEngine)
 	t.Cleanup(e.Stop)
@@ -799,12 +821,15 @@ func newLockSpyTestEngine(t *testing.T, spy *executionLockSpy) *openPitEngine {
 	adapter := newOpenPitEngine(
 		eng,
 		testAsyncEngine(t, eng),
-		nil,
+		newTestSharedMarketDataService(t),
 		map[string]struct{}{nameSpotFunds: {}},
 		nil,
 		res,
 	).(*openPitEngine)
-	t.Cleanup(adapter.Stop)
+	t.Cleanup(func() {
+		adapter.Stop()
+		adapter.CloseMarketDataService()
+	})
 
 	if err := seedBalances(eng, []domain.Balance{{
 		Account:   domain.AccountID(testAccount),
@@ -897,9 +922,7 @@ func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
 	n, _, err := node.NewLocalNode(
 		ctx,
 		store,
-		func(snapshot engine.Snapshot) (engine.Engine, error) {
-			return BuildOpenPitEngine("", snapshot)
-		},
+		NewOpenPitEngineBuildFunc(""),
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
@@ -976,7 +999,7 @@ func TestSubmitImmediate_OpeningFillDoesNotEmitNoopAccountPnl(t *testing.T) {
 	acct.Currency = testQuote
 	acct.EffectiveCurrency = testQuote
 	acct.Pnl = "7.25"
-	engine, err := BuildOpenPitEngine("", Snapshot{
+	engine, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
 		Assets:   testAssets(),
 		Accounts: []domain.Account{acct},
 		Balances: []domain.Balance{{
@@ -985,7 +1008,7 @@ func TestSubmitImmediate_OpeningFillDoesNotEmitNoopAccountPnl(t *testing.T) {
 		}},
 	})
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	e := engine.(*openPitEngine)
 	t.Cleanup(e.Stop)
@@ -1070,7 +1093,7 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
-	engine, err := BuildOpenPitEngine("", Snapshot{
+	engine, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
 		Assets:   testAssets(),
 		Accounts: []domain.Account{acct},
 		Balances: []domain.Balance{
@@ -1085,7 +1108,7 @@ func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	e := engine.(*openPitEngine)
 	t.Cleanup(e.Stop)
@@ -1127,22 +1150,22 @@ func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
 	}
 }
 
-func TestBuildOpenPitEngine_SeedsAccountPnlWithoutPnlBounds(t *testing.T) {
+func TestOpenPitEngineBuilder_SeedsAccountPnlWithoutPnlBounds(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
 	acct.EffectiveCurrency = testQuote
 	acct.Pnl = "7.25"
-	eng, err := BuildOpenPitEngine("", Snapshot{
+	eng, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
 		Assets:   testAssets(),
 		Accounts: []domain.Account{acct},
 	})
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	eng.Stop()
 }
 
-func TestBuildOpenPitEngine_PersistedPnlKeepsBoundsClear(t *testing.T) {
+func TestOpenPitEngineBuilder_PersistedPnlKeepsBoundsClear(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
 	acct.Pnl = "5"
@@ -1152,13 +1175,13 @@ func TestBuildOpenPitEngine_PersistedPnlKeepsBoundsClear(t *testing.T) {
 		Currency:   testQuote,
 		LowerBound: "-3",
 	}}
-	built, err := BuildOpenPitEngine("", Snapshot{
+	built, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
 		Assets:                   testAssets(),
 		Accounts:                 []domain.Account{acct},
 		SpotFundsPnlBoundsLimits: limits,
 	})
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	eng := built.(*openPitEngine)
 	t.Cleanup(eng.Stop)
@@ -1340,9 +1363,9 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 			},
 		},
 	}
-	engine, err := BuildOpenPitEngine("", snap)
+	engine, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	adapter := engine.(*openPitEngine)
 	t.Cleanup(adapter.Stop)
@@ -1493,9 +1516,9 @@ func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 			},
 		},
 	}
-	engine, err := BuildOpenPitEngine("", snap)
+	engine, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	adapter := engine.(*openPitEngine)
 	t.Cleanup(adapter.Stop)
@@ -1631,7 +1654,7 @@ func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T
 	acct := blockedAccount(testAccount, "account block")
 	acct.Currency = testQuote
 	acct.GroupCode = "desk-a"
-	eng, err := BuildOpenPitEngine("", Snapshot{
+	eng, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
 		Assets:   testAssets(),
 		Accounts: []domain.Account{acct},
 		Groups: []domain.AccountGroup{{
@@ -1640,7 +1663,7 @@ func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T
 		}},
 	})
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	e := eng.(*openPitEngine)
 	t.Cleanup(e.Stop)

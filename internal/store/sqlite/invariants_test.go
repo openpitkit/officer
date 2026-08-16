@@ -266,17 +266,6 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 		t.Fatalf("UpsertMarketDataInstrument: %v", err)
 	}
 
-	// Quote (addressed by (instance, symbol) just like instrument).
-	if err := rs.UpsertMarketDataQuote(ctx, domain.MarketDataQuote{
-		Instance:       mdInst.ExternalID,
-		ExternalSymbol: "AAPL",
-		Mark:           "150.00",
-		AsOf:           time.Now().UTC(),
-		ReceivedAt:     time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("UpsertMarketDataQuote: %v", err)
-	}
-
 	// Read back all machine records through their public list paths and assert
 	// every ExternalID field passes the shape check.
 

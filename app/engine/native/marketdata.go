@@ -50,24 +50,15 @@ type marketDataSink struct {
 
 	mu  sync.Mutex
 	ids map[instrumentKey]bindmd.InstrumentID
-	// publishMu serializes Officer writers across the TTL change and the quote
-	// publish that must land under it.
-	publishMu sync.Mutex
-	// lifetimes holds the quote lifetime each instrument currently runs under, so
-	// a publish knows whether the incoming one narrows or widens it. Read and
-	// written only under publishMu; a missing entry means the service-wide
-	// default the instrument was registered with.
-	lifetimes map[instrumentKey]time.Duration
 }
 
 // newMarketDataSink wraps service into a Sink with an empty id cache.
 func newMarketDataSink(service *bindmd.Service, res idResolver) *marketDataSink {
 	return &marketDataSink{
-		service:   service,
-		res:       res,
-		now:       time.Now,
-		ids:       make(map[instrumentKey]bindmd.InstrumentID),
-		lifetimes: make(map[instrumentKey]time.Duration),
+		service: service,
+		res:     res,
+		now:     time.Now,
+		ids:     make(map[instrumentKey]bindmd.InstrumentID),
 	}
 }
 
@@ -77,9 +68,6 @@ func newMarketDataSink(service *bindmd.Service, res idResolver) *marketDataSink 
 // are wrapped as officer errors. The SDK market-data service is FullSync for a
 // non-NoSync engine, so connector goroutines may push off the account lanes.
 func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
-	s.publishMu.Lock()
-	defer s.publishMu.Unlock()
-
 	instrument, err := instrumentFrom(update.Base, update.Quote, s.res)
 	if err != nil {
 		return err
@@ -104,99 +92,21 @@ func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
 			"now", now,
 		)
 	}
-	ttl, sourced := quoteSourceTTL(update.AsOf, now)
-	// A cleared override falls back to the service-wide default, which this
-	// package builds from the same freshness constant.
-	lifetime := MarketDataFreshnessTTL
-	if sourced {
-		lifetime = ttl
+	sourceAge := time.Duration(0)
+	if !update.AsOf.IsZero() && !update.AsOf.After(now) {
+		sourceAge = now.Sub(update.AsOf)
 	}
-	setLifetime := func() error {
-		if !sourced {
-			if err := s.service.ClearInstrumentTTL(id); err != nil {
-				return fmt.Errorf(
-					"engine: restore quote ttl %d/%d: %w", update.Base, update.Quote, err,
-				)
-			}
-			return nil
-		}
-		if err := s.service.SetInstrumentTTL(id, bindmd.WithinTTL(ttl)); err != nil {
-			return fmt.Errorf(
-				"engine: set source quote ttl %d/%d: %w", update.Base, update.Quote, err,
-			)
-		}
-		return nil
+	if err := s.service.Push(id, quote, sourceAge); err != nil {
+		return fmt.Errorf(
+			"engine: push quote %d/%d: %w", update.Base, update.Quote, err,
+		)
 	}
-	push := func() error {
-		if err := s.service.Push(id, quote); err != nil {
-			return fmt.Errorf(
-				"engine: push quote %d/%d: %w", update.Base, update.Quote, err,
-			)
-		}
-		return nil
-	}
-
-	// The SDK exposes the quote and its lifetime as separate calls, so one of
-	// them is always visible before the other and neither order is safe alone:
-	// TTL first lends the incoming lifetime to the outgoing quote, quote first
-	// lends the outgoing lifetime to the incoming quote. Narrowing first and
-	// widening last runs every window under min(outgoing, incoming), which can
-	// only expire a quote early, never serve an aged one as fresh - and that is
-	// also what a failed call leaves behind. The quote itself is never cleared:
-	// SpotFunds may still use an expired snapshot as an FX fallback.
-	key := instrumentKey{base: update.Base, quote: update.Quote}
-	if lifetime <= s.appliedLifetime(key) {
-		if err := setLifetime(); err != nil {
-			return err
-		}
-		s.lifetimes[key] = lifetime
-		return push()
-	}
-	if err := push(); err != nil {
-		return err
-	}
-	if err := setLifetime(); err != nil {
-		return err
-	}
-	s.lifetimes[key] = lifetime
 	return nil
-}
-
-// appliedLifetime returns the quote lifetime the instrument currently runs
-// under. An instrument this sink has not retuned yet runs under the
-// service-wide default, which is the full freshness window. Callers hold
-// publishMu.
-func (s *marketDataSink) appliedLifetime(key instrumentKey) time.Duration {
-	if applied, ok := s.lifetimes[key]; ok {
-		return applied
-	}
-	return MarketDataFreshnessTTL
-}
-
-// quoteSourceTTL maps the connector's source timestamp onto the remaining SDK
-// lifetime. The SDK retains an expired quote in ErrQuoteExpired, which lets
-// SpotFunds accounting use the last-known FX while market-order pricing treats
-// the same quote as unavailable. A zero timestamp keeps the service default.
-func quoteSourceTTL(asOf, now time.Time) (time.Duration, bool) {
-	if asOf.IsZero() {
-		return 0, false
-	}
-	if asOf.After(now) {
-		return MarketDataFreshnessTTL, true
-	}
-	age := now.Sub(asOf)
-	if age >= MarketDataFreshnessTTL {
-		return 0, true
-	}
-	return MarketDataFreshnessTTL - age, true
 }
 
 // Clear removes the live quote for one instrument without unregistering its
 // stable service id. An instrument this sink has never observed is a no-op.
 func (s *marketDataSink) Clear(base, quote domain.EngineAssetID) error {
-	s.publishMu.Lock()
-	defer s.publishMu.Unlock()
-
 	instrument, err := instrumentFrom(base, quote, s.res)
 	if err != nil {
 		return err

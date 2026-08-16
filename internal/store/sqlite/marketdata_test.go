@@ -18,9 +18,8 @@
 // Market-data group tests: instance create/get/list/update/delete by external
 // id; NOCASE label uniqueness conflict; credentials opaque round-trip;
 // instrument upsert keyed by (instance, external symbol) with replace-on-
-// conflict; unknown asset code error; quote upsert-to-list 1:1 replace;
-// cascade — deleting an instance removes its instruments and quotes;
-// enabled filters for instances and instruments.
+// conflict; unknown asset code error; instance deletion cascade; enabled
+// filters for instances and instruments.
 
 package sqlite
 
@@ -29,7 +28,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 )
@@ -618,197 +616,8 @@ func TestMDInstrumentDelete(t *testing.T) {
 	}
 }
 
-// --- Quotes -----------------------------------------------------------------
-
-// sampleQuote builds a quote for the given instance and symbol.
-func sampleQuote(instance domain.ExternalID) domain.MarketDataQuote {
-	return domain.MarketDataQuote{
-		Instance:       instance,
-		ExternalSymbol: "AAPL",
-		BaseAsset:      "AAPL",
-		QuoteAsset:     "USD",
-		Mark:           "150.00",
-		Bid:            "149.99",
-		Ask:            "150.01",
-		AsOf:           time.Date(2025, 1, 2, 12, 0, 0, 0, time.UTC),
-		ReceivedAt:     time.Date(2025, 1, 2, 12, 0, 0, 100, time.UTC),
-	}
-}
-
-// TestMDQuoteUpsertAndList verifies basic quote upsert and list round-trip.
-func TestMDQuoteUpsertAndList(t *testing.T) {
-	ctx, rs := seedMDFixtures(t)
-
-	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
-	if err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-
-	instr := sampleInstrument(inst.ExternalID)
-	if err := rs.UpsertMarketDataInstrument(ctx, instr); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument: %v", err)
-	}
-
-	q := sampleQuote(inst.ExternalID)
-	if err := rs.UpsertMarketDataQuote(ctx, q); err != nil {
-		t.Fatalf("UpsertMarketDataQuote: %v", err)
-	}
-
-	list, err := rs.ListMarketDataQuotes(ctx, inst.ExternalID)
-	if err != nil {
-		t.Fatalf("ListMarketDataQuotes: %v", err)
-	}
-	if len(list) != 1 {
-		t.Fatalf("ListMarketDataQuotes len = %d, want 1", len(list))
-	}
-	got := list[0]
-	if got.Instance != inst.ExternalID {
-		t.Fatalf("Instance = %v, want %v", got.Instance, inst.ExternalID)
-	}
-	if got.ExternalSymbol != q.ExternalSymbol {
-		t.Fatalf("ExternalSymbol = %q, want %q", got.ExternalSymbol, q.ExternalSymbol)
-	}
-	if got.Mark != q.Mark {
-		t.Fatalf("Mark = %q, want %q", got.Mark, q.Mark)
-	}
-	if got.Bid != q.Bid {
-		t.Fatalf("Bid = %q, want %q", got.Bid, q.Bid)
-	}
-	if got.Ask != q.Ask {
-		t.Fatalf("Ask = %q, want %q", got.Ask, q.Ask)
-	}
-	if !got.AsOf.Equal(q.AsOf) {
-		t.Fatalf("AsOf = %v, want %v", got.AsOf, q.AsOf)
-	}
-	if !got.ReceivedAt.Equal(q.ReceivedAt) {
-		t.Fatalf("ReceivedAt = %v, want %v", got.ReceivedAt, q.ReceivedAt)
-	}
-	if _, err := rs.UpdateAsset(ctx, "AAPL", domain.Asset{Code: "AAPL.NEW"}); err != nil {
-		t.Fatalf("UpdateAsset(AAPL): %v", err)
-	}
-	quotesAfterRename, err := rs.ListMarketDataQuotes(ctx, inst.ExternalID)
-	if err != nil || len(quotesAfterRename) != 1 ||
-		quotesAfterRename[0].BaseAsset != "AAPL.NEW" ||
-		quotesAfterRename[0].QuoteAsset != "USD" {
-		t.Fatalf("quotes after asset rename = %+v, err=%v", quotesAfterRename, err)
-	}
-}
-
-// TestMDQuoteUpsertReplace confirms that upserting a second quote for the same
-// instrument replaces the existing row (1:1 semantics).
-func TestMDQuoteUpsertReplace(t *testing.T) {
-	ctx, rs := seedMDFixtures(t)
-
-	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
-	if err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-
-	if err := rs.UpsertMarketDataInstrument(ctx, sampleInstrument(inst.ExternalID)); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument: %v", err)
-	}
-
-	q1 := sampleQuote(inst.ExternalID)
-	if err := rs.UpsertMarketDataQuote(ctx, q1); err != nil {
-		t.Fatalf("UpsertMarketDataQuote (first): %v", err)
-	}
-
-	// Second upsert — different mark/bid/ask.
-	q2 := q1
-	q2.Mark = "155.00"
-	q2.Bid = "154.99"
-	q2.Ask = "155.01"
-	q2.AsOf = q1.AsOf.Add(time.Second)
-	if err := rs.UpsertMarketDataQuote(ctx, q2); err != nil {
-		t.Fatalf("UpsertMarketDataQuote (second): %v", err)
-	}
-
-	list, err := rs.ListMarketDataQuotes(ctx, inst.ExternalID)
-	if err != nil {
-		t.Fatalf("ListMarketDataQuotes after second upsert: %v", err)
-	}
-	if len(list) != 1 {
-		t.Fatalf("ListMarketDataQuotes len = %d, want 1 after replace", len(list))
-	}
-	if list[0].Mark != "155.00" {
-		t.Fatalf("Mark after replace = %q, want 155.00", list[0].Mark)
-	}
-}
-
-// TestMDQuoteListAllInstances verifies that a zero-value instance parameter
-// returns quotes from all instances.
-func TestMDQuoteListAllInstances(t *testing.T) {
-	ctx, rs := seedMDFixtures(t)
-
-	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "BTC"}); err != nil {
-		t.Fatalf("CreateAsset BTC: %v", err)
-	}
-
-	instA, err := rs.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
-		Provider: domain.MarketDataProviderBYO,
-		Label:    "inst-a",
-	})
-	if err != nil {
-		t.Fatalf("CreateMarketDataInstance A: %v", err)
-	}
-	instB, err := rs.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
-		Provider: domain.MarketDataProviderBYO,
-		Label:    "inst-b",
-	})
-	if err != nil {
-		t.Fatalf("CreateMarketDataInstance B: %v", err)
-	}
-
-	// Add AAPL/USD instrument to A, BTC/USD instrument to B.
-	if err := rs.UpsertMarketDataInstrument(ctx, domain.MarketDataInstrument{
-		Instance:       instA.ExternalID,
-		ExternalSymbol: "AAPL",
-		BaseAsset:      "AAPL",
-		QuoteAsset:     "USD",
-	}); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument A: %v", err)
-	}
-	if err := rs.UpsertMarketDataInstrument(ctx, domain.MarketDataInstrument{
-		Instance:       instB.ExternalID,
-		ExternalSymbol: "BTC-USD",
-		BaseAsset:      "BTC",
-		QuoteAsset:     "USD",
-	}); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument B: %v", err)
-	}
-
-	// Upsert one quote per instance.
-	if err := rs.UpsertMarketDataQuote(ctx, domain.MarketDataQuote{
-		Instance:       instA.ExternalID,
-		ExternalSymbol: "AAPL",
-		Mark:           "150.00",
-		AsOf:           time.Now().UTC(),
-		ReceivedAt:     time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("UpsertMarketDataQuote A: %v", err)
-	}
-	if err := rs.UpsertMarketDataQuote(ctx, domain.MarketDataQuote{
-		Instance:       instB.ExternalID,
-		ExternalSymbol: "BTC-USD",
-		Mark:           "50000.00",
-		AsOf:           time.Now().UTC(),
-		ReceivedAt:     time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("UpsertMarketDataQuote B: %v", err)
-	}
-
-	// Zero instance returns both.
-	all, err := rs.ListMarketDataQuotes(ctx, domain.ExternalID(""))
-	if err != nil {
-		t.Fatalf("ListMarketDataQuotes(zero): %v", err)
-	}
-	if len(all) != 2 {
-		t.Fatalf("ListMarketDataQuotes(zero) len = %d, want 2", len(all))
-	}
-}
-
 // TestMDCascadeDeleteInstance confirms that deleting an instance removes its
-// instruments and quotes.
+// instruments without removing their global assets.
 func TestMDCascadeDeleteInstance(t *testing.T) {
 	ctx, rs := seedMDFixtures(t)
 
@@ -821,10 +630,6 @@ func TestMDCascadeDeleteInstance(t *testing.T) {
 	if err := rs.UpsertMarketDataInstrument(ctx, instr); err != nil {
 		t.Fatalf("UpsertMarketDataInstrument: %v", err)
 	}
-	if err := rs.UpsertMarketDataQuote(ctx, sampleQuote(inst.ExternalID)); err != nil {
-		t.Fatalf("UpsertMarketDataQuote: %v", err)
-	}
-
 	// Delete the instance.
 	if err := rs.DeleteMarketDataInstance(ctx, inst.ExternalID); err != nil {
 		t.Fatalf("DeleteMarketDataInstance: %v", err)
@@ -839,15 +644,6 @@ func TestMDCascadeDeleteInstance(t *testing.T) {
 		t.Fatalf("instruments not cascaded: got %d rows, want 0", len(instrList))
 	}
 
-	// Quotes for that instance must be gone (zero id = all instances).
-	quotes, err := rs.ListMarketDataQuotes(ctx, domain.ExternalID(""))
-	if err != nil {
-		t.Fatalf("ListMarketDataQuotes after cascade: %v", err)
-	}
-	if len(quotes) != 0 {
-		t.Fatalf("quotes not cascaded: got %d rows, want 0", len(quotes))
-	}
-
 	// Feed-owned rows must not remove the global assets they reference.
 	for _, code := range []string{"AAPL", "USD"} {
 		if _, ok, err := rs.GetAsset(ctx, code); err != nil {
@@ -855,58 +651,6 @@ func TestMDCascadeDeleteInstance(t *testing.T) {
 		} else if !ok {
 			t.Fatalf("asset %s was removed with its market-data source", code)
 		}
-	}
-}
-
-// TestMDCascadeDeleteInstrumentRemovesQuote confirms that deleting an
-// instrument removes its quote.
-func TestMDCascadeDeleteInstrumentRemovesQuote(t *testing.T) {
-	ctx, rs := seedMDFixtures(t)
-
-	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
-	if err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-
-	instr := sampleInstrument(inst.ExternalID)
-	if err := rs.UpsertMarketDataInstrument(ctx, instr); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument: %v", err)
-	}
-	if err := rs.UpsertMarketDataQuote(ctx, sampleQuote(inst.ExternalID)); err != nil {
-		t.Fatalf("UpsertMarketDataQuote: %v", err)
-	}
-
-	if err := rs.DeleteMarketDataInstrument(
-		ctx, inst.ExternalID, instr.ExternalSymbol,
-	); err != nil {
-		t.Fatalf("DeleteMarketDataInstrument: %v", err)
-	}
-
-	// Quote must have been removed by cascade.
-	quotes, err := rs.ListMarketDataQuotes(ctx, inst.ExternalID)
-	if err != nil {
-		t.Fatalf("ListMarketDataQuotes after instrument delete: %v", err)
-	}
-	if len(quotes) != 0 {
-		t.Fatalf("quote not cascaded: got %d rows, want 0", len(quotes))
-	}
-}
-
-// TestMDQuoteUpsertMissingInstrument confirms ErrNotFound when the instrument
-// does not exist.
-func TestMDQuoteUpsertMissingInstrument(t *testing.T) {
-	ctx, rs := seedMDFixtures(t)
-
-	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
-	if err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-
-	// No instrument created.
-	q := sampleQuote(inst.ExternalID)
-	err = rs.UpsertMarketDataQuote(ctx, q)
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("UpsertMarketDataQuote(no instrument) error = %v, want ErrNotFound", err)
 	}
 }
 

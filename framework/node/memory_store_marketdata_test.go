@@ -169,22 +169,3 @@ func (r *memoryRealm) DeleteMarketDataInstrument(
 	delete(r.instruments, key)
 	return nil
 }
-
-func (r *memoryRealm) UpsertMarketDataQuote(
-	_ context.Context, quote domain.MarketDataQuote,
-) error {
-	r.quotes[instrumentKey(quote.Instance, quote.ExternalSymbol)] = quote
-	return nil
-}
-
-func (r *memoryRealm) ListMarketDataQuotes(
-	_ context.Context, instance domain.ExternalID,
-) ([]domain.MarketDataQuote, error) {
-	var out []domain.MarketDataQuote
-	for _, quote := range r.quotes {
-		if instance.IsZero() || quote.Instance == instance {
-			out = append(out, quote)
-		}
-	}
-	return out, nil
-}

@@ -107,20 +107,25 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 			)] = struct{}{}
 		}
 	}
-	quotes, err := n.ListMarketDataQuotes(ctx, domain.ExternalID(""))
-	if err != nil {
-		return MarketDataStatus{}, fmt.Errorf("backend: list market-data quotes: %w", err)
-	}
-	quoteByInstrument := make(map[string]domain.MarketDataQuote, len(quotes))
-	for _, quote := range quotes {
-		quoteByInstrument[marketDataKey(quote.Instance.String(), quote.ExternalSymbol)] = quote
-	}
-
 	var runtimeStatuses map[string]marketdata.InstanceRuntimeStatus
 	var appliedConfig map[string]marketdata.AppliedInstanceConfig
 	if s.md != nil {
 		runtimeStatuses = s.md.InstanceStatuses()
 		appliedConfig = s.md.AppliedConfig()
+	}
+
+	var snapshots []marketdata.QuoteSnapshot
+	if s.md != nil {
+		snapshots = s.md.QuoteSnapshots()
+	}
+	quoteByInstrument := make(map[marketDataQuoteKey]domain.MarketDataQuote, len(snapshots))
+	for _, snapshot := range snapshots {
+		quoteByInstrument[marketDataKey(
+			snapshot.Instance.String(),
+			snapshot.ExternalSymbol,
+			snapshot.BaseAssetID,
+			snapshot.QuoteAssetID,
+		)] = snapshot.MarketDataQuote
 	}
 
 	now := time.Now().UTC()
@@ -137,15 +142,18 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 		instStatuses := make([]MarketDataInstrumentStatus, 0, len(instruments))
 		for _, instrument := range instruments {
 			var quotePtr *domain.MarketDataQuote
-			// Clearing a BYO mark leaves the last persisted snapshot as historical
-			// evidence, but it is no longer a configured current quote. Hide it from
-			// live status just as replay hides it from the engine.
-			manualCleared := instance.Provider == domain.MarketDataProviderBYO &&
-				instrument.ManualPrice == ""
-			if quote, ok := quoteByInstrument[marketDataKey(
+			// Configuration is authoritative for a BYO mark; an empty price
+			// means there is no current quote even if memory still holds one.
+			if instance.Provider == domain.MarketDataProviderBYO &&
+				instrument.ManualPrice == "" {
+				quotePtr = nil
+			} else if quote, ok := quoteByInstrument[marketDataKey(
 				instrument.Instance.String(), instrument.ExternalSymbol,
-			)]; ok && !manualCleared {
+				instrument.BaseAssetID, instrument.QuoteAssetID,
+			)]; ok {
 				q := quote
+				q.BaseAsset = instrument.BaseAsset
+				q.QuoteAsset = instrument.QuoteAsset
 				quotePtr = &q
 			}
 			stale := marketDataInstrumentStale(
@@ -195,11 +203,10 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 // RestartMarketData re-applies the market-data configuration by stopping and
 // restarting the connector manager. With no runtime wired it is a no-op.
 //
-// It re-adopts the node's current engine sink before restarting. Residual
-// lifecycle rebuilds and database reset replace the engine's market-data
-// service, which leaves any cached sink pointing at a closed service (every push
-// then fails with "market-data service is null"). Re-adopting on restart
-// converges every feed-change path onto the live sink.
+// It re-adopts the node's current engine sink and resolver before restarting.
+// Lifecycle rebuilds and database reset replace that engine-specific adapter
+// while the local node keeps one SDK market-data service alive until final
+// shutdown. Re-adopting converges every feed-change path onto the current sink.
 func (s *Service) RestartMarketData(ctx context.Context) error {
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
@@ -625,7 +632,9 @@ func (s *Service) SetMarketDataInstanceEnabled(
 	if err != nil {
 		return err
 	}
-	return n.SetMarketDataInstanceEnabled(ctx, instanceID, enabled, auth.CallerFromContext(ctx))
+	return n.SetMarketDataInstanceEnabled(
+		ctx, instanceID, enabled, auth.CallerFromContext(ctx),
+	)
 }
 
 // UpdateMarketDataInstanceSettings validates and persists editable source
@@ -926,6 +935,21 @@ func marketDataInstrumentStale(
 	return now.Sub(quote.AsOf) >= MarketDataFreshnessTTL
 }
 
-func marketDataKey(instanceID, externalSymbol string) string {
-	return instanceID + "\x00" + externalSymbol
+type marketDataQuoteKey struct {
+	instanceID string
+	external   string
+	base       domain.EngineAssetID
+	quote      domain.EngineAssetID
+}
+
+func marketDataKey(
+	instanceID, externalSymbol string,
+	base, quote domain.EngineAssetID,
+) marketDataQuoteKey {
+	return marketDataQuoteKey{
+		instanceID: instanceID,
+		external:   externalSymbol,
+		base:       base,
+		quote:      quote,
+	}
 }

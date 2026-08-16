@@ -40,9 +40,10 @@ import (
 // Snapshot is the engine state the control plane builds the engine from at
 // process start: accounts (and their stored engine ids and blocked state), the
 // account groups, the persisted balances, and the complete set of risk barriers
-// across the typed limit tables. BuildOpenPitEngine consumes it once. A
-// Snapshot is plain data with no native handles, so the store layer can assemble
-// it without cgo.
+// across the typed limit tables. The build function returned by
+// NewOpenPitEngineBuildFunc consumes it for each engine build. A Snapshot is
+// plain data with no native handles, so the store layer can assemble it without
+// cgo.
 //
 // The accounts and groups carry their stored engine ids (EngineAccountID /
 // EngineGroupID), assigned collision-free by the connector. The engine adapter
@@ -373,12 +374,14 @@ type Engine interface {
 	// MarketDataSink returns the quote sink backed by the engine's market-data
 	// service. The connector manager drains normalized quotes into it; the sink
 	// registers instruments on first sight and pushes quotes through the binding.
-	// It is valid until Stop closes this engine handle; backup restore swaps the
-	// engine and reconnects feeds to the replacement handle's sink.
+	// Rebuilds replace the engine-specific sink and resolver. Engines may share
+	// the underlying service across those rebuilds.
 	MarketDataSink() marketdata.Sink
 
-	// Stop halts the engine and releases the underlying native resources,
-	// including the owned market-data service (closed after the engine stops).
-	// After Stop the engine is no longer usable. Stop is idempotent.
+	// Stop halts the engine and releases its engine-specific native resources. It
+	// must not close a market-data service the engine shares. Where it holds one,
+	// its owner releases it separately; for a node-built engine, the node does so
+	// at final shutdown after the last Stop. After Stop the engine is no longer
+	// usable. Stop is idempotent.
 	Stop()
 }

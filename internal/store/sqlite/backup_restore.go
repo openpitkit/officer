@@ -644,52 +644,6 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 	return nil
 }
 
-func (rt *restoreTx) restoreQuotes(ctx context.Context, quotes []domain.MarketDataQuote) error {
-	for _, q := range quotes {
-		var instrumentID int64
-		err := rt.tx.QueryRowContext(
-			ctx,
-			`SELECT mdi.id
-			 FROM market_data_instrument mdi
-			 JOIN market_data_instance i ON i.id = mdi.instance_id
-			 WHERE i.external_id = ? AND mdi.external_symbol = ?`,
-			q.Instance.Bytes(), q.ExternalSymbol,
-		).Scan(&instrumentID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf(
-				"store: restore quote instrument %q/%q: %w",
-				q.Instance, q.ExternalSymbol, domain.ErrNotFound,
-			)
-		}
-		if err != nil {
-			return fmt.Errorf("store: restore quote resolve instrument: %w", err)
-		}
-		exists, err := rowExists(
-			ctx, rt.tx,
-			`SELECT 1 FROM market_data_quote WHERE instrument_id = ?`, instrumentID,
-		)
-		if err != nil {
-			return err
-		}
-		if rt.skip(backup.SectionMarketDataQuotes, exists) {
-			continue
-		}
-		if _, err := rt.tx.ExecContext(
-			ctx,
-			`INSERT OR REPLACE INTO market_data_quote
-			 (instrument_id, mark, bid, ask, as_of, received_at)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			instrumentID, q.Mark, q.Bid, q.Ask,
-			q.AsOf.UTC().Format(time.RFC3339Nano),
-			q.ReceivedAt.UTC().Format(time.RFC3339Nano),
-		); err != nil {
-			return fmt.Errorf("store: restore quote %q: %w", q.ExternalSymbol, err)
-		}
-		rt.applyRuntime(backup.SectionMarketDataQuotes, 1)
-	}
-	return nil
-}
-
 // --- Restore: settings ------------------------------------------------------
 
 // restoreGeneralSettings restores the MCP access overrides, the signing config

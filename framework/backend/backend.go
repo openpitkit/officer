@@ -46,6 +46,9 @@ type MarketDataRuntime interface {
 	// QuoteUpdateInterval returns the elapsed time between the two most recent
 	// ticks of the identified instrument's quote, and whether it is known yet.
 	QuoteUpdateInterval(instanceID, external string) (time.Duration, bool)
+	// QuoteSnapshots returns the last successfully applied direct quotes and
+	// their internal routing identities held by the market-data runtime.
+	QuoteSnapshots() []marketdata.QuoteSnapshot
 	Restart() error
 	// PushManual delivers or clears one instrument's operator-set manual mark in
 	// the running instance. It is a no-op when the instance is not running, its

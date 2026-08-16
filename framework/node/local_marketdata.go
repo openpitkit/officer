@@ -236,13 +236,3 @@ func (n *localNode) DeleteMarketDataInstrument(
 	}
 	return nil
 }
-
-func (n *localNode) ListMarketDataQuotes(
-	ctx context.Context, instance domain.ExternalID,
-) ([]domain.MarketDataQuote, error) {
-	quotes, err := n.realm.ListMarketDataQuotes(ctx, instance)
-	if err != nil {
-		return nil, fmt.Errorf("list market-data quotes: %w", err)
-	}
-	return quotes, nil
-}

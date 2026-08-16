@@ -535,14 +535,7 @@ func TestDeleteAssetForceRebuildsWithoutCascadedRuntimeRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertMarketDataInstrument(surviving): %v", err)
 	}
-	deletedAsset, ok, err := n.realm.GetAsset(ctx, asset)
-	if err != nil || !ok {
-		t.Fatalf("GetAsset(%s): ok=%v err=%v", asset, ok, err)
-	}
-
 	next := newFakeEngine()
-	sink := &marketDataReplaySink{}
-	next.sink = sink
 	var rebuilt engine.Snapshot
 	n.build = fakeBuild(next, &rebuilt)
 
@@ -598,25 +591,6 @@ func TestDeleteAssetForceRebuildsWithoutCascadedRuntimeRows(t *testing.T) {
 			instrumentsErr,
 		)
 	}
-	survivingReplayed := false
-	deletedAssetReplayed := false
-	for _, update := range sink.updates {
-		if update.Base == instruments[0].BaseAssetID &&
-			update.Quote == instruments[0].QuoteAssetID &&
-			update.Mark == survivingMark {
-			survivingReplayed = true
-		}
-		if update.Base == deletedAsset.EngineAssetID ||
-			update.Quote == deletedAsset.EngineAssetID {
-			deletedAssetReplayed = true
-		}
-	}
-	if !survivingReplayed {
-		t.Fatalf("rebuilt engine did not replay surviving market data: %+v", sink.updates)
-	}
-	if deletedAssetReplayed {
-		t.Fatalf("rebuilt engine replayed deleted asset market data: %+v", sink.updates)
-	}
 	if n.currentEngine() != next || !next.running || old.running {
 		t.Fatalf("engine after forced delete: current=%p next running=%v old running=%v",
 			n.currentEngine(), next.running, old.running)
@@ -637,15 +611,6 @@ func TestDeleteAssetForceFailureKeepsStoreAndOldEngine(t *testing.T) {
 					return nil, buildErr
 				}
 				return nil, buildErr
-			},
-		},
-		{
-			name: "market-data transition",
-			run: func(n *localNode) (*fakeEngine, error) {
-				next := newFakeEngine()
-				next.sink = nil
-				n.build = fakeBuild(next, new(engine.Snapshot))
-				return next, errors.New("nil market-data sink")
 			},
 		},
 	} {
@@ -762,42 +727,6 @@ func TestDeleteAssetForceRejectsCurrencyDependentsBeforeBuild(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestAssetDeleteTransitionExcludesPendingMarketData(t *testing.T) {
-	t.Parallel()
-	oldSink := &marketDataReplaySink{}
-	old := newFakeEngine()
-	old.sink = oldSink
-	n, _ := newTestNode(t, old)
-	nextSink := &marketDataReplaySink{}
-	next := newFakeEngine()
-	next.sink = nextSink
-
-	transition, err := n.beginMarketDataTransition(next)
-	if err != nil {
-		t.Fatalf("beginMarketDataTransition: %v", err)
-	}
-	transition.excludeAsset(testMarketDataAssetID("AAPL"))
-	update := marketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "1"}
-	if err := n.CurrentMarketDataSink().Push(update); err != nil {
-		t.Fatalf("Push: %v", err)
-	}
-	if len(oldSink.updates) != 1 || oldSink.updates[0] != update ||
-		len(nextSink.updates) != 0 {
-		t.Fatalf("buffered asset delete update: old=%+v next=%+v",
-			oldSink.updates, nextSink.updates)
-	}
-
-	prev, err := n.commitMarketDataTransition(transition, next)
-	if err != nil {
-		t.Fatalf("commitMarketDataTransition: %v", err)
-	}
-	if prev != old || n.currentEngine() != next || len(nextSink.updates) != 0 {
-		t.Fatalf("committed asset delete transition: prev=%p current=%p next=%+v",
-			prev, n.currentEngine(), nextSink.updates)
-	}
-	prev.Stop()
 }
 
 func TestLocalNode_DeleteAssetRemovesLiveResolver(t *testing.T) {
@@ -1885,16 +1814,34 @@ func TestLocalNode_RefusedAssetDeleteKeepsConcurrentQuoteConsistent(t *testing.T
 	n := newTestNodeWithStore(t, st, eng)
 
 	const provider = "asset-delete-race"
-	instance := seedReplayInstanceForProvider(t, n.realm, provider)
-	instrument := seedReplayInstrument(
-		t,
-		n.realm,
-		instance.ExternalID,
-		"EURUSD",
-		"EUR",
-		"USD",
-		"",
-	)
+	instance, err := n.realm.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+		Provider: provider,
+		Label:    "asset delete race",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	baseAsset, ok, err := n.realm.GetAsset(ctx, "EUR")
+	if err != nil || !ok {
+		t.Fatalf("GetAsset(EUR): ok=%v err=%v", ok, err)
+	}
+	quoteAsset, ok, err := n.realm.GetAsset(ctx, "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetAsset(USD): ok=%v err=%v", ok, err)
+	}
+	instrument := domain.MarketDataInstrument{
+		Instance:       instance.ExternalID,
+		ExternalSymbol: "EURUSD",
+		BaseAsset:      baseAsset.Code,
+		QuoteAsset:     quoteAsset.Code,
+		BaseAssetID:    baseAsset.EngineAssetID,
+		QuoteAssetID:   quoteAsset.EngineAssetID,
+		Enabled:        true,
+	}
+	if err := n.realm.UpsertMarketDataInstrument(ctx, instrument); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
 	connector := &assetDeleteQuoteConnector{
 		updates: make(chan marketdata.QuoteUpdate, 1),
 	}
@@ -1972,20 +1919,17 @@ func TestLocalNode_RefusedAssetDeleteKeepsConcurrentQuoteConsistent(t *testing.T
 	if sinkResult.update != update {
 		t.Fatalf("engine quote = %+v, want %+v", sinkResult.update, update)
 	}
-	quotes, err := n.ListMarketDataQuotes(ctx, instance.ExternalID)
-	if err != nil {
-		t.Fatalf("ListMarketDataQuotes: %v", err)
-	}
+	quotes := manager.QuoteSnapshots()
 	if len(quotes) != 1 {
-		t.Fatalf("persisted quotes = %+v, want one quote", quotes)
+		t.Fatalf("manager quote snapshots = %+v, want one quote", quotes)
 	}
-	persisted := quotes[0]
-	if !persisted.AsOf.Equal(update.AsOf) ||
-		persisted.ExternalSymbol != instrument.ExternalSymbol ||
-		persisted.Mark != update.Mark {
+	accepted := quotes[0]
+	if !accepted.AsOf.Equal(update.AsOf) ||
+		accepted.ExternalSymbol != instrument.ExternalSymbol ||
+		accepted.Mark != update.Mark {
 		t.Fatalf(
-			"persisted quote = %+v, engine quote = %+v",
-			persisted,
+			"accepted quote = %+v, engine quote = %+v",
+			accepted,
 			sinkResult.update,
 		)
 	}

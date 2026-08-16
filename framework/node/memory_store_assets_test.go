@@ -204,15 +204,6 @@ func (r *memoryRealm) UpdateAsset(
 			}
 			r.instruments[key] = instrument
 		}
-		for key, quote := range r.quotes {
-			if quote.BaseAsset == oldCode {
-				quote.BaseAsset = asset.Code
-			}
-			if quote.QuoteAsset == oldCode {
-				quote.QuoteAsset = asset.Code
-			}
-			r.quotes[key] = quote
-		}
 	}
 	r.assets[asset.Code] = asset
 	return asset, nil
@@ -380,7 +371,6 @@ func (r *memoryRealm) cascadeDeleteAsset(code string) {
 	for key, instrument := range r.instruments {
 		if instrument.BaseAsset == code || instrument.QuoteAsset == code {
 			delete(r.instruments, key)
-			delete(r.quotes, key)
 		}
 	}
 }

@@ -2006,7 +2006,6 @@ var backupExportedTables = map[string]bool{
 	"audit":                      true,
 	"market_data_instance":       true,
 	"market_data_instrument":     true,
-	"market_data_quote":          true,
 	"signing_key":                true,
 	"signing_config":             true,
 	"mcp_access":                 true,

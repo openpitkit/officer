@@ -112,7 +112,6 @@ const backupSections: BackupSection[] = [
   "positions",
   "risk_limits",
   "market_data_settings",
-  "market_data_quotes",
   "general_settings",
   "user_settings",
   "activity_history",

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -926,63 +927,6 @@ func TestLocalNode_RestoreBackupBuildFailureKeepsCommittedStoreAndFatals(t *test
 	}
 }
 
-func TestLocalNode_RestoreBackupReplayFailureKeepsCommittedStoreAndFatals(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	old := newFakeEngine()
-	n, realm := newTestNode(t, old)
-	instance := seedReplayInstance(t, realm)
-	instrument := seedReplayInstrument(
-		t, realm, instance.ExternalID, "EURUSD", "EUR", "USD", "2",
-	)
-	now := time.Now().UTC()
-	if err := realm.UpsertMarketDataQuote(ctx, domain.MarketDataQuote{
-		AsOf:           now,
-		ReceivedAt:     now,
-		Instance:       instance.ExternalID,
-		ExternalSymbol: instrument.ExternalSymbol,
-		BaseAsset:      instrument.BaseAsset,
-		QuoteAsset:     instrument.QuoteAsset,
-		Mark:           "2",
-	}); err != nil {
-		t.Fatalf("UpsertMarketDataQuote: %v", err)
-	}
-	if _, err := n.CreateAccount(ctx, testAccount("keep"), testCaller); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-	archive, err := realm.ExportBackup(ctx, backup.Scope{All: true})
-	if err != nil {
-		t.Fatalf("ExportBackup: %v", err)
-	}
-	archive.Data.Accounts = nil
-
-	replayErr := errors.New("restore replay failed")
-	next := newFakeEngine()
-	next.sink = &marketDataReplaySink{err: replayErr}
-	n.build = fakeBuild(next, new(engine.Snapshot))
-	var fatalErr error
-	n.fatal = func(err error) { fatalErr = err }
-	_, _, err = n.RestoreBackup(ctx, archive, backup.RestoreOptions{
-		Scope: backup.Scope{All: true},
-		Mode:  backup.RestoreModeReplaceAll,
-	}, testCaller)
-	if !errors.Is(err, replayErr) {
-		t.Fatalf("RestoreBackup error = %v, want replay failure", err)
-	}
-	if fatalErr == nil || !errors.Is(fatalErr, replayErr) {
-		t.Fatalf("fatal error = %v, want replay failure", fatalErr)
-	}
-	if n.currentEngine() != old || !old.running || next.running {
-		t.Fatalf(
-			"engine state after replay failure: current=%p old=%v next=%v",
-			n.currentEngine(), old.running, next.running,
-		)
-	}
-	if _, ok, getErr := realm.GetAccount(ctx, "keep"); getErr != nil || ok {
-		t.Fatalf("keep account after committed restore: ok=%v err=%v, want absent", ok, getErr)
-	}
-}
-
 func TestLocalNode_RestoreBackupPostSwapMirrorFailureDoesNotRollback(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1459,6 +1403,12 @@ func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
 	if oldEngine.running {
 		t.Fatalf("old engine still running after reset")
 	}
+	if oldEngine.marketDataServiceCloseCalls != 1 {
+		t.Fatalf(
+			"old engine service closes = %d, want 1",
+			oldEngine.marketDataServiceCloseCalls,
+		)
+	}
 	if !nextEngine.running {
 		t.Fatalf("next engine is not running after reset")
 	}
@@ -1483,6 +1433,49 @@ func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
 	if rows[0].Actor != testCaller.Principal || rows[0].Source != testCaller.Source {
 		t.Fatalf("audit attribution = %+v, want actor %s and source %s",
 			rows[0], testCaller.Principal, testCaller.Source)
+	}
+}
+
+type engineWithoutMarketDataServiceCloser struct {
+	engine.Engine
+}
+
+func TestLocalNode_ResetDatabaseRequiresMarketDataServiceCloser(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newMemoryStore("reset-missing-market-data-rotation.db")
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	inner := newFakeEngine()
+	var seed engine.Snapshot
+	nn, _, err := NewLocalNode(ctx, st, func(snapshot engine.Snapshot) (engine.Engine, error) {
+		built, buildErr := fakeBuild(inner, &seed)(snapshot)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		return engineWithoutMarketDataServiceCloser{Engine: built}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nn.(*localNode)
+	seedTestPrincipal(t, n)
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	_, err = n.ResetDatabase(ctx, testCaller)
+	var reconciliation internalPostCommitNodeMutationFailure
+	if !errors.As(err, &reconciliation) {
+		t.Fatalf("ResetDatabase error = %T %v, want reconciliation error", err, err)
+	}
+	const missingCapability = "missing CloseMarketDataService"
+	if !strings.Contains(err.Error(), missingCapability) {
+		t.Fatalf("ResetDatabase error = %q, want %q", err, missingCapability)
+	}
+	if fatalErr == nil || !strings.Contains(fatalErr.Error(), missingCapability) {
+		t.Fatalf("fatal error = %v, want %q", fatalErr, missingCapability)
 	}
 }
 

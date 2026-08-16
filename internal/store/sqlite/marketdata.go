@@ -15,13 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Market-data group of the SQLite store: instances, instruments, and quotes.
+// Market-data group of the SQLite store: instances and instruments.
 // Instances are machine records addressed by their opaque external id; the
 // surrogate key joins instruments internally and never crosses the interface
 // boundary. Instruments are addressed by (instance external id, external
-// symbol); quotes are 1:1 with an instrument. Asset references are resolved
-// by code on write and surfaced as code on read; the label COLLATE NOCASE
-// UNIQUE constraint on instances is mapped to domain.ErrAlreadyExists.
+// symbol). Asset references are resolved by code on write and surfaced as code
+// on read; the label COLLATE NOCASE UNIQUE constraint on instances is mapped to
+// domain.ErrAlreadyExists.
 
 package sqlite
 
@@ -30,7 +30,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 )
@@ -214,13 +213,6 @@ func (r *realmStore) DeleteMarketDataInstance(
 	instanceID, err := resolveInstanceID(ctx, tx, id)
 	if err != nil {
 		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM market_data_quote
-		WHERE instrument_id IN (
-			SELECT id FROM market_data_instrument WHERE instance_id = ?
-		)`, instanceID); err != nil {
-		return fmt.Errorf("store: delete market data quotes for instance: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM market_data_instrument WHERE instance_id = ?`,
@@ -475,146 +467,4 @@ func scanMDInstrument(rows *sql.Rows) (domain.MarketDataInstrument, error) {
 	}
 	instr.Instance = xid
 	return instr, nil
-}
-
-// --- Market-data quotes -----------------------------------------------------
-
-// mdQuoteSelect is the shared projection for quote reads. The instrument is
-// identified by (instance external id, external symbol) and the base/quote
-// asset codes are joined so no surrogate ids escape the store.
-const mdQuoteSelect = `
-SELECT i.external_id AS instance_xid, mdi.external_symbol,
-       ba.code, qa.code,
-       q.mark, q.bid, q.ask, q.as_of, q.received_at
-FROM market_data_quote q
-JOIN market_data_instrument mdi ON mdi.id = q.instrument_id
-JOIN market_data_instance   i   ON i.id   = mdi.instance_id
-JOIN asset ba                   ON ba.id  = mdi.base_asset_id
-JOIN asset qa                   ON qa.id  = mdi.quote_asset_id`
-
-// UpsertMarketDataQuote records the latest normalized quote for one configured
-// instrument, keyed by (instance, external symbol). The quote row is 1:1 with
-// the instrument; it is replaced on every update.
-func (r *realmStore) UpsertMarketDataQuote(
-	ctx context.Context, quote domain.MarketDataQuote,
-) error {
-	// Resolve the instrument's surrogate id from (instance external id, symbol).
-	db, err := r.db()
-	if err != nil {
-		return err
-	}
-	var instrumentID int64
-	err = db.QueryRowContext(
-		ctx,
-		`SELECT mdi.id
-		 FROM market_data_instrument mdi
-		 JOIN market_data_instance i ON i.id = mdi.instance_id
-		 WHERE i.external_id = ? AND mdi.external_symbol = ?`,
-		quote.Instance.Bytes(), quote.ExternalSymbol,
-	).Scan(&instrumentID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf(
-			"market data instrument %q/%q: %w",
-			quote.Instance.String(), quote.ExternalSymbol, domain.ErrNotFound,
-		)
-	}
-	if err != nil {
-		return fmt.Errorf("store: resolve instrument for quote: %w", err)
-	}
-
-	if _, err := db.ExecContext(
-		ctx,
-		`INSERT INTO market_data_quote
-		 (instrument_id, mark, bid, ask, as_of, received_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(instrument_id) DO UPDATE SET
-		   mark        = excluded.mark,
-		   bid         = excluded.bid,
-		   ask         = excluded.ask,
-		   as_of       = excluded.as_of,
-		   received_at = excluded.received_at`,
-		instrumentID,
-		quote.Mark, quote.Bid, quote.Ask,
-		quote.AsOf.UTC().Format(time.RFC3339Nano),
-		quote.ReceivedAt.UTC().Format(time.RFC3339Nano),
-	); err != nil {
-		return fmt.Errorf("store: upsert market data quote: %w", err)
-	}
-	return nil
-}
-
-// ListMarketDataQuotes returns the latest quotes for one instance, ordered by
-// external symbol. A zero instance id returns quotes for all instances.
-func (r *realmStore) ListMarketDataQuotes(
-	ctx context.Context, instance domain.ExternalID,
-) ([]domain.MarketDataQuote, error) {
-	var (
-		q    string
-		args []any
-	)
-	if instance.IsZero() {
-		q = mdQuoteSelect + ` ORDER BY mdi.external_symbol`
-	} else {
-		q = mdQuoteSelect + ` WHERE i.external_id = ? ORDER BY mdi.external_symbol`
-		args = []any{instance.Bytes()}
-	}
-
-	db, err := r.db()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: list market data quotes: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	result := make([]domain.MarketDataQuote, 0)
-	for rows.Next() {
-		quote, err := scanMDQuote(rows)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, quote)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate market data quotes: %w", err)
-	}
-	return result, nil
-}
-
-func scanMDQuote(rows *sql.Rows) (domain.MarketDataQuote, error) {
-	var (
-		quote    domain.MarketDataQuote
-		rawXID   []byte
-		asOf     string
-		received string
-	)
-	if err := rows.Scan(
-		&rawXID, &quote.ExternalSymbol,
-		&quote.BaseAsset, &quote.QuoteAsset,
-		&quote.Mark, &quote.Bid, &quote.Ask,
-		&asOf, &received,
-	); err != nil {
-		return domain.MarketDataQuote{}, fmt.Errorf("store: scan market data quote: %w", err)
-	}
-	xid, err := domain.ExternalIDFromBytes(rawXID)
-	if err != nil {
-		return domain.MarketDataQuote{}, fmt.Errorf("store: decode quote instance external id: %w", err)
-	}
-	quote.Instance = xid
-
-	asOfTime, err := time.Parse(time.RFC3339Nano, asOf)
-	if err != nil {
-		return domain.MarketDataQuote{}, fmt.Errorf("store: parse quote as_of %q: %w", asOf, err)
-	}
-	quote.AsOf = asOfTime
-
-	recTime, err := time.Parse(time.RFC3339Nano, received)
-	if err != nil {
-		return domain.MarketDataQuote{}, fmt.Errorf("store: parse quote received_at %q: %w", received, err)
-	}
-	quote.ReceivedAt = recTime
-
-	return quote, nil
 }

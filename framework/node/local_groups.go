@@ -466,29 +466,12 @@ func (n *localNode) DeleteGroup(
 	if next == previousEngine {
 		return fmt.Errorf("build engine for group delete returned current engine")
 	}
-	transition, err := n.beginMarketDataTransition(next)
-	if err != nil {
-		next.Stop()
-		return fmt.Errorf("prepare group delete market data: %w", err)
-	}
-	if err := n.replayMarketDataInto(ctx, next); err != nil {
-		n.cancelMarketDataTransition(transition)
-		next.Stop()
-		return fmt.Errorf("replay market data for group delete: %w", err)
-	}
-
 	durableCtx := context.WithoutCancel(ctx)
-	prev, err := n.commitMarketDataTransitionWithHook(transition, next, func() error {
-		if err := n.realm.DeleteGroup(durableCtx, code, force); err != nil {
-			return fmt.Errorf("delete group: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		n.cancelMarketDataTransition(transition)
+	if err := n.realm.DeleteGroup(durableCtx, code, force); err != nil {
 		next.Stop()
-		return fmt.Errorf("commit group delete engine transition: %w", err)
+		return fmt.Errorf("delete group: %w", err)
 	}
+	prev := n.swapEngine(next)
 	if prev != nil && prev != next {
 		prev.Stop()
 	}

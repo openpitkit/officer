@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -315,14 +316,12 @@ func spotFundsLimitMap(
 type restoreMarketDataShape struct {
 	instances   map[domain.ExternalID]domain.MarketDataInstance
 	instruments map[string]backup.MarketDataInstrument
-	quotes      map[string]domain.MarketDataQuote
 }
 
 func marketDataRuntimeShape(data backup.Data) restoreMarketDataShape {
 	shape := restoreMarketDataShape{
 		instances:   make(map[domain.ExternalID]domain.MarketDataInstance, len(data.MarketDataInstances)),
 		instruments: make(map[string]backup.MarketDataInstrument, len(data.MarketDataInstruments)),
-		quotes:      make(map[string]domain.MarketDataQuote, len(data.MarketDataQuotes)),
 	}
 	for _, instance := range data.MarketDataInstances {
 		shape.instances[instance.ExternalID] = instance
@@ -330,9 +329,6 @@ func marketDataRuntimeShape(data backup.Data) restoreMarketDataShape {
 	for _, instrument := range data.MarketDataInstruments {
 		shape.instruments[restoreMarketDataKey(instrument.Instance, instrument.ExternalSymbol)] =
 			instrument
-	}
-	for _, quote := range data.MarketDataQuotes {
-		shape.quotes[restoreMarketDataKey(quote.Instance, quote.ExternalSymbol)] = quote
 	}
 	return shape
 }
@@ -589,57 +585,169 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if err := clearRestoredMarketData(eng.MarketDataSink(), before, after); err != nil {
 			return fmt.Errorf("clear restored market data: %w", err)
 		}
-		if err := n.replayMarketDataInto(ctx, eng); err != nil {
-			return fmt.Errorf("replay restored market data: %w", err)
-		}
 	}
 	return nil
 }
 
-func clearRestoredMarketData(
-	sink marketdata.Sink, before, after restoreRuntimeSnapshot,
+type marketDataPairKey struct {
+	base  domain.EngineAssetID
+	quote domain.EngineAssetID
+}
+
+// marketDataPublicationState contains only fields that determine whether an
+// instrument publishes a live, valid quote. The pair selects the registry
+// entries, provider selects publication behavior, effectiveEnabled combines
+// both enable switches, manualPrice participates only for BYO publication, and
+// pairResolved distinguishes an incomplete instrument from the zero-value key.
+type marketDataPublicationState struct {
+	pair             marketDataPairKey
+	provider         string
+	manualPrice      string
+	effectiveEnabled bool
+	pairResolved     bool
+}
+
+// effectiveMarketDataPublicationState derives the provider-aware comparison
+// rule for one snapshot. A missing owner is an error because the store foreign
+// key guarantees that every persisted instrument has an instance.
+func effectiveMarketDataPublicationState(
+	snapshot restoreRuntimeSnapshot,
+	instances map[domain.ExternalID]domain.MarketDataInstance,
+	instrument backup.MarketDataInstrument,
+) (marketDataPublicationState, error) {
+	instance, ok := instances[instrument.Instance]
+	if !ok {
+		return marketDataPublicationState{}, fmt.Errorf(
+			"owning market-data instance %q: %w",
+			instrument.Instance,
+			domain.ErrNotFound,
+		)
+	}
+	pair, pairResolved, err := marketDataPairFromAssets(
+		snapshot.assets, instrument.BaseAsset, instrument.QuoteAsset,
+	)
+	if err != nil {
+		return marketDataPublicationState{}, err
+	}
+	manualPrice := ""
+	if instance.Provider == domain.MarketDataProviderBYO {
+		manualPrice = instrument.ManualPrice
+	}
+	return marketDataPublicationState{
+		pair:             pair,
+		provider:         instance.Provider,
+		manualPrice:      manualPrice,
+		effectiveEnabled: instance.Enabled && instrument.Enabled,
+		pairResolved:     pairResolved,
+	}, nil
+}
+
+func restoreMarketDataPublicationStates(
+	snapshot restoreRuntimeSnapshot,
+) (map[string]marketDataPublicationState, error) {
+	instances := make(map[domain.ExternalID]domain.MarketDataInstance,
+		len(snapshot.data.MarketDataInstances))
+	for _, instance := range snapshot.data.MarketDataInstances {
+		instances[instance.ExternalID] = instance
+	}
+	states := make(map[string]marketDataPublicationState,
+		len(snapshot.data.MarketDataInstruments))
+	for _, instrument := range snapshot.data.MarketDataInstruments {
+		key := restoreMarketDataKey(
+			instrument.Instance, instrument.ExternalSymbol,
+		)
+		state, err := effectiveMarketDataPublicationState(
+			snapshot, instances, instrument,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("resolve instrument %q publication state: %w", key, err)
+		}
+		states[key] = state
+	}
+	return states, nil
+}
+
+type marketDataPairSet map[marketDataPairKey]struct{}
+
+func (pairs marketDataPairSet) add(pair marketDataPairKey) {
+	pairs[pair] = struct{}{}
+	pairs[marketDataPairKey{base: pair.quote, quote: pair.base}] = struct{}{}
+}
+
+func marketDataPairFromAssets(
+	assets map[string]domain.Asset, base, quote string,
+) (marketDataPairKey, bool, error) {
+	if base == "" || quote == "" {
+		return marketDataPairKey{}, false, nil
+	}
+	baseAsset, ok := assets[base]
+	if !ok {
+		return marketDataPairKey{}, false,
+			fmt.Errorf("market-data base asset %q: %w", base, domain.ErrNotFound)
+	}
+	quoteAsset, ok := assets[quote]
+	if !ok {
+		return marketDataPairKey{}, false,
+			fmt.Errorf("market-data quote asset %q: %w", quote, domain.ErrNotFound)
+	}
+	return marketDataPairKey{
+		base: baseAsset.EngineAssetID, quote: quoteAsset.EngineAssetID,
+	}, true, nil
+}
+
+func changedRestoreMarketDataPairs(
+	before, after restoreRuntimeSnapshot,
+) (marketDataPairSet, error) {
+	beforeStates, err := restoreMarketDataPublicationStates(before)
+	if err != nil {
+		return nil, fmt.Errorf("resolve previous market data: %w", err)
+	}
+	afterStates, err := restoreMarketDataPublicationStates(after)
+	if err != nil {
+		return nil, fmt.Errorf("resolve restored market data: %w", err)
+	}
+
+	pairs := make(marketDataPairSet)
+	for key, previous := range beforeStates {
+		next, exists := afterStates[key]
+		if !exists {
+			if previous.pairResolved {
+				pairs.add(previous.pair)
+			}
+			continue
+		}
+		if previous == next {
+			continue
+		}
+		if previous.pairResolved {
+			pairs.add(previous.pair)
+		}
+		if next.pairResolved {
+			pairs.add(next.pair)
+		}
+	}
+	for key, next := range afterStates {
+		if _, exists := beforeStates[key]; exists {
+			continue
+		}
+		if next.pairResolved {
+			pairs.add(next.pair)
+		}
+	}
+	return pairs, nil
+}
+
+func clearMarketDataPairs(
+	sink marketdata.Sink, pairs marketDataPairSet,
 ) error {
+	if len(pairs) == 0 {
+		return nil
+	}
 	clearer, ok := sink.(marketdata.QuoteClearer)
 	if !ok {
 		return fmt.Errorf("live market-data sink does not support quote clear")
 	}
-	pairs := make(map[marketDataReplayPairKey]struct{})
-	addPair := func(
-		assets map[string]domain.Asset, base, quote string,
-	) error {
-		if base == "" || quote == "" {
-			return nil
-		}
-		baseAsset, ok := assets[base]
-		if !ok {
-			return fmt.Errorf("restore market-data base asset %q: %w", base, domain.ErrNotFound)
-		}
-		quoteAsset, ok := assets[quote]
-		if !ok {
-			return fmt.Errorf("restore market-data quote asset %q: %w", quote, domain.ErrNotFound)
-		}
-		pairs[marketDataReplayPairKey{
-			base: baseAsset.EngineAssetID, quote: quoteAsset.EngineAssetID,
-		}] = struct{}{}
-		pairs[marketDataReplayPairKey{
-			base: quoteAsset.EngineAssetID, quote: baseAsset.EngineAssetID,
-		}] = struct{}{}
-		return nil
-	}
-	for _, snapshot := range []restoreRuntimeSnapshot{before, after} {
-		data := snapshot.data
-		for _, instrument := range data.MarketDataInstruments {
-			if err := addPair(snapshot.assets, instrument.BaseAsset, instrument.QuoteAsset); err != nil {
-				return err
-			}
-		}
-		for _, quote := range data.MarketDataQuotes {
-			if err := addPair(snapshot.assets, quote.BaseAsset, quote.QuoteAsset); err != nil {
-				return err
-			}
-		}
-	}
-	ordered := make([]marketDataReplayPairKey, 0, len(pairs))
+	ordered := make([]marketDataPairKey, 0, len(pairs))
 	for pair := range pairs {
 		ordered = append(ordered, pair)
 	}
@@ -649,12 +757,25 @@ func clearRestoredMarketData(
 		}
 		return ordered[i].quote < ordered[j].quote
 	})
+	var clearErrors []error
 	for _, pair := range ordered {
 		if err := clearer.Clear(pair.base, pair.quote); err != nil {
-			return fmt.Errorf("clear quote %d/%d: %w", pair.base, pair.quote, err)
+			clearErrors = append(clearErrors, fmt.Errorf(
+				"clear quote %d/%d: %w", pair.base, pair.quote, err,
+			))
 		}
 	}
-	return nil
+	return errors.Join(clearErrors...)
+}
+
+func clearRestoredMarketData(
+	sink marketdata.Sink, before, after restoreRuntimeSnapshot,
+) error {
+	pairs, err := changedRestoreMarketDataPairs(before, after)
+	if err != nil {
+		return err
+	}
+	return clearMarketDataPairs(sink, pairs)
 }
 
 func (n *localNode) applyRestoredBalances(

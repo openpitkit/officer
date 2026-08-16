@@ -514,7 +514,7 @@ type MarketDataInstrument struct {
 type MarketDataQuote struct {
 	// AsOf is the source observation time.
 	AsOf time.Time
-	// ReceivedAt is when Officer received and persisted the quote.
+	// ReceivedAt is when Officer received the quote.
 	ReceivedAt time.Time
 	// Instance is the owning instance's opaque public handle.
 	Instance ExternalID

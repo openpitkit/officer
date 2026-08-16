@@ -55,8 +55,6 @@ const (
 	SectionRiskLimits Section = "risk_limits"
 	// SectionMarketData carries market-data instances and their instruments.
 	SectionMarketData Section = "market_data_settings"
-	// SectionMarketDataQuotes carries the latest per-instrument quotes.
-	SectionMarketDataQuotes Section = "market_data_quotes"
 	// SectionGeneralSettings carries the MCP access overrides and signing config.
 	SectionGeneralSettings Section = "general_settings"
 	// SectionUserSettings carries the per-user UI settings.
@@ -77,7 +75,6 @@ var AllSections = []Section{
 	SectionPositions,
 	SectionRiskLimits,
 	SectionMarketData,
-	SectionMarketDataQuotes,
 	SectionGeneralSettings,
 	SectionUserSettings,
 	SectionActivityHistory,
@@ -423,9 +420,6 @@ type Data struct {
 	// MarketDataInstruments are per-instance instruments, linked by the instance
 	// external id and asset codes.
 	MarketDataInstruments []MarketDataInstrument `json:"marketDataInstruments,omitempty"`
-	// MarketDataQuotes are latest per-instrument quotes, linked by instance
-	// external id and external symbol.
-	MarketDataQuotes []domain.MarketDataQuote `json:"marketDataQuotes,omitempty"`
 	// SigningKeys are the signing keypairs (by key_id).
 	SigningKeys []SigningKey `json:"signingKeys,omitempty"`
 	// SigningConfig is the global signing configuration (enum keys).
@@ -489,8 +483,7 @@ func RuntimeSection(section Section) bool {
 	case SectionAccountsGroups,
 		SectionPositions,
 		SectionRiskLimits,
-		SectionMarketData,
-		SectionMarketDataQuotes:
+		SectionMarketData:
 		return true
 	default:
 		return false
@@ -555,11 +548,10 @@ var accountAddressedSections = []Section{
 
 // Normalize trims and deduplicates the scope's section list and selectors, then
 // force-includes the parent dictionary sections a scoped archive's rows resolve
-// against: any account-addressed section pulls in accounts+groups, and the
-// market-data quotes section pulls in the market-data instances section. This
-// keeps a scoped archive self-resolving (its rows never reference a parent the
-// archive omitted). It is a no-op when All is set, since All already carries
-// every section.
+// against: any account-addressed section pulls in accounts+groups. This keeps a
+// scoped archive self-resolving (its rows never reference a parent the archive
+// omitted). It is a no-op when All is set, since All already carries every
+// section.
 func (s Scope) Normalize() Scope {
 	s.Sections = normalizeSections(s.Sections)
 	s.Accounts = s.Accounts.Normalize()
@@ -571,8 +563,8 @@ func (s Scope) Normalize() Scope {
 }
 
 // forceParentSections appends, in canonical AllSections order, the parent
-// dictionary sections required by the included account-addressed and quote
-// sections, leaving an already-complete or empty list untouched.
+// dictionary sections required by the included account-addressed sections,
+// leaving an already-complete or empty list untouched.
 func forceParentSections(sections []Section) []Section {
 	has := make(map[Section]bool, len(sections))
 	for _, section := range sections {
@@ -585,9 +577,6 @@ func forceParentSections(sections []Section) []Section {
 				break
 			}
 		}
-	}
-	if has[SectionMarketDataQuotes] {
-		has[SectionMarketData] = true
 	}
 	if has[SectionActivityHistory] {
 		has[SectionGeneralSettings] = true
@@ -650,10 +639,6 @@ func FilterData(data Data, scope Scope) Data {
 			data.MarketDataInstances...)
 		out.MarketDataInstruments = append([]MarketDataInstrument(nil),
 			data.MarketDataInstruments...)
-	}
-	if scope.Included(SectionMarketDataQuotes) {
-		out.MarketDataQuotes = append([]domain.MarketDataQuote(nil),
-			data.MarketDataQuotes...)
 	}
 	if scope.Included(SectionGeneralSettings) {
 		if data.McpAccess != nil {

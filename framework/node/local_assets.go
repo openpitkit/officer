@@ -325,7 +325,7 @@ func (n *localNode) DeleteAsset(
 	}
 	defer n.endEngineRestart()
 
-	asset, ok, err := n.realm.GetAsset(ctx, code)
+	_, ok, err := n.realm.GetAsset(ctx, code)
 	if err != nil {
 		return fmt.Errorf("read asset for delete: %w", err)
 	}
@@ -352,30 +352,12 @@ func (n *localNode) DeleteAsset(
 	if next == previousEngine {
 		return fmt.Errorf("build engine for asset delete returned current engine")
 	}
-	transition, err := n.beginMarketDataTransition(next)
-	if err != nil {
-		next.Stop()
-		return fmt.Errorf("prepare asset delete market data: %w", err)
-	}
-	transition.excludeAsset(asset.EngineAssetID)
-	if err := n.replayMarketDataWithoutAssetInto(ctx, next, code); err != nil {
-		n.cancelMarketDataTransition(transition)
-		next.Stop()
-		return fmt.Errorf("replay market data for asset delete: %w", err)
-	}
-
 	durableCtx := context.WithoutCancel(ctx)
-	prev, err := n.commitMarketDataTransitionWithHook(transition, next, func() error {
-		if err := n.realm.DeleteAsset(durableCtx, code, true); err != nil {
-			return fmt.Errorf("delete asset: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		n.cancelMarketDataTransition(transition)
+	if err := n.realm.DeleteAsset(durableCtx, code, true); err != nil {
 		next.Stop()
-		return fmt.Errorf("commit asset delete engine transition: %w", err)
+		return fmt.Errorf("delete asset: %w", err)
 	}
+	prev := n.swapEngine(next)
 	if prev != nil && prev != next {
 		prev.Stop()
 	}

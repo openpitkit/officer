@@ -715,7 +715,6 @@ var expectedSchemaTableNames = []string{
 	"limit_spot_funds_pnl_bound",
 	"market_data_instance",
 	"market_data_instrument",
-	"market_data_quote",
 	"mcp_access",
 	"order_amount_kind",
 	"order_event",
@@ -1015,16 +1014,6 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"quote_asset_id":  "QuoteAsset",
 			"enabled":         "Enabled",
 			"manual_price":    "ManualPrice",
-		},
-	},
-	"market_data_quote": {
-		backup: map[string]string{
-			"instrument_id": "Instance/ExternalSymbol",
-			"mark":          "Mark",
-			"bid":           "Bid",
-			"ask":           "Ask",
-			"as_of":         "AsOf",
-			"received_at":   "ReceivedAt",
 		},
 	},
 	"signing_key": {
@@ -1678,19 +1667,6 @@ func seedClientDataDriftRealm(
 			Enabled:        true,
 		},
 	))
-	must(t, "UpsertMarketDataQuote", rs.UpsertMarketDataQuote(
-		ctx, domain.MarketDataQuote{
-			Instance:       inst.ExternalID,
-			ExternalSymbol: "AAPL/USD",
-			BaseAsset:      "AAPL",
-			QuoteAsset:     "USD",
-			Mark:           "151.50",
-			Bid:            "151.40",
-			Ask:            "151.60",
-			AsOf:           time.Date(2026, 7, 8, 10, 2, 0, 0, time.UTC),
-			ReceivedAt:     time.Date(2026, 7, 8, 10, 2, 1, 0, time.UTC),
-		},
-	))
 	must(t, "SetSigningConfig", rs.SetSigningConfig(ctx, "no_esign", "0"))
 	must(t, "SetMcpAccess", rs.SetMcpAccess(ctx, "submit_order", true))
 	must(t, "SetUserSetting", rs.SetUserSetting(
@@ -1863,7 +1839,6 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"audit", data.Audit},
 		{"market-data-instances", data.MarketDataInstances},
 		{"market-data-instruments", data.MarketDataInstruments},
-		{"market-data-quotes", data.MarketDataQuotes},
 		{"signing-keys", data.SigningKeys},
 		{"signing-config", data.SigningConfig},
 		{"mcp-access", data.McpAccess},

@@ -48,9 +48,6 @@ type Store interface {
 	ListEnabledMarketDataInstruments(
 		ctx context.Context, instance domain.ExternalID,
 	) ([]domain.MarketDataInstrument, error)
-	// UpsertMarketDataQuote records the latest quote snapshot for panel and
-	// dashboard observability.
-	UpsertMarketDataQuote(ctx context.Context, quote domain.MarketDataQuote) error
 }
 
 // Manager owns the runtime lifecycle of every enabled market-data connector. It
@@ -101,6 +98,7 @@ type Manager struct {
 	manualTokens    map[string]map[quoteInstrumentKey]uint64
 	manualSynthetic map[string]map[quoteInstrumentKey]bool
 	statuses        map[string]InstanceRuntimeStatus
+	latestQuotes    map[quoteSnapshotIdentity]domain.MarketDataQuote
 	// The publisher gate preserves FIFO across live upserts and periodic
 	// reconciliation while allowing a cancelled caller to stop waiting. The
 	// apply gate orders every sink mutation when Stop times out. The per-run
@@ -140,6 +138,7 @@ type manualQuoteIdentity struct {
 type manualAcknowledgedState struct {
 	mark      string
 	synthetic bool
+	external  string
 }
 
 type manualClearState struct {
@@ -147,6 +146,7 @@ type manualClearState struct {
 	token      uint64
 	direct     bool
 	synthetic  bool
+	external   string
 }
 
 type startupManualAction struct {
@@ -174,6 +174,14 @@ type InstanceRuntimeStatus struct {
 	Diagnostics     []Diagnostic
 }
 
+// QuoteSnapshot carries a last accepted quote with its resolved engine asset pair.
+// BaseAssetID and QuoteAssetID are routing identity, not display data.
+type QuoteSnapshot struct {
+	domain.MarketDataQuote
+	BaseAssetID  domain.EngineAssetID
+	QuoteAssetID domain.EngineAssetID
+}
+
 const (
 	StateOK    = "ok"
 	StateError = "error"
@@ -188,6 +196,10 @@ const diagBufferCap = 20
 const diagnoseGrace = 20 * time.Second
 
 const defaultManagerStopGrace = 2 * time.Second
+
+// ErrUnknownAsset marks an engine asset identifier that the market-data
+// boundary can no longer resolve.
+var ErrUnknownAsset = errors.New("marketdata: unknown asset")
 
 // ErrUnsupportedProvider marks an unregistered market-data provider type.
 var ErrUnsupportedProvider = errors.New("unsupported market-data provider")
@@ -223,6 +235,7 @@ func NewManager(
 		sinkApplyGate:         newManagerGate(),
 		manualAcknowledged:    make(map[manualQuoteIdentity]manualAcknowledgedState),
 		manualMayBeLive:       make(map[manualQuoteIdentity]manualAcknowledgedState),
+		latestQuotes:          make(map[quoteSnapshotIdentity]domain.MarketDataQuote),
 	}, nil
 }
 
@@ -239,17 +252,48 @@ func (m *Manager) Registry() *Registry {
 
 // Start reads the enabled instances and brings up one connector per instance.
 // It is safe to call once; a second Start while running is a no-op. An instance
-// whose type is unknown, whose instruments cannot be read, or whose Subscribe
-// fails is logged and skipped - it never fails Start or stops the other
-// instances. With nothing enabled Start is a clean no-op.
+// whose type is unknown, whose instruments become unreadable after reconciliation
+// has read them, or whose connector cannot be built or subscribed is logged and
+// skipped - these later per-instance failures never fail Start or stop the other
+// instances.
+// Reconciliation must read every enabled instrument; a store read failure fails
+// Start because a partial allowed set could clear a configured quote.
+// Start waits at most 2 x stopGrace for the sink apply gate and fails explicitly
+// when an in-flight engine sink operation still holds it, so a stuck sink cannot
+// wedge the caller's lock. The condition is transient and the call may be
+// retried.
+// With nothing enabled Start brings up no connector but still reconciles: every
+// quote identity left in the registry is cleared.
 func (m *Manager) Start(ctx context.Context) error {
+	m.mu.Lock()
+	if m.started {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+
+	sink := m.currentSink()
+	if sink == nil {
+		return ErrNilSink
+	}
+	gateCtx, cancelGateWait := context.WithTimeout(ctx, 2*m.stopGrace)
+	gateErr := m.acquireGate(gateCtx, m.sinkApplyGate)
+	cancelGateWait()
+	if gateErr != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return fmt.Errorf(
+			"marketdata: restart blocked by an in-flight engine sink operation: %w",
+			gateErr,
+		)
+	}
+	defer m.releaseGate(m.sinkApplyGate)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.started {
 		return nil
-	}
-	if m.sink == nil {
-		return ErrNilSink
 	}
 	m.baseCtx = ctx
 
@@ -257,8 +301,17 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("marketdata: list enabled instances: %w", err)
 	}
+	allowedQuoteIdentities, err := m.allowedQuoteIdentities(ctx, instances)
+	if err != nil {
+		return err
+	}
 	syntheticPairs, err := m.syntheticPairPlan(ctx)
 	if err != nil {
+		return err
+	}
+	if err := m.reconcileQuoteRegistry(
+		sink, allowedQuoteIdentities, syntheticPairs,
+	); err != nil {
 		return err
 	}
 
@@ -312,6 +365,123 @@ func (m *Manager) Start(ctx context.Context) error {
 		(len(m.byInstance) > 0 || len(m.pendingManualClears) > 0) {
 		runWG.Add(1)
 		go m.refreshManualMarks(runCtx, runWG, m.manualRefreshInterval)
+	}
+	return nil
+}
+
+func (m *Manager) allowedQuoteIdentities(
+	ctx context.Context,
+	instances []domain.MarketDataInstance,
+) (map[quoteSnapshotIdentity]struct{}, error) {
+	allowed := make(map[quoteSnapshotIdentity]struct{})
+	for _, instance := range instances {
+		instruments, err := m.store.ListEnabledMarketDataInstruments(
+			ctx, instance.ExternalID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"marketdata: list enabled instruments for %s: %w",
+				instance.ExternalID, err,
+			)
+		}
+		for _, instrument := range instruments {
+			allowed[quoteSnapshotIdentity{
+				instanceID: instance.ExternalID.String(),
+				external:   instrument.ExternalSymbol,
+				pair: quoteInstrumentKey{
+					base:  instrument.BaseAssetID,
+					quote: instrument.QuoteAssetID,
+				},
+			}] = struct{}{}
+		}
+	}
+	return allowed, nil
+}
+
+func (m *Manager) reconcileQuoteRegistry(
+	sink Sink,
+	allowed map[quoteSnapshotIdentity]struct{},
+	syntheticPairs map[quoteInstrumentKey]struct{},
+) error {
+	directAllowedPairs := make(map[quoteInstrumentKey]struct{}, len(allowed))
+	for identity := range allowed {
+		directAllowedPairs[identity.pair] = struct{}{}
+	}
+	inverseAllowedPairs := make(
+		map[quoteInstrumentKey]struct{}, 2*len(directAllowedPairs),
+	)
+	for pair := range directAllowedPairs {
+		inverseAllowedPairs[pair] = struct{}{}
+		if _, synthetic := syntheticPairs[pair]; !synthetic {
+			continue
+		}
+		inverseAllowedPairs[quoteInstrumentKey{
+			base: pair.quote, quote: pair.base,
+		}] = struct{}{}
+	}
+
+	stale := make([]quoteSnapshotIdentity, 0)
+	for identity := range m.latestQuotes {
+		if _, ok := allowed[identity]; !ok {
+			stale = append(stale, identity)
+		}
+	}
+
+	type reconciliationClear struct {
+		pair    quoteInstrumentKey
+		inverse bool
+	}
+identityLoop:
+	for _, identity := range stale {
+		clears := make([]reconciliationClear, 0, 2)
+		if _, ok := directAllowedPairs[identity.pair]; !ok {
+			clears = append(clears, reconciliationClear{pair: identity.pair})
+		}
+		inverse := quoteInstrumentKey{
+			base: identity.pair.quote, quote: identity.pair.base,
+		}
+		if _, ok := inverseAllowedPairs[inverse]; !ok {
+			clears = append(clears, reconciliationClear{
+				pair: inverse, inverse: true,
+			})
+		}
+		if len(clears) > 0 {
+			clearer, ok := sink.(QuoteClearer)
+			if !ok {
+				return fmt.Errorf("marketdata: sink does not support quote clear")
+			}
+			for _, clear := range clears {
+				err := clearer.Clear(clear.pair.base, clear.pair.quote)
+				if errors.Is(err, ErrUnknownAsset) {
+					m.logger.Warn(
+						"market data reconciliation dropped unresolvable quote identity",
+						"instance_id", identity.instanceID,
+						"external_symbol", identity.external,
+						"base_asset_id", clear.pair.base,
+						"quote_asset_id", clear.pair.quote,
+						"inverse", clear.inverse,
+						"reason", err,
+					)
+					m.retireManualQuoteLocked(manualQuoteIdentity{
+						instanceID: identity.instanceID,
+						pair:       identity.pair,
+					})
+					continue identityLoop
+				}
+				if err != nil {
+					direction := "quote"
+					if clear.inverse {
+						direction = "inverse quote"
+					}
+					return fmt.Errorf(
+						"marketdata: reconcile %s %s/%s pair %d/%d: %w",
+						direction, identity.instanceID, identity.external,
+						clear.pair.base, clear.pair.quote, err,
+					)
+				}
+			}
+		}
+		delete(m.latestQuotes, identity)
 	}
 	return nil
 }
@@ -598,6 +768,7 @@ func (m *Manager) startupManualActionsLocked(
 		state := manualClearState{
 			generation: generation,
 			token:      token,
+			external:   acknowledged.external,
 		}
 		switch {
 		case !desired || desiredMark == "":
@@ -618,6 +789,7 @@ func (m *Manager) startupManualActionsLocked(
 	pushActions := make([]startupManualAction, 0)
 	for instanceID, marks := range m.manualMarks {
 		pushable := m.byInstance[instanceID]
+		externals := externalSymbolsFor(m.appliedConfig[instanceID].Subscriptions)
 		for pair, mark := range marks {
 			if mark == "" || pushable == nil {
 				continue
@@ -626,9 +798,11 @@ func (m *Manager) startupManualActionsLocked(
 			mayBeLive := m.manualMayBeLive[identity]
 			mayBeLive.mark = mark
 			mayBeLive.synthetic = mayBeLive.synthetic || m.manualSynthetic[instanceID][pair]
+			mayBeLive.external = externals[pair]
 			m.manualMayBeLive[identity] = mayBeLive
 			pushActions = append(pushActions, startupManualAction{
 				instanceID: instanceID,
+				external:   externals[pair],
 				pushable:   pushable,
 				update: manualQuoteForState(
 					pair, mark, generation, m.manualTokens[instanceID][pair],
@@ -823,19 +997,6 @@ func (m *Manager) drain(
 		received.Store(quoteInstrumentKey{base: update.Base, quote: update.Quote}, true)
 		external := symbols[quoteInstrumentKey{base: update.Base, quote: update.Quote}]
 		m.recordQuoteArrival(generation, instanceID, external, time.Now())
-		if err := m.store.UpsertMarketDataQuote(
-			ctx, quoteSnapshot(instance, symbols, update),
-		); err != nil {
-			m.recordDiagForGeneration(generation, instanceID, Diagnostic{
-				Level:       DiagWarn,
-				Code:        CodeInternalError,
-				Kind:        DiagKindProvider,
-				Title:       "Failed to record quote",
-				Detail:      err.Error(),
-				Remediation: "Usually transient; if persistent, Restart feeds or contact support.",
-				Actions:     []DiagnosticAction{{Type: ActionRestart}},
-			})
-		}
 		if !m.runGenerationIsCurrent(generation) {
 			m.releaseGate(m.sinkApplyGate)
 			continue
@@ -854,18 +1015,25 @@ func (m *Manager) drain(
 		} else {
 			directApplied := m.pushToSink(generation, instanceID, sink, update)
 			syntheticApplied := false
-			if _, planned := syntheticPairs[quoteInstrumentKey{
-				base: update.Base, quote: update.Quote,
-			}]; planned {
-				if inverted, ok := InvertQuote(update); ok {
-					syntheticApplied = m.pushToSink(
-						generation, instanceID, sink, inverted,
-					)
+			if directApplied {
+				m.recordAcceptedSnapshot(
+					instanceID,
+					update,
+					quoteSnapshot(instance, symbols, update),
+				)
+				if _, planned := syntheticPairs[quoteInstrumentKey{
+					base: update.Base, quote: update.Quote,
+				}]; planned {
+					if inverted, ok := InvertQuote(update); ok {
+						syntheticApplied = m.pushToSink(
+							generation, instanceID, sink, inverted,
+						)
+					}
 				}
 			}
 			if update.manual && directApplied {
 				m.acknowledgeManualQuote(
-					generation, instanceID, update, syntheticApplied,
+					generation, instanceID, external, update, syntheticApplied,
 				)
 			}
 		}
@@ -940,6 +1108,9 @@ func (m *Manager) applyManualClear(
 	}
 	if update.clearDirect {
 		if err := clearer.Clear(update.Base, update.Quote); err != nil {
+			if m.retireUnknownManualQuote(instanceID, update, err) {
+				return nil
+			}
 			return fmt.Errorf(
 				"marketdata: clear manual quote %d/%d for %s: %w",
 				update.Base, update.Quote, instanceID, err,
@@ -948,6 +1119,9 @@ func (m *Manager) applyManualClear(
 	}
 	if update.clearSynthetic {
 		if err := clearer.Clear(update.Quote, update.Base); err != nil {
+			if m.retireUnknownManualQuote(instanceID, update, err) {
+				return nil
+			}
 			return fmt.Errorf(
 				"marketdata: clear synthetic manual quote %d/%d for %s: %w",
 				update.Quote, update.Base, instanceID, err,
@@ -975,7 +1149,11 @@ func (m *Manager) manualClearIsCurrent(instanceID string, update QuoteUpdate) bo
 }
 
 func (m *Manager) acknowledgeManualQuote(
-	generation uint64, instanceID string, update QuoteUpdate, syntheticApplied bool,
+	generation uint64,
+	instanceID string,
+	external string,
+	update QuoteUpdate,
+	syntheticApplied bool,
 ) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -989,12 +1167,14 @@ func (m *Manager) acknowledgeManualQuote(
 	}
 	acknowledged := m.manualAcknowledged[identity]
 	acknowledged.mark = update.Mark
+	acknowledged.external = external
 	if syntheticApplied {
 		acknowledged.synthetic = true
 	}
 	m.manualAcknowledged[identity] = acknowledged
 	mayBeLive := m.manualMayBeLive[identity]
 	mayBeLive.mark = update.Mark
+	mayBeLive.external = external
 	if syntheticApplied {
 		mayBeLive.synthetic = true
 	}
@@ -1071,6 +1251,26 @@ func (m *Manager) recordQuoteArrival(
 		}
 	}
 	m.lastArrival[key] = arrival
+}
+
+func (m *Manager) recordAcceptedSnapshot(
+	instanceID string,
+	update QuoteUpdate,
+	quote domain.MarketDataQuote,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// The caller holds sinkApplyGate from before Sink.Push until this write
+	// completes. Record every accepted push even if Stop timed out and Start
+	// advanced the generation while the sink was blocked; a later generation
+	// cannot acquire the gate and overwrite this snapshot out of order.
+	m.latestQuotes[quoteSnapshotIdentity{
+		instanceID: instanceID,
+		external:   quote.ExternalSymbol,
+		pair: quoteInstrumentKey{
+			base: update.Base, quote: update.Quote,
+		},
+	}] = quote
 }
 
 // QuoteUpdateInterval returns the elapsed time between the two most recent ticks
@@ -1186,10 +1386,10 @@ func (m *Manager) UseSink(sink Sink) error {
 	return nil
 }
 
-// UseSinkProvider installs a resolver that returns the current engine sink on
+// UseSinkProvider installs a resolver that returns the current engine's sink on
 // every push. Unlike UseSink it may be set once at construction and needs no
-// restart on an engine rebuild: the manager always pushes into the live engine,
-// so a rebuild never leaves it pushing into a closed service.
+// restart on an engine rebuild: each node-scoped engine has a current resolver
+// while its SDK market-data service remains shared across rebuilds.
 func (m *Manager) UseSinkProvider(provider func() Sink) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1222,6 +1422,22 @@ func (m *Manager) InstanceStatuses() map[string]InstanceRuntimeStatus {
 			status.Diagnostics = diags
 		}
 		out[id] = status
+	}
+	return out
+}
+
+// QuoteSnapshots returns the last successfully applied direct quote for each
+// instance and external instrument.
+func (m *Manager) QuoteSnapshots() []QuoteSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]QuoteSnapshot, 0, len(m.latestQuotes))
+	for identity, quote := range m.latestQuotes {
+		out = append(out, QuoteSnapshot{
+			MarketDataQuote: quote,
+			BaseAssetID:     identity.pair.base,
+			QuoteAssetID:    identity.pair.quote,
+		})
 	}
 	return out
 }
@@ -1262,8 +1478,10 @@ func (m *Manager) Restart() error {
 // an empty price queues a clear through the same connector channel, ordering it
 // after every older heartbeat. It is a no-op when the manager is not running,
 // the connector is not push-capable, the instrument is disabled, or the applied
-// subscription does not match. The last cases leave topology reconciliation to
-// the explicit manager Restart.
+// subscription does not match. Clearing a quote identity that the engine can no
+// longer resolve also retires the identity as a no-op and records a warning that
+// a stale quote may remain. The topology cases leave reconciliation to the
+// explicit manager Restart.
 func (m *Manager) PushManual(
 	ctx context.Context, instanceID string, instrument domain.MarketDataInstrument,
 ) error {
@@ -1317,6 +1535,7 @@ func (m *Manager) PushManual(
 			token:      token,
 			direct:     true,
 			synthetic:  mayBeLive.synthetic || synthetic,
+			external:   instrument.ExternalSymbol,
 		}
 		m.setPendingManualClearLocked(identity, clearState)
 	} else {
@@ -1324,6 +1543,7 @@ func (m *Manager) PushManual(
 		mayBeLive := m.manualMayBeLive[identity]
 		mayBeLive.mark = instrument.ManualPrice
 		mayBeLive.synthetic = mayBeLive.synthetic || synthetic
+		mayBeLive.external = instrument.ExternalSymbol
 		m.manualMayBeLive[identity] = mayBeLive
 	}
 	m.mu.Unlock()
@@ -1395,6 +1615,13 @@ func (m *Manager) completeManualClear(instanceID string, update QuoteUpdate) {
 	if update.clearDirect {
 		delete(m.manualAcknowledged, identity)
 		delete(m.manualMayBeLive, identity)
+		delete(m.latestQuotes, quoteSnapshotIdentity{
+			instanceID: instanceID,
+			external:   state.external,
+			pair: quoteInstrumentKey{
+				base: update.Base, quote: update.Quote,
+			},
+		})
 	} else if update.clearSynthetic {
 		if acknowledged, ok := m.manualAcknowledged[identity]; ok {
 			acknowledged.synthetic = false
@@ -1407,6 +1634,60 @@ func (m *Manager) completeManualClear(instanceID string, update QuoteUpdate) {
 	}
 	delete(m.pendingManualClears, identity)
 	m.resolveSinkBarrierClearLocked(identity, state)
+}
+
+func (m *Manager) retireUnknownManualQuote(
+	instanceID string, update QuoteUpdate, err error,
+) bool {
+	if !errors.Is(err, ErrUnknownAsset) {
+		return false
+	}
+	identity := manualQuoteIdentity{
+		instanceID: instanceID,
+		pair: quoteInstrumentKey{
+			base: update.Base, quote: update.Quote,
+		},
+	}
+	instrument := fmt.Sprintf("%d/%d", update.Base, update.Quote)
+	m.mu.Lock()
+	if state, ok := m.pendingManualClears[identity]; ok && state.external != "" {
+		instrument = state.external
+	}
+	m.retireManualQuoteLocked(identity)
+	m.mu.Unlock()
+	m.recordDiagForGeneration(update.manualGeneration, instanceID, Diagnostic{
+		Level:      DiagWarn,
+		Code:       CodeInternalError,
+		Kind:       DiagKindConfig,
+		Title:      "Manual quote identity retired",
+		Instrument: instrument,
+		Detail: fmt.Sprintf(
+			"Quote identity %d/%d was retired because the engine can no longer "+
+				"resolve its assets; a stale quote may remain: %v",
+			update.Base, update.Quote, err,
+		),
+		Remediation: "Reconcile the engine asset registry before publishing " +
+			"another manual quote.",
+	})
+	return true
+}
+
+func (m *Manager) retireManualQuoteLocked(identity manualQuoteIdentity) {
+	if state, ok := m.pendingManualClears[identity]; ok {
+		delete(m.pendingManualClears, identity)
+		m.resolveSinkBarrierClearLocked(identity, state)
+	}
+	delete(m.manualAcknowledged, identity)
+	delete(m.manualMayBeLive, identity)
+	delete(m.manualMarks[identity.instanceID], identity.pair)
+	delete(m.manualTokens[identity.instanceID], identity.pair)
+	delete(m.manualSynthetic[identity.instanceID], identity.pair)
+	for snapshotIdentity := range m.latestQuotes {
+		if snapshotIdentity.instanceID == identity.instanceID &&
+			snapshotIdentity.pair == identity.pair {
+			delete(m.latestQuotes, snapshotIdentity)
+		}
+	}
 }
 
 func (m *Manager) setPendingManualClearLocked(
@@ -1524,9 +1805,9 @@ func (m *Manager) recordManualReconciliationPending(
 
 // refreshManualMarks periodically rereads current BYO configuration and sends
 // every enabled non-empty mark through its running connector. The connector's
-// normal drain path stamps and persists a fresh AsOf, then updates both direct
-// and planned synthetic engine pairs. No startup quote is retained here, so a
-// live edit or clear is observed on the next tick.
+// normal drain path stamps a fresh AsOf, records the accepted direct snapshot,
+// then updates both direct and planned synthetic engine pairs. A live edit or
+// clear is observed on the next tick.
 func (m *Manager) refreshManualMarks(
 	ctx context.Context, runWG *sync.WaitGroup, interval time.Duration,
 ) {
@@ -1637,6 +1918,7 @@ func (m *Manager) refreshManualMarksOnce(ctx context.Context) {
 						direct:     true,
 						synthetic: mayBeLive.synthetic || pending.synthetic ||
 							m.manualSynthetic[instanceID][key],
+						external: instrument.ExternalSymbol,
 					}
 					m.setPendingManualClearLocked(identity, state)
 					actions = append(actions, manualAction{
@@ -1657,6 +1939,7 @@ func (m *Manager) refreshManualMarksOnce(ctx context.Context) {
 			mayBeLive.mark = instrument.ManualPrice
 			mayBeLive.synthetic = mayBeLive.synthetic ||
 				m.manualSynthetic[instanceID][key]
+			mayBeLive.external = instrument.ExternalSymbol
 			m.manualMayBeLive[identity] = mayBeLive
 			actions = append(actions, manualAction{
 				instrument: instrument,
@@ -1721,8 +2004,8 @@ func (m *Manager) retryPendingManualClears(ctx context.Context) {
 }
 
 // manualQuote builds the one-shot quote carrying an instrument's operator-set
-// manual mark. AsOf is left zero so the sink/store stamps it with receipt time,
-// matching a fresh push.
+// manual mark. AsOf is left zero so the sink publishes it as current and the
+// manager snapshot stamps it with receipt time, matching a fresh push.
 func manualQuote(instrument domain.MarketDataInstrument) QuoteUpdate {
 	return QuoteUpdate{
 		Base:  instrument.BaseAssetID,
@@ -1797,6 +2080,12 @@ func cloneSubscriptions(subs []Subscription) []Subscription {
 type quoteInstrumentKey struct {
 	base  domain.EngineAssetID
 	quote domain.EngineAssetID
+}
+
+type quoteSnapshotIdentity struct {
+	instanceID string
+	external   string
+	pair       quoteInstrumentKey
 }
 
 func externalSymbolsFor(subs []Subscription) map[quoteInstrumentKey]string {

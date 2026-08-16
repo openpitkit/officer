@@ -37,6 +37,73 @@ type blockingStatusMarketDataRuntime struct {
 	stopCalled    chan struct{}
 }
 
+type managerSnapshotStore struct {
+	node *fakeNode
+}
+
+func (s managerSnapshotStore) ListMarketDataInstances(
+	ctx context.Context,
+) ([]domain.MarketDataInstance, error) {
+	return s.node.ListMarketDataInstances(ctx)
+}
+
+func (s managerSnapshotStore) ListEnabledMarketDataInstances(
+	ctx context.Context,
+) ([]domain.MarketDataInstance, error) {
+	instances, err := s.node.ListMarketDataInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.MarketDataInstance, 0, len(instances))
+	for _, instance := range instances {
+		if instance.Enabled {
+			out = append(out, instance)
+		}
+	}
+	return out, nil
+}
+
+func (s managerSnapshotStore) ListMarketDataInstruments(
+	ctx context.Context,
+	instance domain.ExternalID,
+) ([]domain.MarketDataInstrument, error) {
+	return s.node.ListMarketDataInstruments(ctx, instance)
+}
+
+func (s managerSnapshotStore) ListEnabledMarketDataInstruments(
+	ctx context.Context,
+	instance domain.ExternalID,
+) ([]domain.MarketDataInstrument, error) {
+	instruments, err := s.node.ListMarketDataInstruments(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.MarketDataInstrument, 0, len(instruments))
+	for _, instrument := range instruments {
+		if instrument.Enabled {
+			out = append(out, instrument)
+		}
+	}
+	return out, nil
+}
+
+type managerSnapshotConnector struct {
+	updates chan marketdata.QuoteUpdate
+}
+
+func (c *managerSnapshotConnector) Subscribe(
+	context.Context,
+	[]marketdata.Subscription,
+) (<-chan marketdata.QuoteUpdate, error) {
+	return c.updates, nil
+}
+
+func (*managerSnapshotConnector) Close() {}
+
+type managerSnapshotSink struct{}
+
+func (managerSnapshotSink) Push(marketdata.QuoteUpdate) error { return nil }
+
 func (r *blockingStatusMarketDataRuntime) InstanceStatuses() map[string]marketdata.InstanceRuntimeStatus {
 	close(r.statusEntered)
 	<-r.statusRelease
@@ -50,8 +117,21 @@ func (r *blockingStatusMarketDataRuntime) Stop() {
 
 func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
 	now := time.Now().UTC()
+	md := &fakeMarketDataRuntime{snapshots: []marketdata.QuoteSnapshot{
+		{
+			MarketDataQuote: domain.MarketDataQuote{
+				Instance:       mdID("mock-1"),
+				ExternalSymbol: "AAPL",
+				Mark:           "100",
+				AsOf:           now,
+				ReceivedAt:     now,
+			},
+			BaseAssetID:  testMarketDataAssetID("AAPL"),
+			QuoteAssetID: testMarketDataAssetID("USD"),
+		},
+	}}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 		{ExternalID: mdID("mock-2"), Provider: domain.MarketDataProviderMock, Enabled: false},
@@ -83,18 +163,6 @@ func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 			},
 		},
 	}
-	fn.mdQuotes = []domain.MarketDataQuote{
-		{
-			Instance:       mdID("mock-1"),
-			ExternalSymbol: "AAPL",
-			BaseAsset:      "AAPL",
-			QuoteAsset:     "USD",
-			Mark:           "100",
-			AsOf:           now,
-			ReceivedAt:     now,
-		},
-	}
-
 	status, err := svc.ListMarketData(context.Background())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
@@ -134,6 +202,154 @@ func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 	}
 	if disabledSource.Stale {
 		t.Fatalf("disabled source instrument should not be stale: %+v", disabledSource)
+	}
+}
+
+func TestService_ListMarketDataKeepsManagerSnapshotAfterEngineRebuild(t *testing.T) {
+	t.Parallel()
+	instanceID := mdID("manager-rebuild")
+	fn := &fakeNode{
+		mdInstances: []domain.MarketDataInstance{{
+			ExternalID: instanceID,
+			Provider:   domain.MarketDataProviderMock,
+			Enabled:    true,
+		}},
+		mdInstruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {{
+				Instance:       instanceID,
+				ExternalSymbol: "AAPL",
+				BaseAsset:      "AAPL",
+				QuoteAsset:     "USD",
+				Enabled:        true,
+			}},
+		},
+		orders: make(map[domain.ExternalID]domain.Order),
+	}
+	connector := &managerSnapshotConnector{
+		updates: make(chan marketdata.QuoteUpdate, 1),
+	}
+	registry := marketdata.NewRegistry()
+	if err := registry.Register(marketdata.Provider{
+		Type: domain.MarketDataProviderMock,
+		Build: func(domain.MarketDataInstance) (marketdata.Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	manager, err := marketdata.NewManager(
+		registry,
+		managerSnapshotStore{node: fn},
+		managerSnapshotSink{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	liveSink := marketdata.Sink(managerSnapshotSink{})
+	manager.UseSinkProvider(func() marketdata.Sink { return liveSink })
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer manager.Stop()
+
+	now := time.Now().UTC()
+	connector.updates <- marketdata.QuoteUpdate{
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"),
+		Mark: "185", AsOf: now,
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(manager.QuoteSnapshots()) != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if snapshots := manager.QuoteSnapshots(); len(snapshots) != 1 {
+		t.Fatalf("accepted quote snapshots = %+v, want one", snapshots)
+	}
+
+	liveSink = managerSnapshotSink{}
+	svc := backend.New(&fakeRouter{node: fn}, manager, nil)
+	status, err := svc.ListMarketData(context.Background())
+	if err != nil {
+		t.Fatalf("ListMarketData: %v", err)
+	}
+	got := status.Instances[0].Instruments[0]
+	if got.Quote == nil || got.Quote.Mark != "185" || !got.Quote.AsOf.Equal(now) {
+		t.Fatalf("quote after rebuild = %+v, want accepted manager snapshot", got.Quote)
+	}
+}
+
+func TestService_ListMarketDataKeepsManagerSnapshotWhileManagerStopped(t *testing.T) {
+	t.Parallel()
+	instanceID := mdID("manager-stopped")
+	fn := &fakeNode{
+		mdInstances: []domain.MarketDataInstance{{
+			ExternalID: instanceID,
+			Provider:   domain.MarketDataProviderMock,
+			Enabled:    true,
+		}},
+		mdInstruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {{
+				Instance:       instanceID,
+				ExternalSymbol: "AAPL",
+				BaseAsset:      "AAPL",
+				QuoteAsset:     "USD",
+				Enabled:        true,
+			}},
+		},
+		orders: make(map[domain.ExternalID]domain.Order),
+	}
+	connector := &managerSnapshotConnector{
+		updates: make(chan marketdata.QuoteUpdate, 1),
+	}
+	registry := marketdata.NewRegistry()
+	if err := registry.Register(marketdata.Provider{
+		Type: domain.MarketDataProviderMock,
+		Build: func(domain.MarketDataInstance) (marketdata.Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	manager, err := marketdata.NewManager(
+		registry,
+		managerSnapshotStore{node: fn},
+		managerSnapshotSink{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(manager.Stop)
+
+	now := time.Now().UTC()
+	connector.updates <- marketdata.QuoteUpdate{
+		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"),
+		Mark: "185", AsOf: now,
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(manager.QuoteSnapshots()) != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if snapshots := manager.QuoteSnapshots(); len(snapshots) != 1 {
+		t.Fatalf("accepted quote snapshots = %+v, want one", snapshots)
+	}
+
+	manager.Stop()
+	if applied := manager.AppliedConfig(); len(applied) != 0 {
+		t.Fatalf("applied config after Stop = %+v, want empty", applied)
+	}
+
+	svc := backend.New(&fakeRouter{node: fn}, manager, nil)
+	status, err := svc.ListMarketData(context.Background())
+	if err != nil {
+		t.Fatalf("ListMarketData: %v", err)
+	}
+	got := status.Instances[0].Instruments[0]
+	if got.Quote == nil || got.Quote.Mark != "185" || !got.Quote.AsOf.Equal(now) {
+		t.Fatalf("quote while manager stopped = %+v, want accepted manager snapshot", got.Quote)
 	}
 }
 
@@ -228,10 +444,14 @@ func TestService_ListMarketDataSurfacesAppliedSyntheticInverse(t *testing.T) {
 			BaseAsset: "EUR", QuoteAsset: "USD", Enabled: true,
 		}},
 	}
-	fn.mdQuotes = []domain.MarketDataQuote{{
-		Instance: mdID("mock-1"), ExternalSymbol: "EURUSD",
-		BaseAsset: "EUR", QuoteAsset: "USD",
-		Mark: "2", Bid: "4", Ask: "8", AsOf: now, ReceivedAt: now,
+	md.snapshots = []marketdata.QuoteSnapshot{{
+		MarketDataQuote: domain.MarketDataQuote{
+			Instance: mdID("mock-1"), ExternalSymbol: "EURUSD",
+			BaseAsset: "EUR", QuoteAsset: "USD",
+			Mark: "2", Bid: "4", Ask: "8", AsOf: now, ReceivedAt: now,
+		},
+		BaseAssetID:  testMarketDataAssetID("EUR"),
+		QuoteAssetID: testMarketDataAssetID("USD"),
 	}}
 
 	status, err := svc.ListMarketData(context.Background())
@@ -283,9 +503,13 @@ func TestService_ListMarketDataSuppressesInverseForConfiguredDisabledReverse(t *
 			BaseAsset: "USD", QuoteAsset: "EUR", Enabled: false,
 		}},
 	}
-	fn.mdQuotes = []domain.MarketDataQuote{{
-		Instance: mdID("mock-1"), ExternalSymbol: "EURUSD",
-		BaseAsset: "EUR", QuoteAsset: "USD", Mark: "2", AsOf: now, ReceivedAt: now,
+	md.snapshots = []marketdata.QuoteSnapshot{{
+		MarketDataQuote: domain.MarketDataQuote{
+			Instance: mdID("mock-1"), ExternalSymbol: "EURUSD",
+			BaseAsset: "EUR", QuoteAsset: "USD", Mark: "2", AsOf: now, ReceivedAt: now,
+		},
+		BaseAssetID:  testMarketDataAssetID("EUR"),
+		QuoteAssetID: testMarketDataAssetID("USD"),
 	}}
 
 	status, err := svc.ListMarketData(context.Background())
@@ -303,8 +527,21 @@ func TestService_ListMarketDataSuppressesInverseForConfiguredDisabledReverse(t *
 
 func TestService_ListMarketDataFlagsStaleQuote(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
 	now := time.Now().UTC()
+	md := &fakeMarketDataRuntime{snapshots: []marketdata.QuoteSnapshot{
+		{
+			MarketDataQuote: domain.MarketDataQuote{
+				Instance:       mdID("mock-1"),
+				ExternalSymbol: "AAPL",
+				Mark:           "298.01",
+				AsOf:           now.Add(-backend.MarketDataFreshnessTTL - time.Second),
+				ReceivedAt:     now,
+			},
+			BaseAssetID:  testMarketDataAssetID("AAPL"),
+			QuoteAssetID: testMarketDataAssetID("USD"),
+		},
+	}}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
@@ -319,18 +556,6 @@ func TestService_ListMarketDataFlagsStaleQuote(t *testing.T) {
 			},
 		},
 	}
-	fn.mdQuotes = []domain.MarketDataQuote{
-		{
-			Instance:       mdID("mock-1"),
-			ExternalSymbol: "AAPL",
-			BaseAsset:      "AAPL",
-			QuoteAsset:     "USD",
-			Mark:           "298.01",
-			AsOf:           now.Add(-backend.MarketDataFreshnessTTL - time.Second),
-			ReceivedAt:     now,
-		},
-	}
-
 	status, err := svc.ListMarketData(context.Background())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
@@ -656,7 +881,7 @@ func TestService_ListMarketDataManualPriceDoesNotRequireRestart(t *testing.T) {
 	}
 }
 
-func TestService_ListMarketDataClearedManualHidesHistoricalQuote(t *testing.T) {
+func TestService_ListMarketDataClearedManualHasNoSnapshot(t *testing.T) {
 	t.Parallel()
 	instanceID := mdID("byo-cleared")
 	md := &fakeMarketDataRuntime{
@@ -685,12 +910,6 @@ func TestService_ListMarketDataClearedManualHidesHistoricalQuote(t *testing.T) {
 			BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "", Enabled: true,
 		}},
 	}
-	fn.mdQuotes = []domain.MarketDataQuote{{
-		Instance: instanceID, ExternalSymbol: "Z/USD",
-		BaseAsset: "Z", QuoteAsset: "USD", Mark: "2",
-		AsOf: time.Now().UTC(), ReceivedAt: time.Now().UTC(),
-	}}
-
 	status, err := svc.ListMarketData(context.Background())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
@@ -700,10 +919,7 @@ func TestService_ListMarketDataClearedManualHidesHistoricalQuote(t *testing.T) {
 	}
 	got := status.Instances[0].Instruments[0]
 	if got.Quote != nil || got.InverseQuote != nil || !got.Stale {
-		t.Fatalf("cleared manual status = %+v, want hidden historical quote and stale", got)
-	}
-	if len(fn.mdQuotes) != 1 || fn.mdQuotes[0].Mark != "2" {
-		t.Fatalf("historical persisted quote was mutated: %+v", fn.mdQuotes)
+		t.Fatalf("cleared manual status = %+v, want no snapshot and stale", got)
 	}
 }
 

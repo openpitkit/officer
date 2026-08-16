@@ -1113,16 +1113,6 @@ type RealmStore interface {
 		ctx context.Context, instance domain.ExternalID, externalSymbol string,
 	) error
 
-	// UpsertMarketDataQuote records the latest normalized quote for one configured
-	// instrument, keyed by (instance, external symbol).
-	UpsertMarketDataQuote(ctx context.Context, quote domain.MarketDataQuote) error
-
-	// ListMarketDataQuotes returns latest quotes for one instance, ordered by
-	// external symbol. A zero instance returns quotes for all instances.
-	ListMarketDataQuotes(
-		ctx context.Context, instance domain.ExternalID,
-	) ([]domain.MarketDataQuote, error)
-
 	// --- Signing keys and config (key_id is the key's own UUID handle) ---
 
 	// UpsertSigningKey inserts or replaces a signing key row. PrivateKey must be

@@ -23,7 +23,6 @@ import (
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
-	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
@@ -41,9 +40,7 @@ func TestLocalNode_ApplyAdjustmentRejectsAverageEntryPriceOnly(t *testing.T) {
 	n, _, err := node.NewLocalNode(
 		ctx,
 		store,
-		func(snapshot engine.Snapshot) (engine.Engine, error) {
-			return BuildOpenPitEngine("", snapshot)
-		},
+		NewOpenPitEngineBuildFunc(""),
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)

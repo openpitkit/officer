@@ -536,7 +536,7 @@ func (n *localNode) Close() error {
 	n.mutate.Lock()
 	defer n.mutate.Unlock()
 	n.engineMu.Lock()
-	n.engine.Stop()
+	stopFinalEngine(n.engine)
 	n.engineMu.Unlock()
 	if err := n.db.Close(); err != nil {
 		return fmt.Errorf("close store: %w", err)

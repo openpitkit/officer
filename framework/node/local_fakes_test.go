@@ -33,8 +33,9 @@ import (
 )
 
 type fakeEngine struct {
-	running bool
-	sink    marketdata.Sink
+	running                     bool
+	sink                        marketdata.Sink
+	marketDataServiceCloseCalls int
 
 	enforceResolver    bool
 	knownAccounts      map[domain.AccountID]struct{}
@@ -1571,12 +1572,18 @@ func (e *fakeEngine) MarketDataSink() marketdata.Sink { return e.sink }
 
 func (e *fakeEngine) Stop() { e.running = false }
 
+func (e *fakeEngine) CloseMarketDataService() {
+	e.marketDataServiceCloseCalls++
+}
+
 // nopSink is a Sink that drops every quote; it stands in for the engine's sink
 // in node tests that never push.
 type nopSink struct{}
 
 func (nopSink) Push(marketdata.QuoteUpdate) error { return nil }
-func (nopSink) Clear(string, string) error        { return nil }
+func (nopSink) Clear(domain.EngineAssetID, domain.EngineAssetID) error {
+	return nil
+}
 
 // realmWrapStore decorates a store.Store so its ForRealm returns a realm handle
 // produced by wrap. It lets a test inject a failing/overriding RealmStore while

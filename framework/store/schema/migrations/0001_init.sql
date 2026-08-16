@@ -470,17 +470,6 @@ CREATE INDEX idx_market_data_instruments_base_asset
 CREATE INDEX idx_market_data_instruments_quote_asset
     ON market_data_instrument (quote_asset_id);
 
--- Latest normalized quote per configured instrument, 1:1 with the instrument and
--- overwritten on each update (an operational snapshot, not a tick history).
-CREATE TABLE market_data_quote (
-    instrument_id INTEGER PRIMARY KEY REFERENCES market_data_instrument(id) ON DELETE CASCADE,
-    mark          TEXT NOT NULL DEFAULT '',
-    bid           TEXT NOT NULL DEFAULT '',
-    ask           TEXT NOT NULL DEFAULT '',
-    as_of         TEXT NOT NULL,
-    received_at   TEXT NOT NULL
-);
-
 -- Ed25519 signing keypairs. key_id is the key's own UUID handle. private_key is
 -- a plaintext BLOB (at-rest encryption deferred). active=1 marks the signing key.
 CREATE TABLE signing_key (

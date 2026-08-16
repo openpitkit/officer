@@ -78,18 +78,26 @@ func (e *engineRebuildError) Unwrap() error {
 type localNode struct {
 	engineMu sync.RWMutex
 	engine   engine.Engine
-	// marketDataTransition fans provider updates into both the current and the
-	// freshly built engine while persisted quotes are replayed before a swap.
-	marketDataTransition marketdata.Sink
-	build                engine.BuildFunc
-	db                   store.Store
-	realm                store.RealmStore
-	fatal                func(error)
+	build    engine.BuildFunc
+	db       store.Store
+	realm    store.RealmStore
+	fatal    func(error)
 
 	mutate     sync.Mutex
 	reportMu   sync.Mutex
 	laneGate   sync.RWMutex
 	restarting atomic.Bool
+}
+
+type marketDataServiceCloser interface {
+	CloseMarketDataService()
+}
+
+func stopFinalEngine(eng engine.Engine) {
+	eng.Stop()
+	if closer, ok := eng.(marketDataServiceCloser); ok {
+		closer.CloseMarketDataService()
+	}
 }
 
 const (
@@ -103,7 +111,8 @@ const (
 type LocalOption func(*localNode)
 
 // WithFatalShutdownHook wires the process-level fail-stop hook for
-// unrecoverable post-engine persistence failures.
+// unrecoverable post-engine persistence failures. A nil hook is ignored and
+// leaves the no-op default in place; see NewLocalNode for what that costs.
 func WithFatalShutdownHook(hook func(error)) LocalOption {
 	return func(n *localNode) {
 		if hook != nil {
@@ -129,6 +138,14 @@ func WithFatalShutdownHook(hook func(error)) LocalOption {
 // can swap the current engine. It returns an error if any dependency is nil, if
 // the realm cannot be bound, if the seed cannot be loaded, or if the engine
 // cannot be built.
+//
+// The fatal-shutdown hook is optional and defaults to a no-op, so a caller that
+// omits WithFatalShutdownHook still receives every unrecoverable post-engine
+// failure as an explicit error but gets no process-level fail-stop. Some paths
+// rely on that fail-stop rather than on the caller: a reset that fails between
+// closing the market-data service and installing the rebuilt engine leaves the
+// node's current sink backed by a closed service, and only an exiting hook
+// keeps that sink from being used. A production deployment must install one.
 func NewLocalNode(
 	ctx context.Context, st store.Store, build engine.BuildFunc, opts ...LocalOption,
 ) (Node, engine.Engine, error) {
@@ -180,7 +197,7 @@ func NewLocalNode(
 		Detail: counts,
 		Source: domain.SourceSystem,
 	}); err != nil {
-		eng.Stop()
+		stopFinalEngine(eng)
 		return nil, nil, fmt.Errorf("audit build: %w", err)
 	}
 
@@ -188,7 +205,7 @@ func NewLocalNode(
 	// node serves anything (an accumulated loss restored past its barrier blocks
 	// on sight). Mirror those blocks before the node is handed out.
 	if err := n.mirrorSeedAccountBlocks(ctx, eng); err != nil {
-		eng.Stop()
+		stopFinalEngine(eng)
 		return nil, nil, fmt.Errorf("mirror seed account blocks: %w", err)
 	}
 
@@ -620,6 +637,21 @@ func (n *localNode) RestoreBackup(
 	}
 
 	if plan.rebuild {
+		pairs, err := changedRestoreMarketDataPairs(beforeRuntime, afterRuntime)
+		if err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(),
+				failAfterCommit(
+					"clear market data for committed backup restore",
+					fmt.Errorf("collect restored market-data pairs: %w", err),
+				)
+		}
+		if err := clearMarketDataPairs(n.currentMarketDataSink(), pairs); err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(),
+				failAfterCommit(
+					"clear market data for committed backup restore",
+					fmt.Errorf("clear restored market data: %w", err),
+				)
+		}
 		if err := n.rebuildEngineFromStore(durableCtx); err != nil {
 			return backup.RestoreSummary{}, n.currentMarketDataSink(),
 				failAfterCommit(
@@ -683,6 +715,23 @@ func (n *localNode) ResetDatabase(
 	committedFailure := func(operation string, err error) (marketdata.Sink, error) {
 		return n.currentMarketDataSink(), n.fatalReconciliation(operation, err)
 	}
+	// The backend keeps the connector manager stopped for the whole reset, so no
+	// publisher can push while the service is rotated. The old engine remains
+	// current until rebuildEngineFromStore swaps it, but its policies hold
+	// refcounted native-handle clones that remain valid when Service.Close runs
+	// concurrently. Rotating after Reset preserves its durable commit point: all
+	// later reconciliation failures remain fatal.
+	closer, ok := n.currentEngine().(marketDataServiceCloser)
+	if !ok {
+		return committedFailure(
+			"rotate market-data service after database reset",
+			errors.New(
+				"current engine does not support market-data service rotation "+
+					"(missing CloseMarketDataService)",
+			),
+		)
+	}
+	closer.CloseMarketDataService()
 	realm, err := n.db.ForRealm(durableCtx, domain.DefaultRealm)
 	if err != nil {
 		return committedFailure(
@@ -765,27 +814,7 @@ func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
 	if next == nil {
 		return preparedFailure(fmt.Errorf("build restored engine returned nil"))
 	}
-	transition, err := n.beginMarketDataTransition(next)
-	if err != nil {
-		if next != n.currentEngine() {
-			next.Stop()
-		}
-		return preparedFailure(fmt.Errorf("prepare restored engine market data: %w", err))
-	}
-	if err := n.replayMarketDataInto(ctx, next); err != nil {
-		n.cancelMarketDataTransition(transition)
-		if next != n.currentEngine() {
-			next.Stop()
-		}
-		return preparedFailure(fmt.Errorf("replay market data into restored engine: %w", err))
-	}
-	prev, err := n.commitMarketDataTransition(transition, next)
-	if err != nil {
-		if next != n.currentEngine() {
-			next.Stop()
-		}
-		return preparedFailure(fmt.Errorf("commit restored engine market data: %w", err))
-	}
+	prev := n.swapEngine(next)
 	if prev != nil && prev != next {
 		prev.Stop()
 	}
@@ -804,10 +833,15 @@ func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
 func (n *localNode) currentMarketDataSink() marketdata.Sink {
 	n.engineMu.RLock()
 	defer n.engineMu.RUnlock()
-	if n.marketDataTransition != nil {
-		return n.marketDataTransition
-	}
 	return n.engine.MarketDataSink()
+}
+
+func (n *localNode) swapEngine(next engine.Engine) engine.Engine {
+	n.engineMu.Lock()
+	defer n.engineMu.Unlock()
+	prev := n.engine
+	n.engine = next
+	return prev
 }
 
 func (n *localNode) currentEngine() engine.Engine {

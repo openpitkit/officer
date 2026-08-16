@@ -32,16 +32,16 @@ import (
 type marketDataDeleteTestNode struct {
 	node.Node
 
-	deleteAssetErr      error
-	deleteInstanceErr   error
-	deleteInstrumentErr error
-	sink                marketdata.Sink
+	deleteAssetErr error
+	sink           marketdata.Sink
 
-	deleteAssetCalls      int
-	deleteInstanceCalls   int
-	deleteInstrumentCalls int
-	upsertCalls           int
-	instrument            domain.MarketDataInstrument
+	deleteAssetCalls          int
+	setInstanceEnabledCalls   int
+	deleteInstanceCalls       int
+	setInstrumentEnabledCalls int
+	deleteInstrumentCalls     int
+	upsertCalls               int
+	instrument                domain.MarketDataInstrument
 }
 
 func (n *marketDataDeleteTestNode) Owns(node.Key) bool {
@@ -59,18 +59,32 @@ func (n *marketDataDeleteTestNode) DeleteAsset(
 	return n.deleteAssetErr
 }
 
+func (n *marketDataDeleteTestNode) SetMarketDataInstanceEnabled(
+	context.Context, domain.ExternalID, bool, domain.Caller,
+) error {
+	n.setInstanceEnabledCalls++
+	return nil
+}
+
 func (n *marketDataDeleteTestNode) DeleteMarketDataInstance(
 	context.Context, domain.ExternalID, domain.Caller,
 ) error {
 	n.deleteInstanceCalls++
-	return n.deleteInstanceErr
+	return nil
+}
+
+func (n *marketDataDeleteTestNode) SetMarketDataInstrumentEnabled(
+	context.Context, domain.ExternalID, string, bool, domain.Caller,
+) error {
+	n.setInstrumentEnabledCalls++
+	return nil
 }
 
 func (n *marketDataDeleteTestNode) DeleteMarketDataInstrument(
 	context.Context, domain.ExternalID, string, domain.Caller,
 ) error {
 	n.deleteInstrumentCalls++
-	return n.deleteInstrumentErr
+	return nil
 }
 
 func (n *marketDataDeleteTestNode) UpsertMarketDataInstrument(
@@ -188,17 +202,30 @@ func TestServiceDeleteAssetWithoutForceRestartsMarketData(t *testing.T) {
 	}
 }
 
-func TestServiceDeleteMarketDataConfigurationDoesNotRestartWithoutDeadlock(t *testing.T) {
+func TestServiceMarketDataConfigurationMutationsReachNodeWithoutRestartingMarketData(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	for _, test := range []struct {
 		name   string
-		delete func(*Service) error
+		mutate func(*Service) error
 		calls  func(*marketDataDeleteTestNode) int
 	}{
 		{
-			name: "instance",
-			delete: func(s *Service) error {
+			name: "set instance enabled",
+			mutate: func(s *Service) error {
+				return s.SetMarketDataInstanceEnabled(
+					context.Background(), "instance-1", true,
+				)
+			},
+			calls: func(n *marketDataDeleteTestNode) int {
+				return n.setInstanceEnabledCalls
+			},
+		},
+		{
+			name: "delete instance",
+			mutate: func(s *Service) error {
 				return s.DeleteMarketDataInstance(context.Background(), "instance-1")
 			},
 			calls: func(n *marketDataDeleteTestNode) int {
@@ -206,8 +233,19 @@ func TestServiceDeleteMarketDataConfigurationDoesNotRestartWithoutDeadlock(t *te
 			},
 		},
 		{
-			name: "instrument",
-			delete: func(s *Service) error {
+			name: "set instrument enabled",
+			mutate: func(s *Service) error {
+				return s.SetMarketDataInstrumentEnabled(
+					context.Background(), "instance-1", "AAPL/USD", true,
+				)
+			},
+			calls: func(n *marketDataDeleteTestNode) int {
+				return n.setInstrumentEnabledCalls
+			},
+		},
+		{
+			name: "delete instrument",
+			mutate: func(s *Service) error {
 				return s.DeleteMarketDataInstrument(
 					context.Background(), "instance-1", "AAPL/USD",
 				)
@@ -225,19 +263,19 @@ func TestServiceDeleteMarketDataConfigurationDoesNotRestartWithoutDeadlock(t *te
 			svc := newMarketDataDeleteTestService(t, n, md)
 			done := make(chan error, 1)
 			go func() {
-				done <- test.delete(svc)
+				done <- test.mutate(svc)
 			}()
 
 			select {
 			case err := <-done:
 				if err != nil {
-					t.Fatalf("delete market-data %s: %v", test.name, err)
+					t.Fatalf("market-data configuration mutation: %v", err)
 				}
 			case <-time.After(time.Second):
-				t.Fatalf("delete market-data %s deadlocked", test.name)
+				t.Fatal("market-data configuration mutation deadlocked")
 			}
-			if test.calls(n) != 1 {
-				t.Fatalf("delete calls = %d, want 1", test.calls(n))
+			if got := test.calls(n); got != 1 {
+				t.Fatalf("node calls = %d, want 1", got)
 			}
 			if md.stops != 0 || md.restarts != 0 || md.uses != 0 {
 				t.Fatalf(

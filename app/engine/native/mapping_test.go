@@ -324,8 +324,8 @@ func testAssets() []domain.Asset {
 }
 
 // testResolver builds an idResolver covering the given account codes, mirroring
-// the resolver BuildOpenPitEngine builds from a Snapshot. It is used by the pure
-// mapping tests that do not build a full engine.
+// the resolver the OpenPit engine builder builds from a Snapshot. It is used by
+// the pure mapping tests that do not build a full engine.
 func testResolver(codes ...string) idResolver {
 	accounts := make([]domain.Account, 0, len(codes))
 	for _, code := range codes {
@@ -616,7 +616,7 @@ func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
-	eng, service, registered, _, err := buildEngine(snap, res)
+	eng, service, registered, _, _, err := buildEngine(snap, res, nil)
 	if err != nil {
 		t.Fatalf("buildEngine: %v", err)
 	}
@@ -1021,6 +1021,13 @@ func TestIDResolver_RemovesAssetAliasWithStableIDValidation(t *testing.T) {
 	}
 	if _, err := res.assetByID(asset.EngineAssetID); err == nil {
 		t.Fatal("removed id alias lookup succeeded")
+	} else {
+		if !errors.Is(err, marketdata.ErrUnknownAsset) {
+			t.Fatalf("removed id alias error = %v, want ErrUnknownAsset", err)
+		}
+		if errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("removed id alias error = %v, must not be ErrNotFound", err)
+		}
 	}
 	if _, err := res.assetAlias(ready); err == nil {
 		t.Fatal("removed reverse alias lookup succeeded")
@@ -1513,19 +1520,19 @@ func (h *fakeCurrencyAccounts) SetCurrency(
 	return nil
 }
 
-// TestBuildOpenPitEngine_SeedsFromSnapshot builds the one engine from a seeded
+// TestOpenPitEngineBuilder_SeedsFromSnapshot builds one engine from a seeded
 // snapshot (a blocked account plus a rate-limit barrier) and retunes the
 // rate-limit policy in place. It needs the native dylib at run time.
-func TestBuildOpenPitEngine_SeedsFromSnapshot(t *testing.T) {
+func TestOpenPitEngineBuilder_SeedsFromSnapshot(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
 		Assets:     testAssets(),
 		Accounts:   []domain.Account{blockedAccount("acc-1", "risk"), account("acc-2")},
 		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 	ctx := context.Background()
@@ -1564,9 +1571,9 @@ func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -1588,9 +1595,9 @@ func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 		Assets:          testAssets(),
 		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -1615,9 +1622,9 @@ func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 			orderSize(domain.ScopeAsset, "", "USD", "5", ""),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 	adapter := eng.(*openPitEngine)
@@ -1644,9 +1651,9 @@ func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 		Accounts:        []domain.Account{account("acc-1")},
 		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -1670,9 +1677,9 @@ func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -1695,9 +1702,9 @@ func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 			rateLimit(domain.ScopeAsset, "", "USD", 100, time.Second),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -1715,9 +1722,9 @@ func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 		Assets:     testAssets(),
 		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 	ctx := context.Background()
@@ -1747,9 +1754,9 @@ func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 	adapter := eng.(*openPitEngine)
@@ -1948,9 +1955,9 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -1968,12 +1975,12 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 
 func TestEngine_CheckOrderUnknownAssetIsInvalid(t *testing.T) {
 	t.Parallel()
-	eng, err := BuildOpenPitEngine("", Snapshot{
+	eng, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
 		Accounts: []domain.Account{account("acc-1")},
 		Assets:   []domain.Asset{testAsset("AAPL"), testAsset("USD")},
 	})
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -1994,9 +2001,9 @@ func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 	adapter := eng.(*openPitEngine)
@@ -2072,12 +2079,12 @@ func TestEngine_CheckOrderMultiplePricesUsesDryRunIdentifier(t *testing.T) {
 // checks it rejects with a structured reject (insufficient funds), not an error.
 func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 	t.Parallel()
-	eng, err := BuildOpenPitEngine("", Snapshot{
+	eng, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
 		Assets:   testAssets(),
 		Accounts: []domain.Account{account("acc-1")},
 	})
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -2110,9 +2117,9 @@ func TestEngine_CheckOrderStandingBlockIsRejectOnly(t *testing.T) {
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -2147,9 +2154,9 @@ func TestEngine_CheckOrderKeepsShortRejectText(t *testing.T) {
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 
@@ -2211,9 +2218,9 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 	ctx := context.Background()
@@ -2270,9 +2277,9 @@ func TestEngine_CheckOrderMatchesSubmitOrderSizeVerdict(t *testing.T) {
 			MaxQuantity: "1",
 		}},
 	}
-	eng, err := BuildOpenPitEngine("", snap)
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
-		t.Fatalf("BuildOpenPitEngine: %v", err)
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
 

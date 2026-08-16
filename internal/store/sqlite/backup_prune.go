@@ -58,11 +58,6 @@ func (rt *restoreTx) prune(ctx context.Context, scope backup.Scope, data backup.
 			return err
 		}
 	}
-	if scope.Included(backup.SectionMarketDataQuotes) {
-		if err := rt.pruneQuotes(ctx, data.MarketDataQuotes); err != nil {
-			return err
-		}
-	}
 	if scope.Included(backup.SectionUserSettings) {
 		if err := rt.pruneUserSettings(ctx, data.UserSettings); err != nil {
 			return err
@@ -545,63 +540,6 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 			ctx, `DELETE FROM market_data_instance WHERE id = ?`, inst.id,
 		); err != nil {
 			return fmt.Errorf("store: prune md instance id %d: %w", inst.id, err)
-		}
-	}
-	return nil
-}
-
-// pruneQuotes deletes the quotes whose instrument (by instance external id and
-// external symbol) the archive omits.
-func (rt *restoreTx) pruneQuotes(ctx context.Context, quotes []domain.MarketDataQuote) error {
-	keep := make(map[string]bool, len(quotes))
-	for _, q := range quotes {
-		keep[q.Instance.String()+"\x00"+q.ExternalSymbol] = true
-	}
-	rows, err := rt.tx.QueryContext(
-		ctx,
-		`SELECT q.instrument_id, i.external_id, mdi.external_symbol
-		 FROM market_data_quote q
-		 JOIN market_data_instrument mdi ON mdi.id = q.instrument_id
-		 JOIN market_data_instance i ON i.id = mdi.instance_id`,
-	)
-	if err != nil {
-		return fmt.Errorf("store: prune quotes scan: %w", err)
-	}
-	type quoteRow struct {
-		instrumentID int64
-		key          string
-	}
-	out := make([]quoteRow, 0)
-	for rows.Next() {
-		var (
-			instrumentID int64
-			extID        []byte
-			symbol       string
-		)
-		if err := rows.Scan(&instrumentID, &extID, &symbol); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("store: prune quote row: %w", err)
-		}
-		xid, err := domain.ExternalIDFromBytes(extID)
-		if err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("store: prune quote external id: %w", err)
-		}
-		out = append(out, quoteRow{instrumentID: instrumentID, key: xid.String() + "\x00" + symbol})
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("store: prune quotes iterate: %w", err)
-	}
-	_ = rows.Close()
-	for _, q := range out {
-		if keep[q.key] {
-			continue
-		}
-		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM market_data_quote WHERE instrument_id = ?`, q.instrumentID,
-		); err != nil {
-			return fmt.Errorf("store: prune quote %d: %w", q.instrumentID, err)
 		}
 	}
 	return nil

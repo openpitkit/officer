@@ -188,8 +188,9 @@ func TestManagerDeliversOriginalAndSyntheticAndStoresOnlyOriginal(t *testing.T) 
 	if got[3].Mark != "0.00000000000000001" {
 		t.Fatalf("huge-price synthetic mark = %q, want non-zero reciprocal", got[3].Mark)
 	}
-	if store.quoteCount() != 2 {
-		t.Fatalf("stored quote count = %d, want originals only", store.quoteCount())
+	snapshots := manager.QuoteSnapshots()
+	if len(snapshots) != 1 || snapshots[0].Mark != "100000000000000000" {
+		t.Fatalf("quote snapshots = %+v, want latest direct quote only", snapshots)
 	}
 	applied := manager.AppliedConfig()[instanceID.String()].Subscriptions
 	if len(applied) != 1 || !applied[0].SyntheticInverse {

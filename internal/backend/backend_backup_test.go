@@ -147,9 +147,9 @@ func TestService_ResetDatabaseNodeError(t *testing.T) {
 }
 
 // TestService_RestartMarketDataReadoptsCurrentSink proves an explicit feed
-// restart re-adopts the node's current sink. Reset and residual recovery may
-// replace the engine's market-data service, so reusing a cached native sink can
-// otherwise leave every push targeting the closed service.
+// restart re-adopts the node's current sink. Rebuilds create an engine-specific
+// sink and resolver with an empty instrument-id cache over the same service, so
+// a sink cached by an older handle resolves against a stale resolver.
 func TestService_RestartMarketDataReadoptsCurrentSink(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{}
@@ -272,50 +272,6 @@ func TestService_RestoreBackupMarketDataTopologyRestartsOnce(t *testing.T) {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
-		t.Fatalf("market-data lifecycle stops=%d restarts=%d sink=%#v",
-			md.stops, md.restarts, md.sink)
-	}
-}
-
-func TestService_RestoreBackupQuotesOnlyKeepsUnchangedFeedsRunning(t *testing.T) {
-	t.Parallel()
-	instance := restoredMarketDataInstance()
-	instrument := restoredMarketDataInstrument(instance.ExternalID)
-	originalSink := &backendTestSink{}
-	md := &fakeMarketDataRuntime{sink: originalSink}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
-	fn.mdInstances = []domain.MarketDataInstance{instance}
-	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
-		instance.ExternalID.String(): {instrument},
-	}
-	archive := backup.Archive{
-		Manifest: backup.Manifest{
-			Source: "test",
-			Sections: []backup.Section{
-				backup.SectionMarketData,
-				backup.SectionMarketDataQuotes,
-			},
-		},
-		Data: backup.Data{
-			MarketDataInstances: []domain.MarketDataInstance{instance},
-			MarketDataInstruments: []backup.MarketDataInstrument{
-				backupMarketDataInstrument(instrument),
-			},
-			MarketDataQuotes: []domain.MarketDataQuote{{
-				Instance: instance.ExternalID, ExternalSymbol: instrument.ExternalSymbol,
-				BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
-				Mark: "2",
-			}},
-		},
-	}
-	_, err := svc.RestoreBackup(context.Background(), archive, backup.RestoreOptions{
-		Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketDataQuotes}},
-		Mode:  backup.RestoreModeOverwrite,
-	})
-	if err != nil {
-		t.Fatalf("RestoreBackup: %v", err)
-	}
-	if md.stops != 0 || md.restarts != 0 || md.sink != originalSink {
 		t.Fatalf("market-data lifecycle stops=%d restarts=%d sink=%#v",
 			md.stops, md.restarts, md.sink)
 	}

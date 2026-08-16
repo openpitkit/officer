@@ -219,9 +219,6 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.MarketDataInstruments, err = r.exportInstruments(ctx); err != nil {
 		return backup.Data{}, err
 	}
-	if data.MarketDataQuotes, err = r.ListMarketDataQuotes(ctx, domain.ExternalID("")); err != nil {
-		return backup.Data{}, err
-	}
 	if data.SigningKeys, err = r.exportSigningKeys(ctx); err != nil {
 		return backup.Data{}, err
 	}
@@ -368,11 +365,6 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 	}
 	if scope.Included(backup.SectionMarketData) {
 		if err := rt.restoreMarketData(ctx, data); err != nil {
-			return err
-		}
-	}
-	if scope.Included(backup.SectionMarketDataQuotes) {
-		if err := rt.restoreQuotes(ctx, data.MarketDataQuotes); err != nil {
 			return err
 		}
 	}

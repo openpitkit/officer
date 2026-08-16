@@ -138,14 +138,16 @@ type Node interface {
 		caller domain.Caller,
 	) (backup.RestoreSummary, marketdata.Sink, error)
 
-	// ResetDatabase recreates the store from scratch, rebuilds the live engine,
-	// and audits the reset in the new database.
+	// ResetDatabase recreates the store from scratch, closes the current engine's
+	// market-data service, rebuilds the live engine with a fresh service, and
+	// audits the reset in the new database. The returned sink belongs to that new
+	// service. Callers must stop every quote publisher for the duration.
 	ResetDatabase(ctx context.Context, caller domain.Caller) (marketdata.Sink, error)
 
-	// CurrentMarketDataSink returns the quote sink of the node's current engine.
-	// Administrative and SDK-required rebuilds replace the market-data service, so
-	// the market-data runtime must re-adopt the returned/current sink rather than
-	// caching one across a rebuild. Normal account and group mutations stay online.
+	// CurrentMarketDataSink returns the current engine's quote sink and resolver.
+	// Ordinary rebuilds replace the engine-specific adapter but preserve its
+	// service; a database reset replaces both. The market-data runtime must resolve
+	// the current adapter rather than caching an older one.
 	CurrentMarketDataSink() marketdata.Sink
 
 	// ListAssets returns every persisted asset.
@@ -581,12 +583,6 @@ type Node interface {
 	DeleteMarketDataInstrument(
 		ctx context.Context, instance domain.ExternalID, externalSymbol string, caller domain.Caller,
 	) error
-
-	// ListMarketDataQuotes returns latest quote snapshots for one instance, or
-	// every instance when instance is the zero external id.
-	ListMarketDataQuotes(
-		ctx context.Context, instance domain.ExternalID,
-	) ([]domain.MarketDataQuote, error)
 
 	// CheckOrder runs a non-mutating pre-trade dry-run for probe against the
 	// engine, returning whether the order would pass plus the would-be lock or

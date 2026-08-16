@@ -408,22 +408,11 @@ func (n *localNode) replaceEngineForPolicyLifecycle(
 	if next == previousEngine {
 		return nil, fmt.Errorf("build engine for %s lifecycle returned current engine", policy)
 	}
-	transition, err := n.beginMarketDataTransition(next)
-	if err != nil {
+	if err := commit(); err != nil {
 		next.Stop()
-		return nil, fmt.Errorf("prepare %s lifecycle market data: %w", policy, err)
+		return nil, fmt.Errorf("commit %s lifecycle engine replacement: %w", policy, err)
 	}
-	if err := n.replayMarketDataInto(ctx, next); err != nil {
-		n.cancelMarketDataTransition(transition)
-		next.Stop()
-		return nil, fmt.Errorf("replay market data for %s lifecycle: %w", policy, err)
-	}
-	prev, err := n.commitMarketDataTransitionWithHook(transition, next, commit)
-	if err != nil {
-		n.cancelMarketDataTransition(transition)
-		next.Stop()
-		return nil, fmt.Errorf("commit %s lifecycle engine transition: %w", policy, err)
-	}
+	prev := n.swapEngine(next)
 	if prev != nil && prev != next {
 		prev.Stop()
 	}
