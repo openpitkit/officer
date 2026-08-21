@@ -21,15 +21,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/param"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
 
-// SetAccountCurrency sets or clears the account-level currency in the store and
-// live engine. Effective-currency changes are rejected when the account has
-// non-zero positions or P&L, a halted P&L, active orders, or active limits.
+// SetAccountCurrency sets or clears account currency through an SDK account
+// chain whose final engine hook persists the store state and audit. Effective
+// currency changes are rejected when the account has non-zero positions or
+// P&L, a halted P&L, active orders, or active limits.
 func (n *localNode) SetAccountCurrency(
 	ctx context.Context, key Key, currency string, caller domain.Caller,
 ) error {
@@ -42,73 +47,172 @@ func (n *localNode) SetAccountCurrency(
 	if err != nil {
 		return err
 	}
-	defer endLane()
-	return eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
-		prev, ok, err := n.realm.GetAccount(ctx, key.Account)
-		if err != nil {
-			return fmt.Errorf("read account for currency: %w", err)
+	laneHeld := true
+	defer func() {
+		if laneHeld {
+			endLane()
+		}
+	}()
+	source, err := eng.AccountID(key.Account)
+	if err != nil {
+		return err
+	}
+	resolver := eng
+	type accountCurrencyChainState struct {
+		administrativeChainState
+		previous domain.Account
+	}
+	state := &accountCurrencyChainState{
+		administrativeChainState: administrativeChainState{ctx: ctx},
+	}
+	begin := func(context.Context) (*accountCurrencyChainState, error) {
+		if ctxErr := state.ctx.Err(); ctxErr != nil {
+			state.err = ctxErr
+			return nil, state.err
+		}
+		previous, ok, readErr := n.realm.GetAccount(state.ctx, key.Account)
+		if readErr != nil {
+			state.err = fmt.Errorf("read account for currency: %w", readErr)
+			return nil, state.err
 		}
 		if !ok {
-			return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+			state.err = fmt.Errorf(
+				"account %q: %w", key.Account, domain.ErrNotFound,
+			)
+			return nil, state.err
+		}
+		if validateErr := validateAccountAdministrativeSource(
+			previous, source,
+		); validateErr != nil {
+			state.err = fmt.Errorf("read account for currency: %w", validateErr)
+			return nil, state.err
 		}
 		nextEffective, _ := domain.ResolveCurrencyCascade(
 			currency,
-			prev.GroupCurrency,
-			prev.DefaultCurrency,
+			previous.GroupCurrency,
+			previous.DefaultCurrency,
 		)
-		if err := n.guardEffectiveCurrencyChange(
-			ctx,
+		if guardErr := n.guardEffectiveCurrencyChange(
+			state.ctx,
 			[]domain.AccountID{key.Account},
-			prev.EffectiveCurrency,
+			previous.EffectiveCurrency,
 			nextEffective,
-		); err != nil {
-			if !errors.Is(err, domain.ErrConflict) {
-				return err
+		); guardErr != nil {
+			if !errors.Is(guardErr, domain.ErrConflict) {
+				state.err = guardErr
+				return nil, state.err
 			}
-			return domain.NewCurrencyChangeBlockedError(
-				domain.ScopeAccount, key.Account.String(), err,
+			state.err = domain.NewCurrencyChangeBlockedError(
+				domain.ScopeAccount, key.Account.String(), guardErr,
 			)
+			return nil, state.err
 		}
-		if prev.Currency == currency {
-			return nil
+		if previous.Currency == currency {
+			state.err = domain.ErrNoChange
+			return nil, state.err
 		}
-		if err := ctx.Err(); err != nil {
-			return err
+		state.previous = previous
+		state.failureOperation = "apply account currency"
+		return state, nil
+	}
+	persist := func(state *accountCurrencyChainState) error {
+		state.engineApplied = true
+		mutationCtx := context.WithoutCancel(state.ctx)
+		state.failureOperation = "set account currency"
+		if err := n.realm.SetAccountCurrency(
+			mutationCtx, key.Account, currency,
+		); err != nil {
+			state.err = fmt.Errorf("set account currency: %w", err)
+			return state.err
 		}
-		mutationCtx := context.WithoutCancel(ctx)
-
-		if err := n.realm.SetAccountCurrency(mutationCtx, key.Account, currency); err != nil {
-			return fmt.Errorf("set account currency: %w", err)
-		}
-		if applyErr := applyAccountCurrency(
-			mutationCtx, lane, key.Account, currency,
-		); applyErr != nil {
-			return n.revertAccountCurrency(
-				mutationCtx,
-				lane,
-				key.Account,
-				prev.Currency,
-				fmt.Errorf("apply account currency: %w", applyErr),
-			)
-		}
+		state.persistenceCompleted = true
+		state.failureOperation = "audit account currency"
 		if err := n.audit(mutationCtx, caller, store.AuditEntry{
 			Action:       domain.AuditActionSetAccountCurrency,
 			Account:      key.Account,
-			AccountTitle: prev.Title,
+			AccountTitle: state.previous.Title,
 			Detail: currencyDetail(
 				"set account currency",
 				key.Account.String(),
-				prev.Currency,
+				state.previous.Currency,
 				currency,
 			),
 		}); err != nil {
-			return n.fatalPostEngineAuditByCode(
-				"audit account currency", "account", key.Account.String(),
-				fmt.Errorf("audit account currency: %w", err),
-			)
+			state.err = fmt.Errorf("audit account currency: %w", err)
+			return state.err
 		}
 		return nil
+	}
+	builder := asyncengine.Chain(source, begin)
+	if currency == "" {
+		builder.ClearAccountCurrency(
+			asyncengine.ClearCurrencyHooks[*accountCurrencyChainState]{
+				OnCleared: func(
+					_ context.Context, state *accountCurrencyChainState,
+				) error {
+					return persist(state)
+				},
+			},
+		)
+	} else {
+		builder.SetAccountCurrency(
+			asyncengine.CurrencyHooks[*accountCurrencyChainState]{
+				Currency: func(
+					_ context.Context, state *accountCurrencyChainState,
+				) (param.Asset, error) {
+					return n.administrativeCurrencyAsset(
+						state.ctx, resolver, currency,
+					)
+				},
+				OnSet: func(
+					_ context.Context, state *accountCurrencyChainState,
+				) error {
+					return persist(state)
+				},
+			},
+		)
+	}
+	runner := builder.Finally(func(
+		_ context.Context,
+		state *accountCurrencyChainState,
+		outcome asyncengine.ChainOutcome,
+	) error {
+		state.err = n.administrativeChainTerminalError(
+			"account currency",
+			"account",
+			key.Account.String(),
+			&state.administrativeChainState,
+			outcome,
+		)
+		return nil
 	})
+	_, chainErr := runner.Run(
+		ctx, eng.AsyncEngine(),
+	).Await(context.Background())
+	runErr := accountChainRunError(
+		"set account currency", state.err, chainErr,
+	)
+	if errors.Is(runErr, domain.ErrNoChange) {
+		return nil
+	}
+	if !state.engineApplied {
+		return runErr
+	}
+	if administrativeChainNeedsReconciliation(runErr) {
+		// Reserve restart ownership before releasing the admitted account lane.
+		// beginEngineRestartFromLane consumes endLane on both outcomes.
+		if restartErr := n.beginEngineRestartFromLane(endLane); restartErr != nil {
+			laneHeld = false
+			return internalPostCommitNodeMutationError(
+				errors.Join(runErr, restartErr),
+			)
+		}
+		laneHeld = false
+		defer n.endEngineRestart()
+	}
+	return n.reconcileAdministrativeChainFailure(
+		ctx, "account currency", runErr,
+	)
 }
 
 // ensureAccountCurrencyAssetRegisteredExclusive publishes a missing currency
@@ -166,63 +270,64 @@ func (n *localNode) ensureAccountCurrencyAssetRegisteredExclusive(
 	return n.ensureCurrencyAsset(ctx, currency, "set account currency", caller)
 }
 
-// revertAccountCurrency undoes a persisted currency write once applying it to
-// the live engine has failed. A successful revert restores only the account's
-// currency in engine and store to the value it held before the attempt - any
-// currency asset that ensureAccountCurrencyAssetRegisteredExclusive registered
-// earlier in the same request stays committed - so cause keeps the
-// classification the engine reported for it: the caller really did submit the
-// currency the engine rejected. When the revert itself fails, engine and store
-// are left disagreeing about the account's currency instead: the original
-// apply cause and the revert failure both flow into the fatal-shutdown hook
-// and into the error handed back to the caller, and that returned error is
-// terminal so neither cause can be reclassified as a caller fault.
-func (n *localNode) revertAccountCurrency(
+func (n *localNode) administrativeCurrencyAsset(
 	ctx context.Context,
-	lane engine.AccountLane,
-	account domain.AccountID,
-	previous string,
-	cause error,
-) error {
-	revertEngineErr := applyAccountCurrency(ctx, lane, account, previous)
-	var revertStoreErr error
-	if revertEngineErr == nil {
-		revertStoreErr = n.realm.SetAccountCurrency(ctx, account, previous)
+	resolver engine.DictionaryResolver,
+	currency string,
+) (param.Asset, error) {
+	return n.administrativeAsset(ctx, resolver, currency, "currency asset")
+}
+
+func (n *localNode) administrativeAsset(
+	ctx context.Context,
+	resolver engine.DictionaryResolver,
+	code string,
+	kind string,
+) (param.Asset, error) {
+	asset, ok, err := n.realm.GetAsset(ctx, code)
+	if err != nil {
+		return param.Asset{}, fmt.Errorf("read %s: %w", kind, err)
 	}
-	if revertErr := errors.Join(revertEngineErr, revertStoreErr); revertErr != nil {
-		return n.fatalPostEngineAuditByCode(
-			"revert account currency", "account", account.String(),
-			errors.Join(
-				cause,
-				fmt.Errorf("revert account currency: %w", revertErr),
-			),
+	if !ok {
+		return param.Asset{}, fmt.Errorf(
+			"%s %q: %w", kind, code, domain.ErrNotFound,
 		)
 	}
-	return cause
-}
-
-func applyAccountCurrency(
-	ctx context.Context,
-	lane engine.AccountLane,
-	account domain.AccountID,
-	currency string,
-) error {
-	if currency == "" {
-		return lane.ClearAccountCurrency(ctx, account)
+	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
+		return param.Asset{}, fmt.Errorf(
+			"%s %q engine id: %w", kind, code, err,
+		)
 	}
-	return lane.SetAccountCurrency(ctx, account, currency)
+	ready, err := resolver.ResolveAsset(code)
+	if err != nil {
+		return param.Asset{}, fmt.Errorf(
+			"resolve %s %q from the live dictionary: %w",
+			kind,
+			code,
+			err,
+		)
+	}
+	if ready.Safe() != strconv.FormatUint(asset.EngineAssetID.Uint64(), 10) {
+		return param.Asset{}, fmt.Errorf(
+			"%s %q engine identity does not match the live resolver: %w",
+			kind,
+			code,
+			domain.ErrInvalid,
+		)
+	}
+	return ready, nil
 }
 
-// SetGroupCurrency sets or clears a persisted account-group currency and
-// applies the group-level SDK state through its async-engine group lane.
+// SetGroupCurrency sets or clears a persisted account-group currency through a
+// group-sourced SDK chain whose final engine hook commits the store and audit.
 func (n *localNode) SetGroupCurrency(
 	ctx context.Context, code string, currency string, caller domain.Caller,
 ) error {
 	return n.setGroupCurrency(ctx, code, currency, caller, false)
 }
 
-// SetDefaultGroupCurrency sets or clears the reserved default group currency and
-// applies the default-group SDK state through its async-engine group lane.
+// SetDefaultGroupCurrency sets or clears the reserved default group currency
+// through its group-sourced SDK chain.
 func (n *localNode) SetDefaultGroupCurrency(
 	ctx context.Context, currency string, caller domain.Caller,
 ) error {
@@ -246,6 +351,7 @@ func (n *localNode) setGroupCurrency(
 	defer n.endLiveIdentityPublication()
 
 	prevCurrency := ""
+	var previous domain.AccountGroup
 	if !defaultGroup {
 		prev, ok, err := n.realm.GetGroup(ctx, code)
 		if err != nil {
@@ -266,11 +372,13 @@ func (n *localNode) setGroupCurrency(
 				domain.ScopeAccountGroup, code, err,
 			)
 		}
+		previous = prev
 	} else {
 		if prev, ok, err := n.realm.GetGroup(ctx, ""); err != nil {
 			return fmt.Errorf("read default group currency: %w", err)
 		} else if ok {
 			prevCurrency = prev.Currency
+			previous = prev
 		}
 		if err := n.guardDefaultGroupCurrencyChange(ctx, currency); err != nil {
 			if !errors.Is(err, domain.ErrConflict) {
@@ -287,62 +395,167 @@ func (n *localNode) setGroupCurrency(
 	if err := n.ensureCurrencyAsset(ctx, currency, operation, caller); err != nil {
 		return err
 	}
-	if err := n.realm.SetGroupCurrency(ctx, code, currency); err != nil {
-		return fmt.Errorf("set group currency: %w", err)
-	}
 	eng := n.currentEngine()
-	applyErr := eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
-		return applyGroupCurrency(ctx, lane, code, currency)
-	})
-	if applyErr != nil {
-		mutationCtx := context.WithoutCancel(ctx)
-		revertRuntimeErr := eng.RunGroupSynchronized(
-			mutationCtx, code, func(lane engine.GroupLane) error {
-				return applyGroupCurrency(mutationCtx, lane, code, prevCurrency)
-			},
-		)
-		revertStoreErr := n.realm.SetGroupCurrency(mutationCtx, code, prevCurrency)
-		if revertRuntimeErr != nil || revertStoreErr != nil {
-			cause := errors.Join(
-				fmt.Errorf("apply group currency: %w", applyErr),
-				optionalOperationError("restore group currency runtime", revertRuntimeErr),
-				optionalOperationError("restore group currency store", revertStoreErr),
-			)
-			return internalPostCommitNodeMutationError(
-				n.reconcileEngineAfterFailure(
-					mutationCtx, "reconcile engine after group currency failure", cause,
-				).err,
-			)
-		}
-		return fmt.Errorf("apply group currency: %w", applyErr)
+	resolver := eng
+	source, err := administrativeGroupSource(resolver, previous)
+	if err != nil {
+		return err
+	}
+	if err := validateGroupAdministrativeSource(previous, source); err != nil {
+		return fmt.Errorf("read group for currency: %w", err)
 	}
 	label := code
 	if defaultGroup {
 		label = "default"
 	}
-	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
-		Action: domain.AuditActionSetGroupCurrency,
-		Group:  code,
-		Detail: currencyDetail("set group currency", label, prevCurrency, currency),
-	}); err != nil {
-		return n.fatalPostEngineAuditByCode(
-			"audit group currency", "group", label,
-			fmt.Errorf("audit group currency: %w", err),
+	type groupCurrencyChainState struct {
+		administrativeChainState
+		previous domain.AccountGroup
+	}
+	state := &groupCurrencyChainState{
+		administrativeChainState: administrativeChainState{ctx: ctx},
+	}
+	begin := func(context.Context) (*groupCurrencyChainState, error) {
+		if ctxErr := state.ctx.Err(); ctxErr != nil {
+			state.err = ctxErr
+			return nil, state.err
+		}
+		current, found, readErr := n.realm.GetGroup(state.ctx, code)
+		if readErr != nil {
+			state.err = fmt.Errorf("read group for currency: %w", readErr)
+			return nil, state.err
+		}
+		if !defaultGroup && !found {
+			state.err = fmt.Errorf("group %q: %w", code, domain.ErrNotFound)
+			return nil, state.err
+		}
+		if !found {
+			current = domain.AccountGroup{Code: ""}
+		}
+		if validateErr := validateGroupAdministrativeSource(
+			current, source,
+		); validateErr != nil {
+			state.err = fmt.Errorf("read group for currency: %w", validateErr)
+			return nil, state.err
+		}
+		if current.Currency == currency {
+			state.err = domain.ErrNoChange
+			return nil, state.err
+		}
+		if defaultGroup {
+			if guardErr := n.guardDefaultGroupCurrencyChange(
+				state.ctx, currency,
+			); guardErr != nil {
+				if !errors.Is(guardErr, domain.ErrConflict) {
+					state.err = guardErr
+					return nil, state.err
+				}
+				state.err = domain.NewCurrencyChangeBlockedError(
+					domain.ScopeAccountGroup, "-", guardErr,
+				)
+				return nil, state.err
+			}
+		} else if guardErr := n.guardGroupCurrencyChange(
+			state.ctx, code, currency,
+		); guardErr != nil {
+			if !errors.Is(guardErr, domain.ErrConflict) {
+				state.err = guardErr
+				return nil, state.err
+			}
+			state.err = domain.NewCurrencyChangeBlockedError(
+				domain.ScopeAccountGroup, code, guardErr,
+			)
+			return nil, state.err
+		}
+		state.previous = current
+		state.failureOperation = "apply group currency"
+		return state, nil
+	}
+	persist := func(state *groupCurrencyChainState) error {
+		state.engineApplied = true
+		mutationCtx := context.WithoutCancel(state.ctx)
+		state.failureOperation = "set group currency"
+		if err := n.realm.SetGroupCurrency(
+			mutationCtx, code, currency,
+		); err != nil {
+			state.err = fmt.Errorf("set group currency: %w", err)
+			return state.err
+		}
+		state.persistenceCompleted = true
+		state.failureOperation = "audit group currency"
+		if err := n.audit(mutationCtx, caller, store.AuditEntry{
+			Action: domain.AuditActionSetGroupCurrency,
+			Group:  code,
+			Detail: currencyDetail(
+				"set group currency",
+				label,
+				state.previous.Currency,
+				currency,
+			),
+		}); err != nil {
+			state.err = fmt.Errorf("audit group currency: %w", err)
+			return state.err
+		}
+		return nil
+	}
+	builder := asyncengine.Chain(source, begin)
+	if currency == "" {
+		builder.ClearAccountGroupCurrency(
+			asyncengine.ClearCurrencyHooks[*groupCurrencyChainState]{
+				OnCleared: func(
+					_ context.Context, state *groupCurrencyChainState,
+				) error {
+					return persist(state)
+				},
+			},
+		)
+	} else {
+		builder.SetAccountGroupCurrency(
+			asyncengine.CurrencyHooks[*groupCurrencyChainState]{
+				Currency: func(
+					_ context.Context, state *groupCurrencyChainState,
+				) (param.Asset, error) {
+					return n.administrativeCurrencyAsset(
+						state.ctx, resolver, currency,
+					)
+				},
+				OnSet: func(
+					_ context.Context, state *groupCurrencyChainState,
+				) error {
+					return persist(state)
+				},
+			},
 		)
 	}
-	return nil
-}
-
-func applyGroupCurrency(
-	ctx context.Context,
-	lane engine.GroupLane,
-	group string,
-	currency string,
-) error {
-	if currency == "" {
-		return lane.ClearGroupCurrency(ctx, group)
+	runner := builder.Finally(func(
+		_ context.Context,
+		state *groupCurrencyChainState,
+		outcome asyncengine.ChainOutcome,
+	) error {
+		state.err = n.administrativeChainTerminalError(
+			"group currency",
+			"group",
+			label,
+			&state.administrativeChainState,
+			outcome,
+		)
+		return nil
+	})
+	_, chainErr := runner.Run(
+		ctx, eng.AsyncEngine(),
+	).Await(context.Background())
+	runErr := accountChainRunError(
+		operation, state.err, chainErr,
+	)
+	if errors.Is(runErr, domain.ErrNoChange) {
+		return nil
 	}
-	return lane.SetGroupCurrency(ctx, group, currency)
+	if !state.engineApplied {
+		return runErr
+	}
+	return n.reconcileAdministrativeChainFailure(
+		ctx, "group currency", runErr,
+	)
 }
 
 func (n *localNode) ensureCurrencyAsset(

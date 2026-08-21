@@ -22,8 +22,19 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+
+	openpit "go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/configure"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/pretrade/policies"
+	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -329,7 +340,25 @@ func newRealServiceRouterWithEngine(t *testing.T) (
 	if err != nil {
 		t.Fatalf("ForRealm: %v", err)
 	}
-	eng := &realGateEngine{running: true}
+	driver, err := openpit.NewEngineBuilder().
+		AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		Build()
+	if err != nil {
+		t.Fatalf("build chain driver: %v", err)
+	}
+	async, err := asyncengine.NewBuilder(driver).Sharded(1).Build()
+	if err != nil {
+		driver.Stop()
+		t.Fatalf("build async engine: %v", err)
+	}
+	eng := &realGateEngine{
+		running: true,
+		async:   async,
+		driver:  driver,
+		assets:  make(map[string]domain.EngineAssetID),
+		groups:  make(map[string]domain.EngineGroupID),
+	}
 	n, _, err := node.NewLocalNode(ctx, st, func(engine.Snapshot) (engine.Engine, error) {
 		return eng, nil
 	})
@@ -372,20 +401,242 @@ func seedRealAccountAndAssets(t *testing.T, realm store.RealmStore, id domain.Ac
 }
 
 // realGateEngine is a minimal engine.Engine fake sufficient for the
-// execution-report terminal-gate test: it runs the account lane inline and, on
-// the force path, returns a valid single-fill persistence write-set so the node
+// execution-report terminal-gate test: on the force path it returns a valid
+// single-fill persistence write-set so the node
 // completes the settlement. It carries no risk logic; the gate under test is the
 // node's own terminal-order guard, not the engine.
 type realGateEngine struct {
 	running               bool
 	executionReportLeaves []string
+	async                 *asyncengine.AsyncEngine
+	driver                *openpit.Engine
+	assets                map[string]domain.EngineAssetID
+	groups                map[string]domain.EngineGroupID
+}
+
+func (e *realGateEngine) AsyncEngine() *asyncengine.AsyncEngine { return e.async }
+
+func (*realGateEngine) AccountID(
+	domain.AccountID,
+) (param.AccountID, error) {
+	return param.NewAccountIDFromUint64(1), nil
+}
+
+func (e *realGateEngine) ExecutionReportModel(
+	in domain.ExecutionReportInput,
+	leavesQuantity string,
+) (model.ExecutionReport, error) {
+	order, err := e.OrderModel(domain.Order{
+		Account:     in.Account,
+		BaseAsset:   in.BaseAsset,
+		QuoteAsset:  in.QuoteAsset,
+		Side:        in.Side,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+	})
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	orderOperation, _ := order.Operation().Get()
+	instrument, _ := orderOperation.Instrument().Get()
+	accountID, _ := orderOperation.AccountID().Get()
+	side, _ := orderOperation.Side().Get()
+	report := model.NewExecutionReport()
+	operation := report.EnsureOperationView()
+	operation.SetInstrument(instrument)
+	operation.SetAccountID(accountID)
+	operation.SetSide(side)
+	fill := report.EnsureFillView()
+	if in.FillQuantity != "" && in.FillPrice != "" {
+		price, err := param.NewPriceFromString(in.FillPrice)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		quantity, err := param.NewQuantityFromString(in.FillQuantity)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
+	}
+	if leavesQuantity != "" {
+		leaves, err := param.NewQuantityFromString(leavesQuantity)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		fill.SetRemainingReservedQuantity(leaves)
+	}
+	fill.SetIsFinal(domain.OrderStatusTerminal(in.OrderStatus))
+	if len(in.Lock) > 0 {
+		fill.SetLock(in.Lock)
+	}
+	engineLeaves := ""
+	if reportFill, ok := report.Fill().Get(); ok {
+		if leaves, ok := reportFill.RemainingReservedQuantity().Get(); ok {
+			engineLeaves = leaves.String()
+		}
+	}
+	e.executionReportLeaves = append(e.executionReportLeaves, engineLeaves)
+	return report, nil
+}
+
+func (e *realGateEngine) SettledExecutionReport(
+	in domain.ExecutionReportInput,
+	_ param.AccountID,
+	_ pretrade.PostTradeResult,
+) (engine.ExecutionReportResult, error) {
+	return e.materializeExecutionReport(in)
+}
+
+func (*realGateEngine) AccountAdjustmentModels(
+	reqs []domain.AdjustmentRequest,
+) ([]model.AccountAdjustment, error) {
+	return make([]model.AccountAdjustment, len(reqs)), nil
+}
+
+func (*realGateEngine) AppliedAccountAdjustmentBatch(
+	_ domain.AccountID,
+	reqs []domain.AdjustmentRequest,
+	_ accountadjustment.BatchResult,
+) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+	results := make([]engine.AdjustmentResult, 0, len(reqs))
+	for range reqs {
+		results = append(results, engine.AdjustmentResult{
+			Accepted: &domain.AdjustmentOutcomeAccepted{},
+		})
+	}
+	return results, nil, nil
+}
+
+func (*realGateEngine) OrderModel(order domain.Order) (model.Order, error) {
+	base, err := param.NewAsset(order.BaseAsset)
+	if err != nil {
+		return model.Order{}, err
+	}
+	quote, err := param.NewAsset(order.QuoteAsset)
+	if err != nil {
+		return model.Order{}, err
+	}
+	var side param.Side
+	switch order.Side {
+	case domain.OrderSideBuy:
+		side = param.SideBuy
+	case domain.OrderSideSell:
+		side = param.SideSell
+	default:
+		return model.Order{}, domain.ErrInvalid
+	}
+	var amount param.TradeAmount
+	switch order.AmountKind {
+	case domain.OrderAmountKindQuantity:
+		quantity, quantityErr := param.NewQuantityFromString(order.AmountValue)
+		if quantityErr != nil {
+			return model.Order{}, quantityErr
+		}
+		amount = param.NewQuantityTradeAmount(quantity)
+	case domain.OrderAmountKindVolume:
+		volume, volumeErr := param.NewVolumeFromString(order.AmountValue)
+		if volumeErr != nil {
+			return model.Order{}, volumeErr
+		}
+		amount = param.NewVolumeTradeAmount(volume)
+	default:
+		return model.Order{}, domain.ErrInvalid
+	}
+	result := model.NewOrder()
+	operation := result.EnsureOperationView()
+	operation.SetInstrument(param.NewInstrument(base, quote))
+	operation.SetAccountID(param.NewAccountIDFromUint64(1))
+	operation.SetSide(side)
+	operation.SetTradeAmount(amount)
+	if order.Price != "" {
+		price, priceErr := param.NewPriceFromString(order.Price)
+		if priceErr != nil {
+			return model.Order{}, priceErr
+		}
+		operation.SetPrice(price)
+	}
+	return result, nil
+}
+
+func (e *realGateEngine) CheckOrderModel(probe domain.OrderProbe) (model.Order, error) {
+	return e.OrderModel(domain.Order{
+		Account:     probe.Account,
+		BaseAsset:   probe.BaseAsset,
+		QuoteAsset:  probe.QuoteAsset,
+		Side:        probe.Side,
+		AmountKind:  probe.AmountKind,
+		AmountValue: probe.AmountValue,
+		Price:       probe.Price,
+	})
+}
+
+func (*realGateEngine) RejectedOrder(domain.Order, []reject.Reject) engine.OrderResult {
+	return engine.OrderResult{}
+}
+
+func (*realGateEngine) ReservedOrder(
+	order domain.Order, _ asyncengine.OperationResult,
+) (engine.OrderResult, error) {
+	return engine.OrderResult{
+		Accepted:            true,
+		SettlementLockPrice: order.Price,
+	}, nil
+}
+
+func (e *realGateEngine) AppliedDropCopyOrder(
+	order domain.Order, result asyncengine.DropCopyResult,
+) (engine.OrderResult, error) {
+	return e.ReservedOrder(order, result)
+}
+
+func (*realGateEngine) RejectedImmediate(
+	domain.Order, []reject.Reject,
+) engine.ImmediateResult {
+	return engine.ImmediateResult{}
+}
+
+func (*realGateEngine) PrepareImmediateReservation(
+	domain.Order, asyncengine.OperationResult,
+) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, domain.ErrNotImplemented
+}
+
+func (*realGateEngine) PrepareImmediateDropCopy(
+	domain.Order, asyncengine.DropCopyResult,
+) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, domain.ErrNotImplemented
+}
+
+func (*realGateEngine) SettleImmediate(
+	domain.Order, engine.ImmediatePreparation, pretrade.PostTradeResult,
+) (engine.ImmediateResult, error) {
+	return engine.ImmediateResult{}, domain.ErrNotImplemented
+}
+
+func (*realGateEngine) CheckedOrder(
+	domain.OrderProbe, asyncengine.OrderCheckResult,
+) (domain.CheckResult, error) {
+	return domain.CheckResult{}, domain.ErrNotImplemented
 }
 
 func (e *realGateEngine) Version() string                            { return "fake" }
 func (e *realGateEngine) BuildProfile() string                       { return "test" }
 func (e *realGateEngine) Running() bool                              { return e.running }
 func (*realGateEngine) AddAccountResolverEntry(domain.Account) error { return nil }
-func (*realGateEngine) AddAssetResolverEntry(domain.Asset) error     { return nil }
+func (e *realGateEngine) AddAssetResolverEntry(asset domain.Asset) error {
+	if e.assets == nil {
+		e.assets = make(map[string]domain.EngineAssetID)
+	}
+	e.assets[asset.Code] = asset.EngineAssetID
+	return nil
+}
+func (e *realGateEngine) ResolveAsset(code string) (param.Asset, error) {
+	id, ok := e.assets[code]
+	if !ok {
+		return param.Asset{}, domain.ErrInvalid
+	}
+	return param.NewAsset(strconv.FormatUint(id.Uint64(), 10))
+}
 func (*realGateEngine) RenameAccountResolverEntry(
 	domain.AccountID,
 	domain.Account,
@@ -394,7 +645,23 @@ func (*realGateEngine) RenameAccountResolverEntry(
 }
 func (*realGateEngine) RenameAssetResolverEntry(string, domain.Asset) error { return nil }
 func (*realGateEngine) RemoveAssetResolverEntry(domain.Asset) error         { return nil }
-func (*realGateEngine) AddGroupResolverEntry(domain.AccountGroup) error     { return nil }
+func (e *realGateEngine) AddGroupResolverEntry(group domain.AccountGroup) error {
+	if e.groups == nil {
+		e.groups = make(map[string]domain.EngineGroupID)
+	}
+	e.groups[group.Code] = group.EngineGroupID
+	return nil
+}
+func (e *realGateEngine) ResolveGroup(code string) (param.AccountGroupID, error) {
+	if code == "" {
+		return param.DefaultAccountGroup, nil
+	}
+	id, ok := e.groups[code]
+	if !ok {
+		return param.AccountGroupID{}, domain.ErrInvalid
+	}
+	return param.NewAccountGroupIDFromUint32(id.Uint32())
+}
 func (*realGateEngine) RenameGroupResolverEntry(
 	string,
 	domain.AccountGroup,
@@ -407,73 +674,39 @@ func (e *realGateEngine) ConfigurePolicy(
 ) (engine.PolicyConfigurationResult, error) {
 	return engine.PolicyConfigurationResult{}, nil
 }
-func (e *realGateEngine) BlockAccount(context.Context, domain.AccountID, string) error { return nil }
-func (e *realGateEngine) UnblockAccount(context.Context, domain.AccountID) error       { return nil }
-func (e *realGateEngine) ApplyAccountAdjustment(
-	context.Context, domain.AccountID, domain.AdjustmentRequest,
-) (engine.AdjustmentResult, error) {
-	return engine.AdjustmentResult{Accepted: &domain.AdjustmentOutcomeAccepted{}}, nil
-}
-func (e *realGateEngine) ApplyAccountAdjustmentBatch(
-	_ context.Context, _ domain.AccountID, reqs []domain.AdjustmentRequest,
-) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
-	out := make([]engine.AdjustmentResult, 0, len(reqs))
-	for range reqs {
-		out = append(out, engine.AdjustmentResult{Accepted: &domain.AdjustmentOutcomeAccepted{}})
+func (*realGateEngine) SpotFundsAccountPnlAssignment(
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) (asyncengine.SpotFundsAccountPnlAssignment, error) {
+	if (pnl == "") == (haltReason == "") {
+		return asyncengine.SpotFundsAccountPnlAssignment{}, domain.ErrInvalid
 	}
-	return out, nil, nil
+	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
+		return asyncengine.SpotFundsAccountPnlAssignment{}, err
+	}
+	if pnl != "" {
+		value, err := param.NewPnlFromString(pnl)
+		if err != nil {
+			return asyncengine.SpotFundsAccountPnlAssignment{}, err
+		}
+		return asyncengine.SpotFundsAccountPnlAssignment{
+			PolicyName: policies.SpotFundsPolicyName,
+			State:      model.NewPnlState(value),
+		}, nil
+	}
+	return asyncengine.SpotFundsAccountPnlAssignment{}, domain.ErrInvalid
 }
-func (e *realGateEngine) SubmitOrder(context.Context, domain.Order) (engine.OrderResult, error) {
-	return engine.OrderResult{Accepted: true}, nil
-}
-func (e *realGateEngine) SetAccountCurrency(context.Context, domain.AccountID, string) error {
-	return nil
-}
-func (e *realGateEngine) ClearAccountCurrency(context.Context, domain.AccountID) error {
-	return nil
-}
-func (e *realGateEngine) SetAccountPnl(
-	context.Context, domain.AccountID, string,
+func (*realGateEngine) AppliedSpotFundsAccountPnl(
+	domain.AccountID,
+	string,
+	domain.PnlHaltReason,
+	configure.PolicyConfigurationResult,
 ) ([]domain.AccountBlock, error) {
 	return nil, nil
 }
-
-func (e *realGateEngine) SetAccountPnlState(
-	ctx context.Context,
-	id domain.AccountID,
-	pnl string,
-	haltReason domain.PnlHaltReason,
-) ([]domain.AccountBlock, error) {
-	if (pnl == "") == (haltReason == "") {
-		return nil, domain.ErrInvalid
-	}
-	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
-		return nil, err
-	}
-	if haltReason != "" {
-		return nil, nil
-	}
-	return e.SetAccountPnl(ctx, id, pnl)
-}
-func (e *realGateEngine) SubmitImmediate(
-	context.Context, domain.Order,
-) (engine.ImmediateResult, error) {
-	return engine.ImmediateResult{Accepted: true}, nil
-}
-func (e *realGateEngine) RunAccountSynchronized(
-	_ context.Context, _ domain.AccountID, fn func(engine.AccountLane) error,
-) error {
-	return fn(e)
-}
-func (e *realGateEngine) RunGroupSynchronized(
-	_ context.Context, _ string, fn func(engine.GroupLane) error,
-) error {
-	return fn(e)
-}
-func (e *realGateEngine) ApplyExecutionReport(
-	_ context.Context, in domain.ExecutionReportInput, leavesQuantity string,
+func (e *realGateEngine) materializeExecutionReport(
+	in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, error) {
-	e.executionReportLeaves = append(e.executionReportLeaves, leavesQuantity)
 	// Mirror the native settlement builder (executionReportPersistenceFrom): copy
 	// the report-owned fill fields and structured commission into persistence and
 	// the event payload; a fill also copies them onto the persisted trade.
@@ -524,13 +757,18 @@ func (e *realGateEngine) UnblockGroup(context.Context, string) error       { ret
 func (e *realGateEngine) SetGroupCurrency(context.Context, string, string) error { return nil }
 
 func (e *realGateEngine) ClearGroupCurrency(context.Context, string) error { return nil }
-func (e *realGateEngine) CheckOrder(
-	context.Context, domain.OrderProbe,
-) (domain.CheckResult, error) {
-	return domain.CheckResult{}, nil
+func (e *realGateEngine) MarketDataSink() marketdata.Sink                  { return realGateSink{} }
+func (e *realGateEngine) Stop() {
+	e.running = false
+	if e.async != nil {
+		_ = e.async.StopGraceful(context.Background())
+		e.async = nil
+	}
+	if e.driver != nil {
+		e.driver.Stop()
+		e.driver = nil
+	}
 }
-func (e *realGateEngine) MarketDataSink() marketdata.Sink { return realGateSink{} }
-func (e *realGateEngine) Stop()                           { e.running = false }
 
 type realGateSink struct{}
 

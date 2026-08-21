@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/asyncengine"
+
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -166,7 +168,7 @@ func TestLocalNode_OrderSizeConfigureFailureRevertsWithoutRebuild(t *testing.T) 
 	}
 }
 
-func TestLocalNode_LivePolicyConfigurationQuiescesAccountLanes(t *testing.T) {
+func TestLocalNode_LivePolicyConfigurationQuiescesAccountChains(t *testing.T) {
 	t.Parallel()
 	base := newFakeEngine()
 	n, _ := newTestNode(t, base)
@@ -196,13 +198,27 @@ func TestLocalNode_LivePolicyConfigurationQuiescesAccountLanes(t *testing.T) {
 			return
 		}
 		defer done()
-		laneDone <- eng.RunAccountSynchronized(
-			context.Background(), "acc-1", func(engine.AccountLane) error {
-				close(laneEntered)
-				<-laneRelease
-				return nil
+		accountID, err := eng.AccountID("acc-1")
+		if err != nil {
+			laneDone <- err
+			return
+		}
+		type laneState struct{}
+		builder := asyncengine.Chain(
+			accountID,
+			func(context.Context) (*laneState, error) {
+				return &laneState{}, nil
 			},
 		)
+		builder.Then(func(context.Context, *laneState) error {
+			close(laneEntered)
+			<-laneRelease
+			return nil
+		})
+		_, err = builder.Run(
+			context.Background(), eng.AsyncEngine(),
+		).Await(context.Background())
+		laneDone <- err
 	}()
 	waitLivePolicySignal(t, laneEntered, "account lane did not start")
 

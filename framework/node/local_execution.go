@@ -19,13 +19,136 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
+
+type executionReportChainState struct {
+	ctx                  context.Context
+	adapter              engine.AccountChainAdapter
+	accountID            param.AccountID
+	in                   domain.ExecutionReportInput
+	request              *domain.ExecutionReportRequest
+	order                domain.Order
+	leavesQuantity       string
+	report               model.ExecutionReport
+	result               engine.ExecutionReportResult
+	err                  error
+	engineApplied        bool
+	persistenceCompleted bool
+	overFilled           bool
+	forcedTerminalBypass bool
+}
+
+func (n *localNode) accountChainTerminalError(
+	operation string,
+	accountID string,
+	stateErr error,
+	engineApplied bool,
+	persistenceCompleted bool,
+	outcome asyncengine.ChainOutcome,
+) error {
+	if !engineApplied || outcome.Err == nil || errors.Is(stateErr, domain.ErrNoChange) {
+		return stateErr
+	}
+	switch stateErr.(type) {
+	case internalPostCommitNodeMutationFailure,
+		*internalPostCommitNodeMutationFailure:
+		return stateErr
+	}
+	cause := chainRootCause(outcome.Err)
+	if persistenceCompleted {
+		return n.fatalPostCommitAudit(operation, accountID, cause)
+	}
+	return n.fatalPostEnginePersistence(operation, accountID, cause)
+}
+
+func accountChainRunError(operation string, stateErr, chainErr error) error {
+	if stateErr != nil {
+		if errors.Is(chainErr, asyncengine.ErrChainRetryUnsafe) &&
+			!errors.Is(stateErr, asyncengine.ErrChainRetryUnsafe) {
+			return errors.Join(stateErr, asyncengine.ErrChainRetryUnsafe)
+		}
+		return stateErr
+	}
+	if chainErr != nil {
+		return fmt.Errorf("%s: %w", operation, chainErr)
+	}
+	return nil
+}
+
+func (n *localNode) runExecutionReportChain(
+	ctx context.Context,
+	eng engine.Engine,
+	source param.AccountID,
+	state *executionReportChainState,
+	begin func(context.Context) (*executionReportChainState, error),
+	persist func(*executionReportChainState) error,
+	operation string,
+	accountID string,
+) error {
+	builder := asyncengine.Chain(source, begin)
+	builder.ApplyExecutionReport(
+		asyncengine.ExecutionReportHooks[*executionReportChainState]{
+			Report: func(
+				_ context.Context,
+				state *executionReportChainState,
+			) (model.ExecutionReport, error) {
+				return state.report, nil
+			},
+			OnSettled: func(
+				_ context.Context,
+				state *executionReportChainState,
+				postTrade pretrade.PostTradeResult,
+			) error {
+				state.engineApplied = true
+				result, err := state.adapter.SettledExecutionReport(
+					state.in, state.accountID, postTrade,
+				)
+				if err != nil {
+					state.err = fmt.Errorf("%s: %w", operation, err)
+					return state.err
+				}
+				state.result = result
+				return nil
+			},
+		},
+	)
+	runner := builder.Then(func(
+		_ context.Context, state *executionReportChainState,
+	) error {
+		state.err = persist(state)
+		return state.err
+	}).Finally(func(
+		_ context.Context,
+		state *executionReportChainState,
+		outcome asyncengine.ChainOutcome,
+	) error {
+		state.err = n.accountChainTerminalError(
+			operation,
+			accountID,
+			state.err,
+			state.engineApplied,
+			state.persistenceCompleted,
+			outcome,
+		)
+		return nil
+	})
+	_, chainErr := runner.Run(
+		ctx, eng.AsyncEngine(),
+	).Await(context.Background())
+	return accountChainRunError(operation, state.err, chainErr)
+}
 
 // ApplyExecutionReport serializes every report on its account pipeline.
 // Reports carrying a fill or commission, and reports targeting a terminal
@@ -64,8 +187,8 @@ func (n *localNode) applyExecutionReport(
 	if err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
-	// Report ids are realm-wide while account lanes only serialize one account.
-	// Keep the availability check and persistence ordered across all lanes.
+	// Report ids are realm-wide while account chains only serialize one account.
+	// Keep the availability check and persistence ordered across all chains.
 	n.reportMu.Lock()
 	defer n.reportMu.Unlock()
 	if !requiresEngine {
@@ -78,8 +201,8 @@ func (n *localNode) applyExecutionReport(
 	}
 	account := routeDetail.Order.Account
 
-	// Register the order account and assets and rebuild pre-lane so the resolver
-	// knows them before RunAccountSynchronized resolves the account.
+	// Register the order account and assets and rebuild before resolving the
+	// stable account-chain key.
 	assets := []string{routeDetail.Order.BaseAsset, routeDetail.Order.QuoteAsset}
 	if in.Commission != nil {
 		assets = append(assets, in.Commission.Currency)
@@ -104,46 +227,62 @@ func (n *localNode) applyExecutionReport(
 	if err := n.requireExecutionReportIDAvailable(ctx, in.ExternalID); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
-
-	var result engine.ExecutionReportResult
-	if err := eng.RunAccountSynchronized(ctx, account, func(lane engine.AccountLane) error {
+	source, err := eng.AccountID(account)
+	if err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	state := &executionReportChainState{
+		ctx:       ctx,
+		adapter:   eng,
+		accountID: source,
+	}
+	begin := func(context.Context) (*executionReportChainState, error) {
 		detail, err := n.realm.GetOrder(ctx, in.Order)
 		if err != nil {
-			return fmt.Errorf("get execution report order: %w", err)
+			state.err = fmt.Errorf("get execution report order: %w", err)
+			return nil, state.err
 		}
 		if err := domain.RequireOrderModifiable(detail.Order.Status, in.Force); err != nil {
-			return err
+			state.err = err
+			return nil, err
 		}
-		forcedTerminalBypass := in.Force && domain.OrderStatusTerminal(detail.Order.Status)
-		in.Account = detail.Order.Account
-		in.BaseAsset = detail.Order.BaseAsset
-		in.QuoteAsset = detail.Order.QuoteAsset
-		in.Side = detail.Order.Side
-		if len(in.Lock) == 0 && len(detail.Order.Lock) > 0 {
-			in.Lock = detail.Order.Lock
+		state.forcedTerminalBypass = in.Force &&
+			domain.OrderStatusTerminal(detail.Order.Status)
+		state.in = in
+		state.in.Account = detail.Order.Account
+		state.in.BaseAsset = detail.Order.BaseAsset
+		state.in.QuoteAsset = detail.Order.QuoteAsset
+		state.in.Side = detail.Order.Side
+		if len(state.in.Lock) == 0 && len(detail.Order.Lock) > 0 {
+			state.in.Lock = detail.Order.Lock
 		}
-		leavesQuantity, err := executionEngineLeaves(in, detail)
+		leavesQuantity, err := executionEngineLeaves(state.in, detail)
 		if err != nil {
-			return err
+			state.err = err
+			return nil, err
 		}
-		overFilled := executionReportOverFilled(in, detail)
-
-		applied, err := lane.ApplyExecutionReport(ctx, in, leavesQuantity)
+		state.leavesQuantity = leavesQuantity
+		state.overFilled = executionReportOverFilled(state.in, detail)
+		state.report, err = eng.ExecutionReportModel(
+			state.in, state.leavesQuantity,
+		)
 		if err != nil {
-			return fmt.Errorf("apply execution report: %w", err)
+			state.err = fmt.Errorf("apply execution report: %w", err)
+			return nil, state.err
 		}
-		result = applied
-
-		if result.Persistence == nil {
+		return state, nil
+	}
+	persist := func(state *executionReportChainState) error {
+		if state.result.Persistence == nil {
 			return fmt.Errorf("apply execution report returned no persistence write set: %w", domain.ErrInvalid)
 		}
 		persistence := stampExecutionReportPersistence(
-			*result.Persistence, caller, request,
+			*state.result.Persistence, caller, request,
 		)
 		settlement := domain.OrderSettlement{
-			Account:              in.Account,
-			Order:                in.Order,
-			ReportID:             &in.ExternalID,
+			Account:              state.in.Account,
+			Order:                state.in.Order,
+			ReportID:             &state.in.ExternalID,
 			OrderStatus:          persistence.OrderStatus,
 			AccountPnl:           persistence.AccountPnl,
 			AccountPnlHaltReason: persistence.AccountPnlHaltReason,
@@ -163,26 +302,32 @@ func (n *localNode) applyExecutionReport(
 				fmt.Errorf("record execution report: %w", err),
 			)
 		}
-		result.ReportID = reportID
+		state.result.ReportID = reportID
+		state.persistenceCompleted = true
 
-		if err := n.mirrorEngineBlocksAudit(ctx, in.Order, result.Blocks); err != nil {
+		if err := n.mirrorEngineBlocksAudit(
+			ctx, state.in.Order, state.result.Blocks,
+		); err != nil {
 			return n.fatalPostEnginePersistence(
 				"audit execution report engine blocks", accountID, err,
 			)
 		}
 
 		detailText := executionReportDetail(
-			in, leavesQuantity, status, len(result.Blocks),
+			state.in,
+			state.leavesQuantity,
+			status,
+			len(state.result.Blocks),
 		)
-		if overFilled {
+		if state.overFilled {
 			detailText += " overfill=true"
 		}
-		if forcedTerminalBypass {
+		if state.forcedTerminalBypass {
 			detailText += " forced=true"
 		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionExecutionReport,
-			Account: in.Account,
+			Account: state.in.Account,
 			Detail:  detailText,
 		}); err != nil {
 			return n.fatalPostEnginePersistence(
@@ -192,10 +337,20 @@ func (n *localNode) applyExecutionReport(
 			)
 		}
 		return nil
-	}); err != nil {
+	}
+	if err := n.runExecutionReportChain(
+		ctx,
+		eng,
+		source,
+		state,
+		begin,
+		persist,
+		"apply execution report",
+		accountID,
+	); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
-	return result, nil
+	return state.result, nil
 }
 
 // executionEngineLeaves selects leaves using their source before the report
@@ -257,6 +412,14 @@ func executionReportOverFilled(
 	return filled.GreaterThan(recorded)
 }
 
+type workflowExecutionReportChainState struct {
+	ctx                  context.Context
+	in                   domain.ExecutionReportInput
+	settlement           domain.OrderSettlement
+	err                  error
+	forcedTerminalBypass bool
+}
+
 func (n *localNode) recordWorkflowExecutionReport(
 	ctx context.Context,
 	in domain.ExecutionReportInput,
@@ -287,38 +450,45 @@ func (n *localNode) recordWorkflowExecutionReport(
 	if err := n.requireExecutionReportIDAvailable(ctx, in.ExternalID); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
-
-	if err := eng.RunAccountSynchronized(ctx, account, func(_ engine.AccountLane) error {
+	source, err := eng.AccountID(account)
+	if err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	state := &workflowExecutionReportChainState{ctx: ctx, in: in}
+	begin := func(context.Context) (*workflowExecutionReportChainState, error) {
 		detail, err := n.realm.GetOrder(ctx, in.Order)
 		if err != nil {
-			return fmt.Errorf("get execution report order: %w", err)
+			state.err = fmt.Errorf("get execution report order: %w", err)
+			return nil, state.err
 		}
 		if err := domain.RequireOrderModifiable(detail.Order.Status, in.Force); err != nil {
-			return err
+			state.err = err
+			return nil, err
 		}
-		forcedTerminalBypass := in.Force &&
+		state.forcedTerminalBypass = in.Force &&
 			domain.OrderStatusTerminal(detail.Order.Status)
 		status := in.OrderStatus
 		eventType, ok := domain.ExecutionReportStatusChangeEvent(status)
 		if !ok {
-			return fmt.Errorf(
+			state.err = fmt.Errorf(
 				"execution report status %q is not workflow-only: %w",
 				status,
 				domain.ErrInvalid,
 			)
+			return nil, state.err
 		}
-		in.Account = detail.Order.Account
-		in.BaseAsset = detail.Order.BaseAsset
-		in.QuoteAsset = detail.Order.QuoteAsset
-		settlement := domain.OrderSettlement{
-			Account:     in.Account,
-			Order:       in.Order,
-			ReportID:    &in.ExternalID,
+		state.in.Account = detail.Order.Account
+		state.in.BaseAsset = detail.Order.BaseAsset
+		state.in.QuoteAsset = detail.Order.QuoteAsset
+		state.settlement = domain.OrderSettlement{
+			Account:     state.in.Account,
+			Order:       state.in.Order,
+			ReportID:    &state.in.ExternalID,
 			OrderStatus: status,
-			Leaves:      in.LeavesQuantity,
+			Leaves:      state.in.LeavesQuantity,
 			AllowedFrom: []domain.OrderStatus{detail.Order.Status},
 			Events: []domain.OrderEvent{{
-				Order:     in.Order,
+				Order:     state.in.Order,
 				Type:      eventType,
 				Source:    caller.Source,
 				Principal: caller.Principal,
@@ -329,33 +499,60 @@ func (n *localNode) recordWorkflowExecutionReport(
 				},
 			}},
 		}
+		return state, nil
+	}
+	builder := asyncengine.Chain(source, begin)
+	runner := builder.Then(func(
+		_ context.Context, state *workflowExecutionReportChainState,
+	) error {
 		reportID, err := recordOrderSettlementWithAttestation(
-			ctx, n.realm, settlement, attest,
+			ctx, n.realm, state.settlement, attest,
 		)
 		if err != nil {
-			return fmt.Errorf("record workflow execution report: %w", err)
+			state.err = fmt.Errorf("record workflow execution report: %w", err)
+			return state.err
 		}
-		in.ExternalID = reportID
-		detailText := executionReportDetail(in, "", status, 0)
-		if forcedTerminalBypass {
+		state.in.ExternalID = reportID
+		return nil
+	}).Then(func(
+		_ context.Context, state *workflowExecutionReportChainState,
+	) error {
+		detailText := executionReportDetail(
+			state.in, "", state.in.OrderStatus, 0,
+		)
+		if state.forcedTerminalBypass {
 			detailText += " forced=true"
 		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionExecutionReport,
-			Account: in.Account,
+			Account: state.in.Account,
 			Detail:  detailText,
 		}); err != nil {
-			return n.fatalPostCommitAudit(
+			state.err = n.fatalPostCommitAudit(
 				"audit workflow execution report",
 				accountID,
 				fmt.Errorf("audit workflow execution report: %w", err),
 			)
+			return state.err
 		}
 		return nil
-	}); err != nil {
-		return engine.ExecutionReportResult{}, err
+	}).Finally(func(
+		context.Context,
+		*workflowExecutionReportChainState,
+		asyncengine.ChainOutcome,
+	) error {
+		return nil
+	})
+	_, chainErr := runner.Run(
+		ctx, eng.AsyncEngine(),
+	).Await(context.Background())
+	if state.err != nil {
+		return engine.ExecutionReportResult{}, state.err
 	}
-	return engine.ExecutionReportResult{ReportID: in.ExternalID}, nil
+	if chainErr != nil {
+		return engine.ExecutionReportResult{}, chainErr
+	}
+	return engine.ExecutionReportResult{ReportID: state.in.ExternalID}, nil
 }
 
 func (n *localNode) requireExecutionReportIDAvailable(
@@ -519,15 +716,43 @@ func (n *localNode) CheckOrder(
 ) (domain.CheckResult, error) {
 	eng, done := n.beginLaneRead()
 	defer done()
-	var out domain.CheckResult
-	if err := eng.RunAccountSynchronized(ctx, probe.Account, func(lane engine.AccountLane) error {
-		var err error
-		out, err = lane.CheckOrder(ctx, probe)
-		return err
-	}); err != nil {
+	source, err := eng.CheckOrderModel(probe)
+	if err != nil {
 		return domain.CheckResult{}, err
 	}
-	return out, nil
+	type checkOrderState struct {
+		ctx    context.Context
+		result domain.CheckResult
+		err    error
+	}
+	state := &checkOrderState{ctx: ctx}
+	chain := asyncengine.Chain(
+		source,
+		func(context.Context) (*checkOrderState, error) {
+			if ctxErr := state.ctx.Err(); ctxErr != nil {
+				state.err = fmt.Errorf(
+					"engine: check order cancelled: %w", ctxErr,
+				)
+				return nil, state.err
+			}
+			return state, nil
+		},
+	).CheckOrder(func(
+		_ context.Context,
+		state *checkOrderState,
+		checked asyncengine.OrderCheckResult,
+	) error {
+		state.result, state.err = eng.CheckedOrder(probe, checked)
+		return state.err
+	})
+	_, chainErr := chain.Run(ctx, eng.AsyncEngine()).Await(context.Background())
+	if state.err != nil {
+		return domain.CheckResult{}, state.err
+	}
+	if chainErr != nil {
+		return domain.CheckResult{}, chainErr
+	}
+	return state.result, nil
 }
 
 // Close stops the engine and closes the store. It is idempotent: the engine's

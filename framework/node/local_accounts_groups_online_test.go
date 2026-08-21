@@ -20,61 +20,38 @@ package node
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
+	"strings"
 	"testing"
+
+	"go.openpit.dev/openpit/asyncengine"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
 
-type rejectAccountRereadRealm struct {
+type failSelectedAccountRereadsRealm struct {
 	store.RealmStore
+	calls     int
+	failCalls map[int]error
 }
 
-func (r *rejectAccountRereadRealm) GetAccount(
-	context.Context, domain.AccountID,
-) (domain.Account, bool, error) {
-	return domain.Account{}, false, errors.New("unexpected account reread")
-}
-
-type failFirstGroupBlockEngine struct {
-	*fakeEngine
-	blockErr error
-}
-
-func (e *failFirstGroupBlockEngine) RunGroupSynchronized(
-	ctx context.Context,
-	groupID string,
-	fn func(engine.GroupLane) error,
-) error {
-	return e.fakeEngine.RunGroupSynchronized(
-		ctx, groupID, func(engine.GroupLane) error { return fn(e) },
-	)
-}
-
-func (e *failFirstGroupBlockEngine) BlockGroup(
-	ctx context.Context, groupID, reason string,
-) error {
-	if e.blockErr != nil {
-		err := e.blockErr
-		e.blockErr = nil
-		return err
-	}
-	return e.fakeEngine.BlockGroup(ctx, groupID, reason)
+type failSelectedGroupRereadsRealm struct {
+	store.RealmStore
+	calls     int
+	failCalls map[int]error
 }
 
 func TestLocalNode_GroupCreateEmergencyRebuildFailureIsFatal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	groupCause := errors.New("group currency mutation failed")
 	eng := newFakeEngine()
-	eng.groupCurrencyErr = errors.Join(domain.ErrInvalid, groupCause)
 	n, _ := newTestNode(t, eng)
-	rebuildErr := errors.New("group reconciliation rebuild failed")
+	stopFakeAdministrativeDriver(t, eng)
+	rebuildCause := errors.New("group reconciliation rebuild failed")
 	n.build = func(engine.Snapshot) (engine.Engine, error) {
-		return nil, rebuildErr
+		return nil, errors.Join(domain.ErrInvalid, rebuildCause)
 	}
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
@@ -83,34 +60,150 @@ func TestLocalNode_GroupCreateEmergencyRebuildFailureIsFatal(t *testing.T) {
 		Code:     "desk",
 		Currency: "USD",
 	}, testCaller)
+	if err == nil {
+		t.Fatal("CreateGroup succeeded, want stopped-driver failure")
+	}
 	if errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CreateGroup error = %v, must hide domain sentinel", err)
 	}
-	if !errors.Is(err, groupCause) || !errors.Is(err, rebuildErr) {
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) ||
+		!errors.Is(err, rebuildCause) {
 		t.Fatalf(
-			"CreateGroup error = %v, want mutation cause and rebuild failure",
+			"CreateGroup error = %v, want retry-unsafe mutation and rebuild failure",
 			err,
 		)
 	}
+	if !strings.Contains(err.Error(), "apply created group runtime state") ||
+		!strings.Contains(err.Error(), "rebuild engine from current store") {
+		t.Fatalf("CreateGroup error = %v, want mutation and rebuild layers", err)
+	}
 	if fatalErr == nil ||
 		!errors.Is(fatalErr, domain.ErrInvalid) ||
-		!errors.Is(fatalErr, groupCause) ||
-		!errors.Is(fatalErr, rebuildErr) {
+		!errors.Is(fatalErr, asyncengine.ErrChainRetryUnsafe) ||
+		!errors.Is(fatalErr, rebuildCause) {
 		t.Fatalf(
-			"fatal error = %v, want sentinel, mutation cause, and rebuild failure",
+			"fatal error = %v, want sentinel, retry-unsafe mutation, and rebuild failure",
 			fatalErr,
 		)
 	}
 }
 
-func TestLocalNode_GroupCurrencyFailureCompensatesWithoutRebuild(t *testing.T) {
+func (r *failSelectedAccountRereadsRealm) GetAccount(
+	ctx context.Context, account domain.AccountID,
+) (domain.Account, bool, error) {
+	r.calls++
+	if err := r.failCalls[r.calls]; err != nil {
+		return domain.Account{}, false, err
+	}
+	return r.RealmStore.GetAccount(ctx, account)
+}
+
+func (r *failSelectedGroupRereadsRealm) GetGroup(
+	ctx context.Context,
+	group string,
+) (domain.AccountGroup, bool, error) {
+	r.calls++
+	if err := r.failCalls[r.calls]; err != nil {
+		return domain.AccountGroup{}, false, err
+	}
+	return r.RealmStore.GetGroup(ctx, group)
+}
+
+func TestLocalNode_CreateAccountWithoutRuntimeDoesNotReread(t *testing.T) {
 	t.Parallel()
-	applyErr := fmt.Errorf(
-		"set group currency failed: %w",
-		domain.ErrReservedGroup,
-	)
+	ctx := context.Background()
 	eng := newFakeEngine()
-	eng.groupCurrencyFails = map[int]error{2: applyErr}
+	n, _ := newTestNode(t, eng)
+	cause := errors.New("unexpected account reread")
+	n.realm = &failSelectedAccountRereadsRealm{
+		RealmStore: n.realm,
+		failCalls:  map[int]error{1: cause},
+	}
+
+	created, err := n.CreateAccount(
+		ctx,
+		domain.Account{Code: "plain"},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if created.Code != "plain" {
+		t.Fatalf("created account = %+v, want plain", created)
+	}
+}
+
+func TestLocalNode_CreateAccountPreEngineReadFailureSkipsRebuild(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	n, probe := newRebuildProbeNode(t, eng)
+	buildsBefore := probe.builds
+	cause := errors.New("account reread failed")
+	n.realm = &failSelectedAccountRereadsRealm{
+		RealmStore: n.realm,
+		failCalls: map[int]error{
+			1: errors.Join(domain.ErrInvalid, cause),
+		},
+	}
+
+	_, err := n.CreateAccount(ctx, domain.Account{
+		Code:        "blocked",
+		Blocked:     true,
+		BlockReason: "risk",
+	}, testCaller)
+	if !errors.Is(err, cause) || !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("CreateAccount error = %v, want original classified read failure", err)
+	}
+	if errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("CreateAccount error = %v, must not be retry-unsafe", err)
+	}
+	if probe.builds != buildsBefore {
+		t.Fatalf("engine builds = %d, want no rebuild", probe.builds-buildsBefore)
+	}
+}
+
+func TestLocalNode_CreateGroupPreEngineReadFailureSkipsRebuild(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	n, probe := newRebuildProbeNode(t, eng)
+	buildsBefore := probe.builds
+	cause := errors.New("group reread failed")
+	n.realm = &failSelectedGroupRereadsRealm{
+		RealmStore: n.realm,
+		failCalls: map[int]error{
+			1: errors.Join(domain.ErrInvalid, cause),
+		},
+	}
+
+	_, err := n.CreateGroup(ctx, domain.AccountGroup{
+		Code:        "blocked",
+		Blocked:     true,
+		BlockReason: "risk",
+	}, testCaller)
+	if !errors.Is(err, cause) || !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("CreateGroup error = %v, want original classified read failure", err)
+	}
+	if errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("CreateGroup error = %v, must not be retry-unsafe", err)
+	}
+	if probe.builds != buildsBefore {
+		t.Fatalf("engine builds = %d, want no rebuild", probe.builds-buildsBefore)
+	}
+	if _, ok, getErr := n.realm.GetGroup(ctx, "blocked"); getErr != nil || ok {
+		t.Fatalf("compensated group = ok %v error %v, want absent", ok, getErr)
+	}
+	if _, ok := eng.knownGroups["blocked"]; ok {
+		t.Fatal("compensated group resolver entry remains published")
+	}
+}
+
+func TestLocalNode_GroupCurrencyChainUpdatesWithoutRebuild(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
 	st := newMemoryStore("group-currency-online.db")
 	ctx := context.Background()
 	if err := st.Migrate(ctx); err != nil {
@@ -145,40 +238,24 @@ func TestLocalNode_GroupCurrencyFailureCompensatesWithoutRebuild(t *testing.T) {
 	if err := n.SetGroupCurrency(ctx, "desk", "EUR", testCaller); err != nil {
 		t.Fatalf("SetGroupCurrency initial: %v", err)
 	}
-	err = n.SetGroupCurrency(ctx, "desk", "USD", testCaller)
-	if !errors.Is(err, applyErr) ||
-		!errors.Is(err, domain.ErrReservedGroup) {
-		t.Fatalf(
-			"SetGroupCurrency error = %v, want classifiable apply failure",
-			err,
-		)
+	if err := n.SetGroupCurrency(ctx, "desk", "USD", testCaller); err != nil {
+		t.Fatalf("SetGroupCurrency update: %v", err)
 	}
 	group, ok, err := n.realm.GetGroup(ctx, "desk")
 	if err != nil || !ok {
 		t.Fatalf("GetGroup: ok=%v err=%v", ok, err)
 	}
-	if group.Currency != "EUR" {
-		t.Fatalf("stored group currency = %q, want compensated EUR", group.Currency)
-	}
-	if got := eng.groupCurrencies["desk"]; got != "EUR" {
-		t.Fatalf("live group currency = %q, want compensated EUR", got)
+	if group.Currency != "USD" {
+		t.Fatalf("stored group currency = %q, want USD", group.Currency)
 	}
 	if builds != 1 {
 		t.Fatalf("engine builds = %d, want initial build only", builds)
 	}
 }
 
-func TestLocalNode_GroupBlockFailureCompensatesWithoutRebuild(t *testing.T) {
+func TestLocalNode_GroupBlockChainUpdatesWithoutRebuild(t *testing.T) {
 	t.Parallel()
-	applyErr := fmt.Errorf(
-		"block reserved group: %w",
-		domain.ErrReservedGroup,
-	)
 	fake := newFakeEngine()
-	eng := &failFirstGroupBlockEngine{
-		fakeEngine: fake,
-		blockErr:   applyErr,
-	}
 	st := newMemoryStore("group-block-online.db")
 	ctx := context.Background()
 	if err := st.Migrate(ctx); err != nil {
@@ -188,17 +265,12 @@ func TestLocalNode_GroupBlockFailureCompensatesWithoutRebuild(t *testing.T) {
 
 	var seed engine.Snapshot
 	baseBuild := fakeBuild(fake, &seed)
-	var fatalErr error
 	nodeRaw, _, err := NewLocalNode(
 		ctx,
 		st,
 		func(snapshot engine.Snapshot) (engine.Engine, error) {
-			if _, err := baseBuild(snapshot); err != nil {
-				return nil, err
-			}
-			return eng, nil
+			return baseBuild(snapshot)
 		},
-		WithFatalShutdownHook(func(err error) { fatalErr = err }),
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
@@ -211,28 +283,14 @@ func TestLocalNode_GroupBlockFailureCompensatesWithoutRebuild(t *testing.T) {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 
-	err = n.SetGroupBlocked(ctx, "desk", true, "risk", testCaller)
-	if !errors.Is(err, applyErr) ||
-		!errors.Is(err, domain.ErrReservedGroup) {
-		t.Fatalf(
-			"SetGroupBlocked error = %v, want classifiable apply failure",
-			err,
-		)
-	}
-	if fatalErr != nil {
-		t.Fatalf("fatal error = %v, want successful compensation", fatalErr)
+	if err := n.SetGroupBlocked(ctx, "desk", true, "risk", testCaller); err != nil {
+		t.Fatalf("SetGroupBlocked: %v", err)
 	}
 	group, ok, getErr := n.realm.GetGroup(ctx, "desk")
-	if getErr != nil || !ok || group.Blocked {
+	if getErr != nil || !ok || !group.Blocked {
 		t.Fatalf(
-			"compensated group = %+v ok=%v err=%v, want unblocked",
+			"stored group = %+v ok=%v err=%v, want blocked",
 			group, ok, getErr,
-		)
-	}
-	if !slices.Equal(eng.unblockGroupCalls, []string{"desk"}) {
-		t.Fatalf(
-			"unblock group calls = %+v, want compensation for desk",
-			eng.unblockGroupCalls,
 		)
 	}
 }
@@ -322,12 +380,10 @@ func TestLocalNode_AccountGroupCRUDRebuildsForCascadeDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if _, ok := eng.accountCurrencies[createdAccount.Code]; ok {
+	if createdAccount.Currency != "" {
 		t.Fatal("created account inherited currency was materialized as an override")
 	}
-	if got := eng.effectiveAccountCurrency(createdAccount.Code); got != "USD" {
-		t.Fatalf("created account effective currency = %q, want inherited USD", got)
-	}
+	assertFakeEffectiveCurrency(t, eng, createdAccount.Code, "USD")
 	if err := n.SetAccountBlocked(
 		ctx, testKey(createdAccount.Code), true, "online", domain.MissingAccountCreate, testCaller,
 	); err != nil {
@@ -486,25 +542,133 @@ func TestLocalNode_AccountRenameKeepsDependentsOnStableEngineIdentity(t *testing
 	}
 }
 
-func TestLocalNode_CreateAccountUsesStoredCreateResult(t *testing.T) {
+func TestLocalNode_SetAccountGroupRegisterFailureRestoresPreviousGroup(
+	t *testing.T,
+) {
 	t.Parallel()
-	ctx := context.Background()
 	eng := newFakeEngine()
-	eng.enforceResolver = true
-	n, realm := newTestNode(t, eng)
-	n.realm = &rejectAccountRereadRealm{RealmStore: realm}
+	n, probe := newRebuildProbeNode(t, eng)
+	ctx := context.Background()
 
-	created, err := n.CreateAccount(ctx, domain.Account{Code: "created"}, testCaller)
-	if err != nil {
+	for _, code := range []string{"desk-old", "desk-new"} {
+		if _, err := n.CreateGroup(
+			ctx, domain.AccountGroup{Code: code}, testCaller,
+		); err != nil {
+			t.Fatalf("CreateGroup(%s): %v", code, err)
+		}
+	}
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "account", GroupCode: "desk-old",
+	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if created.EngineAccountID == 0 {
-		t.Fatalf("created account = %+v, want assigned engine id", created)
+	cause := errors.New("register chain account reread failed")
+	realm := n.realm
+	n.realm = &failSelectedAccountRereadsRealm{
+		RealmStore: realm,
+		failCalls:  map[int]error{4: cause},
 	}
-	stored, ok, err := realm.GetAccount(ctx, created.Code)
-	if err != nil || !ok || stored.EngineAccountID != created.EngineAccountID {
-		t.Fatalf("stored account = %+v ok=%v err=%v, want create result", stored, ok, err)
+
+	err := n.SetAccountGroup(
+		ctx,
+		testKey("account"),
+		"desk-new",
+		domain.MissingAccountReject,
+		testCaller,
+	)
+	if !errors.Is(err, cause) {
+		t.Fatalf("SetAccountGroup error = %v, want reread cause", err)
 	}
+	if isInternalPostCommitNodeMutation(err) {
+		t.Fatalf("SetAccountGroup error = %v, want classified compensation", err)
+	}
+	if probe.builds != 1 {
+		t.Fatalf("engine builds = %d, want no reconciliation", probe.builds)
+	}
+	stored, ok, getErr := realm.GetAccount(ctx, "account")
+	if getErr != nil || !ok || stored.GroupCode != "desk-old" {
+		t.Fatalf(
+			"stored account = %+v ok=%v err=%v, want desk-old",
+			stored,
+			ok,
+			getErr,
+		)
+	}
+	assertFakeAccountGroup(t, eng, "account", "desk-old")
+}
+
+func TestLocalNode_SetAccountGroupRegisterAndCompensationFailureRebuilds(
+	t *testing.T,
+) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newRebuildProbeNode(t, eng)
+	ctx := context.Background()
+
+	for _, code := range []string{"desk-old", "desk-new"} {
+		if _, err := n.CreateGroup(
+			ctx, domain.AccountGroup{Code: code}, testCaller,
+		); err != nil {
+			t.Fatalf("CreateGroup(%s): %v", code, err)
+		}
+	}
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "account", GroupCode: "desk-old",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	registerCause := errors.New("register chain account reread failed")
+	compensationCause := errors.New("compensation account reread failed")
+	realm := n.realm
+	n.realm = &failSelectedAccountRereadsRealm{
+		RealmStore: realm,
+		failCalls: map[int]error{
+			4: registerCause,
+			5: compensationCause,
+		},
+	}
+	next := newFakeEngine()
+	var rebuilt engine.Snapshot
+	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+		probe.builds++
+		probe.last = snapshot
+		return fakeBuild(next, &rebuilt)(snapshot)
+	}
+
+	err := n.SetAccountGroup(
+		ctx,
+		testKey("account"),
+		"desk-new",
+		domain.MissingAccountReject,
+		testCaller,
+	)
+	if !errors.Is(err, registerCause) || !errors.Is(err, compensationCause) {
+		t.Fatalf(
+			"SetAccountGroup error = %v, want register and compensation causes",
+			err,
+		)
+	}
+	if !isInternalPostCommitNodeMutation(err) {
+		t.Fatalf("SetAccountGroup error = %v, want terminal classification", err)
+	}
+	if probe.builds != 2 || n.currentEngine() != next {
+		t.Fatalf(
+			"reconciliation = builds %d current %p, want 2 and %p",
+			probe.builds,
+			n.currentEngine(),
+			next,
+		)
+	}
+	stored, ok, getErr := realm.GetAccount(ctx, "account")
+	if getErr != nil || !ok || stored.GroupCode != "desk-old" {
+		t.Fatalf(
+			"stored account = %+v ok=%v err=%v, want desk-old",
+			stored,
+			ok,
+			getErr,
+		)
+	}
+	assertFakeAccountGroup(t, next, "account", "desk-old")
 }
 
 func TestLocalNode_ClearAccountCurrencyRevealsCurrentGroupCurrency(t *testing.T) {
@@ -533,20 +697,21 @@ func TestLocalNode_ClearAccountCurrencyRevealsCurrentGroupCurrency(t *testing.T)
 	); err != nil {
 		t.Fatalf("SetAccountCurrency(GBP): %v", err)
 	}
-	if got := eng.effectiveAccountCurrency(account.Code); got != "GBP" {
-		t.Fatalf("effective currency with override = %q, want GBP", got)
+	stored, _, err := n.GetAccountState(ctx, testKey(account.Code))
+	if err != nil || stored.EffectiveCurrency != "GBP" {
+		t.Fatalf("account with override = %+v err=%v, want effective GBP", stored, err)
 	}
+	assertFakeEffectiveCurrency(t, eng, account.Code, "GBP")
 	if err := n.SetAccountCurrency(
 		ctx, testKey(account.Code), "", testCaller,
 	); err != nil {
 		t.Fatalf("ClearAccountCurrency: %v", err)
 	}
-	if got := eng.effectiveAccountCurrency(account.Code); got != "EUR" {
-		t.Fatalf("effective currency after clear = %q, want inherited EUR", got)
+	stored, _, err = n.GetAccountState(ctx, testKey(account.Code))
+	if err != nil || stored.Currency != "" || stored.EffectiveCurrency != "EUR" {
+		t.Fatalf("account after clear = %+v err=%v, want inherited EUR", stored, err)
 	}
-	if _, ok := eng.accountCurrencies[account.Code]; ok {
-		t.Fatal("cleared account currency override remains in live engine")
-	}
+	assertFakeEffectiveCurrency(t, eng, account.Code, "EUR")
 	if probe.builds != 1 {
 		t.Fatalf("engine builds = %d, want initial build only", probe.builds)
 	}
@@ -727,9 +892,7 @@ func TestLocalNode_ImplicitGroupPublicationStaysOnline(t *testing.T) {
 		t.Fatalf("SetGroupBlocked auto-create: %v", err)
 	}
 	for _, code := range []string{"auto", "notes-auto", "block-auto"} {
-		if err := eng.RunGroupSynchronized(
-			ctx, code, func(engine.GroupLane) error { return nil },
-		); err != nil {
+		if _, err := eng.ResolveGroup(code); err != nil {
 			t.Fatalf("live resolver group %s: %v", code, err)
 		}
 	}

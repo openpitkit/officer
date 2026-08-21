@@ -24,12 +24,27 @@ import (
 	"reflect"
 	"sort"
 
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/model"
+
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/store"
 )
+
+type restoreBalanceChainState struct {
+	ctx           context.Context
+	account       domain.Account
+	reqs          []domain.AdjustmentRequest
+	adjustments   []model.AccountAdjustment
+	results       []engine.AdjustmentResult
+	reject        *engine.AdjustmentBatchReject
+	err           error
+	engineApplied bool
+}
 
 // restoreRuntimeSnapshot is the persisted runtime shape on one side of a
 // restore. The portable archive supplies fact rows while the store reads retain
@@ -348,10 +363,7 @@ func (n *localNode) applyRestoreRuntimeDelta(
 	plan restoreRuntimePlan,
 ) error {
 	eng := n.currentEngine()
-	resolver, err := requireDictionaryResolver(eng)
-	if err != nil {
-		return err
-	}
+	resolver := eng
 
 	for _, code := range sortedNewAssetCodes(before.data.Assets, after.data.Assets) {
 		asset, ok, err := n.realm.GetAsset(ctx, code)
@@ -375,6 +387,13 @@ func (n *localNode) applyRestoreRuntimeDelta(
 			return fmt.Errorf("publish restored account %q: %w", code, err)
 		}
 	}
+	groupFallback := make(map[string]domain.AccountGroup, len(before.groups)+len(after.groups))
+	for code, group := range before.groups {
+		groupFallback[code] = group
+	}
+	for code, group := range after.groups {
+		groupFallback[code] = group
+	}
 
 	for _, code := range sortedGroupCodes(after.groups) {
 		previous, existed := before.groups[code]
@@ -385,9 +404,15 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if !existed && next.Currency == "" {
 			continue
 		}
-		if err := eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
-			return applyGroupCurrency(ctx, lane, code, next.Currency)
-		}); err != nil {
+		if _, err := n.runGroupRuntimeChain(
+			ctx,
+			eng,
+			next,
+			true,
+			"apply restored group currency",
+			&next.Currency,
+			nil,
+		); err != nil {
 			return fmt.Errorf("apply restored group %q currency: %w", code, err)
 		}
 	}
@@ -402,7 +427,9 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if oldGroup == next.GroupCode {
 			continue
 		}
-		if err := n.applyGroupMove(ctx, eng, code, oldGroup, next.GroupCode); err != nil {
+		if _, err := n.applyGroupMove(
+			ctx, eng, next, oldGroup, next.GroupCode, groupFallback,
+		); err != nil {
 			return fmt.Errorf("apply restored account %q group: %w", code, err)
 		}
 	}
@@ -420,9 +447,15 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if !existed && next.Currency == "" {
 			continue
 		}
-		if err := eng.RunAccountSynchronized(ctx, code, func(lane engine.AccountLane) error {
-			return applyAccountCurrency(ctx, lane, code, next.Currency)
-		}); err != nil {
+		if _, _, err := n.runAccountRuntimeChain(
+			ctx,
+			eng,
+			next,
+			"apply restored account currency",
+			&next.Currency,
+			nil,
+			nil,
+		); err != nil {
 			return fmt.Errorf("apply restored account %q currency: %w", code, err)
 		}
 	}
@@ -467,24 +500,31 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if !pnlChanged {
 			continue
 		}
-		err := eng.RunAccountSynchronized(ctx, code, func(lane engine.AccountLane) error {
-			pnl := next.Pnl
-			if pnl == "" {
-				pnl = "0"
-			}
-			if next.PnlHaltReason != "" {
-				pnl = ""
-			}
-			blocks, err := lane.SetAccountPnlState(
-				ctx, code, pnl, next.PnlHaltReason,
-			)
-			runtimeBlocks = append(runtimeBlocks, blocks...)
-			spotFundsRuntimeBlocks = append(spotFundsRuntimeBlocks, blocks...)
-			return err
-		})
+		pnl := next.Pnl
+		if pnl == "" {
+			pnl = "0"
+		}
+		if next.PnlHaltReason != "" {
+			pnl = ""
+		}
+		blocks, _, err := n.runAccountRuntimeChain(
+			ctx,
+			eng,
+			next,
+			"apply restored account pnl state",
+			nil,
+			&accountRuntimePnl{
+				value:       pnl,
+				storedValue: next.Pnl,
+				haltReason:  next.PnlHaltReason,
+			},
+			nil,
+		)
 		if err != nil {
 			return fmt.Errorf("apply restored account %q state: %w", code, err)
 		}
+		runtimeBlocks = append(runtimeBlocks, blocks...)
+		spotFundsRuntimeBlocks = append(spotFundsRuntimeBlocks, blocks...)
 		// Reapplying P&L against changed SpotFunds bounds evaluates live blocks.
 		// Keep the restored row exact; a halted row carries no numeric value.
 		if plan.spotFundsChanged {
@@ -520,9 +560,18 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if _, blocked := blockedByRuntime[code]; blocked && !next.Blocked {
 			continue
 		}
-		if err := eng.RunAccountSynchronized(ctx, code, func(lane engine.AccountLane) error {
-			return n.applyBlock(ctx, lane, code, next.Blocked, next.BlockReason)
-		}); err != nil {
+		if _, _, err := n.runAccountRuntimeChain(
+			ctx,
+			eng,
+			next,
+			"apply restored account block",
+			nil,
+			nil,
+			&accountRuntimeBlock{
+				blocked: next.Blocked,
+				reason:  next.BlockReason,
+			},
+		); err != nil {
 			return fmt.Errorf("apply restored account %q block: %w", code, err)
 		}
 	}
@@ -540,26 +589,42 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if code == "" {
 			continue
 		}
-		if err := eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
-			return n.applyGroupBlock(ctx, lane, code, next.Blocked, next.BlockReason)
-		}); err != nil {
+		if _, err := n.runGroupRuntimeChain(
+			ctx,
+			eng,
+			next,
+			true,
+			"apply restored group block",
+			nil,
+			&groupRuntimeBlock{
+				blocked: next.Blocked,
+				reason:  next.BlockReason,
+			},
+		); err != nil {
 			return fmt.Errorf("apply restored group %q block: %w", code, err)
 		}
 	}
 
 	for _, code := range sortedDeletedGroupCodes(before.groups, after.groups) {
 		group := before.groups[code]
-		if err := eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
-			if group.Currency != "" {
-				if err := lane.ClearGroupCurrency(ctx, code); err != nil {
-					return err
-				}
-			}
-			if code != "" && group.Blocked {
-				return lane.UnblockGroup(ctx, code)
-			}
-			return nil
-		}); err != nil {
+		var clearCurrency *string
+		if group.Currency != "" {
+			cleared := ""
+			clearCurrency = &cleared
+		}
+		var unblock *groupRuntimeBlock
+		if code != "" && group.Blocked {
+			unblock = &groupRuntimeBlock{}
+		}
+		if _, err := n.runGroupRuntimeChain(
+			ctx,
+			eng,
+			group,
+			false,
+			"clear deleted restored group",
+			clearCurrency,
+			unblock,
+		); err != nil {
 			return fmt.Errorf("clear deleted restored group %q: %w", code, err)
 		}
 		if code != "" {
@@ -822,29 +887,132 @@ func (n *localNode) applyRestoredBalances(
 		for _, balance := range balances {
 			reqs = append(reqs, snapshotAdjustmentRequest(balance))
 		}
-		var results []engine.AdjustmentResult
-		var reject *engine.AdjustmentBatchReject
-		err := eng.RunAccountSynchronized(ctx, account, func(lane engine.AccountLane) error {
-			var err error
-			results, reject, err = lane.ApplyAccountAdjustmentBatch(ctx, account, reqs)
-			return err
-		})
+		storedAccount, found, err := n.realm.GetAccount(ctx, account)
 		if err != nil {
-			return nil, fmt.Errorf("apply restored balances for %q: %w", account, err)
+			return nil, fmt.Errorf("read restored balance account %q: %w", account, err)
 		}
-		if reject != nil {
+		if !found {
+			return nil, fmt.Errorf("account %q: %w", account, domain.ErrNotFound)
+		}
+		source, err := eng.AccountID(account)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateAccountAdministrativeSource(storedAccount, source); err != nil {
+			return nil, err
+		}
+		state := &restoreBalanceChainState{
+			ctx:     ctx,
+			account: storedAccount,
+			reqs:    reqs,
+		}
+		begin := func(context.Context) (*restoreBalanceChainState, error) {
+			if ctxErr := state.ctx.Err(); ctxErr != nil {
+				state.err = fmt.Errorf(
+					"engine: apply restored balances cancelled: %w", ctxErr,
+				)
+				return nil, state.err
+			}
+			current, found, readErr := n.realm.GetAccount(
+				state.ctx, state.account.Code,
+			)
+			if readErr != nil {
+				state.err = fmt.Errorf(
+					"read account for restored balances: %w", readErr,
+				)
+				return nil, state.err
+			}
+			if !found {
+				state.err = fmt.Errorf(
+					"account %q: %w", state.account.Code, domain.ErrNotFound,
+				)
+				return nil, state.err
+			}
+			if validateErr := validateAccountAdministrativeSource(
+				current, source,
+			); validateErr != nil {
+				state.err = fmt.Errorf(
+					"read account for restored balances: %w", validateErr,
+				)
+				return nil, state.err
+			}
+			for _, req := range state.reqs {
+				if _, assetErr := n.administrativeAsset(
+					state.ctx, eng, req.Asset, "restored balance asset",
+				); assetErr != nil {
+					state.err = assetErr
+					return nil, state.err
+				}
+			}
+			adjustments, mapErr := eng.AccountAdjustmentModels(state.reqs)
+			if mapErr != nil {
+				state.err = mapErr
+				return nil, state.err
+			}
+			state.adjustments = adjustments
+			return state, nil
+		}
+		builder := asyncengine.Chain(source, begin)
+		builder.ApplyAccountAdjustment(
+			asyncengine.AccountAdjustmentHooks[*restoreBalanceChainState]{
+				Adjustments: func(
+					context.Context, *restoreBalanceChainState,
+				) ([]model.AccountAdjustment, error) {
+					return state.adjustments, nil
+				},
+				OnAdjusted: func(
+					_ context.Context,
+					state *restoreBalanceChainState,
+					batch accountadjustment.BatchResult,
+				) error {
+					state.engineApplied = true
+					results, reject, appliedErr :=
+						eng.AppliedAccountAdjustmentBatch(
+							state.account.Code, state.reqs, batch,
+						)
+					if appliedErr != nil {
+						state.err = appliedErr
+						return state.err
+					}
+					state.results = results
+					state.reject = reject
+					return nil
+				},
+			},
+		)
+		runner := builder.Finally(func(
+			_ context.Context,
+			state *restoreBalanceChainState,
+			outcome asyncengine.ChainOutcome,
+		) error {
+			state.engineApplied, state.err = runtimeChainTerminalError(
+				state.err, state.engineApplied, outcome,
+			)
+			return nil
+		})
+		_, chainErr := runner.Run(
+			ctx, eng.AsyncEngine(),
+		).Await(context.Background())
+		if runErr := accountChainRunError(
+			"apply restored balances", state.err, chainErr,
+		); runErr != nil {
+			return nil, fmt.Errorf(
+				"apply restored balances for %q: %w", account, runErr,
+			)
+		}
+		if state.reject != nil {
 			return nil, fmt.Errorf(
 				"restored balance batch for %q rejected: %s: %w",
-				account, reject.Reason, domain.ErrInvalid,
+				account, state.reject.Reason, domain.ErrInvalid,
 			)
 		}
-		if len(results) != len(reqs) {
+		if len(state.results) != len(reqs) {
 			return nil, fmt.Errorf(
 				"restored balance batch for %q returned %d outcomes for %d requests: %w",
-				account, len(results), len(reqs), domain.ErrInvalid,
+				account, len(state.results), len(reqs), domain.ErrInvalid,
 			)
 		}
-		for _, result := range results {
+		for _, result := range state.results {
 			if result.Rejected != nil {
 				return nil, fmt.Errorf(
 					"restored balance for %q rejected: %s: %w",

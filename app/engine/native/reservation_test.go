@@ -27,9 +27,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"go.openpit.dev/openpit"
 	"go.openpit.dev/openpit/accountadjustment"
@@ -112,8 +112,8 @@ func newTestEngine(t *testing.T) *openPitEngine {
 		t.Fatalf("build engine: %v", err)
 	}
 	adapter := newOpenPitEngine(
-		eng,
 		testAsyncEngine(t, eng),
+		eng.Configure(),
 		&sharedMarketDataService{service: service},
 		registered,
 		nil,
@@ -153,8 +153,8 @@ func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 		t.Fatalf("build unpriced engine: %v", err)
 	}
 	adapter := newOpenPitEngine(
-		eng,
 		testAsyncEngine(t, eng),
+		eng.Configure(),
 		newTestSharedMarketDataService(t),
 		map[string]struct{}{},
 		nil,
@@ -165,441 +165,6 @@ func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 		adapter.CloseMarketDataService()
 	})
 	return adapter
-}
-
-func TestOpenPitEngineDictionaryResolverMutationsKeepHandleAndSink(t *testing.T) {
-	e := newTestEngine(t)
-	var resolver engine.DictionaryResolver = e
-	engineBefore := e.eng
-	asyncBefore := e.async
-	sinkBefore := e.MarketDataSink()
-
-	account := domain.Account{Code: "added-account", EngineAccountID: 42}
-	if err := resolver.AddAccountResolverEntry(account); err != nil {
-		t.Fatalf("AddAccountResolverEntry: %v", err)
-	}
-	accountLaneRan := false
-	if err := e.RunAccountSynchronized(
-		context.Background(), account.Code, func(engine.AccountLane) error {
-			accountLaneRan = true
-			return nil
-		},
-	); err != nil {
-		t.Fatalf("RunAccountSynchronized after add: %v", err)
-	}
-	if !accountLaneRan {
-		t.Fatal("account resolver entry was not published before lane submission")
-	}
-
-	group := domain.AccountGroup{Code: "added-group", EngineGroupID: 43}
-	if err := resolver.AddGroupResolverEntry(group); err != nil {
-		t.Fatalf("AddGroupResolverEntry: %v", err)
-	}
-	if err := e.RunGroupSynchronized(
-		context.Background(), group.Code, func(engine.GroupLane) error { return nil },
-	); err != nil {
-		t.Fatalf("RunGroupSynchronized after add: %v", err)
-	}
-
-	renamedAccount := account
-	renamedAccount.Code = "renamed-account"
-	if err := resolver.RenameAccountResolverEntry(account.Code, renamedAccount); err != nil {
-		t.Fatalf("RenameAccountResolverEntry: %v", err)
-	}
-	asset := testAsset("EUR")
-	if err := resolver.AddAssetResolverEntry(asset); err != nil {
-		t.Fatalf("AddAssetResolverEntry: %v", err)
-	}
-	renamedAsset := asset
-	renamedAsset.Code = "renamed-asset"
-	if err := resolver.RenameAssetResolverEntry(asset.Code, renamedAsset); err != nil {
-		t.Fatalf("RenameAssetResolverEntry: %v", err)
-	}
-	if _, err := e.res.asset(renamedAsset.Code); err != nil {
-		t.Fatalf("resolve renamed asset: %v", err)
-	}
-	if _, err := e.res.asset(asset.Code); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("old asset alias error = %v, want ErrInvalid", err)
-	}
-	if err := resolver.RemoveAssetResolverEntry(renamedAsset); err != nil {
-		t.Fatalf("RemoveAssetResolverEntry: %v", err)
-	}
-	if _, err := e.res.asset(renamedAsset.Code); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("removed asset alias error = %v, want ErrInvalid", err)
-	}
-	if err := e.RunAccountSynchronized(
-		context.Background(), renamedAccount.Code, func(engine.AccountLane) error { return nil },
-	); err != nil {
-		t.Fatalf("RunAccountSynchronized after rename: %v", err)
-	}
-	if err := e.RunAccountSynchronized(
-		context.Background(), account.Code, func(engine.AccountLane) error { return nil },
-	); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("old account alias error = %v, want ErrInvalid", err)
-	}
-
-	renamedGroup := group
-	renamedGroup.Code = "renamed-group"
-	if err := resolver.RenameGroupResolverEntry(group.Code, renamedGroup); err != nil {
-		t.Fatalf("RenameGroupResolverEntry: %v", err)
-	}
-	if err := e.RunGroupSynchronized(
-		context.Background(), renamedGroup.Code, func(engine.GroupLane) error { return nil },
-	); err != nil {
-		t.Fatalf("RunGroupSynchronized after rename: %v", err)
-	}
-	if err := e.RunGroupSynchronized(
-		context.Background(), group.Code, func(engine.GroupLane) error { return nil },
-	); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("old group alias error = %v, want ErrInvalid", err)
-	}
-	if err := resolver.RemoveGroupResolverEntry(renamedGroup); err != nil {
-		t.Fatalf("RemoveGroupResolverEntry: %v", err)
-	}
-	if err := e.RunGroupSynchronized(
-		context.Background(), renamedGroup.Code, func(engine.GroupLane) error { return nil },
-	); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("removed group alias error = %v, want ErrInvalid", err)
-	}
-
-	if e.eng != engineBefore || e.async != asyncBefore {
-		t.Fatal("resolver mutation replaced the engine handle or async dispatcher")
-	}
-	if got := e.MarketDataSink(); got != sinkBefore {
-		t.Fatal("resolver mutation replaced MarketDataSink")
-	}
-}
-
-func TestGroupLaneCurrencyNamedAndDefaultKeepHandleAndSink(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-	engineBefore := e.eng
-	asyncBefore := e.async
-	sinkBefore := e.MarketDataSink()
-
-	group := domain.AccountGroup{Code: "currency-group", EngineGroupID: 44}
-	if err := e.AddGroupResolverEntry(group); err != nil {
-		t.Fatalf("AddGroupResolverEntry: %v", err)
-	}
-	for _, alias := range []string{group.Code, ""} {
-		if err := e.RunGroupSynchronized(
-			ctx, alias, func(lane engine.GroupLane) error {
-				if err := lane.SetGroupCurrency(ctx, alias, "USD"); err != nil {
-					return err
-				}
-				return lane.ClearGroupCurrency(ctx, alias)
-			},
-		); err != nil {
-			t.Fatalf("set and clear group currency %q: %v", alias, err)
-		}
-	}
-
-	if e.eng != engineBefore || e.async != asyncBefore {
-		t.Fatal("group currency mutation replaced engine handle or async dispatcher")
-	}
-	if got := e.MarketDataSink(); got != sinkBefore {
-		t.Fatal("group currency mutation replaced MarketDataSink")
-	}
-}
-
-// The engine reserves its default group - addressed here by the empty group
-// code - and refuses to block or unblock it. The adapter must translate that
-// typed engine refusal into the domain sentinel the HTTP seam maps to a
-// conflict, rather than leak an opaque internal failure.
-func TestGroupLaneDefaultGroupBlockAndUnblockAreReserved(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	if err := e.RunGroupSynchronized(
-		ctx, "", func(lane engine.GroupLane) error {
-			return lane.BlockGroup(ctx, "", "kill switch")
-		},
-	); !errors.Is(err, domain.ErrReservedGroup) {
-		t.Fatalf("BlockGroup(default group) error = %v, want ErrReservedGroup", err)
-	}
-	if err := e.RunGroupSynchronized(
-		ctx, "", func(lane engine.GroupLane) error {
-			return lane.UnblockGroup(ctx, "")
-		},
-	); !errors.Is(err, domain.ErrReservedGroup) {
-		t.Fatalf("UnblockGroup(default group) error = %v, want ErrReservedGroup", err)
-	}
-}
-
-func TestQueuedAccountLaneKeepsRoutedIDAcrossAliasReuse(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-	oldAlias := domain.AccountID(testAccount)
-	routedID, err := e.res.account(oldAlias)
-	if err != nil {
-		t.Fatalf("resolve routed account: %v", err)
-	}
-	lane := accountLane{
-		owner: e, eng: e.eng, accountAlias: oldAlias, accountID: routedID,
-	}
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	first := e.async.Submit(ctx, routedID, func() error {
-		close(started)
-		<-release
-		return nil
-	})
-	<-started
-	queued := e.async.Submit(ctx, routedID, func() error {
-		return lane.BlockAccount(ctx, oldAlias, "queued block")
-	})
-
-	renamed := domain.Account{Code: "renamed-account", EngineAccountID: 1}
-	if err := e.RenameAccountResolverEntry(oldAlias, renamed); err != nil {
-		t.Fatalf("rename account resolver entry: %v", err)
-	}
-	const reusedEngineID domain.EngineAccountID = 42
-	if err := e.AddAccountResolverEntry(domain.Account{
-		Code: oldAlias, EngineAccountID: reusedEngineID,
-	}); err != nil {
-		t.Fatalf("reuse old account alias: %v", err)
-	}
-	close(release)
-	if _, err := first.Await(ctx); err != nil {
-		t.Fatalf("first account lane: %v", err)
-	}
-	if _, err := queued.Await(ctx); err != nil {
-		t.Fatalf("queued account lane: %v", err)
-	}
-
-	if err := e.eng.Accounts().ReplaceBlockReason(routedID, "routed"); err != nil {
-		t.Fatalf("queued work did not block routed account id: %v", err)
-	}
-	reusedID := param.NewAccountIDFromUint64(reusedEngineID.Uint64())
-	if err := e.eng.Accounts().ReplaceBlockReason(reusedID, "reused"); err == nil {
-		t.Fatal("queued work was redirected to the reused account alias")
-	}
-	if err := e.RunAccountSynchronized(
-		ctx, renamed.Code, func(lane engine.AccountLane) error {
-			return lane.UnblockAccount(ctx, renamed.Code)
-		},
-	); err != nil {
-		t.Fatalf("new work through renamed account alias: %v", err)
-	}
-	if err := e.eng.Accounts().ReplaceBlockReason(routedID, "still blocked"); err == nil {
-		t.Fatal("renamed alias did not route new work to the stable account id")
-	}
-}
-
-func TestQueuedGroupLaneKeepsRoutedIDAcrossAliasReuse(t *testing.T) {
-	e := newTestEngine(t)
-	if err := e.AddAssetResolverEntry(testAsset("EUR")); err != nil {
-		t.Fatalf("add asset resolver entry: %v", err)
-	}
-	ctx := context.Background()
-	oldAlias := "group-old"
-	group := domain.AccountGroup{Code: oldAlias, EngineGroupID: 9}
-	if err := e.AddGroupResolverEntry(group); err != nil {
-		t.Fatalf("add group resolver entry: %v", err)
-	}
-	routedID, err := e.res.group(oldAlias)
-	if err != nil {
-		t.Fatalf("resolve routed group: %v", err)
-	}
-	lane := groupLane{
-		owner: e, eng: e.eng,
-		accountIDs: e.res.accountIDSnapshot(),
-		groupAlias: oldAlias,
-		groupID:    routedID,
-	}
-	routingKey := groupRoutingKey(routedID)
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	first := e.async.Submit(ctx, routingKey, func() error {
-		close(started)
-		<-release
-		return nil
-	})
-	<-started
-	queued := e.async.Submit(ctx, routingKey, func() error {
-		capturedID, err := lane.routedGroupID(oldAlias)
-		if err != nil {
-			return err
-		}
-		if capturedID.Handle() != routedID.Handle() {
-			return errors.New("queued group lane lost its captured numeric id")
-		}
-		if err := lane.SetGroupCurrency(ctx, oldAlias, "EUR"); err != nil {
-			return err
-		}
-		if err := lane.RegisterGroup(
-			ctx, []domain.AccountID{testAccount}, oldAlias,
-		); err != nil {
-			return err
-		}
-		return lane.BlockGroup(ctx, oldAlias, "queued block")
-	})
-
-	renamedAccount := domain.Account{Code: "account-new", EngineAccountID: 1}
-	if err := e.RenameAccountResolverEntry(testAccount, renamedAccount); err != nil {
-		t.Fatalf("rename account resolver entry: %v", err)
-	}
-	if err := e.AddAccountResolverEntry(domain.Account{
-		Code: testAccount, EngineAccountID: 42,
-	}); err != nil {
-		t.Fatalf("reuse old account alias: %v", err)
-	}
-	renamed := group
-	renamed.Code = "group-new"
-	if err := e.RenameGroupResolverEntry(oldAlias, renamed); err != nil {
-		t.Fatalf("rename group resolver entry: %v", err)
-	}
-	const reusedEngineID domain.EngineGroupID = 10
-	if err := e.AddGroupResolverEntry(domain.AccountGroup{
-		Code: oldAlias, EngineGroupID: reusedEngineID,
-	}); err != nil {
-		t.Fatalf("reuse old group alias: %v", err)
-	}
-	close(release)
-	if _, err := first.Await(ctx); err != nil {
-		t.Fatalf("first group lane: %v", err)
-	}
-	if _, err := queued.Await(ctx); err != nil {
-		t.Fatalf("queued group lane: %v", err)
-	}
-
-	if err := e.eng.Accounts().ReplaceGroupBlockReason(routedID, "routed"); err != nil {
-		t.Fatalf("queued work did not block routed group id: %v", err)
-	}
-	reusedID, err := param.NewAccountGroupIDFromUint32(reusedEngineID.Uint32())
-	if err != nil {
-		t.Fatalf("reused group id: %v", err)
-	}
-	if err := e.eng.Accounts().ReplaceGroupBlockReason(reusedID, "reused"); err == nil {
-		t.Fatal("queued work was redirected to the reused group alias")
-	}
-	order := testOrder()
-	order.Account = renamedAccount.Code
-	result, err := e.SubmitOrder(ctx, order)
-	if err != nil {
-		t.Fatalf("submit order through renamed account alias: %v", err)
-	}
-	if result.Accepted {
-		t.Fatal("queued group registration was redirected to the reused account alias")
-	}
-	if err := e.RunGroupSynchronized(
-		ctx, renamed.Code, func(lane engine.GroupLane) error {
-			if err := lane.UnregisterGroup(
-				ctx, []domain.AccountID{renamedAccount.Code}, renamed.Code,
-			); err != nil {
-				return err
-			}
-			return lane.UnblockGroup(ctx, renamed.Code)
-		},
-	); err != nil {
-		t.Fatalf("new work through renamed group alias: %v", err)
-	}
-	if err := e.eng.Accounts().ReplaceGroupBlockReason(routedID, "still blocked"); err == nil {
-		t.Fatal("renamed alias did not route new work to the stable group id")
-	}
-}
-
-func TestRunGroupSynchronizedWaitsForCallbackAfterCallerCancellation(t *testing.T) {
-	e := newTestEngine(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	callbackEntered := make(chan struct{})
-	callbackRelease := make(chan struct{})
-	result := make(chan error, 1)
-	callbackErr := errors.New("group callback result")
-
-	go func() {
-		result <- e.RunGroupSynchronized(
-			ctx, "", func(engine.GroupLane) error {
-				close(callbackEntered)
-				<-callbackRelease
-				return callbackErr
-			},
-		)
-	}()
-	<-callbackEntered
-	cancel()
-
-	select {
-	case err := <-result:
-		t.Fatalf("RunGroupSynchronized returned before callback completed: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-
-	close(callbackRelease)
-	select {
-	case err := <-result:
-		if !errors.Is(err, callbackErr) {
-			t.Fatalf("RunGroupSynchronized error = %v, want callback result", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("RunGroupSynchronized did not return after callback completed")
-	}
-}
-
-func TestAccountLaneSetAccountPnlState(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-	sinkBefore := e.MarketDataSink()
-	engineBefore := e.eng
-
-	var numericBlocks []domain.AccountBlock
-	if err := e.RunAccountSynchronized(
-		ctx, testAccount, func(lane engine.AccountLane) error {
-			var err error
-			numericBlocks, err = lane.SetAccountPnlState(ctx, testAccount, "2.5", "")
-			return err
-		},
-	); err != nil {
-		t.Fatalf("numeric SetAccountPnlState: %v", err)
-	}
-	if len(numericBlocks) != 0 {
-		t.Fatalf("numeric SetAccountPnlState blocks = %v, want none", numericBlocks)
-	}
-
-	var haltedBlocks []domain.AccountBlock
-	if err := e.RunAccountSynchronized(
-		ctx, testAccount, func(lane engine.AccountLane) error {
-			var err error
-			haltedBlocks, err = lane.SetAccountPnlState(
-				ctx, testAccount, "", domain.PnlHaltReasonMissingFx,
-			)
-			return err
-		},
-	); err != nil {
-		t.Fatalf("halted SetAccountPnlState: %v", err)
-	}
-	if len(haltedBlocks) != 0 {
-		t.Fatalf("halted SetAccountPnlState blocks = %+v, want none", haltedBlocks)
-	}
-
-	for _, test := range []struct {
-		name       string
-		pnl        string
-		haltReason domain.PnlHaltReason
-	}{
-		{name: "both", pnl: "1", haltReason: domain.PnlHaltReasonMissingFx},
-		{name: "empty"},
-		{name: "unknown reason", haltReason: "unknown"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			err := e.RunAccountSynchronized(
-				ctx, testAccount, func(lane engine.AccountLane) error {
-					_, err := lane.SetAccountPnlState(
-						ctx, testAccount, test.pnl, test.haltReason,
-					)
-					return err
-				},
-			)
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("SetAccountPnlState error = %v, want ErrInvalid", err)
-			}
-		})
-	}
-	if e.eng != engineBefore || e.MarketDataSink() != sinkBefore {
-		t.Fatal("SetAccountPnlState replaced the engine or MarketDataSink")
-	}
 }
 
 // testOrder is a limit buy that costs 500 quote, so a 1000-quote balance funds
@@ -617,11 +182,237 @@ func testOrder() domain.Order {
 	}
 }
 
+func materializeOrderResult(
+	eng engine.Engine, order domain.Order,
+) (OrderResult, error) {
+	e, ok := eng.(*openPitEngine)
+	if !ok {
+		return OrderResult{}, fmt.Errorf("test engine type %T is not native", eng)
+	}
+	source, err := e.OrderModel(order)
+	if err != nil {
+		return OrderResult{}, err
+	}
+	ctx := context.Background()
+	if order.DropCopy {
+		operation, rejects, applyErr := e.AsyncEngine().ApplyDropCopy(
+			ctx, source,
+		).Await(ctx)
+		if applyErr != nil {
+			return OrderResult{}, applyErr
+		}
+		if len(rejects) > 0 {
+			return e.RejectedOrder(order, rejects), nil
+		}
+		if operation == nil {
+			return OrderResult{}, errors.New("drop-copy operation missing")
+		}
+		result, materializeErr := e.AppliedDropCopyOrder(order, operation)
+		if materializeErr != nil {
+			_, rollbackErr := operation.RollbackAndClose(ctx).Await(ctx)
+			return OrderResult{}, errors.Join(materializeErr, rollbackErr)
+		}
+		_, commitErr := operation.CommitAndClose(ctx).Await(ctx)
+		return result, commitErr
+	}
+	reservation, rejects, executeErr := e.AsyncEngine().ExecutePreTrade(
+		ctx, source,
+	).Await(ctx)
+	if executeErr != nil {
+		return OrderResult{}, executeErr
+	}
+	if len(rejects) > 0 {
+		return e.RejectedOrder(order, rejects), nil
+	}
+	if reservation == nil {
+		return OrderResult{}, errors.New("reservation missing")
+	}
+	result, materializeErr := e.ReservedOrder(order, reservation)
+	if materializeErr != nil {
+		_, rollbackErr := reservation.RollbackAndClose(ctx).Await(ctx)
+		return OrderResult{}, errors.Join(materializeErr, rollbackErr)
+	}
+	_, commitErr := reservation.CommitAndClose(ctx).Await(ctx)
+	return result, commitErr
+}
+
+func materializeImmediateResult(
+	eng engine.Engine, order domain.Order,
+) (ImmediateResult, error) {
+	e, ok := eng.(*openPitEngine)
+	if !ok {
+		return ImmediateResult{}, fmt.Errorf("test engine type %T is not native", eng)
+	}
+	source, err := e.OrderModel(order)
+	if err != nil {
+		return ImmediateResult{}, err
+	}
+	ctx := context.Background()
+	var prepared engine.ImmediatePreparation
+	if order.DropCopy {
+		operation, rejects, applyErr := e.AsyncEngine().ApplyDropCopy(
+			ctx, source,
+		).Await(ctx)
+		if applyErr != nil {
+			return ImmediateResult{}, applyErr
+		}
+		if len(rejects) > 0 {
+			return e.RejectedImmediate(order, rejects), nil
+		}
+		if operation == nil {
+			return ImmediateResult{}, errors.New("drop-copy operation missing")
+		}
+		prepared, err = e.PrepareImmediateDropCopy(order, operation)
+		if err != nil {
+			_, rollbackErr := operation.RollbackAndClose(ctx).Await(ctx)
+			return ImmediateResult{}, errors.Join(err, rollbackErr)
+		}
+		if _, err := operation.CommitAndClose(ctx).Await(ctx); err != nil {
+			return ImmediateResult{}, err
+		}
+	} else {
+		reservation, rejects, executeErr := e.AsyncEngine().ExecutePreTrade(
+			ctx, source,
+		).Await(ctx)
+		if executeErr != nil {
+			return ImmediateResult{}, executeErr
+		}
+		if len(rejects) > 0 {
+			return e.RejectedImmediate(order, rejects), nil
+		}
+		if reservation == nil {
+			return ImmediateResult{}, errors.New("reservation missing")
+		}
+		prepared, err = e.PrepareImmediateReservation(order, reservation)
+		if err != nil {
+			_, rollbackErr := reservation.RollbackAndClose(ctx).Await(ctx)
+			return ImmediateResult{}, errors.Join(err, rollbackErr)
+		}
+		if _, err := reservation.CommitAndClose(ctx).Await(ctx); err != nil {
+			return ImmediateResult{}, err
+		}
+	}
+	postTrade, err := e.AsyncEngine().ApplyExecutionReport(
+		ctx, prepared.ExecutionReport,
+	).Await(ctx)
+	if err != nil {
+		return ImmediateResult{}, err
+	}
+	return e.SettleImmediate(order, prepared, postTrade)
+}
+
+func materializeExecutionReport(
+	eng engine.Engine,
+	in domain.ExecutionReportInput,
+	leavesQuantity string,
+) (ExecutionReportResult, error) {
+	e, ok := eng.(*openPitEngine)
+	if !ok {
+		return ExecutionReportResult{}, fmt.Errorf(
+			"test engine type %T is not native", eng,
+		)
+	}
+	accountID, err := e.AccountID(in.Account)
+	if err != nil {
+		return ExecutionReportResult{}, err
+	}
+	report, err := e.ExecutionReportModel(in, leavesQuantity)
+	if err != nil {
+		return ExecutionReportResult{}, err
+	}
+	ctx := context.Background()
+	postTrade, err := e.AsyncEngine().ApplyExecutionReport(ctx, report).Await(ctx)
+	if err != nil {
+		return ExecutionReportResult{}, fmt.Errorf(
+			"engine: apply execution report: %w", err,
+		)
+	}
+	return e.SettledExecutionReport(in, accountID, postTrade)
+}
+
+func setTestAccountPnlState(
+	ctx context.Context,
+	e *openPitEngine,
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) ([]domain.AccountBlock, error) {
+	accountID, err := e.AccountID(testAccount)
+	if err != nil {
+		return nil, err
+	}
+	assignment, err := e.SpotFundsAccountPnlAssignment(pnl, haltReason)
+	if err != nil {
+		return nil, err
+	}
+	result, err := engine.SetSpotFundsAccountPnl(
+		ctx, e.AsyncEngine(), accountID, assignment,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return e.AppliedSpotFundsAccountPnl(
+		testAccount, pnl, haltReason, result,
+	)
+}
+
+func TestSpotFundsAccountPnlAssignmentRejectsInvalidState(t *testing.T) {
+	t.Parallel()
+	e := &openPitEngine{}
+	for _, test := range []struct {
+		name       string
+		pnl        string
+		haltReason domain.PnlHaltReason
+	}{
+		{name: "both", pnl: "1", haltReason: domain.PnlHaltReasonMissingFx},
+		{name: "empty"},
+		{name: "unknown reason", haltReason: "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := e.SpotFundsAccountPnlAssignment(
+				test.pnl,
+				test.haltReason,
+			)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf(
+					"SpotFundsAccountPnlAssignment() error = %v, want ErrInvalid",
+					err,
+				)
+			}
+		})
+	}
+}
+
+func materializeCheckedOrder(
+	eng engine.Engine, probe domain.OrderProbe,
+) (domain.CheckResult, error) {
+	e, ok := eng.(*openPitEngine)
+	if !ok {
+		return domain.CheckResult{}, fmt.Errorf("test engine type %T is not native", eng)
+	}
+	source, err := e.CheckOrderModel(probe)
+	if err != nil {
+		return domain.CheckResult{}, err
+	}
+	ctx := context.Background()
+	var result domain.CheckResult
+	chain := asyncengine.Chain(source, func(context.Context) (struct{}, error) {
+		return struct{}{}, nil
+	}).CheckOrder(func(
+		_ context.Context, _ struct{}, checked asyncengine.OrderCheckResult,
+	) error {
+		var checkedErr error
+		result, checkedErr = e.CheckedOrder(probe, checked)
+		return checkedErr
+	})
+	_, err = chain.Run(ctx, e.AsyncEngine()).Await(ctx)
+	return result, err
+}
+
 func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 	e := newTestEngine(t)
-	ctx := context.Background()
 
-	res, err := e.SubmitImmediate(ctx, testOrder())
+	res, err := materializeImmediateResult(e, testOrder())
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
@@ -678,7 +469,7 @@ func TestSubmitImmediate_DropCopySettlesWhileAccountIsBlocked(t *testing.T) {
 
 	order := testOrder()
 	order.DropCopy = true
-	result, err := e.SubmitImmediate(context.Background(), order)
+	result, err := materializeImmediateResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitImmediate(drop copy): %v", err)
 	}
@@ -703,12 +494,11 @@ const lockSpyPolicyGroupID model.PolicyGroupID = 42
 // It mirrors the order's limit price so the settlement estimate - the last lock
 // price - stays the price the fill settles at.
 type executionLockSpy struct {
-	price         param.Price
-	pushErr       error
-	rollbackPanic string
-	reportLocks   [][]byte
-	reportLeaves  []string
-	guard         sync.Mutex
+	price        param.Price
+	pushErr      error
+	reportLocks  [][]byte
+	reportLeaves []string
+	guard        sync.Mutex
 }
 
 func (*executionLockSpy) Close() {}
@@ -728,17 +518,9 @@ func (*executionLockSpy) CheckPreTradeStart(
 func (s *executionLockSpy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ model.Order,
-	mutations tx.Mutations,
+	_ tx.Mutations,
 	result pretrade.Result,
 ) []reject.Reject {
-	if s.rollbackPanic != "" {
-		err := mutations.Push(func() {}, func() { panic(s.rollbackPanic) })
-		if err != nil {
-			s.guard.Lock()
-			s.pushErr = err
-			s.guard.Unlock()
-		}
-	}
 	if err := result.PushLockPrice(s.price); err != nil {
 		s.guard.Lock()
 		s.pushErr = err
@@ -758,7 +540,7 @@ func (s *executionLockSpy) ApplyExecutionReport(
 	var leaves string
 	if fill, ok := report.Fill().Get(); ok {
 		lock = append([]byte(nil), fill.Lock()...)
-		if quantity, ok := fill.LeavesQuantity().Get(); ok {
+		if quantity, ok := fill.RemainingReservedQuantity().Get(); ok {
 			leaves = quantity.String()
 		}
 	}
@@ -819,8 +601,8 @@ func newLockSpyTestEngine(t *testing.T, spy *executionLockSpy) *openPitEngine {
 		t.Fatalf("build lock spy engine: %v", err)
 	}
 	adapter := newOpenPitEngine(
-		eng,
 		testAsyncEngine(t, eng),
+		eng.Configure(),
 		newTestSharedMarketDataService(t),
 		map[string]struct{}{nameSpotFunds: {}},
 		nil,
@@ -866,7 +648,7 @@ func TestSubmitImmediate_ReportCarriesEngineLockAndLeaves(t *testing.T) {
 
 			order := testOrder()
 			order.DropCopy = test.dropCopy
-			res, err := e.SubmitImmediate(context.Background(), order)
+			res, err := materializeImmediateResult(e, order)
 			if err != nil {
 				t.Fatalf("SubmitImmediate: %v", err)
 			}
@@ -1013,7 +795,7 @@ func TestSubmitImmediate_OpeningFillDoesNotEmitNoopAccountPnl(t *testing.T) {
 	e := engine.(*openPitEngine)
 	t.Cleanup(e.Stop)
 
-	res, err := e.SubmitImmediate(context.Background(), testOrder())
+	res, err := materializeImmediateResult(e, testOrder())
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
@@ -1038,16 +820,15 @@ func TestSubmitImmediate_OpeningFillDoesNotEmitNoopAccountPnl(t *testing.T) {
 // rejects the fill with missing_required_field and blocks the account.
 func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 	e := newTestEngine(t)
-	ctx := context.Background()
 
-	submitted, err := e.SubmitOrder(ctx, testOrder())
+	submitted, err := materializeOrderResult(e, testOrder())
 	if err != nil || !submitted.Accepted {
 		t.Fatalf("SubmitOrder: %v accepted=%v", err, submitted.Accepted)
 	}
 
 	// A full fill of the 5-unit order at the reservation's settlement lock price
 	// nets the held quote to zero: leaves is 0 and the fill is final.
-	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   testQty,
@@ -1113,18 +894,17 @@ func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
 	e := engine.(*openPitEngine)
 	t.Cleanup(e.Stop)
 
-	ctx := context.Background()
 	order := domain.Order{
 		Account: domain.AccountID(testAccount), BaseAsset: testBase, QuoteAsset: testQuote,
 		Side: domain.OrderSideSell, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: "1", Price: "50000",
 	}
-	submitted, err := e.SubmitOrder(ctx, order)
+	submitted, err := materializeOrderResult(e, order)
 	if err != nil || !submitted.Accepted {
 		t.Fatalf("SubmitOrder: %v accepted=%v rejects=%+v", err, submitted.Accepted, submitted.Rejects)
 	}
 
-	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
 		BaseAsset: testBase, QuoteAsset: testQuote,
 		FillQuantity: "1", FillPrice: "50000", LeavesQuantity: "0",
 		LockPrice: submitted.SettlementLockPrice,
@@ -1244,39 +1024,10 @@ func TestSpotFundsAccountPnlSeeds_RestoresPersistedNumericAccountPnl(t *testing.
 	}
 }
 
-func TestApplyExecutionReport_CanceledContextDoesNotEnterLane(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	submitted, err := e.SubmitOrder(ctx, testOrder())
-	if err != nil || !submitted.Accepted {
-		t.Fatalf("SubmitOrder: %v accepted=%v", err, submitted.Accepted)
-	}
-
-	reportCtx, cancel := context.WithCancel(ctx)
-	cancel()
-	if _, err := e.ApplyExecutionReport(reportCtx, domain.ExecutionReportInput{
-		BaseAsset:      testBase,
-		QuoteAsset:     testQuote,
-		FillQuantity:   testQty,
-		FillPrice:      submitted.SettlementLockPrice,
-		LeavesQuantity: "0",
-		LockPrice:      submitted.SettlementLockPrice,
-		Lock:           submitted.Lock,
-		Account:        domain.AccountID(testAccount),
-		Side:           domain.OrderSideBuy,
-		Order:          "order-1",
-		OrderStatus:    domain.OrderStatusFilled,
-	}, "0"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("ApplyExecutionReport with canceled context = %v, want context canceled", err)
-	}
-}
-
 func TestApplyExecutionReport_NoTradeFinalReleasesStoredLeaves(t *testing.T) {
 	e := newTestEngine(t)
-	ctx := context.Background()
 
-	submitted, err := e.SubmitOrder(ctx, testOrder())
+	submitted, err := materializeOrderResult(e, testOrder())
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -1284,7 +1035,7 @@ func TestApplyExecutionReport_NoTradeFinalReleasesStoredLeaves(t *testing.T) {
 		t.Fatalf("SubmitOrder rejected: %+v", submitted.Rejects)
 	}
 
-	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		LeavesQuantity: "0",
@@ -1374,7 +1125,6 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 
 func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) {
 	e := newTestEngineWithSpotFundsPnlBounds(t)
-	ctx := context.Background()
 
 	if _, ok := e.registered[nameSpotFunds]; !ok || len(e.registered) != 1 {
 		t.Fatalf("registered policies = %+v, want only %s", e.registered, nameSpotFunds)
@@ -1387,13 +1137,13 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) 
 	market := testOrder()
 	market.Price = ""
 	market.AmountValue = "1"
-	if result, err := e.SubmitOrder(ctx, market); err != nil || !result.Accepted {
+	if result, err := materializeOrderResult(e, market); err != nil || !result.Accepted {
 		t.Fatalf("market SubmitOrder: err=%v result=%+v", err, result)
 	}
 
 	feeOrder := testOrder()
 	feeOrder.AmountValue = "1"
-	submitted, err := e.SubmitOrder(ctx, feeOrder)
+	submitted, err := materializeOrderResult(e, feeOrder)
 	if err != nil {
 		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
@@ -1401,7 +1151,7 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) 
 		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 
-	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   "1",
@@ -1429,7 +1179,7 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 	e := newTestEngineWithSpotFundsPnlBounds(t)
 	ctx := context.Background()
 
-	engBefore := e.eng
+	asyncBefore := e.async
 	if _, err := e.ConfigurePolicy(
 		ctx,
 		domain.PolicySpotFundsPnlBoundsKillSwitch,
@@ -1437,13 +1187,13 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 	); err != nil {
 		t.Fatalf("ConfigurePolicy clear spot funds pnl bounds: %v", err)
 	}
-	if e.eng != engBefore {
+	if e.async != asyncBefore {
 		t.Fatal("ConfigurePolicy replaced engine handle, want online reconfigure")
 	}
 
 	feeOrder := testOrder()
 	feeOrder.AmountValue = "1"
-	submitted, err := e.SubmitOrder(ctx, feeOrder)
+	submitted, err := materializeOrderResult(e, feeOrder)
 	if err != nil {
 		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
@@ -1451,7 +1201,7 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 
-	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   "1",
@@ -1531,17 +1281,16 @@ func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 // block state.
 func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) ExecutionReportResult {
 	t.Helper()
-	ctx := context.Background()
 	order := testOrder()
 	order.AmountValue = "1"
-	submitted, err := e.SubmitOrder(ctx, order)
+	submitted, err := materializeOrderResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
 	if !submitted.Accepted {
 		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
-	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   "1",
@@ -1612,9 +1361,8 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierReportsLivePnlBlock(
 // durable lock and the canonical settlement inputs a later report needs.
 func TestSubmitOrder_AcceptCapturesSettlement(t *testing.T) {
 	e := newTestEngine(t)
-	ctx := context.Background()
 
-	res, err := e.SubmitOrder(ctx, testOrder())
+	res, err := materializeOrderResult(e, testOrder())
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -1670,7 +1418,7 @@ func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T
 
 	order := testOrder()
 	order.DropCopy = true
-	result, err := e.SubmitOrder(context.Background(), order)
+	result, err := materializeOrderResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitOrder(drop copy): %v", err)
 	}
@@ -1695,7 +1443,7 @@ func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T
 	}
 
 	ordinary := testOrder()
-	ordinaryResult, err := e.SubmitOrder(context.Background(), ordinary)
+	ordinaryResult, err := materializeOrderResult(e, ordinary)
 	if err != nil {
 		t.Fatalf("SubmitOrder(ordinary): %v", err)
 	}
@@ -1712,16 +1460,10 @@ func TestSubmitOrder_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 	// A PnL barrier must be configured for a halted PnL state to matter.
 	e := newTestEngineWithSpotFundsPnlBounds(t)
 	ctx := context.Background()
-	var setupBlocks []domain.AccountBlock
-	if err := e.RunAccountSynchronized(
-		ctx, testAccount, func(lane engine.AccountLane) error {
-			var err error
-			setupBlocks, err = lane.SetAccountPnlState(
-				ctx, testAccount, "", domain.PnlHaltReasonMissingFx,
-			)
-			return err
-		},
-	); err != nil {
+	setupBlocks, err := setTestAccountPnlState(
+		ctx, e, "", domain.PnlHaltReasonMissingFx,
+	)
+	if err != nil {
 		t.Fatalf("SetAccountPnlState: %v", err)
 	}
 	// The precondition remains the live registry state. The historical
@@ -1733,7 +1475,7 @@ func TestSubmitOrder_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 
 	order := testOrder()
 	order.DropCopy = true
-	result, err := e.SubmitOrder(ctx, order)
+	result, err := materializeOrderResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitOrder(drop copy): %v", err)
 	}
@@ -1763,16 +1505,10 @@ func TestSubmitImmediate_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 	// A PnL barrier must be configured for a halted PnL state to matter.
 	e := newTestEngineWithSpotFundsPnlBounds(t)
 	ctx := context.Background()
-	var setupBlocks []domain.AccountBlock
-	if err := e.RunAccountSynchronized(
-		ctx, testAccount, func(lane engine.AccountLane) error {
-			var err error
-			setupBlocks, err = lane.SetAccountPnlState(
-				ctx, testAccount, "", domain.PnlHaltReasonMissingFx,
-			)
-			return err
-		},
-	); err != nil {
+	setupBlocks, err := setTestAccountPnlState(
+		ctx, e, "", domain.PnlHaltReasonMissingFx,
+	)
+	if err != nil {
 		t.Fatalf("SetAccountPnlState: %v", err)
 	}
 	if len(setupBlocks) != 1 {
@@ -1781,7 +1517,7 @@ func TestSubmitImmediate_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 
 	order := testOrder()
 	order.DropCopy = true
-	result, err := e.SubmitImmediate(ctx, order)
+	result, err := materializeImmediateResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitImmediate(drop copy): %v", err)
 	}
@@ -1805,13 +1541,12 @@ func TestSubmitImmediate_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 
 func TestSubmitOrder_DropCopyVolumeDoesNotDeriveQuantity(t *testing.T) {
 	e := newTestEngine(t)
-	ctx := context.Background()
 	order := testOrder()
 	order.DropCopy = true
 	order.AmountKind = domain.OrderAmountKindVolume
 	order.AmountValue = "500.00"
 
-	res, err := e.SubmitOrder(ctx, order)
+	res, err := materializeOrderResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -1831,7 +1566,7 @@ func TestSubmitOrder_DropCopyVolumeAtZeroPriceLeavesBaseInflowEmpty(t *testing.T
 	order.AmountValue = "500"
 	order.Price = "0"
 
-	result, err := e.SubmitOrder(context.Background(), order)
+	result, err := materializeOrderResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitOrder(drop-copy volume at zero price): %v", err)
 	}
@@ -1858,7 +1593,7 @@ func TestSubmitOrder_UnpricedVolumeDoesNotInventReject(t *testing.T) {
 	order.AmountValue = "500"
 	order.Price = ""
 
-	res, err := e.SubmitOrder(context.Background(), order)
+	res, err := materializeOrderResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -1874,7 +1609,7 @@ func TestSubmitImmediate_UnpricedVolumeWithoutLockIsInvalid(t *testing.T) {
 	order.AmountValue = "500"
 	order.Price = ""
 
-	_, err := e.SubmitImmediate(context.Background(), order)
+	_, err := materializeImmediateResult(e, order)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("SubmitImmediate(volume without price) = %v, want ErrInvalid", err)
 	}
@@ -1887,7 +1622,7 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		order.AmountKind = domain.OrderAmountKindVolume
 		order.AmountValue = "500"
 
-		result, err := e.SubmitImmediate(context.Background(), order)
+		result, err := materializeImmediateResult(e, order)
 		if err != nil {
 			t.Fatalf("SubmitImmediate(volume limit): %v", err)
 		}
@@ -1912,7 +1647,7 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		order.AmountValue = "500"
 		order.Price = "0"
 
-		result, err := e.SubmitImmediate(context.Background(), order)
+		result, err := materializeImmediateResult(e, order)
 		if err != nil {
 			t.Fatalf("SubmitImmediate(volume at zero price): %v", err)
 		}
@@ -1937,7 +1672,7 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		order.AmountValue = "500"
 		order.Price = ""
 
-		result, err := e.SubmitImmediate(context.Background(), order)
+		result, err := materializeImmediateResult(e, order)
 		if err != nil {
 			t.Fatalf("SubmitImmediate(volume market): %v", err)
 		}
@@ -2067,7 +1802,7 @@ func TestSubmitImmediate_DropCopyVolumeUsesEngineDelta(t *testing.T) {
 	order.AmountKind = domain.OrderAmountKindVolume
 	order.AmountValue = "500"
 
-	result, err := e.SubmitImmediate(context.Background(), order)
+	result, err := materializeImmediateResult(e, order)
 	if err != nil {
 		t.Fatalf("SubmitImmediate(drop-copy volume): %v", err)
 	}
@@ -2095,168 +1830,5 @@ func TestImmediateTradePrice_UsesRequestOrMarketLock(t *testing.T) {
 
 	if _, err := immediateTradePrice(domain.Order{}, ""); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("market trade price without lock = %v, want ErrInvalid", err)
-	}
-}
-
-// TestRunAccountSynchronized_SerializesSameAccount drives the real SDK account
-// lane (not a fake global mutex): two goroutines submit work for the same
-// account through RunAccountSynchronized concurrently, and the test asserts the
-// lane never runs both callbacks at once. A callback that observed a sibling
-// already inside the lane would flip overlap; the lane's per-account ordering
-// keeps the increments race-free without any additional lock in the callback.
-func TestRunAccountSynchronized_SerializesSameAccount(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	const goroutines = 8
-	const iterations = 50
-
-	var (
-		active  int
-		overlap bool
-		counter int
-		guard   sync.Mutex
-	)
-	// The callback intentionally reads-modifies-writes counter without a lock: if
-	// the lane serializes, no data race occurs and the final value is exact.
-	work := func(AccountLane) error {
-		guard.Lock()
-		active++
-		if active > 1 {
-			overlap = true
-		}
-		guard.Unlock()
-
-		v := counter
-		time.Sleep(time.Millisecond)
-		counter = v + 1
-
-		guard.Lock()
-		active--
-		guard.Unlock()
-		return nil
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for g := 0; g < goroutines; g++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < iterations; i++ {
-				if err := e.RunAccountSynchronized(
-					ctx, domain.AccountID(testAccount), work,
-				); err != nil {
-					t.Errorf("RunAccountSynchronized: %v", err)
-					return
-				}
-			}
-		}()
-	}
-	wg.Wait()
-
-	if overlap {
-		t.Fatal("account lane ran two callbacks concurrently for one account")
-	}
-	if want := goroutines * iterations; counter != want {
-		t.Fatalf("counter = %d, want %d (lane did not serialize increments)", counter, want)
-	}
-}
-
-func TestRunAccountSynchronized_CancellationWaitsForStartedCallback(t *testing.T) {
-	e := newTestEngine(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- e.RunAccountSynchronized(ctx, testAccount, func(AccountLane) error {
-			close(entered)
-			<-release
-			return nil
-		})
-	}()
-	<-entered
-	cancel()
-	select {
-	case err := <-done:
-		t.Fatalf("RunAccountSynchronized returned while callback was running: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("RunAccountSynchronized after callback completion: %v", err)
-	}
-}
-
-func TestRunAccountSynchronized_CancellationWaitsForQueuedCallback(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-	firstEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- e.RunAccountSynchronized(ctx, testAccount, func(AccountLane) error {
-			close(firstEntered)
-			<-releaseFirst
-			return nil
-		})
-	}()
-	<-firstEntered
-
-	queuedCtx, cancel := context.WithCancel(ctx)
-	callStarted := make(chan struct{})
-	callbackStarted := make(chan struct{})
-	queuedDone := make(chan error, 1)
-	go func() {
-		close(callStarted)
-		queuedDone <- e.RunAccountSynchronized(
-			queuedCtx, testAccount, func(AccountLane) error {
-				close(callbackStarted)
-				return nil
-			},
-		)
-	}()
-	<-callStarted
-	// The first callback keeps the account worker occupied while the second call
-	// reaches AsyncEngine.Submit and waits in its queue.
-	time.Sleep(100 * time.Millisecond)
-	cancel()
-	select {
-	case err := <-queuedDone:
-		t.Fatalf("queued callback released its caller gate on cancellation: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(releaseFirst)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first RunAccountSynchronized: %v", err)
-	}
-	select {
-	case <-callbackStarted:
-	case <-time.After(time.Second):
-		t.Fatal("accepted queued callback did not run")
-	}
-	if err := <-queuedDone; err != nil {
-		t.Fatalf("queued RunAccountSynchronized after callback completion: %v", err)
-	}
-}
-
-// TestRunAccountSynchronized_RejectsUnknownAccount proves the real lane resolves
-// the account before entering the callback: an account the resolver does not
-// know rejects with domain.ErrInvalid and the callback never runs, which is the
-// seam the node's pre-lane auto-create/rebuild exists to satisfy.
-func TestRunAccountSynchronized_RejectsUnknownAccount(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	ran := false
-	err := e.RunAccountSynchronized(ctx, "unknown-account", func(AccountLane) error {
-		ran = true
-		return nil
-	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("RunAccountSynchronized(unknown) error = %v, want ErrInvalid", err)
-	}
-	if ran {
-		t.Fatal("callback ran for an account the resolver does not know")
 	}
 }

@@ -99,54 +99,6 @@ func assertInternalAssetFailureUnclassified(
 	}
 }
 
-type engineWithoutDictionaryResolver struct {
-	engine.Engine
-}
-
-type assetMutationProbeRealm struct {
-	store.RealmStore
-	createCalls int
-	updateCalls int
-}
-
-func (r *assetMutationProbeRealm) CreateAsset(
-	ctx context.Context, asset domain.Asset,
-) (domain.Asset, error) {
-	r.createCalls++
-	return r.RealmStore.CreateAsset(ctx, asset)
-}
-
-func (r *assetMutationProbeRealm) UpdateAsset(
-	ctx context.Context, oldCode string, asset domain.Asset,
-) (domain.Asset, error) {
-	r.updateCalls++
-	return r.RealmStore.UpdateAsset(ctx, oldCode, asset)
-}
-
-func newResolverCapabilityTestNode(t *testing.T, st store.Store) *localNode {
-	t.Helper()
-	eng := newFakeEngine()
-	var captured engine.Snapshot
-	build := fakeBuild(eng, &captured)
-	n, _, err := NewLocalNode(
-		context.Background(),
-		st,
-		func(snapshot engine.Snapshot) (engine.Engine, error) {
-			built, buildErr := build(snapshot)
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			return engineWithoutDictionaryResolver{Engine: built}, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewLocalNode: %v", err)
-	}
-	local := n.(*localNode)
-	seedTestPrincipal(t, local)
-	return local
-}
-
 func TestInternalPostCommitNodeMutationFailureIsTerminalToDomainErrorsIs(
 	t *testing.T,
 ) {
@@ -282,81 +234,6 @@ func TestInternalPostCommitNodeMutationFailureHasNoErrorsAsTraversal(
 	var target domain.CurrencyChangeBlockedError
 	if errors.As(err, &target) {
 		t.Fatalf("post-commit error = %v, must terminate errors.As traversal", err)
-	}
-}
-
-func TestLocalNode_CreateAssetChecksResolverCapabilityBeforeStoreWrite(
-	t *testing.T,
-) {
-	t.Parallel()
-	ctx := context.Background()
-	base := newMemoryStore("asset-create-capability.db")
-	var probe *assetMutationProbeRealm
-	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
-		probe = &assetMutationProbeRealm{RealmStore: realm}
-		return probe
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	n := newResolverCapabilityTestNode(t, st)
-	if probe == nil {
-		t.Fatal("asset mutation probe was not installed")
-	}
-	probe.createCalls = 0
-
-	_, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller)
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		t.Fatalf("CreateAsset = %v, want ErrNotImplemented", err)
-	}
-	if probe.createCalls != 0 {
-		t.Fatalf("CreateAsset store calls = %d, want 0", probe.createCalls)
-	}
-}
-
-func TestLocalNode_RenameAssetChecksResolverCapabilityBeforeStoreWrite(
-	t *testing.T,
-) {
-	t.Parallel()
-	ctx := context.Background()
-	base := newMemoryStore("asset-rename-capability.db")
-	if err := base.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	seedRealm, err := base.ForRealm(ctx, domain.DefaultRealm)
-	if err != nil {
-		t.Fatalf("ForRealm: %v", err)
-	}
-	if _, err := seedRealm.CreateAsset(
-		ctx,
-		domain.Asset{Code: "GOLD"},
-	); err != nil {
-		t.Fatalf("seed CreateAsset: %v", err)
-	}
-	var probe *assetMutationProbeRealm
-	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
-		probe = &assetMutationProbeRealm{RealmStore: realm}
-		return probe
-	})
-	t.Cleanup(func() { _ = st.Close() })
-	n := newResolverCapabilityTestNode(t, st)
-	if probe == nil {
-		t.Fatal("asset mutation probe was not installed")
-	}
-	probe.updateCalls = 0
-
-	_, err = n.UpdateAsset(
-		ctx,
-		"GOLD",
-		domain.Asset{Code: "GOLDX"},
-		testCaller,
-	)
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		t.Fatalf("UpdateAsset rename = %v, want ErrNotImplemented", err)
-	}
-	if probe.updateCalls != 0 {
-		t.Fatalf("UpdateAsset store calls = %d, want 0", probe.updateCalls)
 	}
 }
 

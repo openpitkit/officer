@@ -58,14 +58,7 @@ func (n *localNode) CreateAsset(
 	}
 	defer n.endLiveIdentityPublication()
 
-	// Deliberately checked before the store write: no point persisting an
-	// asset the engine cannot publish. This also means a missing resolver
-	// capability now surfaces as ErrNotImplemented ahead of the store's own
-	// duplicate-code ErrAlreadyExists.
-	resolver, err := requireDictionaryResolver(n.currentEngine())
-	if err != nil {
-		return domain.Asset{}, err
-	}
+	resolver := n.currentEngine()
 	created, err := n.realm.CreateAsset(ctx, asset)
 	if err != nil {
 		return domain.Asset{}, fmt.Errorf("create asset: %w", err)
@@ -151,13 +144,7 @@ func (n *localNode) renameAsset(
 	if !ok {
 		return domain.Asset{}, fmt.Errorf("asset %q: %w", oldCode, domain.ErrNotFound)
 	}
-	// Same deliberate precedence as CreateAsset: checked ahead of the store
-	// write, so a missing resolver capability surfaces as ErrNotImplemented
-	// ahead of the store's own duplicate-code ErrAlreadyExists.
-	resolver, err := requireDictionaryResolver(n.currentEngine())
-	if err != nil {
-		return domain.Asset{}, err
-	}
+	resolver := n.currentEngine()
 
 	durableCtx := context.WithoutCancel(ctx)
 	updated, err := n.realm.UpdateAsset(durableCtx, oldCode, asset)
@@ -235,10 +222,7 @@ func (n *localNode) DeleteAsset(
 		if !ok {
 			return fmt.Errorf("asset %q: %w", code, domain.ErrNotFound)
 		}
-		resolver, err := requireDictionaryResolver(n.currentEngine())
-		if err != nil {
-			return err
-		}
+		resolver := n.currentEngine()
 		if err := ctx.Err(); err != nil {
 			return err
 		}

@@ -140,20 +140,6 @@ func (r idResolver) accountAlias(id param.AccountID) (domain.AccountID, error) {
 	return code, nil
 }
 
-func (r idResolver) accountIDSnapshot() map[domain.AccountID]param.AccountID {
-	if r.shared == nil {
-		return map[domain.AccountID]param.AccountID{}
-	}
-	r.shared.mu.RLock()
-	defer r.shared.mu.RUnlock()
-
-	accounts := make(map[domain.AccountID]param.AccountID, len(r.shared.accounts))
-	for alias, id := range r.shared.accounts {
-		accounts[alias] = id
-	}
-	return accounts
-}
-
 // asset resolves a human asset code to the immutable ready asset held by the
 // adapter. An unknown code is caller input and therefore wraps domain.ErrInvalid.
 func (r idResolver) asset(code string) (param.Asset, error) {
@@ -1699,7 +1685,7 @@ func executionReportFromAccount(
 		fill.SetFee(commission)
 	}
 	if leaves != nil {
-		fill.SetLeavesQuantity(*leaves)
+		fill.SetRemainingReservedQuantity(*leaves)
 	}
 	fill.SetIsFinal(isFinal)
 	if lockBytes != nil {

@@ -21,14 +21,1422 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"maps"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	openpit "go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/accounts"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/configure"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/pretrade/policies"
+	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
+
+var fakeOrderAsyncEngines sync.Map
+
+type fakeOrderAsyncRuntime struct {
+	async  *asyncengine.AsyncEngine
+	driver asyncengine.Driver
+}
+
+type fakeOrderChainDriver struct {
+	owner   *fakeEngine
+	admin   asyncengine.Driver
+	trading asyncengine.Driver
+}
+
+type persistedAccountMismatchRealm struct {
+	store.RealmStore
+}
+
+func (s *persistedAccountMismatchRealm) RecordOrderSubmission(
+	ctx context.Context,
+	o domain.Order,
+	submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+) (domain.Order, error) {
+	return s.RealmStore.RecordOrderSubmission(
+		ctx,
+		o,
+		submitted,
+		func(persisted domain.Order) (domain.OrderSettlement, error) {
+			persisted.Account = "acc-2"
+			return apply(persisted)
+		},
+	)
+}
+
+func newPersistedAccountMismatchNode(
+	t *testing.T,
+) (*localNode, *fakeEngine) {
+	t.Helper()
+	st := newRealmWrapStore(
+		newMemoryStore("persisted-account-mismatch.db"),
+		func(realm store.RealmStore) store.RealmStore {
+			return &persistedAccountMismatchRealm{RealmStore: realm}
+		},
+	)
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	eng := newFakeEngine()
+	return newTestNodeWithStore(t, st, eng), eng
+}
+
+func persistedAccountMismatchOrder(dropCopy bool) domain.Order {
+	return domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+		DropCopy:    dropCopy,
+	}
+}
+
+func fakeStoredLock(t *testing.T) []byte {
+	t.Helper()
+	payload, err := pretrade.NewLock().MarshalMsgpack()
+	if err != nil {
+		t.Fatalf("marshal fake stored lock: %v", err)
+	}
+	return payload
+}
+
+func (e *fakeEngine) AsyncEngine() *asyncengine.AsyncEngine {
+	if existing, ok := fakeOrderAsyncEngines.Load(e); ok {
+		return existing.(*fakeOrderAsyncRuntime).async
+	}
+	admin, err := openpit.NewEngineBuilder().
+		AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		panic(fmt.Sprintf("build fake administrative engine: %v", err))
+	}
+	trading, err := openpit.NewEngineBuilder().
+		AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		Build()
+	if err != nil {
+		admin.Stop()
+		panic(fmt.Sprintf("build fake trading engine: %v", err))
+	}
+	if err := e.seedAdministrativeDriver(admin); err != nil {
+		admin.Stop()
+		trading.Stop()
+		panic(fmt.Sprintf("seed fake administrative engine: %v", err))
+	}
+	async, err := asyncengine.NewBuilder(
+		&fakeOrderChainDriver{owner: e, admin: admin, trading: trading},
+	).WithStopUnderlying(func() {
+		admin.Stop()
+		trading.Stop()
+	}).Dynamic().MaxQueues(0).Build()
+	if err != nil {
+		panic(fmt.Sprintf("build fake order async engine: %v", err))
+	}
+	runtime := &fakeOrderAsyncRuntime{async: async, driver: admin}
+	actual, loaded := fakeOrderAsyncEngines.LoadOrStore(e, runtime)
+	if loaded {
+		_ = async.StopGraceful(context.Background())
+		return actual.(*fakeOrderAsyncRuntime).async
+	}
+	return async
+}
+
+func (e *fakeEngine) administrativeDriver() asyncengine.Driver {
+	e.AsyncEngine()
+	runtime, ok := fakeOrderAsyncEngines.Load(e)
+	if !ok {
+		panic("fake administrative driver was not initialized")
+	}
+	return runtime.(*fakeOrderAsyncRuntime).driver
+}
+
+func stopFakeAdministrativeDriver(t *testing.T, eng *fakeEngine) {
+	t.Helper()
+	driver, ok := eng.administrativeDriver().(*openpit.Engine)
+	if !ok {
+		t.Fatalf("administrative driver type = %T, want *openpit.Engine", driver)
+	}
+	driver.Stop()
+}
+
+func assertFakeAccountGroup(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+	group string,
+) {
+	t.Helper()
+	accountID, err := eng.AccountID(account)
+	if err != nil {
+		t.Fatalf("AccountID(%s): %v", account, err)
+	}
+	got, ok := eng.administrativeDriver().Accounts().GroupOf(accountID).Get()
+	if group == "" {
+		if ok {
+			t.Fatalf("GroupOf(%s) = %v, want no group", account, got)
+		}
+		return
+	}
+	want, err := eng.ResolveGroup(group)
+	if err != nil {
+		t.Fatalf("ResolveGroup(%s): %v", group, err)
+	}
+	if !ok || got != want {
+		t.Fatalf(
+			"GroupOf(%s) = (%v, %v), want (%v, true)",
+			account,
+			got,
+			ok,
+			want,
+		)
+	}
+}
+
+func assertFakeOrderBlock(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+	wantBlocked bool,
+	wantReason string,
+) {
+	t.Helper()
+	order, err := eng.OrderModel(domain.Order{
+		Account:     account,
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "100",
+	})
+	if err != nil {
+		t.Fatalf("OrderModel(%s): %v", account, err)
+	}
+	request, rejects, err := eng.administrativeDriver().StartPreTrade(order)
+	if request != nil {
+		request.Close()
+	}
+	if err != nil {
+		t.Fatalf("StartPreTrade(%s): %v", account, err)
+	}
+	if !wantBlocked {
+		if len(rejects) != 0 {
+			t.Fatalf("StartPreTrade(%s) rejects = %+v, want none", account, rejects)
+		}
+		return
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeAccountBlocked {
+		t.Fatalf(
+			"StartPreTrade(%s) rejects = %+v, want account block",
+			account,
+			rejects,
+		)
+	}
+	if rejects[0].Reason != wantReason {
+		t.Fatalf(
+			"StartPreTrade(%s) block reason = %q, want %q",
+			account,
+			rejects[0].Reason,
+			wantReason,
+		)
+	}
+}
+
+func assertFakeEffectiveCurrency(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+	want string,
+) {
+	t.Helper()
+	driver := eng.administrativeDriver()
+	accountID, err := eng.AccountID(account)
+	if err != nil {
+		t.Fatalf("AccountID(%s): %v", account, err)
+	}
+	currency, err := eng.ResolveAsset(want)
+	if err != nil {
+		t.Fatalf("ResolveAsset(%s): %v", want, err)
+	}
+	wasBlocked := fakeAdministrativeAccountBlocked(t, eng, account)
+	previous := fakeAccountPnlState(t, eng, account)
+	pnl, err := param.NewPnlFromString("-150")
+	if err != nil {
+		t.Fatalf("NewPnlFromString: %v", err)
+	}
+	if _, err := driver.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		accountID,
+		model.NewPnlState(pnl),
+	); err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl(%s): %v", account, err)
+	}
+	probeBlocked := false
+	defer func() {
+		restoreFakeCurrencyProbe(
+			t, driver, accountID, previous, wasBlocked, probeBlocked,
+		)
+	}()
+	lowerBound, err := param.NewPnlFromString("-100")
+	if err != nil {
+		t.Fatalf("NewPnlFromString: %v", err)
+	}
+	barrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   currency,
+		LowerBound: optional.Some(lowerBound),
+	}
+	outcomes, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
+		nil,
+		[]policies.SpotFundsPnlBoundsAccountBarrier{{
+			AccountID: accountID,
+			Barrier:   barrier,
+		}},
+	)
+	if err != nil {
+		t.Fatalf("SpotFundsPnlBoundsKillSwitch(%s): %v", account, err)
+	}
+	probeBlocked = len(outcomes.AccountBlocks) != 0
+	if len(outcomes.AccountBlocks) != 1 ||
+		outcomes.AccountBlocks[0].AccountID != accountID ||
+		outcomes.AccountBlocks[0].Block.Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf(
+			"effective currency probe for %s = %+v, want %s P&L block",
+			account,
+			outcomes.AccountBlocks,
+			want,
+		)
+	}
+}
+
+func fakeAdministrativeAccountBlocked(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+) bool {
+	t.Helper()
+	accountID, err := eng.AccountID(account)
+	if err != nil {
+		t.Fatalf("AccountID(%s): %v", account, err)
+	}
+	base, _ := param.NewAsset("PROBE_BASE")
+	quote, _ := param.NewAsset("PROBE_QUOTE")
+	quantity, _ := param.NewQuantityFromString("1")
+	price, _ := param.NewPriceFromString("1")
+	order := model.NewOrder()
+	operation := order.EnsureOperationView()
+	operation.SetInstrument(param.NewInstrument(base, quote))
+	operation.SetAccountID(accountID)
+	operation.SetSide(param.SideBuy)
+	operation.SetTradeAmount(param.NewQuantityTradeAmount(quantity))
+	operation.SetPrice(price)
+	request, rejects, err := eng.administrativeDriver().StartPreTrade(order)
+	if request != nil {
+		request.Close()
+	}
+	if err != nil {
+		t.Fatalf("StartPreTrade(%s): %v", account, err)
+	}
+	for _, item := range rejects {
+		if item.Code == reject.CodeAccountBlocked {
+			return true
+		}
+	}
+	return false
+}
+
+func fakeAccountPnlState(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+) model.PnlState {
+	t.Helper()
+	eng.stateMu.Lock()
+	state, ok := eng.accountPnlStates[account]
+	eng.stateMu.Unlock()
+	if ok {
+		return state
+	}
+	zero, err := param.NewPnlFromString("0")
+	if err != nil {
+		t.Fatalf("NewPnlFromString(0): %v", err)
+	}
+	return model.NewPnlState(zero)
+}
+
+func restoreFakeCurrencyProbe(
+	t *testing.T,
+	driver asyncengine.Driver,
+	account param.AccountID,
+	previous model.PnlState,
+	wasBlocked bool,
+	probeBlocked bool,
+) {
+	t.Helper()
+	if _, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
+		nil,
+		[]policies.SpotFundsPnlBoundsAccountBarrier{},
+	); err != nil {
+		t.Errorf("clear currency probe barrier: %v", err)
+	}
+	if _, err := driver.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		account,
+		previous,
+	); err != nil {
+		t.Errorf("restore currency probe P&L: %v", err)
+	}
+	if probeBlocked && !wasBlocked {
+		driver.Accounts().Unblock(account)
+	}
+}
+
+func assertFakeAccountPnl(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+	currencyCode string,
+	want string,
+) {
+	t.Helper()
+	driver := eng.administrativeDriver()
+	accountID, err := eng.AccountID(account)
+	if err != nil {
+		t.Fatalf("AccountID(%s): %v", account, err)
+	}
+	currency, err := eng.ResolveAsset(currencyCode)
+	if err != nil {
+		t.Fatalf("ResolveAsset(%s): %v", currencyCode, err)
+	}
+	pnl, err := param.NewPnlFromString(want)
+	if err != nil {
+		t.Fatalf("NewPnlFromString(%s): %v", want, err)
+	}
+	barrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   currency,
+		LowerBound: optional.Some(pnl),
+		UpperBound: optional.Some(pnl),
+	}
+	wasBlocked := fakeAdministrativeAccountBlocked(t, eng, account)
+	outcomes, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
+		nil,
+		[]policies.SpotFundsPnlBoundsAccountBarrier{{
+			AccountID: accountID,
+			Barrier:   barrier,
+		}},
+	)
+	if err != nil {
+		t.Fatalf("probe account P&L for %s: %v", account, err)
+	}
+	if _, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
+		nil,
+		[]policies.SpotFundsPnlBoundsAccountBarrier{},
+	); err != nil {
+		t.Fatalf("clear account P&L probe: %v", err)
+	}
+	if len(outcomes.AccountBlocks) != 0 {
+		if !wasBlocked {
+			driver.Accounts().Unblock(accountID)
+		}
+		t.Fatalf(
+			"account P&L probe for %s = %+v, want exact %s %s",
+			account,
+			outcomes.AccountBlocks,
+			want,
+			currencyCode,
+		)
+	}
+}
+
+func assertFakeBalances(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+	assetCode string,
+	wantBalance string,
+	wantHeld string,
+	wantIncoming string,
+) {
+	t.Helper()
+	accountID, err := eng.AccountID(account)
+	if err != nil {
+		t.Fatalf("AccountID(%s): %v", account, err)
+	}
+	asset, err := eng.ResolveAsset(assetCode)
+	if err != nil {
+		t.Fatalf("ResolveAsset(%s): %v", assetCode, err)
+	}
+	zero, err := param.NewPositionSizeFromString("0")
+	if err != nil {
+		t.Fatalf("NewPositionSizeFromString(0): %v", err)
+	}
+	delta := param.NewDeltaAdjustmentAmount(zero)
+	adjustment, err := model.NewAccountAdjustmentFromValues(
+		model.AccountAdjustmentValues{
+			BalanceOperation: optional.Some(
+				model.NewAccountAdjustmentBalanceOperationFromValues(
+					model.AccountAdjustmentBalanceOperationValues{
+						Asset: optional.Some(asset),
+					},
+				),
+			),
+			Amount: optional.Some(
+				model.NewAccountAdjustmentAmountFromValues(
+					model.AccountAdjustmentAmountValues{
+						Balance:  optional.Some(delta),
+						Held:     optional.Some(delta),
+						Incoming: optional.Some(delta),
+					},
+				),
+			),
+		},
+	)
+	if err != nil {
+		t.Fatalf("build balance probe: %v", err)
+	}
+	result, err := eng.administrativeDriver().ApplyAccountAdjustment(
+		accountID,
+		[]model.AccountAdjustment{adjustment},
+	)
+	if err != nil {
+		t.Fatalf("apply balance probe: %v", err)
+	}
+	if batchErr, ok := result.BatchError.Get(); ok {
+		t.Fatalf("balance probe rejected: %+v", batchErr)
+	}
+	for _, outcome := range result.Outcomes {
+		if outcome.Entry.Asset.String() != asset.String() {
+			continue
+		}
+		assertFakeOutcomeAmount(
+			t, "balance", outcome.Entry.Balance, wantBalance,
+		)
+		assertFakeOutcomeAmount(t, "held", outcome.Entry.Held, wantHeld)
+		assertFakeOutcomeAmount(
+			t, "incoming", outcome.Entry.Incoming, wantIncoming,
+		)
+		return
+	}
+	t.Fatalf(
+		"balance probe outcomes = %+v, want asset %s",
+		result.Outcomes,
+		assetCode,
+	)
+}
+
+func assertFakeOutcomeAmount(
+	t *testing.T,
+	field string,
+	got optional.Option[accountadjustment.OutcomeAmount],
+	want string,
+) {
+	t.Helper()
+	value, ok := got.Get()
+	if !ok || value.Absolute.String() != want {
+		t.Fatalf(
+			"balance probe %s = (%v, %v), want %s",
+			field,
+			value.Absolute,
+			ok,
+			want,
+		)
+	}
+}
+
+func assertFakeNoEffectiveCurrency(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+	probeCurrency string,
+) {
+	t.Helper()
+	driver := eng.administrativeDriver()
+	accountID, err := eng.AccountID(account)
+	if err != nil {
+		t.Fatalf("AccountID(%s): %v", account, err)
+	}
+	currency, err := eng.ResolveAsset(probeCurrency)
+	if err != nil {
+		t.Fatalf("ResolveAsset(%s): %v", probeCurrency, err)
+	}
+	wasBlocked := fakeAdministrativeAccountBlocked(t, eng, account)
+	previous := fakeAccountPnlState(t, eng, account)
+	pnl, _ := param.NewPnlFromString("-150")
+	if _, err := driver.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		accountID,
+		model.NewPnlState(pnl),
+	); err != nil {
+		t.Fatalf("seed no-currency probe P&L: %v", err)
+	}
+	probeBlocked := false
+	defer func() {
+		if _, clearErr := driver.Configure().SpotFundsPnlBoundsKillSwitch(
+			policies.SpotFundsPolicyName,
+			optional.Some[*policies.SpotFundsPnlBoundsBarrier](nil),
+			nil,
+			nil,
+		); clearErr != nil {
+			t.Errorf("clear no-currency probe barrier: %v", clearErr)
+		}
+		if _, restoreErr := driver.Configure().SetSpotFundsAccountPnl(
+			policies.SpotFundsPolicyName,
+			accountID,
+			previous,
+		); restoreErr != nil {
+			t.Errorf("restore no-currency probe P&L: %v", restoreErr)
+		}
+		if probeBlocked && !wasBlocked {
+			driver.Accounts().Unblock(accountID)
+		}
+	}()
+	lower, _ := param.NewPnlFromString("-100")
+	barrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   currency,
+		LowerBound: optional.Some(lower),
+	}
+	outcomes, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		optional.Some(&barrier),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("probe absent effective currency: %v", err)
+	}
+	probeBlocked = len(outcomes.AccountBlocks) != 0
+	if len(outcomes.AccountBlocks) != 1 ||
+		outcomes.AccountBlocks[0].AccountID != accountID {
+		t.Fatalf(
+			"no-currency probe for %s = %+v, want one fallback block",
+			account,
+			outcomes.AccountBlocks,
+		)
+	}
+}
+
+func TestAssertFakeEffectiveCurrencyRestoresPnl(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	const account domain.AccountID = "probe"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:     account,
+		Currency: "USD",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	accountID, err := eng.AccountID(account)
+	if err != nil {
+		t.Fatalf("AccountID(%s): %v", account, err)
+	}
+	pnl, _ := param.NewPnlFromString("5")
+	result, err := eng.administrativeDriver().Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		accountID,
+		model.NewPnlState(pnl),
+	)
+	if err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl: %v", err)
+	}
+	if _, err := eng.AppliedSpotFundsAccountPnl(account, "5", "", result); err != nil {
+		t.Fatalf("AppliedSpotFundsAccountPnl: %v", err)
+	}
+	assertFakeEffectiveCurrency(t, eng, account, "USD")
+	assertFakeAccountPnl(t, eng, account, "USD", "5")
+}
+
+func (e *fakeEngine) seedAdministrativeDriver(driver asyncengine.Driver) error {
+	e.resolverMu.RLock()
+	accountIDs := maps.Clone(e.accountResolverIDs)
+	groupIDs := maps.Clone(e.groupResolverIDs)
+	accountGroups := maps.Clone(e.accountGroups)
+	e.resolverMu.RUnlock()
+
+	admin := driver.Accounts()
+	for code, groupCode := range accountGroups {
+		if groupCode == "" {
+			continue
+		}
+		account, err := fakeAdministrativeAccountID(code, accountIDs)
+		if err != nil {
+			return err
+		}
+		group, err := fakeAdministrativeGroupID(groupCode, groupIDs)
+		if err != nil {
+			return err
+		}
+		if err := admin.RegisterGroup([]param.AccountID{account}, group); err != nil {
+			return fmt.Errorf("register account %q with group %q: %w", code, groupCode, err)
+		}
+	}
+	return nil
+}
+
+func fakeAdministrativeAccountID(
+	code domain.AccountID,
+	ids map[domain.AccountID]domain.EngineAccountID,
+) (param.AccountID, error) {
+	id, ok := ids[code]
+	if !ok {
+		return param.AccountID{}, fmt.Errorf("account %q has no fake engine id", code)
+	}
+	return param.NewAccountIDFromUint64(id.Uint64()), nil
+}
+
+func fakeAdministrativeGroupID(
+	code string,
+	ids map[string]domain.EngineGroupID,
+) (param.AccountGroupID, error) {
+	if code == "" {
+		return param.DefaultAccountGroup, nil
+	}
+	id, ok := ids[code]
+	if !ok {
+		return param.AccountGroupID{}, fmt.Errorf("group %q has no fake engine id", code)
+	}
+	return param.NewAccountGroupIDFromUint32(id.Uint32())
+}
+
+func (d *fakeOrderChainDriver) StartPreTrade(
+	order model.Order,
+) (*pretrade.Request, []reject.Reject, error) {
+	return d.trading.StartPreTrade(order)
+}
+
+func (d *fakeOrderChainDriver) ExecutePreTrade(
+	order model.Order,
+) (*pretrade.Reservation, []reject.Reject, error) {
+	if d.owner.failSubmit {
+		return nil, nil, errors.New("submit failed")
+	}
+	if d.owner.submitReject != nil {
+		return nil, []reject.Reject{{}}, nil
+	}
+	return d.trading.ExecutePreTrade(order)
+}
+
+func (d *fakeOrderChainDriver) ExecutePreTradeDryRun(
+	order model.Order,
+) (*pretrade.DryRunReport, error) {
+	return d.trading.ExecutePreTradeDryRun(order)
+}
+
+func (d *fakeOrderChainDriver) ApplyDropCopy(
+	order model.Order,
+) (*pretrade.DropCopyOperation, []reject.Reject, error) {
+	if d.owner.failSubmit {
+		return nil, nil, errors.New("submit failed")
+	}
+	if d.owner.submitReject != nil {
+		return nil, []reject.Reject{{}}, nil
+	}
+	return d.trading.ApplyDropCopy(order)
+}
+
+func (d *fakeOrderChainDriver) ApplyExecutionReport(
+	report model.ExecutionReport,
+) (pretrade.PostTradeResult, error) {
+	if d.owner.failExecReport {
+		return pretrade.PostTradeResult{}, errors.New("exec report failed")
+	}
+	leavesQuantity := ""
+	if fill, ok := report.Fill().Get(); ok {
+		if leaves, ok := fill.RemainingReservedQuantity().Get(); ok {
+			leavesQuantity = leaves.String()
+		}
+	}
+	d.owner.stateMu.Lock()
+	d.owner.execReportLeaves = append(
+		d.owner.execReportLeaves, leavesQuantity,
+	)
+	d.owner.stateMu.Unlock()
+	return d.trading.ApplyExecutionReport(report)
+}
+
+func (d *fakeOrderChainDriver) ApplyAccountAdjustment(
+	account param.AccountID, adjustments []model.AccountAdjustment,
+) (accountadjustment.BatchResult, error) {
+	if d.owner.failAdjustment {
+		return accountadjustment.BatchResult{}, errors.New("adjustment failed")
+	}
+	return d.admin.ApplyAccountAdjustment(account, adjustments)
+}
+
+func (d *fakeOrderChainDriver) Accounts() accounts.Accounts {
+	return d.admin.Accounts()
+}
+
+func (e *fakeEngine) AccountID(
+	account domain.AccountID,
+) (param.AccountID, error) {
+	if err := e.checkKnownAccount(account); err != nil {
+		return param.AccountID{}, err
+	}
+	e.resolverMu.RLock()
+	accountID, ok := e.accountResolverIDs[account]
+	e.resolverMu.RUnlock()
+	if !ok {
+		hash := fnv.New64a()
+		_, _ = hash.Write([]byte(account))
+		accountID = domain.EngineAccountID(hash.Sum64())
+		if accountID == 0 {
+			accountID = 1
+		}
+	}
+	return param.NewAccountIDFromUint64(accountID.Uint64()), nil
+}
+
+func (e *fakeEngine) OrderModel(o domain.Order) (model.Order, error) {
+	if err := e.checkKnownOrderAssets(o.BaseAsset, o.QuoteAsset); err != nil {
+		return model.Order{}, err
+	}
+	accountID, err := e.AccountID(o.Account)
+	if err != nil {
+		return model.Order{}, err
+	}
+	e.resolverMu.RLock()
+	baseID, baseOK := e.assetResolverIDs[o.BaseAsset]
+	quoteID, quoteOK := e.assetResolverIDs[o.QuoteAsset]
+	e.resolverMu.RUnlock()
+	baseAlias := o.BaseAsset
+	if baseOK {
+		baseAlias = strconv.FormatUint(baseID.Uint64(), 10)
+	}
+	base, err := param.NewAsset(baseAlias)
+	if err != nil {
+		return model.Order{}, err
+	}
+	quoteAlias := o.QuoteAsset
+	if quoteOK {
+		quoteAlias = strconv.FormatUint(quoteID.Uint64(), 10)
+	}
+	quote, err := param.NewAsset(quoteAlias)
+	if err != nil {
+		return model.Order{}, err
+	}
+	var side param.Side
+	switch o.Side {
+	case domain.OrderSideBuy:
+		side = param.SideBuy
+	case domain.OrderSideSell:
+		side = param.SideSell
+	default:
+		return model.Order{}, fmt.Errorf(
+			"engine: unknown order side %q: %w", o.Side, domain.ErrInvalid,
+		)
+	}
+	var amount param.TradeAmount
+	switch o.AmountKind {
+	case domain.OrderAmountKindQuantity:
+		quantity, quantityErr := param.NewQuantityFromString(o.AmountValue)
+		if quantityErr != nil {
+			return model.Order{}, quantityErr
+		}
+		amount = param.NewQuantityTradeAmount(quantity)
+	case domain.OrderAmountKindVolume:
+		volume, volumeErr := param.NewVolumeFromString(o.AmountValue)
+		if volumeErr != nil {
+			return model.Order{}, volumeErr
+		}
+		amount = param.NewVolumeTradeAmount(volume)
+	default:
+		return model.Order{}, fmt.Errorf(
+			"engine: unknown order amount kind %q: %w",
+			o.AmountKind, domain.ErrInvalid,
+		)
+	}
+	order := model.NewOrder()
+	operation := order.EnsureOperationView()
+	operation.SetInstrument(param.NewInstrument(base, quote))
+	operation.SetAccountID(accountID)
+	operation.SetSide(side)
+	operation.SetTradeAmount(amount)
+	if o.Price != "" {
+		price, priceErr := param.NewPriceFromString(o.Price)
+		if priceErr != nil {
+			return model.Order{}, priceErr
+		}
+		operation.SetPrice(price)
+	}
+	return order, nil
+}
+
+func (e *fakeEngine) ExecutionReportModel(
+	in domain.ExecutionReportInput,
+	leavesQuantity string,
+) (model.ExecutionReport, error) {
+	if in.Commission != nil {
+		if err := e.checkKnownAsset(in.Commission.Currency); err != nil {
+			return model.ExecutionReport{}, err
+		}
+	}
+	order, err := e.OrderModel(domain.Order{
+		Account:     in.Account,
+		BaseAsset:   in.BaseAsset,
+		QuoteAsset:  in.QuoteAsset,
+		Side:        in.Side,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+	})
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	orderOperation, _ := order.Operation().Get()
+	instrument, _ := orderOperation.Instrument().Get()
+	accountID, _ := orderOperation.AccountID().Get()
+	if e.execReportAccountMismatch {
+		accountID = param.NewAccountIDFromUint64(
+			uint64(accountID.Handle()) + 1,
+		)
+	}
+	side, _ := orderOperation.Side().Get()
+	report := model.NewExecutionReport()
+	operation := report.EnsureOperationView()
+	operation.SetInstrument(instrument)
+	operation.SetAccountID(accountID)
+	operation.SetSide(side)
+	fill := report.EnsureFillView()
+	if in.FillQuantity != "" && in.FillPrice != "" {
+		price, err := param.NewPriceFromString(in.FillPrice)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		quantity, err := param.NewQuantityFromString(in.FillQuantity)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
+	}
+	if leavesQuantity != "" {
+		leaves, err := param.NewQuantityFromString(leavesQuantity)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		fill.SetRemainingReservedQuantity(leaves)
+	}
+	fill.SetIsFinal(domain.OrderStatusTerminal(in.OrderStatus))
+	if len(in.Lock) > 0 {
+		lock, err := pretrade.NewLockFromMsgPack(in.Lock)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		fill.SetLock(lock.Bytes())
+	}
+	return report, nil
+}
+
+func (e *fakeEngine) AccountAdjustmentModels(
+	reqs []domain.AdjustmentRequest,
+) ([]model.AccountAdjustment, error) {
+	adjustments := make([]model.AccountAdjustment, 0, len(reqs))
+	for _, req := range reqs {
+		adjustment, err := e.fakeAccountAdjustmentModel(req)
+		if err != nil {
+			return nil, err
+		}
+		adjustments = append(adjustments, adjustment)
+	}
+	return adjustments, nil
+}
+
+func (e *fakeEngine) fakeAccountAdjustmentModel(
+	req domain.AdjustmentRequest,
+) (model.AccountAdjustment, error) {
+	if err := e.checkKnownAsset(req.Asset); err != nil {
+		return model.AccountAdjustment{}, err
+	}
+	asset, err := e.ResolveAsset(req.Asset)
+	if err != nil {
+		return model.AccountAdjustment{}, err
+	}
+	operation := model.AccountAdjustmentBalanceOperationValues{
+		Asset: optional.Some(asset),
+	}
+	if req.AverageEntryPrice != "" {
+		price, parseErr := param.NewPriceFromString(req.AverageEntryPrice)
+		if parseErr != nil {
+			return model.AccountAdjustment{}, parseErr
+		}
+		operation.AverageEntryPrice = optional.Some(price)
+	}
+	if req.RealizedPnl != "" || req.RealizedPnlHaltReason != "" {
+		state, stateErr := fakePnlState(
+			req.RealizedPnl,
+			req.RealizedPnlHaltReason,
+		)
+		if stateErr != nil {
+			return model.AccountAdjustment{}, stateErr
+		}
+		operation.RealizedPnl = optional.Some(state)
+	}
+	amounts, err := fakeAdjustmentAmounts(req)
+	if err != nil {
+		return model.AccountAdjustment{}, err
+	}
+	values := model.AccountAdjustmentValues{
+		BalanceOperation: optional.Some(
+			model.NewAccountAdjustmentBalanceOperationFromValues(operation),
+		),
+		Amount: optional.Some(
+			model.NewAccountAdjustmentAmountFromValues(amounts),
+		),
+	}
+	bounds, hasBounds, err := fakeAdjustmentBounds(req)
+	if err != nil {
+		return model.AccountAdjustment{}, err
+	}
+	if hasBounds {
+		values.Bounds = optional.Some(
+			model.NewAccountAdjustmentBoundsFromValues(bounds),
+		)
+	}
+	return model.NewAccountAdjustmentFromValues(values)
+}
+
+func fakePnlState(
+	value string,
+	haltReason domain.PnlHaltReason,
+) (model.PnlState, error) {
+	if haltReason == "" {
+		pnl, err := param.NewPnlFromString(value)
+		if err != nil {
+			return model.PnlState{}, err
+		}
+		return model.NewPnlState(pnl), nil
+	}
+	reasons := map[domain.PnlHaltReason]model.PnlHaltReason{
+		domain.PnlHaltReasonMissingFx:              model.PnlHaltReasonMissingFx,
+		domain.PnlHaltReasonMissingAccountCurrency: model.PnlHaltReasonMissingAccountCurrency,
+		domain.PnlHaltReasonMissingInitialPnl:      model.PnlHaltReasonMissingInitialPnl,
+		domain.PnlHaltReasonMissingCostBasis:       model.PnlHaltReasonMissingCostBasis,
+		domain.PnlHaltReasonArithmeticOverflow:     model.PnlHaltReasonArithmeticOverflow,
+	}
+	reason, ok := reasons[haltReason]
+	if !ok {
+		return model.PnlState{}, domain.ErrInvalid
+	}
+	return model.NewPnlHaltedState(reason)
+}
+
+func fakeAdjustmentAmounts(
+	req domain.AdjustmentRequest,
+) (model.AccountAdjustmentAmountValues, error) {
+	var values model.AccountAdjustmentAmountValues
+	fields := []struct {
+		input *domain.AdjustmentAmount
+		set   func(param.AdjustmentAmount)
+	}{
+		{req.Balance, func(value param.AdjustmentAmount) {
+			values.Balance = optional.Some(value)
+		}},
+		{req.Held, func(value param.AdjustmentAmount) {
+			values.Held = optional.Some(value)
+		}},
+		{req.Incoming, func(value param.AdjustmentAmount) {
+			values.Incoming = optional.Some(value)
+		}},
+	}
+	for _, field := range fields {
+		if field.input == nil {
+			continue
+		}
+		amount, err := fakeAdjustmentAmount(*field.input)
+		if err != nil {
+			return values, err
+		}
+		field.set(amount)
+	}
+	return values, nil
+}
+
+func fakeAdjustmentAmount(
+	amount domain.AdjustmentAmount,
+) (param.AdjustmentAmount, error) {
+	value, err := param.NewPositionSizeFromString(amount.Value)
+	if err != nil {
+		return param.AdjustmentAmount{}, err
+	}
+	switch amount.Mode {
+	case domain.AdjustmentModeAbsolute:
+		return param.NewAbsoluteAdjustmentAmount(value), nil
+	case domain.AdjustmentModeDelta:
+		return param.NewDeltaAdjustmentAmount(value), nil
+	default:
+		return param.AdjustmentAmount{}, domain.ErrInvalid
+	}
+}
+
+func fakeAdjustmentBounds(
+	req domain.AdjustmentRequest,
+) (model.AccountAdjustmentBoundsValues, bool, error) {
+	var values model.AccountAdjustmentBoundsValues
+	hasBounds := false
+	fields := []struct {
+		input        *domain.AdjustmentBounds
+		lower, upper *optional.Option[param.PositionSize]
+	}{
+		{req.BalanceBounds, &values.BalanceLower, &values.BalanceUpper},
+		{req.HeldBounds, &values.HeldLower, &values.HeldUpper},
+		{req.IncomingBounds, &values.IncomingLower, &values.IncomingUpper},
+	}
+	for _, field := range fields {
+		if field.input == nil {
+			continue
+		}
+		if field.input.Lower != "" {
+			value, err := param.NewPositionSizeFromString(field.input.Lower)
+			if err != nil {
+				return values, false, err
+			}
+			*field.lower = optional.Some(value)
+			hasBounds = true
+		}
+		if field.input.Upper != "" {
+			value, err := param.NewPositionSizeFromString(field.input.Upper)
+			if err != nil {
+				return values, false, err
+			}
+			*field.upper = optional.Some(value)
+			hasBounds = true
+		}
+	}
+	return values, hasBounds, nil
+}
+
+func (e *fakeEngine) AppliedAccountAdjustmentBatch(
+	account domain.AccountID,
+	reqs []domain.AdjustmentRequest,
+	_ accountadjustment.BatchResult,
+) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+	return e.materializeFakeAccountAdjustmentBatch(account, reqs)
+}
+
+func (e *fakeEngine) SpotFundsAccountPnlAssignment(
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) (asyncengine.SpotFundsAccountPnlAssignment, error) {
+	if pnl != "" && haltReason != "" {
+		return asyncengine.SpotFundsAccountPnlAssignment{}, domain.ErrInvalid
+	}
+	var state model.PnlState
+	if haltReason == "" {
+		value, err := param.NewPnlFromString(pnl)
+		if err != nil {
+			return asyncengine.SpotFundsAccountPnlAssignment{}, err
+		}
+		state = model.NewPnlState(value)
+	} else {
+		reasons := map[domain.PnlHaltReason]model.PnlHaltReason{
+			domain.PnlHaltReasonMissingFx:              model.PnlHaltReasonMissingFx,
+			domain.PnlHaltReasonMissingAccountCurrency: model.PnlHaltReasonMissingAccountCurrency,
+			domain.PnlHaltReasonMissingInitialPnl:      model.PnlHaltReasonMissingInitialPnl,
+			domain.PnlHaltReasonMissingCostBasis:       model.PnlHaltReasonMissingCostBasis,
+			domain.PnlHaltReasonArithmeticOverflow:     model.PnlHaltReasonArithmeticOverflow,
+		}
+		reason, ok := reasons[haltReason]
+		if !ok {
+			return asyncengine.SpotFundsAccountPnlAssignment{}, domain.ErrInvalid
+		}
+		var err error
+		state, err = model.NewPnlHaltedState(reason)
+		if err != nil {
+			return asyncengine.SpotFundsAccountPnlAssignment{}, err
+		}
+	}
+	return asyncengine.SpotFundsAccountPnlAssignment{
+		PolicyName: policies.SpotFundsPolicyName,
+		State:      state,
+	}, nil
+}
+
+func (e *fakeEngine) AppliedSpotFundsAccountPnl(
+	account domain.AccountID,
+	pnl string,
+	haltReason domain.PnlHaltReason,
+	_ configure.PolicyConfigurationResult,
+) ([]domain.AccountBlock, error) {
+	if e.accountPnlErr != nil {
+		return nil, e.accountPnlErr
+	}
+	assignment, err := e.SpotFundsAccountPnlAssignment(pnl, haltReason)
+	if err != nil {
+		return nil, err
+	}
+	e.stateMu.Lock()
+	if e.accountPnlStates == nil {
+		e.accountPnlStates = make(map[domain.AccountID]model.PnlState)
+	}
+	e.accountPnlStates[account] = assignment.State
+	e.stateMu.Unlock()
+	e.accountPnlStateCalls = append(e.accountPnlStateCalls, accountPnlStateCall{
+		id: account, pnl: pnl, haltReason: haltReason,
+	})
+	if haltReason == "" {
+		e.accountPnlCalls = append(e.accountPnlCalls, accountPnlCall{account, pnl})
+	}
+	return e.accountPnlBlocks[account], nil
+}
+
+func (e *fakeEngine) CheckOrderModel(
+	probe domain.OrderProbe,
+) (model.Order, error) {
+	return e.OrderModel(domain.Order{
+		Account:     probe.Account,
+		BaseAsset:   probe.BaseAsset,
+		QuoteAsset:  probe.QuoteAsset,
+		Side:        probe.Side,
+		AmountKind:  probe.AmountKind,
+		AmountValue: probe.AmountValue,
+		Price:       probe.Price,
+	})
+}
+
+func (e *fakeEngine) recordChainSubmit(o domain.Order) error {
+	e.stateMu.Lock()
+	e.submitCalls = append(e.submitCalls, o)
+	e.stateMu.Unlock()
+	if e.submitEntered != nil {
+		e.submitEntered <- o.Account
+	}
+	if e.submitRelease != nil {
+		<-e.submitRelease
+	}
+	return nil
+}
+
+func (e *fakeEngine) RejectedOrder(
+	o domain.Order, _ []reject.Reject,
+) engine.OrderResult {
+	_ = e.recordChainSubmit(o)
+	return engine.OrderResult{
+		Accepted: false,
+		Rejects:  []domain.OrderReject{*e.submitReject},
+	}
+}
+
+func (e *fakeEngine) ReservedOrder(
+	o domain.Order, _ asyncengine.OperationResult,
+) (engine.OrderResult, error) {
+	if err := e.recordChainSubmit(o); err != nil {
+		return engine.OrderResult{}, err
+	}
+	return engine.OrderResult{
+		Accepted:            true,
+		Lock:                append([]byte(nil), e.submitLock...),
+		Blocks:              append([]domain.ExecutionAccountBlock(nil), e.submitBlocks...),
+		Outcomes:            append([]engine.BalanceOutcome(nil), e.submitOutcomes...),
+		SettlementLockPrice: o.Price,
+	}, nil
+}
+
+func (e *fakeEngine) AppliedDropCopyOrder(
+	o domain.Order, result asyncengine.DropCopyResult,
+) (engine.OrderResult, error) {
+	return e.ReservedOrder(o, result)
+}
+
+func (e *fakeEngine) RejectedImmediate(
+	o domain.Order, _ []reject.Reject,
+) engine.ImmediateResult {
+	_ = e.recordChainSubmit(o)
+	return engine.ImmediateResult{
+		Accepted: false,
+		Rejects:  []domain.OrderReject{*e.submitReject},
+	}
+}
+
+func (e *fakeEngine) PrepareImmediateReservation(
+	o domain.Order, _ asyncengine.OperationResult,
+) (engine.ImmediatePreparation, error) {
+	return e.prepareFakeImmediate(o, nil)
+}
+
+func (e *fakeEngine) PrepareImmediateDropCopy(
+	o domain.Order, _ asyncengine.DropCopyResult,
+) (engine.ImmediatePreparation, error) {
+	return e.prepareFakeImmediate(o, e.submitBlocks)
+}
+
+func (e *fakeEngine) prepareFakeImmediate(
+	o domain.Order, blocks []domain.ExecutionAccountBlock,
+) (engine.ImmediatePreparation, error) {
+	if err := e.recordChainSubmit(o); err != nil {
+		return engine.ImmediatePreparation{}, err
+	}
+	settlementPrice := e.submitSettlementLockPrice
+	if settlementPrice == "" {
+		settlementPrice = o.Price
+	}
+	tradePrice := e.submitTradePrice
+	if tradePrice == "" {
+		tradePrice = o.Price
+		if tradePrice == "" {
+			tradePrice = settlementPrice
+		}
+	}
+	reportInput := domain.ExecutionReportInput{
+		BaseAsset:      o.BaseAsset,
+		QuoteAsset:     o.QuoteAsset,
+		FillQuantity:   o.AmountValue,
+		FillPrice:      tradePrice,
+		LeavesQuantity: "0",
+		LockPrice:      settlementPrice,
+		Lock:           append([]byte(nil), e.submitLock...),
+		Order:          o.ExternalID,
+		Account:        o.Account,
+		Side:           o.Side,
+		OrderStatus:    domain.OrderStatusFilled,
+	}
+	report, err := e.fakeImmediateReportModel(o, reportInput)
+	if err != nil {
+		return engine.ImmediatePreparation{}, err
+	}
+	state := "reservation committed"
+	if o.DropCopy {
+		state = "drop-copy committed"
+	}
+	return engine.ImmediatePreparation{
+		ExecutionReport:     report,
+		ReportInput:         reportInput,
+		Outcomes:            append([]engine.BalanceOutcome(nil), e.submitOutcomes...),
+		Blocks:              append([]domain.ExecutionAccountBlock(nil), blocks...),
+		ReconciliationState: state,
+	}, nil
+}
+
+func (e *fakeEngine) fakeImmediateReportModel(
+	o domain.Order, in domain.ExecutionReportInput,
+) (model.ExecutionReport, error) {
+	order, err := e.OrderModel(o)
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	orderOperation, _ := order.Operation().Get()
+	instrument, _ := orderOperation.Instrument().Get()
+	accountID, _ := orderOperation.AccountID().Get()
+	side, _ := orderOperation.Side().Get()
+	report := model.NewExecutionReport()
+	operation := report.EnsureOperationView()
+	operation.SetInstrument(instrument)
+	operation.SetAccountID(accountID)
+	operation.SetSide(side)
+	fill := report.EnsureFillView()
+	priceValue := in.FillPrice
+	if priceValue == "" {
+		priceValue = "1"
+	}
+	price, err := param.NewPriceFromString(priceValue)
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	quantity, err := param.NewQuantityFromString(in.FillQuantity)
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
+	leaves, err := param.NewQuantityFromString("0")
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	fill.SetRemainingReservedQuantity(leaves)
+	fill.SetIsFinal(true)
+	if len(in.Lock) > 0 {
+		fill.SetLock(in.Lock)
+	}
+	return report, nil
+}
+
+func (e *fakeEngine) SettleImmediate(
+	o domain.Order,
+	prepared engine.ImmediatePreparation,
+	_ pretrade.PostTradeResult,
+) (engine.ImmediateResult, error) {
+	in := prepared.ReportInput
+	request := domain.ExecutionReportRequestFromInput(in)
+	persistence := engine.ExecutionReportPersistence{
+		Trade: &domain.Trade{
+			Order:      o.ExternalID,
+			Account:    o.Account,
+			BaseAsset:  o.BaseAsset,
+			QuoteAsset: o.QuoteAsset,
+			Side:       o.Side,
+			Quantity:   in.FillQuantity,
+			Price:      in.FillPrice,
+			LockPrice:  in.LockPrice,
+		},
+		OrderStatus:          domain.OrderStatusFilled,
+		AccountPnl:           e.submitAccountPnl,
+		AccountPnlHaltReason: e.submitAccountPnlHaltReason,
+		Leaves:               in.LeavesQuantity,
+		Balances:             balanceSettlementsFrom(e.submitOutcomes),
+		Events: []domain.OrderEvent{{
+			Order: o.ExternalID,
+			Type:  domain.OrderEventFill,
+			Payload: domain.OrderEventPayload{
+				FillQuantity:   in.FillQuantity,
+				FillPrice:      in.FillPrice,
+				FillLockPrice:  in.LockPrice,
+				LeavesQuantity: in.LeavesQuantity,
+				OrderStatus:    string(in.OrderStatus),
+			},
+		}},
+	}
+	var persistenceResult *engine.ExecutionReportPersistence
+	if !e.emptyImmediatePersistence {
+		persistenceResult = &persistence
+	}
+	return engine.ImmediateResult{
+		Accepted:             true,
+		Persistence:          persistenceResult,
+		ExecutionReport:      request,
+		Lock:                 append([]byte(nil), e.submitLock...),
+		Blocks:               append([]domain.ExecutionAccountBlock(nil), prepared.Blocks...),
+		Outcomes:             append([]engine.BalanceOutcome(nil), e.submitOutcomes...),
+		AccountPnl:           e.submitAccountPnl,
+		AccountPnlHaltReason: e.submitAccountPnlHaltReason,
+		SettlementLockPrice:  in.LockPrice,
+		FillQuantity:         in.FillQuantity,
+		TradePrice:           in.FillPrice,
+	}, nil
+}
+
+func (e *fakeEngine) CheckedOrder(
+	probe domain.OrderProbe, _ asyncengine.OrderCheckResult,
+) (domain.CheckResult, error) {
+	e.checkProbes = append(e.checkProbes, probe)
+	return e.checkResult, nil
+}
 
 func TestOrderRejectedSettlementPreservesOrderedRejects(t *testing.T) {
 	t.Parallel()
@@ -104,13 +1512,76 @@ func TestLocalNode_SubmitOrderRejectedRecordsZeroLeaves(t *testing.T) {
 	}
 }
 
+func TestLocalNode_SubmitOrderRejectsPersistedAccountMismatchBeforeEngine(
+	t *testing.T,
+) {
+	t.Parallel()
+	n, eng := newPersistedAccountMismatchNode(t)
+
+	_, err := n.SubmitOrder(
+		context.Background(),
+		testKey("acc-1"),
+		persistedAccountMismatchOrder(false),
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitOrder error = %v, want ErrInvalid", err)
+	}
+	if len(eng.submitCalls) != 0 {
+		t.Fatalf("engine mutations = %+v, want none", eng.submitCalls)
+	}
+}
+
+func TestLocalNode_SubmitImmediateReservationRejectsPersistedAccountMismatchBeforeEngine(
+	t *testing.T,
+) {
+	t.Parallel()
+	n, eng := newPersistedAccountMismatchNode(t)
+
+	_, _, err := n.SubmitImmediate(
+		context.Background(),
+		testKey("acc-1"),
+		persistedAccountMismatchOrder(false),
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitImmediate error = %v, want ErrInvalid", err)
+	}
+	if len(eng.submitCalls) != 0 {
+		t.Fatalf("engine mutations = %+v, want none", eng.submitCalls)
+	}
+}
+
+func TestLocalNode_SubmitImmediateDropCopyRejectsPersistedAccountMismatchBeforeEngine(
+	t *testing.T,
+) {
+	t.Parallel()
+	n, eng := newPersistedAccountMismatchNode(t)
+
+	_, _, err := n.SubmitImmediate(
+		context.Background(),
+		testKey("acc-1"),
+		persistedAccountMismatchOrder(true),
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitImmediate error = %v, want ErrInvalid", err)
+	}
+	if len(eng.submitCalls) != 0 {
+		t.Fatalf("engine mutations = %+v, want none", eng.submitCalls)
+	}
+}
+
 // TestLocalNode_SubmitOrderPersistsPreTradeBalances verifies the direct submit
 // path mirrors the engine's balance effects into the snapshot, so held funds
 // and incoming quantity show up before any fill settles.
 func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.submitLock = []byte("lock")
+	eng.submitLock = fakeStoredLock(t)
 	eng.submitOutcomes = []engine.BalanceOutcome{
 		{
 			Asset: "USD",
@@ -292,7 +1763,7 @@ func TestLocalNode_SubmitImmediateNilPersistenceIsInternal(t *testing.T) {
 func TestLocalNode_VolumeOrderRecordsEngineOpeningLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.submitLock = []byte("stored-lock")
+	eng.submitLock = fakeStoredLock(t)
 	eng.submitOutcomes = []engine.BalanceOutcome{{
 		Asset:   "AAPL",
 		Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "5"},
@@ -333,7 +1804,7 @@ func TestLocalNode_VolumeOrderRecordsEngineOpeningLeaves(t *testing.T) {
 func TestLocalNode_CancelVolumeOrderUsesPreReportLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.submitLock = []byte("stored-lock")
+	eng.submitLock = fakeStoredLock(t)
 	eng.submitOutcomes = []engine.BalanceOutcome{{
 		Asset:   "AAPL",
 		Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "5"},
@@ -797,7 +2268,7 @@ func TestLocalNode_SubmitImmediateDoesNotUseEffectiveCurrencyToInferAccountPnl(t
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	n.engineMu.Lock()
-	n.engine = &currencyChangingAccountLaneEngine{
+	n.engine = &currencyChangingOrderModelEngine{
 		fakeEngine: eng,
 		beforeLane: func() error {
 			return st.SetAccountCurrency(ctx, "acc-1", "EUR")
@@ -825,20 +2296,18 @@ func TestLocalNode_SubmitImmediateDoesNotUseEffectiveCurrencyToInferAccountPnl(t
 	}
 }
 
-type currencyChangingAccountLaneEngine struct {
+type currencyChangingOrderModelEngine struct {
 	*fakeEngine
 	beforeLane func() error
 }
 
-func (e *currencyChangingAccountLaneEngine) RunAccountSynchronized(
-	ctx context.Context,
-	account domain.AccountID,
-	fn func(engine.AccountLane) error,
-) error {
+func (e *currencyChangingOrderModelEngine) OrderModel(
+	order domain.Order,
+) (model.Order, error) {
 	if err := e.beforeLane(); err != nil {
-		return err
+		return model.Order{}, err
 	}
-	return e.fakeEngine.RunAccountSynchronized(ctx, account, fn)
+	return e.fakeEngine.OrderModel(order)
 }
 
 func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
@@ -871,6 +2340,9 @@ func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
 	}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("SubmitOrder error = %v, want store failure", err)
+	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("SubmitOrder error = %v, want retry-unsafe marker", err)
 	}
 	if len(eng.submitCalls) != 1 {
 		t.Fatalf("submit calls = %+v, want one engine apply", eng.submitCalls)
@@ -979,6 +2451,9 @@ func TestLocalNode_SubmitImmediatePostEngineStoreFailureFatals(t *testing.T) {
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("SubmitImmediate error = %v, want store failure", err)
 	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("SubmitImmediate error = %v, want retry-unsafe marker", err)
+	}
 	if len(eng.submitCalls) != 1 {
 		t.Fatalf("submit calls = %+v, want one engine apply", eng.submitCalls)
 	}
@@ -1040,63 +2515,6 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAsset(t *testing.T) {
 	}
 }
 
-func TestLocalNode_SubmitOrderRejectsUnsupportedAssetAutoCreateBeforeStoreWrite(
-	t *testing.T,
-) {
-	t.Parallel()
-	ctx := context.Background()
-	base := newMemoryStore("auto-create-asset-capability.db")
-	var probe *assetMutationProbeRealm
-	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
-		probe = &assetMutationProbeRealm{RealmStore: realm}
-		return probe
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	seedTestAccount(t, base.realm, "acc-1")
-	n := newResolverCapabilityTestNode(t, st)
-	if probe == nil {
-		t.Fatal("asset mutation probe was not installed")
-	}
-	probe.createCalls = 0
-
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
-		BaseAsset:   "GOLD",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "2",
-		Price:       "100",
-	}, domain.MissingAccountCreate, testCaller)
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		t.Fatalf("SubmitOrder = %v, want ErrNotImplemented", err)
-	}
-	if probe.createCalls != 0 {
-		t.Fatalf("CreateAsset store calls = %d, want 0", probe.createCalls)
-	}
-	if order.ExternalID != "" {
-		t.Fatalf("SubmitOrder returned order %q, want no order", order.ExternalID)
-	}
-	if _, ok, getErr := n.realm.GetAsset(ctx, "GOLD"); getErr != nil || ok {
-		t.Fatalf("GetAsset(GOLD) = ok %v err %v, want absent", ok, getErr)
-	}
-	if _, ok, getErr := n.realm.GetAssetClass(
-		ctx, autoCreatedAssetClassCode,
-	); getErr != nil || ok {
-		t.Fatalf(
-			"GetAssetClass(auto-created) = ok %v err %v, want absent",
-			ok,
-			getErr,
-		)
-	}
-}
-
-// failingAssetResolverEngine forces AddAssetResolverEntry to fail with a
-// caller-supplied error while delegating everything else to the wrapped fake,
-// so a test can drive the auto-created asset publication failure without
-// disturbing the rest of the engine's dictionary state.
 type failingAssetResolverEngine struct {
 	*fakeEngine
 	err error
@@ -1190,8 +2608,8 @@ func TestLocalNode_AutoCreatedAssetAuditSurvivesRequestCancellation(t *testing.T
 	if _, err := n.CreateAccount(ctx, domain.Account{
 		Code:     "asset-audit-cancel",
 		Currency: "GOLD",
-	}, testCaller); err != nil {
-		t.Fatalf("CreateAccount after request cancellation: %v", err)
+	}, testCaller); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CreateAccount error = %v, want context cancellation", err)
 	}
 	if ctx.Err() == nil {
 		t.Fatal("asset resolver publication did not cancel the request context")
@@ -1429,6 +2847,179 @@ func TestLocalNode_SubmitOrderSameAccountSerializes(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Fatalf("SubmitOrder #%d: %v", i, err)
 		}
+	}
+}
+
+func occupyOrderChainLane(
+	t *testing.T, n *localNode, eng *fakeEngine,
+) (func(), <-chan error) {
+	t.Helper()
+	entered := make(chan domain.AccountID, 2)
+	release := make(chan struct{})
+	eng.submitEntered = entered
+	eng.submitRelease = release
+	var releaseOnce sync.Once
+	releaseLane := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseLane)
+	result := make(chan error, 1)
+	go func() {
+		_, err := n.SubmitOrder(
+			context.Background(),
+			testKey("acc-1"),
+			domain.Order{
+				BaseAsset: "AAPL", QuoteAsset: "USD",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "1", Price: "10",
+			},
+			domain.MissingAccountCreate,
+			testCaller,
+		)
+		result <- err
+	}()
+	select {
+	case account := <-entered:
+		if account != "acc-1" {
+			t.Fatalf("occupied lane account = %s, want acc-1", account)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first submission did not occupy the account lane")
+	}
+	return releaseLane, result
+}
+
+func TestLocalNode_SubmitOrderCancellationWhileLaneOccupied(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	seedTestAccount(t, st, "acc-1")
+	release, first := occupyOrderChainLane(t, n, eng)
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := n.SubmitOrder(
+			ctx,
+			testKey("acc-1"),
+			domain.Order{
+				BaseAsset: "AAPL", QuoteAsset: "USD",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "1", Price: "10",
+			},
+			domain.MissingAccountCreate,
+			testCaller,
+		)
+		result <- err
+	}()
+	<-started
+	cancel()
+	release()
+	if err := <-first; err != nil {
+		t.Fatalf("occupying SubmitOrder: %v", err)
+	}
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled SubmitOrder error = %v, want context.Canceled", err)
+	}
+	if len(eng.submitCalls) != 1 {
+		t.Fatalf("engine submissions = %d, want only the occupying call", len(eng.submitCalls))
+	}
+}
+
+func TestLocalNode_SubmitImmediateCancellationWhileLaneOccupied(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	seedTestAccount(t, st, "acc-1")
+	release, first := occupyOrderChainLane(t, n, eng)
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		close(started)
+		_, _, err := n.SubmitImmediate(
+			ctx,
+			testKey("acc-1"),
+			domain.Order{
+				BaseAsset: "AAPL", QuoteAsset: "USD",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "1", Price: "10",
+			},
+			domain.MissingAccountCreate,
+			testCaller,
+		)
+		result <- err
+	}()
+	<-started
+	cancel()
+	release()
+	if err := <-first; err != nil {
+		t.Fatalf("occupying SubmitOrder: %v", err)
+	}
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled SubmitImmediate error = %v, want context.Canceled", err)
+	}
+	if len(eng.submitCalls) != 1 {
+		t.Fatalf("engine submissions = %d, want only the occupying call", len(eng.submitCalls))
+	}
+}
+
+func TestLocalNode_CheckOrderCancellationWhileLaneOccupied(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	seedTestAccount(t, st, "acc-1")
+	release, first := occupyOrderChainLane(t, n, eng)
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := n.CheckOrder(ctx, testKey("acc-1"), domain.OrderProbe{
+			Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+			Side:        domain.OrderSideBuy,
+			AmountKind:  domain.OrderAmountKindQuantity,
+			AmountValue: "1", Price: "10",
+		})
+		result <- err
+	}()
+	<-started
+	cancel()
+	release()
+	if err := <-first; err != nil {
+		t.Fatalf("occupying SubmitOrder: %v", err)
+	}
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled CheckOrder error = %v, want context.Canceled", err)
+	}
+	if len(eng.checkProbes) != 0 {
+		t.Fatalf("engine dry-runs = %d, want none", len(eng.checkProbes))
+	}
+}
+
+func TestChainRootCausePreservesNonChainDiagnostics(t *testing.T) {
+	t.Parallel()
+	settlement := fmt.Errorf("settle broker leg: %w", errors.New("EOF"))
+	rollback := errors.New("native rollback failed")
+	cause := chainRootCause(errors.Join(
+		fmt.Errorf("async chain apply execution report: %w", settlement),
+		asyncengine.ErrChainRetryUnsafe,
+		rollback,
+	))
+	if cause == nil {
+		t.Fatal("chainRootCause returned nil")
+	}
+	diagnostic := cause.Error()
+	if !strings.Contains(diagnostic, "settle broker leg: EOF") {
+		t.Fatalf("cause = %q, want wrapped settlement diagnostic", diagnostic)
+	}
+	if !strings.Contains(diagnostic, rollback.Error()) {
+		t.Fatalf("cause = %q, want rollback diagnostic", diagnostic)
+	}
+	if strings.Contains(diagnostic, asyncengine.ErrChainRetryUnsafe.Error()) {
+		t.Fatalf("cause = %q, must omit retry-unsafe sentinel", diagnostic)
 	}
 }
 

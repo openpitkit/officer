@@ -550,10 +550,10 @@ func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
 		}},
 		Accounts: []backup.Account{
 			{
-				Code: "existing", GroupCode: "desk", Pnl: "7",
+				Code: "existing", GroupCode: "desk", Currency: "USD", Pnl: "7",
 				Blocked: true, BlockReason: "restored account block",
 			},
-			{Code: "added", Pnl: "3"},
+			{Code: "added", GroupCode: "desk", Pnl: "3"},
 		},
 		Balances: []backup.Balance{{
 			Account: "existing", Asset: "USD", Available: "12",
@@ -587,29 +587,15 @@ func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
 	if _, ok := eng.knownAccounts["added"]; !ok {
 		t.Fatalf("live resolver missing added account: %+v", eng.knownAccounts)
 	}
-	if got := eng.accountGroups["existing"]; got != "desk" {
-		t.Fatalf("existing account group = %q, want desk", got)
-	}
-	if len(eng.accountPnlStateCalls) < 2 {
-		t.Fatalf("account pnl state calls = %+v, want restored accounts", eng.accountPnlStateCalls)
-	}
-	if len(eng.blockCalls) == 0 || eng.blockCalls[len(eng.blockCalls)-1].id != "existing" {
-		t.Fatalf("account block calls = %+v", eng.blockCalls)
-	}
-	if len(eng.blockGroupCalls) == 0 ||
-		eng.blockGroupCalls[len(eng.blockGroupCalls)-1].groupID != "desk" {
-		t.Fatalf("group block calls = %+v", eng.blockGroupCalls)
-	}
+	assertFakeAccountGroup(t, eng, "existing", "desk")
+	assertFakeAccountPnl(t, eng, "existing", "USD", "7")
+	assertFakeBalances(t, eng, "existing", "USD", "12", "2", "1")
+	assertFakeOrderBlock(t, eng, "existing", true, "restored account block")
+	assertFakeOrderBlock(t, eng, "added", true, "restored group block")
 	if len(eng.configureCalls) != 1 ||
 		eng.configureCalls[0].policy != domain.PolicyRateLimit ||
 		eng.configureCalls[0].limits.RateLimits[0].MaxOrders != 20 {
 		t.Fatalf("restored policy configure calls = %+v", eng.configureCalls)
-	}
-	if len(eng.adjustmentBatchCalls) != 1 ||
-		eng.adjustmentBatchCalls[0].account != "existing" ||
-		len(eng.adjustmentBatchCalls[0].reqs) != 1 ||
-		eng.adjustmentBatchCalls[0].reqs[0].Balance.Value != "12" {
-		t.Fatalf("restored balance batches = %+v", eng.adjustmentBatchCalls)
 	}
 }
 
@@ -733,7 +719,8 @@ func TestLocalNode_RestoreBackupPublishesDefaultCurrencyOnline(t *testing.T) {
 	summary, sink, err := n.RestoreBackup(
 		ctx,
 		testArchive(backup.Scope{All: true}, backup.Data{
-			Assets:               []backup.Asset{{Code: "EUR"}},
+			Assets:               []backup.Asset{{Code: "EUR"}, {Code: "USD"}},
+			Accounts:             []backup.Account{{Code: "probe"}},
 			DefaultGroupCurrency: "EUR",
 		}),
 		backup.RestoreOptions{
@@ -747,10 +734,10 @@ func TestLocalNode_RestoreBackupPublishesDefaultCurrencyOnline(t *testing.T) {
 	if summary.RestartRequired || builds != 0 || n.currentEngine() != eng {
 		t.Fatalf("default currency restore rebuilt: summary=%+v builds=%d", summary, builds)
 	}
-	if sink != sinkBefore || eng.groupCurrencies[""] != "EUR" {
-		t.Fatalf("default currency not published online: sink=%T currencies=%+v",
-			sink, eng.groupCurrencies)
+	if sink != sinkBefore {
+		t.Fatalf("default currency restore replaced sink: %T", sink)
 	}
+	assertFakeEffectiveCurrency(t, eng, "probe", "EUR")
 	if _, ok := eng.knownGroups[""]; !ok {
 		t.Fatalf("default group resolver entry missing: %+v", eng.knownGroups)
 	}
@@ -770,6 +757,7 @@ func TestLocalNode_RestoreBackupClearsDefaultCurrencyWithoutRemovingResolver(t *
 		ctx,
 		testArchive(backup.Scope{All: true}, backup.Data{
 			Assets:               []backup.Asset{{Code: "EUR"}},
+			Accounts:             []backup.Account{{Code: "probe"}},
 			DefaultGroupCurrency: "EUR",
 		}),
 		backup.RestoreOptions{
@@ -782,7 +770,10 @@ func TestLocalNode_RestoreBackupClearsDefaultCurrencyWithoutRemovingResolver(t *
 
 	summary, _, err := n.RestoreBackup(
 		ctx,
-		testArchive(backup.Scope{All: true}, backup.Data{}),
+		testArchive(backup.Scope{All: true}, backup.Data{
+			Assets:   []backup.Asset{{Code: "EUR"}, {Code: "USD"}},
+			Accounts: []backup.Account{{Code: "probe"}},
+		}),
 		backup.RestoreOptions{
 			Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
 		},
@@ -797,9 +788,7 @@ func TestLocalNode_RestoreBackupClearsDefaultCurrencyWithoutRemovingResolver(t *
 	if _, ok := eng.knownGroups[""]; !ok {
 		t.Fatalf("default group resolver entry was removed: %+v", eng.knownGroups)
 	}
-	if _, ok := eng.groupCurrencies[""]; ok {
-		t.Fatalf("default group currency was not cleared: %+v", eng.groupCurrencies)
-	}
+	assertFakeNoEffectiveCurrency(t, eng, "probe", "USD")
 }
 
 func TestMemoryRealmRestoreDefaultGroupSemantics(t *testing.T) {
@@ -880,11 +869,11 @@ func TestLocalNode_RestoreBackupNonRuntimeScopePublishesForceIncludedGroup(t *te
 	if err := n.SetGroupBlocked(ctx, "restored-desk", true, "risk", testCaller); err != nil {
 		t.Fatalf("SetGroupBlocked into restored group: %v", err)
 	}
-	if len(oldEngine.blockGroupCalls) != 1 ||
-		oldEngine.blockGroupCalls[0].groupID != "restored-desk" {
-		t.Fatalf("block group calls = %+v, want one for restored-desk",
-			oldEngine.blockGroupCalls)
+	group, ok, err := n.realm.GetGroup(ctx, "restored-desk")
+	if err != nil || !ok || !group.Blocked {
+		t.Fatalf("restored group after block = %+v ok=%v err=%v", group, ok, err)
 	}
+	assertFakeOrderBlock(t, oldEngine, "restored-acc", true, "risk")
 }
 
 func TestLocalNode_RestoreBackupBuildFailureKeepsCommittedStoreAndFatals(t *testing.T) {
@@ -1583,7 +1572,7 @@ func TestLocalNode_ErrorMessagesNoNodePrefix(t *testing.T) {
 
 // TestLocalNode_MissingAccountAdminRejectsWithResolver guards the pre-lane
 // missing-account resolution in SetAccountBlocked and SetAccountGroup. The fake
-// engine runs with enforceResolver=true, so its RunAccountSynchronized rejects
+// engine runs with enforceResolver=true, so its account-chain resolver rejects
 // an unknown account with domain.ErrInvalid before the closure runs, mirroring
 // the real adapter. The only way a rejecting request can still surface
 // domain.ErrAccountMissing is the pre-lane realm check: remove it and the

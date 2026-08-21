@@ -256,13 +256,6 @@ func TestLocalNode_CheckOrderDelegatesToEngine(t *testing.T) {
 	if len(eng.checkProbes) != 1 || eng.checkProbes[0].Account != "acc-1" {
 		t.Fatalf("probe must be forwarded to the engine once")
 	}
-	if eng.operationOutsideSync {
-		t.Fatal("check order ran outside the account sync lane")
-	}
-	if len(eng.accountSyncCalls) == 0 ||
-		eng.accountSyncCalls[len(eng.accountSyncCalls)-1] != "acc-1" {
-		t.Fatalf("account sync calls = %+v, want last acc-1", eng.accountSyncCalls)
-	}
 }
 
 // TestLocalNode_CheckOrderWritesNoAudit asserts the non-mutating check writes

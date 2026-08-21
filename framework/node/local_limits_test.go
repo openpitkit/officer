@@ -230,9 +230,7 @@ func TestLocalNode_CreateAccountPublishesIntoLiveEngine(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount("fresh"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := eng.RunAccountSynchronized(
-		ctx, "fresh", func(engine.AccountLane) error { return nil },
-	); err != nil {
+	if _, err := eng.AccountID("fresh"); err != nil {
 		t.Fatalf("new account is not routable: %v", err)
 	}
 	if builds != 0 {
@@ -261,9 +259,7 @@ func TestLocalNode_CreateGroupPublishesIntoLiveEngine(t *testing.T) {
 	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "vips"}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	if err := eng.RunGroupSynchronized(
-		ctx, "vips", func(engine.GroupLane) error { return nil },
-	); err != nil {
+	if _, err := eng.ResolveGroup("vips"); err != nil {
 		t.Fatalf("new group is not routable: %v", err)
 	}
 	if builds != 0 {
@@ -561,7 +557,9 @@ func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
-	seedTestAccount(t, st, "acc-1")
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
 	if err := n.SetAccountBlocked(
 		ctx, testKey("acc-1"), true, "operator hold", domain.MissingAccountCreate, testCaller,
 	); err != nil {

@@ -33,6 +33,14 @@ package engine
 import (
 	"context"
 
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/configure"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
+
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
 )
@@ -201,6 +209,156 @@ type ImmediateResult struct {
 	Accepted bool
 }
 
+// ImmediatePreparation is the caller-owned state derived from a pending
+// reservation or drop-copy operation before it is committed. ExecutionReport
+// must be applied only after the chain commits that pending operation.
+type ImmediatePreparation struct {
+	// ExecutionReport is the SDK report derived while the pending operation can
+	// still be rolled back.
+	ExecutionReport model.ExecutionReport
+	// ReportInput is the immutable Officer report payload represented by
+	// ExecutionReport.
+	ReportInput domain.ExecutionReportInput
+	// Outcomes are the pre-trade balance effects to merge with post-trade
+	// outcomes after the report settles.
+	Outcomes []BalanceOutcome
+	// Blocks are drop-copy account blocks captured before commit.
+	Blocks []domain.ExecutionAccountBlock
+	// ReconciliationState describes the engine mutation finalized before the
+	// execution report is applied.
+	ReconciliationState string
+}
+
+// OrderChainAdapter maps Officer order values to the SDK chain surface and
+// materializes capability-limited hook results. The node owns chain ordering
+// and persistence; the adapter owns only SDK representation and resolver work.
+type OrderChainAdapter interface {
+	// AsyncEngine returns the account dispatcher on which the node runs order
+	// chains. A nil engine is invalid and fails through asyncengine's explicit
+	// ErrChainEngineMissing result.
+	AsyncEngine() *asyncengine.AsyncEngine
+	OrderModel(domain.Order) (model.Order, error)
+	CheckOrderModel(domain.OrderProbe) (model.Order, error)
+	RejectedOrder(domain.Order, []reject.Reject) OrderResult
+	ReservedOrder(domain.Order, asyncengine.OperationResult) (OrderResult, error)
+	AppliedDropCopyOrder(
+		domain.Order, asyncengine.DropCopyResult,
+	) (OrderResult, error)
+	RejectedImmediate(domain.Order, []reject.Reject) ImmediateResult
+	PrepareImmediateReservation(
+		domain.Order, asyncengine.OperationResult,
+	) (ImmediatePreparation, error)
+	PrepareImmediateDropCopy(
+		domain.Order, asyncengine.DropCopyResult,
+	) (ImmediatePreparation, error)
+	SettleImmediate(
+		domain.Order, ImmediatePreparation, pretrade.PostTradeResult,
+	) (ImmediateResult, error)
+	CheckedOrder(
+		domain.OrderProbe, asyncengine.OrderCheckResult,
+	) (domain.CheckResult, error)
+}
+
+// AccountChainAdapter maps Officer execution-report and account-adjustment
+// values to the SDK account-chain surface and materializes the canonical
+// results exposed to chain hooks. The node owns chain ordering and persistence;
+// the adapter owns only SDK representation and resolver work.
+type AccountChainAdapter interface {
+	// AccountID resolves an Officer account alias to its stable SDK chain key.
+	AccountID(domain.AccountID) (param.AccountID, error)
+	ExecutionReportModel(
+		domain.ExecutionReportInput, string,
+	) (model.ExecutionReport, error)
+	SettledExecutionReport(
+		domain.ExecutionReportInput,
+		param.AccountID,
+		pretrade.PostTradeResult,
+	) (ExecutionReportResult, error)
+	AccountAdjustmentModels(
+		[]domain.AdjustmentRequest,
+	) ([]model.AccountAdjustment, error)
+	AppliedAccountAdjustmentBatch(
+		domain.AccountID,
+		[]domain.AdjustmentRequest,
+		accountadjustment.BatchResult,
+	) ([]AdjustmentResult, *AdjustmentBatchReject, error)
+	SpotFundsAccountPnlAssignment(
+		string, domain.PnlHaltReason,
+	) (asyncengine.SpotFundsAccountPnlAssignment, error)
+	AppliedSpotFundsAccountPnl(
+		domain.AccountID,
+		string,
+		domain.PnlHaltReason,
+		configure.PolicyConfigurationResult,
+	) ([]domain.AccountBlock, error)
+}
+
+type spotFundsAccountPnlChainState struct {
+	ctx        context.Context
+	assignment asyncengine.SpotFundsAccountPnlAssignment
+	result     configure.PolicyConfigurationResult
+	err        error
+}
+
+// SetSpotFundsAccountPnl runs one already-mapped SpotFunds P&L assignment on
+// its account chain. Engine adapters supply SDK values and materialize the
+// returned configuration; framework owns the chain lifecycle and ordering.
+func SetSpotFundsAccountPnl(
+	ctx context.Context,
+	async *asyncengine.AsyncEngine,
+	account param.AccountID,
+	assignment asyncengine.SpotFundsAccountPnlAssignment,
+) (configure.PolicyConfigurationResult, error) {
+	state := &spotFundsAccountPnlChainState{
+		ctx:        ctx,
+		assignment: assignment,
+	}
+	begin := func(context.Context) (*spotFundsAccountPnlChainState, error) {
+		if ctxErr := state.ctx.Err(); ctxErr != nil {
+			state.err = ctxErr
+			return nil, state.err
+		}
+		return state, nil
+	}
+	builder := asyncengine.Chain(account, begin)
+	builder.SetSpotFundsAccountPnl(
+		asyncengine.SpotFundsAccountPnlHooks[*spotFundsAccountPnlChainState]{
+			Assignment: func(
+				_ context.Context,
+				state *spotFundsAccountPnlChainState,
+			) (asyncengine.SpotFundsAccountPnlAssignment, error) {
+				return state.assignment, nil
+			},
+			OnSet: func(
+				_ context.Context,
+				state *spotFundsAccountPnlChainState,
+				result configure.PolicyConfigurationResult,
+			) error {
+				state.result = result
+				return nil
+			},
+		},
+	)
+	runner := builder.Finally(func(
+		_ context.Context,
+		state *spotFundsAccountPnlChainState,
+		outcome asyncengine.ChainOutcome,
+	) error {
+		state.err = outcome.Err
+		return nil
+	})
+	_, chainErr := runner.Run(
+		ctx, async,
+	).Await(context.Background())
+	if chainErr != nil {
+		return configure.PolicyConfigurationResult{}, chainErr
+	}
+	if state.err != nil {
+		return configure.PolicyConfigurationResult{}, state.err
+	}
+	return state.result, nil
+}
+
 // ExecutionReportPersistence is the Officer write set produced after the engine
 // applies an execution report. Report-owned order, commission, trade, and event
 // fields are copied from the original report; engine-owned account effects are
@@ -249,56 +407,6 @@ type ExecutionReportResult struct {
 	Outcomes []BalanceOutcome
 }
 
-// AccountLane is the engine view captured for one account-synchronized lane
-// callback. Methods on this handle run directly on the already-routed engine
-// lane; callers must not call Engine.RunAccountSynchronized from inside them.
-type AccountLane interface {
-	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
-	UnblockAccount(ctx context.Context, id domain.AccountID) error
-	SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error
-	ClearAccountCurrency(ctx context.Context, id domain.AccountID) error
-	// SetAccountPnl force-sets the live SpotFunds account-currency P&L
-	// accumulator to pnl, an absolute decimal-string assignment that also clears
-	// any halt latched on it. The returned blocks are the account blocks the
-	// engine latched while applying the assignment: a seeded value can breach its
-	// own kill-switch barrier, so the caller must mirror them rather than assume
-	// an accepted assignment leaves the account tradable.
-	SetAccountPnl(
-		ctx context.Context, id domain.AccountID, pnl string,
-	) ([]domain.AccountBlock, error)
-	// SetAccountPnlState force-sets either a numeric account P&L or a halted
-	// state. Exactly one of pnl and haltReason must be non-empty.
-	SetAccountPnlState(
-		ctx context.Context,
-		id domain.AccountID,
-		pnl string,
-		haltReason domain.PnlHaltReason,
-	) ([]domain.AccountBlock, error)
-	ApplyAccountAdjustmentBatch(
-		ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
-	) ([]AdjustmentResult, *AdjustmentBatchReject, error)
-	ApplyAccountAdjustment(
-		ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
-	) (AdjustmentResult, error)
-	SubmitOrder(ctx context.Context, o domain.Order) (OrderResult, error)
-	SubmitImmediate(ctx context.Context, o domain.Order) (ImmediateResult, error)
-	ApplyExecutionReport(
-		ctx context.Context, in domain.ExecutionReportInput, leavesQuantity string,
-	) (ExecutionReportResult, error)
-	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
-}
-
-// GroupLane is the engine view captured for one group-synchronized lane
-// callback.
-type GroupLane interface {
-	BlockGroup(ctx context.Context, groupID, reason string) error
-	UnblockGroup(ctx context.Context, groupID string) error
-	SetGroupCurrency(ctx context.Context, groupID, currency string) error
-	ClearGroupCurrency(ctx context.Context, groupID string) error
-	RegisterGroup(ctx context.Context, accounts []domain.AccountID, groupID string) error
-	UnregisterGroup(ctx context.Context, accounts []domain.AccountID, groupID string) error
-}
-
 // BuildFunc builds an engine from a seed snapshot. The local node calls it at
 // construction and for administrative rebuilds. Production wires it to the app
 // engine adapter bound to a runtime-library path. Tests substitute a fake.
@@ -314,10 +422,12 @@ type BuildFunc func(snap Snapshot) (Engine, error)
 type DictionaryResolver interface {
 	AddAccountResolverEntry(account domain.Account) error
 	AddAssetResolverEntry(asset domain.Asset) error
+	ResolveAsset(code string) (param.Asset, error)
 	RenameAccountResolverEntry(oldCode domain.AccountID, account domain.Account) error
 	RenameAssetResolverEntry(oldCode string, asset domain.Asset) error
 	RemoveAssetResolverEntry(asset domain.Asset) error
 	AddGroupResolverEntry(group domain.AccountGroup) error
+	ResolveGroup(code string) (param.AccountGroupID, error)
 	RenameGroupResolverEntry(oldCode string, group domain.AccountGroup) error
 	RemoveGroupResolverEntry(group domain.AccountGroup) error
 }
@@ -341,6 +451,10 @@ type Health struct {
 // underlying engine was built with a concurrent sync policy; callers must honor
 // the binding's threading contract.
 type Engine interface {
+	OrderChainAdapter
+	AccountChainAdapter
+	DictionaryResolver
+
 	// Version returns the engine SDK/runtime version string.
 	Version() string
 
@@ -358,18 +472,6 @@ type Engine interface {
 	ConfigurePolicy(
 		ctx context.Context, policy string, limits LimitSet,
 	) (PolicyConfigurationResult, error)
-
-	// RunAccountSynchronized runs fn on the engine's account-synchronized lane.
-	// Account-scoped node operations use this to keep Officer's own checks,
-	// engine calls, and persistence ordered with every engine call for account.
-	RunAccountSynchronized(
-		ctx context.Context, account domain.AccountID, fn func(AccountLane) error,
-	) error
-
-	// RunGroupSynchronized runs fn on the engine's group-synchronized lane.
-	RunGroupSynchronized(
-		ctx context.Context, groupID string, fn func(GroupLane) error,
-	) error
 
 	// MarketDataSink returns the quote sink backed by the engine's market-data
 	// service. The connector manager drains normalized quotes into it; the sink

@@ -39,10 +39,7 @@ func (n *localNode) ensureAutoCreatedAccount(
 	if err := domain.ValidateAccountID(id); err != nil {
 		return err
 	}
-	resolver, err := requireDictionaryResolver(n.currentEngine())
-	if err != nil {
-		return fmt.Errorf("resolve live account dictionary for %s: %w", operation, err)
-	}
+	resolver := n.currentEngine()
 	account, err := n.realm.CreateAccount(ctx, domain.Account{Code: id})
 	if err != nil {
 		if errors.Is(err, domain.ErrAlreadyExists) {

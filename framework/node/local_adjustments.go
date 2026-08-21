@@ -22,11 +22,28 @@ import (
 	"fmt"
 
 	"github.com/shopspring/decimal"
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/model"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
+
+type adjustmentChainState struct {
+	ctx                  context.Context
+	adapter              engine.AccountChainAdapter
+	account              domain.AccountID
+	reqs                 []domain.AdjustmentRequest
+	adjustments          []model.AccountAdjustment
+	result               engine.AdjustmentResult
+	stored               domain.AccountAdjustmentRecord
+	balanceExists        bool
+	err                  error
+	engineApplied        bool
+	persistenceCompleted bool
+}
 
 func (n *localNode) auditEntry(
 	caller domain.Caller, entry store.AuditEntry,
@@ -56,18 +73,30 @@ func (n *localNode) ensureAdjustmentExternalIDUnused(
 }
 
 func snapshotAdjustmentRequest(snapshot domain.Balance) domain.AdjustmentRequest {
+	available := snapshot.Available
+	if available == "" {
+		available = "0"
+	}
+	held := snapshot.Held
+	if held == "" {
+		held = "0"
+	}
+	incoming := snapshot.Incoming
+	if incoming == "" {
+		incoming = "0"
+	}
 	req := domain.AdjustmentRequest{
 		Asset:                 snapshot.Asset,
 		AverageEntryPrice:     snapshot.AverageEntryPrice,
 		RealizedPnlHaltReason: snapshot.RealizedPnlHaltReason,
 		Balance: &domain.AdjustmentAmount{
-			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Available,
+			Mode: domain.AdjustmentModeAbsolute, Value: available,
 		},
 		Held: &domain.AdjustmentAmount{
-			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Held,
+			Mode: domain.AdjustmentModeAbsolute, Value: held,
 		},
 		Incoming: &domain.AdjustmentAmount{
-			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Incoming,
+			Mode: domain.AdjustmentModeAbsolute, Value: incoming,
 		},
 	}
 	if snapshot.RealizedPnlHaltReason == "" {
@@ -94,9 +123,8 @@ func (n *localNode) ApplyAdjustment(
 	if err := domain.ValidateAsset(req.Asset); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	// Resolve the account and auto-create the asset before entering the lane and
-	// publish a new account's stable id through the live resolver, so
-	// RunAccountSynchronized can resolve it without replacing the engine.
+	// Resolve the account and auto-create the asset before entering the chain,
+	// publishing a new account's stable id through the live resolver first.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
 		ctx, key.Account, missing, "adjustment", caller, req.Asset,
 	); err != nil {
@@ -114,32 +142,102 @@ func (n *localNode) ApplyAdjustment(
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	defer done()
-
-	var stored domain.AccountAdjustmentRecord
-	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+	source, err := eng.AccountID(key.Account)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	state := &adjustmentChainState{
+		ctx:           ctx,
+		adapter:       eng,
+		account:       key.Account,
+		reqs:          []domain.AdjustmentRequest{req},
+		balanceExists: true,
+	}
+	begin := func(context.Context) (*adjustmentChainState, error) {
+		if ctxErr := state.ctx.Err(); ctxErr != nil {
+			state.err = fmt.Errorf("engine: adjustment cancelled: %w", ctxErr)
+			return nil, state.err
+		}
 		requiresExistingBalance := adjustmentRequiresExistingBalance(req)
-		balanceExists := true
 		if requiresExistingBalance {
 			_, exists, err := n.realm.GetBalance(
 				ctx, key.Account, req.Asset,
 			)
 			if err != nil {
-				return fmt.Errorf("read balance before average adjustment: %w", err)
+				state.err = fmt.Errorf(
+					"read balance before average adjustment: %w", err,
+				)
+				return nil, state.err
 			}
-			balanceExists = exists
+			state.balanceExists = exists
 		}
-		result, err := lane.ApplyAccountAdjustment(ctx, key.Account, req)
-		if err != nil {
-			return fmt.Errorf("apply adjustment: %w", err)
+		adjustments, adjustmentErr := eng.AccountAdjustmentModels(state.reqs)
+		if adjustmentErr != nil {
+			state.err = fmt.Errorf("apply adjustment: %w", adjustmentErr)
+			return nil, state.err
 		}
-		if err := n.mirrorAdjustmentAccountBlocks(ctx, result.AccountBlocks); err != nil {
+		state.adjustments = adjustments
+		return state, nil
+	}
+	builder := asyncengine.Chain(source, begin)
+	builder.ApplyAccountAdjustment(
+		asyncengine.AccountAdjustmentHooks[*adjustmentChainState]{
+			Adjustments: func(
+				_ context.Context,
+				state *adjustmentChainState,
+			) ([]model.AccountAdjustment, error) {
+				return state.adjustments, nil
+			},
+			OnAdjusted: func(
+				_ context.Context,
+				state *adjustmentChainState,
+				batch accountadjustment.BatchResult,
+			) error {
+				state.engineApplied = true
+				results, batchReject, err :=
+					state.adapter.AppliedAccountAdjustmentBatch(
+						state.account, state.reqs, batch,
+					)
+				if err != nil {
+					state.err = fmt.Errorf("apply adjustment: %w", err)
+					return state.err
+				}
+				if batchReject != nil {
+					state.result = engine.AdjustmentResult{Rejected: batchReject}
+					return nil
+				}
+				if len(results) == 0 {
+					return nil
+				}
+				if len(results) != 1 {
+					state.err = fmt.Errorf(
+						"apply adjustment: engine: adjustment returned %d outcomes",
+						len(results),
+					)
+					return state.err
+				}
+				state.result = results[0]
+				return nil
+			},
+		},
+	)
+	runner := builder.Then(func(
+		_ context.Context, state *adjustmentChainState,
+	) error {
+		if err := n.mirrorAdjustmentAccountBlocks(
+			ctx, state.result.AccountBlocks,
+		); err != nil {
+			state.err = err
 			return err
 		}
-		if requiresExistingBalance && !balanceExists && result.Accepted != nil {
-			return domain.ErrNoChange
+		if adjustmentRequiresExistingBalance(req) &&
+			!state.balanceExists && state.result.Accepted != nil {
+			state.err = domain.ErrNoChange
+			return state.err
 		}
-		if adjustmentResultNoChange(result) {
-			return domain.ErrNoChange
+		if adjustmentResultNoChange(state.result) {
+			state.err = domain.ErrNoChange
+			return state.err
 		}
 
 		// A non-zero externalID is the caller-supplied handle, carried verbatim onto
@@ -150,45 +248,74 @@ func (n *localNode) ApplyAdjustment(
 			Source:     caller.Source,
 			Principal:  caller.Principal,
 			Request:    req,
-			Accepted:   result.Accepted,
-			Rejected:   result.Rejected,
+			Accepted:   state.result.Accepted,
+			Rejected:   state.result.Rejected,
 			Asset:      req.Asset,
 		}
 
 		var balance *domain.Balance
 		var deleteBalance *store.BalanceKey
-		if result.Accepted != nil {
-			balance, deleteBalance, err =
-				n.adjustedBalanceCommand(ctx, key, req.Asset, *result.Accepted)
-			if err != nil {
-				return err
+		if state.result.Accepted != nil {
+			adjustedBalance, deleteKey, balanceErr :=
+				n.adjustedBalanceCommand(ctx, key, req.Asset, *state.result.Accepted)
+			if balanceErr != nil {
+				state.err = balanceErr
+				return balanceErr
 			}
+			balance = adjustedBalance
+			deleteBalance = deleteKey
 		}
 
 		audit := n.auditEntry(caller, store.AuditEntry{
 			Action:  domain.AuditActionAdjustment,
 			Account: key.Account,
 			Asset:   req.Asset,
-			Detail:  adjustmentDetail(key.Account, req.Asset, result.Accepted != nil),
+			Detail: adjustmentDetail(
+				key.Account, req.Asset, state.result.Accepted != nil,
+			),
 		})
-		stored, err = n.realm.RecordAccountAdjustment(ctx, store.AccountAdjustmentPersistence{
-			UpsertBalance: balance,
-			DeleteBalance: deleteBalance,
-			Adjustment:    rec,
-			Audit:         audit,
-		})
-		if err != nil {
-			return n.fatalPostEnginePersistence(
+		stored, recordErr := n.realm.RecordAccountAdjustment(
+			ctx, store.AccountAdjustmentPersistence{
+				UpsertBalance: balance,
+				DeleteBalance: deleteBalance,
+				Adjustment:    rec,
+				Audit:         audit,
+			})
+		if recordErr != nil {
+			state.err = n.fatalPostEnginePersistence(
 				"record account adjustment",
 				accountID,
-				fmt.Errorf("record adjustment: %w", err),
+				fmt.Errorf("record adjustment: %w", recordErr),
 			)
+			return state.err
 		}
+		state.stored = stored
+		state.persistenceCompleted = true
 		return nil
-	}); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
+	}).Finally(func(
+		_ context.Context,
+		state *adjustmentChainState,
+		outcome asyncengine.ChainOutcome,
+	) error {
+		state.err = n.accountChainTerminalError(
+			"apply adjustment",
+			accountID,
+			state.err,
+			state.engineApplied,
+			state.persistenceCompleted,
+			outcome,
+		)
+		return nil
+	})
+	_, chainErr := runner.Run(
+		ctx, eng.AsyncEngine(),
+	).Await(context.Background())
+	if runErr := accountChainRunError(
+		"apply adjustment", state.err, chainErr,
+	); runErr != nil {
+		return domain.AccountAdjustmentRecord{}, runErr
 	}
-	return stored, nil
+	return state.stored, nil
 }
 
 // SetBalanceRealizedPnl writes the current realized-P&L control-plane value for

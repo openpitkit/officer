@@ -28,7 +28,5 @@ type OrderResult = engine.OrderResult
 type BalanceOutcome = engine.BalanceOutcome
 type ImmediateResult = engine.ImmediateResult
 type ExecutionReportResult = engine.ExecutionReportResult
-type AccountLane = engine.AccountLane
-type GroupLane = engine.GroupLane
 type Health = engine.Health
 type Engine = engine.Engine

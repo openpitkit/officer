@@ -23,20 +23,15 @@ import (
 	"fmt"
 	"slices"
 
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/reject"
+
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
 
 // --- groups -----------------------------------------------------------------
-
-func requireDictionaryResolver(eng engine.Engine) (engine.DictionaryResolver, error) {
-	resolver, ok := eng.(engine.DictionaryResolver)
-	if !ok {
-		return nil, fmt.Errorf("engine does not support live dictionary updates: %w", domain.ErrNotImplemented)
-	}
-	return resolver, nil
-}
 
 // CreateGroup persists a new account group, publishes its stable engine id, and
 // applies its group-owned runtime state without replacing the engine or sink.
@@ -56,10 +51,7 @@ func (n *localNode) CreateGroup(
 		}
 	}
 	eng := n.currentEngine()
-	resolver, err := requireDictionaryResolver(eng)
-	if err != nil {
-		return domain.AccountGroup{}, err
-	}
+	resolver := eng
 
 	created, err := n.realm.CreateGroup(ctx, group)
 	if err != nil {
@@ -83,18 +75,52 @@ func (n *localNode) CreateGroup(
 		return domain.AccountGroup{}, internalPostCommitNodeMutationError(resultErr)
 	}
 	if created.Currency != "" || created.Blocked {
-		err = eng.RunGroupSynchronized(ctx, created.Code, func(lane engine.GroupLane) error {
-			if created.Currency != "" {
-				if err := lane.SetGroupCurrency(ctx, created.Code, created.Currency); err != nil {
-					return fmt.Errorf("apply initial group currency: %w", err)
-				}
+		var initialCurrency *string
+		if created.Currency != "" {
+			initialCurrency = &created.Currency
+		}
+		var initialBlock *groupRuntimeBlock
+		if created.Blocked {
+			initialBlock = &groupRuntimeBlock{
+				blocked: true,
+				reason:  created.BlockReason,
 			}
-			if created.Blocked {
-				return n.applyGroupBlock(ctx, lane, created.Code, true, created.BlockReason)
-			}
-			return nil
-		})
+		}
+		engineApplied, chainErr := n.runGroupRuntimeChain(
+			ctx,
+			eng,
+			created,
+			true,
+			"apply initial group runtime state",
+			initialCurrency,
+			initialBlock,
+		)
+		err = chainErr
 		if err != nil {
+			if !engineApplied {
+				mutationCtx := context.WithoutCancel(ctx)
+				resolverErr := resolver.RemoveGroupResolverEntry(created)
+				rollbackErr := n.realm.DeleteGroup(
+					mutationCtx, created.Code, false,
+				)
+				if resolverErr == nil && rollbackErr == nil {
+					return domain.AccountGroup{}, err
+				}
+				cause := errors.Join(
+					err,
+					optionalOperationError(
+						"rollback created group resolver", resolverErr,
+					),
+					optionalOperationError("rollback created group", rollbackErr),
+				)
+				return domain.AccountGroup{}, internalPostCommitNodeMutationError(
+					n.reconcileEngineAfterFailure(
+						mutationCtx,
+						"reconcile engine after group create compensation failure",
+						cause,
+					).err,
+				)
+			}
 			mutationCtx := context.WithoutCancel(ctx)
 			resolverErr := resolver.RemoveGroupResolverEntry(created)
 			rollbackErr := n.realm.DeleteGroup(mutationCtx, created.Code, false)
@@ -179,10 +205,7 @@ func (n *localNode) SetGroupNotes(
 	}
 	defer n.endLiveIdentityPublication()
 
-	resolver, err := requireDictionaryResolver(n.currentEngine())
-	if err != nil {
-		return err
-	}
+	resolver := n.currentEngine()
 	_, created, err := n.ensureGroupRegisteredLocked(ctx, code, resolver)
 	if err != nil {
 		return fmt.Errorf("ensure group for set notes: %w", err)
@@ -232,10 +255,8 @@ func (n *localNode) UpdateGroup(
 	if err != nil {
 		return domain.AccountGroup{}, fmt.Errorf("update group: %w", err)
 	}
-	resolver, err := requireDictionaryResolver(n.currentEngine())
-	if err == nil {
-		err = resolver.RenameGroupResolverEntry(prev.Code, updated)
-	}
+	resolver := n.currentEngine()
+	err = resolver.RenameGroupResolverEntry(prev.Code, updated)
 	if err != nil {
 		mutationCtx := context.WithoutCancel(ctx)
 		_, rollbackErr := n.realm.UpdateGroup(mutationCtx, updated.Code, prev)
@@ -283,14 +304,14 @@ func renamedGroupAuditCodes(prevCode, code string) []string {
 	return []string{prevCode, code}
 }
 
-// SetGroupBlocked blocks or unblocks the group in the store, then the engine,
-// reverts the store on engine failure, and audits the action. If no group
+// SetGroupBlocked blocks or unblocks a group through a group-sourced SDK chain.
+// Its final engine hook persists the store state and audit row. If no group
 // record exists yet (e.g. the group is known only via account membership), a
 // default record is created first so the operation succeeds.
 //
 // The block spans every member account, so the live identity gate quiesces all
-// admitted account lanes. The SDK mutation itself still runs through the real
-// async-engine group lane; the gate is not a synthetic replacement lane.
+// admitted account lanes. The SDK chain itself routes on the group's synthetic
+// administrative key; the gate is not a replacement lane.
 func (n *localNode) SetGroupBlocked(
 	ctx context.Context, code string, blocked bool, reason string, caller domain.Caller,
 ) error {
@@ -300,66 +321,168 @@ func (n *localNode) SetGroupBlocked(
 	defer n.endLiveIdentityPublication()
 
 	eng := n.currentEngine()
-	resolver, err := requireDictionaryResolver(eng)
-	if err != nil {
-		return err
-	}
+	resolver := eng
 	prev, _, err := n.ensureGroupRegisteredLocked(ctx, code, resolver)
 	if err != nil {
 		return fmt.Errorf("read group for block: %w", err)
 	}
-
-	if err := n.realm.SetGroupBlocked(ctx, code, blocked, reason); err != nil {
-		return fmt.Errorf("set group blocked: %w", err)
+	source, err := administrativeGroupSource(resolver, prev)
+	if err != nil {
+		return err
 	}
-
-	applyErr := eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
-		return n.applyGroupBlock(ctx, lane, code, blocked, reason)
-	})
-	if applyErr != nil {
-		mutationCtx := context.WithoutCancel(ctx)
-		revertEngineErr := eng.RunGroupSynchronized(
-			mutationCtx, code, func(lane engine.GroupLane) error {
-				return n.applyGroupBlock(
-					mutationCtx, lane, code, prev.Blocked, prev.BlockReason,
-				)
+	if err := validateGroupAdministrativeSource(prev, source); err != nil {
+		return fmt.Errorf("read group for block: %w", err)
+	}
+	type groupBlockChainState struct {
+		administrativeChainState
+		previous domain.AccountGroup
+	}
+	state := &groupBlockChainState{
+		administrativeChainState: administrativeChainState{ctx: ctx},
+	}
+	begin := func(context.Context) (*groupBlockChainState, error) {
+		if ctxErr := state.ctx.Err(); ctxErr != nil {
+			state.err = fmt.Errorf("engine: group block cancelled: %w", ctxErr)
+			return nil, state.err
+		}
+		previous, ok, readErr := n.realm.GetGroup(state.ctx, code)
+		if readErr != nil {
+			state.err = fmt.Errorf("read group for block: %w", readErr)
+			return nil, state.err
+		}
+		if !ok {
+			state.err = fmt.Errorf("group %q: %w", code, domain.ErrNotFound)
+			return nil, state.err
+		}
+		if validateErr := validateGroupAdministrativeSource(
+			previous, source,
+		); validateErr != nil {
+			state.err = fmt.Errorf("read group for block: %w", validateErr)
+			return nil, state.err
+		}
+		state.previous = previous
+		state.failureOperation = "apply group block"
+		return state, nil
+	}
+	persist := func(state *groupBlockChainState) error {
+		state.engineApplied = true
+		mutationCtx := context.WithoutCancel(state.ctx)
+		state.failureOperation = "set group blocked"
+		if err := n.realm.SetGroupBlocked(
+			mutationCtx, code, blocked, reason,
+		); err != nil {
+			state.err = fmt.Errorf("set group blocked: %w", err)
+			return state.err
+		}
+		state.persistenceCompleted = true
+		action := domain.AuditActionBlockGroup
+		detail := blockGroupDetail(code, reason)
+		if !blocked {
+			action = domain.AuditActionUnblockGroup
+			detail = unblockGroupDetail(code, reason)
+		}
+		state.failureOperation = "audit group block"
+		if err := n.audit(mutationCtx, caller, store.AuditEntry{
+			Action: action,
+			Group:  code,
+			Detail: detail,
+		}); err != nil {
+			state.err = fmt.Errorf("audit group block: %w", err)
+			return state.err
+		}
+		return nil
+	}
+	builder := asyncengine.Chain(source, begin)
+	if blocked {
+		// The live identity gate held by SetGroupBlocked quiesces every member
+		// account lane, so the unblock needed to replace the reason cannot expose
+		// an order to a temporarily unblocked group tier.
+		builder.UnblockAccountGroup(
+			asyncengine.UnblockHooks[*groupBlockChainState]{
+				OnUnblocked: func(
+					_ context.Context, state *groupBlockChainState,
+				) error {
+					state.engineApplied = true
+					return nil
+				},
 			},
 		)
-		revertStoreErr := n.realm.SetGroupBlocked(
-			mutationCtx, code, prev.Blocked, prev.BlockReason,
+		builder.BlockAccountGroup(
+			asyncengine.BlockHooks[*groupBlockChainState]{
+				Reason: func(
+					_ context.Context, _ *groupBlockChainState,
+				) (string, error) {
+					return reason, nil
+				},
+				OnBlocked: func(
+					_ context.Context, state *groupBlockChainState,
+				) error {
+					return persist(state)
+				},
+			},
 		)
-		if revertEngineErr != nil || revertStoreErr != nil {
-			cause := errors.Join(
-				fmt.Errorf("apply group block: %w", applyErr),
-				optionalOperationError("revert group block runtime", revertEngineErr),
-				optionalOperationError("revert group block store", revertStoreErr),
-			)
-			return internalPostCommitNodeMutationError(
-				n.reconcileEngineAfterFailure(
-					mutationCtx, "reconcile engine after group block failure", cause,
-				).err,
-			)
+	} else {
+		builder.UnblockAccountGroup(
+			asyncengine.UnblockHooks[*groupBlockChainState]{
+				OnUnblocked: func(
+					_ context.Context, state *groupBlockChainState,
+				) error {
+					return persist(state)
+				},
+			},
+		)
+	}
+	runner := builder.Finally(func(
+		_ context.Context,
+		state *groupBlockChainState,
+		outcome asyncengine.ChainOutcome,
+	) error {
+		state.err = n.administrativeChainTerminalError(
+			"group block",
+			"group",
+			code,
+			&state.administrativeChainState,
+			outcome,
+		)
+		return nil
+	})
+	_, chainErr := runner.Run(
+		ctx, eng.AsyncEngine(),
+	).Await(context.Background())
+	if state.err == nil && chainErr != nil {
+		operation := "block group"
+		if !blocked {
+			operation = "unblock group"
 		}
-		return fmt.Errorf("apply group block: %w", applyErr)
+		chainErr = groupAdministrativeBlockError(operation, code, chainErr)
 	}
-
-	action := domain.AuditActionBlockGroup
-	detail := blockGroupDetail(code, reason)
-	if !blocked {
-		action = domain.AuditActionUnblockGroup
-		detail = unblockGroupDetail(code, reason)
-	}
-	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
-		Action: action,
-		Group:  code,
-		Detail: detail,
-	}); err != nil {
-		return n.fatalPostEngineAuditByCode(
-			"audit group block", "group", code,
-			fmt.Errorf("audit group block: %w", err),
+	runErr := accountChainRunError("group block", state.err, chainErr)
+	needsReconciliation := administrativeChainNeedsReconciliation(runErr)
+	if needsReconciliation && state.engineApplied {
+		return n.reconcileAdministrativeChainFailure(
+			ctx, "group block", runErr,
 		)
 	}
-	return nil
+	var blockErr *reject.AccountBlockError
+	if errors.As(runErr, &blockErr) {
+		return runErr
+	}
+	return n.reconcileAdministrativeChainFailure(ctx, "group block", runErr)
+}
+
+func groupAdministrativeBlockError(operation, group string, err error) error {
+	var blockErr *reject.AccountBlockError
+	if errors.As(err, &blockErr) &&
+		blockErr.Kind == reject.AccountBlockErrorKindReservedGroup {
+		return fmt.Errorf(
+			"engine: %s %q: %w: %w",
+			operation,
+			group,
+			err,
+			domain.ErrReservedGroup,
+		)
+	}
+	return err
 }
 
 // ensureGroupRegisteredLocked returns the persisted group and, when absent,
@@ -400,17 +523,6 @@ func (n *localNode) ensureGroupRegisteredLocked(
 			internalPostCommitNodeMutationError(resultErr)
 	}
 	return group, true, nil
-}
-
-// applyGroupBlock applies the desired blocked state through a synchronized
-// group lane while the caller holds the live identity gate.
-func (n *localNode) applyGroupBlock(
-	ctx context.Context, lane engine.GroupLane, code string, blocked bool, reason string,
-) error {
-	if blocked {
-		return lane.BlockGroup(ctx, code, reason)
-	}
-	return lane.UnblockGroup(ctx, code)
 }
 
 // DeleteGroup removes the group, detaches its member accounts, rebuilds the

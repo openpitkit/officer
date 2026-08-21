@@ -24,10 +24,23 @@ import (
 	"strings"
 	"testing"
 
+	"go.openpit.dev/openpit/asyncengine"
+
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
+
+type panicAccountAdjustmentRecordRealm struct {
+	store.RealmStore
+	err error
+}
+
+func (s *panicAccountAdjustmentRecordRealm) RecordAccountAdjustment(
+	context.Context, store.AccountAdjustmentPersistence,
+) (domain.AccountAdjustmentRecord, error) {
+	panic(s.err)
+}
 
 func TestLocalNode_ApplyAdjustmentHonorsSuppliedExternalID(t *testing.T) {
 	t.Parallel()
@@ -237,19 +250,17 @@ func TestLocalNode_AdjustedBalanceKeepsRealizedPnlState(t *testing.T) {
 	}
 }
 
-// balanceReadLaneProbeRealm records whether balance reads happen inside the
-// account lane. Adjustment persistence still reads the previous balance there,
-// even though Officer no longer derives any hidden input from it.
-type balanceReadLaneProbeRealm struct {
+// balanceReadChainProbeRealm records balance reads during adjustment processing.
+// The read happens exactly once in the chain's Begin step.
+type balanceReadChainProbeRealm struct {
 	store.RealmStore
-	eng    *fakeEngine
-	inLane []bool
+	reads int
 }
 
-func (s *balanceReadLaneProbeRealm) GetBalance(
+func (s *balanceReadChainProbeRealm) GetBalance(
 	ctx context.Context, account domain.AccountID, asset string,
 ) (domain.Balance, bool, error) {
-	s.inLane = append(s.inLane, s.eng.insideLane())
+	s.reads++
 	return s.RealmStore.GetBalance(ctx, account, asset)
 }
 
@@ -262,9 +273,9 @@ func TestLocalNode_ApplyAdjustmentDoesNotReplayStoredRealizedPnl(t *testing.T) {
 		BalanceResult: "1", AverageEntryPrice: "101",
 		RealizedPnlHaltReason: domain.PnlHaltReasonMissingInitialPnl,
 	}
-	var probe *balanceReadLaneProbeRealm
+	var probe *balanceReadChainProbeRealm
 	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
-		probe = &balanceReadLaneProbeRealm{RealmStore: r, eng: eng}
+		probe = &balanceReadChainProbeRealm{RealmStore: r}
 		return probe
 	})
 	ctx := context.Background()
@@ -292,14 +303,11 @@ func TestLocalNode_ApplyAdjustmentDoesNotReplayStoredRealizedPnl(t *testing.T) {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
 
-	if len(probe.inLane) == 0 {
+	if probe.reads == 0 {
 		t.Fatal("no balance read recorded for adjustment persistence")
 	}
-	for i, inLane := range probe.inLane {
-		if !inLane {
-			t.Fatalf("balance read %d of %d ran outside the account lane, want every "+
-				"read serialized by it", i, len(probe.inLane))
-		}
+	if probe.reads != 1 {
+		t.Fatalf("balance reads = %d, want 1", probe.reads)
 	}
 	if len(eng.adjustmentCalls) != 1 || eng.adjustmentCalls[0].req.RealizedPnl != "" {
 		t.Fatalf("engine adjustment calls = %+v, want caller's empty realized PnL",
@@ -713,6 +721,9 @@ func TestLocalNode_ApplyAdjustmentStoreFailureFatalsWithoutCompensation(t *testi
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("ApplyAdjustment error = %v, want store failure", err)
 	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("ApplyAdjustment error = %v, want retry-unsafe marker", err)
+	}
 	if len(eng.adjustmentCalls) != 1 {
 		t.Fatalf("engine adjustment calls = %+v, want only the requested apply", eng.adjustmentCalls)
 	}
@@ -728,6 +739,69 @@ func TestLocalNode_ApplyAdjustmentStoreFailureFatalsWithoutCompensation(t *testi
 		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
 		!strings.Contains(msg, "record adjustment failed") {
 		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+	}
+}
+
+func TestLocalNode_ApplyAdjustmentRecoveredPersistencePanicFatals(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("record adjustment panicked")
+	st := newRealmWrapStore(
+		newMemoryStore("node.db"),
+		func(realm store.RealmStore) store.RealmStore {
+			return &panicAccountAdjustmentRecordRealm{
+				RealmStore: realm,
+				err:        cause,
+			}
+		},
+	)
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceDelta:  "5",
+		BalanceResult: "15",
+	}
+	var fatalErr error
+	n := newTestNodeWithStore(
+		t,
+		st,
+		eng,
+		WithFatalShutdownHook(func(err error) { fatalErr = err }),
+	)
+	seedTestAccount(t, n.realm, "acc-1")
+	if err := n.realm.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "USD", Available: "10",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	_, err := n.ApplyAdjustment(
+		ctx,
+		testKey("acc-1"),
+		domain.ExternalID(""),
+		domain.AdjustmentRequest{
+			Asset: "USD",
+			Balance: &domain.AdjustmentAmount{
+				Mode: domain.AdjustmentModeDelta, Value: "5",
+			},
+		},
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), cause.Error()) {
+		t.Fatalf("ApplyAdjustment = %v, want panic cause", err)
+	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("ApplyAdjustment = %v, want retry-unsafe marker", err)
+	}
+	if fatalErr == nil ||
+		!errors.Is(fatalErr, cause) ||
+		!strings.Contains(fatalErr.Error(), "post-engine persistence failure") {
+		t.Fatalf("fatal error = %v, want post-engine persistence failure", fatalErr)
 	}
 }
 

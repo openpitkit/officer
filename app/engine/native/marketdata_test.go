@@ -24,7 +24,6 @@
 package native
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -389,8 +388,8 @@ func TestOpenPitBuildFunc_RebuildUsesPublishedQuoteForMarketOrder(t *testing.T) 
 			current = secondEngine
 			firstEngine.Stop()
 
-			result, err := checkOrderOnLane(
-				context.Background(), secondEngine,
+			result, err := materializeCheckedOrder(
+				secondEngine,
 				checkProbe("acc-1", domain.OrderSideBuy, "1", ""),
 			)
 			if err != nil {

@@ -61,7 +61,7 @@ func submitShortcutOrder(
 	}); err != nil {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
-	eng.submitLock = []byte("stored-lock")
+	eng.submitLock = fakeStoredLock(t)
 	eng.submitOutcomes = []engine.BalanceOutcome{
 		{
 			Asset: "USD",
@@ -172,7 +172,7 @@ func TestLocalNode_CancelOrderUsesPreReportLeaves(t *testing.T) {
 	input := eng.execReportCalls[0]
 	if input.Order != order.ExternalID || input.OrderStatus != domain.OrderStatusCancelled ||
 		input.LeavesQuantity != "0" || eng.execReportLeaves[0] != "20" ||
-		!bytes.Equal(input.Lock, []byte("stored-lock")) ||
+		!bytes.Equal(input.Lock, order.Lock) ||
 		input.FillQuantity != "" || input.FillPrice != "" {
 		t.Fatalf("synthetic cancellation input = %+v", input)
 	}
@@ -336,7 +336,7 @@ func TestLocalNode_CancelOrderAfterEngineRebuildUsesStoredState(t *testing.T) {
 	}
 	input := rebuiltEngine.execReportCalls[0]
 	if input.LeavesQuantity != "20" ||
-		!bytes.Equal(input.Lock, []byte("stored-lock")) {
+		!bytes.Equal(input.Lock, order.Lock) {
 		t.Fatalf("restarted cancellation lost stored state: %+v", input)
 	}
 }

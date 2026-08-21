@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/accountadjustment"
+
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -164,41 +166,13 @@ func (e *autoCreateOrderingEngine) record(event string) {
 	e.events = append(e.events, event)
 }
 
-func (e *autoCreateOrderingEngine) RunAccountSynchronized(
-	ctx context.Context,
-	account domain.AccountID,
-	fn func(engine.AccountLane) error,
-) error {
-	return e.fakeEngine.RunAccountSynchronized(
-		ctx,
-		account,
-		func(lane engine.AccountLane) error {
-			return fn(autoCreateOrderingAccountLane{AccountLane: lane, owner: e})
-		},
-	)
-}
-
-type autoCreateOrderingAccountLane struct {
-	engine.AccountLane
-	owner *autoCreateOrderingEngine
-}
-
-func (l autoCreateOrderingAccountLane) ApplyAccountAdjustmentBatch(
-	ctx context.Context,
+func (e *autoCreateOrderingEngine) AppliedAccountAdjustmentBatch(
 	account domain.AccountID,
 	reqs []domain.AdjustmentRequest,
+	batch accountadjustment.BatchResult,
 ) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
-	l.owner.record("adjustment:" + account.String())
-	return l.AccountLane.ApplyAccountAdjustmentBatch(ctx, account, reqs)
-}
-
-func (l autoCreateOrderingAccountLane) ApplyAccountAdjustment(
-	ctx context.Context,
-	account domain.AccountID,
-	req domain.AdjustmentRequest,
-) (engine.AdjustmentResult, error) {
-	l.owner.record("adjustment:" + account.String())
-	return l.AccountLane.ApplyAccountAdjustment(ctx, account, req)
+	e.record("adjustment:" + account.String())
+	return e.fakeEngine.AppliedAccountAdjustmentBatch(account, reqs, batch)
 }
 
 func TestAutoCreateInheritsDefaultCurrencyWithoutAccountOverride(t *testing.T) {
@@ -265,11 +239,9 @@ func TestAutoCreateInheritsDefaultCurrencyWithoutAccountOverride(t *testing.T) {
 	if len(events) != 1 || events[0] != "adjustment:fresh" {
 		t.Fatalf("runtime event order = %v, want adjustment without account override", events)
 	}
-	if _, ok := base.accountCurrencies["fresh"]; ok {
-		t.Fatal("auto-created account inherited currency was materialized as an override")
-	}
-	if got := base.effectiveAccountCurrency("fresh"); got != "USD" {
-		t.Fatalf("fresh live currency = %q, want inherited USD", got)
+	fresh, ok, err := n.realm.GetAccount(ctx, "fresh")
+	if err != nil || !ok || fresh.Currency != "" || fresh.EffectiveCurrency != "USD" {
+		t.Fatalf("fresh account = %+v ok=%v err=%v, want inherited USD", fresh, ok, err)
 	}
 	if builds != 1 {
 		t.Fatalf("engine builds = %d, want initial build only", builds)
@@ -285,8 +257,6 @@ func TestAutoCreateDoesNotTouchAccountCurrencyOverride(t *testing.T) {
 	if err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller); err != nil {
 		t.Fatalf("SetDefaultGroupCurrency: %v", err)
 	}
-	eng.accountCurrencyErr = errors.New("account currency must not be touched")
-
 	err := n.ensureAccountAndAssetsRegisteredExclusive(
 		ctx, "fresh", domain.MissingAccountCreate, "test", testCaller, "USD",
 	)
@@ -296,15 +266,11 @@ func TestAutoCreateDoesNotTouchAccountCurrencyOverride(t *testing.T) {
 	if probe.builds != 1 {
 		t.Fatalf("engine builds = %d, want initial build only", probe.builds)
 	}
-	if _, ok, getErr := n.realm.GetAccount(ctx, "fresh"); getErr != nil || !ok {
-		t.Fatalf("GetAccount after auto-create: ok=%v err=%v, want present", ok, getErr)
+	fresh, ok, getErr := n.realm.GetAccount(ctx, "fresh")
+	if getErr != nil || !ok || fresh.Currency != "" || fresh.EffectiveCurrency != "USD" {
+		t.Fatalf("fresh account = %+v ok=%v err=%v, want inherited USD", fresh, ok, getErr)
 	}
-	if _, ok := eng.accountCurrencies["fresh"]; ok {
-		t.Fatal("auto-created account has an explicit live currency override")
-	}
-	if got := eng.effectiveAccountCurrency("fresh"); got != "USD" {
-		t.Fatalf("fresh effective currency = %q, want inherited USD", got)
-	}
+	assertFakeEffectiveCurrency(t, eng, "fresh", "USD")
 }
 
 func TestAutoCreatePublishesAccountWithoutRebuild(t *testing.T) {
@@ -355,62 +321,7 @@ func TestAutoCreatePublishesAccountWithoutRebuild(t *testing.T) {
 	}
 	if len(eng.adjustmentBatchCalls) != 1 ||
 		eng.adjustmentBatchCalls[0].account != "fresh" {
-		t.Fatalf("adjustment batches = %+v, want fresh account lane", eng.adjustmentBatchCalls)
-	}
-}
-
-type accountMutationProbeRealm struct {
-	store.RealmStore
-	createCalls int
-}
-
-func (r *accountMutationProbeRealm) CreateAccount(
-	ctx context.Context, account domain.Account,
-) (domain.Account, error) {
-	r.createCalls++
-	return r.RealmStore.CreateAccount(ctx, account)
-}
-
-func TestLocalNode_SetAccountGroupRejectsUnsupportedAccountAutoCreateBeforeStoreWrite(
-	t *testing.T,
-) {
-	t.Parallel()
-	ctx := context.Background()
-	base := newMemoryStore("auto-create-account-capability.db")
-	var probe *accountMutationProbeRealm
-	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
-		probe = &accountMutationProbeRealm{RealmStore: realm}
-		return probe
-	})
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	n := newResolverCapabilityTestNode(t, st)
-	if probe == nil {
-		t.Fatal("account mutation probe was not installed")
-	}
-	probe.createCalls = 0
-
-	err := n.SetAccountGroup(
-		ctx,
-		testKey("fresh"),
-		"",
-		domain.MissingAccountCreate,
-		testCaller,
-	)
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		t.Fatalf("SetAccountGroup = %v, want ErrNotImplemented", err)
-	}
-	if probe.createCalls != 0 {
-		t.Fatalf("CreateAccount store calls = %d, want 0", probe.createCalls)
-	}
-	if _, ok, getErr := n.realm.GetAccount(ctx, "fresh"); getErr != nil || ok {
-		t.Fatalf(
-			"GetAccount(fresh) = ok %v err %v, want absent",
-			ok,
-			getErr,
-		)
+		t.Fatalf("adjustment batches = %+v, want fresh account chain", eng.adjustmentBatchCalls)
 	}
 }
 

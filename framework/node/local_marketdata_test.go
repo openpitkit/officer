@@ -49,9 +49,8 @@ func TestUpsertMarketDataInstrumentKeepsEngineAndSink(t *testing.T) {
 		}
 		fake = newFakeEngine()
 		return &marketDataTestEngine{
-			Engine:             fake,
-			DictionaryResolver: fake,
-			sink:               wantSink,
+			Engine: fake,
+			sink:   wantSink,
 		}, nil
 	}
 	nodeValue, _, err := NewLocalNode(ctx, st, build)
@@ -212,7 +211,6 @@ func assertMarketDataAssetAudits(
 
 type marketDataTestEngine struct {
 	engine.Engine
-	engine.DictionaryResolver
 	sink marketdata.Sink
 }
 

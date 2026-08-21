@@ -21,6 +21,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -88,8 +94,155 @@ func recordOrderSettlementWithAttestation(
 	return attesting.RecordOrderSettlementWithAttestation(ctx, st, attest)
 }
 
-// SubmitOrder runs the pre-trade submit on the account lane and persists the
-// order, submitted event, and engine outcome in one store transaction. On accept
+var errOrderSubmissionChainAborted = errors.New(
+	"order submission chain aborted",
+)
+
+type orderSubmissionCompletion struct {
+	order domain.Order
+	err   error
+}
+
+// orderSubmissionBridge keeps RecordOrderSubmission's transaction open while
+// the SDK chain runs. The store callback publishes the assigned draft and then
+// waits for the settlement produced by the chain hook.
+type orderSubmissionBridge struct {
+	settlement chan domain.OrderSettlement
+	abort      chan struct{}
+	done       chan orderSubmissionCompletion
+	completed  bool
+}
+
+func beginOrderSubmission(
+	ctx context.Context,
+	realm store.RealmStore,
+	draft domain.Order,
+	submitted domain.OrderEvent,
+	attest store.EventAttestor,
+) (*orderSubmissionBridge, domain.Order, error) {
+	started := make(chan domain.Order, 1)
+	bridge := &orderSubmissionBridge{
+		settlement: make(chan domain.OrderSettlement, 1),
+		abort:      make(chan struct{}),
+		done:       make(chan orderSubmissionCompletion, 1),
+	}
+	go func() {
+		order, err := recordOrderSubmissionWithAttestation(
+			ctx,
+			realm,
+			draft,
+			submitted,
+			func(persisted domain.Order) (domain.OrderSettlement, error) {
+				started <- persisted
+				select {
+				case settlement := <-bridge.settlement:
+					return settlement, nil
+				case <-bridge.abort:
+					return domain.OrderSettlement{},
+						errOrderSubmissionChainAborted
+				}
+			},
+			attest,
+		)
+		bridge.done <- orderSubmissionCompletion{order: order, err: err}
+	}()
+
+	select {
+	case order := <-started:
+		return bridge, order, nil
+	case completion := <-bridge.done:
+		if completion.err == nil {
+			completion.err = errors.New(
+				"store: order submission apply callback was not called",
+			)
+		}
+		return nil, domain.Order{}, completion.err
+	}
+}
+
+func (b *orderSubmissionBridge) complete(
+	settlement domain.OrderSettlement,
+) (domain.Order, error) {
+	if b == nil {
+		return domain.Order{}, errors.New(
+			"store: order submission transaction is unavailable",
+		)
+	}
+	if b.completed {
+		return domain.Order{}, errors.New(
+			"store: order submission transaction already completed",
+		)
+	}
+	b.completed = true
+	b.settlement <- settlement
+	completion := <-b.done
+	return completion.order, completion.err
+}
+
+func (b *orderSubmissionBridge) abortAndWait() {
+	if b == nil || b.completed {
+		return
+	}
+	b.completed = true
+	close(b.abort)
+	<-b.done
+}
+
+func validatePersistedOrderChainInput(
+	draft domain.Order, persisted domain.Order,
+) error {
+	var field string
+	switch {
+	case persisted.Account != draft.Account:
+		field = "account"
+	case persisted.BaseAsset != draft.BaseAsset:
+		field = "base asset"
+	case persisted.QuoteAsset != draft.QuoteAsset:
+		field = "quote asset"
+	case persisted.Side != draft.Side:
+		field = "side"
+	case persisted.AmountKind != draft.AmountKind:
+		field = "amount kind"
+	case persisted.AmountValue != draft.AmountValue:
+		field = "amount value"
+	case persisted.Price != draft.Price:
+		field = "price"
+	case persisted.DropCopy != draft.DropCopy:
+		field = "drop-copy mode"
+	default:
+		return nil
+	}
+	return fmt.Errorf(
+		"store: persisted order %s does not match chain input: %w",
+		field,
+		domain.ErrInvalid,
+	)
+}
+
+type submitOrderChainState struct {
+	ctx        context.Context
+	bridge     *orderSubmissionBridge
+	order      domain.Order
+	result     engine.OrderResult
+	settlement domain.OrderSettlement
+	attest     store.EventAttestor
+	err        error
+}
+
+type submitImmediateChainState struct {
+	ctx               context.Context
+	bridge            *orderSubmissionBridge
+	order             domain.Order
+	result            engine.ImmediateResult
+	preparation       engine.ImmediatePreparation
+	attest            store.EventAttestor
+	err               error
+	preTradeFinalized bool
+	reportSettled     bool
+}
+
+// SubmitOrder runs pre-trade and caller persistence in one account chain and
+// one store transaction. On accept
 // it records pre_trade_accepted and committed, persists the lock, engine opening
 // leaves, balance outcomes, and committed status; on reject it records
 // pre_trade_rejected and rejected status. missing decides whether an order for
@@ -121,8 +274,8 @@ func (n *localNode) submitOrder(
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
-	// Resolve the account and register both order assets pre-lane so the resolver
-	// knows them before RunAccountSynchronized resolves the account.
+	// Resolve the account and register both order assets before the chain source
+	// is converted to its stable SDK identifiers.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
 		ctx, key.Account, missing, "submit order", caller,
 		o.BaseAsset, o.QuoteAsset,
@@ -139,84 +292,209 @@ func (n *localNode) submitOrder(
 	}
 	defer done()
 
-	var order domain.Order
-	var result engine.OrderResult
-	var attest store.EventAttestor
+	draft := submittedOrderDraft(key, o, caller)
+	source, err := eng.OrderModel(draft)
+	if err != nil {
+		return domain.Order{}, engine.OrderResult{},
+			fmt.Errorf("submit order: %w", err)
+	}
+	state := &submitOrderChainState{ctx: ctx}
 	var attestSubmitted store.EventAttestor
 	if attestFor != nil {
 		attestSubmitted = func(
 			ctx context.Context, event domain.OrderEvent,
 		) (domain.EventAttestation, bool, error) {
-			if attest == nil {
+			if state.attest == nil {
 				return domain.EventAttestation{}, false, nil
 			}
-			return attest(ctx, event)
+			return state.attest(ctx, event)
 		}
 	}
-	engineApplied := false
-	draft := submittedOrderDraft(key, o, caller)
 	submitted := submittedOrderEvent(caller)
-	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
-		var err error
-		order, err = recordOrderSubmissionWithAttestation(
-			ctx,
-			n.realm,
-			draft,
-			submitted,
-			func(persisted domain.Order) (domain.OrderSettlement, error) {
-				result, err = lane.SubmitOrder(ctx, persisted)
-				if err != nil {
-					return domain.OrderSettlement{}, fmt.Errorf("submit order: %w", err)
-				}
-				engineApplied = true
-				if attestFor != nil {
-					attest = attestFor(persisted, result)
-				}
-				if result.Accepted {
-					return orderAcceptedSettlement(key, persisted, result, caller)
-				}
-				return orderRejectedSettlement(key, persisted, result.Rejects, caller), nil
-			},
-			attestSubmitted,
-		)
-		if err != nil {
-			if engineApplied {
-				return n.fatalPostEnginePersistence(
-					"record order submission", accountID, err,
-				)
-			}
-			return err
-		}
-		if result.Accepted {
-			if err := n.mirrorEngineBlocksAudit(
-				ctx, order.ExternalID, result.Blocks,
-			); err != nil {
-				return n.fatalPostEnginePersistence(
-					"audit pre-trade engine blocks", accountID, err,
-				)
-			}
-		}
 
-		action := domain.AuditActionSubmitOrder
-		if order.DropCopy {
-			action = domain.AuditActionSubmitDropCopy
+	begin := func(context.Context) (*submitOrderChainState, error) {
+		if ctxErr := state.ctx.Err(); ctxErr != nil {
+			state.err = fmt.Errorf(
+				"engine: submit order cancelled: %w", ctxErr,
+			)
+			return nil, state.err
 		}
-		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action:  action,
-			Account: key.Account,
-			Detail:  submitOrderDetail(order, result.Accepted),
-		}); err != nil {
+		bridge, persisted, beginErr := beginOrderSubmission(
+			state.ctx, n.realm, draft, submitted, attestSubmitted,
+		)
+		if beginErr != nil {
+			state.err = beginErr
+			return nil, beginErr
+		}
+		if validateErr := validatePersistedOrderChainInput(
+			draft, persisted,
+		); validateErr != nil {
+			bridge.abortAndWait()
+			state.err = fmt.Errorf("submit order: %w", validateErr)
+			return nil, state.err
+		}
+		state.bridge = bridge
+		state.order = persisted
+		return state, nil
+	}
+	builder := asyncengine.Chain(source, begin)
+	onRejected := func(
+		chainCtx context.Context,
+		state *submitOrderChainState,
+		rejects []reject.Reject,
+	) error {
+		state.result = eng.RejectedOrder(state.order, rejects)
+		if attestFor != nil {
+			state.attest = attestFor(state.order, state.result)
+		}
+		settlement := orderRejectedSettlement(
+			key, state.order, state.result.Rejects, caller,
+		)
+		persisted, persistErr := state.bridge.complete(settlement)
+		if persistErr != nil {
+			state.err = n.fatalPostEnginePersistence(
+				"record order submission", accountID, persistErr,
+			)
+			return state.err
+		}
+		state.order = persisted
+		state.err = n.auditSubmittedOrder(
+			state.ctx, key, state.order, state.result, caller, accountID,
+		)
+		return state.err
+	}
+	if draft.DropCopy {
+		builder.ApplyDropCopy(asyncengine.DropCopyHooks[*submitOrderChainState]{
+			OnRejected: onRejected,
+			OnApplied: func(
+				_ context.Context,
+				state *submitOrderChainState,
+				operation asyncengine.DropCopyResult,
+			) (asyncengine.Decision, error) {
+				result, resultErr := eng.AppliedDropCopyOrder(
+					state.order, operation,
+				)
+				if resultErr != nil {
+					state.err = fmt.Errorf("submit order: %w", resultErr)
+					return asyncengine.DecisionRollback, state.err
+				}
+				return n.materializeReservedOrder(
+					key, caller, attestFor, state, result,
+				)
+			},
+		})
+	} else {
+		builder.ExecutePreTrade(asyncengine.PreTradeHooks[*submitOrderChainState]{
+			OnRejected: onRejected,
+			OnReserved: func(
+				_ context.Context,
+				state *submitOrderChainState,
+				reservation asyncengine.OperationResult,
+			) (asyncengine.Decision, error) {
+				result, resultErr := eng.ReservedOrder(
+					state.order, reservation,
+				)
+				if resultErr != nil {
+					state.err = fmt.Errorf("submit order: %w", resultErr)
+					return asyncengine.DecisionRollback, state.err
+				}
+				return n.materializeReservedOrder(
+					key, caller, attestFor, state, result,
+				)
+			},
+		})
+	}
+	runner := builder.Then(func(
+		_ context.Context, state *submitOrderChainState,
+	) error {
+		persisted, persistErr := state.bridge.complete(state.settlement)
+		if persistErr != nil {
+			state.err = n.fatalPostEnginePersistence(
+				"record order submission", accountID, persistErr,
+			)
+			return state.err
+		}
+		state.order = persisted
+		return nil
+	}).Then(func(
+		_ context.Context, state *submitOrderChainState,
+	) error {
+		state.err = n.auditSubmittedOrder(
+			state.ctx, key, state.order, state.result, caller, accountID,
+		)
+		return state.err
+	}).Finally(func(
+		_ context.Context,
+		state *submitOrderChainState,
+		_ asyncengine.ChainOutcome,
+	) error {
+		state.bridge.abortAndWait()
+		return nil
+	})
+	_, chainErr := runner.Run(ctx, eng.AsyncEngine()).Await(context.Background())
+	if runErr := accountChainRunError(
+		"submit order", state.err, chainErr,
+	); runErr != nil {
+		return domain.Order{}, engine.OrderResult{}, runErr
+	}
+	return state.order, state.result, nil
+}
+
+func (n *localNode) materializeReservedOrder(
+	key Key,
+	caller domain.Caller,
+	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
+	state *submitOrderChainState,
+	result engine.OrderResult,
+) (asyncengine.Decision, error) {
+	state.result = result
+	if attestFor != nil {
+		state.attest = attestFor(state.order, state.result)
+	}
+	settlement, err := orderAcceptedSettlement(
+		key, state.order, state.result, caller,
+	)
+	if err != nil {
+		state.err = fmt.Errorf("submit order: materialize settlement: %w", err)
+		return asyncengine.DecisionRollback, state.err
+	}
+	state.settlement = settlement
+	return asyncengine.DecisionCommit, nil
+}
+
+func (n *localNode) auditSubmittedOrder(
+	ctx context.Context,
+	key Key,
+	order domain.Order,
+	result engine.OrderResult,
+	caller domain.Caller,
+	accountID string,
+) error {
+	if result.Accepted {
+		if err := n.mirrorEngineBlocksAudit(
+			ctx, order.ExternalID, result.Blocks,
+		); err != nil {
 			return n.fatalPostEnginePersistence(
-				"audit submit order",
-				accountID,
-				fmt.Errorf("audit submit order: %w", err),
+				"audit pre-trade engine blocks", accountID, err,
 			)
 		}
-		return nil
-	}); err != nil {
-		return domain.Order{}, engine.OrderResult{}, err
 	}
-	return order, result, nil
+	action := domain.AuditActionSubmitOrder
+	if order.DropCopy {
+		action = domain.AuditActionSubmitDropCopy
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action:  action,
+		Account: key.Account,
+		Detail:  submitOrderDetail(order, result.Accepted),
+	}); err != nil {
+		return n.fatalPostEnginePersistence(
+			"audit submit order",
+			accountID,
+			fmt.Errorf("audit submit order: %w", err),
+		)
+	}
+	return nil
 }
 
 func orderAcceptedSettlement(
@@ -341,8 +619,8 @@ func (n *localNode) submitImmediate(
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
-	// Resolve the account and register both order assets pre-lane (see
-	// SubmitOrder).
+	// Resolve the account and register both order assets before converting the
+	// chain source (see SubmitOrder).
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
 		ctx, key.Account, missing, "submit immediate", caller,
 		o.BaseAsset, o.QuoteAsset,
@@ -359,97 +637,292 @@ func (n *localNode) submitImmediate(
 	}
 	defer done()
 
-	var order domain.Order
-	var result engine.ImmediateResult
-	var attest store.EventAttestor
+	draft := submittedOrderDraft(key, o, caller)
+	source, err := eng.OrderModel(draft)
+	if err != nil {
+		return domain.Order{}, engine.ImmediateResult{},
+			fmt.Errorf("submit immediate: %w", err)
+	}
+	state := &submitImmediateChainState{ctx: ctx}
 	var attestSubmitted store.EventAttestor
 	if attestFor != nil {
 		attestSubmitted = func(ctx context.Context, event domain.OrderEvent) (domain.EventAttestation, bool, error) {
-			if attest == nil {
+			if state.attest == nil {
 				return domain.EventAttestation{}, false, nil
 			}
-			return attest(ctx, event)
+			return state.attest(ctx, event)
 		}
 	}
-	engineApplied := false
-	draft := submittedOrderDraft(key, o, caller)
 	submitted := submittedOrderEvent(caller)
-	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
-		var err error
-		order, err = recordOrderSubmissionWithAttestation(
-			ctx,
-			n.realm,
-			draft,
-			submitted,
-			func(persisted domain.Order) (domain.OrderSettlement, error) {
-				result, err = lane.SubmitImmediate(ctx, persisted)
-				if err != nil {
-					return domain.OrderSettlement{}, fmt.Errorf("submit immediate: %w", err)
-				}
-				engineApplied = true
-				if !result.Accepted {
-					if attestFor != nil {
-						attest = attestFor(persisted, result)
-					}
-					return orderRejectedSettlement(key, persisted, result.Rejects, caller), nil
-				}
-				if attestFor != nil {
-					attest = attestFor(persisted, result)
-				}
-				return immediateAcceptedSettlement(
-					key,
-					persisted,
-					result,
-					caller,
-				)
-			},
-			attestSubmitted,
+
+	begin := func(context.Context) (*submitImmediateChainState, error) {
+		if ctxErr := state.ctx.Err(); ctxErr != nil {
+			state.err = fmt.Errorf(
+				"engine: submit immediate cancelled: %w", ctxErr,
+			)
+			return nil, state.err
+		}
+		bridge, persisted, beginErr := beginOrderSubmission(
+			state.ctx, n.realm, draft, submitted, attestSubmitted,
 		)
-		if err != nil {
-			if engineApplied {
-				return n.fatalPostEnginePersistence(
-					"record immediate submission", accountID, err,
-				)
-			}
-			return err
+		if beginErr != nil {
+			state.err = beginErr
+			return nil, beginErr
 		}
-		if result.Accepted {
-			if err := n.mirrorEngineBlocksAudit(ctx, order.ExternalID, result.Blocks); err != nil {
-				return n.fatalPostEnginePersistence(
-					"audit immediate engine blocks", accountID, err,
-				)
-			}
-			if result.ExecutionReport == nil {
-				return n.fatalPostEnginePersistence(
-					"audit immediate execution report",
-					accountID,
-					fmt.Errorf("immediate execution report missing"),
-				)
-			}
-			// The adapter-built report request carries the leaves sent to the SDK.
-			reported := executionReportInputFromRequest(*result.ExecutionReport)
-			if err := n.audit(ctx, caller, store.AuditEntry{
-				Action:  domain.AuditActionExecutionReport,
-				Account: key.Account,
-				Detail: executionReportDetail(
-					reported,
-					reported.LeavesQuantity,
-					domain.OrderStatusFilled,
-					len(result.Blocks),
-				),
-			}); err != nil {
-				return n.fatalPostEnginePersistence(
-					"audit immediate execution report",
-					accountID,
-					fmt.Errorf("audit immediate execution report: %w", err),
-				)
-			}
+		if validateErr := validatePersistedOrderChainInput(
+			draft, persisted,
+		); validateErr != nil {
+			bridge.abortAndWait()
+			state.err = fmt.Errorf("submit immediate: %w", validateErr)
+			return nil, state.err
 		}
-		return nil
-	}); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, err
+		state.bridge = bridge
+		state.order = persisted
+		return state, nil
 	}
-	return order, result, nil
+	builder := asyncengine.Chain(source, begin)
+	onRejected := func(
+		_ context.Context,
+		state *submitImmediateChainState,
+		rejects []reject.Reject,
+	) error {
+		state.result = eng.RejectedImmediate(state.order, rejects)
+		if attestFor != nil {
+			state.attest = attestFor(state.order, state.result)
+		}
+		settlement := orderRejectedSettlement(
+			key, state.order, state.result.Rejects, caller,
+		)
+		persisted, persistErr := state.bridge.complete(settlement)
+		if persistErr != nil {
+			state.err = n.fatalPostEnginePersistence(
+				"record immediate submission", accountID, persistErr,
+			)
+			return state.err
+		}
+		state.order = persisted
+		return nil
+	}
+	if draft.DropCopy {
+		builder.ApplyDropCopy(
+			asyncengine.DropCopyHooks[*submitImmediateChainState]{
+				OnRejected: onRejected,
+				OnApplied: func(
+					_ context.Context,
+					state *submitImmediateChainState,
+					operation asyncengine.DropCopyResult,
+				) (asyncengine.Decision, error) {
+					preparation, prepareErr := eng.PrepareImmediateDropCopy(
+						state.order, operation,
+					)
+					if prepareErr != nil {
+						state.err = fmt.Errorf(
+							"submit immediate: %w", prepareErr,
+						)
+						return asyncengine.DecisionRollback, state.err
+					}
+					state.preparation = preparation
+					return asyncengine.DecisionCommit, nil
+				},
+			},
+		)
+	} else {
+		builder.ExecutePreTrade(
+			asyncengine.PreTradeHooks[*submitImmediateChainState]{
+				OnRejected: onRejected,
+				OnReserved: func(
+					_ context.Context,
+					state *submitImmediateChainState,
+					reservation asyncengine.OperationResult,
+				) (asyncengine.Decision, error) {
+					preparation, prepareErr := eng.PrepareImmediateReservation(
+						state.order, reservation,
+					)
+					if prepareErr != nil {
+						state.err = fmt.Errorf(
+							"submit immediate: %w", prepareErr,
+						)
+						return asyncengine.DecisionRollback, state.err
+					}
+					state.preparation = preparation
+					return asyncengine.DecisionCommit, nil
+				},
+			},
+		)
+	}
+	builder.Then(func(
+		_ context.Context, state *submitImmediateChainState,
+	) error {
+		state.preTradeFinalized = true
+		return nil
+	})
+	builder.ApplyExecutionReport(
+		asyncengine.ExecutionReportHooks[*submitImmediateChainState]{
+			Report: func(
+				_ context.Context, state *submitImmediateChainState,
+			) (model.ExecutionReport, error) {
+				return state.preparation.ExecutionReport, nil
+			},
+			OnSettled: func(
+				_ context.Context,
+				state *submitImmediateChainState,
+				postTrade pretrade.PostTradeResult,
+			) error {
+				result, settleErr := eng.SettleImmediate(
+					state.order, state.preparation, postTrade,
+				)
+				if settleErr != nil {
+					state.err = settleErr
+					return settleErr
+				}
+				state.result = result
+				state.reportSettled = true
+				if attestFor != nil {
+					state.attest = attestFor(state.order, state.result)
+				}
+				return nil
+			},
+		},
+	)
+	runner := builder.Then(func(
+		_ context.Context, state *submitImmediateChainState,
+	) error {
+		settlement, settlementErr := immediateAcceptedSettlement(
+			key, state.order, state.result, caller,
+		)
+		if settlementErr != nil {
+			state.err = n.fatalPostEnginePersistence(
+				"record immediate submission", accountID, settlementErr,
+			)
+			return state.err
+		}
+		persisted, persistErr := state.bridge.complete(settlement)
+		if persistErr != nil {
+			state.err = n.fatalPostEnginePersistence(
+				"record immediate submission", accountID, persistErr,
+			)
+			return state.err
+		}
+		state.order = persisted
+		return nil
+	}).Then(func(
+		_ context.Context, state *submitImmediateChainState,
+	) error {
+		state.err = n.auditImmediateSubmission(
+			state.ctx, key, state.order, state.result, caller, accountID,
+		)
+		return state.err
+	}).Finally(func(
+		_ context.Context,
+		state *submitImmediateChainState,
+		outcome asyncengine.ChainOutcome,
+	) error {
+		if state.err == nil && state.preTradeFinalized &&
+			!state.reportSettled && outcome.Err != nil {
+			state.err = immediateReconciliationError(
+				state.order,
+				state.preparation.ReconciliationState,
+				"the execution report failed and the fill is unsettled",
+				chainRootCause(outcome.Err),
+			)
+		}
+		state.bridge.abortAndWait()
+		return nil
+	})
+	_, chainErr := runner.Run(ctx, eng.AsyncEngine()).Await(context.Background())
+	if runErr := accountChainRunError(
+		"submit immediate", state.err, chainErr,
+	); runErr != nil {
+		return domain.Order{}, engine.ImmediateResult{}, runErr
+	}
+	return state.order, state.result, nil
+}
+
+func (n *localNode) auditImmediateSubmission(
+	ctx context.Context,
+	key Key,
+	order domain.Order,
+	result engine.ImmediateResult,
+	caller domain.Caller,
+	accountID string,
+) error {
+	if err := n.mirrorEngineBlocksAudit(
+		ctx, order.ExternalID, result.Blocks,
+	); err != nil {
+		return n.fatalPostEnginePersistence(
+			"audit immediate engine blocks", accountID, err,
+		)
+	}
+	if result.ExecutionReport == nil {
+		return n.fatalPostEnginePersistence(
+			"audit immediate execution report",
+			accountID,
+			fmt.Errorf("immediate execution report missing"),
+		)
+	}
+	// The adapter-built report request carries the leaves sent to the SDK.
+	reported := executionReportInputFromRequest(*result.ExecutionReport)
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action:  domain.AuditActionExecutionReport,
+		Account: key.Account,
+		Detail: executionReportDetail(
+			reported,
+			reported.LeavesQuantity,
+			domain.OrderStatusFilled,
+			len(result.Blocks),
+		),
+	}); err != nil {
+		return n.fatalPostEnginePersistence(
+			"audit immediate execution report",
+			accountID,
+			fmt.Errorf("audit immediate execution report: %w", err),
+		)
+	}
+	return nil
+}
+
+// immediateReconciliationError reports state the engine already applied and the
+// caller must reconcile by hand. The cause is rendered, not wrapped: causes
+// carrying domain.ErrInvalid would answer 400 "fix your input and retry", which
+// contradicts the message and hides an internal failure.
+func immediateReconciliationError(
+	o domain.Order, state string, action string, err error,
+) error {
+	orderID := o.ExternalID.String()
+	if o.ExternalID.IsZero() {
+		orderID = "<unassigned>"
+	}
+	return fmt.Errorf(
+		"engine: %s for order %s (account %s), but %s; engine state needs "+
+			"manual reconciliation - do not retry blindly: %v",
+		state, orderID, o.Account, action, err,
+	)
+}
+
+func chainRootCause(err error) error {
+	if err == nil {
+		return nil
+	}
+	if err == asyncengine.ErrChainRetryUnsafe {
+		return nil
+	}
+	type joined interface {
+		Unwrap() []error
+	}
+	if unwrapped, ok := err.(joined); ok {
+		causes := make([]error, 0, len(unwrapped.Unwrap()))
+		for _, child := range unwrapped.Unwrap() {
+			if cause := chainRootCause(child); cause != nil {
+				causes = append(causes, cause)
+			}
+		}
+		return errors.Join(causes...)
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped != nil &&
+		strings.HasPrefix(err.Error(), "async chain ") {
+		return chainRootCause(unwrapped)
+	}
+	return err
 }
 
 // ConfirmOrder records a history-only confirmation for an untouched workflow
@@ -485,55 +958,134 @@ func (n *localNode) confirmOrder(
 	}
 	defer done()
 
-	var confirmed domain.Order
-	if err := eng.RunAccountSynchronized(
-		ctx, routeDetail.Order.Account, func(_ engine.AccountLane) error {
-			detail, err := n.realm.GetOrder(ctx, order)
-			if err != nil {
-				return fmt.Errorf("get order: %w", err)
-			}
-			if err := domain.RequireOrderModifiable(
-				detail.Order.Status, false,
-			); err != nil {
-				return err
-			}
-			events, err := n.realm.ListOrderEvents(ctx, order)
-			if err != nil {
-				return fmt.Errorf("list order events: %w", err)
-			}
-			if err := requireNoExecutionReportActivity(order, events); err != nil {
-				return err
-			}
-			if orderEventExists(events, domain.OrderEventConfirmed) {
-				confirmed = detail.Order
-				return nil
-			}
-			if _, err := recordOrderSettlementWithAttestation(
-				ctx,
-				n.realm,
-				domain.OrderSettlement{
-					Account:     detail.Order.Account,
-					Order:       order,
-					OrderStatus: detail.Order.Status,
-					AllowedFrom: []domain.OrderStatus{detail.Order.Status},
-					Events: []domain.OrderEvent{{
-						Order:     order,
-						Type:      domain.OrderEventConfirmed,
-						Source:    caller.Source,
-						Principal: caller.Principal,
-					}},
-				},
-				attest,
-			); err != nil {
-				return fmt.Errorf("record order confirmation: %w", err)
-			}
-			confirmed = detail.Order
-			return nil
-		},
-	); err != nil {
+	type confirmationChainState struct {
+		ctx       context.Context
+		account   domain.Account
+		confirmed domain.Order
+		err       error
+	}
+	account, found, err := n.realm.GetAccount(ctx, routeDetail.Order.Account)
+	if err != nil {
+		return domain.Order{}, fmt.Errorf("read account for confirmation: %w", err)
+	}
+	if !found {
+		return domain.Order{}, fmt.Errorf(
+			"account %q: %w", routeDetail.Order.Account, domain.ErrNotFound,
+		)
+	}
+	source, err := eng.AccountID(routeDetail.Order.Account)
+	if err != nil {
 		return domain.Order{}, err
 	}
-	return confirmed, nil
+	if err := validateAccountAdministrativeSource(account, source); err != nil {
+		return domain.Order{}, err
+	}
+	state := &confirmationChainState{ctx: ctx, account: account}
+	begin := func(context.Context) (*confirmationChainState, error) {
+		if ctxErr := state.ctx.Err(); ctxErr != nil {
+			state.err = ctxErr
+			return nil, state.err
+		}
+		current, found, readErr := n.realm.GetAccount(
+			state.ctx, state.account.Code,
+		)
+		if readErr != nil {
+			state.err = fmt.Errorf("read account for confirmation: %w", readErr)
+			return nil, state.err
+		}
+		if !found {
+			state.err = fmt.Errorf(
+				"account %q: %w", state.account.Code, domain.ErrNotFound,
+			)
+			return nil, state.err
+		}
+		if validateErr := validateAccountAdministrativeSource(
+			current, source,
+		); validateErr != nil {
+			state.err = fmt.Errorf(
+				"read account for confirmation: %w", validateErr,
+			)
+			return nil, state.err
+		}
+		return state, nil
+	}
+	builder := asyncengine.Chain(source, begin)
+	runner := builder.Then(func(
+		_ context.Context, state *confirmationChainState,
+	) error {
+		detail, err := n.realm.GetOrder(state.ctx, order)
+		if err != nil {
+			state.err = fmt.Errorf("get order: %w", err)
+			return state.err
+		}
+		if detail.Order.Account != state.account.Code {
+			state.err = fmt.Errorf(
+				"order %q account changed from %q to %q: %w",
+				order,
+				state.account.Code,
+				detail.Order.Account,
+				domain.ErrInvalid,
+			)
+			return state.err
+		}
+		if err := domain.RequireOrderModifiable(
+			detail.Order.Status, false,
+		); err != nil {
+			state.err = err
+			return err
+		}
+		events, err := n.realm.ListOrderEvents(state.ctx, order)
+		if err != nil {
+			state.err = fmt.Errorf("list order events: %w", err)
+			return state.err
+		}
+		if err := requireNoExecutionReportActivity(order, events); err != nil {
+			state.err = err
+			return err
+		}
+		if orderEventExists(events, domain.OrderEventConfirmed) {
+			state.confirmed = detail.Order
+			return nil
+		}
+		if _, err := recordOrderSettlementWithAttestation(
+			state.ctx,
+			n.realm,
+			domain.OrderSettlement{
+				Account:     detail.Order.Account,
+				Order:       order,
+				OrderStatus: detail.Order.Status,
+				AllowedFrom: []domain.OrderStatus{detail.Order.Status},
+				Events: []domain.OrderEvent{{
+					Order:     order,
+					Type:      domain.OrderEventConfirmed,
+					Source:    caller.Source,
+					Principal: caller.Principal,
+				}},
+			},
+			attest,
+		); err != nil {
+			state.err = fmt.Errorf("record order confirmation: %w", err)
+			return state.err
+		}
+		state.confirmed = detail.Order
+		return nil
+	}).Finally(func(
+		_ context.Context,
+		state *confirmationChainState,
+		outcome asyncengine.ChainOutcome,
+	) error {
+		_, state.err = runtimeChainTerminalError(state.err, false, outcome)
+		return nil
+	})
+	_, chainErr := runner.Run(
+		ctx, eng.AsyncEngine(),
+	).Await(context.Background())
+	if runErr := accountChainRunError(
+		"confirm order", state.err, chainErr,
+	); runErr != nil {
+		return domain.Order{}, runErr
+	}
+	return state.confirmed, nil
 }
 
 // CancelOrder forwards a terminal execution report for an untouched workflow
@@ -581,109 +1133,144 @@ func (n *localNode) cancelOrder(
 		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}
 	defer done()
-
-	var cancelled domain.Order
-	var result engine.ExecutionReportResult
-	if err := eng.RunAccountSynchronized(
-		ctx, routeDetail.Order.Account, func(lane engine.AccountLane) error {
-			detail, err := n.realm.GetOrder(ctx, order)
-			if err != nil {
-				return fmt.Errorf("get order: %w", err)
-			}
-			if err := domain.RequireOrderModifiable(
-				detail.Order.Status, false,
-			); err != nil {
-				return err
-			}
-			events, err := n.realm.ListOrderEvents(ctx, order)
-			if err != nil {
-				return fmt.Errorf("list order events: %w", err)
-			}
-			if err := requireNoExecutionReportActivity(order, events); err != nil {
-				return err
-			}
-
-			in := domain.ExecutionReportInput{
-				Order:          order,
-				Account:        detail.Order.Account,
-				BaseAsset:      detail.Order.BaseAsset,
-				QuoteAsset:     detail.Order.QuoteAsset,
-				Side:           detail.Order.Side,
-				LeavesQuantity: leavesQuantity,
-				Lock:           append([]byte(nil), detail.Order.Lock...),
-				OrderStatus:    domain.OrderStatusCancelled,
-			}
-			if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
-				return fmt.Errorf("build cancellation execution report: %w", err)
-			}
-			leavesForEngine, err := executionEngineLeaves(in, detail)
-			if err != nil {
-				return fmt.Errorf("build cancellation leaves: %w", err)
-			}
-			request := domain.ExecutionReportRequestFromInput(in)
-			result, err = lane.ApplyExecutionReport(ctx, in, leavesForEngine)
-			if err != nil {
-				return fmt.Errorf("apply cancellation execution report: %w", err)
-			}
-			if result.Persistence == nil {
-				return fmt.Errorf(
-					"apply cancellation execution report returned no persistence write set",
-				)
-			}
-			persistence := stampExecutionReportPersistence(
-				*result.Persistence, caller, request,
+	source, err := eng.AccountID(routeDetail.Order.Account)
+	if err != nil {
+		return domain.Order{}, engine.ExecutionReportResult{}, err
+	}
+	state := &executionReportChainState{
+		ctx:       ctx,
+		adapter:   eng,
+		accountID: source,
+	}
+	begin := func(context.Context) (*executionReportChainState, error) {
+		detail, err := n.realm.GetOrder(ctx, order)
+		if err != nil {
+			state.err = fmt.Errorf("get order: %w", err)
+			return nil, state.err
+		}
+		if err := domain.RequireOrderModifiable(
+			detail.Order.Status, false,
+		); err != nil {
+			state.err = err
+			return nil, err
+		}
+		events, err := n.realm.ListOrderEvents(ctx, order)
+		if err != nil {
+			state.err = fmt.Errorf("list order events: %w", err)
+			return nil, state.err
+		}
+		if err := requireNoExecutionReportActivity(order, events); err != nil {
+			state.err = err
+			return nil, err
+		}
+		state.order = detail.Order
+		state.in = domain.ExecutionReportInput{
+			Order:          order,
+			Account:        detail.Order.Account,
+			BaseAsset:      detail.Order.BaseAsset,
+			QuoteAsset:     detail.Order.QuoteAsset,
+			Side:           detail.Order.Side,
+			LeavesQuantity: leavesQuantity,
+			Lock:           append([]byte(nil), detail.Order.Lock...),
+			OrderStatus:    domain.OrderStatusCancelled,
+		}
+		if _, err := domain.ExecutionReportRequiresEngine(state.in); err != nil {
+			state.err = fmt.Errorf(
+				"build cancellation execution report: %w", err,
 			)
-			settlement := domain.OrderSettlement{
-				Account:     in.Account,
-				Order:       order,
-				OrderStatus: persistence.OrderStatus,
-				Leaves:      persistence.Leaves,
-				Balances:    persistence.Balances,
-				Events:      persistence.Events,
-				Trade:       persistence.Trade,
-				Blocks:      persistence.Blocks,
-			}
-			if _, err := recordOrderSettlementWithAttestation(
-				ctx, n.realm, settlement, attest,
-			); err != nil {
-				return n.fatalPostEnginePersistence(
-					"record cancellation execution report",
-					accountID,
-					fmt.Errorf("record cancellation execution report: %w", err),
-				)
-			}
-			if err := n.mirrorEngineBlocksAudit(ctx, order, result.Blocks); err != nil {
-				return n.fatalPostEnginePersistence(
-					"audit cancellation execution report engine blocks",
-					accountID,
-					err,
-				)
-			}
-			detailText := executionReportDetail(
-				in, leavesForEngine, domain.OrderStatusCancelled, len(result.Blocks),
+			return nil, state.err
+		}
+		state.leavesQuantity, err = executionEngineLeaves(state.in, detail)
+		if err != nil {
+			state.err = fmt.Errorf("build cancellation leaves: %w", err)
+			return nil, state.err
+		}
+		state.request = domain.ExecutionReportRequestFromInput(state.in)
+		state.report, err = eng.ExecutionReportModel(
+			state.in, state.leavesQuantity,
+		)
+		if err != nil {
+			state.err = fmt.Errorf(
+				"apply cancellation execution report: %w", err,
 			)
-			if err := n.audit(ctx, caller, store.AuditEntry{
-				Action:  domain.AuditActionExecutionReport,
-				Account: in.Account,
-				Detail:  detailText,
-			}); err != nil {
-				return n.fatalPostEnginePersistence(
-					"audit cancellation execution report",
-					accountID,
-					fmt.Errorf("audit cancellation execution report: %w", err),
-				)
-			}
-			cancelled = detail.Order
-			cancelled.Status = persistence.OrderStatus
-			if persistence.Leaves != "" {
-				cancelled.Leaves = persistence.Leaves
-			}
-			return nil
-		},
+			return nil, state.err
+		}
+		return state, nil
+	}
+	persist := func(state *executionReportChainState) error {
+		if state.result.Persistence == nil {
+			return fmt.Errorf(
+				"apply cancellation execution report returned no persistence write set",
+			)
+		}
+		persistence := stampExecutionReportPersistence(
+			*state.result.Persistence, caller, state.request,
+		)
+		settlement := domain.OrderSettlement{
+			Account:     state.in.Account,
+			Order:       order,
+			OrderStatus: persistence.OrderStatus,
+			Leaves:      persistence.Leaves,
+			Balances:    persistence.Balances,
+			Events:      persistence.Events,
+			Trade:       persistence.Trade,
+			Blocks:      persistence.Blocks,
+		}
+		if _, err := recordOrderSettlementWithAttestation(
+			ctx, n.realm, settlement, attest,
+		); err != nil {
+			return n.fatalPostEnginePersistence(
+				"record cancellation execution report",
+				accountID,
+				fmt.Errorf("record cancellation execution report: %w", err),
+			)
+		}
+		state.persistenceCompleted = true
+		if err := n.mirrorEngineBlocksAudit(
+			ctx, order, state.result.Blocks,
+		); err != nil {
+			return n.fatalPostEnginePersistence(
+				"audit cancellation execution report engine blocks",
+				accountID,
+				err,
+			)
+		}
+		detailText := executionReportDetail(
+			state.in,
+			state.leavesQuantity,
+			domain.OrderStatusCancelled,
+			len(state.result.Blocks),
+		)
+		if err := n.audit(ctx, caller, store.AuditEntry{
+			Action:  domain.AuditActionExecutionReport,
+			Account: state.in.Account,
+			Detail:  detailText,
+		}); err != nil {
+			return n.fatalPostEnginePersistence(
+				"audit cancellation execution report",
+				accountID,
+				fmt.Errorf("audit cancellation execution report: %w", err),
+			)
+		}
+		state.order.Status = persistence.OrderStatus
+		if persistence.Leaves != "" {
+			state.order.Leaves = persistence.Leaves
+		}
+		return nil
+	}
+	if err := n.runExecutionReportChain(
+		ctx,
+		eng,
+		source,
+		state,
+		begin,
+		persist,
+		"apply cancellation execution report",
+		accountID,
 	); err != nil {
 		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}
-	return cancelled, result, nil
+	return state.order, state.result, nil
 }
 
 func requireNoExecutionReportActivity(
@@ -822,12 +1409,7 @@ func (n *localNode) ensureAutoCreatedAsset(
 	if err := domain.ValidateAsset(code); err != nil {
 		return false, err
 	}
-	resolver, err := requireDictionaryResolver(n.currentEngine())
-	if err != nil {
-		return false, fmt.Errorf(
-			"resolve live asset dictionary for %s: %w", operation, err,
-		)
-	}
+	resolver := n.currentEngine()
 	if err := n.realm.CreateAssetClass(ctx, domain.AssetClass{
 		Code:  autoCreatedAssetClassCode,
 		Title: autoCreatedAssetClassTitle,

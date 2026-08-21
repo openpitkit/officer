@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -39,6 +40,13 @@ import (
 	"go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/configure"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
 )
 
 func TestReferenceCompositionAddReplaceHideRemove(t *testing.T) {
@@ -458,6 +466,114 @@ type fakeEngine struct {
 	running bool
 }
 
+var errUnexpectedOrderChain = errors.New("unexpected order chain call")
+
+func (*fakeEngine) AsyncEngine() *asyncengine.AsyncEngine {
+	panic(errUnexpectedOrderChain)
+}
+
+func (*fakeEngine) AccountID(domain.AccountID) (param.AccountID, error) {
+	return param.AccountID{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) ExecutionReportModel(
+	domain.ExecutionReportInput, string,
+) (model.ExecutionReport, error) {
+	return model.ExecutionReport{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) SettledExecutionReport(
+	domain.ExecutionReportInput,
+	param.AccountID,
+	pretrade.PostTradeResult,
+) (engine.ExecutionReportResult, error) {
+	return engine.ExecutionReportResult{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) AccountAdjustmentModels(
+	[]domain.AdjustmentRequest,
+) ([]model.AccountAdjustment, error) {
+	return nil, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) AppliedAccountAdjustmentBatch(
+	domain.AccountID,
+	[]domain.AdjustmentRequest,
+	accountadjustment.BatchResult,
+) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+	return nil, nil, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) SpotFundsAccountPnlAssignment(
+	string,
+	domain.PnlHaltReason,
+) (asyncengine.SpotFundsAccountPnlAssignment, error) {
+	return asyncengine.SpotFundsAccountPnlAssignment{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) AppliedSpotFundsAccountPnl(
+	domain.AccountID,
+	string,
+	domain.PnlHaltReason,
+	configure.PolicyConfigurationResult,
+) ([]domain.AccountBlock, error) {
+	return nil, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) OrderModel(domain.Order) (model.Order, error) {
+	return model.Order{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) CheckOrderModel(domain.OrderProbe) (model.Order, error) {
+	return model.Order{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) RejectedOrder(domain.Order, []reject.Reject) engine.OrderResult {
+	panic(errUnexpectedOrderChain)
+}
+
+func (*fakeEngine) ReservedOrder(
+	domain.Order, asyncengine.OperationResult,
+) (engine.OrderResult, error) {
+	return engine.OrderResult{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) AppliedDropCopyOrder(
+	domain.Order, asyncengine.DropCopyResult,
+) (engine.OrderResult, error) {
+	return engine.OrderResult{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) RejectedImmediate(
+	domain.Order, []reject.Reject,
+) engine.ImmediateResult {
+	panic(errUnexpectedOrderChain)
+}
+
+func (*fakeEngine) PrepareImmediateReservation(
+	domain.Order, asyncengine.OperationResult,
+) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) PrepareImmediateDropCopy(
+	domain.Order, asyncengine.DropCopyResult,
+) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) SettleImmediate(
+	domain.Order, engine.ImmediatePreparation, pretrade.PostTradeResult,
+) (engine.ImmediateResult, error) {
+	return engine.ImmediateResult{}, errUnexpectedOrderChain
+}
+
+func (*fakeEngine) CheckedOrder(
+	domain.OrderProbe, asyncengine.OrderCheckResult,
+) (domain.CheckResult, error) {
+	return domain.CheckResult{}, errUnexpectedOrderChain
+}
+
 func (e *fakeEngine) Version() string      { return "fake" }
 func (e *fakeEngine) BuildProfile() string { return "test" }
 func (e *fakeEngine) Running() bool        { return e.running }
@@ -470,114 +586,27 @@ func (e *fakeEngine) ConfigurePolicy(
 	return engine.PolicyConfigurationResult{}, nil
 }
 
-func (e *fakeEngine) BlockAccount(context.Context, domain.AccountID, string) error {
+func (*fakeEngine) AddAccountResolverEntry(domain.Account) error { return nil }
+func (*fakeEngine) AddAssetResolverEntry(domain.Asset) error     { return nil }
+func (*fakeEngine) AddGroupResolverEntry(domain.AccountGroup) error {
 	return nil
 }
-
-func (e *fakeEngine) UnblockAccount(context.Context, domain.AccountID) error {
+func (*fakeEngine) RenameAccountResolverEntry(domain.AccountID, domain.Account) error {
 	return nil
 }
-
-func (e *fakeEngine) SetAccountCurrency(context.Context, domain.AccountID, string) error {
+func (*fakeEngine) RenameAssetResolverEntry(string, domain.Asset) error { return nil }
+func (*fakeEngine) RenameGroupResolverEntry(string, domain.AccountGroup) error {
 	return nil
 }
-
-func (e *fakeEngine) ClearAccountCurrency(context.Context, domain.AccountID) error {
+func (*fakeEngine) RemoveAssetResolverEntry(domain.Asset) error { return nil }
+func (*fakeEngine) RemoveGroupResolverEntry(domain.AccountGroup) error {
 	return nil
 }
-
-func (e *fakeEngine) SetAccountPnl(
-	context.Context, domain.AccountID, string,
-) ([]domain.AccountBlock, error) {
-	return nil, nil
+func (*fakeEngine) ResolveAsset(string) (param.Asset, error) {
+	return param.Asset{}, errUnexpectedOrderChain
 }
-
-func (e *fakeEngine) SetAccountPnlState(
-	ctx context.Context,
-	id domain.AccountID,
-	pnl string,
-	haltReason domain.PnlHaltReason,
-) ([]domain.AccountBlock, error) {
-	if (pnl == "") == (haltReason == "") {
-		return nil, domain.ErrInvalid
-	}
-	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
-		return nil, err
-	}
-	if haltReason != "" {
-		return nil, nil
-	}
-	return e.SetAccountPnl(ctx, id, pnl)
-}
-
-func (e *fakeEngine) ApplyAccountAdjustmentBatch(
-	context.Context,
-	domain.AccountID,
-	[]domain.AdjustmentRequest,
-) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
-	return nil, nil, nil
-}
-
-func (e *fakeEngine) ApplyAccountAdjustment(
-	context.Context,
-	domain.AccountID,
-	domain.AdjustmentRequest,
-) (engine.AdjustmentResult, error) {
-	return engine.AdjustmentResult{}, nil
-}
-
-func (e *fakeEngine) SubmitOrder(context.Context, domain.Order) (engine.OrderResult, error) {
-	return engine.OrderResult{}, nil
-}
-
-func (e *fakeEngine) SubmitImmediate(
-	context.Context,
-	domain.Order,
-) (engine.ImmediateResult, error) {
-	return engine.ImmediateResult{}, nil
-}
-
-func (e *fakeEngine) RunAccountSynchronized(
-	_ context.Context, _ domain.AccountID, fn func(engine.AccountLane) error,
-) error {
-	return fn(e)
-}
-
-func (e *fakeEngine) RunGroupSynchronized(
-	_ context.Context, _ string, fn func(engine.GroupLane) error,
-) error {
-	return fn(e)
-}
-
-func (e *fakeEngine) ApplyExecutionReport(
-	context.Context,
-	domain.ExecutionReportInput,
-	string,
-) (engine.ExecutionReportResult, error) {
-	return engine.ExecutionReportResult{}, nil
-}
-
-func (e *fakeEngine) RegisterGroup(context.Context, []domain.AccountID, string) error {
-	return nil
-}
-
-func (e *fakeEngine) UnregisterGroup(context.Context, []domain.AccountID, string) error {
-	return nil
-}
-
-func (e *fakeEngine) BlockGroup(context.Context, string, string) error { return nil }
-
-func (e *fakeEngine) UnblockGroup(context.Context, string) error { return nil }
-
-func (e *fakeEngine) SetGroupCurrency(context.Context, string, string) error { return nil }
-
-func (e *fakeEngine) ClearGroupCurrency(context.Context, string) error { return nil }
-
-func (e *fakeEngine) CheckOrder(
-	context.Context,
-	domain.OrderProbe,
-) (domain.CheckResult, error) {
-	return domain.CheckResult{}, nil
+func (*fakeEngine) ResolveGroup(string) (param.AccountGroupID, error) {
+	return param.AccountGroupID{}, errUnexpectedOrderChain
 }
 
 func (e *fakeEngine) MarketDataSink() marketdata.Sink { return e.sink }

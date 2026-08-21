@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/asyncengine"
+
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
@@ -51,6 +53,43 @@ func testOrder(t *testing.T, st store.RealmStore, id domain.AccountID) domain.Or
 		t.Fatalf("CreateOrder: %v", err)
 	}
 	return order
+}
+
+type panicOrderSettlementRealm struct {
+	store.RealmStore
+	err error
+}
+
+func (s *panicOrderSettlementRealm) RecordOrderSettlement(
+	context.Context, domain.OrderSettlement,
+) (domain.ExternalID, error) {
+	panic(s.err)
+}
+
+type panicActionAuditRealm struct {
+	store.RealmStore
+	action domain.AuditAction
+	err    error
+}
+
+func (s *panicActionAuditRealm) AppendAudit(
+	ctx context.Context, entry store.AuditEntry,
+) error {
+	if entry.Action == s.action {
+		panic(s.err)
+	}
+	return s.RealmStore.AppendAudit(ctx, entry)
+}
+
+func (s *panicActionAuditRealm) AppendAuditBatch(
+	ctx context.Context, entries []store.AuditEntry,
+) error {
+	for _, entry := range entries {
+		if entry.Action == s.action {
+			panic(s.err)
+		}
+	}
+	return s.RealmStore.AppendAuditBatch(ctx, entries)
 }
 
 // TestLocalNode_ApplyExecutionReportPersistsBothLegs verifies a spot fill
@@ -210,6 +249,9 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 	if !errors.Is(err, storeCause) {
 		t.Fatalf("ApplyExecutionReport error = %v, want non-domain store cause", err)
 	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("ApplyExecutionReport error = %v, want retry-unsafe marker", err)
+	}
 	if len(eng.execReportCalls) != 1 {
 		t.Fatalf("engine report calls = %+v, want one engine apply", eng.execReportCalls)
 	}
@@ -228,6 +270,133 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
 		!strings.Contains(msg, "record execution report failed") {
 		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportChainFailurePhases(t *testing.T) {
+	tests := []struct {
+		name            string
+		phase           string
+		wantEngineCalls int
+		wantRetryUnsafe bool
+		wantFatalFamily string
+		wantStatus      domain.OrderStatus
+	}{
+		{
+			name:       "engine not reached",
+			phase:      "before_engine",
+			wantStatus: domain.OrderStatusFilled,
+		},
+		{
+			name:            "engine applied but persistence failed",
+			phase:           "persistence",
+			wantEngineCalls: 1,
+			wantRetryUnsafe: true,
+			wantFatalFamily: "post-engine persistence failure",
+			wantStatus:      domain.OrderStatusCommitted,
+		},
+		{
+			name:            "persistence done but later hook failed",
+			phase:           "after_persistence",
+			wantEngineCalls: 1,
+			wantRetryUnsafe: true,
+			wantFatalFamily: "post-commit audit failure",
+			wantStatus:      domain.OrderStatusFilled,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cause := errors.New(test.name)
+			real := newMemoryStore("node.db")
+			wrap := func(realm store.RealmStore) store.RealmStore { return realm }
+			switch test.phase {
+			case "persistence":
+				wrap = func(realm store.RealmStore) store.RealmStore {
+					return &panicOrderSettlementRealm{
+						RealmStore: realm,
+						err:        cause,
+					}
+				}
+			case "after_persistence":
+				wrap = func(realm store.RealmStore) store.RealmStore {
+					return &panicActionAuditRealm{
+						RealmStore: realm,
+						action:     domain.AuditActionExecutionReport,
+						err:        cause,
+					}
+				}
+			}
+			st := newRealmWrapStore(real, wrap)
+			ctx := context.Background()
+			if err := st.Migrate(ctx); err != nil {
+				t.Fatalf("Migrate: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+
+			eng := newFakeEngine()
+			var fatalErr error
+			n := newTestNodeWithStore(
+				t,
+				st,
+				eng,
+				WithFatalShutdownHook(func(err error) { fatalErr = err }),
+			)
+			order := testOrder(t, n.realm, "acc-1")
+			if test.phase == "before_engine" {
+				if err := n.realm.UpdateOrderStatus(
+					ctx, order.ExternalID, domain.OrderStatusFilled,
+				); err != nil {
+					t.Fatalf("UpdateOrderStatus: %v", err)
+				}
+			}
+
+			_, err := n.ApplyExecutionReport(
+				ctx,
+				testKey("acc-1"),
+				domain.ExecutionReportInput{
+					Order:          order.ExternalID,
+					FillQuantity:   "2",
+					FillPrice:      "400",
+					LeavesQuantity: "0",
+					OrderStatus:    domain.OrderStatusFilled,
+				},
+				testCaller,
+			)
+			if test.phase == "before_engine" {
+				if !errors.Is(err, domain.ErrTerminalOrder) {
+					t.Fatalf("ApplyExecutionReport = %v, want terminal order", err)
+				}
+			} else if !errors.Is(err, cause) || !strings.Contains(err.Error(), cause.Error()) {
+				t.Fatalf("ApplyExecutionReport = %v, want cause %v", err, cause)
+			}
+			if got := errors.Is(err, asyncengine.ErrChainRetryUnsafe); got != test.wantRetryUnsafe {
+				t.Fatalf("retry-unsafe = %v, want %v: %v", got, test.wantRetryUnsafe, err)
+			}
+			if len(eng.execReportCalls) != test.wantEngineCalls {
+				t.Fatalf("engine calls = %d, want %d", len(eng.execReportCalls), test.wantEngineCalls)
+			}
+			if test.wantFatalFamily == "" {
+				if fatalErr != nil {
+					t.Fatalf("fatal error = %v, want none", fatalErr)
+				}
+			} else if fatalErr == nil ||
+				!errors.Is(fatalErr, cause) ||
+				!strings.Contains(fatalErr.Error(), test.wantFatalFamily) {
+				t.Fatalf(
+					"fatal error = %v, want cause and family %q",
+					fatalErr,
+					test.wantFatalFamily,
+				)
+			}
+			detail, detailErr := n.realm.GetOrder(ctx, order.ExternalID)
+			if detailErr != nil {
+				t.Fatalf("GetOrder: %v", detailErr)
+			}
+			if detail.Order.Status != test.wantStatus {
+				t.Fatalf("order status = %q, want %q", detail.Order.Status, test.wantStatus)
+			}
+		})
 	}
 }
 
@@ -1178,7 +1347,7 @@ func TestLocalNode_ApplyExecutionReportIgnoresCanceledContext(t *testing.T) {
 	}
 }
 
-func TestLocalNode_ApplyExecutionReportUsesAccountSyncLane(t *testing.T) {
+func TestLocalNode_ApplyExecutionReportUsesAccountChain(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
@@ -1189,7 +1358,6 @@ func TestLocalNode_ApplyExecutionReportUsesAccountSyncLane(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	order := testOrder(t, st, id)
-
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
@@ -1202,11 +1370,46 @@ func TestLocalNode_ApplyExecutionReportUsesAccountSyncLane(t *testing.T) {
 	}, testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
-	if eng.execReportOutsideSync {
-		t.Fatal("execution report applied outside the account sync lane")
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine report calls = %+v, want one", eng.execReportCalls)
 	}
-	if len(eng.accountSyncCalls) == 0 || eng.accountSyncCalls[len(eng.accountSyncCalls)-1] != id {
-		t.Fatalf("account sync calls = %+v, want last %s", eng.accountSyncCalls, id)
+}
+
+func TestLocalNode_ApplyExecutionReportRejectsChainAccountMismatch(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.execReportAccountMismatch = true
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+
+	_, err := n.ApplyExecutionReport(
+		ctx,
+		testKey("acc-1"),
+		domain.ExecutionReportInput{
+			Order:          order.ExternalID,
+			FillQuantity:   "1",
+			FillPrice:      "400",
+			LeavesQuantity: "0",
+			OrderStatus:    domain.OrderStatusFilled,
+		},
+		testCaller,
+	)
+	if !errors.Is(err, asyncengine.ErrChainAccountMismatch) {
+		t.Fatalf(
+			"ApplyExecutionReport error = %v, want ErrChainAccountMismatch",
+			err,
+		)
+	}
+	if len(eng.execReportCalls) != 0 {
+		t.Fatalf("engine report calls = %+v, want none", eng.execReportCalls)
+	}
+	detail, getErr := st.GetOrder(ctx, order.ExternalID)
+	if getErr != nil {
+		t.Fatalf("GetOrder: %v", getErr)
+	}
+	if detail.Order.Status != order.Status || len(detail.Events) != 0 {
+		t.Fatalf("order mutated after account mismatch: %+v", detail)
 	}
 }
 
@@ -1451,7 +1654,7 @@ func TestLocalNode_ApplyExecutionReportPersistsAuditSafeOriginalRequest(t *testi
 		FillPrice:      "101.50",
 		LeavesQuantity: "2.75",
 		LockPrice:      "100.25",
-		Lock:           []byte{0x00, 0x7f, 0xff},
+		Lock:           fakeStoredLock(t),
 		Commission:     &domain.Commission{Amount: "-0.01", Currency: "EUR"},
 		Order:          order.ExternalID,
 		Account:        "caller-account",
@@ -1532,9 +1735,6 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 			}
 			if len(eng.execReportCalls) != 0 {
 				t.Fatalf("workflow status reached engine: %+v", eng.execReportCalls)
-			}
-			if len(eng.accountSyncCalls) != 1 || eng.accountSyncCalls[0] != id {
-				t.Fatalf("account sync calls = %+v, want [%s]", eng.accountSyncCalls, id)
 			}
 			detail, err := st.GetOrder(ctx, order.ExternalID)
 			if err != nil {
@@ -1634,11 +1834,10 @@ func TestLocalNode_ApplyExecutionReportRejectsInvalidWorkflowReport(t *testing.T
 			if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("ApplyExecutionReport error = %v, want ErrInvalid", err)
 			}
-			if len(eng.execReportCalls) != 0 || len(eng.accountSyncCalls) != 0 {
+			if len(eng.execReportCalls) != 0 {
 				t.Fatalf(
-					"invalid workflow report reached account pipeline: engine=%+v sync=%+v",
+					"invalid workflow report reached account pipeline: engine=%+v",
 					eng.execReportCalls,
-					eng.accountSyncCalls,
 				)
 			}
 			detail, err := st.GetOrder(ctx, order.ExternalID)
@@ -1750,14 +1949,26 @@ func TestLocalNode_ApplyExecutionReportNilPersistenceErrors(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.emptyExecReportPersistence = true
-	n, st := newTestNode(t, eng)
+	st := newMemoryStore("node.db")
 	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	var fatalErr error
+	n := newTestNodeWithStore(
+		t,
+		st,
+		eng,
+		WithFatalShutdownHook(func(err error) { fatalErr = err }),
+	)
+	realm := n.realm
 
 	const id domain.AccountID = "acc-1"
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	order := testOrder(t, st, id)
+	order := testOrder(t, realm, id)
 
 	_, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
 		Order:          order.ExternalID,
@@ -1766,11 +1977,19 @@ func TestLocalNode_ApplyExecutionReportNilPersistenceErrors(t *testing.T) {
 		LeavesQuantity: "0",
 		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ApplyExecutionReport nil persistence = %v, want ErrInvalid", err)
+	if errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyExecutionReport nil persistence = %v, must hide ErrInvalid", err)
+	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("ApplyExecutionReport nil persistence = %v, want retry-unsafe marker", err)
+	}
+	if fatalErr == nil || !strings.Contains(
+		fatalErr.Error(), "post-engine persistence failure",
+	) {
+		t.Fatalf("fatal error = %v, want post-engine persistence failure", fatalErr)
 	}
 
-	detail, err := st.GetOrder(ctx, order.ExternalID)
+	detail, err := realm.GetOrder(ctx, order.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}

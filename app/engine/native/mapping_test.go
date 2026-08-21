@@ -40,6 +40,7 @@ import (
 	"unicode/utf8"
 
 	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
@@ -629,24 +630,6 @@ func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 		if _, ok := registered[name]; !ok {
 			t.Fatalf("policy %q not registered", name)
 		}
-	}
-}
-
-func TestAccountLaneSetAccountCurrency_InvalidCurrencyIsDomainInvalid(t *testing.T) {
-	t.Parallel()
-	res := testResolver("acc-1")
-	accountID, err := res.account("acc-1")
-	if err != nil {
-		t.Fatalf("resolve account: %v", err)
-	}
-	lane := accountLane{
-		owner:        &openPitEngine{res: res},
-		accountAlias: "acc-1",
-		accountID:    accountID,
-	}
-	err = lane.SetAccountCurrency(context.Background(), "acc-1", "  ")
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SetAccountCurrency invalid currency = %v, want ErrInvalid", err)
 	}
 }
 
@@ -1628,7 +1611,7 @@ func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 	}
 	defer eng.Stop()
 	adapter := eng.(*openPitEngine)
-	engineBefore := adapter.eng
+	asyncBefore := adapter.async
 	sinkBefore := adapter.MarketDataSink()
 
 	dropped := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")}}
@@ -1637,7 +1620,7 @@ func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 	); err != nil {
 		t.Fatalf("ConfigurePolicy drop order-size broker: %v", err)
 	}
-	if adapter.eng != engineBefore || adapter.MarketDataSink() != sinkBefore {
+	if adapter.async != asyncBefore || adapter.MarketDataSink() != sinkBefore {
 		t.Fatal("dropping order-size broker replaced engine or market-data sink")
 	}
 }
@@ -1760,7 +1743,7 @@ func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 	}
 	defer eng.Stop()
 	adapter := eng.(*openPitEngine)
-	engineBefore := adapter.eng
+	asyncBefore := adapter.async
 	sinkBefore := adapter.MarketDataSink()
 
 	dropped := LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second)}}
@@ -1769,7 +1752,7 @@ func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 	); err != nil {
 		t.Fatalf("ConfigurePolicy drop rate-limit broker: %v", err)
 	}
-	if adapter.eng != engineBefore || adapter.MarketDataSink() != sinkBefore {
+	if adapter.async != asyncBefore || adapter.MarketDataSink() != sinkBefore {
 		t.Fatal("dropping rate-limit broker replaced engine or market-data sink")
 	}
 }
@@ -1907,39 +1890,38 @@ func checkProbe(acct string, side domain.OrderSide, qty, price string) domain.Or
 func blockAccountOnLane(
 	ctx context.Context, eng Engine, account domain.AccountID, reason string,
 ) error {
-	return eng.RunAccountSynchronized(ctx, account, func(lane AccountLane) error {
-		return lane.BlockAccount(ctx, account, reason)
+	accountID, err := eng.AccountID(account)
+	if err != nil {
+		return err
+	}
+	type state struct{}
+	builder := asyncengine.Chain(
+		accountID, func(context.Context) (*state, error) { return &state{}, nil },
+	)
+	builder.BlockAccount(asyncengine.BlockHooks[*state]{
+		Reason: func(context.Context, *state) (string, error) {
+			return reason, nil
+		},
+		OnBlocked: func(context.Context, *state) error { return nil },
 	})
+	_, err = builder.Run(ctx, eng.AsyncEngine()).Await(context.Background())
+	return err
 }
 
 func unblockAccountOnLane(ctx context.Context, eng Engine, account domain.AccountID) error {
-	return eng.RunAccountSynchronized(ctx, account, func(lane AccountLane) error {
-		return lane.UnblockAccount(ctx, account)
-	})
-}
-
-func checkOrderOnLane(
-	ctx context.Context, eng Engine, probe domain.OrderProbe,
-) (domain.CheckResult, error) {
-	var out domain.CheckResult
-	err := eng.RunAccountSynchronized(ctx, probe.Account, func(lane AccountLane) error {
-		var err error
-		out, err = lane.CheckOrder(ctx, probe)
+	accountID, err := eng.AccountID(account)
+	if err != nil {
 		return err
+	}
+	type state struct{}
+	builder := asyncengine.Chain(
+		accountID, func(context.Context) (*state, error) { return &state{}, nil },
+	)
+	builder.UnblockAccount(asyncengine.UnblockHooks[*state]{
+		OnUnblocked: func(context.Context, *state) error { return nil },
 	})
-	return out, err
-}
-
-func submitOrderOnLane(
-	ctx context.Context, eng Engine, order domain.Order,
-) (OrderResult, error) {
-	var out OrderResult
-	err := eng.RunAccountSynchronized(ctx, order.Account, func(lane AccountLane) error {
-		var err error
-		out, err = lane.SubmitOrder(ctx, order)
-		return err
-	})
-	return out, err
+	_, err = builder.Run(ctx, eng.AsyncEngine()).Await(context.Background())
+	return err
 }
 
 // TestEngine_CheckOrderPassCapturesLock runs a non-mutating dry-run for a funded
@@ -1961,7 +1943,7 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	out, err := checkOrderOnLane(context.Background(), eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	out, err := materializeCheckedOrder(eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -1986,7 +1968,7 @@ func TestEngine_CheckOrderUnknownAssetIsInvalid(t *testing.T) {
 
 	probe := checkProbe("acc-1", domain.OrderSideBuy, "1", "100")
 	probe.BaseAsset = "unknown"
-	if _, err := checkOrderOnLane(context.Background(), eng, probe); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := materializeCheckedOrder(eng, probe); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CheckOrder unknown asset = %v, want ErrInvalid", err)
 	}
 }
@@ -2021,7 +2003,7 @@ func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: "1",
 	}
-	stale, err := submitOrderOnLane(context.Background(), eng, marketOrder)
+	stale, err := materializeOrderResult(eng, marketOrder)
 	if err != nil {
 		t.Fatalf("SubmitOrder with stale quote: %v", err)
 	}
@@ -2035,7 +2017,7 @@ func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Push aged fresh quote: %v", err)
 	}
-	fresh, err := submitOrderOnLane(context.Background(), eng, marketOrder)
+	fresh, err := materializeOrderResult(eng, marketOrder)
 	if err != nil {
 		t.Fatalf("SubmitOrder with fresh quote: %v", err)
 	}
@@ -2056,8 +2038,8 @@ func TestEngine_CheckOrderMultiplePricesUsesDryRunIdentifier(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(previous)
 
-	out, err := e.CheckOrder(
-		context.Background(),
+	out, err := materializeCheckedOrder(
+		e,
 		checkProbe(testAccount, domain.OrderSideBuy, "1", "100"),
 	)
 	if err != nil {
@@ -2088,7 +2070,7 @@ func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	out, err := checkOrderOnLane(context.Background(), eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	out, err := materializeCheckedOrder(eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -2123,7 +2105,7 @@ func TestEngine_CheckOrderStandingBlockIsRejectOnly(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	out, err := checkOrderOnLane(context.Background(), eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	out, err := materializeCheckedOrder(eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -2160,7 +2142,7 @@ func TestEngine_CheckOrderKeepsShortRejectText(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	out, err := checkOrderOnLane(context.Background(), eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	out, err := materializeCheckedOrder(eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -2223,10 +2205,9 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
 	}
 	defer eng.Stop()
-	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		out, err := checkOrderOnLane(ctx, eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+		out, err := materializeCheckedOrder(eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 		if err != nil {
 			t.Fatalf("CheckOrder #%d: %v", i, err)
 		}
@@ -2241,7 +2222,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 		AmountValue: "1", Price: "100",
 	}
 
-	first, err := submitOrderOnLane(ctx, eng, order)
+	first, err := materializeOrderResult(eng, order)
 	if err != nil {
 		t.Fatalf("first SubmitOrder: %v", err)
 	}
@@ -2249,7 +2230,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 		t.Fatalf("first submit must pass after dry-runs (budget intact), got %+v", first.Rejects)
 	}
 
-	second, err := submitOrderOnLane(ctx, eng, order)
+	second, err := materializeOrderResult(eng, order)
 	if err != nil {
 		t.Fatalf("second SubmitOrder: %v", err)
 	}
@@ -2283,18 +2264,17 @@ func TestEngine_CheckOrderMatchesSubmitOrderSizeVerdict(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	ctx := context.Background()
 	for _, tc := range []struct {
 		quantity string
 		accepted bool
 	}{{quantity: "1", accepted: true}, {quantity: "2", accepted: false}} {
 		quantity := tc.quantity
 		probe := checkProbe("acc-1", domain.OrderSideBuy, quantity, "10")
-		dryRun, err := checkOrderOnLane(ctx, eng, probe)
+		dryRun, err := materializeCheckedOrder(eng, probe)
 		if err != nil {
 			t.Fatalf("CheckOrder quantity %s: %v", quantity, err)
 		}
-		real, err := submitOrderOnLane(ctx, eng, domain.Order{
+		real, err := materializeOrderResult(eng, domain.Order{
 			Account:     probe.Account,
 			BaseAsset:   probe.BaseAsset,
 			QuoteAsset:  probe.QuoteAsset,
@@ -2471,7 +2451,7 @@ func TestExecutionReportFromCancellationForwardsEngineLeaves(t *testing.T) {
 	if _, ok := fill.LastTrade().Get(); ok {
 		t.Fatal("LastTrade set for a cancellation without a fill")
 	}
-	leaves, ok := fill.LeavesQuantity().Get()
+	leaves, ok := fill.RemainingReservedQuantity().Get()
 	if !ok {
 		t.Fatal("Fill.LeavesQuantity unset")
 	}
@@ -2507,7 +2487,7 @@ func TestExecutionReportFromFillUsesSelectedEngineLeaves(t *testing.T) {
 	if !ok {
 		t.Fatal("Fill unset")
 	}
-	leaves, ok := fill.LeavesQuantity().Get()
+	leaves, ok := fill.RemainingReservedQuantity().Get()
 	if !ok || leaves.String() != "2" {
 		t.Fatalf("engine fill leaves = %v, %t, want selected leaves 2", leaves, ok)
 	}
@@ -2724,7 +2704,7 @@ func TestExecutionReportFrom_WorkflowCommissionOmitsRequestLeaves(t *testing.T) 
 	if !ok {
 		t.Fatal("Fill unset")
 	}
-	if _, ok := fill.LeavesQuantity().Get(); ok {
+	if _, ok := fill.RemainingReservedQuantity().Get(); ok {
 		t.Fatal("LeavesQuantity set from workflow request leaves")
 	}
 }

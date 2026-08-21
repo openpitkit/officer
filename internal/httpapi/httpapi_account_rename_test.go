@@ -199,8 +199,12 @@ func newAccountRenameHTTPTestEngine(snapshot engine.Snapshot) *accountRenameHTTP
 		accounts[account.Code] = account.EngineAccountID
 	}
 	return &accountRenameHTTPTestEngine{
-		realGateEngine: &realGateEngine{running: true},
-		accounts:       accounts,
+		realGateEngine: &realGateEngine{
+			running: true,
+			assets:  make(map[string]domain.EngineAssetID),
+			groups:  make(map[string]domain.EngineGroupID),
+		},
+		accounts: accounts,
 	}
 }
 
@@ -209,8 +213,8 @@ func (e *accountRenameHTTPTestEngine) AddAccountResolverEntry(account domain.Acc
 	return nil
 }
 
-func (*accountRenameHTTPTestEngine) AddAssetResolverEntry(domain.Asset) error {
-	return nil
+func (e *accountRenameHTTPTestEngine) AddAssetResolverEntry(asset domain.Asset) error {
+	return e.realGateEngine.AddAssetResolverEntry(asset)
 }
 
 func (e *accountRenameHTTPTestEngine) RenameAccountResolverEntry(
@@ -237,8 +241,8 @@ func (*accountRenameHTTPTestEngine) RemoveAssetResolverEntry(domain.Asset) error
 	return nil
 }
 
-func (*accountRenameHTTPTestEngine) AddGroupResolverEntry(domain.AccountGroup) error {
-	return nil
+func (e *accountRenameHTTPTestEngine) AddGroupResolverEntry(group domain.AccountGroup) error {
+	return e.realGateEngine.AddGroupResolverEntry(group)
 }
 
 func (*accountRenameHTTPTestEngine) RenameGroupResolverEntry(
