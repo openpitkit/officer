@@ -58,7 +58,7 @@ func missingAccountRoutes() []missingAccountRoute {
 			name:   "limits.order-size",
 			method: http.MethodPut,
 			path:   "/api/v1/limits/order-size",
-			body: `{"scope":"account_asset","account":"acc-1",` +
+			body: `{"scope":"account_underlying_asset","account":"acc-1",` +
 				`"asset":"AAPL","maxQuantity":"10"}`,
 			ok: http.StatusOK,
 		},
@@ -147,7 +147,7 @@ func newMissingAccountService() *fakeService {
 				},
 			},
 			OrderSizeLimits: []domain.LimitOrderSize{{
-				Scope:       domain.ScopeAccountAsset,
+				Scope:       domain.ScopeAccountUnderlyingAsset,
 				Account:     "acc-1",
 				Asset:       "AAPL",
 				MaxQuantity: "10",

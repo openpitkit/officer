@@ -610,8 +610,10 @@ func TestGetLimitsHappyPath(t *testing.T) {
 		limits: node.AccountLimits{
 			OrderSizeLimits: []domain.LimitOrderSize{
 				{
-					Scope:       domain.ScopeBroker,
-					MaxQuantity: "500",
+					Scope:       domain.ScopeAccountSettlementAsset,
+					Account:     "acc-1",
+					Asset:       "USD",
+					MaxNotional: "500",
 				},
 			},
 			RateLimits: []domain.LimitRate{
@@ -633,8 +635,11 @@ func TestGetLimitsHappyPath(t *testing.T) {
 	if len(got.RateLimits) != 1 {
 		t.Fatalf("want 1 rate limit, got %d", len(got.RateLimits))
 	}
-	if got.OrderSizeLimits[0].MaxQuantity != "500" {
-		t.Errorf("wrong max_quantity: %q", got.OrderSizeLimits[0].MaxQuantity)
+	orderSize := got.OrderSizeLimits[0]
+	if orderSize.Scope != "account_settlement_asset" ||
+		orderSize.Account != "acc-1" || orderSize.Asset != "USD" ||
+		orderSize.MaxQuantity != "" || orderSize.MaxNotional != "500" {
+		t.Errorf("wrong order-size limit: %+v", orderSize)
 	}
 }
 

@@ -378,8 +378,8 @@ func fixtureData() Data {
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
 			{Scope: domain.ScopeBroker, MaxQuantity: "1000"},
-			{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100"},
-			{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxQuantity: "200"},
+			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100"},
+			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-2", Asset: "AAPL", MaxQuantity: "200"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{

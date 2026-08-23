@@ -409,10 +409,11 @@ ACCOUNTS = [
 # shape; the rest are the per-kind body fields:
 #   rate       -> PUT /limits/rate        {scope, account, asset, windowMs, maxOrders}
 #   order_size -> PUT /limits/order-size  {scope, account, asset, maxQuantity, maxNotional}
-# Scope axes: account required for account/account_asset; asset required for
-# asset/account_asset. Allowed scopes differ per kind (the engine validates):
+# Scope axes: account required for account scopes; asset required for asset
+# scopes. Allowed scopes differ per kind (the engine validates):
 #   rate       broker | asset | account | account_asset
-#   order_size broker | asset | account_asset
+#   order_size broker | underlying_asset | settlement_asset |
+#              account_underlying_asset | account_settlement_asset
 # windowMs is a positive integer (<= 24h); maxOrders a positive integer; all
 # decimal ceilings/bounds are exact strings.
 LIMITS = [
@@ -449,17 +450,17 @@ LIMITS = [
     {
         # Per-name leash on a degen: at most 1 000 AAPL units per order.
         "kind": "order_size",
-        "scope": "account_asset",
+        "scope": "account_underlying_asset",
         "account": "degen-yolo",
         "asset": "AAPL",
         "maxQuantity": "1000",
     },
     {
-        # Index notional cap, asset-wide: SPX orders capped at 2 000 000 notional.
+        # Settlement notional cap: USD-settled orders capped at 2 000 000.
         "kind": "order_size",
-        "scope": "asset",
+        "scope": "settlement_asset",
         "account": "",
-        "asset": "SPX",
+        "asset": "USD",
         "maxNotional": "2000000",
     },
 ]

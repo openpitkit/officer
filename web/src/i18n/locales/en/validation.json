@@ -39,6 +39,10 @@
     "policyNoAccountGroup": "{{policy}} must not carry an account group",
     "rateLimitRequires": "rate_limit requires both max_orders and window",
     "orderSizeRequires": "order_size_limit requires max_quantity or max_notional",
+    "orderSizeUnderlyingRequires": "an underlying-asset scope requires max_quantity",
+    "orderSizeUnderlyingNoNotional": "an underlying-asset scope must not carry max_notional",
+    "orderSizeSettlementRequires": "a settlement-asset scope requires max_notional",
+    "orderSizeSettlementNoQuantity": "a settlement-asset scope must not carry max_quantity",
     "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch requires currency",
     "pnlRequires": "spot_funds_pnl_bounds_kill_switch requires lower_bound or upper_bound",
     "pnlBoundOrder": "lower_bound must be <= upper_bound"

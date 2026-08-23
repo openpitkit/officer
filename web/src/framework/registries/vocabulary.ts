@@ -116,11 +116,23 @@ export function isScope(value: string): value is Scope {
 }
 
 export function scopeHasAccount(scope: string): boolean {
-  return scope === "account" || scope === "account_asset";
+  return (
+    scope === "account" ||
+    scope === "account_asset" ||
+    scope === "account_underlying_asset" ||
+    scope === "account_settlement_asset"
+  );
 }
 
 export function scopeHasAsset(scope: string): boolean {
-  return scope === "asset" || scope === "account_asset";
+  return (
+    scope === "asset" ||
+    scope === "account_asset" ||
+    scope === "underlying_asset" ||
+    scope === "settlement_asset" ||
+    scope === "account_underlying_asset" ||
+    scope === "account_settlement_asset"
+  );
 }
 
 export function policyLabel(t: TFunction, id: string): string {

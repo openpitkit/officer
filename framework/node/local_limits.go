@@ -654,7 +654,10 @@ func (n *localNode) ensureLimitAccount(
 	caller domain.Caller,
 ) error {
 	switch scope {
-	case domain.ScopeAccount, domain.ScopeAccountAsset:
+	case domain.ScopeAccount,
+		domain.ScopeAccountAsset,
+		domain.ScopeAccountUnderlyingAsset,
+		domain.ScopeAccountSettlementAsset:
 		return n.ensureAccount(ctx, account, missing, operation, caller)
 	default:
 		return nil
@@ -669,7 +672,12 @@ func (n *localNode) ensureLimitAsset(
 	caller domain.Caller,
 ) error {
 	switch scope {
-	case domain.ScopeAsset, domain.ScopeAccountAsset:
+	case domain.ScopeAsset,
+		domain.ScopeAccountAsset,
+		domain.ScopeUnderlyingAsset,
+		domain.ScopeSettlementAsset,
+		domain.ScopeAccountUnderlyingAsset,
+		domain.ScopeAccountSettlementAsset:
 		_, err := n.ensureAutoCreatedAsset(ctx, asset, operation, caller)
 		return err
 	default:

@@ -2490,8 +2490,7 @@ paths:
           in: query
           description: Filter by exact policy scope.
           schema:
-            type: string
-            enum: [broker, global, account, asset, account_group, account_asset]
+            $ref: "#/components/schemas/LimitScope"
         - name: policy
           in: query
           description: Filter by policy kind.
@@ -2628,7 +2627,12 @@ paths:
       summary: Upsert an order-size barrier
       description: >
         `missingAccount` follows the rate-limit barrier: it is required when the
-        scope carries the account axis and ignored otherwise.
+        scope carries the account axis and ignored otherwise. A broker barrier may
+        carry either cap or both. `underlying_asset` and
+        `account_underlying_asset` carry only `maxQuantity`;
+        `settlement_asset` and `account_settlement_asset` carry only
+        `maxNotional`. A barrier carrying neither cap, or a cap its scope does
+        not consult, is rejected with a validation error.
       tags: [limits]
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
@@ -5608,9 +5612,14 @@ components:
     LimitScope:
       type: string
       description: >
-        Policy scope discriminator: `broker` (global), `global`, `asset`,
-        `account`, `account_group`, or `account_asset`.
-      enum: [broker, global, asset, account, account_group, account_asset]
+        Policy scope discriminator. Rate limits use `broker`, `asset`,
+        `account`, and `account_asset`. Order-size limits use `broker`,
+        `underlying_asset`, `settlement_asset`, `account_underlying_asset`, and
+        `account_settlement_asset`. P&L bounds use `global`, `account_group`,
+        and `account`.
+      enum: [broker, global, asset, account, account_group, account_asset,
+        underlying_asset, settlement_asset, account_underlying_asset,
+        account_settlement_asset]
 
     RateLimitScope:
       type: string
@@ -5622,9 +5631,10 @@ components:
     OrderSizeLimitScope:
       type: string
       description: >
-        Order-size-limit scope discriminator: `broker` (global), `asset`, or
-        `account_asset`.
-      enum: [broker, asset, account_asset]
+        Order-size-limit scope discriminator. Underlying-asset scopes carry a
+        quantity cap; settlement-asset scopes carry a notional cap.
+      enum: [broker, underlying_asset, settlement_asset,
+        account_underlying_asset, account_settlement_asset]
 
     SpotFundsPnlBoundsScope:
       type: string
@@ -5665,16 +5675,36 @@ components:
           $ref: "#/components/schemas/OrderSizeLimitScope"
         account:
           type: string
-          description: Account code this barrier applies to, or empty for a global barrier.
+          description: >
+            Account code this barrier applies to. Required by
+            `account_underlying_asset` and `account_settlement_asset`; must be
+            empty for every other scope, and a non-empty value there is rejected
+            with a validation error.
         asset:
           type: string
-          description: Asset this barrier applies to, or empty when not asset-scoped.
+          description: >
+            Asset this barrier is keyed on - the underlying asset for a quantity
+            cap, the settlement asset for a notional cap. Required by every
+            asset scope; must be empty for a broker barrier, and a non-empty
+            value there is rejected with a validation error.
         maxQuantity:
           type: string
-          description: Maximum order quantity - exact decimal string; empty when unset.
+          description: >
+            Maximum order quantity - exact decimal string; empty when unset. Broker
+            barriers may carry either cap or both. `underlying_asset` and
+            `account_underlying_asset` carry only `maxQuantity`;
+            `settlement_asset` and `account_settlement_asset` must leave it
+            empty. A barrier carrying neither cap, or a cap its scope does not
+            consult, is rejected with a validation error.
         maxNotional:
           type: string
-          description: Maximum order notional - exact decimal string; empty when unset.
+          description: >
+            Maximum order notional - exact decimal string; empty when unset. Broker
+            barriers may carry either cap or both. `settlement_asset` and
+            `account_settlement_asset` carry only `maxNotional`;
+            `underlying_asset` and `account_underlying_asset` must leave it
+            empty. A barrier carrying neither cap, or a cap its scope does not
+            consult, is rejected with a validation error.
 
     SpotFundsPnlBoundsLimit:
       type: object

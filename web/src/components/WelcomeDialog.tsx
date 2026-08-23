@@ -99,10 +99,17 @@ const DEMO_LIMITS: Limit[] = [
   },
   {
     policy: "order_size_limit",
-    scope: "account_asset",
+    scope: "account_underlying_asset",
     account: DEMO_ACCOUNT_ID,
     asset: "BTC",
-    values: { max_quantity: "2", max_notional: "150000" },
+    values: { max_quantity: "2" },
+  },
+  {
+    policy: "order_size_limit",
+    scope: "account_settlement_asset",
+    account: DEMO_ACCOUNT_ID,
+    asset: "USD",
+    values: { max_notional: "150000" },
   },
 ];
 

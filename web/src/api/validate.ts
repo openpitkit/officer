@@ -327,6 +327,22 @@ export function validateLimit(limit: Limit): FieldError | null {
     if (kinds.length === 0) {
       return { key: "limit.orderSizeRequires" };
     }
+    const isUnderlyingScope =
+      scope === "underlying_asset" || scope === "account_underlying_asset";
+    const isSettlementScope =
+      scope === "settlement_asset" || scope === "account_settlement_asset";
+    if (isUnderlyingScope && !kinds.includes("max_quantity")) {
+      return { key: "limit.orderSizeUnderlyingRequires" };
+    }
+    if (isUnderlyingScope && kinds.includes("max_notional")) {
+      return { key: "limit.orderSizeUnderlyingNoNotional" };
+    }
+    if (isSettlementScope && !kinds.includes("max_notional")) {
+      return { key: "limit.orderSizeSettlementRequires" };
+    }
+    if (isSettlementScope && kinds.includes("max_quantity")) {
+      return { key: "limit.orderSizeSettlementNoQuantity" };
+    }
   } else if (policy === SPOT_FUNDS_PNL_POLICY) {
     if ((limit.values.currency ?? "").trim() === "") {
       return { key: "limit.pnlCurrencyRequired" };

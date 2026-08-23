@@ -278,10 +278,9 @@ func TestPutOrderSizeLimit(t *testing.T) {
 		limits: node.AccountLimits{
 			OrderSizeLimits: []domain.LimitOrderSize{
 				{
-					Scope:       domain.ScopeAccountAsset,
+					Scope:       domain.ScopeAccountSettlementAsset,
 					Account:     "acc-1",
-					Asset:       "AAPL",
-					MaxQuantity: "501",
+					Asset:       "USD",
 					MaxNotional: "50001",
 				},
 			},
@@ -292,18 +291,18 @@ func TestPutOrderSizeLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(`{
-		"scope":"account_asset","account":"acc-1","asset":"AAPL",
-		"maxQuantity":"500","maxNotional":"50000"
+		"scope":"account_settlement_asset","account":"acc-1","asset":"USD",
+		"maxQuantity":"","maxNotional":"50000"
 	}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/order-size?missingAccount=create", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if svc.orderSizeLimitPut.Scope != domain.ScopeAccountAsset ||
+	if svc.orderSizeLimitPut.Scope != domain.ScopeAccountSettlementAsset ||
 		svc.orderSizeLimitPut.Account != "acc-1" ||
-		svc.orderSizeLimitPut.Asset != "AAPL" ||
-		svc.orderSizeLimitPut.MaxQuantity != "500" ||
+		svc.orderSizeLimitPut.Asset != "USD" ||
+		svc.orderSizeLimitPut.MaxQuantity != "" ||
 		svc.orderSizeLimitPut.MaxNotional != "50000" {
 		t.Fatalf("captured order-size limit = %+v", svc.orderSizeLimitPut)
 	}
@@ -312,7 +311,8 @@ func TestPutOrderSizeLimit(t *testing.T) {
 	if !ok {
 		t.Fatalf("response missing orderSizeLimit field: %v", m)
 	}
-	if osl["maxQuantity"] != "501" || osl["maxNotional"] != "50001" {
+	if osl["scope"] != "account_settlement_asset" ||
+		osl["maxQuantity"] != "" || osl["maxNotional"] != "50001" {
 		t.Fatalf("unexpected persisted orderSizeLimit: %v", osl)
 	}
 }

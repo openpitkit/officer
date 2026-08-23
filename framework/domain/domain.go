@@ -256,12 +256,16 @@ const (
 
 // Scope identifiers.
 const (
-	ScopeBroker       = "broker"
-	ScopeGlobal       = "global"
-	ScopeAsset        = "asset"
-	ScopeAccount      = "account"
-	ScopeAccountGroup = "account_group"
-	ScopeAccountAsset = "account_asset"
+	ScopeBroker                 = "broker"
+	ScopeGlobal                 = "global"
+	ScopeAsset                  = "asset"
+	ScopeAccount                = "account"
+	ScopeAccountGroup           = "account_group"
+	ScopeAccountAsset           = "account_asset"
+	ScopeUnderlyingAsset        = "underlying_asset"
+	ScopeSettlementAsset        = "settlement_asset"
+	ScopeAccountUnderlyingAsset = "account_underlying_asset"
+	ScopeAccountSettlementAsset = "account_settlement_asset"
 )
 
 // Kind identifiers.

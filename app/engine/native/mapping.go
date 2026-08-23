@@ -645,9 +645,20 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 ) {
 	var broker *policies.OrderSizeBrokerBarrier
 	assets := []policies.OrderSizeAssetBarrier{}
+	assetIndexes := make(map[string]int)
 	accountAssets := []policies.OrderSizeAccountAssetBarrier{}
+	type accountAssetKey struct {
+		account param.AccountID
+		asset   string
+	}
+	accountAssetIndexes := make(map[accountAssetKey]int)
 
 	for _, limit := range limits {
+		if err := limit.Validate(); err != nil {
+			return nil, nil, nil, fmt.Errorf(
+				"engine: invalid order_size_limit: %w", err,
+			)
+		}
 		size, err := orderSizeValue(limit)
 		if err != nil {
 			return nil, nil, nil, err
@@ -661,16 +672,29 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 					"engine: order_size_limit carries more than one broker barrier")
 			}
 			broker = &policies.OrderSizeBrokerBarrier{Limit: size}
-		case domain.ScopeAsset:
+		case domain.ScopeUnderlyingAsset, domain.ScopeSettlementAsset:
 			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			assetKey := asset.Safe()
+			if index, ok := assetIndexes[assetKey]; ok {
+				merged, err := mergeOrderSizeValue(
+					assets[index].Limit, size, fmt.Sprintf("asset %q", limit.Asset),
+				)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				assets[index].Limit = merged
+				break
+			}
+			assetIndexes[assetKey] = len(assets)
 			assets = append(assets, policies.OrderSizeAssetBarrier{
-				Limit:           size,
-				SettlementAsset: asset,
+				Limit: size,
+				Asset: asset,
 			})
-		case domain.ScopeAccountAsset:
+		case domain.ScopeAccountUnderlyingAsset,
+			domain.ScopeAccountSettlementAsset:
 			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, nil, nil, err
@@ -679,10 +703,24 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			key := accountAssetKey{account: account, asset: asset.Safe()}
+			if index, ok := accountAssetIndexes[key]; ok {
+				merged, err := mergeOrderSizeValue(
+					accountAssets[index].Limit,
+					size,
+					fmt.Sprintf("account %q asset %q", limit.Account, limit.Asset),
+				)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				accountAssets[index].Limit = merged
+				break
+			}
+			accountAssetIndexes[key] = len(accountAssets)
 			accountAssets = append(accountAssets, policies.OrderSizeAccountAssetBarrier{
-				Limit:           size,
-				AccountID:       account,
-				SettlementAsset: asset,
+				Limit:     size,
+				AccountID: account,
+				Asset:     asset,
 			})
 		default:
 			return nil, nil, nil, fmt.Errorf(
@@ -832,51 +870,9 @@ func rateLimitReady(limits []domain.LimitRate, res idResolver) (*policies.RateLi
 func orderSizeReady(limits []domain.LimitOrderSize, res idResolver) (*policies.OrderSizeLimitReadyBuilder, error) {
 	builder := policies.BuildOrderSizeLimit()
 	ready := builder.PolicyGroupID(0)
-
-	var (
-		broker        *policies.OrderSizeBrokerBarrier
-		assets        []policies.OrderSizeAssetBarrier
-		accountAssets []policies.OrderSizeAccountAssetBarrier
-	)
-	for _, limit := range limits {
-		size, err := orderSizeValue(limit)
-		if err != nil {
-			return nil, err
-		}
-		switch limit.Scope {
-		case domain.ScopeBroker:
-			// The builder takes one broker barrier; a second one would silently
-			// replace the first and lose a configured limit.
-			if broker != nil {
-				return nil, fmt.Errorf("engine: order_size_limit carries more than one broker barrier")
-			}
-			broker = &policies.OrderSizeBrokerBarrier{Limit: size}
-		case domain.ScopeAsset:
-			asset, err := res.asset(limit.Asset)
-			if err != nil {
-				return nil, err
-			}
-			assets = append(assets, policies.OrderSizeAssetBarrier{
-				Limit:           size,
-				SettlementAsset: asset,
-			})
-		case domain.ScopeAccountAsset:
-			account, err := res.account(limit.Account)
-			if err != nil {
-				return nil, err
-			}
-			asset, err := res.asset(limit.Asset)
-			if err != nil {
-				return nil, err
-			}
-			accountAssets = append(accountAssets, policies.OrderSizeAccountAssetBarrier{
-				Limit:           size,
-				AccountID:       account,
-				SettlementAsset: asset,
-			})
-		default:
-			return nil, fmt.Errorf("engine: order_size_limit unsupported scope %q", limit.Scope)
-		}
+	broker, assets, accountAssets, err := orderSizeAxes(limits, res)
+	if err != nil {
+		return nil, err
 	}
 
 	if broker != nil {
@@ -898,25 +894,11 @@ func rateLimitValue(limit domain.LimitRate) (policies.RateLimit, error) {
 
 // orderSizeValue extracts the engine order-size limit from a typed order-size
 // barrier.
-//
-// The binding's OrderSizeLimit always carries both a quantity and a notional
-// cap and rejects an order when it exceeds either (a strict ">"). The domain
-// barrier may omit one dimension ("at least one required"), meaning that
-// dimension must not constrain. The boundary adapter maps an omitted dimension
-// to the largest representable value so it never triggers a reject; this is a
-// transport-only sentinel and never participates in any calculation.
 func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error) {
-	maxQty, err := param.NewQuantityFromInt64(math.MaxInt64)
-	if err != nil {
-		return policies.OrderSizeLimit{}, fmt.Errorf(
-			"engine: order_size_limit unbounded quantity: %w", err)
+	out := policies.OrderSizeLimit{
+		MaxQuantity: optional.None[param.Quantity](),
+		MaxNotional: optional.None[param.Volume](),
 	}
-	maxNotional, err := param.NewVolumeFromInt64(math.MaxInt64)
-	if err != nil {
-		return policies.OrderSizeLimit{}, fmt.Errorf(
-			"engine: order_size_limit unbounded notional: %w", err)
-	}
-	out := policies.OrderSizeLimit{MaxQuantity: maxQty, MaxNotional: maxNotional}
 
 	if limit.MaxQuantity != "" {
 		q, err := param.NewQuantityFromString(limit.MaxQuantity)
@@ -924,7 +906,7 @@ func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error
 			return policies.OrderSizeLimit{}, fmt.Errorf(
 				"engine: order_size_limit max_quantity %q: %w", limit.MaxQuantity, err)
 		}
-		out.MaxQuantity = q
+		out.MaxQuantity = optional.Some(q)
 	}
 	if limit.MaxNotional != "" {
 		n, err := param.NewVolumeFromString(limit.MaxNotional)
@@ -932,9 +914,37 @@ func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error
 			return policies.OrderSizeLimit{}, fmt.Errorf(
 				"engine: order_size_limit max_notional %q: %w", limit.MaxNotional, err)
 		}
-		out.MaxNotional = n
+		out.MaxNotional = optional.Some(n)
 	}
 	return out, nil
+}
+
+// mergeOrderSizeValue combines complementary caps on one SDK barrier key and
+// rejects the same metric appearing twice on that key.
+func mergeOrderSizeValue(
+	current, incoming policies.OrderSizeLimit, key string,
+) (policies.OrderSizeLimit, error) {
+	if current.MaxQuantity.IsSet() && incoming.MaxQuantity.IsSet() {
+		return policies.OrderSizeLimit{}, fmt.Errorf(
+			"engine: duplicate order_size_limit max_quantity for %s: %w",
+			key,
+			domain.ErrInvalid,
+		)
+	}
+	if current.MaxNotional.IsSet() && incoming.MaxNotional.IsSet() {
+		return policies.OrderSizeLimit{}, fmt.Errorf(
+			"engine: duplicate order_size_limit max_notional for %s: %w",
+			key,
+			domain.ErrInvalid,
+		)
+	}
+	if incoming.MaxQuantity.IsSet() {
+		current.MaxQuantity = incoming.MaxQuantity
+	}
+	if incoming.MaxNotional.IsSet() {
+		current.MaxNotional = incoming.MaxNotional
+	}
+	return current, nil
 }
 
 func spotFundsPnlBoundsBarrier(

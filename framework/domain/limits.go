@@ -51,9 +51,10 @@ type LimitRate struct {
 }
 
 // LimitOrderSize is the typed order-size barrier: a per-order ceiling on
-// quantity and/or notional for the addressed scope. It maps to the engine's
-// order-size policy. At least one of MaxQuantity or MaxNotional is set; an unset
-// bound is the empty string. Both are exact decimal strings, never float.
+// quantity and/or notional for the addressed scope. Broker barriers may carry
+// either or both caps. Underlying-asset scopes carry quantity; settlement-asset
+// scopes carry notional. An unset bound is the empty string. Both are exact
+// decimal strings, never float.
 type LimitOrderSize struct {
 	// Scope is the axis combination this barrier applies to.
 	Scope LimitScope
@@ -92,8 +93,14 @@ type LimitSpotFundsPnlBounds struct {
 // mapping the typed validators enforce; only the storage shape changed when the
 // EAV table became three typed barriers.
 var allowedScopes = map[string][]LimitScope{
-	PolicyRateLimit:      {ScopeBroker, ScopeAsset, ScopeAccount, ScopeAccountAsset},
-	PolicyOrderSizeLimit: {ScopeBroker, ScopeAsset, ScopeAccountAsset},
+	PolicyRateLimit: {ScopeBroker, ScopeAsset, ScopeAccount, ScopeAccountAsset},
+	PolicyOrderSizeLimit: {
+		ScopeBroker,
+		ScopeUnderlyingAsset,
+		ScopeSettlementAsset,
+		ScopeAccountUnderlyingAsset,
+		ScopeAccountSettlementAsset,
+	},
 	PolicySpotFundsPnlBoundsKillSwitch: {
 		ScopeGlobal, ScopeAccountGroup, ScopeAccount,
 	},
@@ -137,6 +144,30 @@ func (l LimitOrderSize) Validate() error {
 			"order_size_limit requires at least max_quantity or max_notional: %w",
 			ErrInvalid,
 		)
+	}
+	switch l.Scope {
+	case ScopeUnderlyingAsset, ScopeAccountUnderlyingAsset:
+		if l.MaxQuantity == "" {
+			return fmt.Errorf(
+				"scope %q requires max_quantity: %w", l.Scope, ErrInvalid,
+			)
+		}
+		if l.MaxNotional != "" {
+			return fmt.Errorf(
+				"scope %q must not carry max_notional: %w", l.Scope, ErrInvalid,
+			)
+		}
+	case ScopeSettlementAsset, ScopeAccountSettlementAsset:
+		if l.MaxNotional == "" {
+			return fmt.Errorf(
+				"scope %q requires max_notional: %w", l.Scope, ErrInvalid,
+			)
+		}
+		if l.MaxQuantity != "" {
+			return fmt.Errorf(
+				"scope %q must not carry max_quantity: %w", l.Scope, ErrInvalid,
+			)
+		}
 	}
 	if l.MaxQuantity != "" {
 		if err := validatePositiveDecimal(l.MaxQuantity); err != nil {
@@ -195,9 +226,14 @@ func ValidateLimitScopeAndAxes(
 		return fmt.Errorf("scope %q not allowed for policy %q: %w", scope, policy, ErrInvalid)
 	}
 
-	needsAccount := scope == ScopeAccount || scope == ScopeAccountAsset
+	needsAccount := scope == ScopeAccount || scope == ScopeAccountAsset ||
+		scope == ScopeAccountUnderlyingAsset ||
+		scope == ScopeAccountSettlementAsset
 	needsAccountGroup := scope == ScopeAccountGroup
-	needsAsset := scope == ScopeAsset || scope == ScopeAccountAsset
+	needsAsset := scope == ScopeAsset || scope == ScopeAccountAsset ||
+		scope == ScopeUnderlyingAsset || scope == ScopeSettlementAsset ||
+		scope == ScopeAccountUnderlyingAsset ||
+		scope == ScopeAccountSettlementAsset
 
 	// Only the presence rule is Officer's: axis values are parsed and
 	// format-checked downstream by the engine barrier build or store resolvers,

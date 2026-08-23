@@ -116,21 +116,40 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 			valid: true,
 		},
 		{
-			name: "order size asset",
+			name: "order size underlying asset",
 			target: node.LimitTarget{
 				Policy: domain.PolicyOrderSizeLimit,
-				Scope:  domain.ScopeAsset,
+				Scope:  domain.ScopeUnderlyingAsset,
 				Asset:  "AAPL",
 			},
 			valid: true,
 		},
 		{
-			name: "order size account asset",
+			name: "order size settlement asset",
+			target: node.LimitTarget{
+				Policy: domain.PolicyOrderSizeLimit,
+				Scope:  domain.ScopeSettlementAsset,
+				Asset:  "USD",
+			},
+			valid: true,
+		},
+		{
+			name: "order size account underlying asset",
 			target: node.LimitTarget{
 				Policy:  domain.PolicyOrderSizeLimit,
-				Scope:   domain.ScopeAccountAsset,
+				Scope:   domain.ScopeAccountUnderlyingAsset,
 				Account: "acc-1",
 				Asset:   "AAPL",
+			},
+			valid: true,
+		},
+		{
+			name: "order size account settlement asset",
+			target: node.LimitTarget{
+				Policy:  domain.PolicyOrderSizeLimit,
+				Scope:   domain.ScopeAccountSettlementAsset,
+				Account: "acc-1",
+				Asset:   "USD",
 			},
 			valid: true,
 		},

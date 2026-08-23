@@ -41,6 +41,10 @@ export function registerOpenVocabulary(): void {
   registerScope("account");
   registerScope("account_group");
   registerScope("account_asset");
+  registerScope("underlying_asset");
+  registerScope("settlement_asset");
+  registerScope("account_underlying_asset");
+  registerScope("account_settlement_asset");
 
   registerPolicy({
     id: "rate_limit",
@@ -53,7 +57,13 @@ export function registerOpenVocabulary(): void {
   });
   registerPolicy({
     id: "order_size_limit",
-    allowedScopes: ["broker", "asset", "account_asset"],
+    allowedScopes: [
+      "broker",
+      "underlying_asset",
+      "settlement_asset",
+      "account_underlying_asset",
+      "account_settlement_asset",
+    ],
     kinds: [{ kind: "max_quantity" }, { kind: "max_notional" }],
     catalog: {
       wikiUrl:

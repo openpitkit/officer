@@ -94,7 +94,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100",
+		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
@@ -1441,9 +1441,10 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 		{
 			name: "order-size",
 			data: backup.Data{OrderSizeLimits: []domain.LimitOrderSize{{
-				Scope: domain.ScopeAsset, Asset: "AAPL",
+				Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL",
+				MaxNotional: "1",
 			}}},
-			want: []string{"order_size_limit", `scope "asset"`, `asset "AAPL"`},
+			want: []string{"order_size_limit", `scope "underlying_asset"`, `asset "AAPL"`},
 		},
 		{
 			name: "spot-funds-pnl-bounds",
@@ -1617,7 +1618,7 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 			t.Fatalf("UpsertBalance(extra): %v", err)
 		}
 		if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-			Scope: domain.ScopeAccountAsset, Account: "extra-acc", Asset: "AAPL", MaxQuantity: "9",
+			Scope: domain.ScopeAccountUnderlyingAsset, Account: "extra-acc", Asset: "AAPL", MaxQuantity: "9",
 		}); err != nil {
 			t.Fatalf("PutOrderSizeLimit(extra): %v", err)
 		}

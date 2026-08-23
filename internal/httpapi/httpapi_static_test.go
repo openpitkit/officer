@@ -52,6 +52,22 @@ func TestServeOpenAPISpec(t *testing.T) {
 		t.Fatal("body does not look like an OpenAPI spec")
 	}
 	body := rec.Body.String()
+	limitScopeQuery := `        - name: scope
+          in: query
+          description: Filter by exact policy scope.
+          schema:
+            $ref: "#/components/schemas/LimitScope"`
+	if !strings.Contains(body, limitScopeQuery) {
+		t.Fatal("GET /limits scope filter does not reference LimitScope")
+	}
+	limitScopeDefinition := "    LimitScope:\n      type: string"
+	limitScopeEnum := `      enum: [broker, global, asset, account, account_group, account_asset,
+        underlying_asset, settlement_asset, account_underlying_asset,
+        account_settlement_asset]`
+	if !strings.Contains(body, limitScopeDefinition) ||
+		!strings.Contains(body, limitScopeEnum) {
+		t.Fatal("LimitScope does not include the order-size scopes")
+	}
 	if !strings.Contains(body, "realizedPnlResult:\n          type: object") ||
 		!strings.Contains(body, "required: [delta, result]") {
 		t.Fatal("AdjustmentAccepted realizedPnlResult is not documented as an object")

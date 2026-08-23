@@ -702,10 +702,10 @@ describe("limits client", () => {
           },
           {
             kind: "order_size_limit",
-            scope: "account_asset",
+            scope: "account_underlying_asset",
             account: "desk-alpha",
             asset: "AAPL",
-            values: { orderSize: { maxQuantity: "10", maxNotional: "1500" } },
+            values: { orderSize: { maxQuantity: "10", maxNotional: "" } },
           },
           {
             kind: "spot_funds_pnl_bounds_kill_switch",
@@ -744,11 +744,11 @@ describe("limits client", () => {
       },
       {
         policy: "order_size_limit",
-        scope: "account_asset",
+        scope: "account_underlying_asset",
         account: "desk-alpha",
         accountGroup: "",
         asset: "AAPL",
-        values: { max_quantity: "10", max_notional: "1500" },
+        values: { max_quantity: "10", max_notional: "" },
       },
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
@@ -837,11 +837,11 @@ describe("limits client", () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         orderSizeLimit: {
-          scope: "asset",
+          scope: "underlying_asset",
           account: "",
           asset: "AAPL",
           maxQuantity: "10",
-          maxNotional: "1500",
+          maxNotional: "",
         },
       }),
     );
@@ -850,10 +850,10 @@ describe("limits client", () => {
     await putLimit(
       {
         policy: "order_size_limit",
-        scope: "asset",
+        scope: "underlying_asset",
         account: "",
         asset: "AAPL",
-        values: { max_quantity: "10", max_notional: "1500" },
+        values: { max_quantity: "10" },
       },
       "reject",
     );
@@ -862,6 +862,14 @@ describe("limits client", () => {
       "/app/api/v1/limits/order-size",
       expect.any(Object),
     );
+    const request = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toEqual({
+      scope: "underlying_asset",
+      account: "",
+      asset: "AAPL",
+      maxQuantity: "10",
+      maxNotional: "",
+    });
   });
 
   it("omits missingAccount for a self-computed PnL bound scoped to an account group", async () => {

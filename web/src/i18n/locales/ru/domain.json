@@ -10,7 +10,11 @@
     "asset": "Актив",
     "account": "Счёт",
     "account_group": "Группа счетов",
-    "account_asset": "Счёт + актив"
+    "account_asset": "Счёт + актив",
+    "underlying_asset": "Базовый актив",
+    "settlement_asset": "Расчётный актив",
+    "account_underlying_asset": "Счёт + базовый актив",
+    "account_settlement_asset": "Счёт + расчётный актив"
   },
   "kindHint": {
     "rate_limit": {

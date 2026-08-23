@@ -405,6 +405,20 @@ var clientDataAllowlist = []clientDataAllow{
 	},
 	{
 		Surface: driftBackup,
+		Entity:  "order-size-limits",
+		Field:   "order-size-limits.MaxQuantity",
+		Kind:    "optional-sentinel",
+		Why:     "underlying and settlement scopes carry mutually exclusive cap fields across separate sentinel rows",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "order-size-limits",
+		Field:   "order-size-limits.MaxNotional",
+		Kind:    "optional-sentinel",
+		Why:     "underlying and settlement scopes carry mutually exclusive cap fields across separate sentinel rows",
+	},
+	{
+		Surface: driftBackup,
 		Entity:  "spot-funds-pnl-bounds-limits",
 		Field:   "spot-funds-pnl-bounds-limits.Account",
 		Kind:    "optional-sentinel",
@@ -1421,10 +1435,15 @@ func seedClientDataDriftRealm(
 		Window:    3 * time.Minute,
 	}))
 	must(t, "PutOrderSizeLimit", rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope:       domain.ScopeAccountAsset,
+		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     "acc-1",
 		Asset:       "AAPL",
 		MaxQuantity: "18.5",
+	}))
+	must(t, "PutOrderSizeLimit notional", rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Scope:       domain.ScopeAccountSettlementAsset,
+		Account:     "acc-1",
+		Asset:       "AAPL",
 		MaxNotional: "2500.75",
 	}))
 	must(t, "PutSpotFundsPnlBoundsLimit", rs.PutSpotFundsPnlBoundsLimit(

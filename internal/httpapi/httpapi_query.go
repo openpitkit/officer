@@ -819,7 +819,10 @@ func policyScopeFromQuery(q url.Values) (domain.LimitScope, error) {
 	scope := q.Get("scope")
 	switch scope {
 	case "", domain.ScopeBroker, domain.ScopeGlobal, domain.ScopeAccount,
-		domain.ScopeAsset, domain.ScopeAccountGroup, domain.ScopeAccountAsset:
+		domain.ScopeAsset, domain.ScopeAccountGroup, domain.ScopeAccountAsset,
+		domain.ScopeUnderlyingAsset, domain.ScopeSettlementAsset,
+		domain.ScopeAccountUnderlyingAsset,
+		domain.ScopeAccountSettlementAsset:
 		return scope, nil
 	default:
 		return "", fmt.Errorf("invalid scope")

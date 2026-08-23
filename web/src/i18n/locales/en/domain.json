@@ -10,7 +10,11 @@
     "asset": "Asset",
     "account": "Account",
     "account_group": "Account group",
-    "account_asset": "Account + asset"
+    "account_asset": "Account + asset",
+    "underlying_asset": "Underlying asset",
+    "settlement_asset": "Settlement asset",
+    "account_underlying_asset": "Account + underlying asset",
+    "account_settlement_asset": "Account + settlement asset"
   },
   "kindHint": {
     "rate_limit": {

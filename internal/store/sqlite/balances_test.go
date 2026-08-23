@@ -481,8 +481,8 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 			t.Fatalf("PutRateLimit: %v", err)
 		}
 		if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
-			MaxQuantity: "2", MaxNotional: "100",
+			Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
+			MaxQuantity: "2",
 		}); err != nil {
 			t.Fatalf("PutOrderSizeLimit: %v", err)
 		}

@@ -253,6 +253,23 @@ function fromLimit(limit: Limit): FormState {
   };
 }
 
+function applicableKinds(
+  policy: Policy,
+  scope: Scope,
+  kinds: ReturnType<typeof getPolicyKinds>,
+): ReturnType<typeof getPolicyKinds> {
+  if (policy !== "order_size_limit") {
+    return kinds;
+  }
+  if (scope === "underlying_asset" || scope === "account_underlying_asset") {
+    return kinds.filter(({ kind }) => kind === "max_quantity");
+  }
+  if (scope === "settlement_asset" || scope === "account_settlement_asset") {
+    return kinds.filter(({ kind }) => kind === "max_notional");
+  }
+  return kinds;
+}
+
 function errMessage(err: unknown): string {
   if (err instanceof ApiError) {
     return err.message;
@@ -407,6 +424,7 @@ export function LimitDialog({
 
   const allowedScopes = getAllowedScopes(form.policy);
   const kinds = getPolicyKinds(form.policy);
+  const visibleKinds = applicableKinds(form.policy, form.scope, kinds);
 
   // Pull the catalog entry for the current policy for descriptions + human labels.
   const catalogEntry = getPolicyCatalogEntry(form.policy);
@@ -430,7 +448,7 @@ export function LimitDialog({
 
   const candidate = useMemo<Limit>(() => {
     const values: Record<string, string> = {};
-    for (const { kind } of kinds) {
+    for (const { kind } of visibleKinds) {
       const v = form.values[kind];
       if (v !== undefined && v.trim().length > 0) {
         values[kind] = v.trim();
@@ -445,7 +463,7 @@ export function LimitDialog({
         !isSpotFundsPnl && scopeHasAsset(form.scope) ? form.asset.trim() : "",
       values,
     };
-  }, [form, hasAccountGroupAxis, isSpotFundsPnl, kinds]);
+  }, [form, hasAccountGroupAxis, isSpotFundsPnl, visibleKinds]);
 
   const validation = validateLimit(candidate);
   const policyCount = policyCounts[form.policy];
@@ -671,7 +689,7 @@ export function LimitDialog({
               <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
                 {t("dialog.values")}
               </p>
-              {kinds.map(({ kind }) => {
+              {visibleKinds.map(({ kind }) => {
                 // Human label/hint come from the policy catalog (domain ns), keyed
                 // by policy id + field key; the field-label helper falls back to
                 // the mnemonic key, and the hint falls back to the kind hint, so

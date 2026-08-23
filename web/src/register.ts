@@ -85,8 +85,8 @@ export function registerOpenOfficerDefaults(): void {
   // Locale catalogs: en, ru, zh-CN, all namespaces from src/i18n/locales.
   registerLocaleResourceMap(openLocaleResources);
 
-  // Vocabulary ids: broker, asset, account, account_asset, rate_limit,
-  // order_size_limit.
+  // Vocabulary ids include the generic rate-limit scopes and the semantic
+  // underlying/settlement order-size scopes.
   registerOpenVocabulary();
 
   // Route ids: dashboard, accounts, policies, limits-redirect, positions,

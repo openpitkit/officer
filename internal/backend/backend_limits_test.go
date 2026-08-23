@@ -221,7 +221,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 	orderDone := make(chan error, 1)
 	go func() {
 		orderDone <- svc.PutOrderSizeLimit(context.Background(), domain.LimitOrderSize{
-			Scope:       domain.ScopeAccountAsset,
+			Scope:       domain.ScopeAccountUnderlyingAsset,
 			Account:     "acc-1",
 			Asset:       "AAPL",
 			MaxQuantity: "1",

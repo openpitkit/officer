@@ -55,8 +55,8 @@ func TestSnapshotWithoutAccountKeepsUnrelatedAndGroupRuntimeState(t *testing.T) 
 			{Scope: domain.ScopeAccount, Account: "retained", MaxOrders: 2, Window: time.Minute},
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
-			{Scope: domain.ScopeAccountAsset, Account: "deleted", Asset: "USD", MaxQuantity: "1"},
-			{Scope: domain.ScopeAccountAsset, Account: "retained", Asset: "USD", MaxQuantity: "2"},
+			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "deleted", Asset: "USD", MaxQuantity: "1"},
+			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "retained", Asset: "USD", MaxQuantity: "2"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{Scope: domain.ScopeAccount, Account: "deleted", Currency: "USD", LowerBound: "-1"},

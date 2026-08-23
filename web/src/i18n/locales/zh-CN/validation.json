@@ -39,6 +39,10 @@
     "policyNoAccountGroup": "{{policy}} 不得携带账户组",
     "rateLimitRequires": "rate_limit 需要同时指定 max_orders 和 window",
     "orderSizeRequires": "order_size_limit 需要指定 max_quantity 或 max_notional",
+    "orderSizeUnderlyingRequires": "标的资产范围需要指定 max_quantity",
+    "orderSizeUnderlyingNoNotional": "标的资产范围不得携带 max_notional",
+    "orderSizeSettlementRequires": "结算资产范围需要指定 max_notional",
+    "orderSizeSettlementNoQuantity": "结算资产范围不得携带 max_quantity",
     "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch 需要指定货币",
     "pnlRequires": "spot_funds_pnl_bounds_kill_switch 需要指定 lower_bound 或 upper_bound",
     "pnlBoundOrder": "lower_bound 必须 <= upper_bound"

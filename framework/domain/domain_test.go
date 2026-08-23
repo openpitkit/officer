@@ -1327,11 +1327,18 @@ func TestLimitOrderSize_Validate(t *testing.T) {
 			Scope: domain.ScopeBroker, MaxQuantity: "100"}},
 		{"broker max_notional only", domain.LimitOrderSize{
 			Scope: domain.ScopeBroker, MaxNotional: "50000.5"}},
-		{"account_asset both", domain.LimitOrderSize{
-			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
-			MaxQuantity: "1", MaxNotional: "999"}},
-		{"asset", domain.LimitOrderSize{
-			Scope: domain.ScopeAsset, Asset: "MSFT", MaxQuantity: "0.5"}},
+		{"broker both", domain.LimitOrderSize{
+			Scope: domain.ScopeBroker, MaxQuantity: "1", MaxNotional: "999"}},
+		{"underlying asset", domain.LimitOrderSize{
+			Scope: domain.ScopeUnderlyingAsset, Asset: "MSFT", MaxQuantity: "0.5"}},
+		{"settlement asset", domain.LimitOrderSize{
+			Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "500"}},
+		{"account underlying asset", domain.LimitOrderSize{
+			Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
+			MaxQuantity: "1"}},
+		{"account settlement asset", domain.LimitOrderSize{
+			Scope: domain.ScopeAccountSettlementAsset, Account: "acc-1", Asset: "USD",
+			MaxNotional: "999"}},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
@@ -1353,6 +1360,18 @@ func TestLimitOrderSize_Validate(t *testing.T) {
 			Scope: domain.ScopeBroker, MaxNotional: "-1"}},
 		{"scope account not allowed", domain.LimitOrderSize{
 			Scope: domain.ScopeAccount, Account: "acc-1", MaxQuantity: "1"}},
+		{"generic asset scope not allowed", domain.LimitOrderSize{
+			Scope: domain.ScopeAsset, Asset: "AAPL", MaxQuantity: "1"}},
+		{"underlying missing quantity", domain.LimitOrderSize{
+			Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxNotional: "10"}},
+		{"underlying carries notional", domain.LimitOrderSize{
+			Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL",
+			MaxQuantity: "1", MaxNotional: "10"}},
+		{"settlement missing notional", domain.LimitOrderSize{
+			Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxQuantity: "1"}},
+		{"settlement carries quantity", domain.LimitOrderSize{
+			Scope: domain.ScopeSettlementAsset, Asset: "USD",
+			MaxQuantity: "1", MaxNotional: "10"}},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {

@@ -20,6 +20,79 @@ import { describe, expect, it } from "vitest";
 import { validateLimit } from "@/api/validate";
 
 describe("validateLimit", () => {
+  it("validates semantic order-size scopes and cap applicability", () => {
+    const limit = (
+      scope: string,
+      account: string,
+      asset: string,
+      values: Record<string, string>,
+    ) =>
+      validateLimit({
+        policy: "order_size_limit",
+        scope,
+        account,
+        asset,
+        values,
+      });
+
+    expect(limit("broker", "", "", { max_quantity: "10" })).toBeNull();
+    expect(limit("broker", "", "", { max_notional: "1000" })).toBeNull();
+    expect(
+      limit("broker", "", "", {
+        max_quantity: "10",
+        max_notional: "1000",
+      }),
+    ).toBeNull();
+    expect(
+      limit("underlying_asset", "", "AAPL", { max_quantity: "10" }),
+    ).toBeNull();
+    expect(
+      limit("settlement_asset", "", "USD", { max_notional: "1000" }),
+    ).toBeNull();
+    expect(
+      limit("account_underlying_asset", "acc-1", "AAPL", {
+        max_quantity: "10",
+      }),
+    ).toBeNull();
+    expect(
+      limit("account_settlement_asset", "acc-1", "USD", {
+        max_notional: "1000",
+      }),
+    ).toBeNull();
+
+    expect(limit("underlying_asset", "", "AAPL", {})).toEqual({
+      key: "limit.orderSizeRequires",
+    });
+    expect(
+      limit("underlying_asset", "", "AAPL", { max_notional: "1000" }),
+    ).toEqual({ key: "limit.orderSizeUnderlyingRequires" });
+    expect(
+      limit("underlying_asset", "", "AAPL", {
+        max_quantity: "10",
+        max_notional: "1000",
+      }),
+    ).toEqual({ key: "limit.orderSizeUnderlyingNoNotional" });
+    expect(
+      limit("settlement_asset", "", "USD", { max_quantity: "10" }),
+    ).toEqual({ key: "limit.orderSizeSettlementRequires" });
+    expect(
+      limit("settlement_asset", "", "USD", {
+        max_quantity: "10",
+        max_notional: "1000",
+      }),
+    ).toEqual({ key: "limit.orderSizeSettlementNoQuantity" });
+    expect(
+      limit("account_underlying_asset", "acc-1", "AAPL", {
+        max_notional: "1000",
+      }),
+    ).toEqual({ key: "limit.orderSizeUnderlyingRequires" });
+    expect(
+      limit("account_settlement_asset", "acc-1", "USD", {
+        max_quantity: "10",
+      }),
+    ).toEqual({ key: "limit.orderSizeSettlementRequires" });
+  });
+
   it("accepts self-computed account-group PnL limits", () => {
     expect(
       validateLimit({

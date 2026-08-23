@@ -433,8 +433,314 @@ func TestOrderSizeValue_ParsesBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("quantity: %v", err)
 	}
-	if !limit.MaxQuantity.Equal(want) {
+	maxQuantity, ok := limit.MaxQuantity.Get()
+	if !ok || !maxQuantity.Equal(want) {
 		t.Fatalf("max_quantity mismatch")
+	}
+}
+
+func TestOrderSizeValue_OmittedCapIsNone(t *testing.T) {
+	t.Parallel()
+	limit, err := orderSizeValue(orderSize(
+		domain.ScopeBroker, "", "", "10", "",
+	))
+	if err != nil {
+		t.Fatalf("orderSizeValue: %v", err)
+	}
+	if !limit.MaxQuantity.IsSet() {
+		t.Fatal("max_quantity must be set")
+	}
+	if limit.MaxNotional.IsSet() {
+		t.Fatal("max_notional must remain unset")
+	}
+}
+
+func TestOrderSizeAxes_MergesComplementaryAssetCaps(t *testing.T) {
+	t.Parallel()
+	_, assets, _, err := orderSizeAxes([]domain.LimitOrderSize{
+		orderSize(domain.ScopeUnderlyingAsset, "", "USD", "10", ""),
+		orderSize(domain.ScopeSettlementAsset, "", "USD", "", "1000"),
+	}, testResolver())
+	if err != nil {
+		t.Fatalf("orderSizeAxes: %v", err)
+	}
+	if len(assets) != 1 {
+		t.Fatalf("asset barriers = %d, want 1 merged barrier", len(assets))
+	}
+	if !assets[0].Limit.MaxQuantity.IsSet() ||
+		!assets[0].Limit.MaxNotional.IsSet() {
+		t.Fatalf("merged barrier caps = %+v", assets[0].Limit)
+	}
+}
+
+func TestOrderSizeAxes_MergesComplementaryAccountAssetCaps(t *testing.T) {
+	t.Parallel()
+	_, _, accountAssets, err := orderSizeAxes([]domain.LimitOrderSize{
+		orderSize(domain.ScopeAccountUnderlyingAsset, "acc-1", "USD", "10", ""),
+		orderSize(domain.ScopeAccountSettlementAsset, "acc-1", "USD", "", "1000"),
+	}, testResolver("acc-1"))
+	if err != nil {
+		t.Fatalf("orderSizeAxes: %v", err)
+	}
+	if len(accountAssets) != 1 {
+		t.Fatalf(
+			"account-asset barriers = %d, want 1 merged barrier",
+			len(accountAssets),
+		)
+	}
+	if !accountAssets[0].Limit.MaxQuantity.IsSet() ||
+		!accountAssets[0].Limit.MaxNotional.IsSet() {
+		t.Fatalf("merged barrier caps = %+v", accountAssets[0].Limit)
+	}
+}
+
+func TestOrderSizeAxes_KeepsDifferentAccountsSeparate(t *testing.T) {
+	t.Parallel()
+	res := testResolver("acc-1", "acc-2")
+	account1, err := res.account("acc-1")
+	if err != nil {
+		t.Fatalf("resolve acc-1: %v", err)
+	}
+	account2, err := res.account("acc-2")
+	if err != nil {
+		t.Fatalf("resolve acc-2: %v", err)
+	}
+	asset, err := res.asset("USD")
+	if err != nil {
+		t.Fatalf("resolve USD: %v", err)
+	}
+	_, _, accountAssets, err := orderSizeAxes([]domain.LimitOrderSize{
+		orderSize(domain.ScopeAccountUnderlyingAsset, "acc-1", "USD", "10", ""),
+		orderSize(domain.ScopeAccountUnderlyingAsset, "acc-2", "USD", "20", ""),
+	}, res)
+	if err != nil {
+		t.Fatalf("orderSizeAxes: %v", err)
+	}
+	if len(accountAssets) != 2 {
+		t.Fatalf("account-asset barriers = %d, want 2", len(accountAssets))
+	}
+	barrierIndexes := make(map[param.AccountID]int, len(accountAssets))
+	for index, barrier := range accountAssets {
+		barrierIndexes[barrier.AccountID] = index
+	}
+	for _, want := range []struct {
+		accountID   param.AccountID
+		maxQuantity string
+	}{
+		{accountID: account1, maxQuantity: "10"},
+		{accountID: account2, maxQuantity: "20"},
+	} {
+		index, ok := barrierIndexes[want.accountID]
+		if !ok {
+			t.Fatalf("barrier for account %v not found", want.accountID)
+		}
+		barrier := accountAssets[index]
+		if !barrier.Asset.Equal(asset) {
+			t.Fatalf("barrier for account %v asset mismatch", want.accountID)
+		}
+		maxQuantity, ok := barrier.Limit.MaxQuantity.Get()
+		wantMaxQuantity, parseErr := param.NewQuantityFromString(want.maxQuantity)
+		if parseErr != nil {
+			t.Fatalf("parse max quantity: %v", parseErr)
+		}
+		if !ok || !maxQuantity.Equal(wantMaxQuantity) {
+			t.Fatalf("barrier for account %v max_quantity mismatch", want.accountID)
+		}
+		if barrier.Limit.MaxNotional.IsSet() {
+			t.Fatalf(
+				"barrier for account %v unexpectedly carries max_notional",
+				want.accountID,
+			)
+		}
+	}
+}
+
+func TestOrderSizeAxes_KeepsDifferentAssetsSeparate(t *testing.T) {
+	t.Parallel()
+	res := testResolver()
+	usd, err := res.asset("USD")
+	if err != nil {
+		t.Fatalf("resolve USD: %v", err)
+	}
+	aapl, err := res.asset("AAPL")
+	if err != nil {
+		t.Fatalf("resolve AAPL: %v", err)
+	}
+	_, assets, _, err := orderSizeAxes([]domain.LimitOrderSize{
+		orderSize(domain.ScopeUnderlyingAsset, "", "USD", "10", ""),
+		orderSize(domain.ScopeUnderlyingAsset, "", "AAPL", "20", ""),
+	}, res)
+	if err != nil {
+		t.Fatalf("orderSizeAxes: %v", err)
+	}
+	if len(assets) != 2 {
+		t.Fatalf("asset barriers = %d, want 2", len(assets))
+	}
+	barrierIndexes := make(map[string]int, len(assets))
+	for index, barrier := range assets {
+		barrierIndexes[barrier.Asset.Safe()] = index
+	}
+	usdIndex, ok := barrierIndexes[usd.Safe()]
+	if !ok {
+		t.Fatal("barrier for USD not found")
+	}
+	aaplIndex, ok := barrierIndexes[aapl.Safe()]
+	if !ok {
+		t.Fatal("barrier for AAPL not found")
+	}
+	if assets[usdIndex].Asset.Equal(assets[aaplIndex].Asset) {
+		t.Fatal("USD and AAPL barriers have the same asset")
+	}
+	for _, want := range []struct {
+		asset       param.Asset
+		maxQuantity string
+	}{
+		{asset: usd, maxQuantity: "10"},
+		{asset: aapl, maxQuantity: "20"},
+	} {
+		index := barrierIndexes[want.asset.Safe()]
+		barrier := assets[index]
+		if !barrier.Asset.Equal(want.asset) {
+			t.Fatalf("barrier for asset %q mismatch", want.asset.Safe())
+		}
+		maxQuantity, ok := barrier.Limit.MaxQuantity.Get()
+		wantMaxQuantity, parseErr := param.NewQuantityFromString(want.maxQuantity)
+		if parseErr != nil {
+			t.Fatalf("parse max quantity: %v", parseErr)
+		}
+		if !ok || !maxQuantity.Equal(wantMaxQuantity) {
+			t.Fatalf("barrier for asset %q max_quantity mismatch", want.asset.Safe())
+		}
+	}
+}
+
+func TestOrderSizeAxes_KeepsDifferentAccountAssetsSeparate(t *testing.T) {
+	t.Parallel()
+	res := testResolver("acc-1")
+	accountID, err := res.account("acc-1")
+	if err != nil {
+		t.Fatalf("resolve acc-1: %v", err)
+	}
+	usd, err := res.asset("USD")
+	if err != nil {
+		t.Fatalf("resolve USD: %v", err)
+	}
+	aapl, err := res.asset("AAPL")
+	if err != nil {
+		t.Fatalf("resolve AAPL: %v", err)
+	}
+	_, _, accountAssets, err := orderSizeAxes([]domain.LimitOrderSize{
+		orderSize(domain.ScopeAccountUnderlyingAsset, "acc-1", "USD", "10", ""),
+		orderSize(domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL", "20", ""),
+	}, res)
+	if err != nil {
+		t.Fatalf("orderSizeAxes: %v", err)
+	}
+	if len(accountAssets) != 2 {
+		t.Fatalf("account-asset barriers = %d, want 2", len(accountAssets))
+	}
+	barrierIndexes := make(map[string]int, len(accountAssets))
+	for index, barrier := range accountAssets {
+		barrierIndexes[barrier.Asset.Safe()] = index
+	}
+	usdIndex, ok := barrierIndexes[usd.Safe()]
+	if !ok {
+		t.Fatal("barrier for acc-1/USD not found")
+	}
+	aaplIndex, ok := barrierIndexes[aapl.Safe()]
+	if !ok {
+		t.Fatal("barrier for acc-1/AAPL not found")
+	}
+	if accountAssets[usdIndex].Asset.Equal(accountAssets[aaplIndex].Asset) {
+		t.Fatal("acc-1 USD and AAPL barriers have the same asset")
+	}
+	for _, want := range []struct {
+		asset       param.Asset
+		maxQuantity string
+	}{
+		{asset: usd, maxQuantity: "10"},
+		{asset: aapl, maxQuantity: "20"},
+	} {
+		index := barrierIndexes[want.asset.Safe()]
+		barrier := accountAssets[index]
+		if barrier.AccountID != accountID {
+			t.Fatalf(
+				"barrier for asset %q account = %v, want %v",
+				want.asset.Safe(),
+				barrier.AccountID,
+				accountID,
+			)
+		}
+		if !barrier.Asset.Equal(want.asset) {
+			t.Fatalf("barrier for asset %q mismatch", want.asset.Safe())
+		}
+		maxQuantity, ok := barrier.Limit.MaxQuantity.Get()
+		wantMaxQuantity, parseErr := param.NewQuantityFromString(want.maxQuantity)
+		if parseErr != nil {
+			t.Fatalf("parse max quantity: %v", parseErr)
+		}
+		if !ok || !maxQuantity.Equal(wantMaxQuantity) {
+			t.Fatalf("barrier for asset %q max_quantity mismatch", want.asset.Safe())
+		}
+	}
+}
+
+func TestOrderSizeAxes_RejectsDuplicateCapForSDKKey(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		accounts []string
+		limits   []domain.LimitOrderSize
+		want     string
+	}{
+		{
+			name: "quantity",
+			limits: []domain.LimitOrderSize{
+				orderSize(domain.ScopeUnderlyingAsset, "", "USD", "10", ""),
+				orderSize(domain.ScopeUnderlyingAsset, "", "USD", "20", ""),
+			},
+			want: "duplicate order_size_limit max_quantity for asset \"USD\"",
+		},
+		{
+			name: "notional",
+			limits: []domain.LimitOrderSize{
+				orderSize(domain.ScopeSettlementAsset, "", "USD", "", "1000"),
+				orderSize(domain.ScopeSettlementAsset, "", "USD", "", "2000"),
+			},
+			want: "duplicate order_size_limit max_notional for asset \"USD\"",
+		},
+		{
+			name:     "account quantity",
+			accounts: []string{"acc-1"},
+			limits: []domain.LimitOrderSize{
+				orderSize(
+					domain.ScopeAccountUnderlyingAsset,
+					"acc-1",
+					"USD",
+					"10",
+					"",
+				),
+				orderSize(
+					domain.ScopeAccountUnderlyingAsset,
+					"acc-1",
+					"USD",
+					"20",
+					"",
+				),
+			},
+			want: "duplicate order_size_limit max_quantity for account \"acc-1\" asset \"USD\"",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, _, _, err := orderSizeAxes(tc.limits, testResolver(tc.accounts...))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("error = %v, want ErrInvalid", err)
+			}
+		})
 	}
 }
 
@@ -1586,7 +1892,7 @@ func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 
 	replaced := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{
 		orderSize(domain.ScopeBroker, "", "", "20", ""),
-		orderSize(domain.ScopeAsset, "", "USD", "5", ""),
+		orderSize(domain.ScopeUnderlyingAsset, "", "USD", "5", ""),
 	}}
 	if _, err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyOrderSizeLimit, replaced); err != nil {
@@ -1602,7 +1908,7 @@ func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 		Assets: testAssets(),
 		OrderSizeLimits: []domain.LimitOrderSize{
 			orderSize(domain.ScopeBroker, "", "", "10", ""),
-			orderSize(domain.ScopeAsset, "", "USD", "5", ""),
+			orderSize(domain.ScopeUnderlyingAsset, "", "USD", "5", ""),
 		},
 	}
 	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
@@ -1614,7 +1920,9 @@ func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 	asyncBefore := adapter.async
 	sinkBefore := adapter.MarketDataSink()
 
-	dropped := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")}}
+	dropped := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(
+		domain.ScopeUnderlyingAsset, "", "USD", "5", "",
+	)}}
 	if _, err := eng.ConfigurePolicy(
 		context.Background(), domain.PolicyOrderSizeLimit, dropped,
 	); err != nil {
@@ -1630,9 +1938,11 @@ func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Assets:          testAssets(),
-		Accounts:        []domain.Account{account("acc-1")},
-		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")},
+		Assets:   testAssets(),
+		Accounts: []domain.Account{account("acc-1")},
+		OrderSizeLimits: []domain.LimitOrderSize{orderSize(
+			domain.ScopeUnderlyingAsset, "", "USD", "5", "",
+		)},
 	}
 	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
@@ -1641,8 +1951,8 @@ func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 	defer eng.Stop()
 
 	replaced := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{
-		orderSize(domain.ScopeAsset, "", "USD", "7", ""),
-		orderSize(domain.ScopeAccountAsset, "acc-1", "USD", "3", ""),
+		orderSize(domain.ScopeUnderlyingAsset, "", "USD", "7", ""),
+		orderSize(domain.ScopeAccountUnderlyingAsset, "acc-1", "USD", "3", ""),
 	}}
 	if _, err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyOrderSizeLimit, replaced); err != nil {
@@ -2252,9 +2562,9 @@ func TestEngine_CheckOrderMatchesSubmitOrderSizeVerdict(t *testing.T) {
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{{
-			Scope:       domain.ScopeAccountAsset,
+			Scope:       domain.ScopeAccountUnderlyingAsset,
 			Account:     "acc-1",
-			Asset:       "USD",
+			Asset:       "AAPL",
 			MaxQuantity: "1",
 		}},
 	}

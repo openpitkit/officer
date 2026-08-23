@@ -217,11 +217,10 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
 	limit := domain.LimitOrderSize{
-		Scope:       domain.ScopeAccountAsset,
+		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     "acc-1",
 		Asset:       "AAPL",
 		MaxQuantity: "500",
-		MaxNotional: "50000",
 	}
 	if err := rs.PutOrderSizeLimit(ctx, limit); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
@@ -235,41 +234,59 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("len = %d, want 1", len(list))
 	}
 	got := list[0]
-	if got.MaxQuantity != "500" || got.MaxNotional != "50000" {
+	if got != limit {
 		t.Fatalf("max_quantity=%q max_notional=%q", got.MaxQuantity, got.MaxNotional)
+	}
+	settlement := domain.LimitOrderSize{
+		Scope:       domain.ScopeAccountSettlementAsset,
+		Account:     "acc-1",
+		Asset:       "AAPL",
+		MaxNotional: "50000",
+	}
+	if err := rs.PutOrderSizeLimit(ctx, settlement); err != nil {
+		t.Fatalf("PutOrderSizeLimit(settlement): %v", err)
 	}
 
 	// Upsert updates.
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 		MaxQuantity: "1000",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit (upsert): %v", err)
 	}
 	list, _ = rs.ListOrderSizeLimits(ctx, "")
-	if len(list) != 1 || list[0].MaxQuantity != "1000" {
-		t.Fatalf("after upsert max_quantity = %q", list[0].MaxQuantity)
+	if len(list) != 2 {
+		t.Fatalf("after upsert len = %d, want 2 semantic rows", len(list))
 	}
 
-	if err := rs.DeleteOrderSizeLimit(ctx, domain.ScopeAccountAsset, "acc-1", "AAPL"); err != nil {
+	if err := rs.DeleteOrderSizeLimit(
+		ctx, domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL",
+	); err != nil {
 		t.Fatalf("DeleteOrderSizeLimit: %v", err)
 	}
 	list, _ = rs.ListOrderSizeLimits(ctx, "")
-	if len(list) != 0 {
-		t.Fatalf("expected 0 after delete, got %d", len(list))
+	if len(list) != 1 || list[0] != settlement {
+		t.Fatalf("after underlying delete = %+v, want settlement row", list)
 	}
 
-	if err := rs.DeleteOrderSizeLimit(ctx, domain.ScopeAccountAsset, "acc-1", "AAPL"); !errors.Is(err, domain.ErrNotFound) {
+	if err := rs.DeleteOrderSizeLimit(
+		ctx, domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL",
+	); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("DeleteOrderSizeLimit(missing) = %v, want ErrNotFound", err)
+	}
+	if err := rs.DeleteOrderSizeLimit(
+		ctx, domain.ScopeAccountSettlementAsset, "acc-1", "AAPL",
+	); err != nil {
+		t.Fatalf("DeleteOrderSizeLimit(settlement): %v", err)
 	}
 }
 
 func TestOrderSizeLimitAccountFilter(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	// One broker barrier and one account_asset barrier.
+	// One broker barrier and one account-underlying-asset barrier.
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 		MaxQuantity: "100",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit(acc-1): %v", err)
@@ -280,12 +297,12 @@ func TestOrderSizeLimitAccountFilter(t *testing.T) {
 		t.Fatalf("PutOrderSizeLimit(broker): %v", err)
 	}
 
-	// Filter by account returns only the account_asset row.
+	// Filter by account returns only the account-underlying-asset row.
 	filtered, err := rs.ListOrderSizeLimits(ctx, "acc-1")
 	if err != nil {
 		t.Fatalf("ListOrderSizeLimits(acc-1): %v", err)
 	}
-	if len(filtered) != 1 || filtered[0].Scope != domain.ScopeAccountAsset {
+	if len(filtered) != 1 || filtered[0].Scope != domain.ScopeAccountUnderlyingAsset {
 		t.Fatalf("filtered = %+v", filtered)
 	}
 }
@@ -306,7 +323,7 @@ func TestOrderSizeLimitCascadeOnAssetDelete(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 		MaxQuantity: "100",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
@@ -415,7 +432,7 @@ func seedPolicyFixtures(t *testing.T) (context.Context, RealmStore) {
 		t.Fatalf("PutRateLimit(acc-2): %v", err)
 	}
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 		MaxQuantity: "500",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit(acc-1): %v", err)
@@ -499,7 +516,7 @@ func TestListPolicyRowsScopeFilter(t *testing.T) {
 	ctx, rs := seedPolicyFixtures(t)
 
 	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
-		Scope: domain.ScopeAccountAsset,
+		Scope: domain.ScopeAccountUnderlyingAsset,
 	})
 	if err != nil {
 		t.Fatalf("ListPolicyRows scope: %v", err)
@@ -507,10 +524,10 @@ func TestListPolicyRowsScopeFilter(t *testing.T) {
 	if got := policyKeys(page.Rows); !equalStrings(
 		got, []string{"order_size_limit|acc-1"},
 	) {
-		t.Fatalf("account-asset rows = %v", got)
+		t.Fatalf("account-underlying-asset rows = %v", got)
 	}
 	if page.Total != 1 {
-		t.Fatalf("account-asset total = %d, want 1", page.Total)
+		t.Fatalf("account-underlying-asset total = %d, want 1", page.Total)
 	}
 }
 

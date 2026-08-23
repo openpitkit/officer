@@ -130,7 +130,7 @@ func TestLocalNode_PutRateLimitRejectsMissingAccount(t *testing.T) {
 
 // TestLocalNode_PutOrderSizeLimitCreatesNamedAccount mirrors the rate-policy
 // happy path for the order-size policy, whose account axis rides on the
-// account_asset scope.
+// account_underlying_asset scope.
 func TestLocalNode_PutOrderSizeLimitCreatesNamedAccount(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -140,7 +140,7 @@ func TestLocalNode_PutOrderSizeLimitCreatesNamedAccount(t *testing.T) {
 	ctx := context.Background()
 
 	limit := domain.LimitOrderSize{
-		Scope:       domain.ScopeAccountAsset,
+		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     "fresh",
 		Asset:       "AAPL",
 		MaxQuantity: "10",
@@ -175,7 +175,7 @@ func TestLocalNode_PutOrderSizeLimitRejectsMissingAccount(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope:       domain.ScopeAccountAsset,
+		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     "fresh",
 		Asset:       "AAPL",
 		MaxQuantity: "10",

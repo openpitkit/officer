@@ -142,7 +142,10 @@ func policyListWhere(filter fwstore.PolicyListFilter) (string, []any, error) {
 	if filter.Scope != "" {
 		switch filter.Scope {
 		case domain.ScopeBroker, domain.ScopeGlobal, domain.ScopeAsset,
-			domain.ScopeAccount, domain.ScopeAccountGroup, domain.ScopeAccountAsset:
+			domain.ScopeAccount, domain.ScopeAccountGroup, domain.ScopeAccountAsset,
+			domain.ScopeUnderlyingAsset, domain.ScopeSettlementAsset,
+			domain.ScopeAccountUnderlyingAsset,
+			domain.ScopeAccountSettlementAsset:
 		default:
 			return "", nil, fmt.Errorf(
 				"invalid policy scope %q: %w", filter.Scope, domain.ErrInvalid,

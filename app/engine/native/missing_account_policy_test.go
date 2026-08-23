@@ -123,12 +123,11 @@ func TestPutOrderSizeLimit_CreatedAccountBarrierIsEnforced(t *testing.T) {
 	n, caller := newMissingAccountNode(t)
 	const account = domain.AccountID("os-acc")
 
-	// The engine keys an account_asset order-size barrier on the settlement
-	// (quote) asset, so the barrier names USDT rather than the traded base.
+	// Quantity caps are keyed by the traded underlying asset.
 	if _, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope:       domain.ScopeAccountAsset,
+		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     account,
-		Asset:       "USDT",
+		Asset:       "BTC",
 		MaxQuantity: "1",
 	}, domain.MissingAccountCreate, caller); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)

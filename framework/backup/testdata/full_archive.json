@@ -69,7 +69,7 @@
     ],
     "orderSizeLimits": [
       {
-        "Scope": "account_asset",
+        "Scope": "account_underlying_asset",
         "Account": "acc-1",
         "Asset": "AAPL",
         "MaxQuantity": "100",

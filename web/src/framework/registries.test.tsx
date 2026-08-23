@@ -49,6 +49,16 @@ function Throwaway() {
 }
 
 describe("framework registries", () => {
+  it("registers semantic order-size scopes", () => {
+    expect(getAllowedScopes("order_size_limit")).toEqual([
+      "broker",
+      "underlying_asset",
+      "settlement_asset",
+      "account_underlying_asset",
+      "account_settlement_asset",
+    ]);
+  });
+
   afterEach(() => {
     unregisterRoute("smoke-route");
     unregisterNav("smoke-nav");

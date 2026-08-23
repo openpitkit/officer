@@ -224,10 +224,30 @@ describe("WelcomeDialog", () => {
       screen.getByRole("button", { name: /Add starter policy barriers/i }),
     );
 
-    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(3));
     for (const call of putLimitMock.mock.calls) {
       expect(call[1]).toBe("create");
     }
+    expect(putLimitMock).toHaveBeenCalledWith(
+      {
+        policy: "order_size_limit",
+        scope: "account_underlying_asset",
+        account: "demo-main",
+        asset: "BTC",
+        values: { max_quantity: "2" },
+      },
+      "create",
+    );
+    expect(putLimitMock).toHaveBeenCalledWith(
+      {
+        policy: "order_size_limit",
+        scope: "account_settlement_asset",
+        account: "demo-main",
+        asset: "USD",
+        values: { max_notional: "150000" },
+      },
+      "create",
+    );
   });
 
   it("applies static market-data preset without closing", async () => {

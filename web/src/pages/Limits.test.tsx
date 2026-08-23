@@ -211,12 +211,13 @@ function renderLimits(
   );
 }
 
-function renderLimitDialog(editing: Limit) {
+function renderLimitDialog(editing: Limit | null) {
   render(
     <I18nextProvider i18n={i18n}>
       <LimitDialog
         open
         editing={editing}
+        policyCounts={{ order_size_limit: 1 }}
         onOpenChange={() => {}}
         onSaved={() => {}}
       />
@@ -368,6 +369,112 @@ describe("Limits identity filters", () => {
 });
 
 describe("LimitDialog framework controls", () => {
+  it("renders and submits only the quantity cap for an underlying-asset scope", async () => {
+    const user = userEvent.setup();
+    renderLimitDialog(null);
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "Order size limit" }),
+    );
+
+    const maxQuantity = within(dialog).getByLabelText("max quantity");
+    const maxNotional = within(dialog).getByLabelText("max notional");
+    await user.type(maxQuantity, "5");
+    await user.type(maxNotional, "1000");
+
+    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "Underlying asset" }),
+    );
+
+    expect(within(dialog).getByLabelText("max quantity")).toHaveValue("5");
+    expect(within(dialog).queryByLabelText("max notional")).toBeNull();
+    await user.type(within(dialog).getByLabelText("Asset"), "AAPL");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
+
+    await waitFor(() =>
+      expect(putLimitMock).toHaveBeenCalledWith(
+        {
+          policy: "order_size_limit",
+          scope: "underlying_asset",
+          account: "",
+          accountGroup: "",
+          asset: "AAPL",
+          values: { max_quantity: "5" },
+        },
+        "reject",
+      ),
+    );
+  });
+
+  it("restores a hidden order-size cap after returning to broker scope", async () => {
+    const user = userEvent.setup();
+    renderLimitDialog(null);
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "Order size limit" }),
+    );
+    await user.type(within(dialog).getByLabelText("max quantity"), "5");
+    await user.type(within(dialog).getByLabelText("max notional"), "1000");
+
+    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "Underlying asset" }),
+    );
+
+    expect(within(dialog).queryByLabelText("max notional")).toBeNull();
+
+    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getByRole("option", { name: "Broker" }));
+
+    expect(within(dialog).getByLabelText("max notional")).toHaveValue("1000");
+  });
+
+  it("renders and submits only the notional cap for a settlement-asset scope", async () => {
+    const user = userEvent.setup();
+    renderLimitDialog(null);
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "Order size limit" }),
+    );
+    await user.type(within(dialog).getByLabelText("max quantity"), "5");
+    await user.type(within(dialog).getByLabelText("max notional"), "1000");
+
+    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "Settlement asset" }),
+    );
+
+    expect(within(dialog).queryByLabelText("max quantity")).toBeNull();
+    expect(within(dialog).getByLabelText("max notional")).toHaveValue("1000");
+    await user.type(within(dialog).getByLabelText("Asset"), "USD");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
+
+    await waitFor(() =>
+      expect(putLimitMock).toHaveBeenCalledWith(
+        {
+          policy: "order_size_limit",
+          scope: "settlement_asset",
+          account: "",
+          accountGroup: "",
+          asset: "USD",
+          values: { max_notional: "1000" },
+        },
+        "reject",
+      ),
+    );
+  });
+
   it("uses clearable numeric steppers and pre-searches account and asset fields", async () => {
     const user = userEvent.setup();
     fetchAccountsMock.mockResolvedValue([
@@ -401,7 +508,9 @@ describe("LimitDialog framework controls", () => {
     );
     await user.click(within(dialog).getAllByRole("combobox")[1]);
     await user.click(
-      within(dialog).getByRole("option", { name: "Account + asset" }),
+      within(dialog).getByRole("option", {
+        name: "Account + underlying asset",
+      }),
     );
 
     const account = within(dialog).getByLabelText("Account");

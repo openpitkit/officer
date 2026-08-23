@@ -10,7 +10,11 @@
     "asset": "资产",
     "account": "账户",
     "account_group": "账户组",
-    "account_asset": "账户 + 资产"
+    "account_asset": "账户 + 资产",
+    "underlying_asset": "标的资产",
+    "settlement_asset": "结算资产",
+    "account_underlying_asset": "账户 + 标的资产",
+    "account_settlement_asset": "账户 + 结算资产"
   },
   "kindHint": {
     "rate_limit": {

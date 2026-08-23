@@ -181,11 +181,12 @@ func ratePolicyRowWithAsset(
 func orderSizePolicyRow(account domain.AccountID, asset string) store.PolicyListRow {
 	return store.PolicyListRow{
 		Kind:    store.PolicyKindOrderSize,
-		Scope:   domain.ScopeAccountAsset,
+		Scope:   domain.ScopeAccountUnderlyingAsset,
 		Account: account,
 		Asset:   asset,
 		OrderSize: &domain.LimitOrderSize{
-			Scope: domain.ScopeAccountAsset, Account: account, Asset: asset,
+			Scope:   domain.ScopeAccountUnderlyingAsset,
+			Account: account, Asset: asset, MaxQuantity: "1",
 		},
 	}
 }

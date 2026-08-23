@@ -86,7 +86,7 @@ func TestLocalNode_BrokerBarrierRemovalKeepsNativeEngineAndSink(t *testing.T) {
 		t.Fatalf("PutOrderSizeLimit first barrier = (sink %T, %v), want one SDK-required rebuild", sink, err)
 	}
 	if sink, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
-		Scope: domain.ScopeAsset, Asset: "USD", MaxQuantity: "50",
+		Scope: domain.ScopeUnderlyingAsset, Asset: "USD", MaxQuantity: "50",
 	}, domain.MissingAccountCreate, caller); err != nil || sink != nil {
 		t.Fatalf("PutOrderSizeLimit asset = (sink %T, %v), want online success", sink, err)
 	}

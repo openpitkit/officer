@@ -299,8 +299,9 @@ func TestFakeEngineRejectsUnpublishedAssetOnEveryResolverPath(t *testing.T) {
 			run: func(eng *fakeEngine) error {
 				_, err := eng.ConfigurePolicy(ctx, domain.PolicyOrderSizeLimit,
 					engine.LimitSet{OrderSizeLimits: []domain.LimitOrderSize{{
-						Scope: domain.ScopeAsset,
-						Asset: unpublished,
+						Scope:       domain.ScopeUnderlyingAsset,
+						Asset:       unpublished,
+						MaxQuantity: "1",
 					}}})
 				return err
 			},
@@ -510,8 +511,10 @@ func (e *fakeEngine) checkKnownPolicyAssets(
 		}
 	case domain.PolicyOrderSizeLimit:
 		for _, limit := range limits.OrderSizeLimits {
-			if limit.Scope != domain.ScopeAsset &&
-				limit.Scope != domain.ScopeAccountAsset {
+			if limit.Scope != domain.ScopeUnderlyingAsset &&
+				limit.Scope != domain.ScopeSettlementAsset &&
+				limit.Scope != domain.ScopeAccountUnderlyingAsset &&
+				limit.Scope != domain.ScopeAccountSettlementAsset {
 				continue
 			}
 			if err := e.checkKnownAsset(limit.Asset); err != nil {
