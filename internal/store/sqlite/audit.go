@@ -66,7 +66,7 @@ func (r *realmStore) AppendAudit(
 // compliance event is either wholly visible or wholly absent.
 func (r *realmStore) AppendAuditBatch(
 	ctx context.Context, entries []fwstore.AuditEntry,
-) error {
+) (err error) {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -82,7 +82,7 @@ func (r *realmStore) AppendAuditBatch(
 	if err != nil {
 		return fmt.Errorf("store: begin audit batch: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 	for _, entry := range entries {
 		if err := appendAudit(ctx, tx, dictionaries, entry); err != nil {
 			return err

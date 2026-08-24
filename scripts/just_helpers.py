@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -168,6 +169,74 @@ def command_export_ci_env(_: argparse.Namespace) -> None:
     with Path(github_env).open("a", encoding="utf-8", newline="\n") as file:
         for line in lines:
             file.write(f"{line}\n")
+
+
+def required_semgrep_version() -> str:
+    requirements = ROOT / "checks" / "semgrep" / "requirements.txt"
+    try:
+        lines = requirements.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise SystemExit(
+            f"could not read Semgrep requirements file {requirements}: {exc}"
+        ) from None
+
+    for line in lines:
+        match = re.match(r"^\s*semgrep\s*==\s*([^\s;#]*)", line)
+        if match is None:
+            continue
+        version = match.group(1)
+        if version:
+            return version
+        raise SystemExit(
+            f"Semgrep requirements file {requirements} has an empty version; "
+            "expected semgrep==<version>"
+        )
+
+    raise SystemExit(
+        f"Semgrep requirements file {requirements} has no Semgrep pin; "
+        "expected semgrep==<version>"
+    )
+
+
+def installed_semgrep_version(venv_python: Path) -> str | None:
+    if not venv_python.is_file():
+        return None
+    result = run(
+        [
+            str(venv_python),
+            "-c",
+            (
+                "from importlib.metadata import PackageNotFoundError, version; "
+                "\ntry:\n print(version('semgrep'))\n"
+                "except PackageNotFoundError:\n pass"
+            ),
+        ],
+        capture=True,
+    )
+    return result.stdout.strip() or None
+
+
+def command_install_semgrep(_: argparse.Namespace) -> None:
+    required_version = required_semgrep_version()
+    venv_dir = ROOT / ".venv"
+    venv_bin = venv_dir / ("Scripts" if is_windows() else "bin")
+    venv_python = venv_bin / ("python.exe" if is_windows() else "python")
+    installed_version = installed_semgrep_version(venv_python)
+    if installed_version == required_version:
+        print(f"Semgrep {required_version} already installed.")
+        return
+
+    run([sys.executable, "-m", "venv", str(venv_dir)])
+    run(
+        [
+            str(venv_python),
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(ROOT / "requirements.txt"),
+        ]
+    )
 
 
 def command_check_gofmt(args: argparse.Namespace) -> None:
@@ -344,6 +413,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("export-ci-env").set_defaults(func=command_export_ci_env)
+
+    subparsers.add_parser("install-semgrep").set_defaults(func=command_install_semgrep)
 
     subparser = subparsers.add_parser("check-gofmt")
     subparser.add_argument("paths", nargs="+")

@@ -113,7 +113,7 @@ func (r *realmStore) UpsertBalance(ctx context.Context, balance domain.Balance) 
 
 // GetBalance returns the balance for (account, asset). The bool is false when
 // no row exists. An unknown account or asset code is not an error from this
-// method — there simply is no row to return.
+// method - there simply is no row to return.
 func (r *realmStore) GetBalance(
 	ctx context.Context, account domain.AccountID, asset string,
 ) (domain.Balance, bool, error) {

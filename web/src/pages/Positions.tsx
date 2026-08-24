@@ -202,7 +202,7 @@ function ordersFilterHref(account: string): string {
  *  separate unbreakable units that wrap as a whole, never split mid-value. */
 function SplitTime({ iso }: { iso: string }) {
   if (!iso) {
-    return <span className="text-muted-lt">—</span>;
+    return <span className="text-muted-lt">-</span>;
   }
   let date: string;
   let time: string;
@@ -221,7 +221,7 @@ function SplitTime({ iso }: { iso: string }) {
 }
 
 function dash(v: string | undefined): string {
-  return v && v !== "" ? v : "—";
+  return v && v !== "" ? v : "-";
 }
 
 /** Render a position value next to the asset it is denominated in, so a figure
@@ -238,7 +238,7 @@ function DenominatedAmount({
 }) {
   const { t } = useTranslation("positions");
   if (!value || value.trim() === "") {
-    return <span className="text-muted-lt">—</span>;
+    return <span className="text-muted-lt">-</span>;
   }
   const unit = currency.trim();
   return (
@@ -249,7 +249,7 @@ function DenominatedAmount({
           className="text-muted-lt"
           title={t("balances.noAccountCurrencyHint")}
         >
-          —
+          -
         </span>
       ) : (
         <span className="text-muted-lt">{unit}</span>
@@ -519,7 +519,7 @@ function outcomeAmountText(
   result: string,
 ): string {
   if (request?.mode === "absolute") {
-    return result || "—";
+    return result || "-";
   }
   return `Δ${delta} → ${result}`;
 }
@@ -964,7 +964,7 @@ function PositionRangeFilter({
 }
 
 // ---------------------------------------------------------------------------
-// Balances table — adjustment panel
+// Balances table - adjustment panel
 // ---------------------------------------------------------------------------
 
 const BALANCE_TABLE_COLS = 9;
@@ -2408,7 +2408,7 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
 }
 
 // ---------------------------------------------------------------------------
-// Amount field row — mode toggle + value input
+// Amount field row - mode toggle + value input
 // ---------------------------------------------------------------------------
 
 interface AmountFieldState {
@@ -2479,7 +2479,7 @@ function AmountField({
 }
 
 // ---------------------------------------------------------------------------
-// Bounds field row — optional lower / upper
+// Bounds field row - optional lower / upper
 // ---------------------------------------------------------------------------
 
 interface BoundsFieldState {
@@ -2524,7 +2524,7 @@ function BoundsField({
               value={field.lower}
               min={null}
               spellCheck={false}
-              placeholder="—"
+              placeholder="-"
               inputClassName="h-7 text-xs"
               onChange={(lower) => onChange({ ...field, lower })}
               onClear={() => onChange({ ...field, lower: "" })}
@@ -2539,7 +2539,7 @@ function BoundsField({
               value={field.upper}
               min={null}
               spellCheck={false}
-              placeholder="—"
+              placeholder="-"
               inputClassName="h-7 text-xs"
               onChange={(upper) => onChange({ ...field, upper })}
               onClear={() => onChange({ ...field, upper: "" })}
@@ -3054,7 +3054,7 @@ function AdjustDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Adjustment history row — inline outcome
+// Adjustment history row - inline outcome
 // ---------------------------------------------------------------------------
 
 function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
@@ -3062,7 +3062,7 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
   const { accepted, rejected } = adj;
   if (rejected) {
     return (
-      <span className="text-[var(--danger)]">{rejected.reason || "—"}</span>
+      <span className="text-[var(--danger)]">{rejected.reason || "-"}</span>
     );
   }
   if (accepted) {
@@ -3110,11 +3110,11 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
     }
     return (
       <span className={haltText ? "text-[var(--warn)]" : "nums text-text"}>
-        {parts.length > 0 ? parts.join(" · ") : "—"}
+        {parts.length > 0 ? parts.join(" · ") : "-"}
       </span>
     );
   }
-  return <span className="text-muted-lt">—</span>;
+  return <span className="text-muted-lt">-</span>;
 }
 
 function HistoryRow({
@@ -3210,7 +3210,7 @@ function HistoryRow({
         </Badge>
       </TableCell>
       <TableCell className="nums text-xs text-muted-lt">
-        {reqParts.length > 0 ? reqParts.join(" · ") : "—"}
+        {reqParts.length > 0 ? reqParts.join(" · ") : "-"}
       </TableCell>
       <TableCell className="w-[var(--positions-status-column-width)]">
         {isRejected ? (
@@ -3628,7 +3628,7 @@ export function Positions() {
     setDraftOpenRequest((current) => current + 1);
   };
 
-  // Clone an adjustment record — open dialog prefilled with all request fields.
+  // Clone an adjustment record - open dialog prefilled with all request fields.
   const openCloneAdjust = (adj: Adjustment) => {
     const req = adj.request;
     setAdjustAccount(adj.account);

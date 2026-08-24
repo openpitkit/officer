@@ -30,7 +30,7 @@
     "classPlaceholder": "Filter by class…",
     "clearField": "Clear field"
   },
-  "noClass": "—",
+  "noClass": "-",
   "actions": {
     "editTitle": "Edit asset"
   },

@@ -27,7 +27,7 @@ import (
 
 func TestService_CreateAccountValidates(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	if _, err := svc.CreateAccount(ctx, domain.Account{}); !errors.Is(err, domain.ErrInvalid) {
@@ -53,7 +53,7 @@ func TestService_CreateAccountValidates(t *testing.T) {
 
 func TestService_CreateAssetValidatesAndRoutes(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	if _, err := svc.CreateAsset(ctx, domain.Asset{}); !errors.Is(err, domain.ErrInvalid) {
@@ -82,7 +82,7 @@ func TestService_CreateAssetValidatesAndRoutes(t *testing.T) {
 
 func TestService_CreateAssetClassValidatesAndRoutes(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	if _, err := svc.CreateAssetClass(ctx, domain.AssetClass{}); !errors.Is(err, domain.ErrInvalid) {
@@ -110,7 +110,7 @@ func TestService_CreateAssetClassValidatesAndRoutes(t *testing.T) {
 
 func TestService_UpdateAssetClassValidatesAndRoutes(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 	fn.assetClasses = []domain.AssetClass{{Code: "equity"}}
 
@@ -128,7 +128,7 @@ func TestService_UpdateAssetClassValidatesAndRoutes(t *testing.T) {
 
 func TestService_UpdateAssetRenames(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 	fn.assets = []domain.Asset{{Code: "AAPL", Title: "Apple"}}
 
@@ -149,7 +149,7 @@ func TestService_UpdateAssetRenames(t *testing.T) {
 
 func TestService_BlockAccountValidates(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	if err := svc.BlockAccount(ctx, "", "risk", domain.MissingAccountCreate); !errors.Is(err, domain.ErrInvalid) {

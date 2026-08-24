@@ -18,6 +18,8 @@
 package main
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 
 	frameworkapp "go.openpit.dev/officer/framework/app"
@@ -35,18 +37,25 @@ type referenceComposition struct {
 }
 
 func main() {
-	_ = newReferenceComposition()
+	if _, err := newReferenceComposition(); err != nil {
+		log.Fatal(err)
+	}
 }
 
-func newReferenceComposition() referenceComposition {
+func newReferenceComposition() (referenceComposition, error) {
 	authorizer := newDenyOneAuthorizer(hiddenRoutePermission, hiddenToolID)
 
 	builder := frameworkapp.NewBuilder()
-	openapp.Register(builder)
+	if err := openapp.Register(builder); err != nil {
+		return referenceComposition{}, err
+	}
 	builder.SetAuthorizer(authorizer)
-	_ = builder.RegisterMarketDataProvider(privateProvider())
+	if err := builder.RegisterMarketDataProvider(privateProvider()); err != nil {
+		return referenceComposition{},
+			fmt.Errorf("register private market data provider: %w", err)
+	}
 	builder.AddToolRegistrar(registerReferenceTools)
-	_ = builder.WrapRouteConfigBuilder(func(
+	if err := builder.WrapRouteConfigBuilder(func(
 		open frameworkapp.RouteConfigBuilder,
 	) frameworkapp.RouteConfigBuilder {
 		return func(
@@ -58,12 +67,15 @@ func newReferenceComposition() referenceComposition {
 			cfg.Authorizer = authorizer
 			return cfg
 		}
-	})
+	}); err != nil {
+		return referenceComposition{},
+			fmt.Errorf("wrap reference route config builder: %w", err)
+	}
 
 	return referenceComposition{
 		Builder:    builder,
 		Authorizer: authorizer,
-	}
+	}, nil
 }
 
 var _ marketdata.Connector = (*privateConnector)(nil)

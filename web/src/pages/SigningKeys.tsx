@@ -66,7 +66,7 @@ function errMessage(err: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// Card A — Active key
+// Card A - Active key
 // ---------------------------------------------------------------------------
 
 function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
@@ -183,7 +183,7 @@ function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
 }
 
 // ---------------------------------------------------------------------------
-// Card B — Generate / Import
+// Card B - Generate / Import
 // ---------------------------------------------------------------------------
 
 function ManageKeyCard({ onDone }: { onDone: () => void }) {
@@ -381,7 +381,7 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Card C — eSign toggle
+// Card C - eSign toggle
 // ---------------------------------------------------------------------------
 
 function ESignCard({

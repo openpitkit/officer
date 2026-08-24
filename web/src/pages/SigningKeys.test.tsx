@@ -132,7 +132,7 @@ beforeEach(() => {
   setESignEnabledMock.mockResolvedValue(undefined);
 });
 
-describe("SigningKeys page — empty state", () => {
+describe("SigningKeys page - empty state", () => {
   it("shows empty state when no keys are configured", () => {
     mockReady({ keys: [], eSignEnabled: false });
     renderPage();
@@ -140,7 +140,7 @@ describe("SigningKeys page — empty state", () => {
   });
 });
 
-describe("SigningKeys page — active key card", () => {
+describe("SigningKeys page - active key card", () => {
   it("renders key id and fingerprint from loaded data", () => {
     mockReady(makeStatus());
     renderPage();
@@ -149,7 +149,7 @@ describe("SigningKeys page — active key card", () => {
   });
 });
 
-describe("SigningKeys page — generate", () => {
+describe("SigningKeys page - generate", () => {
   it("opens AlertDialog on Generate button click", async () => {
     mockReady(makeStatus());
     renderPage();
@@ -171,7 +171,7 @@ describe("SigningKeys page — generate", () => {
   });
 });
 
-describe("SigningKeys page — import", () => {
+describe("SigningKeys page - import", () => {
   it("shows validation error when importing empty key", async () => {
     mockReady(makeStatus());
     renderPage();
@@ -207,7 +207,7 @@ describe("SigningKeys page — import", () => {
   });
 });
 
-describe("SigningKeys page — export", () => {
+describe("SigningKeys page - export", () => {
   it("calls exportPublicKey with the selected format", async () => {
     mockReady(makeStatus());
     renderPage();
@@ -229,7 +229,7 @@ describe("SigningKeys page — export", () => {
   });
 });
 
-describe("SigningKeys page — eSign toggle", () => {
+describe("SigningKeys page - eSign toggle", () => {
   it("calls setESignEnabled(false) when toggled off", async () => {
     mockReady(makeStatus({ eSignEnabled: true }));
     renderPage();
@@ -262,7 +262,7 @@ describe("SigningKeys page — eSign toggle", () => {
   });
 });
 
-describe("SigningKeys page — loading state", () => {
+describe("SigningKeys page - loading state", () => {
   it("renders without crashing while loading", () => {
     mockLoading();
     renderPage();

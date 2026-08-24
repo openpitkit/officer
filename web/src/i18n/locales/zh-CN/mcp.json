@@ -18,8 +18,8 @@
       "flags": "此列显示该命令的安全和实现标记。"
     },
     "enableAriaLabel": "启用 {{name}}",
-    "disabledNotice": "已禁用 — 将向 Agent 返回「面板已禁用」提示。",
-    "noDescription": "—"
+    "disabledNotice": "已禁用 - 将向 Agent 返回「面板已禁用」提示。",
+    "noDescription": "-"
   },
   "flags": {
     "protected": "受保护",
@@ -34,7 +34,7 @@
     "body1Post": "。启用后将授予 AI Agent 修改数据库的能力，操作员无法实时监督或控制。",
     "body2": "这是防止 AI 自主操作的保护屏障。仅在您明确授权 Agent 该权限且接受相应风险时方可启用。",
     "body3Pre": "如有疑虑，请按",
-    "body3Post": "— 命令将保持禁用。",
+    "body3Post": "- 命令将保持禁用。",
     "confirm": "仍然启用"
   },
   "command": {
@@ -94,7 +94,7 @@
       "step1": "打开您的自定义 GPT 或 ChatGPT 连接器设置。",
       "step2": "添加指向上方 URL 的 MCP 连接器。",
       "step3": "或通过 /docs 的 OpenAPI 描述构建 ChatGPT Action。",
-      "publicUrlCaveat": "托管版 ChatGPT 仅能访问可公开解析的 HTTPS URL。回环地址或 localhost 的 Officer 实例无法被访问——请先将服务发布至公开的 HTTPS 端点。",
+      "publicUrlCaveat": "托管版 ChatGPT 仅能访问可公开解析的 HTTPS URL。回环地址或 localhost 的 Officer 实例无法被访问，请先将服务发布至公开的 HTTPS 端点。",
       "instructionsHint": "下载用于自定义 GPT 的指令文本。",
       "instructionsButton": "下载 GPT 指令"
     },

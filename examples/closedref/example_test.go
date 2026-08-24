@@ -51,7 +51,10 @@ import (
 
 func TestReferenceCompositionAddReplaceHideRemove(t *testing.T) {
 	ctx := context.Background()
-	composition := newReferenceComposition()
+	composition, err := newReferenceComposition()
+	if err != nil {
+		t.Fatalf("newReferenceComposition: %v", err)
+	}
 	composition.Builder.SetEngineBuildFactory(func(app.Config) engine.BuildFunc {
 		return func(engine.Snapshot) (engine.Engine, error) {
 			return &fakeEngine{running: true, sink: &fakeSink{}}, nil

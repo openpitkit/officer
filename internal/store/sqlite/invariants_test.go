@@ -29,7 +29,7 @@
 //     integer.
 //
 //   - TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades: the cross-group
-//     cascade that is not covered in any per-group test — deleting an asset must
+//     cascade that is not covered in any per-group test - deleting an asset must
 //     cascade its referencing orders (and thence their events, trades, and event
 //     attestations). The balance and limits cascades on asset/account delete are
 //     already covered by sqlite_balances_test.go and sqlite_limits_test.go.
@@ -63,7 +63,7 @@ import (
 //   - Machine records: ExternalID is non-zero and its string form is exactly
 //     22 chars (domain.ExternalIDStringLen). ParseExternalID must succeed.
 //   - Dictionaries: Code is non-empty. No returned domain type carries an
-//     internal surrogate integer field exposed to callers — this is a
+//     internal surrogate integer field exposed to callers - this is a
 //     compile-time invariant guaranteed by the domain types themselves, which the
 //     store interface enforces.
 //
@@ -195,7 +195,7 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	}
 	assertExternalID(t, "trade", trade.ExternalID)
 
-	// Event attestation (write-once 1:1 table, not its own external id —
+	// Event attestation (write-once 1:1 table, not its own external id -
 	// addressed by the event's external id; no separate external id to assert
 	// here).
 	if err := rs.PutEventAttestation(ctx, ev.ExternalID, domain.EventAttestation{
@@ -255,7 +255,7 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	}
 	assertExternalID(t, "market_data_instance", mdInst.ExternalID)
 
-	// Market-data instrument (keyed by (instance, symbol) — no external id of
+	// Market-data instrument (keyed by (instance, symbol) - no external id of
 	// its own; its identity is the instance external id + external symbol).
 	if err := rs.UpsertMarketDataInstrument(ctx, domain.MarketDataInstrument{
 		Instance:       mdInst.ExternalID,
@@ -496,7 +496,7 @@ func TestEngineIDAssignment_ManyAccountsAndGroups(t *testing.T) {
 // replace value). This test exercises the raw constraint: the upsert methods
 // use INSERT OR REPLACE, which by definition does not fail; here we verify the
 // underlying constraint with raw duplicate INSERTs and the store helper upsert
-// behavior — one entry per natural composite, no phantom duplicates.
+// behavior - one entry per natural composite, no phantom duplicates.
 //
 // Additionally, this test verifies that two distinct composites on different
 // policy tables can both carry broker-scoped NULL-axis rows without colliding
@@ -526,7 +526,7 @@ func TestLimitPolicyUnique_AllLimitTables(t *testing.T) {
 		t.Fatalf("PutRateLimit(broker): %v", err)
 	}
 	// A second PutRateLimit with the same broker composite must be an upsert,
-	// not a duplicate row — the list must return exactly one row.
+	// not a duplicate row - the list must return exactly one row.
 	if err := rs.PutRateLimit(ctx, domain.LimitRate{
 		Scope:     domain.ScopeBroker,
 		MaxOrders: 200,

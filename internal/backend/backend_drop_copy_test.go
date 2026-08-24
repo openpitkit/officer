@@ -46,7 +46,7 @@ func dropCopyOrder(id domain.ExternalID) domain.Order {
 // drop a real fill. The request is invalid and never reaches the node.
 func TestService_SubmitDropCopyOrderRejectsRefusingMissingAccount(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
 		Source: domain.SourcePanel, Principal: "operator",
 	})
@@ -70,7 +70,7 @@ func TestService_SubmitDropCopyOrderRejectsRefusingMissingAccount(t *testing.T) 
 // MCP surfaces share.
 func TestService_SubmitDropCopyOrderRequiresMissingAccountChoice(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
 		Source: domain.SourcePanel, Principal: "operator",
 	})
@@ -89,7 +89,7 @@ func TestService_SubmitDropCopyOrderRequiresMissingAccountChoice(t *testing.T) {
 // boundary for the signed submit path.
 func TestService_SubmitOrderTokenRequiresMissingAccountChoice(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 
 	if _, err := svc.SubmitOrderToken(
 		context.Background(), sampleOrder(), backend.SubmitModeHold, "",
@@ -103,7 +103,7 @@ func TestService_SubmitOrderTokenRequiresMissingAccountChoice(t *testing.T) {
 
 func TestService_SubmitDropCopyOrderGeneratesExternalIDWhenAbsent(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
 		Source: domain.SourcePanel, Principal: "operator",
 	})
@@ -133,7 +133,7 @@ func TestService_SubmitDropCopyOrderGeneratesExternalIDWhenAbsent(t *testing.T) 
 
 func TestService_SubmitOrderTokenRefusesDropCopy(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	order := dropCopyOrder(mdID("signed-drop-copy"))
 	order.DropCopy = true
 
@@ -151,7 +151,7 @@ func TestService_SubmitDropCopyOrderPreservesSuppliedIDAndConflictsOnDuplicate(
 	t *testing.T,
 ) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	id := mdID("drop-copy-order")
 	o := dropCopyOrder(id)
 	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
@@ -187,7 +187,7 @@ func TestService_SubmitDropCopyOrderPreservesSuppliedIDAndConflictsOnDuplicate(
 func TestService_DropCopyExecutionReportRemainsUnsignedAndKeepsCaller(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{signErr: errors.New("signer must not be called")}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	id := mdID("drop-copy-execution-report")
 	order := dropCopyOrder(id)
 	order.DropCopy = true
@@ -233,7 +233,7 @@ func TestService_DropCopyExecutionReportRemainsUnsignedAndKeepsCaller(t *testing
 
 func TestService_DropCopySigningShortcutsAreRefused(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	id := mdID("drop-copy-shortcuts")
 	order := dropCopyOrder(id)
 	order.DropCopy = true

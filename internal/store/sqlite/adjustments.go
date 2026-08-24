@@ -20,7 +20,7 @@
 // Account and asset references cascade on delete; the
 // optional principal reference is cleared (SET NULL) when the principal is
 // removed. The request and outcome columns are opaque JSON stored whole; this
-// package never decodes them — callers supply pre-marshalled JSON and receive
+// package never decodes them - callers supply pre-marshalled JSON and receive
 // it back byte-for-byte.
 
 package sqlite
@@ -153,7 +153,7 @@ func (r *realmStore) RecordAccountAdjustment(
 
 func (r *realmStore) recordAccountAdjustment(
 	ctx context.Context, in fwstore.AccountAdjustmentPersistence,
-) (domain.AccountAdjustmentRecord, error) {
+) (record domain.AccountAdjustmentRecord, err error) {
 	db, err := r.db()
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, err
@@ -167,7 +167,7 @@ func (r *realmStore) recordAccountAdjustment(
 		return domain.AccountAdjustmentRecord{},
 			fmt.Errorf("store: begin account adjustment tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	if in.UpsertBalance != nil {
 		if err := upsertBalancesTx(ctx, tx, []domain.Balance{*in.UpsertBalance}); err != nil {

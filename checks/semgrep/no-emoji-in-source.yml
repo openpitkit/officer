@@ -1,0 +1,40 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Source and documentation use words rather than emoji so they remain
+# searchable and render consistently.
+
+rules:
+  - id: no-emoji-in-source
+    message: >-
+      Emoji do not belong in source or documentation: they are not searchable,
+      render unpredictably, and carry no meaning a word cannot.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '[\x{1F300}-\x{1FAFF}\x{2700}-\x{27BF}]'
+    paths:
+      exclude:
+        - /web/node_modules
+        - /web/dist
+        - /web/lib
+        - .venv
+        - .ruff_cache
+        - __pycache__
+        - .tmp
+        - .wt
+        - .serena
+        - .git

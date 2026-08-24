@@ -473,7 +473,7 @@ function ApprovalBreakdown({
 }
 
 // ---------------------------------------------------------------------------
-// Mode A — reproduction of one event's artifacts
+// Mode A - reproduction of one event's artifacts
 // ---------------------------------------------------------------------------
 
 type ReproState =
@@ -790,7 +790,7 @@ function ReproductionMode({
 }
 
 // ---------------------------------------------------------------------------
-// Mode B — paste any token and verify it
+// Mode B - paste any token and verify it
 // ---------------------------------------------------------------------------
 
 interface PasteResult {
@@ -976,7 +976,7 @@ function EsignStatus({
 
 // ---------------------------------------------------------------------------
 // Verbatim JSON reconstruction (server serializer produced these objects; we
-// stringify the whole DTO, which is allowed — only the SIGNED artifacts must
+// stringify the whole DTO, which is allowed - only the SIGNED artifacts must
 // stay byte-verbatim, and those are copied as their own server strings above).
 // ---------------------------------------------------------------------------
 

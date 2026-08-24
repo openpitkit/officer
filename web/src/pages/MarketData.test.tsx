@@ -738,8 +738,7 @@ describe("IB feed resolver", () => {
     expect(input).toMatchObject({ query: "BTC/USDT" });
 
     const result = await screen.findByRole("button", { name: /BTCUSDT/ });
-    expect(result).toHaveTextContent("BTCUSDT · SPOT");
-    expect(result).not.toHaveTextContent("—");
+    expect(result).toHaveTextContent(/^BTCUSDT · SPOT$/);
     await user.click(result);
 
     expect(screen.getByPlaceholderText("External symbol")).toHaveValue(
@@ -1146,7 +1145,7 @@ describe("stale quote rendering", () => {
       }),
     );
 
-    // Price must be visible, not "—".
+    // Price must be visible, not "-".
     const row = screen.getByText("AAPL").closest("tr") as HTMLElement;
     expect(within(row).getByText("298.01")).toBeInTheDocument();
 

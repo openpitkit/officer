@@ -176,7 +176,7 @@ func sampleOrder() domain.Order {
 func TestService_SubmitOrderTokenWorkflowIssuesSignedToken(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
 		Source: domain.SourceAPI, Principal: "trader-accept",
 	})
@@ -247,7 +247,7 @@ func TestService_SubmitOrderTokenWorkflowIssuesSignedToken(t *testing.T) {
 func TestService_SubmitOrderTokenImmediateSettles(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeImmediate, domain.MissingAccountCreate)
 	if err != nil {
@@ -316,7 +316,7 @@ func TestService_SubmitOrderTokenImmediateSettles(t *testing.T) {
 func TestService_SubmitOrderTokenDefaultsImmediate(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), "", domain.MissingAccountCreate)
 	if err != nil {
@@ -335,7 +335,7 @@ func TestService_SubmitOrderTokenDefaultsImmediate(t *testing.T) {
 func TestService_SubmitOrderTokenRejectPersistsVerdict(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	fn.submitResult = &engine.OrderResult{
 		Accepted: false,
 		Rejects:  []domain.OrderReject{{Code: "insufficient_funds", Reason: "no funds"}},
@@ -388,7 +388,7 @@ func TestService_SubmitOrderTokenRejectPersistsVerdict(t *testing.T) {
 func TestService_SubmitOrderTokenESignOff(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{noESign: true}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
 	if err != nil {
@@ -437,7 +437,7 @@ func TestService_SubmitOrderTokenESignOff(t *testing.T) {
 func TestService_ShortcutsESignOffPersistUnsignedEvents(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{noESign: true}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	confirmTok := mustWorkflow(t, svc)
 	confirmed, confirmAtt, err := svc.ConfirmExecution(
@@ -489,7 +489,7 @@ func TestService_ShortcutsESignOffPersistUnsignedEvents(t *testing.T) {
 func TestService_ConfirmExecutionRecordsHistoryOnly(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 
 	before := len(fn.persistAttestationCalls)
@@ -518,7 +518,7 @@ func TestService_ConfirmExecutionRecordsHistoryOnly(t *testing.T) {
 func TestService_ConfirmExecutionIdempotent(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, _ := newTestServiceWithSigner(signer)
+	svc, _ := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 
 	first, firstAtt, err := svc.ConfirmExecution(
@@ -548,7 +548,7 @@ func TestService_ConfirmExecutionIdempotent(t *testing.T) {
 func TestService_ConfirmExecutionMissingAttestationFailsClosed(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 
 	if _, _, err := svc.ConfirmExecution(
@@ -578,7 +578,7 @@ func TestService_ConfirmExecutionMissingAttestationFailsClosed(t *testing.T) {
 func TestService_ConfirmAfterCancelRequiresExplicitReport(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 
 	if _, _, err := svc.CancelOrder(
@@ -598,7 +598,7 @@ func TestService_ConfirmAfterCancelRequiresExplicitReport(t *testing.T) {
 func TestService_ConfirmAfterWorkflowReportRequiresExplicitReport(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 
 	if _, _, err := svc.ApplyExecutionReport(context.Background(), domain.ExecutionReportInput{
@@ -620,7 +620,7 @@ func TestService_ConfirmAfterWorkflowReportRequiresExplicitReport(t *testing.T) 
 func TestService_CancelAfterConfirmUsesNormalReport(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 
 	if _, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token); err != nil {
@@ -640,7 +640,7 @@ func TestService_CancelAfterConfirmUsesNormalReport(t *testing.T) {
 func TestService_CancelAfterFillRequiresExplicitReport(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 
 	if _, _, err := svc.ApplyExecutionReport(context.Background(), domain.ExecutionReportInput{
@@ -666,7 +666,7 @@ func TestService_CancelAfterFillRequiresExplicitReport(t *testing.T) {
 func TestService_CancelOrderForwardsCallerLeaves(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 	submitPayload := httpTokenPayload(t, signer, backend.SubmitModeHold)
 
@@ -723,7 +723,7 @@ func TestService_CancelOrderForwardsCallerLeaves(t *testing.T) {
 func TestService_CancelOrderNoopMissingAttestationFailsClosed(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 	fn.cancelNoop = true
 
@@ -740,7 +740,7 @@ func TestService_CancelOrderNoopMissingAttestationFailsClosed(t *testing.T) {
 func TestService_ConfirmRejectsBadToken(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{verifyErr: domain.ErrInvalid}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 	fn.confirmCalls = nil
 
@@ -765,7 +765,7 @@ func TestService_ConfirmImmediateTokenConflictsBeforeEngine(t *testing.T) {
 			Signed: true,
 		},
 	}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("workflow setup: %v", err)
@@ -792,7 +792,7 @@ func TestService_ShortcutsRejectNonAcceptVerdict(t *testing.T) {
 			Signed: true,
 		},
 	}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok, err := svc.SubmitOrderToken(
 		context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate,
 	)
@@ -818,7 +818,7 @@ func TestService_ShortcutsRejectNonAcceptVerdict(t *testing.T) {
 func TestService_ShortcutsRejectCommittedEventAttestation(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 	detail := getOrderByToken(t, svc, tok)
 
@@ -869,7 +869,7 @@ func TestService_ShortcutsRejectCommittedEventAttestation(t *testing.T) {
 
 func TestService_SubmitOrderTokenValidatesMode(t *testing.T) {
 	t.Parallel()
-	svc, _ := newTestServiceWithSigner(&fakeSigner{})
+	svc, _ := newTestServiceWithSigner(t, &fakeSigner{})
 	if _, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), "weird", domain.MissingAccountCreate); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown mode must be ErrInvalid, got %v", err)
 	}
@@ -877,7 +877,7 @@ func TestService_SubmitOrderTokenValidatesMode(t *testing.T) {
 
 func TestService_SigningMethodsRequireSigner(t *testing.T) {
 	t.Parallel()
-	svc, _ := newTestService() // nil signer
+	svc, _ := newTestService(t) // nil signer
 	ctx := context.Background()
 
 	if _, err := svc.GenerateSigningKey(ctx); !errors.Is(err, domain.ErrNotImplemented) {
@@ -891,7 +891,7 @@ func TestService_SigningMethodsRequireSigner(t *testing.T) {
 func TestService_SetNoESignAudits(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	if err := svc.SetNoESign(context.Background(), true); err != nil {
 		t.Fatalf("SetNoESign: %v", err)
@@ -907,7 +907,7 @@ func TestService_SetNoESignAudits(t *testing.T) {
 func TestService_GenerateSigningKeyAudits(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	key, err := svc.GenerateSigningKey(context.Background())
 	if err != nil {
@@ -1028,7 +1028,7 @@ func TestService_SubmitOrderApprovalReadBack(t *testing.T) {
 			return "token-" + p.EventExternalID
 		},
 	}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	ctx := context.Background()
 
 	token, err := svc.SubmitOrderToken(ctx, sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
@@ -1097,7 +1097,7 @@ func TestService_SubmitOrderApprovalReadBack(t *testing.T) {
 func TestService_SubmitOrderApprovalReadBackESignOff(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{noESign: true}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	ctx := context.Background()
 
 	token, err := svc.SubmitOrderToken(ctx, sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
@@ -1160,7 +1160,7 @@ func TestService_SubmitOrderTokenApprovalPersistFailureAudited(t *testing.T) {
 	} {
 		t.Run(mode, func(t *testing.T) {
 			signer := &fakeSigner{}
-			svc, fn := newTestServiceWithSigner(signer)
+			svc, fn := newTestServiceWithSigner(t, signer)
 			fn.persistAttestationErr = errors.New("approval store down")
 
 			_, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), mode, domain.MissingAccountCreate)
@@ -1181,10 +1181,40 @@ func TestService_SubmitOrderTokenApprovalPersistFailureAudited(t *testing.T) {
 	}
 }
 
+func TestService_SubmitOrderTokenReturnsTokenWhenIssuedAuditFails(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(t, signer)
+	fn.auditErr = errors.New("audit store down")
+
+	tok, err := svc.SubmitOrderToken(
+		context.Background(), sampleOrder(), backend.SubmitModeHold,
+		domain.MissingAccountCreate,
+	)
+	if err != nil {
+		t.Fatalf("SubmitOrderToken post-commit audit failure: %v", err)
+	}
+	if tok.Token == "" {
+		t.Fatal("SubmitOrderToken returned an empty token after successful commit")
+	}
+	if orderByToken(t, fn, tok).Status != domain.OrderStatusCommitted {
+		t.Fatalf("successful submit did not keep its committed order: %+v", tok)
+	}
+	attempts := 0
+	for _, entry := range fn.auditCalls {
+		if entry.Action == domain.AuditActionApprovalIssued {
+			attempts++
+		}
+	}
+	if attempts != 1 {
+		t.Fatalf("approval_issued audit attempts = %d, want exactly one failed attempt", attempts)
+	}
+}
+
 func TestService_SubmitOrderMissingAttestationFailsClosedInternal(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	fn.skipAttestNewEvents = true
 
 	_, err := svc.SubmitOrderToken(
@@ -1205,7 +1235,7 @@ func TestService_SubmitOrderRiskRejectReturnsSignedDecision(t *testing.T) {
 			return "token-" + p.EventExternalID
 		},
 	}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	rejects := []domain.OrderReject{
 		{
 			Code:    "max_order_size",
@@ -1279,7 +1309,7 @@ func TestService_SubmitOrderRiskRejectReturnsSignedDecision(t *testing.T) {
 
 func TestService_SubmitOrderTokenSigningFailureFailsClosed(t *testing.T) {
 	signer := &fakeSigner{signErr: errors.New("signing down")}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	_, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
 	if !errors.Is(err, signer.signErr) {
@@ -1296,7 +1326,7 @@ func TestService_SubmitOrderTokenSigningFailureFailsClosed(t *testing.T) {
 
 func TestService_ConfirmExecutionSigningFailureFailsClosed(t *testing.T) {
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 	beforeOrder := fn.orders[domain.ExternalID(tok.OrderExternalID)]
 	beforeEvents := slices.Clone(fn.orderEvents[domain.ExternalID(tok.OrderExternalID)])
@@ -1320,7 +1350,7 @@ func TestService_ConfirmExecutionSigningFailureFailsClosed(t *testing.T) {
 
 func TestService_CancelOrderSigningFailureFailsClosed(t *testing.T) {
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	tok := mustWorkflow(t, svc)
 	beforeOrder := fn.orders[domain.ExternalID(tok.OrderExternalID)]
 	beforeEvents := slices.Clone(fn.orderEvents[domain.ExternalID(tok.OrderExternalID)])
@@ -1349,7 +1379,7 @@ func TestService_CancelOrderSigningFailureFailsClosed(t *testing.T) {
 func TestService_SubmitOrderTokenHonorsSuppliedExternalID(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	supplied := mdID("supplied-order-id")
 	o := sampleOrder()
@@ -1395,7 +1425,7 @@ func TestService_SubmitOrderTokenHonorsSuppliedExternalID(t *testing.T) {
 func TestService_SubmitOrderTokenGeneratesExternalIDWhenAbsent(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
 	if err != nil {
@@ -1422,7 +1452,7 @@ func TestService_SubmitOrderTokenGeneratesExternalIDWhenAbsent(t *testing.T) {
 func TestService_SubmitOrderTokenDuplicateSuppliedIDConflicts(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	fn.submitErr = fmt.Errorf("create order: %w", domain.ErrAlreadyExists)
 
 	o := sampleOrder()
@@ -1438,7 +1468,7 @@ func TestService_SubmitOrderTokenDuplicateSuppliedIDConflicts(t *testing.T) {
 func TestService_SubmitOrderTokenHonorsSuppliedID(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 
 	supplied := mdID("supplied-submit-id")
 	o := sampleOrder()
@@ -1469,7 +1499,7 @@ func TestService_SubmitOrderTokenHonorsSuppliedID(t *testing.T) {
 // external-id string handle, rejecting a malformed handle before routing.
 func TestService_GetOrderAddressedByExternalID(t *testing.T) {
 	t.Parallel()
-	svc, _ := newTestServiceWithSigner(&fakeSigner{})
+	svc, _ := newTestServiceWithSigner(t, &fakeSigner{})
 	ctx := context.Background()
 
 	tok := mustWorkflow(t, svc)

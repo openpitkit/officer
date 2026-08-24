@@ -29,7 +29,7 @@ import (
 
 func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestServiceWithSigner(&fakeSigner{})
+	svc, fn := newTestServiceWithSigner(t, &fakeSigner{})
 	orderID := mdID("order-4")
 	fn.orders[orderID] = domain.Order{
 		ExternalID: orderID,
@@ -61,7 +61,7 @@ func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
 
 func TestService_ApplyExecutionReportForceBypassesTerminalGuard(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestServiceWithSigner(&fakeSigner{})
+	svc, fn := newTestServiceWithSigner(t, &fakeSigner{})
 	orderID := mdID("order-4")
 	fn.orders[orderID] = domain.Order{
 		ExternalID: orderID,
@@ -98,7 +98,7 @@ func TestService_ApplyExecutionReportForceBypassesTerminalGuard(t *testing.T) {
 func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	orderID := mdID("order-report")
 	fn.orders[orderID] = domain.Order{
 		ExternalID: orderID,
@@ -152,7 +152,7 @@ func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
 func TestService_ApplyExecutionReportAttestsNoTradeCommission(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	orderID := mdID("order-terminal-commission")
 	fn.orders[orderID] = domain.Order{
 		ExternalID: orderID,
@@ -192,7 +192,7 @@ func TestService_ApplyExecutionReportAttestsNoTradeCommission(t *testing.T) {
 func TestService_ApplyExecutionReportSigningFailureFailsClosed(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{signErr: errors.New("report signing down")}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	orderID := mdID("order-report-signing")
 	fn.orders[orderID] = domain.Order{
 		ExternalID: orderID,
@@ -229,7 +229,7 @@ func TestService_ApplyExecutionReportSigningFailureFailsClosed(t *testing.T) {
 func TestService_ApplyExecutionReportSignsAllEventsAndReturnsFill(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	orderID := mdID("order-report-multi")
 	fn.orders[orderID] = domain.Order{
 		ExternalID: orderID,
@@ -283,7 +283,7 @@ func TestService_ApplyExecutionReportSignsAllEventsAndReturnsFill(t *testing.T) 
 func TestService_ApplyExecutionReportMissingAttestationFailsClosed(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
+	svc, fn := newTestServiceWithSigner(t, signer)
 	fn.execReportNoop = true
 	orderID := mdID("order-report-noop")
 	fn.orders[orderID] = domain.Order{
@@ -317,7 +317,7 @@ func TestService_ApplyExecutionReportMissingAttestationFailsClosed(t *testing.T)
 
 func TestService_ApplyExecutionReportStatusLifecycleReachesNode(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestServiceWithSigner(&fakeSigner{})
+	svc, fn := newTestServiceWithSigner(t, &fakeSigner{})
 	orderID := mdID("order-4")
 	fn.orders[orderID] = domain.Order{
 		ExternalID: orderID,
@@ -343,7 +343,7 @@ func TestService_ApplyExecutionReportStatusLifecycleReachesNode(t *testing.T) {
 
 func TestService_ApplyExecutionReportRejectsInvalidStatusBeforeNode(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	orderID := mdID("order-5")
 	fn.orders[orderID] = domain.Order{
 		ExternalID: orderID,

@@ -1460,7 +1460,7 @@ function normalizeMarketDataSymbolMatch(v: unknown): MarketDataSymbolMatch {
   // A numeric strike is intentionally ignored: financial decimals must never
   // be represented as JS numbers (lossless string is the only safe wire
   // format). The backend always sends strike as a decimal string, so a number
-  // here would be an unexpected wire-format bug — omit rather than coerce.
+  // here would be an unexpected wire-format bug - omit rather than coerce.
   const right = pick(o, "right", "Right");
   if (typeof right === "string" && right.length > 0) {
     match.right = right;
@@ -3359,7 +3359,7 @@ async function fetchEventReproduction(
   };
 }
 
-/** GET /signing/keys/{keyId}/public?format= — resolve one key's public material
+/** GET /signing/keys/{keyId}/public?format= - resolve one key's public material
  *  by id (rotation-safe: not the active key). Only public material is returned. */
 async function fetchPublicKeyById(
   client: ApiClient,
@@ -3890,7 +3890,7 @@ function normalizeSigningKeyResult(v: unknown): SigningKeyResult {
   };
 }
 
-/** GET /signing/keys — list all keys (including inactive) + global config. */
+/** GET /signing/keys - list all keys (including inactive) + global config. */
 async function fetchSigningKeys(
   client: ApiClient,
   signal?: AbortSignal,
@@ -3908,7 +3908,7 @@ async function fetchSigningKeys(
   return normalizeSigningKeysStatus(combined);
 }
 
-/** POST /signing/keys/generate — create a new Ed25519 key pair. */
+/** POST /signing/keys/generate - create a new Ed25519 key pair. */
 async function generateSigningKey(
   client: ApiClient,
 ): Promise<SigningKeyResult> {
@@ -3918,7 +3918,7 @@ async function generateSigningKey(
   return normalizeSigningKeyResult(v);
 }
 
-/** POST /signing/keys/import — import a BYOK private key. */
+/** POST /signing/keys/import - import a BYOK private key. */
 async function importSigningKey(
   client: ApiClient,
   key: string,
@@ -3931,7 +3931,7 @@ async function importSigningKey(
   return normalizeSigningKeyResult(v);
 }
 
-/** GET /signing/keys/active/public?format= — export the active public key. */
+/** GET /signing/keys/active/public?format= - export the active public key. */
 async function exportPublicKey(
   client: ApiClient,
   format: SigningKeyFormat,
@@ -3945,7 +3945,7 @@ async function exportPublicKey(
   return asString(pick(o, "publicKey", "PublicKey", "public_key"));
 }
 
-/** PUT /signing/config — toggle the global eSign flag. */
+/** PUT /signing/config - toggle the global eSign flag. */
 async function setESignEnabled(
   client: ApiClient,
   enabled: boolean,

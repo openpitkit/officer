@@ -52,7 +52,7 @@ type executionReportChainState struct {
 
 func (n *localNode) accountChainTerminalError(
 	operation string,
-	accountID string,
+	account domain.AccountID,
 	stateErr error,
 	engineApplied bool,
 	persistenceCompleted bool,
@@ -68,9 +68,9 @@ func (n *localNode) accountChainTerminalError(
 	}
 	cause := chainRootCause(outcome.Err)
 	if persistenceCompleted {
-		return n.fatalPostCommitAudit(operation, accountID, cause)
+		return n.fatalPostCommitAudit(operation, account, cause)
 	}
-	return n.fatalPostEnginePersistence(operation, accountID, cause)
+	return n.fatalPostEnginePersistence(operation, account, cause)
 }
 
 func accountChainRunError(operation string, stateErr, chainErr error) error {
@@ -95,7 +95,7 @@ func (n *localNode) runExecutionReportChain(
 	begin func(context.Context) (*executionReportChainState, error),
 	persist func(*executionReportChainState) error,
 	operation string,
-	accountID string,
+	account domain.AccountID,
 ) error {
 	builder := asyncengine.Chain(source, begin)
 	builder.ApplyExecutionReport(
@@ -136,7 +136,7 @@ func (n *localNode) runExecutionReportChain(
 	) error {
 		state.err = n.accountChainTerminalError(
 			operation,
-			accountID,
+			account,
 			state.err,
 			state.engineApplied,
 			state.persistenceCompleted,
@@ -213,10 +213,6 @@ func (n *localNode) applyExecutionReport(
 		ctx, account, domain.MissingAccountCreate, "execution report", caller,
 		assets...,
 	); err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
-	accountID, err := n.accountDiagnosticID(ctx, account)
-	if err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
 	eng, done, err := n.beginLane()
@@ -298,7 +294,7 @@ func (n *localNode) applyExecutionReport(
 		if err != nil {
 			return n.fatalPostEnginePersistence(
 				"record execution report",
-				accountID,
+				account,
 				fmt.Errorf("record execution report: %w", err),
 			)
 		}
@@ -309,7 +305,7 @@ func (n *localNode) applyExecutionReport(
 			ctx, state.in.Order, state.result.Blocks,
 		); err != nil {
 			return n.fatalPostEnginePersistence(
-				"audit execution report engine blocks", accountID, err,
+				"audit execution report engine blocks", account, err,
 			)
 		}
 
@@ -332,7 +328,7 @@ func (n *localNode) applyExecutionReport(
 		}); err != nil {
 			return n.fatalPostEnginePersistence(
 				"audit execution report",
-				accountID,
+				account,
 				fmt.Errorf("audit execution report: %w", err),
 			)
 		}
@@ -346,7 +342,7 @@ func (n *localNode) applyExecutionReport(
 		begin,
 		persist,
 		"apply execution report",
-		accountID,
+		account,
 	); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
@@ -438,10 +434,6 @@ func (n *localNode) recordWorkflowExecutionReport(
 	); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
-	accountID, err := n.accountDiagnosticID(ctx, account)
-	if err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
 	eng, done, err := n.beginLane()
 	if err != nil {
 		return engine.ExecutionReportResult{}, err
@@ -530,7 +522,7 @@ func (n *localNode) recordWorkflowExecutionReport(
 		}); err != nil {
 			state.err = n.fatalPostCommitAudit(
 				"audit workflow execution report",
-				accountID,
+				account,
 				fmt.Errorf("audit workflow execution report: %w", err),
 			)
 			return state.err

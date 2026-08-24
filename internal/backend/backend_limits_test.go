@@ -49,7 +49,7 @@ func (r *blockingStopMarketDataRuntime) Stop() {
 
 func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	// account scope on order_size_limit is not allowed - validation must reject
@@ -69,7 +69,7 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 
 func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	// Account "acc-new" does not exist in the fake node (getAccountErr is not set,
@@ -92,7 +92,7 @@ func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 
 func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	limit := domain.LimitRate{
@@ -115,7 +115,7 @@ func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 func TestService_PutLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	sink := &backendTestSink{}
 	fn.restoreSink = sink
 	ctx := context.Background()
@@ -146,7 +146,7 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 			close(md.firstRelease)
 		}
 	})
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.restoreSink = &backendTestSink{}
 	limit := domain.LimitRate{
 		Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
@@ -187,7 +187,7 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 
 func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testing.T) {
 	md := &fakeMarketDataRuntime{}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.restoreSink = &backendTestSink{}
 	rateEntered := make(chan struct{})
 	rateRelease := make(chan struct{})
@@ -250,7 +250,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 
 func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	// broker scope is not allowed for SpotFunds P&L bounds; target validation must reject.
@@ -283,7 +283,7 @@ func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 func TestService_DeleteLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	sink := &backendTestSink{}
 	fn.restoreSink = sink
 	ctx := context.Background()

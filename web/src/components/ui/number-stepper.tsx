@@ -61,7 +61,7 @@ function assignRef<T>(ref: ForwardedRef<T>, value: T) {
 /**
  * Decimal text input with smart +/- controls. The step size scales with the
  * current value's magnitude (see {@link stepValue}); ArrowUp/ArrowDown nudge it
- * too. Free-form typing is preserved — the controls only nudge.
+ * too. Free-form typing is preserved - the controls only nudge.
  */
 export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
   (

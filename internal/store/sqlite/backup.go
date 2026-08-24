@@ -36,6 +36,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -61,12 +62,23 @@ func (r *realmStore) exportBackup(
 	ctx context.Context,
 	scope backup.Scope,
 	afterSnapshot func() error,
-) (backup.Archive, error) {
+) (archive backup.Archive, err error) {
 	snapshot, cleanup, err := r.backupSnapshot(ctx)
 	if err != nil {
 		return backup.Archive{}, err
 	}
-	defer cleanup()
+	defer func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			if err != nil {
+				err = errors.Join(err, cleanupErr)
+				return
+			}
+			slog.Error(
+				"cleanup sqlite backup snapshot",
+				"error", cleanupErr,
+			)
+		}
+	}()
 	if afterSnapshot != nil {
 		if err := afterSnapshot(); err != nil {
 			return backup.Archive{}, err
@@ -85,7 +97,7 @@ func (r *realmStore) exportBackup(
 
 func (r *realmStore) backupSnapshot(
 	ctx context.Context,
-) (*realmStore, func(), error) {
+) (*realmStore, func() error, error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, nil, err
@@ -95,38 +107,55 @@ func (r *realmStore) backupSnapshot(
 		return nil, nil, fmt.Errorf("store: create backup snapshot path: %w", err)
 	}
 	path := temp.Name()
-	removeSnapshot := func() {
+	removeSnapshot := func() error {
+		var result error
 		for _, candidate := range sqliteResetPaths(path) {
-			_ = os.Remove(candidate)
+			if err := os.Remove(candidate); err != nil &&
+				!errors.Is(err, os.ErrNotExist) {
+				result = errors.Join(
+					result,
+					fmt.Errorf("store: remove backup snapshot %q: %w", candidate, err),
+				)
+			}
 		}
+		return result
 	}
 	if err := temp.Close(); err != nil {
-		removeSnapshot()
-		return nil, nil, fmt.Errorf("store: close backup snapshot path: %w", err)
+		return nil, nil, errors.Join(
+			fmt.Errorf("store: close backup snapshot path: %w", err),
+			removeSnapshot(),
+		)
 	}
 	if err := os.Remove(path); err != nil {
-		removeSnapshot()
-		return nil, nil, fmt.Errorf("store: prepare backup snapshot path: %w", err)
+		return nil, nil, errors.Join(
+			fmt.Errorf("store: prepare backup snapshot path: %w", err),
+			removeSnapshot(),
+		)
 	}
 	if _, err := db.ExecContext(ctx, `VACUUM INTO ?`, path); err != nil {
-		removeSnapshot()
-		return nil, nil, fmt.Errorf("store: capture backup snapshot: %w", err)
+		return nil, nil, errors.Join(
+			fmt.Errorf("store: capture backup snapshot: %w", err),
+			removeSnapshot(),
+		)
 	}
 
 	raw, err := New(path, WithRealm(r.store.realm))
 	if err != nil {
-		removeSnapshot()
-		return nil, nil, fmt.Errorf("store: open backup snapshot: %w", err)
+		return nil, nil, errors.Join(
+			fmt.Errorf("store: open backup snapshot: %w", err),
+			removeSnapshot(),
+		)
 	}
 	snapshotStore, ok := raw.(*sqliteStore)
 	if !ok {
-		_ = raw.Close()
-		removeSnapshot()
-		return nil, nil, fmt.Errorf("store: open backup snapshot returned unexpected type")
+		return nil, nil, errors.Join(
+			errors.New("store: open backup snapshot returned unexpected type"),
+			raw.Close(),
+			removeSnapshot(),
+		)
 	}
-	cleanup := func() {
-		_ = snapshotStore.Close()
-		removeSnapshot()
+	cleanup := func() error {
+		return errors.Join(snapshotStore.Close(), removeSnapshot())
 	}
 	return &realmStore{store: snapshotStore}, cleanup, nil
 }
@@ -246,7 +275,7 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 // the committed delta crossed a live engine lifecycle boundary.
 func (r *realmStore) RestoreBackup(
 	ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
-) (backup.RestoreSummary, error) {
+) (summary backup.RestoreSummary, err error) {
 	if archive.Manifest.FormatVersion != backup.FormatVersion {
 		return backup.RestoreSummary{}, fmt.Errorf(
 			"backup format version %d unsupported, want %d: %w",
@@ -273,9 +302,9 @@ func (r *realmStore) RestoreBackup(
 	if err != nil {
 		return backup.RestoreSummary{}, fmt.Errorf("store: begin restore: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
-	summary := backup.NewSummary()
+	summary = backup.NewSummary()
 	rt := &restoreTx{
 		tx:           tx,
 		dictionaries: dictionaries,

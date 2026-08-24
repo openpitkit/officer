@@ -214,7 +214,7 @@
   "execReport": {
     "dialog": {
       "title": "提交执行报告",
-      "description": "订单 {{orderExternalId}} — 记录工作流状态变更、成交、佣金或终态结果。",
+      "description": "订单 {{orderExternalId}} - 记录工作流状态变更、成交、佣金或终态结果。",
       "fillQty": "成交数量",
       "fillQtyPlaceholder": "如 50",
       "fillPrice": "成交价格",
@@ -347,7 +347,7 @@
     "canonicalLabel": "规范形式（已签名字节）",
     "canonicalNote": "按字节原样，用于验证签名。",
     "signatureLabel": "签名与公钥",
-    "signatureNote": "信封签名，以及按此认证密钥 ID 解析出的公钥 — 该密钥可能是已轮换的非活跃密钥。",
+    "signatureNote": "信封签名，以及按此认证密钥 ID 解析出的公钥 - 该密钥可能是已轮换的非活跃密钥。",
     "keyId": "密钥 ID",
     "signatureFieldLabel": "签名（base64）",
     "publicKeyFieldLabel": "公钥（{{format}}）",
@@ -367,7 +367,7 @@
     "badgeError": "ERROR",
     "validNote": "已通过此认证密钥 ID 对应的公钥验证签名。",
     "invalidNote": "签名不匹配。令牌可能已被更改。",
-    "unsignedNote": "无加密签名 — 此事件在 eSign-off 模式下认证。",
+    "unsignedNote": "无加密签名 - 此事件在 eSign-off 模式下认证。",
     "errorNote": "无法执行验证。{{message}}",
     "missingArtifacts": "数据包中缺少规范字节或签名。",
     "jsSnippetLabel": "使用 WebCrypto 验证（JavaScript）",
@@ -387,7 +387,7 @@
 
   "breakdown": {
     "label": "可读明细",
-    "readOnlyNote": "仅供阅读 — 不用于复制或验证。请依据规范字节验证，切勿依据重新格式化的副本。",
+    "readOnlyNote": "仅供阅读 - 不用于复制或验证。请依据规范字节验证，切勿依据重新格式化的副本。",
     "version": "版本",
     "approvalId": "批准 ID",
     "approvalRef": "批准引用",

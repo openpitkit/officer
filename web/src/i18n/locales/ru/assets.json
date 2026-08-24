@@ -30,7 +30,7 @@
     "classPlaceholder": "Фильтр по классу…",
     "clearField": "Очистить поле"
   },
-  "noClass": "—",
+  "noClass": "-",
   "actions": {
     "editTitle": "Изменить актив"
   },

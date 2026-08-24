@@ -233,8 +233,8 @@ func TestDecodeBodyAcceptsValidUnicodeEscapes(t *testing.T) {
 		body string
 		want string
 	}{
-		{"surrogate pair", `{"value":"\ud83d\ude00"}`, "😀"},
-		{"uppercase surrogate pair", `{"value":"\uD83D\uDE00"}`, "😀"},
+		{"surrogate pair", `{"value":"\ud83d\ude00"}`, "\U0001F600"},
+		{"uppercase surrogate pair", `{"value":"\uD83D\uDE00"}`, "\U0001F600"},
 		{"replacement character", `{"value":"\ufffd"}`, "\ufffd"},
 		{"escaped backslash", `{"value":"\\ud800"}`, `\ud800`},
 	}

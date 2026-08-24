@@ -113,7 +113,7 @@ func TestService_CheckOrderForwardsWithoutFormatValidation(t *testing.T) {
 		{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "bad asset"},
 	}
 	for _, probe := range probes {
-		svc, fn := newTestService()
+		svc, fn := newTestService(t)
 		if _, err := svc.CheckOrder(ctx, probe); err != nil {
 			t.Fatalf("CheckOrder %+v: unexpected error: %v", probe, err)
 		}
@@ -125,7 +125,7 @@ func TestService_CheckOrderForwardsWithoutFormatValidation(t *testing.T) {
 
 func TestService_CheckOrderRoutesAndReturnsPass(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.checkResult = domain.CheckResult{Passed: true, WouldLockPrice: "100"}
 	ctx := context.Background()
 
@@ -152,7 +152,7 @@ func TestService_CheckOrderRoutesAndReturnsPass(t *testing.T) {
 
 func TestService_CheckOrderReturnsRejectAndBlock(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.checkResult = domain.CheckResult{
 		Passed: false,
 		Rejects: []domain.OrderReject{

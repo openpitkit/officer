@@ -1807,7 +1807,7 @@ describe("verifyMarketDataSymbol", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Signing keys — normalizer unit tests
+// Signing keys - normalizer unit tests
 // ---------------------------------------------------------------------------
 
 describe("normalizeSigningKeysStatus", () => {
@@ -1870,7 +1870,7 @@ describe("normalizeSigningKeysStatus", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Signing keys — HTTP call tests
+// Signing keys - HTTP call tests
 // ---------------------------------------------------------------------------
 
 describe("signing-keys HTTP calls", () => {
@@ -2393,7 +2393,7 @@ describe("order check client", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Orders — submit creates a signed approval token and addresses by external id
+// Orders - submit creates a signed approval token and addresses by external id
 // ---------------------------------------------------------------------------
 
 describe("Orders createOrder submit lifecycle", () => {

@@ -20,6 +20,8 @@ package openapp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"go.openpit.dev/officer"
 	enginenative "go.openpit.dev/officer/app/engine/native"
@@ -40,9 +42,9 @@ import (
 )
 
 // Register populates b with the open Officer concrete implementations.
-func Register(b *frameworkapp.Builder) {
+func Register(b *frameworkapp.Builder) error {
 	if b == nil {
-		return
+		return errors.New("openapp: nil builder")
 	}
 	b.SetStoreFactory(func(path string) (store.Store, error) {
 		return sqlite.New(path)
@@ -76,7 +78,9 @@ func Register(b *frameworkapp.Builder) {
 		appmarketdata.BYOProvider(),
 		appmarketdata.MockProvider(),
 	} {
-		_ = b.RegisterMarketDataProvider(provider)
+		if err := b.RegisterMarketDataProvider(provider); err != nil {
+			return fmt.Errorf("openapp: register market data provider: %w", err)
+		}
 	}
 	b.SetServiceFactory(func(
 		router node.NodeRouter,
@@ -110,4 +114,5 @@ func Register(b *frameworkapp.Builder) {
 	})
 	b.AddToolRegistrar(tools.RegisterTools)
 	b.SetSPAFactory(officer.WebDist)
+	return nil
 }

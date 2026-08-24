@@ -142,7 +142,7 @@
     "added": "Order added",
     "dialog": {
       "title": "Add order",
-      "description": "Add an order to evaluate it against the risk engine. This is an emulation — nothing is sent to any market. Without a price it is treated as a market order and may be rejected.",
+      "description": "Add an order to evaluate it against the risk engine. This is an emulation - nothing is sent to any market. Without a price it is treated as a market order and may be rejected.",
       "account": "Account",
       "accountPlaceholder": "e.g. desk-alpha",
       "baseAsset": "Base asset",
@@ -347,7 +347,7 @@
     "canonicalLabel": "Canonical form (signed bytes)",
     "canonicalNote": "Byte-for-byte, for signature verification.",
     "signatureLabel": "Signature and public key",
-    "signatureNote": "The envelope signature and the public key resolved by this attestation's key id — which may be a rotated, non-active key.",
+    "signatureNote": "The envelope signature and the public key resolved by this attestation's key id - which may be a rotated, non-active key.",
     "keyId": "Key id",
     "signatureFieldLabel": "Signature (base64)",
     "publicKeyFieldLabel": "Public key ({{format}})",
@@ -367,7 +367,7 @@
     "badgeError": "ERROR",
     "validNote": "Signature verified against the public key for this attestation's key id.",
     "invalidNote": "Signature does not match. The token may have been altered.",
-    "unsignedNote": "No cryptographic signature — this event was attested under eSign-off.",
+    "unsignedNote": "No cryptographic signature - this event was attested under eSign-off.",
     "errorNote": "Verification could not run. {{message}}",
     "missingArtifacts": "The canonical bytes or signature are missing from the bundle.",
     "jsSnippetLabel": "Verify with WebCrypto (JavaScript)",
@@ -387,7 +387,7 @@
 
   "breakdown": {
     "label": "Human-readable breakdown",
-    "readOnlyNote": "Read only — not for copying or verification. Verify against the canonical bytes, never a reformatted copy.",
+    "readOnlyNote": "Read only - not for copying or verification. Verify against the canonical bytes, never a reformatted copy.",
     "version": "Version",
     "approvalId": "Approval ID",
     "approvalRef": "Approval reference",

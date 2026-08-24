@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -212,59 +211,50 @@ func NewLocalNode(
 	return n, eng, nil
 }
 
-func (n *localNode) accountDiagnosticID(
-	ctx context.Context, account domain.AccountID,
-) (string, error) {
-	if account == "" {
-		return "unknown", nil
-	}
-	record, ok, err := n.realm.GetAccount(ctx, account)
-	if err != nil {
-		return "", fmt.Errorf("read diagnostic account id %s: %w", account, err)
-	}
-	if !ok || record.EngineAccountID == 0 {
-		return "", fmt.Errorf("diagnostic account id %s: %w", account, domain.ErrNotFound)
-	}
-	return strconv.FormatUint(record.EngineAccountID.Uint64(), 10), nil
-}
-
 // fatalPostEnginePersistence routes a post-engine persistence failure into the
-// fatal-shutdown hook. The engine mutation already committed, so a failed store
+// fatal-shutdown hook. Its diagnostic identifies the affected account by its
+// operator-facing code, never the DB/engine surrogate: the audit row itself
+// stores code and title only, so resolving or emitting an engine id adds no
+// recovery value. The engine mutation already committed, so a failed store
 // write leaves engine and store divergent; the P7 cascade is intentionally
 // straight-to-fatal (it does not block the account first) because there is no
-// safe in-process state to fall back to once the durable record is lost.
+// safe in-process state to fall back to
+// once the durable record is lost.
 func (n *localNode) fatalPostEnginePersistence(
-	operation string, accountID string, err error,
+	operation string, account domain.AccountID, err error,
 ) error {
 	if err == nil {
 		return nil
 	}
-	if accountID == "" {
-		accountID = "unknown"
+	if account == "" {
+		account = "unknown"
 	}
 	n.fatal(fmt.Errorf(
-		"operation=%q account_id=%s: post-engine persistence failure: %w",
-		operation, accountID, err,
+		"operation=%q account=%s: post-engine persistence failure: %w",
+		operation, account, err,
 	))
 	return internalPostCommitNodeMutationError(err)
 }
 
 // fatalPostCommitAudit routes an audit failure after a durable store mutation
-// into the fatal-shutdown hook. The caller has already reported success to its
+// into the fatal-shutdown hook. Its diagnostic identifies the affected account
+// by its operator-facing code, never the DB/engine surrogate: the audit row
+// itself stores code and title only, so resolving or emitting an engine id adds
+// no recovery value. The caller has already reported success to its
 // transactional persistence seam, so continuing would let a retry duplicate
 // history that the first request committed without its required audit row.
 func (n *localNode) fatalPostCommitAudit(
-	operation string, accountID string, err error,
+	operation string, account domain.AccountID, err error,
 ) error {
 	if err == nil {
 		return nil
 	}
-	if accountID == "" {
-		accountID = "unknown"
+	if account == "" {
+		account = "unknown"
 	}
 	n.fatal(fmt.Errorf(
-		"operation=%q account_id=%s: post-commit audit failure: %w",
-		operation, accountID, err,
+		"operation=%q account=%s: post-commit audit failure: %w",
+		operation, account, err,
 	))
 	return internalPostCommitNodeMutationError(err)
 }

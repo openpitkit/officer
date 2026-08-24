@@ -20,7 +20,6 @@ package node
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -261,15 +260,11 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 	if !errors.Is(fatalErr, domain.ErrInvalid) || !errors.Is(fatalErr, storeCause) {
 		t.Fatalf("fatal error = %v, want complete raw store error chain", fatalErr)
 	}
-	account, ok, err := realm.GetAccount(ctx, "acc-1")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
-	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="record execution report"`) ||
-		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
+		!strings.Contains(msg, "account=acc-1") ||
 		!strings.Contains(msg, "record execution report failed") {
-		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+		t.Fatalf("fatal error = %q, want operation and cause", msg)
 	}
 }
 
@@ -497,16 +492,12 @@ func TestLocalNode_ApplyExecutionReportWorkflowAuditFailureFatalsAfterCommit(
 		!errors.Is(fatalErr, auditCause) {
 		t.Fatalf("fatal error = %v, want sentinel-bearing audit chain", fatalErr)
 	}
-	account, ok, err := realm.GetAccount(ctx, "acc-1")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
-	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="audit workflow execution report"`) ||
-		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
+		!strings.Contains(msg, "account=acc-1") ||
 		!strings.Contains(msg, "post-commit audit failure") ||
 		!strings.Contains(msg, auditCause.Error()) {
-		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+		t.Fatalf("fatal error = %q, want operation and cause", msg)
 	}
 	detail, err := realm.GetOrder(ctx, order.ExternalID)
 	if err != nil {

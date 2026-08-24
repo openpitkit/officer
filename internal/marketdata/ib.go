@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"math"
 	"net"
 	"reflect"
@@ -474,7 +475,7 @@ func (c *ibConnector) Subscribe(
 // a timeout, and a zero-match resolve all return a nil slice with a nil error.
 func (c *ibConnector) SearchSymbols(
 	ctx context.Context, query SymbolSearchQuery,
-) ([]SymbolMatch, error) {
+) (result []SymbolMatch, err error) {
 	if c.configErr != nil {
 		return nil, c.configErr
 	}
@@ -491,7 +492,25 @@ func (c *ibConnector) SearchSymbols(
 	errs := make(chan error, 1)
 	wrapper := newIBSearchWrapper(results, errs)
 	client := c.newClient(wrapper)
-	defer func() { _ = disconnectIBClient(client) }()
+	defer func() {
+		if disconnectErr := disconnectIBClient(client); disconnectErr != nil {
+			disconnectErr = fmt.Errorf(
+				"ib: disconnect symbol search client: %w", disconnectErr,
+			)
+			if err != nil {
+				err = errors.Join(err, disconnectErr)
+				return
+			}
+			// Registry searches use a fresh connector without a DiagnosticReporter,
+			// so this cleanup failure stays on the process logger.
+			slog.Error(
+				"disconnect ib symbol search client",
+				"query", pattern,
+				"client_id", c.cfg.ClientID+ibSearchClientIDOffset,
+				"error", disconnectErr,
+			)
+		}
+	}()
 
 	clientID := c.cfg.ClientID + ibSearchClientIDOffset
 	if err := c.connectClient(ctx, client, clientID); err != nil {
@@ -613,14 +632,30 @@ func (c *ibConnector) run(
 // delivered, so run resets its reconnect backoff after a healthy connection.
 func (c *ibConnector) stream(
 	ctx context.Context, subs []ibSubscription, out chan<- QuoteUpdate,
-) (bool, error) {
+) (delivered bool, err error) {
 	wrapper := newIBWrapper(ctx, subs, out, c.now, c.reportStatus, c.reportDiag)
 	client := c.newClient(wrapper)
 	defer func() {
 		for _, sub := range subs {
 			client.CancelMktData(sub.reqID)
 		}
-		_ = disconnectIBClient(client)
+		if disconnectErr := disconnectIBClient(client); disconnectErr != nil {
+			disconnectErr = fmt.Errorf(
+				"ib: disconnect market data client: %w", disconnectErr,
+			)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				err = errors.Join(err, disconnectErr)
+			}
+			c.reportDiag(Diagnostic{
+				Level:       DiagError,
+				Code:        CodeConnectionError,
+				Kind:        DiagKindProvider,
+				Title:       "Interactive Brokers disconnect failed",
+				Detail:      disconnectErr.Error(),
+				Remediation: "Check that TWS/Gateway released the client ID, then Restart feeds.",
+				Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			})
+		}
 	}()
 	if err := c.connect(ctx, client); err != nil {
 		return wrapper.delivered.Load(), ibConnectError(c.cfg, err)
@@ -668,10 +703,16 @@ func (c *ibConnector) connectClient(
 	case err := <-result:
 		return err
 	case <-connectCtx.Done():
-		_ = disconnectIBClient(client)
+		disconnectErr := disconnectIBClient(client)
 		select {
 		case <-result:
 		case <-time.After(defaultIBConnectDrainTimeout):
+		}
+		if disconnectErr != nil {
+			return errors.Join(
+				connectCtx.Err(),
+				fmt.Errorf("ib: disconnect timed-out client: %w", disconnectErr),
+			)
 		}
 		return connectCtx.Err()
 	}

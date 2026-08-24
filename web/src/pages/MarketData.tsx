@@ -3332,7 +3332,7 @@ export function InstanceCard({
                       </td>
                     )}
                     <td className="nums py-2 pr-3 text-text">
-                      {displayedPriceLabel(instrument) || "—"}
+                      {displayedPriceLabel(instrument) || "-"}
                     </td>
                     <td className="nums py-2 pr-3 text-muted">
                       {instrument.quote ? (
@@ -3350,7 +3350,7 @@ export function InstanceCard({
                           ) : null}
                         </span>
                       ) : (
-                        "—"
+                        "-"
                       )}
                     </td>
                     <td className="py-2 pr-3">

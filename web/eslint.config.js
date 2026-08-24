@@ -99,7 +99,7 @@ export default tseslint.config(
           },
           // `words.exclude` REPLACES the plugin defaults, so the default
           // punctuation/constant patterns are restated, plus:
-          //  - URL / route paths ("/docs", "/mcp") — identifiers, not copy.
+          //  - URL / route paths ("/docs", "/mcp") - identifiers, not copy.
           //  - placeholder / symbol-only text (em dash, ·, Δ, →, ×, …) used
           //    as glyphs around interpolated values, not translatable words.
           words: {

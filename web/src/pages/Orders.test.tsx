@@ -716,7 +716,7 @@ describe("Orders submit mode", () => {
     await user.click(
       within(modeGroup).getByRole("radio", { name: /submit and settle/i }),
     );
-    // Everything chosen — submission is unblocked.
+    // Everything chosen - submission is unblocked.
     expect(submitButton).toBeEnabled();
 
     await user.click(submitButton);

@@ -1777,7 +1777,7 @@ type cancelOrderRequestDTO struct {
 
 // toSigningKeyDTO maps a domain.SigningKey onto the wire DTO. It NEVER copies
 // PrivateKey. The fingerprint is the first 8 bytes of the SHA-256 of the
-// public key, hex-encoded — the same derivation used by the signing package.
+// public key, hex-encoded - the same derivation used by the signing package.
 func toSigningKeyDTO(k domain.SigningKey) signingKeyDTO {
 	fp := ""
 	if len(k.PublicKey) > 0 {

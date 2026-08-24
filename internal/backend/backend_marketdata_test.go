@@ -131,7 +131,7 @@ func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 			QuoteAssetID: testMarketDataAssetID("USD"),
 		},
 	}}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 		{ExternalID: mdID("mock-2"), Provider: domain.MarketDataProviderMock, Enabled: false},
@@ -267,7 +267,10 @@ func TestService_ListMarketDataKeepsManagerSnapshotAfterEngineRebuild(t *testing
 	}
 
 	liveSink = managerSnapshotSink{}
-	svc := backend.New(&fakeRouter{node: fn}, manager, nil)
+	svc, newErr := backend.New(&fakeRouter{node: fn}, manager, nil)
+	if newErr != nil {
+		t.Fatalf("New service: %v", newErr)
+	}
 	status, err := svc.ListMarketData(context.Background())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
@@ -342,7 +345,10 @@ func TestService_ListMarketDataKeepsManagerSnapshotWhileManagerStopped(t *testin
 		t.Fatalf("applied config after Stop = %+v, want empty", applied)
 	}
 
-	svc := backend.New(&fakeRouter{node: fn}, manager, nil)
+	svc, newErr := backend.New(&fakeRouter{node: fn}, manager, nil)
+	if newErr != nil {
+		t.Fatalf("New service: %v", newErr)
+	}
 	status, err := svc.ListMarketData(context.Background())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
@@ -366,7 +372,7 @@ func TestService_ListMarketDataSerializesManagerLifecycle(t *testing.T) {
 			close(md.statusRelease)
 		}
 	})
-	svc, _ := newTestServiceWithMarketDataRuntime(md)
+	svc, _ := newTestServiceWithMarketDataRuntime(t, md)
 	listDone := make(chan error, 1)
 	go func() {
 		_, err := svc.ListMarketData(context.Background())
@@ -433,7 +439,7 @@ func TestService_ListMarketDataSurfacesAppliedSyntheticInverse(t *testing.T) {
 			},
 		},
 	}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	now := time.Now().UTC()
 	fn.mdInstances = []domain.MarketDataInstance{{
 		ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true,
@@ -487,7 +493,7 @@ func TestService_ListMarketDataSuppressesInverseForConfiguredDisabledReverse(t *
 			},
 		},
 	}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	now := time.Now().UTC()
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
@@ -541,7 +547,7 @@ func TestService_ListMarketDataFlagsStaleQuote(t *testing.T) {
 			QuoteAssetID: testMarketDataAssetID("USD"),
 		},
 	}}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
@@ -591,7 +597,7 @@ func TestService_ListMarketDataDetectsRestartRequired(t *testing.T) {
 			},
 		},
 	}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
@@ -633,7 +639,7 @@ func TestService_ListMarketDataSurfacesUpdateInterval(t *testing.T) {
 			mdID("mock-1").String() + "\x00AAPL": 12 * time.Second,
 		},
 	}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
@@ -676,7 +682,7 @@ func TestService_ListMarketDataSurfacesUpdateInterval(t *testing.T) {
 
 func TestService_CreateMarketDataInstanceGeneratesExternalIDAndDefaultLabel(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 
 	// With no supplied id the store mints one and returns it.
 	created, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
@@ -703,7 +709,7 @@ func TestService_CreateMarketDataInstanceGeneratesExternalIDAndDefaultLabel(t *t
 
 func TestService_CreateMarketDataInstanceHonorsSuppliedExternalID(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 
 	supplied := mdID("operator-supplied")
 	created, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
@@ -727,7 +733,7 @@ func TestService_CreateMarketDataInstanceHonorsSuppliedExternalID(t *testing.T) 
 
 func TestService_CreateMarketDataInstancePassesCredentials(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 
 	_, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
 		Provider: domain.MarketDataProviderAlpaca,
@@ -749,7 +755,7 @@ func TestService_CreateMarketDataInstancePassesCredentials(t *testing.T) {
 
 func TestService_CreateMarketDataInstanceRejectsInvalidCredentials(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 
 	_, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
 		Provider: domain.MarketDataProviderAlpaca,
@@ -767,7 +773,7 @@ func TestService_CreateMarketDataInstanceRejectsInvalidCredentials(t *testing.T)
 
 func TestService_CreateMarketDataInstanceRejectsDuplicateLabel(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("bn-1"), Provider: domain.MarketDataProviderBinance, Label: "Binance"},
 	}
@@ -786,7 +792,7 @@ func TestService_CreateMarketDataInstanceRejectsDuplicateLabel(t *testing.T) {
 
 func TestService_UpdateMarketDataInstanceSettingsMergesBlankSecret(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{
 			ExternalID:  mdID("alpaca-1"),
@@ -820,7 +826,7 @@ func TestService_UpdateMarketDataInstanceSettingsMergesBlankSecret(t *testing.T)
 
 func TestService_UpdateMarketDataInstanceSettingsRejectsDuplicateLabel(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("a"), Provider: domain.MarketDataProviderBinance, Label: "Primary"},
 		{ExternalID: mdID("b"), Provider: domain.MarketDataProviderBinance, Label: "Backup"},
@@ -855,7 +861,7 @@ func TestService_ListMarketDataManualPriceDoesNotRequireRestart(t *testing.T) {
 			},
 		},
 	}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("byo-1"), Provider: domain.MarketDataProviderBYO, Enabled: true},
 	}
@@ -898,7 +904,7 @@ func TestService_ListMarketDataClearedManualHasNoSnapshot(t *testing.T) {
 			},
 		},
 	}
-	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.mdInstances = []domain.MarketDataInstance{{
 		ExternalID: instanceID,
 		Provider:   domain.MarketDataProviderBYO,
@@ -925,7 +931,7 @@ func TestService_ListMarketDataClearedManualHasNoSnapshot(t *testing.T) {
 
 func TestService_ListMarketDataSurfacesVerifyCapability(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 		{ExternalID: mdID("bn-1"), Provider: domain.MarketDataProviderBinance, Enabled: false},
@@ -964,7 +970,7 @@ func TestService_ListMarketDataSurfacesVerifyCapability(t *testing.T) {
 
 func TestService_VerifyMarketDataSymbolUnsupported(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
@@ -980,7 +986,7 @@ func TestService_VerifyMarketDataSymbolUnsupported(t *testing.T) {
 
 func TestService_VerifyMarketDataSymbolUnknownInstance(t *testing.T) {
 	t.Parallel()
-	svc, _ := newTestService()
+	svc, _ := newTestService(t)
 
 	_, err := svc.VerifyMarketDataSymbol(context.Background(), mdID("missing").String(), "AAPL")
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -990,7 +996,7 @@ func TestService_VerifyMarketDataSymbolUnknownInstance(t *testing.T) {
 
 func TestService_SearchMarketDataSymbolsUnsupported(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.mdInstances = []domain.MarketDataInstance{
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
@@ -1009,7 +1015,7 @@ func TestService_SearchMarketDataSymbolsUnsupported(t *testing.T) {
 
 func TestService_SearchMarketDataSymbolsNotFound(t *testing.T) {
 	t.Parallel()
-	svc, _ := newTestService()
+	svc, _ := newTestService(t)
 
 	_, err := svc.SearchMarketDataSymbols(
 		context.Background(), mdID("missing").String(),
@@ -1034,7 +1040,7 @@ func sampleAdjustmentRequest() domain.AdjustmentRequest {
 // returned verbatim.
 func TestService_ApplyAdjustmentHonorsSuppliedExternalID(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 
 	supplied := mdID("supplied-adj-id")
 	rec, err := svc.ApplyAdjustment(
@@ -1054,7 +1060,7 @@ func TestService_ApplyAdjustmentHonorsSuppliedExternalID(t *testing.T) {
 // path: a zero id is forwarded so the store mints one.
 func TestService_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 
 	rec, err := svc.ApplyAdjustment(
 		context.Background(), "acc-1", domain.ExternalID(""), sampleAdjustmentRequest(), domain.MissingAccountCreate)
@@ -1074,7 +1080,7 @@ func TestService_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 // unchanged from the store.
 func TestService_ApplyAdjustmentDuplicateSuppliedIDConflicts(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.adjustmentErr = fmt.Errorf("append adjustment: %w", domain.ErrAlreadyExists)
 
 	_, err := svc.ApplyAdjustment(

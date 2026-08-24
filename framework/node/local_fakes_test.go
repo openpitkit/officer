@@ -538,7 +538,7 @@ func (e *fakeEngine) checkKnownGroup(groupID string) error {
 	e.resolverMu.RLock()
 	defer e.resolverMu.RUnlock()
 	if _, ok := e.knownGroups[groupID]; !ok {
-		return fmt.Errorf("engine: unknown group %q: %w", groupID, domain.ErrInvalid)
+		return fmt.Errorf("engine: unknown group: %w", domain.ErrInvalid)
 	}
 	return nil
 }

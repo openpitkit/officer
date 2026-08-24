@@ -243,7 +243,7 @@ export function MarketDataCard() {
                           ? inst.diagnostics[inst.diagnostics.length - 1]
                           : null;
                       const diagSuffix = latest
-                        ? ` — ${latest.title.slice(0, 40)}${latest.title.length > 40 ? "…" : ""}`
+                        ? ` - ${latest.title.slice(0, 40)}${latest.title.length > 40 ? "…" : ""}`
                         : "";
                       return (
                         <Badge key={inst.id} variant="danger">
@@ -256,7 +256,7 @@ export function MarketDataCard() {
                     if (inst.state === "pending") {
                       return (
                         <Badge key={inst.id} variant="warn">
-                          {label} — {t("marketData.instanceNotApplied")}
+                          {label} - {t("marketData.instanceNotApplied")}
                         </Badge>
                       );
                     }
@@ -427,7 +427,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
 
       <span className="w-28 shrink-0 truncate text-xs text-text">
         {entry.accountTitle || entry.account || (
-          <span className="text-muted-lt">—</span>
+          <span className="text-muted-lt">-</span>
         )}
       </span>
 

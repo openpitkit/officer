@@ -132,7 +132,7 @@
       "arithmeticOverflow": "PnL 计算已停止：精确运算超出支持的数值范围。",
       "unknown": "引擎已停止 PnL 计算。"
     },
-    "filteredTo": "— 筛选至",
+    "filteredTo": "- 筛选至",
     "filteredToDefault": "默认分组",
     "columns": {
       "account": "账户",
@@ -174,10 +174,10 @@
       "noGroup": "无"
     },
     "links": {
-      "positions": "持仓 — 该账户的现货限额",
-      "trading": "交易 — 订单与成交",
-      "policies": "策略 — 风控屏障",
-      "audit": "审计 — 该账户的变更日志"
+      "positions": "持仓 - 该账户的现货限额",
+      "trading": "交易 - 订单与成交",
+      "policies": "策略 - 风控屏障",
+      "audit": "审计 - 该账户的变更日志"
     },
     "actions": {
       "notes": "备注",
@@ -228,7 +228,7 @@
     "currencyHint": "未设置货币时，除非在账户层级设置货币，否则不计算该分组内账户的已实现 P&L。",
     "notesLabel": "备注（可选）",
     "notesPlaceholder": "归属于美国股票交易台的账户。",
-    "notesHint": "参考备注 — 仅存储于控制平面，不发送至引擎。",
+    "notesHint": "参考备注 - 仅存储于控制平面，不发送至引擎。",
     "cancel": "取消",
     "submit": "创建"
   },
@@ -358,21 +358,21 @@
     "submit": "保存"
   },
   "editGroupNotes": {
-    "titlePrefix": "备注 — 分组",
+    "titlePrefix": "备注 - 分组",
     "description": "存储于控制平面的参考备注。不发送至引擎，对风控评估无影响。",
     "notesLabel": "备注",
     "cancel": "取消",
     "submit": "保存"
   },
   "editAccountNotes": {
-    "titlePrefix": "备注 —",
+    "titlePrefix": "备注 -",
     "description": "存储于控制平面的参考备注。不发送至引擎，对风控评估无影响。",
     "notesLabel": "备注",
     "cancel": "取消",
     "submit": "保存"
   },
   "assignGroup": {
-    "titlePrefix": "分配分组 —",
+    "titlePrefix": "分配分组 -",
     "description": "选择已有分组或输入新 ID。留空则清除分组分配。",
     "groupLabel": "分组",
     "cancel": "取消",

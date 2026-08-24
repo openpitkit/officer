@@ -196,7 +196,10 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			router := &fakeRouter{node: &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}}
-			svc := backend.New(router, nil, &fakeSigner{})
+			svc, newErr := backend.New(router, nil, &fakeSigner{})
+			if newErr != nil {
+				t.Fatalf("New service: %v", newErr)
+			}
 			fn := router.node
 			reset := func() {
 				router.routeCount.Store(0)
@@ -217,7 +220,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 
 func TestService_BusinessCSVExportAuditsAndDoesNotReuseBackupAction(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.accounts = []domain.Account{{
 		Code:      "acc-1",
 		GroupCode: "desk-a",
@@ -247,7 +250,7 @@ func TestService_BusinessCSVExportAuditsAndDoesNotReuseBackupAction(t *testing.T
 
 func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.accounts = []domain.Account{
 		{Code: "acc-none"},
 		{Code: "acc-desk-a", GroupCode: "desk-a"},
@@ -315,7 +318,7 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 
 func TestService_BusinessCSVOrderExportKeepsUnreadableLockRow(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.allOrders = []domain.Order{{
 		ExternalID:  "order-corrupt-lock",
 		Account:     "acc-1",

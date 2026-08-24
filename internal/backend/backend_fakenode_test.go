@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
@@ -106,6 +107,7 @@ type fakeNode struct {
 	cancelCalls             []string
 	persistAttestationCalls []domain.ExternalID
 	auditCalls              []store.AuditEntry
+	auditErr                error
 
 	getAccountErr error
 
@@ -1300,6 +1302,9 @@ func (n *fakeNode) AppendAudit(
 	_ context.Context, entry store.AuditEntry, _ domain.Caller,
 ) error {
 	n.auditCalls = append(n.auditCalls, entry)
+	if n.auditErr != nil {
+		return n.auditErr
+	}
 	return nil
 }
 
@@ -1490,6 +1495,7 @@ func (r *fakeRouter) Route(node.Key) (node.Node, error) {
 func (r *fakeRouter) All() []node.Node { return []node.Node{r.node} }
 
 type fakeMarketDataRuntime struct {
+	registry   *marketdata.Registry
 	statuses   map[string]marketdata.InstanceRuntimeStatus
 	applied    map[string]marketdata.AppliedInstanceConfig
 	intervals  map[string]time.Duration
@@ -1520,7 +1526,11 @@ func (r *fakeMarketDataRuntime) QuoteSnapshots() []marketdata.QuoteSnapshot {
 }
 
 func (r *fakeMarketDataRuntime) Registry() *marketdata.Registry {
-	return appmarketdata.DefaultRegistry()
+	return r.registry
+}
+
+func (r *fakeMarketDataRuntime) setRegistry(registry *marketdata.Registry) {
+	r.registry = registry
 }
 
 func (r *fakeMarketDataRuntime) QuoteUpdateInterval(
@@ -1554,21 +1564,50 @@ func (r *fakeMarketDataRuntime) PushManual(
 	return r.pushErr
 }
 
-func newTestService() (*backend.Service, *fakeNode) {
+func newTestService(t *testing.T) (*backend.Service, *fakeNode) {
+	t.Helper()
 	fn := &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}
-	return backend.New(&fakeRouter{node: fn}, nil, nil), fn
+	svc, err := backend.New(&fakeRouter{node: fn}, nil, nil)
+	if err != nil {
+		t.Fatalf("New test service: %v", err)
+	}
+	return svc, fn
 }
 
 func newTestServiceWithMarketDataRuntime(
-	md backend.MarketDataRuntime,
+	t *testing.T, md backend.MarketDataRuntime,
 ) (*backend.Service, *fakeNode) {
+	t.Helper()
+	registry, err := appmarketdata.DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
+	registryTarget, ok := md.(interface {
+		setRegistry(*marketdata.Registry)
+	})
+	if !ok {
+		t.Fatalf("market data runtime cannot store registry: %T", md)
+	}
+	registryTarget.setRegistry(registry)
+
 	fn := &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}
-	return backend.New(&fakeRouter{node: fn}, md, nil), fn
+	svc, err := backend.New(&fakeRouter{node: fn}, md, nil)
+	if err != nil {
+		t.Fatalf("New test service with market data runtime: %v", err)
+	}
+	return svc, fn
 }
 
 // newTestServiceWithSigner builds a service with a fake signer for the approval
 // flow tests.
-func newTestServiceWithSigner(signer fwsigning.Service) (*backend.Service, *fakeNode) {
+func newTestServiceWithSigner(
+	t *testing.T, signer fwsigning.Service,
+) (*backend.Service, *fakeNode) {
+	t.Helper()
 	fn := &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}
-	return backend.New(&fakeRouter{node: fn}, nil, signer), fn
+	svc, err := backend.New(&fakeRouter{node: fn}, nil, signer)
+	if err != nil {
+		t.Fatalf("New test service with signer: %v", err)
+	}
+	return svc, fn
 }

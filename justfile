@@ -39,6 +39,11 @@ export GOCACHE := go_cache
 export GOLANGCI_LINT_CACHE := golangci_lint_cache
 export CGO_ENABLED := "1"
 
+venv_dir := justfile_directory() / ".venv"
+venv_bin := if os_family() == "windows" { venv_dir / "Scripts" } else { venv_dir / "bin" }
+venv_python := if os_family() == "windows" { venv_bin / "python.exe" } else { venv_bin / "python" }
+semgrep := if os_family() == "windows" { venv_bin / "semgrep.exe" } else { venv_bin / "semgrep" }
+
 # Build the pit-officer binary.
 build: build-release
 
@@ -167,18 +172,26 @@ tidy:
     {{ python }} {{ just_helper }} go . mod tidy -go={{ go_version }}
     {{ python }} {{ just_helper }} go framework mod tidy -go={{ go_version }}
 
+# Create the Semgrep venv only when it is not at the pinned version.
+install-semgrep:
+    {{ python }} {{ just_helper }} install-semgrep
+
+# Run the Semgrep invariant rule set over the whole tree.
+check-semgrep: install-semgrep
+    {{ semgrep }} --config checks/semgrep/ --error --quiet .
+
 # Lint all.
 [parallel]
-lint-all: lint-go lint-js
+lint-all: lint-go lint-js check-semgrep
 
 # Lint all against a local Pit checkout.
 lint-all-dev pit_checkout="../pit": (lint-all-release-dev pit_checkout)
 
 # Lint all against a debug local Pit checkout.
-lint-all-debug-dev pit_checkout="../pit": (lint-go-debug-dev pit_checkout) lint-js
+lint-all-debug-dev pit_checkout="../pit": (lint-go-debug-dev pit_checkout) lint-js check-semgrep
 
 # Lint all against an optimized local Pit checkout.
-lint-all-release-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout) lint-js
+lint-all-release-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout) lint-js check-semgrep
 
 # Lint Go sources.
 lint-go:

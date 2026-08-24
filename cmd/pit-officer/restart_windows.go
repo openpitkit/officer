@@ -21,6 +21,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 )
 
@@ -36,7 +37,13 @@ func replaceCurrentProcess(args []string) error {
 	if err != nil {
 		return fmt.Errorf("start replacement process: %w", err)
 	}
-	_ = proc.Release()
+	if err := proc.Release(); err != nil {
+		slog.Error(
+			"release replacement process",
+			"pid", proc.Pid,
+			"error", err,
+		)
+	}
 	os.Exit(0)
 	return nil
 }

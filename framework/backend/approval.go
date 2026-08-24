@@ -21,7 +21,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"go.openpit.dev/officer/framework/auth"
@@ -350,8 +352,10 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 // execution reports settle or release them. Mode "immediate" also settles a
 // fill at the engine lock price in the same call. A pre-trade reject is a
 // successful signed decision and returns the reject reasons with the same
-// envelope shape as an accept verdict. The issued token is audited as
-// approval_issued. missing is the caller's required choice for an order naming
+// envelope shape as an accept verdict. The post-commit approval_issued audit
+// write is best-effort: because the operation is already committed, a failure
+// is logged rather than returned. missing is the caller's required choice for
+// an order naming
 // an account that does not exist yet: register it with no group and no currency,
 // or fail with domain.ErrAccountMissing.
 func (s *Service) SubmitOrderToken(
@@ -491,8 +495,12 @@ func (s *Service) submitOrderToken(
 		order, result, err = attesting.SubmitOrderWithAttestation(
 			ctx, key, o, missing, caller, attestFor)
 		if err != nil {
-			_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
-				fmt.Sprintf("submit attestation failed: %v", err))
+			if auditErr := s.auditApproval(
+				ctx, n, key, domain.AuditActionApprovalFailed,
+				fmt.Sprintf("submit attestation failed: %v", err),
+			); auditErr != nil {
+				return ApprovalToken{}, errors.Join(err, auditErr)
+			}
 			return ApprovalToken{}, err
 		}
 		accepted = result.Accepted
@@ -577,8 +585,12 @@ func (s *Service) submitOrderToken(
 		order, result, err = attesting.SubmitImmediateWithAttestation(
 			ctx, key, o, missing, caller, attestFor)
 		if err != nil {
-			_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
-				fmt.Sprintf("submit attestation failed: %v", err))
+			if auditErr := s.auditApproval(
+				ctx, n, key, domain.AuditActionApprovalFailed,
+				fmt.Sprintf("submit attestation failed: %v", err),
+			); auditErr != nil {
+				return ApprovalToken{}, errors.Join(err, auditErr)
+			}
 			return ApprovalToken{}, err
 		}
 		accepted = result.Accepted
@@ -594,10 +606,20 @@ func (s *Service) submitOrderToken(
 	} else {
 		verdict = "reject"
 	}
-	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
+	if err := s.auditApproval(
+		ctx, n, key, domain.AuditActionApprovalIssued,
 		fmt.Sprintf("issue attestation order %s event %s request=%s",
 			order.ExternalID.String(), issued.EventExternalID,
-			domain.AttestationRequestSubmit))
+			domain.AttestationRequestSubmit),
+	); err != nil {
+		slog.Error(
+			"write post-commit approval audit",
+			"action", domain.AuditActionApprovalIssued,
+			"order", order.ExternalID,
+			"event", issued.EventExternalID,
+			"error", err,
+		)
+	}
 
 	return ApprovalToken{
 		Token:           issued.Token,
@@ -657,7 +679,9 @@ func dropCopySigningError() error {
 // records an idempotent confirmation event. It never calls the engine and never
 // changes the order status or balances. The node re-checks execution-report
 // activity inside the account lane; after any such activity the shortcut is no
-// longer allowed because Officer cannot safely infer the venue state.
+// longer allowed because Officer cannot safely infer the venue state. The
+// post-commit approval_confirmed audit write is best-effort: because the
+// operation is already committed, a failure is logged rather than returned.
 func (s *Service) ConfirmExecution(
 	ctx context.Context, orderID string, token string,
 ) (domain.Order, Attestation, error) {
@@ -745,7 +769,16 @@ func (s *Service) ConfirmExecution(
 	key := keyFor(confirmed.Account)
 	detail := fmt.Sprintf(
 		"confirm approval %s order %s", result.Payload.ApprovalID, orderID)
-	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalConfirmed, detail)
+	if err := s.auditApproval(
+		ctx, n, key, domain.AuditActionApprovalConfirmed, detail,
+	); err != nil {
+		slog.Error(
+			"write post-commit approval audit",
+			"action", domain.AuditActionApprovalConfirmed,
+			"order", orderID,
+			"error", err,
+		)
+	}
 	return confirmed, att, nil
 }
 
@@ -753,7 +786,9 @@ func (s *Service) ConfirmExecution(
 // terminal cancellation report for the untouched stored order. Officer stores
 // and signs caller leaves verbatim, while forwarding that value to the engine.
 // If any execution report was already recorded, the shortcut fails and the
-// caller must provide an explicit report instead.
+// caller must provide an explicit report instead. The post-commit
+// approval_cancelled audit write is best-effort: because the operation is
+// already committed, a failure is logged rather than returned.
 func (s *Service) CancelOrder(
 	ctx context.Context, orderID string, token, leavesQuantity, reason string,
 ) (domain.Order, Attestation, error) {
@@ -864,7 +899,16 @@ func (s *Service) CancelOrder(
 	detail := fmt.Sprintf(
 		"cancel approval %s order %s reason=%s",
 		result.Payload.ApprovalID, orderID, reason)
-	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalCancelled, detail)
+	if err := s.auditApproval(
+		ctx, n, key, domain.AuditActionApprovalCancelled, detail,
+	); err != nil {
+		slog.Error(
+			"write post-commit approval audit",
+			"action", domain.AuditActionApprovalCancelled,
+			"order", orderID,
+			"error", err,
+		)
+	}
 	return cancelled, att, nil
 }
 

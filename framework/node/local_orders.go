@@ -282,10 +282,6 @@ func (n *localNode) submitOrder(
 	); err != nil {
 		return domain.Order{}, engine.OrderResult{}, err
 	}
-	accountID, err := n.accountDiagnosticID(ctx, key.Account)
-	if err != nil {
-		return domain.Order{}, engine.OrderResult{}, err
-	}
 	eng, done, err := n.beginLane()
 	if err != nil {
 		return domain.Order{}, engine.OrderResult{}, err
@@ -353,13 +349,13 @@ func (n *localNode) submitOrder(
 		persisted, persistErr := state.bridge.complete(settlement)
 		if persistErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record order submission", accountID, persistErr,
+				"record order submission", key.Account, persistErr,
 			)
 			return state.err
 		}
 		state.order = persisted
 		state.err = n.auditSubmittedOrder(
-			state.ctx, key, state.order, state.result, caller, accountID,
+			state.ctx, key, state.order, state.result, caller,
 		)
 		return state.err
 	}
@@ -410,7 +406,7 @@ func (n *localNode) submitOrder(
 		persisted, persistErr := state.bridge.complete(state.settlement)
 		if persistErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record order submission", accountID, persistErr,
+				"record order submission", key.Account, persistErr,
 			)
 			return state.err
 		}
@@ -420,7 +416,7 @@ func (n *localNode) submitOrder(
 		_ context.Context, state *submitOrderChainState,
 	) error {
 		state.err = n.auditSubmittedOrder(
-			state.ctx, key, state.order, state.result, caller, accountID,
+			state.ctx, key, state.order, state.result, caller,
 		)
 		return state.err
 	}).Finally(func(
@@ -468,14 +464,13 @@ func (n *localNode) auditSubmittedOrder(
 	order domain.Order,
 	result engine.OrderResult,
 	caller domain.Caller,
-	accountID string,
 ) error {
 	if result.Accepted {
 		if err := n.mirrorEngineBlocksAudit(
 			ctx, order.ExternalID, result.Blocks,
 		); err != nil {
 			return n.fatalPostEnginePersistence(
-				"audit pre-trade engine blocks", accountID, err,
+				"audit pre-trade engine blocks", key.Account, err,
 			)
 		}
 	}
@@ -490,7 +485,7 @@ func (n *localNode) auditSubmittedOrder(
 	}); err != nil {
 		return n.fatalPostEnginePersistence(
 			"audit submit order",
-			accountID,
+			key.Account,
 			fmt.Errorf("audit submit order: %w", err),
 		)
 	}
@@ -627,10 +622,6 @@ func (n *localNode) submitImmediate(
 	); err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}
-	accountID, err := n.accountDiagnosticID(ctx, key.Account)
-	if err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, err
-	}
 	eng, done, err := n.beginLane()
 	if err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
@@ -696,7 +687,7 @@ func (n *localNode) submitImmediate(
 		persisted, persistErr := state.bridge.complete(settlement)
 		if persistErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record immediate submission", accountID, persistErr,
+				"record immediate submission", key.Account, persistErr,
 			)
 			return state.err
 		}
@@ -792,14 +783,14 @@ func (n *localNode) submitImmediate(
 		)
 		if settlementErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record immediate submission", accountID, settlementErr,
+				"record immediate submission", key.Account, settlementErr,
 			)
 			return state.err
 		}
 		persisted, persistErr := state.bridge.complete(settlement)
 		if persistErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record immediate submission", accountID, persistErr,
+				"record immediate submission", key.Account, persistErr,
 			)
 			return state.err
 		}
@@ -809,7 +800,7 @@ func (n *localNode) submitImmediate(
 		_ context.Context, state *submitImmediateChainState,
 	) error {
 		state.err = n.auditImmediateSubmission(
-			state.ctx, key, state.order, state.result, caller, accountID,
+			state.ctx, key, state.order, state.result, caller,
 		)
 		return state.err
 	}).Finally(func(
@@ -844,19 +835,18 @@ func (n *localNode) auditImmediateSubmission(
 	order domain.Order,
 	result engine.ImmediateResult,
 	caller domain.Caller,
-	accountID string,
 ) error {
 	if err := n.mirrorEngineBlocksAudit(
 		ctx, order.ExternalID, result.Blocks,
 	); err != nil {
 		return n.fatalPostEnginePersistence(
-			"audit immediate engine blocks", accountID, err,
+			"audit immediate engine blocks", key.Account, err,
 		)
 	}
 	if result.ExecutionReport == nil {
 		return n.fatalPostEnginePersistence(
 			"audit immediate execution report",
-			accountID,
+			key.Account,
 			fmt.Errorf("immediate execution report missing"),
 		)
 	}
@@ -874,7 +864,7 @@ func (n *localNode) auditImmediateSubmission(
 	}); err != nil {
 		return n.fatalPostEnginePersistence(
 			"audit immediate execution report",
-			accountID,
+			key.Account,
 			fmt.Errorf("audit immediate execution report: %w", err),
 		)
 	}
@@ -1124,10 +1114,6 @@ func (n *localNode) cancelOrder(
 			"get order: %w", err,
 		)
 	}
-	accountID, err := n.accountDiagnosticID(ctx, routeDetail.Order.Account)
-	if err != nil {
-		return domain.Order{}, engine.ExecutionReportResult{}, err
-	}
 	eng, done, err := n.beginLane()
 	if err != nil {
 		return domain.Order{}, engine.ExecutionReportResult{}, err
@@ -1221,7 +1207,7 @@ func (n *localNode) cancelOrder(
 		); err != nil {
 			return n.fatalPostEnginePersistence(
 				"record cancellation execution report",
-				accountID,
+				routeDetail.Order.Account,
 				fmt.Errorf("record cancellation execution report: %w", err),
 			)
 		}
@@ -1231,7 +1217,7 @@ func (n *localNode) cancelOrder(
 		); err != nil {
 			return n.fatalPostEnginePersistence(
 				"audit cancellation execution report engine blocks",
-				accountID,
+				routeDetail.Order.Account,
 				err,
 			)
 		}
@@ -1248,7 +1234,7 @@ func (n *localNode) cancelOrder(
 		}); err != nil {
 			return n.fatalPostEnginePersistence(
 				"audit cancellation execution report",
-				accountID,
+				routeDetail.Order.Account,
 				fmt.Errorf("audit cancellation execution report: %w", err),
 			)
 		}
@@ -1266,7 +1252,7 @@ func (n *localNode) cancelOrder(
 		begin,
 		persist,
 		"apply cancellation execution report",
-		accountID,
+		routeDetail.Order.Account,
 	); err != nil {
 		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}

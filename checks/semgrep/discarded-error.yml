@@ -1,0 +1,50 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# golangci-lint's errcheck runs with its default config here (officer has no
+# .golangci.yml), which means check-blank is false: `_ = someCall()` is the
+# conventional way to tell errcheck "ignored on purpose", and errcheck accepts
+# it silently. It only flags a return value that is not captured at all. That
+# leaves the explicit-blank-discard shape uncovered - this rule fills exactly
+# that gap; it does not duplicate errcheck, it complements it.
+#
+# A discarded error is a fallback: execution continues on an assumption that
+# was never checked. Scope is the whole Go tree - narrowing it by package only
+# moves the problem somewhere less watched.
+#
+# The only exemption is `_ = $X.Close(...)` (with or without arguments, so it
+# also covers websocket-style `conn.Close(status, reason)`): best-effort
+# teardown on a cleanup/defer path, where there is nothing useful left to do
+# with the error. Every other discard is a real finding - including
+# `_ = tx.Rollback()`/`_ = rows.Err()`-shaped calls in internal/store/sqlite,
+# which this exemption deliberately does not cover.
+
+rules:
+  - id: discarded-error
+    message: >-
+      The error is discarded. Continuing past a failure that was never
+      inspected is a fallback: it hides the cause and fails later, somewhere
+      else. Handle it, wrap it, or return it.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern: _ = $CALL(...)
+      - pattern-not: _ = $X.Close(...)
+      - pattern-not: var _ $TYPE = $CALL(...)
+    paths:
+      exclude:
+        - "**/*_test.go"

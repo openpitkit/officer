@@ -142,7 +142,7 @@ func TestMDInstanceLabelNOCASEUniqueness(t *testing.T) {
 		t.Fatalf("CreateMarketDataInstance: %v", err)
 	}
 
-	// Same label, all upper-case — must conflict.
+	// Same label, all upper-case - must conflict.
 	dup := inst
 	dup.Label = "DESK-FEED"
 	_, err := rs.CreateMarketDataInstance(ctx, dup)

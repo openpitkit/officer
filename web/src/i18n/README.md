@@ -8,8 +8,8 @@ add their own locale namespaces.
 ## How it is wired
 
 - `index.ts` initializes i18next with the React binding and the browser
-  language detector. **Resources are discovered by glob** —
-  `import.meta.glob('./locales/**/*.json', { eager: true })` — and folded into
+  language detector. **Resources are discovered by glob** -
+  `import.meta.glob('./locales/**/*.json', { eager: true })` - and folded into
   `{ [locale]: { [namespace]: json } }` from each path
   `./locales/<locale>/<namespace>.json`. Adding a namespace or language file
   needs **no edit** to `index.ts`.
@@ -43,8 +43,8 @@ actions in the browser; backend execution remains guarded server-side.
 ### Namespaces
 
 One namespace per area, named after the page/feature (`service`, `accounts`,
-`policies`, …). Shared chrome — generic verbs, placeholders, the language
-switcher — lives in `common` (the default namespace). Components opt into an
+`policies`, …). Shared chrome - generic verbs, placeholders, the language
+switcher - lives in `common` (the default namespace). Components opt into an
 area namespace with `useTranslation("<area>")` and reach `common` with a second
 `useTranslation()`.
 
@@ -54,7 +54,7 @@ Hierarchical and human-meaningful, grouped by UI region, e.g.
 `api.openApiDocs`, `database.unreachable`. Keys describe the slot, not the
 English wording, so a reworded string keeps its key.
 
-### Formatting — use `format.ts`, not raw `toLocale*` / `new Date()`
+### Formatting - use `format.ts`, not raw `toLocale*` / `new Date()`
 
 Render dates and counts through `formatDate` / `formatTime` / `formatDateTime`
 / `formatNumber`. They bind `Intl` formatters to the active UI language and
@@ -66,7 +66,7 @@ update live with the switcher.
 
 ## The cross-layer vocabulary rule (must follow)
 
-`api/vocabulary.ts` defines **domain identifiers** — `POLICIES`, `SCOPES`, and
+`api/vocabulary.ts` defines **domain identifiers** - `POLICIES`, `SCOPES`, and
 kinds like `rate_limit`, `broker`, `max_orders`. These are byte-identical
 cross-layer constants shared with the Go domain, the SQL data, and the
 REST/MCP JSON. **They MUST NEVER be translated, re-cased, or renamed.**
@@ -87,7 +87,7 @@ namespace keyed **by identifier**, e.g.
 looked up as `t("domain:policy.rate_limit.label")` with the raw `rate_limit`
 identifier still flowing unchanged through the wire and the catalog maps.
 
-Do **not** migrate `vocabulary.ts` or its consumers in phase 1 — this section
+Do **not** migrate `vocabulary.ts` or its consumers in phase 1 - this section
 only records the intended approach.
 
 ## Lint guardrail

@@ -681,12 +681,12 @@ func putLimitRow(
 	scope string,
 	accountID, assetID sql.NullInt64,
 	insertFn func(context.Context, sqlExecer) error,
-) error {
+) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin put limit %s: %w", table, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	if _, err := tx.ExecContext(
 		ctx,
@@ -736,12 +736,12 @@ func putSpotFundsPnlBoundsRow(
 	scope string,
 	accountID, groupID sql.NullInt64,
 	insertFn func(context.Context, sqlExecer) error,
-) error {
+) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin put spot funds pnl bounds limit: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	if _, err := tx.ExecContext(
 		ctx,

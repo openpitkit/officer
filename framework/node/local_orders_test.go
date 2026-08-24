@@ -2350,15 +2350,11 @@ func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
 	if fatalErr == nil {
 		t.Fatal("fatal hook did not fire on post-engine order persistence failure")
 	}
-	account, ok, err := n.realm.GetAccount(ctx, "acc-1")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
-	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="record order submission"`) ||
-		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
+		!strings.Contains(msg, "account=acc-1") ||
 		!strings.Contains(msg, "record order submission failed") {
-		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+		t.Fatalf("fatal error = %q, want operation and cause", msg)
 	}
 }
 
@@ -2460,15 +2456,11 @@ func TestLocalNode_SubmitImmediatePostEngineStoreFailureFatals(t *testing.T) {
 	if fatalErr == nil {
 		t.Fatal("fatal hook did not fire on post-engine immediate persistence failure")
 	}
-	account, ok, err := n.realm.GetAccount(ctx, "acc-1")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
-	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="record immediate submission"`) ||
-		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
+		!strings.Contains(msg, "account=acc-1") ||
 		!strings.Contains(msg, "record immediate submission failed") {
-		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+		t.Fatalf("fatal error = %q, want operation and cause", msg)
 	}
 }
 

@@ -44,7 +44,9 @@ import (
 func TestRegisterBuildUsesPopulatedMCPCatalog(t *testing.T) {
 	ctx := context.Background()
 	builder := frameworkapp.NewBuilder()
-	Register(builder)
+	if err := Register(builder); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
 	builder.SetEngineBuildFactory(func(frameworkapp.Config) engine.BuildFunc {
 		return func(engine.Snapshot) (engine.Engine, error) {
 			return &fakeEngine{running: true, sink: &fakeSink{}}, nil

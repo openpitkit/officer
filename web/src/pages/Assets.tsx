@@ -1220,7 +1220,7 @@ function ClassesPanel({
                     assetClass.notes === "" && "italic",
                   )}
                 >
-                  {assetClass.notes || "—"}
+                  {assetClass.notes || "-"}
                 </span>
               </TableCell>
 

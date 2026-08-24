@@ -65,15 +65,19 @@ func New(
 	router node.NodeRouter,
 	md MarketDataRuntime,
 	signer fwsigning.Service,
-) *Service {
+) (*Service, error) {
+	registry, err := appmarketdata.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
 	return fwbackend.New(
 		router,
 		md,
 		signer,
-		fwbackend.WithMarketDataRegistry(appmarketdata.DefaultRegistry()),
+		fwbackend.WithMarketDataRegistry(registry),
 		fwbackend.WithMCPCatalog(defaultMCPCatalog()),
 		fwbackend.WithLockSettlementPrice(native.LockSettlementPrice),
-	)
+	), nil
 }
 
 func defaultMCPCatalog() catalog.Catalog {

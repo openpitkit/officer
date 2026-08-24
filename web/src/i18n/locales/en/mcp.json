@@ -18,8 +18,8 @@
       "flags": "This column shows safety and implementation flags for the command."
     },
     "enableAriaLabel": "Enable {{name}}",
-    "disabledNotice": "Disabled — returns a “disabled in panel” notice to the agent.",
-    "noDescription": "—"
+    "disabledNotice": "Disabled - returns a “disabled in panel” notice to the agent.",
+    "noDescription": "-"
   },
   "flags": {
     "protected": "protected",
@@ -34,7 +34,7 @@
     "body1Post": ". Enabling it grants the AI agent the ability to change the database in ways the operator cannot supervise or control in real time.",
     "body2": "This is a protective barrier against autonomous AI actions. Only enable it if you intend to grant the agent that power and accept the associated risk.",
     "body3Pre": "If you are unsure, press",
-    "body3Post": "— the command will remain disabled.",
+    "body3Post": "- the command will remain disabled.",
     "confirm": "Enable anyway"
   },
   "command": {
@@ -94,7 +94,7 @@
       "step1": "Open your custom GPT or ChatGPT connector settings.",
       "step2": "Add an MCP connector pointing at the URL above.",
       "step3": "Or build a ChatGPT Action from the OpenAPI description at /docs.",
-      "publicUrlCaveat": "Hosted ChatGPT can only reach a publicly resolvable HTTPS URL. A loopback or localhost Officer is not reachable — expose the service on a public HTTPS endpoint first.",
+      "publicUrlCaveat": "Hosted ChatGPT can only reach a publicly resolvable HTTPS URL. A loopback or localhost Officer is not reachable - expose the service on a public HTTPS endpoint first.",
       "instructionsHint": "Download instruction text for a custom GPT.",
       "instructionsButton": "Download GPT instructions"
     },
@@ -105,6 +105,6 @@
   "prompt": {
     "intro": "You have access to the Pit Officer MCP server - a pre-trade risk and\ncompliance control plane for trading operations.\n\nTransport: streamable HTTP at the /mcp endpoint of this service.\nAlternatively available as `pit-officer mcp` over stdio.\n\nPrinciples:\n- Least-privilege surface. The server carries no secrets or credentials.\n- Most tools are read-only. Treat any mutating tool with extra care.\n- Any trading action or mutation must go through pre-trade checks and\n  approval tokens. Never bypass the pre-trade step.",
     "discover": "Discover the available commands at runtime: call the MCP tool list\n(`tools/list`) after connecting and rely on each tool's self-described\ninput schema. Do not assume a fixed set of commands - the surface is\nself-describing and can change as the operator adjusts access.",
-    "footer": "The operator controls which commands are enabled, and this can change at\nany time without notice. If a tool call returns a notice that the command\nis disabled in the panel, do NOT retry it — ask your orchestrator to\nextend or change your prompt/instructions accordingly (or to have the\noperator enable the command in Pit Officer)."
+    "footer": "The operator controls which commands are enabled, and this can change at\nany time without notice. If a tool call returns a notice that the command\nis disabled in the panel, do NOT retry it - ask your orchestrator to\nextend or change your prompt/instructions accordingly (or to have the\noperator enable the command in Pit Officer)."
   }
 }

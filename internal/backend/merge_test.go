@@ -56,7 +56,10 @@ func TestListOrderRowsMergesNodesInGlobalNumericOrder(t *testing.T) {
 		Rows:  []store.OrderListRow{orderRow(3, "9"), orderRow(4, "100.5")},
 		Total: 7,
 	}}
-	svc := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA, nodeB}}, nil, nil)
+	svc, newErr := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA, nodeB}}, nil, nil)
+	if newErr != nil {
+		t.Fatalf("New service: %v", newErr)
+	}
 
 	page, err := svc.ListOrderRows(context.Background(), store.OrderListFilter{
 		Sort: store.SortSpec{Column: "amountValue"},
@@ -109,7 +112,10 @@ func TestListBalanceRowsMergesNodesInGlobalNumericOrder(t *testing.T) {
 		Rows:  []store.BalanceListRow{balanceRow("acc-2", "AAPL", "9"), balanceRow("acc-2", "USD", "100.5")},
 		Total: 3,
 	}}
-	svc := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA, nodeB}}, nil, nil)
+	svc, newErr := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA, nodeB}}, nil, nil)
+	if newErr != nil {
+		t.Fatalf("New service: %v", newErr)
+	}
 
 	page, err := svc.ListBalanceRows(context.Background(), store.BalanceListFilter{
 		Sort: store.SortSpec{Column: "available"},
@@ -140,7 +146,10 @@ func TestListBalanceRowsMergesNodesInGlobalNumericOrder(t *testing.T) {
 
 func TestListBalanceRowsRejectsDenominatedRangeWithoutCurrency(t *testing.T) {
 	nodeA := &fakeNode{}
-	svc := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA}}, nil, nil)
+	svc, newErr := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA}}, nil, nil)
+	if newErr != nil {
+		t.Fatalf("New service: %v", newErr)
+	}
 	min := "50"
 	_, err := svc.ListBalanceRows(context.Background(), store.BalanceListFilter{
 		RealizedPnl: store.DenominatedDecimalRangeFilter{
@@ -224,7 +233,10 @@ func TestListPolicyRowsMergesNodesInGlobalOrder(t *testing.T) {
 		},
 		Total: 6,
 	}}
-	svc := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA, nodeB}}, nil, nil)
+	svc, newErr := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA, nodeB}}, nil, nil)
+	if newErr != nil {
+		t.Fatalf("New service: %v", newErr)
+	}
 
 	page, err := svc.ListPolicyRows(context.Background(), store.PolicyListFilter{
 		Sort: store.SortSpec{Column: "account"},
@@ -296,9 +308,12 @@ func TestListPolicyRowsMergesNodesByEffectiveAsset(t *testing.T) {
 			nodeB := &fakeNode{policyRowsPage: store.PolicyListPage{
 				Rows: []store.PolicyListRow{orderZAR}, Total: 1,
 			}}
-			svc := backend.New(
+			svc, newErr := backend.New(
 				&twoNodeRouter{nodes: []node.Node{nodeA, nodeB}}, nil, nil,
 			)
+			if newErr != nil {
+				t.Fatalf("New service: %v", newErr)
+			}
 			filter := store.PolicyListFilter{
 				Sort: store.SortSpec{Column: "asset", Descending: tc.descending},
 			}

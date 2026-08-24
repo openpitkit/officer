@@ -17,8 +17,8 @@
 #
 # Demo data only. Every account name, group, and note below is fiction: a
 # satirical archetype of trader *behaviour*, not a portrait of any real person,
-# firm, fund, or event. Any resemblance to a real entity — living, dead, or
-# merely insolvent — is coincidental and unintended. The jokes are aimed at
+# firm, fund, or event. Any resemblance to a real entity - living, dead, or
+# merely insolvent - is coincidental and unintended. The jokes are aimed at
 # generic human failings (greed, FOMO, an absent off switch), never at a
 # nameable target. Do not seed a production instance with this file.
 
@@ -35,7 +35,7 @@ Base-URL discovery (in order):
   1. --base flag (explicit override).
   2. officer-runtime.json next to this script (or --runtime-file PATH).
   3. officer-runtime.json in the current working directory.
-  4. Error — no hard-coded fallback; pass --base or start serve.
+  4. Error - no hard-coded fallback; pass --base or start serve.
 """
 
 import argparse
@@ -167,7 +167,7 @@ GROUPS = [
     {
         "code": "whales",
         "title": "Whales",
-        "notes": "Accounts with enough capital to move markets — handle with care.",
+        "notes": "Accounts with enough capital to move markets - handle with care.",
     },
     {
         "code": "degens",
@@ -268,7 +268,7 @@ ACCOUNTS = [
         "code": "degen-hindsight",
         "title": "Hindsight Asset Mgmt",
         "group": "degens",
-        "notes": "Our research is flawless — six months after the fact.",
+        "notes": "Our research is flawless - six months after the fact.",
         "balances": [
             {"asset": "USD", "balance": {"mode": "absolute", "value": "1100000.00"}},
         ],
@@ -317,7 +317,7 @@ ACCOUNTS = [
             {"asset": "USD", "balance": {"mode": "absolute", "value": "500000.00"}},
         ],
         "blocked": True,
-        "block_reason": "Trading halt — runaway-algorithm kill-switch activated.",
+        "block_reason": "Trading halt - runaway-algorithm kill-switch activated.",
     },
     {
         "code": "algo-null-pointer",
@@ -401,7 +401,7 @@ ACCOUNTS = [
             {"asset": "USD", "held": {"mode": "absolute", "value": "-47300000.00"}},
         ],
         "blocked": True,
-        "block_reason": "Regulatory hold — pending liquidation proceedings.",
+        "block_reason": "Regulatory hold - pending liquidation proceedings.",
     },
 ]
 
@@ -418,7 +418,7 @@ ACCOUNTS = [
 # decimal ceilings/bounds are exact strings.
 LIMITS = [
     {
-        # Burst guard for the runaway-algo desk — at most 10 orders per second.
+        # Burst guard for the runaway-algo desk - at most 10 orders per second.
         # The Infinite Loop Capital exhibit is exactly why this exists.
         "kind": "rate",
         "scope": "account",
@@ -592,7 +592,7 @@ ORDERS = [
         "amountValue": "10",
         "price": "5200.00",
         "execution_reports": [
-            # Partial fill only — still open.
+            # Partial fill only - still open.
             {
                 "quantity": "4",
                 "price": "5195.00",
@@ -609,7 +609,7 @@ ORDERS = [
         "amountKind": "volume",
         "amountValue": "50000.00",
         "price": "190.00",
-        # No execution reports — order accepted, not yet filled.
+        # No execution reports - order accepted, not yet filled.
         "execution_reports": [],
     },
     {
@@ -630,7 +630,7 @@ ORDERS = [
         ],
     },
     {
-        # Trips the per-name order-size leash (1 000 AAPL) — rejected on submit.
+        # Trips the per-name order-size leash (1 000 AAPL) - rejected on submit.
         "account": "degen-yolo",
         "baseAsset": "AAPL",
         "quoteAsset": "USD",
@@ -641,7 +641,7 @@ ORDERS = [
         "execution_reports": [],
     },
     {
-        # Trips the global fat-finger ceiling (10 000 units) — rejected on submit.
+        # Trips the global fat-finger ceiling (10 000 units) - rejected on submit.
         "account": "degen-revenge-trade",
         "baseAsset": "AAPL",
         "quoteAsset": "USD",
@@ -703,7 +703,7 @@ ORDERS = [
         ],
     },
     # Infinite Loop Capital runaway-algo burst. The desk is blocked, so the
-    # engine rejects every order on submit — exactly the cautionary tale the
+    # engine rejects every order on submit - exactly the cautionary tale the
     # rate-limit barrier exists to prevent.
     {
         "account": "algo-infinite-loop",

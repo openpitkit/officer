@@ -482,13 +482,15 @@ func writeProblem(w http.ResponseWriter, status int, detail string, item Problem
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(ProblemDetails{
+	if err := json.NewEncoder(w).Encode(ProblemDetails{
 		Type:   "about:blank",
 		Title:  title,
 		Status: status,
 		Detail: detail,
 		Errors: []ProblemError{item},
-	})
+	}); err != nil {
+		slog.Error("write problem response", "error", err)
+	}
 }
 
 func writeHasDependentsErr(w http.ResponseWriter, err error) {
@@ -582,5 +584,7 @@ func WriteErrMsg(w http.ResponseWriter, status int, code, message string) {
 func WriteJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("write json response", "error", err)
+	}
 }

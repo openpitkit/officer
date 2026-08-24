@@ -197,7 +197,7 @@ func (r *realmStore) recordOrderSubmission(
 	submitted domain.OrderEvent,
 	apply func(domain.Order) (domain.OrderSettlement, error),
 	attest fwstore.EventAttestor,
-) (domain.Order, error) {
+) (stored domain.Order, err error) {
 	db, err := r.db()
 	if err != nil {
 		return domain.Order{}, err
@@ -210,7 +210,7 @@ func (r *realmStore) recordOrderSubmission(
 	if err != nil {
 		return domain.Order{}, fmt.Errorf("store: begin order submission: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	order, err := createOrderTx(ctx, dictionaries, tx, o)
 	if err != nil {
@@ -1787,7 +1787,7 @@ func (r *realmStore) RecordOrderSettlementWithAttestation(
 
 func (r *realmStore) recordOrderSettlement(
 	ctx context.Context, st domain.OrderSettlement, attest fwstore.EventAttestor,
-) (domain.ExternalID, error) {
+) (recordID domain.ExternalID, err error) {
 	db, err := r.db()
 	if err != nil {
 		return "", err
@@ -1800,7 +1800,7 @@ func (r *realmStore) recordOrderSettlement(
 	if err != nil {
 		return "", fmt.Errorf("store: begin record_order_settlement: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	reportID, err := r.recordOrderSettlementTx(ctx, dictionaries, tx, st, attest)
 	if err != nil {

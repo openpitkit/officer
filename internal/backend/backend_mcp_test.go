@@ -28,7 +28,7 @@ import (
 
 func TestService_AggregatesReads(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.accounts = []domain.Account{{Code: "a"}, {Code: "b"}}
 	fn.limits = node.AccountLimits{
 		RateLimits: []domain.LimitRate{{Scope: domain.ScopeBroker}},
@@ -52,7 +52,7 @@ func TestService_AggregatesReads(t *testing.T) {
 
 func TestService_ListMcpAccessMergesDefaults(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	// Override one default-on command off and one default-off command on.
 	fn.mcpAccess = map[string]bool{"health": false, "set_limit": true}
 	ctx := context.Background()
@@ -78,7 +78,7 @@ func TestService_ListMcpAccessMergesDefaults(t *testing.T) {
 
 func TestService_SetMcpAccessValidatesCommand(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	ctx := context.Background()
 
 	if err := svc.SetMcpAccess(ctx, "not_a_command", true); !errors.Is(err, domain.ErrNotFound) {
@@ -99,7 +99,7 @@ func TestService_SetMcpAccessValidatesCommand(t *testing.T) {
 
 func TestService_CommandEnabledResolves(t *testing.T) {
 	t.Parallel()
-	svc, fn := newTestService()
+	svc, fn := newTestService(t)
 	fn.mcpAccess = map[string]bool{"check_order": false}
 	ctx := context.Background()
 

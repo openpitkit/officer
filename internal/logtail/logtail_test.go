@@ -57,7 +57,7 @@ func TestEvictByEntryCount(t *testing.T) {
 // TestEvictByBytes checks eviction by total byte size: with a tiny byte cap and
 // a generous entry cap, appending past the cap drops the oldest lines.
 func TestEvictByBytes(t *testing.T) {
-	// Each line is 6 bytes ("aaaaa\n"? no) — use fixed 5-byte payloads.
+	// Each line is 6 bytes ("aaaaa\n"? no) - use fixed 5-byte payloads.
 	buf := New(1000, 12) // room for ~2 of the 5-byte lines plus slack
 	buf.Append("aaaaa")  // 5
 	buf.Append("bbbbb")  // 10

@@ -21,7 +21,7 @@
 import 'justfile'
 
 # Go lint, build, and test against the published OpenPit module.
-ci-go: check-go-dry-release
+ci-go: check-semgrep check-go-dry-release
 
 # JS/TypeScript install, lint, build, and unit tests.
 ci-js: frontend-ci-install check-js

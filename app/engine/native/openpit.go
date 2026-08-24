@@ -340,7 +340,9 @@ func buildOpenPitEngine(
 	var async *asyncengine.AsyncEngine
 	releaseOnErr := func(err error) (Engine, *sharedMarketDataService, error) {
 		if async != nil {
-			_ = async.StopGraceful(context.Background())
+			if stopErr := async.StopGraceful(context.Background()); stopErr != nil {
+				err = errors.Join(err, fmt.Errorf("engine: stop async dispatcher: %w", stopErr))
+			}
 		} else {
 			eng.Stop()
 		}
@@ -1090,15 +1092,15 @@ func blockGroups(eng *openpit.Engine, groups []domain.AccountGroup) error {
 	return nil
 }
 
-func groupBlockError(op, groupID string, err error) error {
+func groupBlockError(op, _ string, err error) error {
 	var blockErr *reject.AccountBlockError
 	if errors.As(err, &blockErr) &&
 		blockErr.Kind == reject.AccountBlockErrorKindReservedGroup {
 		return fmt.Errorf(
-			"engine: %s %q: %w: %w", op, groupID, err, domain.ErrReservedGroup,
+			"engine: %s: %w: %w", op, err, domain.ErrReservedGroup,
 		)
 	}
-	return fmt.Errorf("engine: %s %q: %w", op, groupID, err)
+	return fmt.Errorf("engine: %s: %w", op, err)
 }
 
 func hydrateCurrencies(

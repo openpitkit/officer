@@ -133,10 +133,6 @@ func (n *localNode) ApplyAdjustment(
 	if err := n.ensureAdjustmentExternalIDUnused(ctx, externalID); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	accountID, err := n.accountDiagnosticID(ctx, key.Account)
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
 	eng, done, err := n.beginLane()
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, err
@@ -284,7 +280,7 @@ func (n *localNode) ApplyAdjustment(
 		if recordErr != nil {
 			state.err = n.fatalPostEnginePersistence(
 				"record account adjustment",
-				accountID,
+				key.Account,
 				fmt.Errorf("record adjustment: %w", recordErr),
 			)
 			return state.err
@@ -299,7 +295,7 @@ func (n *localNode) ApplyAdjustment(
 	) error {
 		state.err = n.accountChainTerminalError(
 			"apply adjustment",
-			accountID,
+			key.Account,
 			state.err,
 			state.engineApplied,
 			state.persistenceCompleted,

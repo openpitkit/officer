@@ -355,7 +355,7 @@ export interface Balance {
    *  account's effective currency. One (account, asset) slot merges fills
    *  against every quote asset the asset trades against, so a single fill's
    *  quote asset never denominates these values. Empty when the account's
-   *  currency cascade sets no tier, leaving both values without a unit — which
+   *  currency cascade sets no tier, leaving both values without a unit - which
    *  is also what the engine reports as the `missing_account_currency` halt. */
   accountCurrency: string;
   updatedAt: string;

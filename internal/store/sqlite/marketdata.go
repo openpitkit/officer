@@ -199,7 +199,7 @@ func (r *realmStore) UpdateMarketDataInstanceSettings(
 // and quotes while preserving the referenced global assets.
 func (r *realmStore) DeleteMarketDataInstance(
 	ctx context.Context, id domain.ExternalID,
-) error {
+) (err error) {
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -208,7 +208,7 @@ func (r *realmStore) DeleteMarketDataInstance(
 	if err != nil {
 		return fmt.Errorf("store: begin delete market data instance: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	instanceID, err := resolveInstanceID(ctx, tx, id)
 	if err != nil {

@@ -28,7 +28,10 @@ import (
 func TestDefaultRegistryOrderTitlesAndCapabilities(t *testing.T) {
 	t.Parallel()
 
-	registry := DefaultRegistry()
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
 	want := []struct {
 		typ      string
 		title    string
@@ -122,7 +125,10 @@ func TestDefaultRegistryBuildsFirstPartyConnectors(t *testing.T) {
 		{name: "byo", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBYO}, wantType: (*byoConnector)(nil)},
 		{name: "mock", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderMock}, wantType: (*mockConnector)(nil)},
 	}
-	registry := DefaultRegistry()
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -158,7 +164,10 @@ func TestDefaultRegistryCapabilitiesMatchConnectors(t *testing.T) {
 		{name: "byo", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBYO}},
 		{name: "mock", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderMock}},
 	}
-	registry := DefaultRegistry()
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

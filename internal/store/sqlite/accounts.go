@@ -190,7 +190,7 @@ func assetListOrderBy(sort fwstore.SortSpec) string {
 // surrogate id (an empty code clears the link).
 func (r *realmStore) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset,
-) (domain.Asset, error) {
+) (updated domain.Asset, err error) {
 	db, err := r.db()
 	if err != nil {
 		return domain.Asset{}, err
@@ -199,7 +199,7 @@ func (r *realmStore) UpdateAsset(
 	if err != nil {
 		return domain.Asset{}, fmt.Errorf("store: begin update asset: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	assetID, err := resolveAssetID(ctx, tx, oldCode)
 	if err != nil {
@@ -242,7 +242,7 @@ func (r *realmStore) UpdateAsset(
 }
 
 // DeleteAsset removes the asset and, when forced, cascades its dependent rows.
-func (r *realmStore) DeleteAsset(ctx context.Context, code string, force bool) error {
+func (r *realmStore) DeleteAsset(ctx context.Context, code string, force bool) (err error) {
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -251,7 +251,7 @@ func (r *realmStore) DeleteAsset(ctx context.Context, code string, force bool) e
 	if err != nil {
 		return fmt.Errorf("store: begin delete asset: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	assetID, err := resolveAssetID(ctx, tx, code)
 	if err != nil {
@@ -456,7 +456,7 @@ func (r *realmStore) UpdateAssetClass(
 // the delete clears the link via ON DELETE SET NULL.
 func (r *realmStore) DeleteAssetClass(
 	ctx context.Context, code string, force bool,
-) error {
+) (err error) {
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -465,7 +465,7 @@ func (r *realmStore) DeleteAssetClass(
 	if err != nil {
 		return fmt.Errorf("store: begin delete asset class: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	classID, err := resolveAssetClassID(ctx, tx, code)
 	if err != nil {
@@ -994,7 +994,7 @@ func (r *realmStore) SetGroupBlocked(
 // dependents. Member accounts are detached by their ON DELETE SET NULL link.
 func (r *realmStore) DeleteGroup(
 	ctx context.Context, code string, force bool,
-) error {
+) (err error) {
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -1003,7 +1003,7 @@ func (r *realmStore) DeleteGroup(
 	if err != nil {
 		return fmt.Errorf("store: begin delete group: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	groupID, err := resolveGroupID(ctx, tx, code)
 	if err != nil {
@@ -1113,7 +1113,7 @@ LEFT JOIN asset dc ON dc.id = dg.currency_asset_id`
 // inserted row's surrogate id, which is the id the engine runs the account on.
 func (r *realmStore) CreateAccount(
 	ctx context.Context, account domain.Account,
-) (domain.Account, error) {
+) (created domain.Account, err error) {
 	db, err := r.db()
 	if err != nil {
 		return domain.Account{}, err
@@ -1122,7 +1122,7 @@ func (r *realmStore) CreateAccount(
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("store: begin create account: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	groupID, err := optionalGroupID(ctx, tx, account.GroupCode)
 	if err != nil {
@@ -1160,7 +1160,7 @@ func (r *realmStore) CreateAccount(
 		}
 		return domain.Account{}, fmt.Errorf("store: create account: %w", err)
 	}
-	created, err := scanAccountRow(tx.QueryRowContext(
+	created, err = scanAccountRow(tx.QueryRowContext(
 		ctx, accountSelect+` WHERE a.code = ?`, account.Code.String(),
 	))
 	if err != nil {
@@ -1414,7 +1414,7 @@ func (r *realmStore) UpdateAccount(
 // DeleteAccount removes the account and, when forced, cascades its dependents.
 func (r *realmStore) DeleteAccount(
 	ctx context.Context, code domain.AccountID, force bool,
-) error {
+) (err error) {
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -1423,7 +1423,7 @@ func (r *realmStore) DeleteAccount(
 	if err != nil {
 		return fmt.Errorf("store: begin delete account: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	accountID, err := resolveAccountID(ctx, tx, code)
 	if err != nil {

@@ -3013,11 +3013,11 @@ function groupDisplayName(group: Group): string {
 }
 
 function currencyText(currency: string): string {
-  return currency.trim() === "" ? "—" : currency;
+  return currency.trim() === "" ? "-" : currency;
 }
 
 function pnlText(pnl: string | undefined): string {
-  return pnl && pnl !== "" ? pnl : "—";
+  return pnl && pnl !== "" ? pnl : "-";
 }
 
 function pnlHaltText(t: TFunction, reason: string): string | null {
@@ -3349,7 +3349,7 @@ function GroupsPanel({
               >
                 {row.kind === "real" ? (
                   <div className="flex min-w-0 items-start gap-1">
-                    <NotesText text={row.group.notes || "—"} />
+                    <NotesText text={row.group.notes || "-"} />
                     <EditButton
                       size={28}
                       style={{ marginLeft: "auto" }}
@@ -3760,7 +3760,7 @@ function AccountsTable({
                 title={account.notes || undefined}
               >
                 <div className="flex min-w-0 items-start gap-1">
-                  <NotesText text={account.notes || "—"} />
+                  <NotesText text={account.notes || "-"} />
                   <EditButton
                     size={28}
                     style={{ marginLeft: "auto" }}

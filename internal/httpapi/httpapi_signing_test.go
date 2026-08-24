@@ -332,7 +332,7 @@ func TestSetSigningConfig_RequiresNoESign(t *testing.T) {
 // TestSubmitOrderToken_HappyPath verifies POST /orders/submit CREATES the order
 // from a supplied external id and returns that id in the approval envelope. The
 // fake mirrors the real create-once behavior: it does not echo a pre-stored id,
-// so the returned id is the one the caller supplied — and it is the id a later
+// so the returned id is the one the caller supplied - and it is the id a later
 // confirm resolves, proving submit created exactly one order.
 func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	supplied := extID("order-1").String()

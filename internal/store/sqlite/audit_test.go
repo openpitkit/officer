@@ -644,7 +644,7 @@ func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 	if after[0].Actor != "operator" {
 		t.Fatalf("actor after account delete = %q, want operator", after[0].Actor)
 	}
-	// The action and detail are untouched — the compliance content survives.
+	// The action and detail are untouched - the compliance content survives.
 	if after[0].Action != domain.AuditActionBlock ||
 		after[0].Detail != "blocked then deleted" ||
 		after[0].Source != domain.SourcePanel {

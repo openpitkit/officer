@@ -1,0 +1,59 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# No implicit entity creation (Go).
+#
+# Source: officer's own owner-confirmed architectural rule - an entity is
+# never created because a request merely referenced a code that does not
+# exist yet; the caller chooses explicitly (for example,
+# MissingAccountPolicy / domain.MissingAccountPolicy in
+# framework/domain/domain.go).
+#
+# A third autocreate shape, `$X.ensure$ANY(...)`, is deliberately not included
+# here: officer uses "ensureX" as its ordinary Go verb for idempotent setup in
+# general (e.g. res.ensureInitialized() in app/engine/native/openpit.go,
+# nothing to do with entities), and framework/node/local_*.go's ensureAccount /
+# ensureLimitAccount / ensureGroupRegisteredLocked / ensureAutoCreatedAsset
+# family is the already-reviewed, intentional account-lane auto-provisioning
+# subsystem now being reworked - not an unapproved fallback. Flagging it now
+# would put "unapproved" on load-bearing, agreed code. Revisit the deferred
+# branch once the six ensureAutoCreatedAsset call sites take an explicit
+# create/reject flag.
+
+rules:
+  - id: unapproved-entity-autocreate
+    message: >-
+      An entity is created because it was missing, without an agreement
+      marker. Implicit creation turns a typo into a new record and hides the
+      fact that the caller referenced something that does not exist. Reject
+      the request, or record the agreement above as
+      "// fallback(approved): <why creating here is correct>".
+    severity: ERROR
+    # Go's strict parser rejects a metavariable spliced onto a fixed prefix
+    # inside one identifier (`GetOrCreate$ANY`) - generic mode with a regex
+    # is the only way to express "any method named GetOrCreateX/FirstOrCreateX".
+    languages: [generic]
+    patterns:
+      - pattern-regex: '\.(GetOrCreate|FirstOrCreate)\w*\('
+      - pattern-not-inside: |
+          // fallback(approved): $...REASON
+          ...
+    paths:
+      include:
+        - "**/*.go"
+      exclude:
+        - "**/*_test.go"

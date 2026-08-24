@@ -59,12 +59,12 @@ func TestExecutionReportRequestFromInputOmitsInternalSettlementContext(t *testin
 func TestValidateAccountID(t *testing.T) {
 	t.Parallel()
 
-	// multibyte: 64 Cyrillic code points = 128 bytes — must be accepted.
+	// multibyte: 64 Cyrillic code points = 128 bytes - must be accepted.
 	cyrillic64 := strings.Repeat("я", 64)
 	if utf8.RuneCountInString(cyrillic64) != 64 {
 		t.Fatal("test setup: expected 64 code points")
 	}
-	// 65 Cyrillic code points = 130 bytes — must be rejected.
+	// 65 Cyrillic code points = 130 bytes - must be rejected.
 	cyrillic65 := strings.Repeat("я", 65)
 
 	ok := []struct {
@@ -196,12 +196,12 @@ func TestValidatePnlHaltReason(t *testing.T) {
 func TestValidateTitle(t *testing.T) {
 	t.Parallel()
 
-	// multibyte: 256 CJK code points = 768 bytes — must be accepted.
+	// multibyte: 256 CJK code points = 768 bytes - must be accepted.
 	cjk256 := strings.Repeat("字", 256)
 	if utf8.RuneCountInString(cjk256) != 256 {
 		t.Fatal("test setup: expected 256 code points")
 	}
-	// 257 CJK code points = 771 bytes — must be rejected.
+	// 257 CJK code points = 771 bytes - must be rejected.
 	cjk257 := strings.Repeat("字", 257)
 
 	ok := []struct {
@@ -250,12 +250,12 @@ func TestValidateTitle(t *testing.T) {
 func TestValidateNotes(t *testing.T) {
 	t.Parallel()
 
-	// multibyte: 4096 Cyrillic code points = 8192 bytes — must be accepted.
+	// multibyte: 4096 Cyrillic code points = 8192 bytes - must be accepted.
 	cyrillic4096 := strings.Repeat("я", 4096)
 	if utf8.RuneCountInString(cyrillic4096) != 4096 {
 		t.Fatal("test setup: expected 4096 code points")
 	}
-	// 4097 code points — must be rejected.
+	// 4097 code points - must be rejected.
 	cyrillic4097 := strings.Repeat("я", 4097)
 
 	ok := []struct {
@@ -302,12 +302,12 @@ func TestValidateNotes(t *testing.T) {
 func TestValidateGroupID(t *testing.T) {
 	t.Parallel()
 
-	// multibyte: 64 Cyrillic code points = 128 bytes — must be accepted.
+	// multibyte: 64 Cyrillic code points = 128 bytes - must be accepted.
 	cyrillic64 := strings.Repeat("я", 64)
 	if utf8.RuneCountInString(cyrillic64) != 64 {
 		t.Fatal("test setup: expected 64 code points")
 	}
-	// 65 Cyrillic code points — must be rejected.
+	// 65 Cyrillic code points - must be rejected.
 	cyrillic65 := strings.Repeat("я", 65)
 
 	ok := []struct {

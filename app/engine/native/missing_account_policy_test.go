@@ -114,8 +114,8 @@ func assertAutoCreatedByBarrier(
 	}
 }
 
-// TestPutOrderSizeLimit_CreatedAccountBarrierIsEnforced is the
-// acceptance path for the order-size policy: the barrier names an account that
+// TestPutOrderSizeLimit_CreatedAccountBarrierIsEnforced is the acceptance path
+// for the order-size policy: the barrier names an account that
 // does not exist, "create" registers it, and the live engine enforces the
 // barrier on the very next order.
 func TestPutOrderSizeLimit_CreatedAccountBarrierIsEnforced(t *testing.T) {

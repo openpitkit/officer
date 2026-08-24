@@ -264,16 +264,22 @@ func (s *sqliteStore) Reset(ctx context.Context) error {
 	}
 	if err := s.migrateDB(ctx, tmpDB); err != nil {
 		_ = tmpDB.Close()
-		cleanupSQLiteResetTemp(tmpPath)
-		return fmt.Errorf("store: reset migrate: %w", err)
+		return errors.Join(
+			fmt.Errorf("store: reset migrate: %w", err),
+			cleanupSQLiteResetTemp(tmpPath),
+		)
 	}
 	if err := tmpDB.Close(); err != nil {
-		cleanupSQLiteResetTemp(tmpPath)
-		return fmt.Errorf("store: reset close migrated temporary sqlite: %w", err)
+		return errors.Join(
+			fmt.Errorf("store: reset close migrated temporary sqlite: %w", err),
+			cleanupSQLiteResetTemp(tmpPath),
+		)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		cleanupSQLiteResetTemp(tmpPath)
-		return fmt.Errorf("store: reset replace sqlite at %q: %w", path, err)
+		return errors.Join(
+			fmt.Errorf("store: reset replace sqlite at %q: %w", path, err),
+			cleanupSQLiteResetTemp(tmpPath),
+		)
 	}
 	db, err := openSQLiteDB(path)
 	if err != nil {
@@ -290,10 +296,32 @@ func sqliteResetPaths(path string) []string {
 	return []string{path, path + "-wal", path + "-shm", path + "-journal"}
 }
 
-func cleanupSQLiteResetTemp(path string) {
+func cleanupSQLiteResetTemp(path string) error {
+	var result error
 	for _, candidate := range sqliteResetPaths(path) {
-		_ = os.Remove(candidate)
+		if err := os.Remove(candidate); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(
+				result,
+				fmt.Errorf("store: remove reset temporary sqlite %q: %w", candidate, err),
+			)
+		}
 	}
+	return result
+}
+
+// rollbackTransaction returns a rollback failure alongside the operation result.
+func rollbackTransaction(result *error, tx *sql.Tx) {
+	err := tx.Rollback()
+	if err == nil || errors.Is(err, sql.ErrTxDone) {
+		return
+	}
+	rollbackErr := fmt.Errorf("store: rollback transaction: %w", err)
+	if *result == nil {
+		*result = rollbackErr
+		return
+	}
+	*result = errors.Join(*result, rollbackErr)
 }
 
 // Path returns the on-disk location of the database.
@@ -464,12 +492,12 @@ type enumDictionaries struct {
 
 func seedEnumDictionaries(
 	ctx context.Context, db *sql.DB,
-) (*enumDictionaries, error) {
+) (seeded *enumDictionaries, err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: begin enum dictionary seed: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackTransaction(&err, tx)
 
 	for _, dictionary := range schema.EnumDictionarySeeds() {
 		for _, seed := range dictionary.Codes {

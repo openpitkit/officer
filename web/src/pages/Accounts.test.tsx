@@ -984,7 +984,7 @@ describe("Accounts business CSV", () => {
     expect(cell("Negative PnL")).toHaveClass("text-[var(--pnl-neg)]");
     expect(cell("Zero PnL")).toHaveTextContent("0.0000");
     expect(cell("Zero PnL")).toHaveClass("text-[var(--pnl-flat)]");
-    expect(cell("Empty PnL")).toHaveTextContent("—");
+    expect(cell("Empty PnL")).toHaveTextContent(/^-$/);
     expect(cell("Empty PnL")).toHaveClass("text-[var(--pnl-flat)]");
     expect(
       within(row("Empty PnL")).queryByRole("note"),

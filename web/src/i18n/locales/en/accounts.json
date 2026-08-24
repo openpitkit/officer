@@ -132,7 +132,7 @@
       "arithmeticOverflow": "PnL calculation stopped: exact arithmetic exceeded the supported numeric range.",
       "unknown": "PnL calculation stopped by the engine."
     },
-    "filteredTo": "— filtered to",
+    "filteredTo": "- filtered to",
     "filteredToDefault": "default group",
     "columns": {
       "account": "Account",
@@ -174,10 +174,10 @@
       "noGroup": "none"
     },
     "links": {
-      "positions": "Positions — spot limits for this account",
-      "trading": "Trading — orders & trades",
-      "policies": "Policies — risk barriers",
-      "audit": "Audit — log for this account"
+      "positions": "Positions - spot limits for this account",
+      "trading": "Trading - orders & trades",
+      "policies": "Policies - risk barriers",
+      "audit": "Audit - log for this account"
     },
     "actions": {
       "notes": "Notes",
@@ -228,7 +228,7 @@
     "currencyHint": "Without a currency, realized P&L for accounts in this group is not computed unless an account currency is set.",
     "notesLabel": "Notes (optional)",
     "notesPlaceholder": "Accounts belonging to the US equity trading desks.",
-    "notesHint": "Reference notes — stored in the control plane only, not sent to the engine.",
+    "notesHint": "Reference notes - stored in the control plane only, not sent to the engine.",
     "cancel": "Cancel",
     "submit": "Create"
   },
@@ -358,21 +358,21 @@
     "submit": "Save"
   },
   "editGroupNotes": {
-    "titlePrefix": "Notes — group",
+    "titlePrefix": "Notes - group",
     "description": "Reference notes stored in the control plane. Not sent to the engine and have no effect on risk evaluation.",
     "notesLabel": "Notes",
     "cancel": "Cancel",
     "submit": "Save"
   },
   "editAccountNotes": {
-    "titlePrefix": "Notes —",
+    "titlePrefix": "Notes -",
     "description": "Reference notes stored in the control plane. Not sent to the engine and have no effect on risk evaluation.",
     "notesLabel": "Notes",
     "cancel": "Cancel",
     "submit": "Save"
   },
   "assignGroup": {
-    "titlePrefix": "Assign group —",
+    "titlePrefix": "Assign group -",
     "description": "Choose an existing group or type a new id. Leave blank to clear the group assignment.",
     "groupLabel": "Group",
     "cancel": "Cancel",

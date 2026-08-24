@@ -402,7 +402,7 @@ describe("Positions adjustment panel", () => {
 
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
 
-    // The value stays put — no auto-reset — and the field is still editable.
+    // The value stays put - no auto-reset - and the field is still editable.
     const amount = scope.getByLabelText("Available adjustment amount");
     expect(amount).toHaveValue("600");
     expect(amount).not.toBeDisabled();
@@ -566,7 +566,7 @@ describe("Positions adjustment panel", () => {
     await user.type(amount, "600");
     expect(amount).toHaveValue("600");
 
-    // A ✕ reset appears while the field has a value; one click clears it.
+    // A clear control appears while the field has a value; one click clears it.
     const clears = scope.getAllByRole("button", { name: /clear field/i });
     await user.click(clears[0]!);
     expect(amount).toHaveValue("");
@@ -1362,7 +1362,7 @@ describe("Positions value denomination", () => {
     const scope = within(row);
     expect(scope.getByText("185.25")).toBeInTheDocument();
     expect(scope.getByText("42.10")).toBeInTheDocument();
-    // One unit label per denominated value, and it is the account currency —
+    // One unit label per denominated value, and it is the account currency -
     // not the position asset and not any fill's quote asset.
     expect(scope.getAllByText("USD")).toHaveLength(2);
     expect(scope.queryByText("EUR")).not.toBeInTheDocument();

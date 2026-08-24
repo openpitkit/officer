@@ -20,7 +20,7 @@
 export function ValueChips({ values }: { values: Record<string, string> }) {
   const entries = Object.entries(values).sort(([a], [b]) => a.localeCompare(b));
   if (entries.length === 0) {
-    return <span className="text-xs text-muted">—</span>;
+    return <span className="text-xs text-muted">-</span>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">

@@ -81,6 +81,8 @@ func main() {
 	// loop cannot exhaust memory.
 	buf := logtail.New(0, 0)
 	logger := slog.New(logtail.NewHandler(slog.NewTextHandler(os.Stderr, nil), buf))
+	// Route package-level slog calls in libraries through the same tee'd handler.
+	slog.SetDefault(logger)
 
 	if err := run(os.Args[1:], logger, buf); err != nil {
 		logger.Error("pit-officer exited with error", "err", err)
@@ -137,7 +139,9 @@ func setup(
 	fatalHook func(error),
 ) (*frameworkapp.App, error) {
 	builder := frameworkapp.NewBuilder()
-	openapp.Register(builder)
+	if err := openapp.Register(builder); err != nil {
+		return nil, err
+	}
 	return builder.Build(ctx, frameworkapp.Config{
 		SQLitePath:         cfg.SQLitePath,
 		RuntimeLibraryPath: cfg.RuntimeLibraryPath,

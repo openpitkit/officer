@@ -26,6 +26,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -72,19 +73,39 @@ func Write(cfg config.Config, state State) error {
 	tmpName := tmp.Name()
 
 	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("runtime: write temp state: %w", err)
+		cause := fmt.Errorf("runtime: write temp state: %w", err)
+		if closeErr := tmp.Close(); closeErr != nil {
+			cause = errors.Join(
+				cause,
+				fmt.Errorf("runtime: close temp state after write failure: %w", closeErr),
+			)
+		}
+		return removeTempState(cause, tmpName)
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("runtime: close temp state: %w", err)
+		return removeTempState(
+			fmt.Errorf("runtime: close temp state: %w", err),
+			tmpName,
+		)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("runtime: rename state: %w", err)
+		return removeTempState(
+			fmt.Errorf("runtime: rename state: %w", err),
+			tmpName,
+		)
 	}
 	return nil
+}
+
+// removeTempState preserves both the operation failure and an unsuccessful cleanup.
+func removeTempState(cause error, path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(
+			cause,
+			fmt.Errorf("runtime: remove temp state: %w", err),
+		)
+	}
+	return cause
 }
 
 // Read loads the persisted state. The bool reports presence: it is false with a

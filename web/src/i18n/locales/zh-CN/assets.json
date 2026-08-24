@@ -30,7 +30,7 @@
     "classPlaceholder": "按类别筛选…",
     "clearField": "清除字段"
   },
-  "noClass": "—",
+  "noClass": "-",
   "actions": {
     "editTitle": "编辑资产"
   },

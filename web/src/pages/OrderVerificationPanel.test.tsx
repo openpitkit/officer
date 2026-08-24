@@ -71,7 +71,7 @@ interface SignedFixture {
 // buildSignedToken produces a real Ed25519-signed envelope. The canonical bytes
 // are JSON.stringify(approval) (the wire form the Go server marshals), the
 // envelope embeds those exact bytes as its "approval" value, and the signature
-// covers them — so the panel's substring extractor recovers the signed bytes
+// covers them - so the panel's substring extractor recovers the signed bytes
 // byte-for-byte, exactly as production does.
 async function buildSignedToken(
   keyId: string,
@@ -303,7 +303,7 @@ function textareaByValue(value: string): HTMLTextAreaElement | undefined {
     | undefined;
 }
 
-describe("OrderVerificationPanel — reproduction mode", () => {
+describe("OrderVerificationPanel - reproduction mode", () => {
   it("renders the token and canonical bytes verbatim for a submit event", async () => {
     const fixture = await buildSignedToken("key-1");
     const bundle = submitBundleFrom(fixture);
@@ -455,7 +455,7 @@ describe("OrderVerificationPanel — reproduction mode", () => {
   });
 });
 
-describe("OrderVerificationPanel — verify token mode", () => {
+describe("OrderVerificationPanel - verify token mode", () => {
   it("verifies a valid pasted token (happy path)", async () => {
     const fixture = await buildSignedToken("key-paste");
     fetchPublicKeyByIdMock.mockResolvedValue({
@@ -653,7 +653,7 @@ describe("OrderVerificationPanel — verify token mode", () => {
   });
 });
 
-describe("OrderVerificationPanel — mode switching", () => {
+describe("OrderVerificationPanel - mode switching", () => {
   it("switches from reproduction to verify token", async () => {
     const fixture = await buildSignedToken("key-1");
     fetchEventReproductionMock.mockResolvedValue(submitBundleFrom(fixture));

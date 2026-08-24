@@ -658,6 +658,54 @@ func TestIBConnectorConnectTimeoutIsInterruptible(t *testing.T) {
 	}
 }
 
+func TestIBConnectorConnectTimeoutDrainsResultWhenDisconnectFails(t *testing.T) {
+	t.Parallel()
+
+	connector := NewIBConnector("ib-test", `{"clientId":109}`)
+	connector.connectTimeout = time.Millisecond
+	client := newFakeIBClient(nil)
+	client.connectBlock = make(chan struct{})
+	client.connectReturnBlock = make(chan struct{})
+	client.disconnectErr = errors.New("disconnect failed")
+
+	var releaseOnce sync.Once
+	releaseConnect := func() {
+		releaseOnce.Do(func() { close(client.connectReturnBlock) })
+	}
+	t.Cleanup(releaseConnect)
+
+	result := make(chan error, 1)
+	go func() {
+		result <- connector.connectClient(
+			context.Background(), client, connector.cfg.ClientID,
+		)
+	}()
+
+	select {
+	case <-client.connectBlock:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for disconnect after connect timeout")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("connectClient returned before Connect completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseConnect()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("connectClient error = %v, want context deadline exceeded", err)
+		}
+		if !errors.Is(err, client.disconnectErr) {
+			t.Fatalf("connectClient error = %v, want disconnect failure", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connectClient did not return after Connect completed")
+	}
+}
+
 func TestIBConnectorInvalidCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -819,7 +867,11 @@ func TestIBWrapperSignalsLostOnce(t *testing.T) {
 func TestNewConnectorIBRegistered(t *testing.T) {
 	t.Parallel()
 
-	connector, err := DefaultRegistry().Build(domain.MarketDataInstance{
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
+	connector, err := registry.Build(domain.MarketDataInstance{
 		ExternalID: testProviderExternalID("ib-1"),
 		Provider:   domain.MarketDataProviderIB,
 	})
@@ -834,7 +886,10 @@ func TestNewConnectorIBRegistered(t *testing.T) {
 func TestProviderVerifiesSymbolsIBUnsupported(t *testing.T) {
 	t.Parallel()
 
-	registry := DefaultRegistry()
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
 	if registry.VerifiesSymbols(domain.MarketDataProviderIB) {
 		t.Fatal("VerifiesSymbols(ib) = true, want false")
 	}
@@ -1221,6 +1276,58 @@ func TestIBConnectorSearchSymbolsConnectErrorReturnsError(t *testing.T) {
 	}
 }
 
+func TestIBConnectorSearchSymbolsDisconnectFailurePreservesMatches(t *testing.T) {
+	t.Parallel()
+
+	disconnectErr := errors.New("disconnect failed")
+	connector := NewIBConnector("ib-search", `{"clientId":7}`)
+	connector.newClient = func(wrapper ibapi.EWrapper) ibClient {
+		client := newFakeIBClient(wrapper)
+		client.details = []*ibapi.ContractDetails{
+			ibSearchDetails("AAPL", "STK", "SMART", "USD", "Apple Inc", 265598),
+		}
+		client.disconnectErr = disconnectErr
+		return client
+	}
+
+	matches, err := connector.SearchSymbols(
+		context.Background(), SymbolSearchQuery{Query: "AAPL", SecType: "STK"},
+	)
+	if err != nil {
+		t.Fatalf("SearchSymbols error = %v, want nil", err)
+	}
+	if len(matches) != 1 || matches[0].Symbol != "AAPL" {
+		t.Fatalf("matches = %+v, want AAPL", matches)
+	}
+}
+
+func TestIBConnectorSearchSymbolsFailureJoinsDisconnectFailure(t *testing.T) {
+	t.Parallel()
+
+	searchErr := errors.New("search connect failed")
+	disconnectErr := errors.New("disconnect failed")
+	connector := NewIBConnector("ib-search", `{"clientId":7}`)
+	connector.newClient = func(wrapper ibapi.EWrapper) ibClient {
+		client := newFakeIBClient(wrapper)
+		client.connectErr = searchErr
+		client.disconnectErr = disconnectErr
+		return client
+	}
+
+	matches, err := connector.SearchSymbols(
+		context.Background(), SymbolSearchQuery{Query: "AAPL", SecType: "STK"},
+	)
+	if matches != nil {
+		t.Fatalf("matches = %+v, want nil", matches)
+	}
+	if !errors.Is(err, searchErr) {
+		t.Fatalf("SearchSymbols error = %v, want search failure", err)
+	}
+	if !errors.Is(err, disconnectErr) {
+		t.Fatalf("SearchSymbols error = %v, want disconnect failure", err)
+	}
+}
+
 func TestIBConnectorSearchUsesDistinctClientID(t *testing.T) {
 	t.Parallel()
 
@@ -1388,7 +1495,9 @@ type fakeIBClient struct {
 	mu                 sync.Mutex
 	disconnectOnce     sync.Once
 	connectBlock       chan struct{}
+	connectReturnBlock chan struct{}
 	connectErr         error
+	disconnectErr      error
 	readyDelay         time.Duration
 	requests           []fakeIBRequest
 	searchReqContracts []*ibapi.Contract
@@ -1425,12 +1534,16 @@ func (c *fakeIBClient) Connect(host string, port int, clientID int64) error {
 	c.clientID = clientID
 	err := c.connectErr
 	block := c.connectBlock
+	returnBlock := c.connectReturnBlock
 	c.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if block != nil {
 		<-block
+		if returnBlock != nil {
+			<-returnBlock
+		}
 		return context.Canceled
 	}
 	if c.asyncReady {
@@ -1453,20 +1566,22 @@ func (c *fakeIBClient) Disconnect() error {
 	c.disconnects++
 	block := c.connectBlock
 	noop := c.disconnectNoop
+	err := c.disconnectErr
 	c.mu.Unlock()
 	if !noop {
 		c.closeConnectBlock(block)
 	}
-	return nil
+	return err
 }
 
 func (c *fakeIBClient) ForceDisconnect() error {
 	c.mu.Lock()
 	c.forceDisconnects++
 	block := c.connectBlock
+	err := c.disconnectErr
 	c.mu.Unlock()
 	c.closeConnectBlock(block)
-	return nil
+	return err
 }
 
 func (c *fakeIBClient) ReqMktData(

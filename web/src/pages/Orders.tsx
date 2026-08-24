@@ -1900,7 +1900,7 @@ function ExecReportDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Order Detail dialog — header + event timeline + trades
+// Order Detail dialog - header + event timeline + trades
 // ---------------------------------------------------------------------------
 
 interface OrderDetailDialogProps {
@@ -2419,7 +2419,7 @@ function OrderDetailDialog({
                 )}
               </div>
 
-              {/* Trades — always shown so the order→trades grouping is clear */}
+              {/* Trades - always shown so the order→trades grouping is clear */}
               <div>
                 <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
                   {t("detail.dialog.trades.sectionTitle")}
@@ -3735,7 +3735,7 @@ export function Orders() {
   const initialAccount =
     globalAccountFilter.account || params.get("account") || "";
 
-  // Filter state — seeded from URL on mount
+  // Filter state - seeded from URL on mount
   const [orderAccount, setOrderAccount] = useState(initialAccount);
   const [orderAccountDraft, setOrderAccountDraft] = useState(initialAccount);
   const [orderSource, setOrderSource] = useState(params.get("source") ?? "");

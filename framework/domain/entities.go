@@ -1497,7 +1497,7 @@ type ApprovalPayload struct {
 	// event id is known (kept omitempty so those tokens stay deterministic).
 	EventExternalID string `json:"eventId,omitempty"`
 
-	// Bound order params — connector re-binds against the order it executes.
+	// Bound order params - connector re-binds against the order it executes.
 	Instrument     string `json:"instrument"`
 	Venue          string `json:"venue,omitempty"`
 	Side           string `json:"side"`       // "buy" | "sell"
@@ -1523,7 +1523,7 @@ type ApprovalPayload struct {
 	KeyID string `json:"keyId"`
 	Alg   string `json:"alg"` // "ed25519" | "none"
 
-	// Reject verdict — appended with omitempty so an accept envelope
+	// Reject verdict - appended with omitempty so an accept envelope
 	// (Verdict="accept", these empty) stays byte-identical to the pre-reject
 	// canonical wire shape. Populated only when Verdict="reject".
 	RejectCode    string `json:"rejectCode,omitempty"`

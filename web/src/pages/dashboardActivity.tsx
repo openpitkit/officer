@@ -97,7 +97,7 @@ const BUCKET_META: Record<
   other: { labelKey: "activity.bucket.other", route: "audit" },
 };
 
-/** Bucket ordering — determines column order. */
+/** Bucket ordering - determines column order. */
 const BUCKET_ORDER: ReturnType<typeof kindBucket>[] = [
   "trading",
   "accounts",
@@ -274,7 +274,7 @@ export function auditActionMeta(action: string): AuditIconMeta {
       titleKey: "audit.action.stopService",
     };
 
-  // Policy / config and unknown — raw action string as fallback key.
+  // Policy / config and unknown - raw action string as fallback key.
   if (a.includes("policy") || a.includes("config"))
     return { Icon: Layers, variant: "accent", titleKey: action };
 
