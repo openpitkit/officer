@@ -21,6 +21,11 @@ package sqlite
 // (modernc.org/sqlite).
 type sqliteDialect struct{}
 
+// BindVar renders a SQLite bind placeholder.
+func (sqliteDialect) BindVar(int) string {
+	return "?"
+}
+
 // PrimaryKey renders the surrogate PK as an autoincrementing integer rowid. The
 // key is sequential and internal; it never appears on the wire.
 func (sqliteDialect) PrimaryKey() string {

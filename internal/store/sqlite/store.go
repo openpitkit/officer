@@ -52,7 +52,7 @@ var (
 type sqliteStore struct {
 	db        atomic.Pointer[sql.DB]
 	enumCodes atomic.Pointer[enumDictionaries]
-	dialect   schema.Dialect
+	dialect   sqliteDialect
 	path      string
 	realm     domain.RealmID
 
@@ -196,7 +196,8 @@ func (s *sqliteStore) migrateDB(ctx context.Context, db *sql.DB) error {
 		ctx,
 		db,
 		schema.NewEmbeddedMigrationSource(s.dialect),
-		migration.Config{Table: "schema_migration"},
+		migration.Config{},
+		s.dialect,
 	); err != nil {
 		return err
 	}
@@ -214,9 +215,7 @@ func (s *sqliteStore) SchemaVersion(ctx context.Context) (int, error) {
 	if db == nil {
 		return 0, fmt.Errorf("store: sqlite is closed")
 	}
-	return migration.SchemaVersion(
-		ctx, db, migration.Config{Table: "schema_migration"},
-	)
+	return migration.SchemaVersion(ctx, db, migration.Config{})
 }
 
 // Ping verifies the database is reachable.
