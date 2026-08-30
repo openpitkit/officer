@@ -721,7 +721,7 @@ func (s *Service) UpsertMarketDataInstrument(
 	instrument.BaseAsset = strings.TrimSpace(instrument.BaseAsset)
 	instrument.QuoteAsset = strings.TrimSpace(instrument.QuoteAsset)
 	instrument.ManualPrice = strings.TrimSpace(instrument.ManualPrice)
-	if err := validateMarketDataInstrument(instrument); err != nil {
+	if err := domain.ValidateMarketDataInstrument(instrument); err != nil {
 		return err
 	}
 	n, err := s.groupNode()
@@ -889,33 +889,20 @@ func mergeMarketDataCredentials(existing, update string) (string, error) {
 }
 
 func validateMarketDataInstance(registry *marketdata.Registry, instance domain.MarketDataInstance) error {
-	if instance.Label == "" {
-		return fmt.Errorf("market-data source label: %w", domain.ErrInvalid)
+	if err := domain.ValidateMarketDataInstance(instance); err != nil {
+		return err
 	}
+	return validateMarketDataProvider(registry, instance)
+}
+
+func validateMarketDataProvider(
+	registry *marketdata.Registry, instance domain.MarketDataInstance,
+) error {
 	if !registry.Known(instance.Provider) {
 		return fmt.Errorf("market-data provider %q: %w", instance.Provider, domain.ErrInvalid)
 	}
-	if instance.Credentials != "" && !json.Valid([]byte(instance.Credentials)) {
-		return fmt.Errorf("market-data credentials: %w", domain.ErrInvalid)
-	}
 	if err := registry.Validate(instance); err != nil {
 		return fmt.Errorf("market-data credentials: %v: %w", err, domain.ErrInvalid)
-	}
-	return nil
-}
-
-func validateMarketDataInstrument(instrument domain.MarketDataInstrument) error {
-	if instrument.Instance.IsZero() || instrument.ExternalSymbol == "" {
-		return fmt.Errorf("market-data instrument: %w", domain.ErrInvalid)
-	}
-	if err := domain.ValidateAsset(instrument.BaseAsset); err != nil {
-		return err
-	}
-	if err := domain.ValidateAsset(instrument.QuoteAsset); err != nil {
-		return err
-	}
-	if err := domain.ValidateMarketDataMark(instrument.ManualPrice); err != nil {
-		return err
 	}
 	return nil
 }

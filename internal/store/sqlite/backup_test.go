@@ -24,6 +24,7 @@ package sqlite
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -34,6 +35,7 @@ import (
 
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
+	fwsigning "go.openpit.dev/officer/framework/signing"
 )
 
 // newRealmStore opens a fresh migrated store bound to realm and returns both the
@@ -161,6 +163,39 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 		t.Fatalf("SetUserSetting: %v", err)
 	}
 	return order.ExternalID
+}
+
+func snapshotBackupData(
+	t *testing.T, ctx context.Context, rs RealmStore,
+) backup.Data {
+	t.Helper()
+	archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	return archive.Data
+}
+
+func signingKeyForBackup(
+	t *testing.T, keyID string, seedByte byte, active bool,
+) backup.SigningKey {
+	t.Helper()
+	seed := make([]byte, ed25519.SeedSize)
+	for i := range seed {
+		seed[i] = seedByte
+	}
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	publicKey, ok := privateKey.Public().(ed25519.PublicKey)
+	if !ok {
+		t.Fatal("Ed25519 private key returned a non-Ed25519 public key")
+	}
+	return backup.SigningKey{
+		KeyID:      keyID,
+		Alg:        fwsigning.AlgEd25519,
+		PrivateKey: append([]byte(nil), seed...),
+		PublicKey:  append([]byte(nil), publicKey...),
+		Active:     active,
+	}
 }
 
 func mustCreateAsset(t *testing.T, ctx context.Context, rs RealmStore, asset domain.Asset) {
@@ -1433,24 +1468,32 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 	}{
 		{
 			name: "rate",
-			data: backup.Data{RateLimits: []domain.LimitRate{{
-				Scope: domain.ScopeAccount, Account: "acc-1", Window: time.Minute,
-			}}},
+			data: backup.Data{RateLimits: []domain.LimitRate{
+				{Scope: domain.ScopeBroker, MaxOrders: 1, Window: time.Second},
+				{Scope: domain.ScopeAccount, Account: "acc-1", Window: time.Minute},
+			}},
 			want: []string{"rate_limit", `scope "account"`, `account "acc-1"`},
 		},
 		{
 			name: "order-size",
-			data: backup.Data{OrderSizeLimits: []domain.LimitOrderSize{{
-				Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL",
-				MaxNotional: "1",
-			}}},
+			data: backup.Data{OrderSizeLimits: []domain.LimitOrderSize{
+				{Scope: domain.ScopeBroker, MaxQuantity: "1"},
+				{
+					Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL",
+					MaxNotional: "1",
+				},
+			}},
 			want: []string{"order_size_limit", `scope "underlying_asset"`, `asset "AAPL"`},
 		},
 		{
 			name: "spot-funds-pnl-bounds",
-			data: backup.Data{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
-				Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a", LowerBound: "-1",
-			}}},
+			data: backup.Data{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+				{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+				{
+					Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
+					LowerBound: "-1",
+				},
+			}},
 			want: []string{
 				"spot_funds_pnl_bounds_kill_switch",
 				`scope "account_group"`,
@@ -1462,6 +1505,8 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			_, rs := newTestStore(t)
+			mustCreateAsset(t, ctx, rs, domain.Asset{Code: "USD"})
+			before := snapshotBackupData(t, ctx, rs)
 			archive := backup.NewArchive(
 				time.Now().UTC(),
 				"test",
@@ -1479,6 +1524,394 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
 				}
+			}
+			after := snapshotBackupData(t, ctx, rs)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+			}
+		})
+	}
+}
+
+func TestBackupRestoreRejectsInvalidBalanceAndRollsBack(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "AAPL"})
+	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "USD"})
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "USD", Available: "10",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	before := snapshotBackupData(t, ctx, rs)
+	scope := backup.Scope{Sections: []backup.Section{backup.SectionPositions}}
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		scope,
+		backup.Data{Balances: []backup.Balance{
+			{Account: "acc-1", Asset: "USD", Available: "20"},
+			{Account: "acc-1", Asset: "AAPL", Available: "not-a-decimal"},
+		}},
+	)
+
+	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope, Mode: backup.RestoreModeOverwrite,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{"restore balance", "acc-1", "AAPL", "available"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+		}
+	}
+	after := snapshotBackupData(t, ctx, rs)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+	}
+}
+
+func TestBackupRestoreRejectsNonCanonicalMarketDataStringsAndRollsBack(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantField string
+		mutate    func(*backup.Data)
+	}{
+		{
+			name:      "provider",
+			wantField: "provider",
+			mutate: func(data *backup.Data) {
+				data.MarketDataInstances[1].Provider = " byo"
+			},
+		},
+		{
+			name:      "label",
+			wantField: "label",
+			mutate: func(data *backup.Data) {
+				data.MarketDataInstances[1].Label = " manual "
+			},
+		},
+		{
+			name:      "credentials",
+			wantField: "credentials",
+			mutate: func(data *backup.Data) {
+				data.MarketDataInstances[1].Credentials = " {} "
+			},
+		},
+		{
+			name:      "external-symbol-whitespace-only",
+			wantField: "external symbol",
+			mutate: func(data *backup.Data) {
+				data.MarketDataInstruments[0].ExternalSymbol = "   "
+			},
+		},
+		{
+			name:      "base-asset",
+			wantField: "base asset",
+			mutate: func(data *backup.Data) {
+				data.MarketDataInstruments[0].BaseAsset = " AAPL"
+			},
+		},
+		{
+			name:      "quote-asset",
+			wantField: "quote asset",
+			mutate: func(data *backup.Data) {
+				data.MarketDataInstruments[0].QuoteAsset = "USD "
+			},
+		},
+		{
+			name:      "manual-price",
+			wantField: "manual price",
+			mutate: func(data *backup.Data) {
+				data.MarketDataInstruments[0].ManualPrice = " 100"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, rs := newTestStore(t)
+			mustCreateAsset(t, ctx, rs, domain.Asset{Code: "AAPL"})
+			mustCreateAsset(t, ctx, rs, domain.Asset{Code: "USD"})
+			before := snapshotBackupData(t, ctx, rs)
+			firstID := mustExternalID(t)
+			badID := mustExternalID(t)
+			scope := backup.Scope{
+				Sections: []backup.Section{backup.SectionMarketData},
+			}
+			data := backup.Data{
+				MarketDataInstances: []domain.MarketDataInstance{
+					{
+						ExternalID: firstID,
+						Provider:   domain.MarketDataProviderBYO,
+						Label:      "first",
+					},
+					{
+						ExternalID: badID,
+						Provider:   domain.MarketDataProviderBYO,
+						Label:      "manual",
+					},
+				},
+				MarketDataInstruments: []backup.MarketDataInstrument{{
+					Instance:       badID,
+					ExternalSymbol: "AAPL-USD",
+					BaseAsset:      "AAPL",
+					QuoteAsset:     "USD",
+					ManualPrice:    "100",
+				}},
+			}
+			test.mutate(&data)
+			archive := backup.NewArchive(
+				time.Now().UTC(),
+				"test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)},
+				scope,
+				data,
+			)
+
+			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: scope, Mode: backup.RestoreModeOverwrite,
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+			}
+			for _, want := range []string{"restore market-data", test.wantField} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+				}
+			}
+			after := snapshotBackupData(t, ctx, rs)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf(
+					"database changed after rejected restore:\n before=%+v\n after=%+v",
+					before,
+					after,
+				)
+			}
+		})
+	}
+}
+
+func TestBackupRestoreRejectsZeroMarketDataInstanceIDAndRollsBack(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	before := snapshotBackupData(t, ctx, rs)
+	scope := backup.Scope{Sections: []backup.Section{backup.SectionMarketData}}
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		scope,
+		backup.Data{MarketDataInstances: []domain.MarketDataInstance{
+			{
+				ExternalID: mustExternalID(t),
+				Provider:   domain.MarketDataProviderBYO,
+				Label:      "first",
+			},
+			{
+				Provider: domain.MarketDataProviderBYO,
+				Label:    "zero-id",
+			},
+		}},
+	)
+
+	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope, Mode: backup.RestoreModeOverwrite,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{
+		string(backup.SectionMarketData), "zero-id", "external id",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+		}
+	}
+	after := snapshotBackupData(t, ctx, rs)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+	}
+}
+
+func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	before := snapshotBackupData(t, ctx, rs)
+	firstID := mustExternalID(t)
+	badID := mustExternalID(t)
+	scope := backup.Scope{
+		Sections: []backup.Section{backup.SectionActivityHistory},
+	}
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		scope,
+		backup.Data{Orders: []backup.OrderRecord{
+			{Order: domain.Order{
+				ExternalID: firstID, Account: "acc-1", BaseAsset: "AAPL",
+				QuoteAsset: "USD", Principal: "operator", Source: domain.SourcePanel,
+				Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+				AmountValue: "10", Leaves: "10", Price: "150",
+				Status: domain.OrderStatusSubmitted,
+			}},
+			{Order: domain.Order{
+				ExternalID: badID, Account: "acc-1", BaseAsset: "AAPL",
+				QuoteAsset: "USD", Principal: "operator", Source: domain.SourcePanel,
+				Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+				AmountValue: "10", Leaves: "1e5", Price: "150",
+				Status: domain.OrderStatusSubmitted,
+			}},
+		}},
+	)
+
+	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope, Mode: backup.RestoreModeOverwrite,
+	})
+	if err == nil {
+		t.Fatal("RestoreBackup succeeded, want invalid leaves error")
+	}
+	for _, want := range []string{
+		string(backup.SectionActivityHistory), badID.String(), "leaves", "plain decimal",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+		}
+	}
+	after := snapshotBackupData(t, ctx, rs)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+	}
+}
+
+func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         backup.RestoreMode
+		seedExisting bool
+		want         string
+		keys         func(*testing.T) []backup.SigningKey
+	}{
+		{
+			name: "algorithm",
+			mode: backup.RestoreModeOverwrite,
+			want: "algorithm",
+			keys: func(t *testing.T) []backup.SigningKey {
+				key := signingKeyForBackup(t, "bad-alg", 1, true)
+				key.Alg = "rsa"
+				return []backup.SigningKey{key}
+			},
+		},
+		{
+			name: "private-key-seed",
+			mode: backup.RestoreModeOverwrite,
+			want: "private key seed length",
+			keys: func(t *testing.T) []backup.SigningKey {
+				key := signingKeyForBackup(t, "bad-private", 2, true)
+				key.PrivateKey = []byte("bad")
+				return []backup.SigningKey{key}
+			},
+		},
+		{
+			name: "public-key-length",
+			mode: backup.RestoreModeOverwrite,
+			want: "public key length",
+			keys: func(t *testing.T) []backup.SigningKey {
+				key := signingKeyForBackup(t, "bad-public", 3, true)
+				key.PublicKey = []byte("bad")
+				return []backup.SigningKey{key}
+			},
+		},
+		{
+			name: "public-key-mismatch",
+			mode: backup.RestoreModeOverwrite,
+			want: "does not match",
+			keys: func(t *testing.T) []backup.SigningKey {
+				key := signingKeyForBackup(t, "mismatch", 4, true)
+				other := signingKeyForBackup(t, "other", 5, false)
+				key.PublicKey = other.PublicKey
+				return []backup.SigningKey{key}
+			},
+		},
+		{
+			name: "two-archive-active-keys",
+			mode: backup.RestoreModeOverwrite,
+			want: "more than one active key",
+			keys: func(t *testing.T) []backup.SigningKey {
+				return []backup.SigningKey{
+					signingKeyForBackup(t, "active-1", 6, true),
+					signingKeyForBackup(t, "active-2", 7, true),
+				}
+			},
+		},
+		{
+			name:         "target-active-plus-new-active-key",
+			mode:         backup.RestoreModeInsertMissing,
+			seedExisting: true,
+			want:         "more than one active key",
+			keys: func(t *testing.T) []backup.SigningKey {
+				return []backup.SigningKey{
+					signingKeyForBackup(t, "new-active", 8, true),
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, rs := newTestStore(t)
+			if test.seedExisting {
+				key := signingKeyForBackup(t, "existing-active", 9, true)
+				if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+					CreatedAt:  key.CreatedAt,
+					KeyID:      key.KeyID,
+					Alg:        key.Alg,
+					PublicKey:  key.PublicKey,
+					PrivateKey: key.PrivateKey,
+					Active:     key.Active,
+				}); err != nil {
+					t.Fatalf("UpsertSigningKey: %v", err)
+				}
+			}
+			before := snapshotBackupData(t, ctx, rs)
+			scope := backup.Scope{
+				Sections: []backup.Section{backup.SectionGeneralSettings},
+			}
+			archive := backup.NewArchive(
+				time.Now().UTC(),
+				"test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)},
+				scope,
+				backup.Data{SigningKeys: test.keys(t)},
+			)
+
+			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: scope, Mode: test.mode,
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+			}
+			for _, want := range []string{
+				string(backup.SectionGeneralSettings), "signing key", test.want,
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+				}
+			}
+			after := snapshotBackupData(t, ctx, rs)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf(
+					"database changed after rejected restore:\n before=%+v\n after=%+v",
+					before,
+					after,
+				)
 			}
 		})
 	}
@@ -2183,6 +2616,113 @@ func TestBackupRestoreRejectsInvalidCommission(t *testing.T) {
 				t.Fatalf("trades after failed restore = %d, want 0", c)
 			}
 		})
+	}
+}
+
+func TestBackupRestoreRejectsUnknownOrderStatusAndRollsBack(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	before := snapshotBackupData(t, ctx, rs)
+	firstID := mustExternalID(t)
+	badID := mustExternalID(t)
+	scope := backup.Scope{
+		Sections: []backup.Section{backup.SectionActivityHistory},
+	}
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		scope,
+		backup.Data{Orders: []backup.OrderRecord{
+			{Order: domain.Order{
+				ExternalID:  firstID,
+				Account:     "acc-1",
+				BaseAsset:   "AAPL",
+				QuoteAsset:  "USD",
+				Principal:   "operator",
+				Source:      domain.SourcePanel,
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "10",
+				Price:       "150",
+				Status:      domain.OrderStatusSubmitted,
+			}},
+			{Order: domain.Order{
+				ExternalID:  badID,
+				Account:     "acc-1",
+				BaseAsset:   "AAPL",
+				QuoteAsset:  "USD",
+				Principal:   "operator",
+				Source:      domain.SourcePanel,
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "10",
+				Price:       "150",
+				Status:      domain.OrderStatus("unknown"),
+			}},
+		}},
+	)
+
+	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope, Mode: backup.RestoreModeOverwrite,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{
+		string(backup.SectionActivityHistory), "order", badID.String(), "status",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+		}
+	}
+	after := snapshotBackupData(t, ctx, rs)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+	}
+}
+
+func TestBackupRestoreRejectsInvalidAuditActionAndRollsBack(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	before := snapshotBackupData(t, ctx, rs)
+	firstID := mustExternalID(t)
+	badID := mustExternalID(t)
+	scope := backup.Scope{Sections: []backup.Section{backup.SectionAuditLog}}
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		scope,
+		backup.Data{Audit: []domain.AuditRow{
+			{
+				ExternalID: firstID,
+				Action:     domain.AuditActionCreateAccount,
+				Source:     domain.SourcePanel,
+			},
+			{
+				ExternalID: badID,
+				Action:     domain.AuditAction("unknown"),
+				Source:     domain.SourcePanel,
+			},
+		}},
+	)
+
+	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope, Mode: backup.RestoreModeOverwrite,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{
+		string(backup.SectionAuditLog), "audit", badID.String(), "action",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+		}
+	}
+	after := snapshotBackupData(t, ctx, rs)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
 	}
 }
 

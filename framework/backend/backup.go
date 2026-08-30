@@ -67,6 +67,17 @@ func (s *Service) RestoreBackup(
 		return backup.RestoreSummary{},
 			fmt.Errorf("backup manifest source is required: %w", domain.ErrInvalid)
 	}
+	data := backup.FilterData(archive.Data, opts.Scope.Normalize())
+	for _, instance := range data.MarketDataInstances {
+		if err := validateMarketDataProvider(s.registry, instance); err != nil {
+			return backup.RestoreSummary{}, fmt.Errorf(
+				"backend: restore %s market-data instance %q: %w",
+				backup.SectionMarketData,
+				instance.ExternalID,
+				err,
+			)
+		}
+	}
 	n, err := s.groupNode()
 	if err != nil {
 		return backup.RestoreSummary{}, err

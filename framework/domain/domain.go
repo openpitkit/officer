@@ -22,6 +22,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -641,6 +642,78 @@ func ValidateAsset(asset string) error {
 	return validateAsset(asset)
 }
 
+// ValidateDecimal is a decimal-syntax pre-filter. It bounds neither magnitude
+// nor notation and does not establish that the engine will accept value. Empty
+// strings are invalid; callers with optional fields must handle their empty
+// meaning before calling.
+func ValidateDecimal(value string) error {
+	if _, err := decimal.NewFromString(value); err != nil {
+		return fmt.Errorf("%q is not a valid decimal: %w", value, ErrInvalid)
+	}
+	return nil
+}
+
+// ValidateMarketDataInstance validates the context-independent shape of a
+// market-data instance. Provider registration and provider-specific
+// credentials remain the registry's responsibility.
+func ValidateMarketDataInstance(instance MarketDataInstance) error {
+	if instance.Label != strings.TrimSpace(instance.Label) {
+		return fmt.Errorf("market-data source label %q is not canonical: %w",
+			instance.Label, ErrInvalid)
+	}
+	if instance.Provider != strings.TrimSpace(instance.Provider) {
+		return fmt.Errorf("market-data provider %q is not canonical: %w",
+			instance.Provider, ErrInvalid)
+	}
+	if instance.Credentials != strings.TrimSpace(instance.Credentials) {
+		return fmt.Errorf("market-data credentials are not canonical: %w", ErrInvalid)
+	}
+	if instance.Label == "" {
+		return fmt.Errorf("market-data source label: %w", ErrInvalid)
+	}
+	if instance.Provider == "" {
+		return fmt.Errorf("market-data provider %q: %w", instance.Provider, ErrInvalid)
+	}
+	if instance.Credentials != "" && !json.Valid([]byte(instance.Credentials)) {
+		return fmt.Errorf("market-data credentials: %w", ErrInvalid)
+	}
+	return nil
+}
+
+// ValidateMarketDataInstrument validates the persistent, engine-facing shape
+// of a configured market-data instrument.
+func ValidateMarketDataInstrument(instrument MarketDataInstrument) error {
+	if instrument.ExternalSymbol != strings.TrimSpace(instrument.ExternalSymbol) {
+		return fmt.Errorf("market-data external symbol %q is not canonical: %w",
+			instrument.ExternalSymbol, ErrInvalid)
+	}
+	if instrument.BaseAsset != strings.TrimSpace(instrument.BaseAsset) {
+		return fmt.Errorf("market-data base asset %q is not canonical: %w",
+			instrument.BaseAsset, ErrInvalid)
+	}
+	if instrument.QuoteAsset != strings.TrimSpace(instrument.QuoteAsset) {
+		return fmt.Errorf("market-data quote asset %q is not canonical: %w",
+			instrument.QuoteAsset, ErrInvalid)
+	}
+	if instrument.ManualPrice != strings.TrimSpace(instrument.ManualPrice) {
+		return fmt.Errorf("market-data manual price %q is not canonical: %w",
+			instrument.ManualPrice, ErrInvalid)
+	}
+	if instrument.Instance.IsZero() || instrument.ExternalSymbol == "" {
+		return fmt.Errorf("market-data instrument: %w", ErrInvalid)
+	}
+	if err := ValidateAsset(instrument.BaseAsset); err != nil {
+		return err
+	}
+	if err := ValidateAsset(instrument.QuoteAsset); err != nil {
+		return err
+	}
+	if err := ValidateMarketDataMark(instrument.ManualPrice); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ValidateMarketDataMark returns an error wrapping ErrInvalid when mark is a
 // non-empty, non-decimal mark price. An empty string is valid and means "no
 // manual price". The mark maps to the engine Quote mark, a signed Option<Price>,
@@ -649,8 +722,8 @@ func ValidateMarketDataMark(mark string) error {
 	if mark == "" {
 		return nil
 	}
-	if _, err := decimal.NewFromString(mark); err != nil {
-		return fmt.Errorf("mark %q is not a valid decimal: %w", mark, ErrInvalid)
+	if err := ValidateDecimal(mark); err != nil {
+		return fmt.Errorf("mark %w", err)
 	}
 	return nil
 }
@@ -664,8 +737,8 @@ func ValidateMarketDataStrike(strike string) error {
 	if strike == "" {
 		return nil
 	}
-	if _, err := decimal.NewFromString(strike); err != nil {
-		return fmt.Errorf("strike %q is not a valid decimal: %w", strike, ErrInvalid)
+	if err := ValidateDecimal(strike); err != nil {
+		return fmt.Errorf("strike %w", err)
 	}
 	return nil
 }
@@ -731,8 +804,10 @@ func validatePositiveDecimal(s string) error {
 	return nil
 }
 
-// Adjustment field formats (asset, amount mode/value, bounds) are validated by
-// the engine seam: NewAsset rejects an empty asset, param.NewPositionSizeFromString
-// rejects a non-decimal amount or bound, and an unrecognised amount mode is
-// rejected there too - all as domain.ErrInvalid. Officer adds no boundary
-// pre-validation for them.
+// Live adjustment field formats (asset, amount mode/value, bounds) are
+// validated by the engine seam: NewAsset rejects an empty asset,
+// param.NewPositionSizeFromString rejects a non-decimal amount or bound, and an
+// unrecognised amount mode is rejected there too - all as domain.ErrInvalid.
+// Backup restore additionally syntax-checks persisted adjustment amounts with
+// ValidateDecimal; that pre-filter does not reproduce the engine's bounds or
+// notation rules.

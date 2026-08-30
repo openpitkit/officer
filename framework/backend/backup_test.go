@@ -107,6 +107,18 @@ type backupRestoreTestRuntime struct {
 	pushed   []domain.MarketDataInstrument
 }
 
+type backupRestoreTestConnector struct{}
+
+func (backupRestoreTestConnector) Subscribe(
+	context.Context, []marketdata.Subscription,
+) (<-chan marketdata.QuoteUpdate, error) {
+	updates := make(chan marketdata.QuoteUpdate)
+	close(updates)
+	return updates, nil
+}
+
+func (backupRestoreTestConnector) Close() {}
+
 func (r *backupRestoreTestRuntime) Stop() {
 	r.stops++
 }
@@ -158,7 +170,17 @@ func newBackupRestoreTestService(
 		t.Fatalf("NewLocalRouter: %v", err)
 	}
 	md := &backupRestoreTestRuntime{}
-	return &Service{router: router, md: md}, n, md
+	registry := marketdata.NewRegistry()
+	if err := registry.Register(marketdata.Provider{
+		Type:  domain.MarketDataProviderBYO,
+		Title: "BYO",
+		Build: func(domain.MarketDataInstance) (marketdata.Connector, error) {
+			return backupRestoreTestConnector{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("register BYO provider: %v", err)
+	}
+	return &Service{router: router, md: md, registry: registry}, n, md
 }
 
 func backupRestoreTestArchive(
@@ -192,6 +214,31 @@ func backupRestoreTestArchive(
 		Mode: backup.RestoreModeOverwrite,
 	}
 	return archive, opts
+}
+
+func TestRestoreBackupRejectsUnknownMarketDataProviderBeforeNode(t *testing.T) {
+	t.Parallel()
+
+	svc, n, _ := newBackupRestoreTestService(t, false)
+	archive, opts := backupRestoreTestArchive("100")
+	archive.Data.MarketDataInstances[0].Provider = "unknown"
+
+	_, err := svc.RestoreBackup(context.Background(), archive, opts)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup error = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{
+		string(backup.SectionMarketData),
+		"manual-feed",
+		`provider "unknown"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+		}
+	}
+	if n.restoreCalls != 0 {
+		t.Fatalf("RestoreBackup reached the node %d time(s)", n.restoreCalls)
+	}
 }
 
 func TestRestoreBackupManualPricePushesCommittedInstrument(t *testing.T) {

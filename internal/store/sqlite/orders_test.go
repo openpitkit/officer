@@ -25,6 +25,7 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"strings"
@@ -131,13 +132,15 @@ func getBalanceRow(
 // sub-agent's stub.
 func seedSigningKey(t *testing.T, ctx context.Context, rs RealmStore, keyID string) {
 	t.Helper()
+	seed := []byte("00000000000000000000000000000001")
+	publicKey := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
 	r := rs.(*realmStore)
 	if _, err := r.rawDB().ExecContext(
 		ctx,
 		`INSERT INTO signing_key
 		 (key_id, alg, private_key, public_key, created_at, active)
 		 VALUES (?, 'ed25519', ?, ?, ?, 1)`,
-		keyID, []byte{0x01}, []byte{0x02}, nowStr(),
+		keyID, seed, publicKey, nowStr(),
 	); err != nil {
 		t.Fatalf("seed signing key: %v", err)
 	}

@@ -21,15 +21,19 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
+	fwsigning "go.openpit.dev/officer/framework/signing"
 )
 
 // --- Restore: dictionaries --------------------------------------------------
@@ -344,6 +348,26 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []backup.Bala
 		if err := domain.ValidatePnlHaltReason(b.RealizedPnlHaltReason); err != nil {
 			return fmt.Errorf("store: restore balance %q/%q: %w", b.Account, b.Asset, err)
 		}
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "available", value: b.Available},
+			{name: "held", value: b.Held},
+			{name: "incoming", value: b.Incoming},
+			{name: "realized_pnl", value: b.RealizedPnl},
+			{name: "average_entry_price", value: b.AverageEntryPrice},
+		} {
+			if field.value == "" {
+				continue
+			}
+			if err := domain.ValidateDecimal(field.value); err != nil {
+				return fmt.Errorf(
+					"store: restore balance %q/%q %s: %w",
+					b.Account, b.Asset, field.name, err,
+				)
+			}
+		}
 		accountID, err := resolveAccountID(ctx, rt.tx, b.Account)
 		if err != nil {
 			return err
@@ -445,10 +469,11 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		if err := l.Validate(); err != nil {
 			return fmt.Errorf(
 				"store: restore spot_funds_pnl_bounds_kill_switch scope %q "+
-					"account %q account group %q: %w",
+					"account %q account group %q currency %q: %w",
 				l.Scope,
 				l.Account,
 				l.AccountGroup,
+				l.Currency,
 				err,
 			)
 		}
@@ -563,6 +588,21 @@ func (rt *restoreTx) putSpotFundsPnlBoundsLimit(
 
 func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) error {
 	for _, inst := range data.MarketDataInstances {
+		if inst.ExternalID.IsZero() {
+			return fmt.Errorf(
+				"store: restore %s market-data instance %q external id: %w",
+				backup.SectionMarketData,
+				inst.Label,
+				domain.ErrInvalid,
+			)
+		}
+		if err := domain.ValidateMarketDataInstance(inst); err != nil {
+			return fmt.Errorf(
+				"store: restore market-data instance %q: %w",
+				inst.ExternalID,
+				err,
+			)
+		}
 		exists, err := rowExists(
 			ctx, rt.tx,
 			`SELECT 1 FROM market_data_instance WHERE external_id = ?`,
@@ -583,7 +623,11 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 				inst.Provider, inst.Label, inst.Credentials, inst.Enabled,
 				inst.ExternalID.Bytes(),
 			); err != nil {
-				return fmt.Errorf("store: restore md instance %q: %w", inst.ExternalID, err)
+				return fmt.Errorf(
+					"store: restore market-data instance %q: %w",
+					inst.ExternalID,
+					err,
+				)
 			}
 		} else if _, err := rt.tx.ExecContext(
 			ctx,
@@ -593,7 +637,11 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 			inst.ExternalID.Bytes(), inst.Provider, inst.Label,
 			inst.Credentials, inst.Enabled,
 		); err != nil {
-			return fmt.Errorf("store: restore md instance %q: %w", inst.ExternalID, err)
+			return fmt.Errorf(
+				"store: restore market-data instance %q: %w",
+				inst.ExternalID,
+				err,
+			)
 		}
 		rt.applyRuntime(backup.SectionMarketData, 1)
 	}
@@ -601,6 +649,21 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 	// Instruments resolve their instance by the preserved external id and their
 	// asset by code; they upsert on (instance, external_symbol).
 	for _, instr := range data.MarketDataInstruments {
+		if err := domain.ValidateMarketDataInstrument(domain.MarketDataInstrument{
+			Instance:       instr.Instance,
+			ExternalSymbol: instr.ExternalSymbol,
+			BaseAsset:      instr.BaseAsset,
+			QuoteAsset:     instr.QuoteAsset,
+			ManualPrice:    instr.ManualPrice,
+			Enabled:        instr.Enabled,
+		}); err != nil {
+			return fmt.Errorf(
+				"store: restore market-data instrument %q/%q: %w",
+				instr.Instance,
+				instr.ExternalSymbol,
+				err,
+			)
+		}
 		instanceID, err := resolveInstanceID(ctx, rt.tx, instr.Instance)
 		if err != nil {
 			return err
@@ -637,7 +700,12 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 			instanceID, instr.ExternalSymbol, baseID, quoteID,
 			instr.Enabled, instr.ManualPrice,
 		); err != nil {
-			return fmt.Errorf("store: restore md instrument %q: %w", instr.ExternalSymbol, err)
+			return fmt.Errorf(
+				"store: restore market-data instrument %q/%q: %w",
+				instr.Instance,
+				instr.ExternalSymbol,
+				err,
+			)
 		}
 		rt.applyRuntime(backup.SectionMarketData, 1)
 	}
@@ -650,6 +718,9 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 // and the signing keys. Signing keys are dictionary support rows referenced by
 // order approvals through key_id, so they must land before activity history.
 func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Data) error {
+	if err := rt.validateRestoredSigningKeys(ctx, data.SigningKeys); err != nil {
+		return err
+	}
 	for command, enabled := range data.McpAccess {
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM mcp_access WHERE command = ?`, command)
 		if err != nil {
@@ -713,6 +784,103 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 			return fmt.Errorf("store: restore signing key %q: %w", key.KeyID, err)
 		}
 		rt.summary.AddApplied(backup.SectionGeneralSettings, 1)
+	}
+	return nil
+}
+
+func (rt *restoreTx) validateRestoredSigningKeys(
+	ctx context.Context, keys []backup.SigningKey,
+) error {
+	for _, key := range keys {
+		if err := validateRestoredSigningKey(key); err != nil {
+			return fmt.Errorf(
+				"store: restore %s signing key %q: %w",
+				backup.SectionGeneralSettings,
+				key.KeyID,
+				err,
+			)
+		}
+	}
+
+	rows, err := rt.tx.QueryContext(ctx, `SELECT key_id, active FROM signing_key`)
+	if err != nil {
+		return fmt.Errorf(
+			"store: restore %s signing keys: %w",
+			backup.SectionGeneralSettings,
+			err,
+		)
+	}
+	defer func() { _ = rows.Close() }()
+
+	activeByID := make(map[string]bool)
+	for rows.Next() {
+		var keyID string
+		var active bool
+		if err := rows.Scan(&keyID, &active); err != nil {
+			return fmt.Errorf(
+				"store: restore %s signing keys: %w",
+				backup.SectionGeneralSettings,
+				err,
+			)
+		}
+		activeByID[keyID] = active
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf(
+			"store: restore %s signing keys: %w",
+			backup.SectionGeneralSettings,
+			err,
+		)
+	}
+
+	for _, key := range keys {
+		if _, exists := activeByID[key.KeyID]; exists && rt.mode == backup.RestoreModeInsertMissing {
+			continue
+		}
+		activeByID[key.KeyID] = key.Active
+	}
+	var activeIDs []string
+	for keyID, active := range activeByID {
+		if active {
+			activeIDs = append(activeIDs, keyID)
+		}
+	}
+	if len(activeIDs) > 1 {
+		sort.Strings(activeIDs)
+		return fmt.Errorf(
+			"store: restore %s signing keys %q: more than one active key: %w",
+			backup.SectionGeneralSettings,
+			activeIDs,
+			domain.ErrInvalid,
+		)
+	}
+	return nil
+}
+
+func validateRestoredSigningKey(key backup.SigningKey) error {
+	if key.Alg != fwsigning.AlgEd25519 {
+		return fmt.Errorf("algorithm %q: %w", key.Alg, domain.ErrInvalid)
+	}
+	if len(key.PrivateKey) != ed25519.SeedSize {
+		return fmt.Errorf(
+			"private key seed length %d, want %d: %w",
+			len(key.PrivateKey),
+			ed25519.SeedSize,
+			domain.ErrInvalid,
+		)
+	}
+	if len(key.PublicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf(
+			"public key length %d, want %d: %w",
+			len(key.PublicKey),
+			ed25519.PublicKeySize,
+			domain.ErrInvalid,
+		)
+	}
+	privateKey := ed25519.NewKeyFromSeed(key.PrivateKey)
+	publicKey, ok := privateKey.Public().(ed25519.PublicKey)
+	if !ok || !bytes.Equal(publicKey, key.PublicKey) {
+		return fmt.Errorf("public key does not match private key seed: %w", domain.ErrInvalid)
 	}
 	return nil
 }
@@ -819,13 +987,23 @@ func (rt *restoreTx) restoreAdjustment(
 	}
 	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(rec.Source)))
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s adjustment %q source: %w",
+			backup.SectionActivityHistory,
+			rec.ExternalID,
+			err,
+		)
 	}
 	statusID, err := rt.dictionaries.id(
 		adjustmentStatusTable, "adjustment status", string(adjustmentStatus(rec)),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s adjustment %q status: %w",
+			backup.SectionActivityHistory,
+			rec.ExternalID,
+			err,
+		)
 	}
 	if _, err := rt.tx.ExecContext(
 		ctx,
@@ -844,6 +1022,16 @@ func (rt *restoreTx) restoreAdjustment(
 
 func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) error {
 	o := rec.Order
+	if o.Leaves != "" {
+		if _, err := domain.ParseOpenQuantity(o.Leaves); err != nil {
+			return fmt.Errorf(
+				"store: restore %s order %q leaves: %w",
+				backup.SectionActivityHistory,
+				o.ExternalID,
+				err,
+			)
+		}
+	}
 	accountID, err := resolveAccountID(ctx, rt.tx, o.Account)
 	if err != nil {
 		return err
@@ -871,21 +1059,41 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 	}
 	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(o.Source)))
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s order %q source: %w",
+			backup.SectionActivityHistory,
+			o.ExternalID,
+			err,
+		)
 	}
 	sideID, err := rt.dictionaries.id(orderSideTable, "order side", string(o.Side))
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s order %q side: %w",
+			backup.SectionActivityHistory,
+			o.ExternalID,
+			err,
+		)
 	}
 	amountKindID, err := rt.dictionaries.id(
 		orderAmountKindTable, "order amount kind", string(o.AmountKind),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s order %q amount kind: %w",
+			backup.SectionActivityHistory,
+			o.ExternalID,
+			err,
+		)
 	}
 	statusID, err := rt.dictionaries.id(orderStatusTable, "order status", string(o.Status))
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s order %q status: %w",
+			backup.SectionActivityHistory,
+			o.ExternalID,
+			err,
+		)
 	}
 	if exists && rt.mode == backup.RestoreModeOverwrite {
 		if _, err := rt.tx.ExecContext(
@@ -945,11 +1153,21 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 	}
 	typeID, err := rt.dictionaries.id(orderEventTypeTable, "order event type", string(ev.Type))
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s order event %q type: %w",
+			backup.SectionActivityHistory,
+			ev.ExternalID,
+			err,
+		)
 	}
 	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(ev.Source)))
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s order event %q source: %w",
+			backup.SectionActivityHistory,
+			ev.ExternalID,
+			err,
+		)
 	}
 	if exists && rt.mode == backup.RestoreModeOverwrite {
 		if _, err := rt.tx.ExecContext(
@@ -1137,17 +1355,32 @@ func (rt *restoreTx) restoreEventAttestation(
 	}
 	algID, err := rt.dictionaries.id(attestationAlgTable, "attestation algorithm", att.Alg)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s event attestation %q algorithm: %w",
+			backup.SectionActivityHistory,
+			ev.ExternalID,
+			err,
+		)
 	}
 	requestTypeID, err := rt.dictionaries.id(
 		attestationRequestTypeTable, "attestation request type", string(att.RequestType),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s event attestation %q request type: %w",
+			backup.SectionActivityHistory,
+			ev.ExternalID,
+			err,
+		)
 	}
 	modeID, err := rt.dictionaries.id(attestationModeTable, "attestation mode", att.Mode)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s event attestation %q mode: %w",
+			backup.SectionActivityHistory,
+			ev.ExternalID,
+			err,
+		)
 	}
 	if _, err := rt.tx.ExecContext(
 		ctx,
@@ -1206,11 +1439,21 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 	}
 	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(t.Source)))
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s trade %q source: %w",
+			backup.SectionActivityHistory,
+			t.ExternalID,
+			err,
+		)
 	}
 	sideID, err := rt.dictionaries.id(orderSideTable, "order side", string(t.Side))
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"store: restore %s trade %q side: %w",
+			backup.SectionActivityHistory,
+			t.ExternalID,
+			err,
+		)
 	}
 	if _, err := rt.tx.ExecContext(
 		ctx,
@@ -1248,11 +1491,21 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 		}
 		actionID, err := rt.dictionaries.id(auditActionTable, "audit action", string(row.Action))
 		if err != nil {
-			return err
+			return fmt.Errorf(
+				"store: restore %s audit %q action: %w",
+				backup.SectionAuditLog,
+				row.ExternalID,
+				err,
+			)
 		}
 		sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(source))
 		if err != nil {
-			return err
+			return fmt.Errorf(
+				"store: restore %s audit %q source: %w",
+				backup.SectionAuditLog,
+				row.ExternalID,
+				err,
+			)
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,

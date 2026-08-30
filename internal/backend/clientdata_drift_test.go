@@ -20,6 +20,7 @@ package backend_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -1550,12 +1551,15 @@ func seedClientDataDriftRealm(
 	if err != nil {
 		t.Fatalf("AppendOrderEvent(reject): %v", err)
 	}
+	signingKeySeed := []byte("00000000000000000000000000000002")
+	ed25519Key := ed25519.NewKeyFromSeed(signingKeySeed)
+	signingKeyPublic := ed25519Key.Public().(ed25519.PublicKey)
 	must(t, "UpsertSigningKey", rs.UpsertSigningKey(ctx, domain.SigningKey{
 		CreatedAt:  time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC),
 		KeyID:      "key-sentinel-1",
 		Alg:        "ed25519",
-		PublicKey:  bytes.Repeat([]byte{0x11}, 32),
-		PrivateKey: bytes.Repeat([]byte{0x22}, 32),
+		PublicKey:  signingKeyPublic,
+		PrivateKey: signingKeySeed,
 		Active:     true,
 	}))
 	must(t, "PutEventAttestation", rs.PutEventAttestation(
