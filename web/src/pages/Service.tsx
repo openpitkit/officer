@@ -592,21 +592,31 @@ export function BackupCard() {
 
         {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
         {summary && (
-          <p className="text-xs text-muted-lt">
-            {t("backup.summary", {
-              applied: Object.values(summary.applied).reduce(
-                (a, b) => a + (b ?? 0),
-                0,
-              ),
-              skipped: Object.values(summary.skipped).reduce(
-                (a, b) => a + (b ?? 0),
-                0,
-              ),
-              restart: summary.restartRequired
-                ? t("backup.restartRequired")
-                : tc("value.no"),
-            })}
-          </p>
+          <>
+            <p className="text-xs text-muted-lt">
+              {t("backup.summary", {
+                applied: Object.values(summary.applied).reduce(
+                  (a, b) => a + (b ?? 0),
+                  0,
+                ),
+                skipped: Object.values(summary.skipped).reduce(
+                  (a, b) => a + (b ?? 0),
+                  0,
+                ),
+                restart: summary.restartRequired
+                  ? t("backup.restartRequired")
+                  : tc("value.no"),
+              })}
+            </p>
+            {summary.marketDataCredentialsUnavailable?.length ? (
+              <p className="text-xs text-[var(--danger)]">
+                {t("backup.marketDataCredentialsUnavailable", {
+                  instances:
+                    summary.marketDataCredentialsUnavailable.join(", "),
+                })}
+              </p>
+            ) : null}
+          </>
         )}
       </CardContent>
     </Card>

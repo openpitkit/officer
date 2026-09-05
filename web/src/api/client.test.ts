@@ -129,8 +129,9 @@ beforeEach(() => {
 });
 
 const backupArchive: BackupArchive = {
+  credentialForm: "plaintext",
   manifest: {
-    formatVersion: 1,
+    formatVersion: 2,
     createdAt: "2026-06-22T10:00:00Z",
     source: "unit-test-fixture",
     realm: { code: "test", title: "Test" },
@@ -1342,6 +1343,7 @@ describe("backup client", () => {
         summary: {
           applied: { accounts_groups: 1 },
           skipped: {},
+          marketDataCredentialsUnavailable: ["alpaca-primary", "oanda-fx"],
           restartRequired: true,
         },
       }),
@@ -1368,11 +1370,23 @@ describe("backup client", () => {
       }),
     );
     expect(result.applied.accounts_groups).toBe(1);
+    expect(result.marketDataCredentialsUnavailable).toEqual([
+      "alpaca-primary",
+      "oanda-fx",
+    ]);
     expect(result.restartRequired).toBe(true);
   });
 
   it("restores from an uploaded backup file payload", async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ summary: {} }));
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        summary: {
+          applied: {},
+          skipped: {},
+          restartRequired: false,
+        },
+      }),
+    );
 
     await restoreBackup({
       archiveFile: { base64: "UEsDBA==", filename: "pit backup.zip" },
@@ -1394,8 +1408,16 @@ describe("backup client", () => {
     );
   });
 
-  it("defaults missing restore summary maps", async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ summary: {} }));
+  it("normalizes an empty restore summary", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        summary: {
+          applied: {},
+          skipped: {},
+          restartRequired: false,
+        },
+      }),
+    );
 
     const result = await restoreBackup({
       archive: backupArchive,
@@ -1405,7 +1427,82 @@ describe("backup client", () => {
 
     expect(result.applied).toEqual({});
     expect(result.skipped).toEqual({});
+    expect(result.marketDataCredentialsUnavailable).toBeUndefined();
     expect(result.restartRequired).toBe(false);
+  });
+
+  it.each(["applied", "skipped", "restartRequired"])(
+    "rejects a restore summary with an absent %s field",
+    async (field) => {
+      const summary = {
+        applied: {},
+        skipped: {},
+        restartRequired: false,
+      };
+      delete summary[field as keyof typeof summary];
+      vi.mocked(fetch).mockResolvedValue(jsonResponse({ summary }));
+
+      await expect(
+        restoreBackup({
+          archive: backupArchive,
+          scope: { all: true },
+          mode: "insert_missing",
+        }),
+      ).rejects.toThrow("The service encountered an internal error.");
+    },
+  );
+
+  it.each([
+    ["applied", null],
+    ["applied", "bad"],
+    ["applied", 1],
+    ["skipped", null],
+    ["skipped", "bad"],
+    ["skipped", 1],
+    ["restartRequired", "true"],
+  ])(
+    "rejects a restore summary with a malformed %s field",
+    async (field, value) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          summary: {
+            applied: {},
+            skipped: {},
+            restartRequired: false,
+            [field]: value,
+          },
+        }),
+      );
+
+      await expect(
+        restoreBackup({
+          archive: backupArchive,
+          scope: { all: true },
+          mode: "insert_missing",
+        }),
+      ).rejects.toThrow("The service encountered an internal error.");
+    },
+  );
+
+  it("rejects malformed unavailable market-data credentials", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        summary: {
+          applied: {},
+          skipped: {},
+          restartRequired: false,
+          marketDataCredentialsUnavailable: ["alpaca-primary", 1],
+        },
+      }),
+    );
+
+    await expect(
+      restoreBackup({
+        archive: backupArchive,
+        scope: { all: true },
+        mode: "insert_missing",
+      }),
+    ).rejects.toThrow("The service encountered an internal error.");
   });
 
   it("rejects a non-object restore response distinctly from bad summaries", async () => {

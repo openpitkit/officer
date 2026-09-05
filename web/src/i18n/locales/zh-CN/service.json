@@ -91,6 +91,7 @@
     "positionsGroupsPlaceholder": "持仓分组，用逗号分隔",
     "restartRequired": "运行时已重启",
     "summary": "已应用 {{applied}}，已跳过 {{skipped}} · {{restart}}",
+    "marketDataCredentialsUnavailable": "无法打开 {{instances}} 的凭据。这些行情数据来源已恢复为停用状态，需要重新输入凭据。",
     "confirmReplaceAll": "删除所有选定数据并恢复此备份？",
     "restoreScopeWarningTitle": "只会影响选定分区。",
     "restoreScopeWarning": "恢复模式只应用于上面选择的数据；除非勾选“所有数据”，否则不会作用于整个数据库。",

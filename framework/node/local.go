@@ -980,6 +980,43 @@ func (n *localNode) rollbackStore(
 	scope backup.Scope,
 	err error,
 ) error {
+	currentSigningKeys, listErr := n.realm.ListSigningKeys(ctx)
+	if listErr != nil {
+		return n.fatalReconciliation(
+			"rollback store",
+			errors.Join(
+				err,
+				fmt.Errorf(
+					"rollback not attempted: list current signing keys: %w",
+					listErr,
+				),
+			),
+		)
+	}
+	currentSigningKeyIDs := make(map[string]struct{}, len(currentSigningKeys))
+	for _, key := range currentSigningKeys {
+		currentSigningKeyIDs[key.KeyID] = struct{}{}
+	}
+	missingSigningKeyIDs := make([]string, 0)
+	for _, key := range rollback.Data.SigningKeys {
+		if _, ok := currentSigningKeyIDs[key.KeyID]; !ok {
+			missingSigningKeyIDs = append(missingSigningKeyIDs, key.KeyID)
+		}
+	}
+	if len(missingSigningKeyIDs) != 0 {
+		return n.fatalReconciliation(
+			"rollback store",
+			errors.Join(
+				err,
+				fmt.Errorf(
+					"rollback not attempted because it would replace signing key material "+
+						"the archive cannot carry; missing signing key ids: %q",
+					missingSigningKeyIDs,
+				),
+			),
+		)
+	}
+
 	_, restoreErr := n.realm.RestoreBackup(ctx, rollback, backup.RestoreOptions{
 		Scope: scope,
 		Mode:  backup.RestoreModeReplaceAll,

@@ -28,7 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"log/slog"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
@@ -587,15 +587,16 @@ func (rt *restoreTx) putSpotFundsPnlBoundsLimit(
 // --- Restore: market data ---------------------------------------------------
 
 func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) error {
-	for _, inst := range data.MarketDataInstances {
-		if inst.ExternalID.IsZero() {
+	for _, archived := range data.MarketDataInstances {
+		if archived.ExternalID.IsZero() {
 			return fmt.Errorf(
 				"store: restore %s market-data instance %q external id: %w",
 				backup.SectionMarketData,
-				inst.Label,
+				archived.Label,
 				domain.ErrInvalid,
 			)
 		}
+		inst := restoredMarketDataInstance(archived, "")
 		if err := domain.ValidateMarketDataInstance(inst); err != nil {
 			return fmt.Errorf(
 				"store: restore market-data instance %q: %w",
@@ -614,13 +615,56 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 		if rt.skip(backup.SectionMarketData, exists) {
 			continue
 		}
+
+		credentials, openErr := rt.openArchivedMarketDataCredentials(archived)
+		if openErr != nil {
+			slog.Error(
+				"open archived market-data credentials; restoring instance disabled",
+				"instance_id", archived.ExternalID.String(),
+				"error", openErr,
+			)
+			credentials = []byte{}
+			inst = restoredMarketDataInstance(archived, "")
+			inst.Enabled = false
+			rt.summary.MarketDataCredentialsUnavailable = append(
+				rt.summary.MarketDataCredentialsUnavailable,
+				archived.Label,
+			)
+		} else {
+			inst = restoredMarketDataInstance(archived, string(credentials))
+			if err := domain.ValidateMarketDataInstance(inst); err != nil {
+				return fmt.Errorf(
+					"store: restore market-data instance %q: %w",
+					inst.ExternalID,
+					err,
+				)
+			}
+			if rt.validateMarketDataInstance != nil {
+				if err := rt.validateMarketDataInstance(inst); err != nil {
+					return fmt.Errorf(
+						"store: restore market-data instance %q: %w",
+						inst.ExternalID,
+						err,
+					)
+				}
+			}
+		}
+		storedCredentials, err := rt.store.sealValue(
+			marketDataInstanceTable,
+			marketDataCredentialsColumn,
+			inst.ExternalID.String(),
+			credentials,
+		)
+		if err != nil {
+			return err
+		}
 		if exists {
 			if _, err := rt.tx.ExecContext(
 				ctx,
 				`UPDATE market_data_instance
 				 SET provider = ?, label = ?, credentials = ?, enabled = ?
 				 WHERE external_id = ?`,
-				inst.Provider, inst.Label, inst.Credentials, inst.Enabled,
+				inst.Provider, inst.Label, storedCredentials, inst.Enabled,
 				inst.ExternalID.Bytes(),
 			); err != nil {
 				return fmt.Errorf(
@@ -635,7 +679,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 			 (external_id, provider, label, credentials, enabled)
 			 VALUES (?, ?, ?, ?, ?)`,
 			inst.ExternalID.Bytes(), inst.Provider, inst.Label,
-			inst.Credentials, inst.Enabled,
+			storedCredentials, inst.Enabled,
 		); err != nil {
 			return fmt.Errorf(
 				"store: restore market-data instance %q: %w",
@@ -712,13 +756,56 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 	return nil
 }
 
+func restoredMarketDataInstance(
+	archived backup.MarketDataInstance, credentials string,
+) domain.MarketDataInstance {
+	return domain.MarketDataInstance{
+		ExternalID:  archived.ExternalID,
+		Provider:    archived.Provider,
+		Label:       archived.Label,
+		Credentials: credentials,
+		Enabled:     archived.Enabled,
+	}
+}
+
+func (rt *restoreTx) openArchivedMarketDataCredentials(
+	archived backup.MarketDataInstance,
+) ([]byte, error) {
+	if rt.credentialForm == backup.CredentialFormPlaintext {
+		return append([]byte(nil), archived.Credentials...), nil
+	}
+	key := rt.store.sealer.Load()
+	if key == nil {
+		return nil, fmt.Errorf(
+			"store: open archived market-data credentials for row %q: no master key configured",
+			archived.ExternalID,
+		)
+	}
+	credentials, err := rt.store.openValueWithKey(
+		*key,
+		rt.sourceRealm,
+		marketDataInstanceTable,
+		marketDataCredentialsColumn,
+		archived.ExternalID.String(),
+		archived.Credentials,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"store: open archived market-data credentials for row %q: %w",
+			archived.ExternalID,
+			err,
+		)
+	}
+	return credentials, nil
+}
+
 // --- Restore: settings ------------------------------------------------------
 
 // restoreGeneralSettings restores the MCP access overrides, the signing config
 // and the signing keys. Signing keys are dictionary support rows referenced by
 // order approvals through key_id, so they must land before activity history.
 func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Data) error {
-	if err := rt.validateRestoredSigningKeys(ctx, data.SigningKeys); err != nil {
+	if err := validateRestoredSigningKeys(data.SigningKeys); err != nil {
 		return err
 	}
 	for command, enabled := range data.McpAccess {
@@ -758,9 +845,20 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 		rt.summary.AddApplied(backup.SectionGeneralSettings, 1)
 	}
 	for _, key := range data.SigningKeys {
-		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM signing_key WHERE key_id = ?`, key.KeyID)
-		if err != nil {
-			return err
+		var targetPublicKey []byte
+		err := rt.tx.QueryRowContext(
+			ctx, `SELECT public_key FROM signing_key WHERE key_id = ?`, key.KeyID,
+		).Scan(&targetPublicKey)
+		exists := err == nil
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("store: read signing key %q before restore: %w", key.KeyID, err)
+		}
+		if exists && !bytes.Equal(targetPublicKey, key.PublicKey) {
+			return fmt.Errorf(
+				"store: restore signing key %q: public key conflicts with target identity: %w",
+				key.KeyID,
+				domain.ErrInvalid,
+			)
 		}
 		if rt.skip(backup.SectionGeneralSettings, exists) {
 			continue
@@ -769,28 +867,41 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
-		if _, err := rt.tx.ExecContext(
-			ctx,
-			`INSERT INTO signing_key
-			 (key_id, alg, private_key, public_key, created_at, active)
-			 VALUES (?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(key_id) DO UPDATE SET
-			   alg = excluded.alg, private_key = excluded.private_key,
-			   public_key = excluded.public_key, created_at = excluded.created_at,
-			   active = excluded.active`,
-			key.KeyID, key.Alg, key.PrivateKey, key.PublicKey,
-			createdAt.UTC().Format(time.RFC3339Nano), key.Active,
-		); err != nil {
-			return fmt.Errorf("store: restore signing key %q: %w", key.KeyID, err)
+		if exists {
+			if _, err := rt.tx.ExecContext(
+				ctx,
+				`UPDATE signing_key
+				 SET alg = ?, public_key = ?, created_at = ?
+				 WHERE key_id = ?`,
+				key.Alg, key.PublicKey,
+				createdAt.UTC().Format(time.RFC3339Nano), key.KeyID,
+			); err != nil {
+				return fmt.Errorf("store: restore signing key %q: %w", key.KeyID, err)
+			}
+		} else {
+			privateKey, err := rt.store.sealValue(
+				signingKeyTable, signingPrivateKeyColumn, key.KeyID, []byte{},
+			)
+			if err != nil {
+				return err
+			}
+			if _, err := rt.tx.ExecContext(
+				ctx,
+				`INSERT INTO signing_key
+				 (key_id, alg, private_key, public_key, created_at, active)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				key.KeyID, key.Alg, privateKey, key.PublicKey,
+				createdAt.UTC().Format(time.RFC3339Nano), false,
+			); err != nil {
+				return fmt.Errorf("store: restore signing key %q: %w", key.KeyID, err)
+			}
 		}
 		rt.summary.AddApplied(backup.SectionGeneralSettings, 1)
 	}
 	return nil
 }
 
-func (rt *restoreTx) validateRestoredSigningKeys(
-	ctx context.Context, keys []backup.SigningKey,
-) error {
+func validateRestoredSigningKeys(keys []backup.SigningKey) error {
 	for _, key := range keys {
 		if err := validateRestoredSigningKey(key); err != nil {
 			return fmt.Errorf(
@@ -801,73 +912,12 @@ func (rt *restoreTx) validateRestoredSigningKeys(
 			)
 		}
 	}
-
-	rows, err := rt.tx.QueryContext(ctx, `SELECT key_id, active FROM signing_key`)
-	if err != nil {
-		return fmt.Errorf(
-			"store: restore %s signing keys: %w",
-			backup.SectionGeneralSettings,
-			err,
-		)
-	}
-	defer func() { _ = rows.Close() }()
-
-	activeByID := make(map[string]bool)
-	for rows.Next() {
-		var keyID string
-		var active bool
-		if err := rows.Scan(&keyID, &active); err != nil {
-			return fmt.Errorf(
-				"store: restore %s signing keys: %w",
-				backup.SectionGeneralSettings,
-				err,
-			)
-		}
-		activeByID[keyID] = active
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf(
-			"store: restore %s signing keys: %w",
-			backup.SectionGeneralSettings,
-			err,
-		)
-	}
-
-	for _, key := range keys {
-		if _, exists := activeByID[key.KeyID]; exists && rt.mode == backup.RestoreModeInsertMissing {
-			continue
-		}
-		activeByID[key.KeyID] = key.Active
-	}
-	var activeIDs []string
-	for keyID, active := range activeByID {
-		if active {
-			activeIDs = append(activeIDs, keyID)
-		}
-	}
-	if len(activeIDs) > 1 {
-		sort.Strings(activeIDs)
-		return fmt.Errorf(
-			"store: restore %s signing keys %q: more than one active key: %w",
-			backup.SectionGeneralSettings,
-			activeIDs,
-			domain.ErrInvalid,
-		)
-	}
 	return nil
 }
 
 func validateRestoredSigningKey(key backup.SigningKey) error {
 	if key.Alg != fwsigning.AlgEd25519 {
 		return fmt.Errorf("algorithm %q: %w", key.Alg, domain.ErrInvalid)
-	}
-	if len(key.PrivateKey) != ed25519.SeedSize {
-		return fmt.Errorf(
-			"private key seed length %d, want %d: %w",
-			len(key.PrivateKey),
-			ed25519.SeedSize,
-			domain.ErrInvalid,
-		)
 	}
 	if len(key.PublicKey) != ed25519.PublicKeySize {
 		return fmt.Errorf(
@@ -876,11 +926,6 @@ func validateRestoredSigningKey(key backup.SigningKey) error {
 			ed25519.PublicKeySize,
 			domain.ErrInvalid,
 		)
-	}
-	privateKey := ed25519.NewKeyFromSeed(key.PrivateKey)
-	publicKey, ok := privateKey.Public().(ed25519.PublicKey)
-	if !ok || !bytes.Equal(publicKey, key.PublicKey) {
-		return fmt.Errorf("public key does not match private key seed: %w", domain.ErrInvalid)
 	}
 	return nil
 }

@@ -201,6 +201,7 @@ describe("BackupCard", () => {
     restoreBackupMock.mockResolvedValue({
       applied: { accounts_groups: 1 },
       skipped: {},
+      marketDataCredentialsUnavailable: ["alpaca-primary", "oanda-fx"],
       restartRequired: false,
     });
     renderBackupCard();
@@ -232,7 +233,48 @@ describe("BackupCard", () => {
     await waitFor(() => {
       expect(screen.getByText(/Applied 1, skipped 0/)).toBeInTheDocument();
     });
+    expect(
+      screen.getByText(
+        "Credentials could not be opened for alpaca-primary, oanda-fx. Those market-data sources were restored disabled and need their credentials entered again.",
+      ),
+    ).toBeInTheDocument();
   });
+
+  it.each([
+    ["empty", []],
+    ["absent", undefined],
+  ])(
+    "does not show a credentials notice when the unavailable list is %s",
+    async (_, unavailable) => {
+      const user = userEvent.setup();
+      restoreBackupMock.mockResolvedValue({
+        applied: {},
+        skipped: {},
+        ...(unavailable === undefined
+          ? {}
+          : { marketDataCredentialsUnavailable: unavailable }),
+        restartRequired: false,
+      });
+      renderBackupCard();
+
+      await user.click(screen.getByRole("tab", { name: /^restore$/i }));
+      await user.click(screen.getByRole("radio", { name: /overwrite/i }));
+      const input =
+        document.querySelector<HTMLInputElement>('input[type="file"]');
+      if (input == null) {
+        throw new Error("backup file input not found");
+      }
+      await user.upload(input, backupFile("backup.json", "{}"));
+      await user.click(screen.getByRole("button", { name: /^restore$/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Applied 0, skipped 0/)).toBeInTheDocument();
+      });
+      expect(
+        screen.queryByText(/Credentials could not be opened for/),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("confirms and runs replace-all restore", async () => {
     const user = userEvent.setup();

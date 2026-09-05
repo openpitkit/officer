@@ -44,6 +44,14 @@ services:
       PIT_OFFICER_SQLITE_PATH: "/data/pit-officer.db"
       # Headless container: never attempt to launch a browser on serve start.
       PIT_OFFICER_OPEN_BROWSER: "false"
+      # Passed through only when set on the host; an empty value is configured
+      # but invalid, not absent.
+      PIT_OFFICER_MASTER_KEY:
+      PIT_OFFICER_MASTER_KEY_FILE:
+      # PIT_OFFICER_MASTER_KEY_FILE requires the key file to be bind-mounted
+      # into the container.
+      # The root filesystem is read-only, so mount that file read-only at the
+      # operator's chosen path.
       # Optional: pin a pre-extracted OpenPit runtime library via a bind mount.
       # OPENPIT_RUNTIME_LIBRARY_PATH: /app/lib/libopenpit_ffi.so
 

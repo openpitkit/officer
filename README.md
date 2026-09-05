@@ -81,6 +81,8 @@ takes precedence over built-in defaults.
 | `PIT_OFFICER_HTTP_ADDR` | `-http-addr` | `127.0.0.1:0` | HTTP listen address used in `serve` mode. The default binds to loopback with an OS-assigned free port; use `pit-officer dashboard` to discover the URL. The container image overrides this to `0.0.0.0:8787` so a fixed, mapped port can be reached. |
 | `PIT_OFFICER_SQLITE_PATH` | `-sqlite-path` | `pit-officer.db` | On-disk path of the SQLite database. The container image sets this to `/data/pit-officer.db` and maps `/data` to a named volume. |
 | `OPENPIT_RUNTIME_LIBRARY_PATH` | `-runtime-library-path` | _(empty)_ | Path to a pre-extracted native OpenPit runtime library. When set, the binding skips its own extraction step. The stable container image leaves this unset. |
+| `PIT_OFFICER_MASTER_KEY` | - | _(empty)_ | Exactly 32 bytes in standard base64. Optional; when absent, secrets are stored unencrypted (the default). Officer never generates, stores, or recovers this key; the operator supplies it whole. It is deliberately not available as a command-line flag because process arguments are visible to other local processes. If both sources are configured with different values, or a configured source cannot be read, Officer refuses to start rather than running unencrypted. Once a database is sealed, Officer refuses to start without the matching key; the key is not recoverable, so losing it means that database cannot be opened again. |
+| `PIT_OFFICER_MASTER_KEY_FILE` | `-master-key-file` | _(empty)_ | Path to a file holding the same base64 value. Everything said about `PIT_OFFICER_MASTER_KEY` applies here too. |
 
 <!-- markdownlint-enable MD013 -->
 

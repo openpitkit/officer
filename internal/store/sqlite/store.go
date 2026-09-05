@@ -31,6 +31,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/migration"
+	"go.openpit.dev/officer/framework/secret"
 	fwstore "go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/store/schema"
 
@@ -50,11 +51,14 @@ var (
 // one realm and rejects any other realm id. Safe for concurrent use: all
 // mutations go through database/sql which pools a single connection.
 type sqliteStore struct {
-	db        atomic.Pointer[sql.DB]
-	enumCodes atomic.Pointer[enumDictionaries]
-	dialect   sqliteDialect
-	path      string
-	realm     domain.RealmID
+	db                  atomic.Pointer[sql.DB]
+	enumCodes           atomic.Pointer[enumDictionaries]
+	configuredMasterKey *secret.MasterKey
+	sealer              atomic.Pointer[secret.MasterKey]
+	dialect             sqliteDialect
+	path                string
+	realm               domain.RealmID
+	databaseCreated     bool
 
 	mu        sync.Mutex
 	reachable bool
@@ -74,6 +78,15 @@ func WithRealm(realm domain.RealmID) Option {
 	}
 }
 
+// WithMasterKey records the master key considered by the migration-time secret
+// state machine.
+func WithMasterKey(key secret.MasterKey) Option {
+	return func(s *sqliteStore) {
+		keyCopy := key
+		s.configuredMasterKey = &keyCopy
+	}
+}
+
 // New opens (creating if absent) the SQLite database at path. The
 // caller must run Migrate before any read or write, then obtain a RealmStore
 // from ForRealm. Close releases the underlying connection pool.
@@ -82,6 +95,12 @@ func WithRealm(realm domain.RealmID) Option {
 // filesystem path so the operator sees the full location. filepath.Abs returns
 // an already-absolute path unchanged and keeps the original string on error.
 func New(path string, opts ...Option) (fwstore.Store, error) {
+	filesystemPath, _, _ := strings.Cut(path, "?")
+	_, statErr := os.Stat(filesystemPath)
+	databaseCreated := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !databaseCreated {
+		return nil, fmt.Errorf("store: stat sqlite at %q: %w", path, statErr)
+	}
 	db, err := openSQLiteDB(path)
 	if err != nil {
 		return nil, fmt.Errorf("store: open sqlite at %q: %w", path, err)
@@ -92,9 +111,10 @@ func New(path string, opts ...Option) (fwstore.Store, error) {
 		displayPath = abs
 	}
 	s := &sqliteStore{
-		dialect: sqliteDialect{},
-		path:    displayPath,
-		realm:   domain.DefaultRealm,
+		dialect:         sqliteDialect{},
+		path:            displayPath,
+		realm:           domain.DefaultRealm,
+		databaseCreated: databaseCreated,
 	}
 	s.db.Store(db)
 	for _, opt := range opts {
@@ -188,10 +208,12 @@ func (s *sqliteStore) Migrate(ctx context.Context) error {
 	if db == nil {
 		return fmt.Errorf("store: sqlite is closed")
 	}
-	return s.migrateDB(ctx, db)
+	return s.migrateDB(ctx, db, s.databaseCreated)
 }
 
-func (s *sqliteStore) migrateDB(ctx context.Context, db *sql.DB) error {
+func (s *sqliteStore) migrateDB(
+	ctx context.Context, db *sql.DB, databaseCreated bool,
+) error {
 	if err := migration.Apply(
 		ctx,
 		db,
@@ -203,6 +225,9 @@ func (s *sqliteStore) migrateDB(ctx context.Context, db *sql.DB) error {
 	}
 	dictionaries, err := seedEnumDictionaries(ctx, db)
 	if err != nil {
+		return err
+	}
+	if err := s.configureSealing(ctx, db, databaseCreated); err != nil {
 		return err
 	}
 	s.enumCodes.Store(dictionaries)
@@ -261,7 +286,7 @@ func (s *sqliteStore) Reset(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("store: reset open temporary sqlite at %q: %w", tmpPath, err)
 	}
-	if err := s.migrateDB(ctx, tmpDB); err != nil {
+	if err := s.migrateDB(ctx, tmpDB, true); err != nil {
 		_ = tmpDB.Close()
 		return errors.Join(
 			fmt.Errorf("store: reset migrate: %w", err),
@@ -413,6 +438,11 @@ func externalIDForInsert(supplied domain.ExternalID) (domain.ExternalID, error) 
 type sqlQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// sqlScanner is the scan surface shared by *sql.Row and *sql.Rows.
+type sqlScanner interface {
+	Scan(...any) error
 }
 
 // sqlExecer is the write surface shared by *sql.DB and *sql.Tx.

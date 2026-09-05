@@ -67,16 +67,28 @@ func (s *Service) RestoreBackup(
 		return backup.RestoreSummary{},
 			fmt.Errorf("backup manifest source is required: %w", domain.ErrInvalid)
 	}
+	if err := backup.ValidateCredentialForm(archive.CredentialForm); err != nil {
+		return backup.RestoreSummary{}, fmt.Errorf(
+			"backup credential form %q unsupported: %w",
+			archive.CredentialForm, err,
+		)
+	}
 	data := backup.FilterData(archive.Data, opts.Scope.Normalize())
-	for _, instance := range data.MarketDataInstances {
-		if err := validateMarketDataProvider(s.registry, instance); err != nil {
-			return backup.RestoreSummary{}, fmt.Errorf(
-				"backend: restore %s market-data instance %q: %w",
-				backup.SectionMarketData,
-				instance.ExternalID,
-				err,
-			)
+	marketDataInstances := make(
+		[]domain.MarketDataInstance, 0, len(data.MarketDataInstances),
+	)
+	for _, archived := range data.MarketDataInstances {
+		credentials := ""
+		if archive.CredentialForm == backup.CredentialFormPlaintext {
+			credentials = string(archived.Credentials)
 		}
+		marketDataInstances = append(marketDataInstances, domain.MarketDataInstance{
+			ExternalID:  archived.ExternalID,
+			Provider:    archived.Provider,
+			Label:       archived.Label,
+			Credentials: credentials,
+			Enabled:     archived.Enabled,
+		})
 	}
 	n, err := s.groupNode()
 	if err != nil {
@@ -85,7 +97,9 @@ func (s *Service) RestoreBackup(
 
 	mdPlan := marketDataRestorePlan{}
 	if s.md != nil {
-		mdPlan, err = planMarketDataRestore(ctx, n, archive, opts)
+		mdPlan, err = planMarketDataRestore(
+			ctx, n, archive, opts, marketDataInstances,
+		)
 		if err != nil {
 			return backup.RestoreSummary{}, err
 		}
@@ -95,19 +109,29 @@ func (s *Service) RestoreBackup(
 		s.md.Stop()
 		mdStopped = true
 	}
+	restoreOpts := opts
+	restoreOpts.ValidateMarketDataInstance = func(instance domain.MarketDataInstance) error {
+		return validateMarketDataProvider(s.registry, instance)
+	}
 	summary, sink, err := n.RestoreBackup(
-		ctx, archive, opts, auth.CallerFromContext(ctx),
+		ctx, archive, restoreOpts, auth.CallerFromContext(ctx),
 	)
+	var reloadErr error
+	if reloadErr = s.signer.Reload(context.WithoutCancel(ctx)); reloadErr != nil {
+		reloadErr = fmt.Errorf("backend: reload signer after backup restore: %w", reloadErr)
+	}
 	if err != nil {
 		if mdStopped {
 			err = errors.Join(err, s.restoreMarketDataAfterBackup(sink))
 		}
+		err = errors.Join(err, reloadErr)
 		return backup.RestoreSummary{},
 			fmt.Errorf("backend: restore backup: %w", err)
 	}
+	var postRestoreErr error
 	if mdStopped {
 		if err := s.restoreMarketDataAfterBackup(sink); err != nil {
-			return summary, fmt.Errorf(
+			postRestoreErr = fmt.Errorf(
 				"backend: backup restored; market-data restart pending reconciliation: %w",
 				err,
 			)
@@ -117,21 +141,29 @@ func (s *Service) RestoreBackup(
 			ctx, n, mdPlan.manualUpdates,
 		)
 		if err != nil {
-			return summary, fmt.Errorf(
+			postRestoreErr = fmt.Errorf(
 				"backend: backup restored; live manual market-data update pending reconciliation: %w",
 				err,
 			)
-		}
-		for _, instrument := range manualUpdates {
-			if err := s.md.PushManual(
-				ctx, instrument.Instance.String(), instrument,
-			); err != nil {
-				return summary, fmt.Errorf(
-					"backend: backup restored; live manual market-data update pending reconciliation: %w",
-					err,
-				)
+		} else {
+			for _, instrument := range manualUpdates {
+				if err := s.md.PushManual(
+					ctx, instrument.Instance.String(), instrument,
+				); err != nil {
+					postRestoreErr = fmt.Errorf(
+						"backend: backup restored; live manual market-data update pending reconciliation: %w",
+						err,
+					)
+					break
+				}
 			}
 		}
+	}
+	if postRestoreErr != nil {
+		return summary, errors.Join(postRestoreErr, reloadErr)
+	}
+	if reloadErr != nil {
+		return summary, reloadErr
 	}
 	return summary, nil
 }
@@ -165,11 +197,18 @@ func planMarketDataRestore(
 	},
 	archive backup.Archive,
 	opts backup.RestoreOptions,
+	restoredInstances []domain.MarketDataInstance,
 ) (marketDataRestorePlan, error) {
 	scope := opts.Scope.Normalize()
 	if !scope.Included(backup.SectionMarketData) ||
 		!archiveCarriesSection(archive, backup.SectionMarketData) {
 		return marketDataRestorePlan{}, nil
+	}
+	// This layer does not hold the master key, so it cannot predict whether a
+	// sealed credential will open. Restart against committed store state after
+	// restore instead of pushing the archive representation into reconciliation.
+	if archive.CredentialForm == backup.CredentialFormSealed {
+		return marketDataRestorePlan{restart: true}, nil
 	}
 
 	currentInstances, err := n.ListMarketDataInstances(ctx)
@@ -193,7 +232,7 @@ func planMarketDataRestore(
 	data := backup.FilterData(archive.Data, scope)
 	desiredInstances, desiredInstruments := projectMarketDataRestore(
 		currentInstances, currentInstruments,
-		data.MarketDataInstances, data.MarketDataInstruments,
+		restoredInstances, data.MarketDataInstruments,
 		opts.Mode,
 	)
 	if !sameMarketDataRuntime(

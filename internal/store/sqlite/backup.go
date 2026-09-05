@@ -92,7 +92,14 @@ func (r *realmStore) exportBackup(
 	if err != nil {
 		return backup.Archive{}, err
 	}
-	return backup.NewArchive(time.Now(), backupSource, label, scope, data), nil
+	credentialForm, err := snapshot.exportCredentialForm(ctx)
+	if err != nil {
+		return backup.Archive{}, err
+	}
+	archive = backup.NewArchive(
+		time.Now(), backupSource, label, scope, data, credentialForm,
+	)
+	return archive, nil
 }
 
 func (r *realmStore) backupSnapshot(
@@ -154,6 +161,7 @@ func (r *realmStore) backupSnapshot(
 			removeSnapshot(),
 		)
 	}
+	snapshotStore.setSealer(r.store.sealer.Load())
 	cleanup := func() error {
 		return errors.Join(snapshotStore.Close(), removeSnapshot())
 	}
@@ -242,7 +250,7 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.Audit, err = r.exportAudit(ctx); err != nil {
 		return backup.Data{}, err
 	}
-	if data.MarketDataInstances, err = r.ListMarketDataInstances(ctx); err != nil {
+	if data.MarketDataInstances, err = r.exportMarketDataInstances(ctx); err != nil {
 		return backup.Data{}, err
 	}
 	if data.MarketDataInstruments, err = r.exportInstruments(ctx); err != nil {
@@ -281,6 +289,19 @@ func (r *realmStore) RestoreBackup(
 			"backup format version %d unsupported, want %d: %w",
 			archive.Manifest.FormatVersion, backup.FormatVersion, domain.ErrInvalid)
 	}
+	if err := domain.ValidateRealmID(
+		domain.RealmID(archive.Manifest.Realm.Code),
+	); err != nil {
+		return backup.RestoreSummary{}, fmt.Errorf(
+			"backup manifest.realm.code invalid: %w", err,
+		)
+	}
+	if err := backup.ValidateCredentialForm(archive.CredentialForm); err != nil {
+		return backup.RestoreSummary{}, fmt.Errorf(
+			"backup credential form %q unsupported: %w",
+			archive.CredentialForm, err,
+		)
+	}
 	mode, err := validateRestoreMode(opts.Mode)
 	if err != nil {
 		return backup.RestoreSummary{}, err
@@ -306,10 +327,14 @@ func (r *realmStore) RestoreBackup(
 
 	summary = backup.NewSummary()
 	rt := &restoreTx{
-		tx:           tx,
-		dictionaries: dictionaries,
-		mode:         mode,
-		summary:      &summary,
+		store:                      r.store,
+		tx:                         tx,
+		dictionaries:               dictionaries,
+		mode:                       mode,
+		sourceRealm:                archive.Manifest.Realm.Code,
+		credentialForm:             archive.CredentialForm,
+		validateMarketDataInstance: opts.ValidateMarketDataInstance,
+		summary:                    &summary,
 	}
 
 	if err := rt.run(ctx, scope, data); err != nil {
@@ -337,10 +362,14 @@ func validateRestoreMode(mode backup.RestoreMode) (backup.RestoreMode, error) {
 // restoreTx carries the in-flight restore transaction, the mode and the running
 // per-section summary so the per-table insert helpers stay small.
 type restoreTx struct {
-	tx           *sql.Tx
-	dictionaries *enumDictionaries
-	mode         backup.RestoreMode
-	summary      *backup.RestoreSummary
+	store                      *sqliteStore
+	tx                         *sql.Tx
+	dictionaries               *enumDictionaries
+	mode                       backup.RestoreMode
+	sourceRealm                string
+	credentialForm             string
+	validateMarketDataInstance func(domain.MarketDataInstance) error
+	summary                    *backup.RestoreSummary
 }
 
 // applyRuntime records n runtime rows written to section. The node classifies

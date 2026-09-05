@@ -834,3 +834,32 @@ func TestSignNoActiveKey(t *testing.T) {
 		t.Fatalf("expected ErrNotFound signing without a key, got %v", err)
 	}
 }
+
+func TestReloadDropsActiveKeyRemovedOutsideService(t *testing.T) {
+	st := newFakeStore()
+	svc, err := New(st)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := svc.GenerateKey(context.Background()); err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	st.keys = map[string]domain.SigningKey{}
+	if err := svc.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if _, err := svc.Sign(samplePayload()); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Sign after Reload = %v, want ErrNotFound", err)
+	}
+}
+
+func TestVerifyOnlyActiveKeyFailsToLoad(t *testing.T) {
+	key := domain.SigningKey{
+		KeyID: "verify-only", Alg: fwsigning.AlgEd25519, Active: true,
+	}
+	st := newFakeStore()
+	st.keys[key.KeyID] = key
+	if _, err := New(st); !errors.Is(err, ErrNoPrivateMaterial) {
+		t.Fatalf("New with active verify-only key = %v, want ErrNoPrivateMaterial", err)
+	}
+}

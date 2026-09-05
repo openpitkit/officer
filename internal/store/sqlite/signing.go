@@ -19,12 +19,12 @@
 // configuration. A signing key is a dictionary entity, but unlike the code-keyed
 // dictionaries it is addressed by its own UUID key_id (the handle it carries into
 // approval envelopes), so the surrogate id never crosses the interface boundary
-// here either. The private and public key material is stored verbatim as BLOBs
-// and read back byte-identical. Active-key semantics are caller-driven: the
-// signing service deactivates every key, then upserts one with Active set, so
-// these methods only persist and surface the flag faithfully. signing_config is a
-// plain key/value table whose key is a hardcoded enum stored as TEXT, never a
-// dictionary.
+// here either. The private key is sealed when the store has a sealer, while the
+// public key is always stored verbatim. Active-key semantics are caller-driven:
+// the signing service deactivates every key, then upserts one with Active set,
+// so these methods only persist and surface the flag faithfully. signing_config
+// is a plain key/value table whose key is a hardcoded enum stored as TEXT, never
+// a dictionary.
 
 package sqlite
 
@@ -48,12 +48,19 @@ SELECT key_id, alg, private_key, public_key, created_at, active
 FROM signing_key`
 
 // UpsertSigningKey inserts or replaces a signing key row, keyed by its UUID
-// key_id. The private and public key material is stored verbatim as BLOBs and
-// the active flag is persisted exactly as supplied; active-key switching is the
-// caller's responsibility (it deactivates all then upserts one as active).
+// key_id. The private key is sealed when configured, the public key is stored
+// verbatim, and the active flag is persisted exactly as supplied. Active-key
+// switching is the caller's responsibility (it deactivates all then upserts one
+// as active).
 func (r *realmStore) UpsertSigningKey(
 	ctx context.Context, key domain.SigningKey,
 ) error {
+	privateKey, err := r.store.sealValue(
+		signingKeyTable, signingPrivateKeyColumn, key.KeyID, key.PrivateKey,
+	)
+	if err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -69,7 +76,7 @@ func (r *realmStore) UpsertSigningKey(
 		   public_key  = excluded.public_key,
 		   created_at  = excluded.created_at,
 		   active      = excluded.active`,
-		key.KeyID, key.Alg, key.PrivateKey, key.PublicKey,
+		key.KeyID, key.Alg, privateKey, key.PublicKey,
 		signingKeyCreatedAt(key.CreatedAt), key.Active,
 	); err != nil {
 		return fmt.Errorf("store: upsert signing key: %w", err)
@@ -90,7 +97,7 @@ func (r *realmStore) GetActiveSigningKey(
 	row := db.QueryRowContext(
 		ctx, signingKeySelect+` WHERE active = 1 LIMIT 1`,
 	)
-	key, err := scanSigningKeyRow(row)
+	key, err := scanSigningKeyRow(row, r.store)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SigningKey{}, false, nil
 	}
@@ -112,7 +119,7 @@ func (r *realmStore) GetSigningKey(
 	row := db.QueryRowContext(
 		ctx, signingKeySelect+` WHERE key_id = ?`, keyID,
 	)
-	key, err := scanSigningKeyRow(row)
+	key, err := scanSigningKeyRow(row, r.store)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SigningKey{}, fmt.Errorf("signing key %q: %w", keyID, domain.ErrNotFound)
 	}
@@ -179,21 +186,28 @@ func signingKeyCreatedAt(t time.Time) string {
 }
 
 // scanSigningKeyRow scans one private-material-bearing key projection from a
-// single row, decoding the created_at timestamp and copying the BLOBs verbatim.
-func scanSigningKeyRow(row *sql.Row) (domain.SigningKey, error) {
+// single row, decoding the created_at timestamp and opening the private key
+// when the store has a sealer.
+func scanSigningKeyRow(row *sql.Row, store *sqliteStore) (domain.SigningKey, error) {
 	var (
-		key                   domain.SigningKey
-		privateKey, publicKey []byte
-		createdAt             string
+		key                         domain.SigningKey
+		storedPrivateKey, publicKey []byte
+		createdAt                   string
 	)
 	if err := row.Scan(
-		&key.KeyID, &key.Alg, &privateKey, &publicKey, &createdAt, &key.Active,
+		&key.KeyID, &key.Alg, &storedPrivateKey, &publicKey, &createdAt, &key.Active,
 	); err != nil {
 		return domain.SigningKey{}, err
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return domain.SigningKey{}, fmt.Errorf("store: parse signing key created_at %q: %w", createdAt, err)
+	}
+	privateKey, err := store.openValue(
+		signingKeyTable, signingPrivateKeyColumn, key.KeyID, storedPrivateKey,
+	)
+	if err != nil {
+		return domain.SigningKey{}, err
 	}
 	key.PrivateKey = privateKey
 	key.PublicKey = publicKey

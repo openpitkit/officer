@@ -4531,8 +4531,12 @@ components:
 
     BackupArchive:
       type: object
-      required: [manifest, data]
+      required: [credentialForm, manifest, data]
       properties:
+        credentialForm:
+          type: string
+          enum: [plaintext, sealed]
+          description: Form shared by every archived market-data credential.
         manifest:
           description: Archive metadata used to validate and route restore.
           $ref: "#/components/schemas/BackupManifest"
@@ -4730,6 +4734,10 @@ components:
           type: object
           additionalProperties:
             type: integer
+        marketDataCredentialsUnavailable:
+          type: array
+          items:
+            type: string
         restartRequired:
           type: boolean
 

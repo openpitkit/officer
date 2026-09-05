@@ -441,14 +441,15 @@ CREATE INDEX idx_audit_source ON audit (source_id, at DESC, id DESC);
 CREATE INDEX idx_audit_actor_code ON audit (actor_code, at DESC, id DESC);
 
 -- Market-data connector instances. provider is a hardcoded enum; label is a
--- unique, case-insensitive operator-facing name; credentials is an opaque JSON
--- blob; enabled gates runtime participation.
+-- unique, case-insensitive operator-facing name; credentials holds plaintext or
+-- a sealed binary value according to store state; enabled gates runtime
+-- participation.
 CREATE TABLE market_data_instance (
     id          {{PK}},
     external_id {{XID}} UNIQUE,
     provider    TEXT NOT NULL,
     label       TEXT NOT NULL DEFAULT '' COLLATE NOCASE UNIQUE,
-    credentials TEXT NOT NULL DEFAULT '',
+    credentials BLOB NOT NULL DEFAULT X'',
     enabled     {{BOOL}} NOT NULL DEFAULT 0
 );
 
@@ -470,8 +471,10 @@ CREATE INDEX idx_market_data_instruments_base_asset
 CREATE INDEX idx_market_data_instruments_quote_asset
     ON market_data_instrument (quote_asset_id);
 
--- Ed25519 signing keypairs. key_id is the key's own UUID handle. private_key is
--- a plaintext BLOB (at-rest encryption deferred). active=1 marks the signing key.
+-- Ed25519 signing keys. key_id is the key's own UUID handle. An empty plaintext
+-- marks a verify-only key: an empty column in an unsealed store, or a sealed
+-- envelope of the empty value in a sealed store. Store state decides the form,
+-- never the stored length. active=1 marks the key used for new signatures.
 CREATE TABLE signing_key (
     id          {{PK}},
     key_id      TEXT    NOT NULL UNIQUE,
@@ -483,6 +486,16 @@ CREATE TABLE signing_key (
 );
 
 CREATE INDEX idx_signing_keys_active ON signing_key (active);
+
+-- Singleton state for realm-wide secret sealing. Presence means secret columns
+-- are sealed; key_verifier identifies the required master key without retaining
+-- key material.
+CREATE TABLE secret_state (
+    singleton    INTEGER PRIMARY KEY CHECK (singleton = 1),
+    key_verifier BLOB NOT NULL,
+    sealed_at    TEXT NOT NULL,
+    vacuumed_at  TEXT
+);
 
 -- Global signing configuration; key is a hardcoded enum, not a dictionary.
 CREATE TABLE signing_config (

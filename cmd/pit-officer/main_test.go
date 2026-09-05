@@ -20,14 +20,81 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/internal/config"
+	officerruntime "go.openpit.dev/officer/internal/runtime"
 )
+
+func TestSetupResolvesMasterKey(t *testing.T) {
+	const malformedKey = "not-base64!"
+	t.Setenv(config.EnvMasterKey, malformedKey)
+	t.Setenv(config.EnvMasterKeyFile, filepath.Join(t.TempDir(), "missing-master-key"))
+
+	cfg, err := config.Load([]string{"-mode", "mcp"}, os.LookupEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if _, err := setup(context.Background(), cfg, logger, func(error) {}); err == nil {
+		t.Fatal("setup() error = nil")
+	} else {
+		if !strings.Contains(err.Error(), "master key environment variable") {
+			t.Fatalf("setup() error = %v, want environment source", err)
+		}
+		if strings.Contains(err.Error(), malformedKey) {
+			t.Fatalf("setup() error exposes key material: %v", err)
+		}
+	}
+}
+
+func TestUtilityCommandsDoNotResolveMasterKey(t *testing.T) {
+	t.Setenv(config.EnvMasterKey, "not-base64!")
+	t.Setenv(config.EnvMasterKeyFile, filepath.Join(t.TempDir(), "missing-master-key"))
+
+	t.Run("healthcheck", func(t *testing.T) {
+		t.Setenv(config.EnvSQLitePath, filepath.Join(t.TempDir(), "officer.db"))
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/healthz" {
+				t.Errorf("request path = %q, want /healthz", r.URL.Path)
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		addr := strings.TrimPrefix(server.URL, "http://")
+		if err := runHealthcheck([]string{"-http-addr", addr}); err != nil {
+			t.Fatalf("runHealthcheck: %v", err)
+		}
+	})
+
+	t.Run("dashboard", func(t *testing.T) {
+		sqlitePath := filepath.Join(t.TempDir(), "officer.db")
+		t.Setenv(config.EnvSQLitePath, sqlitePath)
+		cfg := config.Config{SQLitePath: sqlitePath}
+		if err := officerruntime.Write(cfg, officerruntime.State{
+			Addr: "127.0.0.1:8787",
+			URL:  "http://127.0.0.1:8787/",
+		}); err != nil {
+			t.Fatalf("Write runtime state: %v", err)
+		}
+
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		if err := runDashboard([]string{"-no-open"}, logger); err != nil {
+			t.Fatalf("runDashboard: %v", err)
+		}
+	})
+}
 
 func TestServiceLifecycleHandlerAuditsBeforeAccepting(t *testing.T) {
 	t.Parallel()

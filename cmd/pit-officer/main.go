@@ -138,6 +138,11 @@ func setup(
 	logger *slog.Logger,
 	fatalHook func(error),
 ) (*frameworkapp.App, error) {
+	masterKey, err := config.ResolveMasterKey(cfg, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+
 	builder := frameworkapp.NewBuilder()
 	if err := openapp.Register(builder); err != nil {
 		return nil, err
@@ -145,6 +150,7 @@ func setup(
 	return builder.Build(ctx, frameworkapp.Config{
 		SQLitePath:         cfg.SQLitePath,
 		RuntimeLibraryPath: cfg.RuntimeLibraryPath,
+		MasterKey:          masterKey,
 	}, logger, fatalHook)
 }
 

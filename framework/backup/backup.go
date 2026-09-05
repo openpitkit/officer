@@ -40,7 +40,14 @@ import (
 )
 
 // FormatVersion is the current portable archive shape.
-const FormatVersion = 1
+const FormatVersion = 2
+
+const (
+	// CredentialFormPlaintext declares that archived credentials are plaintext.
+	CredentialFormPlaintext = "plaintext"
+	// CredentialFormSealed declares that archived credentials are sealed database values.
+	CredentialFormSealed = "sealed"
+)
 
 // Section identifies a logical backup/restore group. A scope is a set of
 // sections plus the entity selectors that narrow account-addressed rows.
@@ -137,6 +144,10 @@ type RestoreOptions struct {
 	Scope Scope `json:"scope"`
 	// Mode is how incoming rows interact with existing rows.
 	Mode RestoreMode `json:"mode"`
+	// ValidateMarketDataInstance applies the provider registry's validation after
+	// the store has opened archived credentials and before it commits an enabled
+	// instance. It is an in-process restore seam and never part of the wire form.
+	ValidateMarketDataInstance func(domain.MarketDataInstance) error `json:"-"`
 }
 
 // RestoreSummary reports the restore outcome per section. RestartRequired is
@@ -149,6 +160,9 @@ type RestoreSummary struct {
 	Applied map[Section]int `json:"applied"`
 	// Skipped counts the rows skipped per section (insert-missing collisions).
 	Skipped map[Section]int `json:"skipped"`
+	// MarketDataCredentialsUnavailable names instances restored disabled because
+	// their archived credentials could not be opened by this installation.
+	MarketDataCredentialsUnavailable []string `json:"marketDataCredentialsUnavailable,omitempty"`
 	// RestartRequired reports that this restore actually replaced the engine.
 	RestartRequired bool `json:"restartRequired"`
 }
@@ -296,6 +310,23 @@ type Balance struct {
 	Account domain.AccountID `json:"account"`
 }
 
+// MarketDataInstance is the portable archive form of a configured market-data
+// source. Credentials are raw bytes so sealed values survive JSON base64
+// encoding without UTF-8 conversion. Archive.CredentialForm declares whether
+// every row holds the database's sealed or plaintext form.
+type MarketDataInstance struct {
+	// ExternalID is the instance's opaque public handle.
+	ExternalID domain.ExternalID `json:"externalId"`
+	// Provider is the hardcoded provider type.
+	Provider string `json:"provider"`
+	// Label is the unique operator-facing instance name.
+	Label string `json:"label"`
+	// Credentials is the database value exactly as stored.
+	Credentials []byte `json:"credentials"`
+	// Enabled reports whether the instance participates at runtime.
+	Enabled bool `json:"enabled"`
+}
+
 // MarketDataInstrument is the portable archive form of a configured market-data
 // instrument. Asset codes identify its pair: the target connector resolves and
 // assigns fresh, collision-free engine asset ids on restore.
@@ -314,9 +345,9 @@ type MarketDataInstrument struct {
 	Enabled bool `json:"enabled"`
 }
 
-// SigningKey is the portable archive form of a signing key. The key_id UUID is
-// the key's own external handle and is preserved; the private and public key
-// material travel as raw bytes (JSON base64). The surrogate id is never carried.
+// SigningKey is the portable archive form of a signing public key. The key_id
+// UUID is the key's own external handle and is preserved. Private key material
+// never enters the archive, and the surrogate id is never carried.
 type SigningKey struct {
 	// CreatedAt is when the key was generated or imported (UTC).
 	CreatedAt time.Time `json:"createdAt"`
@@ -326,9 +357,8 @@ type SigningKey struct {
 	Alg string `json:"alg"`
 	// PublicKey is the raw public key.
 	PublicKey []byte `json:"publicKey,omitempty"`
-	// PrivateKey is the raw private key seed.
-	PrivateKey []byte `json:"privateKey,omitempty"`
-	// Active reports whether this is the current signing key.
+	// Active reports whether this was the source installation's current signing
+	// key. It is informational; restore never activates an archived key.
 	Active bool `json:"active,omitempty"`
 }
 
@@ -416,11 +446,11 @@ type Data struct {
 	// Audit is the append-only audit trail (by external id).
 	Audit []domain.AuditRow `json:"audit,omitempty"`
 	// MarketDataInstances are configured market-data sources (by external id).
-	MarketDataInstances []domain.MarketDataInstance `json:"marketDataInstances,omitempty"`
+	MarketDataInstances []MarketDataInstance `json:"marketDataInstances,omitempty"`
 	// MarketDataInstruments are per-instance instruments, linked by the instance
 	// external id and asset codes.
 	MarketDataInstruments []MarketDataInstrument `json:"marketDataInstruments,omitempty"`
-	// SigningKeys are the signing keypairs (by key_id).
+	// SigningKeys are the signing public keys (by key_id).
 	SigningKeys []SigningKey `json:"signingKeys,omitempty"`
 	// SigningConfig is the global signing configuration (enum keys).
 	SigningConfig []SigningConfigEntry `json:"signingConfig,omitempty"`
@@ -433,6 +463,8 @@ type Data struct {
 // Archive is the single JSON document copied between Officer realms. It is one
 // realm's portable form: a labelling manifest plus the portable rows.
 type Archive struct {
+	// CredentialForm explicitly declares the form of every archived credential.
+	CredentialForm string `json:"credentialForm"`
 	// Manifest carries the metadata and the realm label.
 	Manifest Manifest `json:"manifest"`
 	// Data carries the portable rows.
@@ -447,9 +479,11 @@ func NewArchive(
 	realm RealmLabel,
 	scope Scope,
 	data Data,
+	credentialForm string,
 ) Archive {
 	scope = scope.Normalize()
 	return Archive{
+		CredentialForm: credentialForm,
 		Manifest: Manifest{
 			FormatVersion: FormatVersion,
 			CreatedAt:     createdAt.UTC(),
@@ -458,6 +492,17 @@ func NewArchive(
 			Sections:      scope.IncludedSections(),
 		},
 		Data: FilterData(data, scope),
+	}
+}
+
+// ValidateCredentialForm rejects an absent, null-decoded or unknown archive
+// credential form. Restore never infers the form from credential bytes.
+func ValidateCredentialForm(form string) error {
+	switch form {
+	case CredentialFormPlaintext, CredentialFormSealed:
+		return nil
+	default:
+		return domain.ErrInvalid
 	}
 }
 
@@ -635,7 +680,7 @@ func FilterData(data Data, scope Scope) Data {
 		)
 	}
 	if scope.Included(SectionMarketData) {
-		out.MarketDataInstances = append([]domain.MarketDataInstance(nil),
+		out.MarketDataInstances = append([]MarketDataInstance(nil),
 			data.MarketDataInstances...)
 		out.MarketDataInstruments = append([]MarketDataInstrument(nil),
 			data.MarketDataInstruments...)

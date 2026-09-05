@@ -23,7 +23,9 @@
 package backup
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -263,7 +265,7 @@ func TestTouchesRuntime(t *testing.T) {
 func TestNewArchiveOmitsVersionAndCarriesRealmLabel(t *testing.T) {
 	created := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
 	archive := NewArchive(created, "src", RealmLabel{Code: "desk-a", Title: "Desk A"},
-		Scope{All: true}, fixtureData())
+		Scope{All: true}, fixtureData(), CredentialFormPlaintext)
 	if archive.Manifest.Realm.Code != "desk-a" || archive.Manifest.Realm.Title != "Desk A" {
 		t.Fatalf("realm label = %+v", archive.Manifest.Realm)
 	}
@@ -292,7 +294,9 @@ func TestNewArchiveExcludesBalanceAccountCurrency(t *testing.T) {
 	if _, found := reflect.TypeOf(Balance{}).FieldByName("AccountCurrency"); found {
 		t.Fatal("portable balance carries derived account currency")
 	}
-	archive := NewArchive(time.Now(), "src", RealmLabel{}, Scope{All: true}, fixtureData())
+	archive := NewArchive(
+		time.Now(), "src", RealmLabel{}, Scope{All: true}, fixtureData(), CredentialFormPlaintext,
+	)
 	raw, err := json.Marshal(archive)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -315,6 +319,13 @@ func TestArchiveUsesPortableLowerCamelCaseKeys(t *testing.T) {
 			Asset:                 "AAPL",
 			Account:               "acc-1",
 		}},
+		MarketDataInstances: []MarketDataInstance{{
+			ExternalID:  mustXID(t2Bytes()),
+			Provider:    domain.MarketDataProviderBYO,
+			Label:       "manual",
+			Credentials: []byte{0xff, 0x00, 0xfe},
+			Enabled:     true,
+		}},
 		MarketDataInstruments: []MarketDataInstrument{{
 			Instance:       mustXID(t1Bytes()),
 			ExternalSymbol: "AAPLUSD",
@@ -331,11 +342,80 @@ func TestArchiveUsesPortableLowerCamelCaseKeys(t *testing.T) {
 		`"updatedAt"`, `"available"`, `"held"`, `"incoming"`, `"realizedPnl"`,
 		`"realizedPnlHaltReason"`, `"averageEntryPrice"`, `"asset"`, `"account"`,
 		`"instance"`, `"externalSymbol"`, `"baseAsset"`, `"quoteAsset"`,
-		`"manualPrice"`, `"enabled"`,
+		`"manualPrice"`, `"externalId"`, `"provider"`, `"label"`,
+		`"credentials"`, `"enabled"`,
 	} {
 		if !strings.Contains(string(raw), key) {
 			t.Fatalf("archive omits portable key %s: %s", key, raw)
 		}
+	}
+}
+
+func TestMarketDataCredentialsJSONRoundTrip(t *testing.T) {
+	want := []byte{0x01, 0xff, 0x00, 0xfe, 0x80, 0x7f}
+	archive := Archive{
+		CredentialForm: CredentialFormSealed,
+		Data: Data{MarketDataInstances: []MarketDataInstance{{
+			ExternalID:  mustXID(t1Bytes()),
+			Provider:    domain.MarketDataProviderBYO,
+			Label:       "sealed-feed",
+			Credentials: want,
+		}}},
+	}
+	raw, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatalf("marshal archive: %v", err)
+	}
+	var roundTrip Archive
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatalf("unmarshal archive: %v", err)
+	}
+	if roundTrip.CredentialForm != CredentialFormSealed {
+		t.Fatalf("credential form = %q, want %q", roundTrip.CredentialForm, CredentialFormSealed)
+	}
+	if len(roundTrip.Data.MarketDataInstances) != 1 {
+		t.Fatalf("market-data instances = %d, want 1", len(roundTrip.Data.MarketDataInstances))
+	}
+	got := roundTrip.Data.MarketDataInstances[0]
+	if !bytes.Equal(got.Credentials, want) {
+		t.Fatalf("credential round-trip bytes = %v, want %v", got.Credentials, want)
+	}
+}
+
+func TestCredentialFormDeclarationIsRequiredAndKnown(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "absent", raw: `{}`},
+		{name: "null", raw: `{"credentialForm":null}`},
+		{name: "unknown", raw: `{"credentialForm":"future"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var archive Archive
+			if err := json.Unmarshal([]byte(test.raw), &archive); err != nil {
+				t.Fatalf("unmarshal archive: %v", err)
+			}
+			if err := ValidateCredentialForm(archive.CredentialForm); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ValidateCredentialForm(%q) = %v, want ErrInvalid",
+					archive.CredentialForm, err)
+			}
+		})
+	}
+}
+
+func TestSigningKeyArchiveFormHasNoPrivateMaterial(t *testing.T) {
+	if _, found := reflect.TypeOf(SigningKey{}).FieldByName("PrivateKey"); found {
+		t.Fatal("portable signing key exposes private material")
+	}
+	raw, err := json.Marshal(SigningKey{
+		KeyID: "key-1", Alg: "ed25519", PublicKey: []byte("public"), Active: true,
+	})
+	if err != nil {
+		t.Fatalf("marshal signing key: %v", err)
+	}
+	if bytes.Contains(raw, []byte("private")) {
+		t.Fatalf("portable signing key JSON contains private material field: %s", raw)
 	}
 }
 

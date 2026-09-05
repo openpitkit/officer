@@ -20,6 +20,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/node"
+	fwsigning "go.openpit.dev/officer/framework/signing"
 )
 
 const (
@@ -74,9 +76,23 @@ func (n *backupRestoreTestNode) ListMarketDataInstruments(
 func (n *backupRestoreTestNode) RestoreBackup(
 	_ context.Context,
 	archive backup.Archive,
-	_ backup.RestoreOptions,
+	opts backup.RestoreOptions,
 	_ domain.Caller,
 ) (backup.RestoreSummary, marketdata.Sink, error) {
+	if opts.ValidateMarketDataInstance != nil {
+		for _, archived := range archive.Data.MarketDataInstances {
+			if err := opts.ValidateMarketDataInstance(domain.MarketDataInstance{
+				ExternalID: archived.ExternalID, Provider: archived.Provider,
+				Label: archived.Label, Credentials: string(archived.Credentials),
+				Enabled: archived.Enabled,
+			}); err != nil {
+				return backup.RestoreSummary{}, nil, fmt.Errorf(
+					"store: restore market-data instance %q: %w",
+					archived.ExternalID, err,
+				)
+			}
+		}
+	}
 	n.restoreCalls++
 	n.restoredArchive = archive
 	if n.removeAfterRestore {
@@ -108,6 +124,17 @@ type backupRestoreTestRuntime struct {
 }
 
 type backupRestoreTestConnector struct{}
+
+type backupRestoreTestSigner struct {
+	fwsigning.Service
+	reloads   int
+	reloadErr error
+}
+
+func (s *backupRestoreTestSigner) Reload(context.Context) error {
+	s.reloads++
+	return s.reloadErr
+}
 
 func (backupRestoreTestConnector) Subscribe(
 	context.Context, []marketdata.Subscription,
@@ -180,19 +207,27 @@ func newBackupRestoreTestService(
 	}); err != nil {
 		t.Fatalf("register BYO provider: %v", err)
 	}
-	return &Service{router: router, md: md, registry: registry}, n, md
+	// New guarantees signer is never a nil interface; a literal built here has
+	// to uphold that invariant itself.
+	return &Service{
+		router:   router,
+		md:       md,
+		registry: registry,
+		signer:   fwsigning.ServiceOrUnavailable(nil),
+	}, n, md
 }
 
 func backupRestoreTestArchive(
 	manualPrice string,
 ) (backup.Archive, backup.RestoreOptions) {
 	archive := backup.Archive{
+		CredentialForm: backup.CredentialFormPlaintext,
 		Manifest: backup.Manifest{
 			Source:   "test",
 			Sections: []backup.Section{backup.SectionMarketData},
 		},
 		Data: backup.Data{
-			MarketDataInstances: []domain.MarketDataInstance{{
+			MarketDataInstances: []backup.MarketDataInstance{{
 				ExternalID: "manual-feed",
 				Provider:   domain.MarketDataProviderBYO,
 				Enabled:    true,
@@ -216,10 +251,10 @@ func backupRestoreTestArchive(
 	return archive, opts
 }
 
-func TestRestoreBackupRejectsUnknownMarketDataProviderBeforeNode(t *testing.T) {
+func TestRestoreBackupInstallsRegistryBackedMarketDataValidator(t *testing.T) {
 	t.Parallel()
 
-	svc, n, _ := newBackupRestoreTestService(t, false)
+	svc, _, _ := newBackupRestoreTestService(t, false)
 	archive, opts := backupRestoreTestArchive("100")
 	archive.Data.MarketDataInstances[0].Provider = "unknown"
 
@@ -227,17 +262,74 @@ func TestRestoreBackupRejectsUnknownMarketDataProviderBeforeNode(t *testing.T) {
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("RestoreBackup error = %v, want ErrInvalid", err)
 	}
-	for _, want := range []string{
-		string(backup.SectionMarketData),
-		"manual-feed",
-		`provider "unknown"`,
-	} {
+	for _, want := range []string{"manual-feed", `provider "unknown"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
 		}
 	}
-	if n.restoreCalls != 0 {
-		t.Fatalf("RestoreBackup reached the node %d time(s)", n.restoreCalls)
+}
+
+func TestRestoreBackupRegistryRejectedInstanceFailsRestore(t *testing.T) {
+	t.Parallel()
+
+	svc, _, _ := newBackupRestoreTestService(t, false)
+	provider, _ := svc.registry.Lookup(domain.MarketDataProviderBYO)
+	provider.Build = func(instance domain.MarketDataInstance) (marketdata.Connector, error) {
+		if instance.Credentials == `{"token":"reject"}` {
+			return nil, errors.New("rejected provider credentials")
+		}
+		return backupRestoreTestConnector{}, nil
+	}
+	if err := svc.registry.Register(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	archive, opts := backupRestoreTestArchive("100")
+	archive.Data.MarketDataInstances[0].Credentials = []byte(`{"token":"reject"}`)
+
+	_, err := svc.RestoreBackup(context.Background(), archive, opts)
+	if !errors.Is(err, domain.ErrInvalid) ||
+		!strings.Contains(err.Error(), "rejected provider credentials") {
+		t.Fatalf("RestoreBackup error = %v, want provider credential rejection", err)
+	}
+}
+
+func TestRestoreBackupRejectsMissingOrUnknownCredentialFormBeforeNode(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		form string
+	}{
+		{name: "missing"},
+		{name: "unknown", form: "future"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			svc, n, _ := newBackupRestoreTestService(t, false)
+			archive, opts := backupRestoreTestArchive("100")
+			archive.CredentialForm = test.form
+			if _, err := svc.RestoreBackup(context.Background(), archive, opts); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup credential form %q = %v, want ErrInvalid", test.form, err)
+			}
+			if n.restoreCalls != 0 {
+				t.Fatalf("restore reached node with credential form %q", test.form)
+			}
+		})
+	}
+}
+
+func TestRestoreBackupReloadsSignerFromCommittedStore(t *testing.T) {
+	t.Parallel()
+
+	svc, _, _ := newBackupRestoreTestService(t, false)
+	signer := &backupRestoreTestSigner{}
+	svc.signer = signer
+	archive, opts := backupRestoreTestArchive("100")
+	if _, err := svc.RestoreBackup(context.Background(), archive, opts); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if signer.reloads != 1 {
+		t.Fatalf("signer reloads = %d, want 1", signer.reloads)
 	}
 }
 
@@ -300,6 +392,24 @@ func TestRestoreBackupTopologyChangeRestartsWithoutManualPush(t *testing.T) {
 	}
 }
 
+func TestRestoreBackupReloadFailureStillRestartsMarketData(t *testing.T) {
+	t.Parallel()
+
+	svc, _, md := newBackupRestoreTestService(t, false)
+	reloadErr := errors.New("test signer reload failure")
+	svc.signer = &backupRestoreTestSigner{reloadErr: reloadErr}
+	archive, opts := backupRestoreTestArchive("125.5")
+	archive.Data.MarketDataInstruments[0].BaseAsset = "MSFT"
+
+	_, err := svc.RestoreBackup(context.Background(), archive, opts)
+	if !errors.Is(err, reloadErr) {
+		t.Fatalf("RestoreBackup error = %v, want signer reload failure", err)
+	}
+	if md.stops != 1 || md.restarts != 1 {
+		t.Fatalf("stop=%d restart=%d, want 1 each", md.stops, md.restarts)
+	}
+}
+
 func assertBackupRestoreManualPush(
 	t *testing.T,
 	md *backupRestoreTestRuntime,
@@ -337,6 +447,7 @@ func backupRestoreSourceArchive(source string) backup.Archive {
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
+		backup.CredentialFormPlaintext,
 	)
 }
 

@@ -308,6 +308,72 @@ func (r *realmStore) exportAudit(ctx context.Context) ([]domain.AuditRow, error)
 	return out, nil
 }
 
+// exportCredentialForm reports the one credential form held by the snapshot.
+// The explicit store state decides the form; credential bytes are never
+// inspected or interpreted. Reporting the stored form directly is deliberate;
+// do not replace this raw query with a sealing accessor.
+func (r *realmStore) exportCredentialForm(ctx context.Context) (string, error) {
+	db, err := r.db()
+	if err != nil {
+		return "", err
+	}
+	var sealed bool
+	if err := db.QueryRowContext(
+		ctx, `SELECT EXISTS(SELECT 1 FROM secret_state WHERE singleton = 1)`,
+	).Scan(&sealed); err != nil {
+		return "", fmt.Errorf("store: read credential form for export: %w", err)
+	}
+	if sealed {
+		return backup.CredentialFormSealed, nil
+	}
+	return backup.CredentialFormPlaintext, nil
+}
+
+// exportMarketDataInstances reads every credential BLOB exactly as the snapshot
+// stores it. The archive-level credential form declares how all rows are held.
+// This verbatim raw read is deliberate; do not replace it with sealing accessors.
+func (r *realmStore) exportMarketDataInstances(
+	ctx context.Context,
+) ([]backup.MarketDataInstance, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
+		ctx,
+		`SELECT external_id, provider, label, credentials, enabled
+		 FROM market_data_instance ORDER BY external_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: export market-data instances: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]backup.MarketDataInstance, 0)
+	for rows.Next() {
+		var (
+			instance backup.MarketDataInstance
+			rawID    []byte
+		)
+		if err := rows.Scan(
+			&rawID, &instance.Provider, &instance.Label,
+			&instance.Credentials, &instance.Enabled,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan market-data instance for export: %w", err)
+		}
+		externalID, err := domain.ExternalIDFromBytes(rawID)
+		if err != nil {
+			return nil, fmt.Errorf("store: decode market-data instance external id for export: %w", err)
+		}
+		instance.ExternalID = externalID
+		out = append(out, instance)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate market-data instances for export: %w", err)
+	}
+	return out, nil
+}
+
 // exportInstruments lists every instrument of every instance in its portable
 // archive form, linked back to its instance by the instance external id.
 func (r *realmStore) exportInstruments(
@@ -337,8 +403,8 @@ func (r *realmStore) exportInstruments(
 	return out, nil
 }
 
-// exportSigningKeys reads every signing key WITH its private material so the keys
-// round-trip; the listing API omits private keys, so this is a dedicated read.
+// exportSigningKeys reads only public signing material. A signing private key is
+// installation identity and never enters an archive.
 func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey, error) {
 	db, err := r.db()
 	if err != nil {
@@ -346,7 +412,7 @@ func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey
 	}
 	rows, err := db.QueryContext(
 		ctx,
-		`SELECT key_id, alg, private_key, public_key, created_at, active
+		`SELECT key_id, alg, public_key, created_at, active
 		 FROM signing_key ORDER BY created_at ASC, id ASC`,
 	)
 	if err != nil {
@@ -357,12 +423,12 @@ func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey
 	out := make([]backup.SigningKey, 0)
 	for rows.Next() {
 		var (
-			key                   backup.SigningKey
-			privateKey, publicKey []byte
-			createdAt             string
+			key       backup.SigningKey
+			publicKey []byte
+			createdAt string
 		)
 		if err := rows.Scan(
-			&key.KeyID, &key.Alg, &privateKey, &publicKey, &createdAt, &key.Active,
+			&key.KeyID, &key.Alg, &publicKey, &createdAt, &key.Active,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan signing key for export: %w", err)
 		}
@@ -370,7 +436,6 @@ func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey
 		if err != nil {
 			return nil, fmt.Errorf("store: parse signing key created_at %q: %w", createdAt, err)
 		}
-		key.PrivateKey = privateKey
 		key.PublicKey = publicKey
 		key.CreatedAt = parsed
 		out = append(out, key)

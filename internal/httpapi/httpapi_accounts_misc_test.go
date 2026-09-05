@@ -122,6 +122,7 @@ func TestBackupExport(t *testing.T) {
 			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
 			backup.Data{Accounts: []backup.Account{{Code: "acc-1"}}},
+			backup.CredentialFormPlaintext,
 		),
 	}
 	r, err := newRouter(svc)
@@ -163,6 +164,7 @@ func TestBackupExportZip(t *testing.T) {
 			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
 			backup.Data{Accounts: []backup.Account{{Code: "acc-1"}}},
+			backup.CredentialFormPlaintext,
 		),
 	}
 	r, err := newRouter(svc)
@@ -335,6 +337,7 @@ func TestBackupRestore(t *testing.T) {
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
+		backup.CredentialFormPlaintext,
 	)
 	body, err := json.Marshal(map[string]any{
 		"archive": archive,
@@ -372,6 +375,7 @@ func TestBackupRestoreRejectsInvalidJSONFraming(t *testing.T) {
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
+		backup.CredentialFormPlaintext,
 	)
 	body, err := json.Marshal(map[string]any{
 		"archive": archive,
@@ -438,6 +442,7 @@ func TestBackupRestoreJSONFile(t *testing.T) {
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{Accounts: []backup.Account{{Code: "acc-json"}}},
+		backup.CredentialFormPlaintext,
 	)
 	payload, err := json.Marshal(archive)
 	if err != nil {
@@ -483,6 +488,7 @@ func TestBackupRestoreZipFile(t *testing.T) {
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{Accounts: []backup.Account{{Code: "acc-zip"}}},
+		backup.CredentialFormPlaintext,
 	)
 	payload, filename, err := zipBackupArchive(
 		archive,
@@ -658,6 +664,7 @@ func TestBackupRestoreInvalidArchiveReturnsBadRequest(t *testing.T) {
 			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
 			backup.Data{},
+			backup.CredentialFormPlaintext,
 		),
 		"scope": backup.Scope{All: true},
 		"mode":  backup.RestoreModeOverwrite,
@@ -718,6 +725,7 @@ func TestBackupRestoreRejectsEmptyScope(t *testing.T) {
 			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
 			backup.Data{},
+			backup.CredentialFormPlaintext,
 		),
 		"scope": backup.Scope{},
 		"mode":  backup.RestoreModeOverwrite,
@@ -756,6 +764,7 @@ func TestBackupRestoreFilePayloadOverridesInlineArchive(t *testing.T) {
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
+		backup.CredentialFormPlaintext,
 	)
 	fileArchive := backup.NewArchive(
 		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
@@ -763,6 +772,7 @@ func TestBackupRestoreFilePayloadOverridesInlineArchive(t *testing.T) {
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
+		backup.CredentialFormPlaintext,
 	)
 	payload, err := json.Marshal(fileArchive)
 	if err != nil {
@@ -812,6 +822,7 @@ func TestBackupRestoreParsingConvergesAcrossShapes(t *testing.T) {
 		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{Accounts: []backup.Account{{Code: "acc-converge"}}},
+		backup.CredentialFormPlaintext,
 	)
 	jsonPayload, err := json.Marshal(archive)
 	if err != nil {
@@ -918,6 +929,7 @@ func TestBackupRestoreServiceErrorReturnsInternal(t *testing.T) {
 			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
 			backup.Data{},
+			backup.CredentialFormPlaintext,
 		),
 		"scope": backup.Scope{All: true},
 		"mode":  backup.RestoreModeOverwrite,

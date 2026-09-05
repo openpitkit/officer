@@ -55,6 +55,9 @@ type Service interface {
 	Verify(ctx context.Context, token string, expect VerifyParams) (VerifyResult, error)
 	NoESign(ctx context.Context) (bool, error)
 	SetNoESign(ctx context.Context, off bool) error
+	// Reload refreshes cached key state from committed store state after
+	// backup restore.
+	Reload(ctx context.Context) error
 }
 
 // ErrNotConfigured reports that no signing implementation was configured.
@@ -136,6 +139,12 @@ func (unavailableService) NoESign(context.Context) (bool, error) {
 
 func (unavailableService) SetNoESign(context.Context, bool) error {
 	return ErrNotConfigured
+}
+
+func (unavailableService) Reload(context.Context) error {
+	// An unconfigured service has no cached key state, so there is nothing to
+	// refresh and refreshing it trivially succeeds.
+	return nil
 }
 
 // VerifyParams are the connector-side expectations a token is re-bound against.

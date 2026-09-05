@@ -898,7 +898,10 @@ export interface BackupData {
   userSettings?: Record<string, unknown>[];
 }
 
+export type BackupCredentialForm = "plaintext" | "sealed";
+
 export interface BackupArchive {
+  credentialForm: BackupCredentialForm;
   manifest: BackupManifest;
   data: BackupData;
 }
@@ -906,6 +909,7 @@ export interface BackupArchive {
 export interface BackupRestoreSummary {
   applied: Partial<Record<BackupSection, number>>;
   skipped: Partial<Record<BackupSection, number>>;
+  marketDataCredentialsUnavailable?: string[];
   restartRequired: boolean;
 }
 

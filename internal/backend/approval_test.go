@@ -142,6 +142,10 @@ func (s *fakeSigner) SetNoESign(_ context.Context, off bool) error {
 	return nil
 }
 
+func (*fakeSigner) Reload(context.Context) error {
+	return nil
+}
+
 type approvalEnvelope struct {
 	Approval  domain.ApprovalPayload `json:"approval"`
 	Signature string                 `json:"signature,omitempty"`

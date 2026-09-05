@@ -1543,16 +1543,40 @@ function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
   const o = v;
   const applied = pick(o, "applied", "Applied");
   const skipped = pick(o, "skipped", "Skipped");
+  const restartRequired = pick(
+    o,
+    "restartRequired",
+    "RestartRequired",
+    "restart_required",
+  );
+  const marketDataCredentialsUnavailable = pick(
+    o,
+    "marketDataCredentialsUnavailable",
+    "MarketDataCredentialsUnavailable",
+    "market_data_credentials_unavailable",
+  );
+  if (
+    !isObject(applied) ||
+    !isObject(skipped) ||
+    typeof restartRequired !== "boolean" ||
+    (marketDataCredentialsUnavailable !== undefined &&
+      (!Array.isArray(marketDataCredentialsUnavailable) ||
+        !marketDataCredentialsUnavailable.every(
+          (instance) => typeof instance === "string",
+        )))
+  ) {
+    throw new ApiError(
+      "The service encountered an internal error.",
+      "internal",
+    );
+  }
   return {
-    applied: isObject(applied)
-      ? (applied as BackupRestoreSummary["applied"])
-      : {},
-    skipped: isObject(skipped)
-      ? (skipped as BackupRestoreSummary["skipped"])
-      : {},
-    restartRequired: asBool(
-      pick(o, "restartRequired", "RestartRequired", "restart_required"),
-    ),
+    applied: applied as BackupRestoreSummary["applied"],
+    skipped: skipped as BackupRestoreSummary["skipped"],
+    marketDataCredentialsUnavailable: marketDataCredentialsUnavailable as
+      | string[]
+      | undefined,
+    restartRequired,
   };
 }
 

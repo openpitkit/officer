@@ -22,6 +22,7 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/openpit/accountadjustment"
@@ -38,6 +39,7 @@ import (
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
+	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/internal/mcp/tools"
 )
 
@@ -83,6 +85,59 @@ func TestRegisterBuildUsesPopulatedMCPCatalog(t *testing.T) {
 	}
 	if err := app.Service().SetMcpAccess(ctx, "get_account_state", false); err != nil {
 		t.Fatalf("SetMcpAccess(get_account_state): %v", err)
+	}
+}
+
+func TestRegisterPassesMasterKeyToSQLite(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	key, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if err != nil {
+		t.Fatalf("ParseMasterKey: %v", err)
+	}
+
+	builder := frameworkapp.NewBuilder()
+	if err := Register(builder); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	builder.SetEngineBuildFactory(func(frameworkapp.Config) engine.BuildFunc {
+		return func(engine.Snapshot) (engine.Engine, error) {
+			return &fakeEngine{running: true, sink: &fakeSink{}}, nil
+		}
+	})
+	app, err := builder.Build(
+		ctx,
+		frameworkapp.Config{SQLitePath: path, MasterKey: &key},
+		slog.Default(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Build with master key: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	withoutKey := frameworkapp.NewBuilder()
+	if err := Register(withoutKey); err != nil {
+		t.Fatalf("Register without key: %v", err)
+	}
+	withoutKey.SetEngineBuildFactory(func(frameworkapp.Config) engine.BuildFunc {
+		return func(engine.Snapshot) (engine.Engine, error) {
+			return &fakeEngine{running: true, sink: &fakeSink{}}, nil
+		}
+	})
+	_, err = withoutKey.Build(
+		ctx,
+		frameworkapp.Config{SQLitePath: path},
+		slog.Default(),
+		nil,
+	)
+	if err == nil {
+		t.Fatal("Build without the master key returned nil error for a sealed database")
+	}
+	if !strings.Contains(err.Error(), "no master key was supplied") {
+		t.Fatalf("Build without the master key returned the wrong error: %v", err)
 	}
 }
 

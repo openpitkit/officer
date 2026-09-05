@@ -40,6 +40,7 @@ func TestService_ExportBackupRoutesScopeCallerAndFilename(t *testing.T) {
 		backup.RealmLabel{Code: "default"},
 		backup.Scope{All: true},
 		backup.Data{},
+		backup.CredentialFormPlaintext,
 	)
 	scope := backup.Scope{
 		Sections: []backup.Section{backup.SectionAccountsGroups},
@@ -299,12 +300,18 @@ func TestService_RestoreBackupManualPriceReconcilesOnline(t *testing.T) {
 		instance.ExternalID.String(): {currentInstrument},
 	}
 	archive := backup.Archive{
+		CredentialForm: backup.CredentialFormPlaintext,
 		Manifest: backup.Manifest{
 			Source:   "test",
 			Sections: []backup.Section{backup.SectionMarketData},
 		},
 		Data: backup.Data{
-			MarketDataInstances: []domain.MarketDataInstance{instance},
+			MarketDataInstances: []backup.MarketDataInstance{{
+				ExternalID: instance.ExternalID,
+				Provider:   instance.Provider,
+				Label:      instance.Label,
+				Enabled:    instance.Enabled,
+			}},
 			MarketDataInstruments: []backup.MarketDataInstrument{
 				backupMarketDataInstrument(restoredInstrument),
 			},
@@ -426,12 +433,18 @@ func TestService_RestoreBackupManualReconciliationErrorReturnsSummary(t *testing
 		Skipped: map[backup.Section]int{},
 	}
 	archive := backup.Archive{
+		CredentialForm: backup.CredentialFormPlaintext,
 		Manifest: backup.Manifest{
 			Source:   "test",
 			Sections: []backup.Section{backup.SectionMarketData},
 		},
 		Data: backup.Data{
-			MarketDataInstances: []domain.MarketDataInstance{instance},
+			MarketDataInstances: []backup.MarketDataInstance{{
+				ExternalID: instance.ExternalID,
+				Provider:   instance.Provider,
+				Label:      instance.Label,
+				Enabled:    instance.Enabled,
+			}},
 			MarketDataInstruments: []backup.MarketDataInstrument{
 				backupMarketDataInstrument(restoredInstrument),
 			},
@@ -450,17 +463,26 @@ func TestService_RestoreBackupManualReconciliationErrorReturnsSummary(t *testing
 }
 
 func restoreArchive(sections ...backup.Section) backup.Archive {
-	return backup.Archive{Manifest: backup.Manifest{Source: "test", Sections: sections}}
+	return backup.Archive{
+		CredentialForm: backup.CredentialFormPlaintext,
+		Manifest:       backup.Manifest{Source: "test", Sections: sections},
+	}
 }
 
 func marketDataTopologyArchive() backup.Archive {
 	return backup.Archive{
+		CredentialForm: backup.CredentialFormPlaintext,
 		Manifest: backup.Manifest{
 			Source:   "test",
 			Sections: []backup.Section{backup.SectionMarketData},
 		},
 		Data: backup.Data{
-			MarketDataInstances: []domain.MarketDataInstance{restoredMarketDataInstance()},
+			MarketDataInstances: []backup.MarketDataInstance{{
+				ExternalID: restoredMarketDataInstance().ExternalID,
+				Provider:   restoredMarketDataInstance().Provider,
+				Label:      restoredMarketDataInstance().Label,
+				Enabled:    restoredMarketDataInstance().Enabled,
+			}},
 		},
 	}
 }

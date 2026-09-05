@@ -46,8 +46,11 @@ func Register(b *frameworkapp.Builder) error {
 	if b == nil {
 		return errors.New("openapp: nil builder")
 	}
-	b.SetStoreFactory(func(path string) (store.Store, error) {
-		return sqlite.New(path)
+	b.SetStoreFactory(func(cfg frameworkapp.Config) (store.Store, error) {
+		if cfg.MasterKey != nil {
+			return sqlite.New(cfg.SQLitePath, sqlite.WithMasterKey(*cfg.MasterKey))
+		}
+		return sqlite.New(cfg.SQLitePath)
 	})
 	b.SetEngineBuildFactory(func(cfg frameworkapp.Config) engine.BuildFunc {
 		return enginenative.NewOpenPitEngineBuildFunc(cfg.RuntimeLibraryPath)

@@ -464,8 +464,8 @@ const (
 // record: its public handle is ExternalID, the surrogate key never appears here.
 // Multiple instances of the same Provider may coexist (e.g. two BYO feeds), so
 // the unique, case-insensitive Label distinguishes them for the operator.
-// Credentials is an opaque JSON blob, unencrypted for now (credentials
-// encryption not yet implemented); BYO and mock leave it empty.
+// Credentials is an opaque JSON blob that is plaintext at the domain boundary
+// and sealed at rest when the store is sealed; BYO and mock leave it empty.
 type MarketDataInstance struct {
 	// ExternalID is the opaque public handle of this instance.
 	ExternalID ExternalID

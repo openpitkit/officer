@@ -50,10 +50,11 @@ type restoreBalanceChainState struct {
 // restore. The portable archive supplies fact rows while the store reads retain
 // the stable numeric ids which deliberately do not travel in a backup.
 type restoreRuntimeSnapshot struct {
-	data     backup.Data
-	accounts map[domain.AccountID]domain.Account
-	assets   map[string]domain.Asset
-	groups   map[string]domain.AccountGroup
+	data                backup.Data
+	marketDataInstances []domain.MarketDataInstance
+	accounts            map[domain.AccountID]domain.Account
+	assets              map[string]domain.Asset
+	groups              map[string]domain.AccountGroup
 }
 
 type restoreRuntimePlan struct {
@@ -102,11 +103,16 @@ func (n *localNode) captureRestoreRuntimeSnapshot(
 	if err != nil {
 		return restoreRuntimeSnapshot{}, backup.Archive{}, err
 	}
+	marketDataInstances, err := n.realm.ListMarketDataInstances(ctx)
+	if err != nil {
+		return restoreRuntimeSnapshot{}, backup.Archive{}, err
+	}
 	snapshot := restoreRuntimeSnapshot{
-		data:     archive.Data,
-		accounts: make(map[domain.AccountID]domain.Account, len(accounts)),
-		assets:   make(map[string]domain.Asset, len(assets)),
-		groups:   make(map[string]domain.AccountGroup, len(groups)),
+		data:                archive.Data,
+		marketDataInstances: marketDataInstances,
+		accounts:            make(map[domain.AccountID]domain.Account, len(accounts)),
+		assets:              make(map[string]domain.Asset, len(assets)),
+		groups:              make(map[string]domain.AccountGroup, len(groups)),
 	}
 	for _, account := range accounts {
 		snapshot.accounts[account.Code] = account
@@ -220,7 +226,8 @@ func classifyRestoreRuntimeDelta(
 		return plan
 	}
 	plan.marketDataChanged = !reflect.DeepEqual(
-		marketDataRuntimeShape(before.data), marketDataRuntimeShape(after.data),
+		marketDataRuntimeShape(before.marketDataInstances, before.data.MarketDataInstruments),
+		marketDataRuntimeShape(after.marketDataInstances, after.data.MarketDataInstruments),
 	)
 	plan.marketDataNeedsClear = plan.marketDataChanged
 	plan.forceAllAccountPnls = plan.spotFundsChanged
@@ -333,15 +340,18 @@ type restoreMarketDataShape struct {
 	instruments map[string]backup.MarketDataInstrument
 }
 
-func marketDataRuntimeShape(data backup.Data) restoreMarketDataShape {
+func marketDataRuntimeShape(
+	instances []domain.MarketDataInstance,
+	instruments []backup.MarketDataInstrument,
+) restoreMarketDataShape {
 	shape := restoreMarketDataShape{
-		instances:   make(map[domain.ExternalID]domain.MarketDataInstance, len(data.MarketDataInstances)),
-		instruments: make(map[string]backup.MarketDataInstrument, len(data.MarketDataInstruments)),
+		instances:   make(map[domain.ExternalID]domain.MarketDataInstance, len(instances)),
+		instruments: make(map[string]backup.MarketDataInstrument, len(instruments)),
 	}
-	for _, instance := range data.MarketDataInstances {
+	for _, instance := range instances {
 		shape.instances[instance.ExternalID] = instance
 	}
-	for _, instrument := range data.MarketDataInstruments {
+	for _, instrument := range instruments {
 		shape.instruments[restoreMarketDataKey(instrument.Instance, instrument.ExternalSymbol)] =
 			instrument
 	}
@@ -711,8 +721,8 @@ func restoreMarketDataPublicationStates(
 	snapshot restoreRuntimeSnapshot,
 ) (map[string]marketDataPublicationState, error) {
 	instances := make(map[domain.ExternalID]domain.MarketDataInstance,
-		len(snapshot.data.MarketDataInstances))
-	for _, instance := range snapshot.data.MarketDataInstances {
+		len(snapshot.marketDataInstances))
+	for _, instance := range snapshot.marketDataInstances {
 		instances[instance.ExternalID] = instance
 	}
 	states := make(map[string]marketDataPublicationState,

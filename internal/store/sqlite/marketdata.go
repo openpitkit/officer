@@ -56,6 +56,13 @@ func (r *realmStore) CreateMarketDataInstance(
 	if err != nil {
 		return instance, err
 	}
+	credentials, err := r.store.sealValue(
+		marketDataInstanceTable, marketDataCredentialsColumn,
+		xid.String(), []byte(instance.Credentials),
+	)
+	if err != nil {
+		return instance, err
+	}
 	db, err := r.db()
 	if err != nil {
 		return instance, err
@@ -66,7 +73,7 @@ func (r *realmStore) CreateMarketDataInstance(
 		 (external_id, provider, label, credentials, enabled)
 		 VALUES (?, ?, ?, ?, ?)`,
 		xid.Bytes(), instance.Provider, instance.Label,
-		instance.Credentials, instance.Enabled,
+		credentials, instance.Enabled,
 	)
 	if err != nil {
 		if isSQLiteUniqueOn(err, "market_data_instance", "external_id") {
@@ -96,7 +103,7 @@ func (r *realmStore) GetMarketDataInstance(
 	row := db.QueryRowContext(
 		ctx, mdInstanceSelect+` WHERE external_id = ?`, id.Bytes(),
 	)
-	inst, err := scanMDInstanceRow(row)
+	inst, err := scanMDInstance(row, r.store)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.MarketDataInstance{}, false, nil
 	}
@@ -139,9 +146,9 @@ func (r *realmStore) queryMDInstances(
 
 	result := make([]domain.MarketDataInstance, 0)
 	for rows.Next() {
-		inst, err := scanMDInstance(rows)
+		inst, err := scanMDInstance(rows, r.store)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("store: scan market data instance: %w", err)
 		}
 		result = append(result, inst)
 	}
@@ -177,6 +184,13 @@ func (r *realmStore) SetMarketDataInstanceEnabled(
 func (r *realmStore) UpdateMarketDataInstanceSettings(
 	ctx context.Context, id domain.ExternalID, label, credentials string,
 ) error {
+	storedCredentials, err := r.store.sealValue(
+		marketDataInstanceTable, marketDataCredentialsColumn,
+		id.String(), []byte(credentials),
+	)
+	if err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -184,7 +198,7 @@ func (r *realmStore) UpdateMarketDataInstanceSettings(
 	res, err := db.ExecContext(
 		ctx,
 		`UPDATE market_data_instance SET label = ?, credentials = ? WHERE external_id = ?`,
-		label, credentials, id.Bytes(),
+		label, storedCredentials, id.Bytes(),
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -233,31 +247,13 @@ func (r *realmStore) DeleteMarketDataInstance(
 	return nil
 }
 
-func scanMDInstance(rows *sql.Rows) (domain.MarketDataInstance, error) {
+func scanMDInstance(scanner sqlScanner, store *sqliteStore) (domain.MarketDataInstance, error) {
 	var (
-		inst  domain.MarketDataInstance
-		rawID []byte
+		inst               domain.MarketDataInstance
+		rawID, credentials []byte
 	)
-	if err := rows.Scan(
-		&rawID, &inst.Provider, &inst.Label, &inst.Credentials, &inst.Enabled,
-	); err != nil {
-		return domain.MarketDataInstance{}, fmt.Errorf("store: scan market data instance: %w", err)
-	}
-	xid, err := domain.ExternalIDFromBytes(rawID)
-	if err != nil {
-		return domain.MarketDataInstance{}, fmt.Errorf("store: decode instance external id: %w", err)
-	}
-	inst.ExternalID = xid
-	return inst, nil
-}
-
-func scanMDInstanceRow(row *sql.Row) (domain.MarketDataInstance, error) {
-	var (
-		inst  domain.MarketDataInstance
-		rawID []byte
-	)
-	if err := row.Scan(
-		&rawID, &inst.Provider, &inst.Label, &inst.Credentials, &inst.Enabled,
+	if err := scanner.Scan(
+		&rawID, &inst.Provider, &inst.Label, &credentials, &inst.Enabled,
 	); err != nil {
 		return domain.MarketDataInstance{}, err
 	}
@@ -266,6 +262,14 @@ func scanMDInstanceRow(row *sql.Row) (domain.MarketDataInstance, error) {
 		return domain.MarketDataInstance{}, fmt.Errorf("store: decode instance external id: %w", err)
 	}
 	inst.ExternalID = xid
+	plaintext, err := store.openValue(
+		marketDataInstanceTable, marketDataCredentialsColumn,
+		xid.String(), credentials,
+	)
+	if err != nil {
+		return domain.MarketDataInstance{}, err
+	}
+	inst.Credentials = string(plaintext)
 	return inst, nil
 }
 

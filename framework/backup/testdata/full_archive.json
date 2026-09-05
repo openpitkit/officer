@@ -1,4 +1,5 @@
 {
+  "credentialForm": "plaintext",
   "manifest": {
     "createdAt": "2026-06-22T10:00:00Z",
     "source": "fixture",
@@ -159,11 +160,11 @@
     ],
     "marketDataInstances": [
       {
-        "ExternalID": "VVVVVVVVVVVVVVVVVVVVVQ",
-        "Provider": "byo",
-        "Label": "manual",
-        "Credentials": "",
-        "Enabled": true
+        "externalId": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "provider": "byo",
+        "label": "manual",
+        "credentials": "",
+        "enabled": true
       }
     ],
     "marketDataInstruments": [

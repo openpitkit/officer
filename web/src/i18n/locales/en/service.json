@@ -91,6 +91,7 @@
     "positionsGroupsPlaceholder": "position groups, comma-separated",
     "restartRequired": "runtime restarted",
     "summary": "Applied {{applied}}, skipped {{skipped}} · {{restart}}",
+    "marketDataCredentialsUnavailable": "Credentials could not be opened for {{instances}}. Those market-data sources were restored disabled and need their credentials entered again.",
     "confirmReplaceAll": "Delete all selected data and restore this backup?",
     "restoreScopeWarningTitle": "Only selected sections are affected.",
     "restoreScopeWarning": "Restore modes apply to the data selected above, not to the entire database unless All data is checked.",

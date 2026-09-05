@@ -53,6 +53,12 @@ const (
 	FormatRawBase64 = "raw-base64"
 )
 
+// ErrNoPrivateMaterial reports a verify-only signing key. The installation must
+// generate a new key before it can create signatures.
+var ErrNoPrivateMaterial = errors.New(
+	"signing key holds no private material; generate a new signing key",
+)
+
 // signingConfigNoESign is the signing_config key holding the global eSign flag
 // ("0" or "1").
 const signingConfigNoESign = "no_esign"
@@ -77,8 +83,9 @@ type Store interface {
 const maxUsedNonces = 1 << 16
 
 // Service signs and verifies approval tokens against the persisted key set. The
-// active keypair is cached in memory; the cache is refreshed whenever a key is
-// generated or imported. A nil active key means no key is configured yet.
+// active keypair is cached in memory; key generation and import refresh it, and
+// callers that change keys through another path must call Reload after commit.
+// A nil active key means no key is configured yet.
 type Service struct {
 	store Store
 
@@ -133,6 +140,13 @@ func (s *Service) reloadActive(ctx context.Context) error {
 	s.active = &k
 	s.signKey = seed
 	return nil
+}
+
+// Reload refreshes the cached active key from committed store state. Callers use
+// it after an operation outside the signing service, such as backup restore,
+// changes persisted keys.
+func (s *Service) Reload(ctx context.Context) error {
+	return s.reloadActive(ctx)
 }
 
 // GenerateKey creates a fresh Ed25519 keypair, deactivates any prior active
@@ -240,8 +254,13 @@ func (s *Service) Sign(payload domain.ApprovalPayload) (string, error) {
 	active := s.active
 	key := s.signKey
 	s.mu.RUnlock()
-	if active == nil || key == nil {
+	if active == nil {
 		return "", fmt.Errorf("signing: no active key: %w", domain.ErrNotFound)
+	}
+	// reloadActive writes active and signKey together, so construction cannot reach
+	// this branch; it prevents a nil signing key from reaching ed25519.Sign.
+	if key == nil {
+		return "", fmt.Errorf("signing: %w", ErrNoPrivateMaterial)
 	}
 	payload.KeyID = active.KeyID
 	payload.Alg = fwsigning.AlgEd25519
@@ -513,6 +532,8 @@ func redact(key domain.SigningKey) domain.SigningKey {
 // accepts a full 64-byte key for tolerance.
 func seedToPrivate(material []byte) (ed25519.PrivateKey, error) {
 	switch len(material) {
+	case 0:
+		return nil, ErrNoPrivateMaterial
 	case ed25519.SeedSize:
 		return ed25519.NewKeyFromSeed(material), nil
 	case ed25519.PrivateKeySize:

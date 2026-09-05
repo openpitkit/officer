@@ -159,6 +159,34 @@ var clientDataAllowlist = []clientDataAllow{
 		Why:     "engine runtime id is resolved from the target asset dictionary",
 	},
 	{
+		Surface: driftBackup,
+		Entity:  "market-data-instances",
+		Field:   "Credentials",
+		Kind:    "type-mismatch",
+		Why:     "archive credentials are bytes so sealed values remain byte-exact",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "signing-keys",
+		Field:   "PrivateKey",
+		Kind:    "uncovered",
+		Why:     "private signing material is intentionally omitted from archives",
+	},
+	{
+		Surface: driftSchema,
+		Entity:  "signing_key",
+		Field:   "private_key",
+		Kind:    "backup-uncovered",
+		Why:     "private signing material is intentionally omitted from archives",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "archive",
+		Field:   "SigningKeys[0].Active",
+		Kind:    "dropped",
+		Why:     "restored public-only signing keys are always inactive",
+	},
+	{
 		Surface: driftBusinessCSV,
 		Entity:  "accounts",
 		Field:   "EffectiveCurrency",
@@ -623,7 +651,7 @@ var backupParitySpecs = []paritySpec{
 		surface: driftBackup,
 		entity:  "market-data-instances",
 		source:  reflect.TypeOf(domain.MarketDataInstance{}),
-		target:  reflect.TypeOf(domain.MarketDataInstance{}),
+		target:  reflect.TypeOf(backup.MarketDataInstance{}),
 	},
 	{
 		surface: driftBackup,
@@ -739,6 +767,7 @@ var expectedSchemaTableNames = []string{
 	"order_status",
 	"principal",
 	"realm",
+	"secret_state",
 	"signing_config",
 	"signing_key",
 	"source_kind",
@@ -757,6 +786,7 @@ var nonClientDataSchemaTables = map[string]string{
 	"order_side":               "closed-domain reference dictionary, not portable client data",
 	"order_status":             "closed-domain reference dictionary, not portable client data",
 	"realm":                    "single-row realm identity metadata, not portable realm contents",
+	"secret_state":             "single-row installation cryptographic state, tied to its master key and not portable",
 	"source_kind":              "closed-domain reference dictionary, not portable client data",
 }
 
@@ -1035,7 +1065,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 		backup: map[string]string{
 			"key_id":      "KeyID",
 			"alg":         "Alg",
-			"private_key": "PrivateKey",
+			"private_key": "",
 			"public_key":  "PublicKey",
 			"created_at":  "CreatedAt",
 			"active":      "Active",

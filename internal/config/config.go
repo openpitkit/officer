@@ -23,7 +23,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+
+	"go.openpit.dev/officer/framework/secret"
 )
 
 // RunMode selects which long-running surface the process exposes.
@@ -77,6 +80,13 @@ const (
 	// EnvOpenBrowser overrides Config.OpenBrowser. Set it to a falsey value
 	// ("false", "0", "no", "off") to keep serve from opening the dashboard.
 	EnvOpenBrowser = "PIT_OFFICER_OPEN_BROWSER"
+	// EnvMasterKey supplies the operator master key as standard base64. It is
+	// intentionally not mirrored by a command-line flag because process
+	// arguments are visible to other local processes.
+	EnvMasterKey = "PIT_OFFICER_MASTER_KEY"
+	// EnvMasterKeyFile names a file holding the operator master key as standard
+	// base64.
+	EnvMasterKeyFile = "PIT_OFFICER_MASTER_KEY_FILE"
 )
 
 // Config is the fully resolved Pit Officer configuration for one process. A
@@ -100,6 +110,11 @@ type Config struct {
 	// OpenBrowser, when true, has serve open the dashboard URL in the default
 	// browser on start. It defaults to true and is ignored in mcp mode.
 	OpenBrowser bool
+	// masterKeyFile is the resolved path from the flag or environment.
+	masterKeyFile string
+	// masterKeyFileConfigured distinguishes an absent file source from a
+	// configured source whose path resolved to an invalid value.
+	masterKeyFileConfigured bool
 }
 
 // Load resolves the configuration for one invocation from the given
@@ -108,15 +123,20 @@ type Config struct {
 // environment; tests pass a stub.
 //
 // Precedence is flags > environment > defaults. The recognized environment
-// variables are EnvHTTPAddr, EnvSQLitePath, EnvRuntimeLibraryPath, and
-// EnvOpenBrowser; the recognized flags are -mode, -http-addr, -sqlite-path,
-// -runtime-library-path, and -open-browser. The MCP transport is derived from
-// the run mode (stdio for mcp, http for serve) and is not separately
-// configurable.
+// variables are EnvHTTPAddr, EnvSQLitePath, EnvRuntimeLibraryPath,
+// EnvOpenBrowser, and EnvMasterKeyFile; the recognized flags are -mode,
+// -http-addr, -sqlite-path, -runtime-library-path, -open-browser, and
+// -master-key-file. The master key itself is intentionally not accepted as a
+// flag because process arguments are visible to other local processes. The MCP
+// transport is derived from the run mode (stdio for mcp, http for serve) and is
+// not separately configurable.
 //
-// Load applies defaults (loopback HTTP bind, default SQLite path), so the
-// returned Config is ready to use. It returns an error for unknown flags, a
-// missing or unknown run mode, or a flag parse failure.
+// Load applies defaults (loopback HTTP bind, default SQLite path), records
+// whether the master key file source is configured, and resolves its path
+// without reading or parsing it. It returns an error for unknown flags, a
+// missing or unknown run mode, a flag parse failure, or a configured master key
+// file whose resolved path is empty. Commands that build the application call
+// ResolveMasterKey to read and parse the file and environment sources.
 func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) {
 	if lookupEnv == nil {
 		lookupEnv = func(string) (string, bool) { return "", false }
@@ -128,6 +148,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	httpAddrDefault := envOr(lookupEnv, EnvHTTPAddr, DefaultHTTPAddr)
 	sqlitePathDefault := envOr(lookupEnv, EnvSQLitePath, DefaultSQLitePath)
 	runtimeLibraryDefault := envOr(lookupEnv, EnvRuntimeLibraryPath, "")
+	masterKeyFileDefault, masterKeyFileEnvironmentConfigured := lookupEnv(EnvMasterKeyFile)
 	// Default on unless the env explicitly sets a falsey value; the flag
 	// (bare or =value) overrides whatever this seed resolves to.
 	openBrowserDefault := envBool(lookupEnv, EnvOpenBrowser, true)
@@ -142,6 +163,8 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 		"on-disk SQLite database path")
 	runtimeLibraryPath := fs.String("runtime-library-path", runtimeLibraryDefault,
 		"explicit native OpenPit runtime library path")
+	masterKeyFile := fs.String("master-key-file", masterKeyFileDefault,
+		"file containing the operator master key")
 	openBrowser := fs.Bool("open-browser", openBrowserDefault,
 		"open the dashboard in the browser on serve start")
 
@@ -151,21 +174,84 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	if fs.NArg() > 0 {
 		return Config{}, fmt.Errorf("config: unexpected argument %q", fs.Arg(0))
 	}
+	masterKeyFileFlagConfigured := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "master-key-file" {
+			masterKeyFileFlagConfigured = true
+		}
+	})
 
 	parsedMode, err := parseMode(*mode)
 	if err != nil {
 		return Config{}, err
 	}
+	masterKeyFileConfigured := masterKeyFileFlagConfigured || masterKeyFileEnvironmentConfigured
+	if masterKeyFileConfigured && *masterKeyFile == "" {
+		return Config{}, fmt.Errorf("config: master key file is configured but path is empty")
+	}
 
 	cfg := Config{
-		Mode:               parsedMode,
-		MCPTransport:       transportForMode(parsedMode),
-		HTTPAddr:           *httpAddr,
-		SQLitePath:         *sqlitePath,
-		RuntimeLibraryPath: *runtimeLibraryPath,
-		OpenBrowser:        *openBrowser,
+		Mode:                    parsedMode,
+		MCPTransport:            transportForMode(parsedMode),
+		HTTPAddr:                *httpAddr,
+		SQLitePath:              *sqlitePath,
+		RuntimeLibraryPath:      *runtimeLibraryPath,
+		OpenBrowser:             *openBrowser,
+		masterKeyFile:           *masterKeyFile,
+		masterKeyFileConfigured: masterKeyFileConfigured,
 	}
 	return cfg, nil
+}
+
+// ResolveMasterKey reads EnvMasterKey directly and parses it alongside the
+// optional file source recorded by Load. When both are configured, they must
+// contain the same key.
+func ResolveMasterKey(
+	cfg Config, lookupEnv func(string) (string, bool),
+) (*secret.MasterKey, error) {
+	if lookupEnv == nil {
+		lookupEnv = func(string) (string, bool) { return "", false }
+	}
+
+	var environmentKey *secret.MasterKey
+	if encoded, ok := lookupEnv(EnvMasterKey); ok {
+		key, err := secret.ParseMasterKey(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("config: parse master key environment variable: %w", err)
+		}
+		environmentKey = &key
+	}
+
+	var fileKey *secret.MasterKey
+	if cfg.masterKeyFileConfigured {
+		if cfg.masterKeyFile == "" {
+			return nil, fmt.Errorf("config: master key file is configured but path is empty")
+		}
+		contents, err := os.ReadFile(cfg.masterKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("config: read master key file: %w", err)
+		}
+		key, err := secret.ParseMasterKeyFile(contents)
+		if err != nil {
+			return nil, fmt.Errorf("config: parse master key file: %w", err)
+		}
+		fileKey = &key
+	}
+
+	if environmentKey == nil {
+		return fileKey, nil
+	}
+	if fileKey == nil {
+		return environmentKey, nil
+	}
+	same, err := environmentKey.Equal(*fileKey)
+	if err != nil {
+		return nil, fmt.Errorf("config: compare master key sources: %w", err)
+	}
+	if !same {
+		return nil, fmt.Errorf("config: master key environment variable and master key file differ")
+	}
+	return environmentKey, nil
 }
 
 // envOr returns the environment value for key when present and non-empty,

@@ -18,12 +18,16 @@
 package node
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 )
 
 func (r *memoryRealm) ExportBackup(
@@ -35,6 +39,7 @@ func (r *memoryRealm) ExportBackup(
 		backup.RealmLabel{Code: string(domain.DefaultRealm)},
 		scope,
 		r.exportData(ctx),
+		backup.CredentialFormPlaintext,
 	), nil
 }
 
@@ -43,6 +48,9 @@ func (r *memoryRealm) RestoreBackup(
 ) (backup.RestoreSummary, error) {
 	if opts.Mode == "" {
 		return backup.RestoreSummary{}, domain.ErrInvalid
+	}
+	if err := backup.ValidateCredentialForm(archive.CredentialForm); err != nil {
+		return backup.RestoreSummary{}, err
 	}
 	data := archive.Data
 	// Mirror the real store: the normalized scope drives whether runtime data can
@@ -55,7 +63,7 @@ func (r *memoryRealm) RestoreBackup(
 		previousGroups := r.groups
 		// Runtime sections replace data except assets, which restore by code to
 		// match SQLite's non-pruning contract.
-		r.restoreData(data, opts.Mode)
+		r.restoreDataWithCredentialForm(data, opts.Mode, archive.CredentialForm)
 		// The real connector updates dictionary rows by code and preserves their
 		// stable engine ids in every restore mode. Keep the memory connector honest
 		// about that identity contract so online-restore tests do not manufacture an
@@ -79,6 +87,13 @@ func (r *memoryRealm) RestoreBackup(
 		}
 	} else {
 		r.restoreAssets(data.Assets, opts.Mode)
+		if opts.Scope.Normalize().Included(backup.SectionGeneralSettings) {
+			r.restoreSigningKeys(data.SigningKeys, opts.Mode)
+			r.signingConfig = map[string]string{}
+			for _, entry := range data.SigningConfig {
+				r.signingConfig[entry.Key] = entry.Value
+			}
+		}
 		for key := range r.mcpAccess {
 			delete(r.mcpAccess, key)
 		}
@@ -116,7 +131,7 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		OrderEvents:           r.exportEvents(),
 		Trades:                append([]domain.Trade(nil), r.trades...),
 		Audit:                 append([]domain.AuditRow(nil), r.audit...),
-		MarketDataInstances:   make([]domain.MarketDataInstance, 0, len(r.instances)),
+		MarketDataInstances:   make([]backup.MarketDataInstance, 0, len(r.instances)),
 		MarketDataInstruments: make([]backup.MarketDataInstrument, 0, len(r.instruments)),
 		SigningKeys:           make([]backup.SigningKey, 0, len(r.signingKeys)),
 		SigningConfig:         make([]backup.SigningConfigEntry, 0, len(r.signingConfig)),
@@ -176,7 +191,15 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		data.Orders = append(data.Orders, backup.OrderRecord{Order: order})
 	}
 	for _, instance := range r.instances {
-		data.MarketDataInstances = append(data.MarketDataInstances, instance)
+		data.MarketDataInstances = append(data.MarketDataInstances,
+			backup.MarketDataInstance{
+				ExternalID:  instance.ExternalID,
+				Provider:    instance.Provider,
+				Label:       instance.Label,
+				Credentials: []byte(instance.Credentials),
+				Enabled:     instance.Enabled,
+			},
+		)
 	}
 	for _, instrument := range r.instruments {
 		data.MarketDataInstruments = append(data.MarketDataInstruments,
@@ -193,8 +216,7 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 	for _, key := range r.signingKeys {
 		data.SigningKeys = append(data.SigningKeys, backup.SigningKey{
 			CreatedAt: key.CreatedAt, KeyID: key.KeyID, Alg: key.Alg,
-			PublicKey: key.PublicKey, PrivateKey: key.PrivateKey,
-			Active: key.Active,
+			PublicKey: key.PublicKey, Active: key.Active,
 		})
 	}
 	for key, value := range r.signingConfig {
@@ -233,6 +255,12 @@ func (r *memoryRealm) restoreAssets(
 }
 
 func (r *memoryRealm) restoreData(data backup.Data, mode backup.RestoreMode) {
+	r.restoreDataWithCredentialForm(data, mode, backup.CredentialFormPlaintext)
+}
+
+func (r *memoryRealm) restoreDataWithCredentialForm(
+	data backup.Data, mode backup.RestoreMode, credentialForm string,
+) {
 	defaultGroup, hadDefaultGroup := r.groups[""]
 	previousAssets := r.assets
 	r.assets = make(map[string]domain.Asset, len(previousAssets))
@@ -322,7 +350,19 @@ func (r *memoryRealm) restoreData(data backup.Data, mode backup.RestoreMode) {
 	r.audit = append([]domain.AuditRow(nil), data.Audit...)
 	r.instances = map[domain.ExternalID]domain.MarketDataInstance{}
 	for _, instance := range data.MarketDataInstances {
-		r.instances[instance.ExternalID] = instance
+		credentials := ""
+		enabled := false
+		if credentialForm == backup.CredentialFormPlaintext {
+			credentials = string(instance.Credentials)
+			enabled = instance.Enabled
+		}
+		r.instances[instance.ExternalID] = domain.MarketDataInstance{
+			ExternalID:  instance.ExternalID,
+			Provider:    instance.Provider,
+			Label:       instance.Label,
+			Credentials: credentials,
+			Enabled:     enabled,
+		}
 	}
 	r.instruments = map[string]domain.MarketDataInstrument{}
 	for _, instrument := range data.MarketDataInstruments {
@@ -344,14 +384,7 @@ func (r *memoryRealm) restoreData(data backup.Data, mode backup.RestoreMode) {
 		}
 		r.instruments[instrumentKey(instrument.Instance, instrument.ExternalSymbol)] = stored
 	}
-	r.signingKeys = map[string]domain.SigningKey{}
-	for _, key := range data.SigningKeys {
-		r.signingKeys[key.KeyID] = domain.SigningKey{
-			CreatedAt: key.CreatedAt, KeyID: key.KeyID, Alg: key.Alg,
-			PublicKey: key.PublicKey, PrivateKey: key.PrivateKey,
-			Active: key.Active,
-		}
-	}
+	r.restoreSigningKeys(data.SigningKeys, mode)
 	r.signingConfig = map[string]string{}
 	for _, entry := range data.SigningConfig {
 		r.signingConfig[entry.Key] = entry.Value
@@ -364,6 +397,37 @@ func (r *memoryRealm) restoreData(data backup.Data, mode backup.RestoreMode) {
 	for _, setting := range data.UserSettings {
 		r.userSettings[settingKey(setting.UserID, setting.Key)] = setting
 	}
+}
+
+func (r *memoryRealm) restoreSigningKeys(
+	keys []backup.SigningKey, mode backup.RestoreMode,
+) {
+	target := r.signingKeys
+	if mode == backup.RestoreModeReplaceAll {
+		target = make(map[string]domain.SigningKey, len(keys))
+	}
+	for _, key := range keys {
+		existing, exists := r.signingKeys[key.KeyID]
+		if exists && mode == backup.RestoreModeInsertMissing {
+			continue
+		}
+		if exists {
+			existing.CreatedAt = key.CreatedAt
+			existing.Alg = key.Alg
+			existing.PublicKey = append([]byte(nil), key.PublicKey...)
+			target[key.KeyID] = existing
+			continue
+		}
+		target[key.KeyID] = domain.SigningKey{
+			CreatedAt:  key.CreatedAt,
+			KeyID:      key.KeyID,
+			Alg:        key.Alg,
+			PrivateKey: []byte{},
+			PublicKey:  append([]byte(nil), key.PublicKey...),
+			Active:     false,
+		}
+	}
+	r.signingKeys = target
 }
 
 func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) int {
@@ -507,5 +571,128 @@ func TestMemoryRealmRestoreAssetsHonorsMode(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLocalNodeRestoreRollbackPreservesActiveSigningPrivateMaterial(t *testing.T) {
+	ctx := context.Background()
+	real := newMemoryStore("restore-signing-rollback.db")
+	realm, err := real.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm: %v", err)
+	}
+	privateKey := bytes.Repeat([]byte{0x51}, 32)
+	publicKey := bytes.Repeat([]byte{0x52}, 32)
+	if err := realm.UpsertSigningKey(ctx, domain.SigningKey{
+		KeyID: "target-active", Alg: "ed25519", PrivateKey: privateKey,
+		PublicKey: publicKey, Active: true,
+	}); err != nil {
+		t.Fatalf("UpsertSigningKey: %v", err)
+	}
+	wrapped := newRealmWrapStore(real, func(inner store.RealmStore) store.RealmStore {
+		return &failRestoreAuditRealm{RealmStore: inner}
+	})
+	n := newTestNodeWithStore(t, wrapped, newFakeEngine())
+	archive := backup.NewArchive(
+		time.Now(), "test", backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{SigningKeys: []backup.SigningKey{{
+			KeyID: "incoming", Alg: "ed25519",
+			PublicKey: bytes.Repeat([]byte{0x53}, 32), Active: true,
+		}}},
+		backup.CredentialFormPlaintext,
+	)
+	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}, testCaller); err == nil {
+		t.Fatal("RestoreBackup succeeded, want injected post-commit audit failure")
+	}
+	active, ok, err := realm.GetActiveSigningKey(ctx)
+	if err != nil || !ok {
+		t.Fatalf("GetActiveSigningKey after rollback: ok=%v err=%v", ok, err)
+	}
+	if active.KeyID != "target-active" || !active.Active ||
+		!bytes.Equal(active.PrivateKey, privateKey) {
+		t.Fatalf("active key after rollback = %+v, want byte-exact target material", active)
+	}
+	if _, err := realm.GetSigningKey(ctx, "incoming"); err == nil {
+		t.Fatal("rollback retained signing key introduced by failed restore")
+	}
+}
+
+func TestLocalNodeRestoreRollbackRefusesAfterReplaceAllPrunesSigningKey(t *testing.T) {
+	ctx := context.Background()
+	real := newMemoryStore("restore-signing-rollback-prune.db")
+	realm, err := real.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm: %v", err)
+	}
+	privateKey := bytes.Repeat([]byte{0x61}, 32)
+	if err := realm.UpsertSigningKey(ctx, domain.SigningKey{
+		KeyID:      "target-active",
+		Alg:        "ed25519",
+		PrivateKey: privateKey,
+		PublicKey:  bytes.Repeat([]byte{0x62}, 32),
+		Active:     true,
+	}); err != nil {
+		t.Fatalf("UpsertSigningKey: %v", err)
+	}
+
+	wrapped := newRealmWrapStore(real, func(inner store.RealmStore) store.RealmStore {
+		return &failRestoreAuditRealm{RealmStore: inner}
+	})
+	engine := newFakeEngine()
+	n := newTestNodeWithStore(t, wrapped, engine)
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	archive := backup.NewArchive(
+		time.Now(),
+		"test",
+		backup.RealmLabel{Code: "foreign-realm"},
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{SigningKeys: []backup.SigningKey{{
+			KeyID:     "incoming",
+			Alg:       "ed25519",
+			PublicKey: bytes.Repeat([]byte{0x63}, 32),
+			Active:    true,
+		}}},
+		backup.CredentialFormPlaintext,
+	)
+	_, _, err = n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller)
+	if err == nil {
+		t.Fatal("RestoreBackup succeeded, want injected post-commit audit failure")
+	}
+	if !errors.Is(err, errRestoreAuditFailed) {
+		t.Fatalf("RestoreBackup error = %v, want audit failure", err)
+	}
+	for _, want := range []string{
+		"rollback not attempted",
+		"target-active",
+		"archive cannot carry",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestoreBackup error = %v, want %q", err, want)
+		}
+	}
+	if fatalErr == nil || !errors.Is(fatalErr, errRestoreAuditFailed) {
+		t.Fatalf("fatal error = %v, want reconciliation with audit failure", fatalErr)
+	}
+	if !engine.running {
+		t.Fatal("engine stopped for non-runtime failed restore")
+	}
+
+	if key, err := realm.GetSigningKey(ctx, "target-active"); err == nil {
+		t.Fatalf("target signing key was rewritten by unsafe rollback: %+v", key)
+	}
+	incoming, err := realm.GetSigningKey(ctx, "incoming")
+	if err != nil {
+		t.Fatalf("incoming signing key missing after refused rollback: %v", err)
+	}
+	if incoming.Active || len(incoming.PrivateKey) != 0 {
+		t.Fatalf("incoming signing key = %+v, want committed verify-only inactive key", incoming)
 	}
 }

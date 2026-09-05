@@ -23,10 +23,13 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -41,10 +44,15 @@ import (
 // newRealmStore opens a fresh migrated store bound to realm and returns both the
 // store and its realm handle.
 func newRealmStore(t *testing.T, realm domain.RealmID) (Store, RealmStore) {
+	return newRealmStoreWithOptions(t, realm)
+}
+
+func newRealmStoreWithOptions(
+	t *testing.T, realm domain.RealmID, opts ...Option,
+) (Store, RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	var opts []Option
 	if realm != "" && realm != domain.DefaultRealm {
 		opts = append(opts, WithRealm(realm))
 	}
@@ -190,11 +198,594 @@ func signingKeyForBackup(
 		t.Fatal("Ed25519 private key returned a non-Ed25519 public key")
 	}
 	return backup.SigningKey{
-		KeyID:      keyID,
+		KeyID:     keyID,
+		Alg:       fwsigning.AlgEd25519,
+		PublicKey: append([]byte(nil), publicKey...),
+		Active:    active,
+	}
+}
+
+func TestBackupExportPreservesCredentialFormAndExcludesSigningPrivateKey(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		sealed bool
+	}{
+		{name: "unsealed"},
+		{name: "sealed", sealed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			var opts []Option
+			if test.sealed {
+				opts = append(opts, WithMasterKey(mustStoreMasterKey(t, 0x31)))
+			}
+			_, rs := newTestStore(t, opts...)
+
+			seed := bytes.Repeat([]byte{0x47}, ed25519.SeedSize)
+			privateKey := ed25519.NewKeyFromSeed(seed)
+			publicKey := privateKey.Public().(ed25519.PublicKey)
+			if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+				KeyID:      "archive-key",
+				Alg:        fwsigning.AlgEd25519,
+				PrivateKey: seed,
+				PublicKey:  publicKey,
+				Active:     true,
+			}); err != nil {
+				t.Fatalf("UpsertSigningKey: %v", err)
+			}
+			credentials := []byte(`{"token":"archive-secret"}`)
+			instance, err := rs.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+				Provider:    domain.MarketDataProviderBYO,
+				Label:       "archive-feed",
+				Credentials: string(credentials),
+				Enabled:     true,
+			})
+			if err != nil {
+				t.Fatalf("CreateMarketDataInstance: %v", err)
+			}
+
+			archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
+			if err != nil {
+				t.Fatalf("ExportBackup: %v", err)
+			}
+			if len(archive.Data.MarketDataInstances) != 1 {
+				t.Fatalf("market-data instances = %d, want 1", len(archive.Data.MarketDataInstances))
+			}
+			wantForm := backup.CredentialFormPlaintext
+			if test.sealed {
+				wantForm = backup.CredentialFormSealed
+			}
+			if archive.CredentialForm != wantForm {
+				t.Fatalf("CredentialForm = %q, want %q", archive.CredentialForm, wantForm)
+			}
+			exported := archive.Data.MarketDataInstances[0]
+			var storedCredentials []byte
+			if err := rs.(*realmStore).rawDB().QueryRowContext(
+				ctx,
+				`SELECT credentials FROM market_data_instance WHERE external_id = ?`,
+				instance.ExternalID.Bytes(),
+			).Scan(&storedCredentials); err != nil {
+				t.Fatalf("read stored credentials: %v", err)
+			}
+			if !bytes.Equal(exported.Credentials, storedCredentials) {
+				t.Fatal("archive credentials differ from the database form")
+			}
+			if test.sealed && bytes.Equal(exported.Credentials, credentials) {
+				t.Fatal("sealed archive contains plaintext credentials")
+			}
+			if !test.sealed && !bytes.Equal(exported.Credentials, credentials) {
+				t.Fatal("unsealed archive does not contain plaintext credentials")
+			}
+
+			raw, err := json.Marshal(archive)
+			if err != nil {
+				t.Fatalf("marshal archive: %v", err)
+			}
+			if bytes.Contains(raw, []byte(`"privateKey"`)) ||
+				bytes.Contains(raw, []byte(base64.StdEncoding.EncodeToString(seed))) {
+				t.Fatal("archive contains signing private key material")
+			}
+			if len(archive.Data.SigningKeys) != 1 ||
+				!bytes.Equal(archive.Data.SigningKeys[0].PublicKey, publicKey) {
+				t.Fatal("archive does not retain the signing public key")
+			}
+			var roundTrip backup.Archive
+			if err := json.Unmarshal(raw, &roundTrip); err != nil {
+				t.Fatalf("unmarshal archive: %v", err)
+			}
+			if !bytes.Equal(
+				roundTrip.Data.MarketDataInstances[0].Credentials,
+				exported.Credentials,
+			) {
+				t.Fatal("credential bytes changed across the archive JSON round-trip")
+			}
+		})
+	}
+}
+
+func TestBackupSnapshotAccessorsRejectMovedSealedCredentials(t *testing.T) {
+	ctx := context.Background()
+	const firstCredentials = `{"token":"first"}`
+	const secondCredentials = `{"token":"second"}`
+	_, source := newRealmStoreWithOptions(
+		t, domain.DefaultRealm, WithMasterKey(mustStoreMasterKey(t, 0x32)),
+	)
+	first, err := source.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+		Provider: domain.MarketDataProviderBYO, Label: "first",
+		Credentials: firstCredentials,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance(first): %v", err)
+	}
+	second, err := source.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+		Provider: domain.MarketDataProviderBYO, Label: "second",
+		Credentials: secondCredentials,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance(second): %v", err)
+	}
+
+	snapshot, cleanup, err := source.(*realmStore).backupSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("backupSnapshot: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup backup snapshot: %v", err)
+		}
+	})
+	snapshotSecond, found, err := snapshot.GetMarketDataInstance(ctx, second.ExternalID)
+	if err != nil {
+		t.Fatalf("read second credentials from snapshot: %v", err)
+	}
+	if !found {
+		t.Fatal("second market-data instance missing from snapshot")
+	}
+	if snapshotSecond.Credentials != secondCredentials {
+		t.Fatalf(
+			"snapshot credentials = %q, want %q",
+			snapshotSecond.Credentials,
+			secondCredentials,
+		)
+	}
+
+	var movedCredentials []byte
+	if err := snapshot.rawDB().QueryRowContext(
+		ctx, `SELECT credentials FROM market_data_instance WHERE external_id = ?`,
+		first.ExternalID.Bytes(),
+	).Scan(&movedCredentials); err != nil {
+		t.Fatalf("read first stored credentials: %v", err)
+	}
+	if _, err := snapshot.rawDB().ExecContext(
+		ctx, `UPDATE market_data_instance SET credentials = ? WHERE external_id = ?`,
+		movedCredentials, second.ExternalID.Bytes(),
+	); err != nil {
+		t.Fatalf("move sealed credentials in snapshot: %v", err)
+	}
+
+	if _, _, err := snapshot.GetMarketDataInstance(ctx, second.ExternalID); err == nil {
+		t.Fatal("sealed backup snapshot accessor accepted ciphertext moved from another row")
+	}
+}
+
+func TestBackupRestoreSealedCredentialsWithSameKey(t *testing.T) {
+	ctx := context.Background()
+	key := mustStoreMasterKey(t, 0x52)
+	_, src := newRealmStoreWithOptions(
+		t, domain.RealmID("source-realm"), WithMasterKey(key),
+	)
+	credentials := `{"token":"same-installation"}`
+	instance, err := src.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+		Provider:    domain.MarketDataProviderBYO,
+		Label:       "same-installation-feed",
+		Credentials: credentials,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	_, dst := newRealmStoreWithOptions(
+		t, domain.RealmID("target-realm"), WithMasterKey(key),
+	)
+	summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if len(summary.MarketDataCredentialsUnavailable) != 0 {
+		t.Fatalf("unavailable credentials = %v, want none", summary.MarketDataCredentialsUnavailable)
+	}
+	got, ok, err := dst.GetMarketDataInstance(ctx, instance.ExternalID)
+	if err != nil || !ok {
+		t.Fatalf("GetMarketDataInstance: ok=%v err=%v", ok, err)
+	}
+	if got.Credentials != credentials || !got.Enabled {
+		t.Fatalf("restored instance = %+v, want enabled with readable credentials", got)
+	}
+	var storedCredentials []byte
+	if err := dst.(*realmStore).rawDB().QueryRowContext(
+		ctx, `SELECT credentials FROM market_data_instance WHERE external_id = ?`,
+		instance.ExternalID.Bytes(),
+	).Scan(&storedCredentials); err != nil {
+		t.Fatalf("read restored credentials: %v", err)
+	}
+	if bytes.Equal(storedCredentials, archive.Data.MarketDataInstances[0].Credentials) {
+		t.Fatal("restore copied sealed credentials instead of opening and sealing them")
+	}
+}
+
+func TestBackupRestoreUnavailableSealedCredentialsDisablesNamedInstance(t *testing.T) {
+	ctx := context.Background()
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	_, src := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x63)))
+	mustCreateAsset(t, ctx, src, domain.Asset{Code: "AAPL"})
+	mustCreateAsset(t, ctx, src, domain.Asset{Code: "USD"})
+	instance, err := src.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+		Provider:    domain.MarketDataProviderBYO,
+		Label:       "transfer-feed",
+		Credentials: `{"token":"source-only"}`,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if err := src.UpsertMarketDataInstrument(ctx, domain.MarketDataInstrument{
+		Instance:       instance.ExternalID,
+		ExternalSymbol: "AAPL-USD",
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Enabled:        true,
+	}); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	for _, test := range []struct {
+		name string
+		opts []Option
+	}{
+		{name: "no-key"},
+		{name: "different-key", opts: []Option{
+			WithMasterKey(mustStoreMasterKey(t, 0x64)),
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, dst := newTestStore(t, test.opts...)
+			summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+			})
+			if err != nil {
+				t.Fatalf("RestoreBackup: %v", err)
+			}
+			if !reflect.DeepEqual(
+				summary.MarketDataCredentialsUnavailable,
+				[]string{"transfer-feed"},
+			) {
+				t.Fatalf("unavailable credentials = %v, want transfer-feed",
+					summary.MarketDataCredentialsUnavailable)
+			}
+			got, ok, err := dst.GetMarketDataInstance(ctx, instance.ExternalID)
+			if err != nil || !ok {
+				t.Fatalf("GetMarketDataInstance: ok=%v err=%v", ok, err)
+			}
+			if got.Enabled || got.Credentials != "" {
+				t.Fatalf("restored unavailable instance = %+v, want disabled and empty", got)
+			}
+			instruments, err := dst.ListMarketDataInstruments(ctx, instance.ExternalID)
+			if err != nil {
+				t.Fatalf("ListMarketDataInstruments: %v", err)
+			}
+			if len(instruments) != 1 || instruments[0].ExternalSymbol != "AAPL-USD" {
+				t.Fatalf("other archive rows did not restore: %+v", instruments)
+			}
+		})
+	}
+	if !strings.Contains(logs.String(), instance.ExternalID.String()) ||
+		!strings.Contains(logs.String(), "open archived market-data credentials") {
+		t.Fatalf("credential open failure log = %q, want instance id and wrapped error", logs.String())
+	}
+	if strings.Contains(logs.String(), "source-only") {
+		t.Fatal("credential open failure log contains plaintext credentials")
+	}
+}
+
+func TestBackupRestorePlaintextCredentialsIntoSealedDatabase(t *testing.T) {
+	ctx := context.Background()
+	_, src := newTestStore(t)
+	credentials := `{"token":"plaintext-transfer"}`
+	instance, err := src.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+		Provider:    domain.MarketDataProviderBYO,
+		Label:       "plaintext-feed",
+		Credentials: credentials,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	if archive.CredentialForm != backup.CredentialFormPlaintext {
+		t.Fatalf("unsealed source credential form = %q, want plaintext", archive.CredentialForm)
+	}
+
+	_, dst := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x75)))
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	got, ok, err := dst.GetMarketDataInstance(ctx, instance.ExternalID)
+	if err != nil || !ok || got.Credentials != credentials || !got.Enabled {
+		t.Fatalf("restored plaintext credentials: instance=%+v ok=%v err=%v", got, ok, err)
+	}
+	var storedCredentials []byte
+	if err := dst.(*realmStore).rawDB().QueryRowContext(
+		ctx, `SELECT credentials FROM market_data_instance WHERE external_id = ?`,
+		instance.ExternalID.Bytes(),
+	).Scan(&storedCredentials); err != nil {
+		t.Fatalf("read stored credentials: %v", err)
+	}
+	if bytes.Equal(storedCredentials, []byte(credentials)) {
+		t.Fatal("plaintext archive credentials were not sealed in the target")
+	}
+}
+
+func TestBackupRestoreProviderValidationMatchesCredentialForm(t *testing.T) {
+	const credentials = `{"token":"registry-reject"}`
+	for _, test := range []struct {
+		name   string
+		sealed bool
+	}{
+		{name: "plaintext"},
+		{name: "sealed", sealed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			key := mustStoreMasterKey(t, 0x76)
+			var sourceOpts []Option
+			var targetOpts []Option
+			if test.sealed {
+				sourceOpts = append(sourceOpts, WithMasterKey(key))
+				targetOpts = append(targetOpts, WithMasterKey(key))
+			}
+			_, src := newRealmStoreWithOptions(
+				t, domain.RealmID("validation-source"), sourceOpts...,
+			)
+			instance, err := src.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+				Provider: domain.MarketDataProviderBYO, Label: "validation-feed",
+				Credentials: credentials, Enabled: true,
+			})
+			if err != nil {
+				t.Fatalf("CreateMarketDataInstance: %v", err)
+			}
+			archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+			if err != nil {
+				t.Fatalf("ExportBackup: %v", err)
+			}
+			_, dst := newRealmStoreWithOptions(
+				t, domain.RealmID("validation-target"), targetOpts...,
+			)
+			validated := false
+			_, err = dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+				ValidateMarketDataInstance: func(got domain.MarketDataInstance) error {
+					validated = true
+					if got.Credentials != credentials {
+						t.Fatalf("validated credentials = %q, want opened value", got.Credentials)
+					}
+					return domain.ErrInvalid
+				},
+			})
+			if !validated || !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup validated=%v error=%v, want registry rejection", validated, err)
+			}
+			if _, ok, getErr := dst.GetMarketDataInstance(ctx, instance.ExternalID); getErr != nil || ok {
+				t.Fatalf("rejected instance committed: ok=%v err=%v", ok, getErr)
+			}
+		})
+	}
+}
+
+func TestBackupRestoreRejectsMissingOrUnknownCredentialForm(t *testing.T) {
+	for _, form := range []string{"", "future"} {
+		t.Run(form, func(t *testing.T) {
+			ctx := context.Background()
+			_, dst := newTestStore(t)
+			archive := backup.NewArchive(
+				time.Now(), "test", backup.RealmLabel{Code: "source"},
+				backup.Scope{All: true}, backup.Data{}, form,
+			)
+			if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+			}); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup credential form %q = %v, want ErrInvalid", form, err)
+			}
+		})
+	}
+}
+
+func TestBackupRestoreSigningKeyIsVerifyOnlyAndInactive(t *testing.T) {
+	ctx := context.Background()
+	_, src := newTestStore(t)
+	seed := bytes.Repeat([]byte{0x29}, ed25519.SeedSize)
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	if err := src.UpsertSigningKey(ctx, domain.SigningKey{
+		KeyID:      "verify-only-key",
 		Alg:        fwsigning.AlgEd25519,
-		PrivateKey: append([]byte(nil), seed...),
-		PublicKey:  append([]byte(nil), publicKey...),
-		Active:     active,
+		PrivateKey: seed,
+		PublicKey:  publicKey,
+		Active:     true,
+	}); err != nil {
+		t.Fatalf("UpsertSigningKey: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	if len(archive.Data.SigningKeys) != 1 || !archive.Data.SigningKeys[0].Active {
+		t.Fatalf("exported signing key metadata = %+v", archive.Data.SigningKeys)
+	}
+
+	_, dst := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x2a)))
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	got, err := dst.GetSigningKey(ctx, "verify-only-key")
+	if err != nil {
+		t.Fatalf("GetSigningKey: %v", err)
+	}
+	if got.Active || len(got.PrivateKey) != 0 || !bytes.Equal(got.PublicKey, publicKey) {
+		t.Fatalf("restored signing key = %+v, want inactive public-only key", got)
+	}
+	if _, ok, err := dst.GetActiveSigningKey(ctx); err != nil || ok {
+		t.Fatalf("GetActiveSigningKey after restore: ok=%v err=%v", ok, err)
+	}
+	var storedPrivateKey []byte
+	var active bool
+	if err := dst.(*realmStore).rawDB().QueryRowContext(
+		ctx, `SELECT private_key, active FROM signing_key WHERE key_id = ?`,
+		"verify-only-key",
+	).Scan(&storedPrivateKey, &active); err != nil {
+		t.Fatalf("read restored signing key: %v", err)
+	}
+	if len(storedPrivateKey) == 0 || active {
+		t.Fatalf("stored signing key private length=%d active=%v, want sealed empty and inactive",
+			len(storedPrivateKey), active)
+	}
+}
+
+func TestBackupRestoreSelfPreservesActiveSigningKey(t *testing.T) {
+	for _, mode := range []backup.RestoreMode{
+		backup.RestoreModeOverwrite,
+		backup.RestoreModeReplaceAll,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x2b)))
+			seed := bytes.Repeat([]byte{0x2c}, ed25519.SeedSize)
+			privateKey := ed25519.NewKeyFromSeed(seed)
+			publicKey := privateKey.Public().(ed25519.PublicKey)
+			if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+				KeyID: "self-key", Alg: fwsigning.AlgEd25519,
+				PrivateKey: seed, PublicKey: publicKey, Active: true,
+			}); err != nil {
+				t.Fatalf("UpsertSigningKey: %v", err)
+			}
+			archive, err := rs.ExportBackup(ctx, backup.Scope{
+				Sections: []backup.Section{backup.SectionGeneralSettings},
+			})
+			if err != nil {
+				t.Fatalf("ExportBackup: %v", err)
+			}
+			var before []byte
+			if err := rs.(*realmStore).rawDB().QueryRowContext(
+				ctx, `SELECT private_key FROM signing_key WHERE key_id = ?`, "self-key",
+			).Scan(&before); err != nil {
+				t.Fatalf("read private key before restore: %v", err)
+			}
+			if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: mode,
+			}); err != nil {
+				t.Fatalf("RestoreBackup: %v", err)
+			}
+			var after []byte
+			var active bool
+			if err := rs.(*realmStore).rawDB().QueryRowContext(
+				ctx, `SELECT private_key, active FROM signing_key WHERE key_id = ?`, "self-key",
+			).Scan(&after, &active); err != nil {
+				t.Fatalf("read private key after restore: %v", err)
+			}
+			if !bytes.Equal(after, before) || !active {
+				t.Fatalf("self restore changed active private material: equal=%v active=%v",
+					bytes.Equal(after, before), active)
+			}
+			got, err := rs.GetSigningKey(ctx, "self-key")
+			if err != nil || !bytes.Equal(got.PrivateKey, seed) {
+				t.Fatalf("GetSigningKey after restore = %+v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestBackupRestoreKeepsTargetActiveWhenArchiveAddsActiveKey(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	target := signingKeyForBackup(t, "existing-active", 0x31, true)
+	seed := bytes.Repeat([]byte{0x31}, ed25519.SeedSize)
+	if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+		CreatedAt: target.CreatedAt, KeyID: target.KeyID, Alg: target.Alg,
+		PrivateKey: seed, PublicKey: target.PublicKey, Active: true,
+	}); err != nil {
+		t.Fatalf("UpsertSigningKey: %v", err)
+	}
+	archive := backup.NewArchive(
+		time.Now(), "test", backup.RealmLabel{Code: "source"},
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{SigningKeys: []backup.SigningKey{
+			signingKeyForBackup(t, "new-active", 0x32, true),
+		}},
+		backup.CredentialFormPlaintext,
+	)
+	if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeInsertMissing,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	active, ok, err := rs.GetActiveSigningKey(ctx)
+	if err != nil || !ok || active.KeyID != target.KeyID ||
+		!bytes.Equal(active.PrivateKey, seed) {
+		t.Fatalf("active key after restore = %+v ok=%v err=%v", active, ok, err)
+	}
+	added, err := rs.GetSigningKey(ctx, "new-active")
+	if err != nil || added.Active || len(added.PrivateKey) != 0 {
+		t.Fatalf("archived active key restored as %+v err=%v, want verify-only inactive", added, err)
+	}
+}
+
+func TestBackupRestoreRejectsSigningKeyIdentityConflict(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	target := signingKeyForBackup(t, "shared-id", 0x41, true)
+	seed := bytes.Repeat([]byte{0x41}, ed25519.SeedSize)
+	if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+		KeyID: target.KeyID, Alg: target.Alg, PrivateKey: seed,
+		PublicKey: target.PublicKey, Active: true,
+	}); err != nil {
+		t.Fatalf("UpsertSigningKey: %v", err)
+	}
+	conflict := signingKeyForBackup(t, target.KeyID, 0x42, false)
+	archive := backup.NewArchive(
+		time.Now(), "test", backup.RealmLabel{Code: "source"},
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{SigningKeys: []backup.SigningKey{conflict}},
+		backup.CredentialFormPlaintext,
+	)
+	if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup = %v, want identity conflict", err)
+	}
+	got, err := rs.GetSigningKey(ctx, target.KeyID)
+	if err != nil || !got.Active || !bytes.Equal(got.PrivateKey, seed) ||
+		!bytes.Equal(got.PublicKey, target.PublicKey) {
+		t.Fatalf("target key changed after rejected conflict: %+v err=%v", got, err)
 	}
 }
 
@@ -1302,6 +1893,7 @@ func TestBackupRestoreReplaceAllPrunesActivityBeforeSigningKeys(t *testing.T) {
 		backup.Data{
 			Accounts: []backup.Account{{Code: "acc-1"}},
 		},
+		backup.CredentialFormPlaintext,
 	)
 	if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: backup.Scope{
@@ -1362,6 +1954,7 @@ func TestBackupRestoreReplaceAllUsesArchiveGroupForActivityPrune(t *testing.T) {
 				{Code: "acc-1", GroupCode: "archive-g"},
 			},
 		},
+		backup.CredentialFormPlaintext,
 	)
 	if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: backup.Scope{
@@ -1447,6 +2040,7 @@ func TestRestoreValidatesDictionaryCodes(t *testing.T) {
 				backup.RealmLabel{Code: string(domain.DefaultRealm)},
 				backup.Scope{All: true},
 				tc.data,
+				backup.CredentialFormPlaintext,
 			)
 			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
 				Scope: backup.Scope{All: true},
@@ -1513,6 +2107,7 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 				backup.RealmLabel{Code: string(domain.DefaultRealm)},
 				scope,
 				tc.data,
+				backup.CredentialFormPlaintext,
 			)
 			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
 				Scope: scope, Mode: backup.RestoreModeInsertMissing,
@@ -1557,6 +2152,7 @@ func TestBackupRestoreRejectsInvalidBalanceAndRollsBack(t *testing.T) {
 			{Account: "acc-1", Asset: "USD", Available: "20"},
 			{Account: "acc-1", Asset: "AAPL", Available: "not-a-decimal"},
 		}},
+		backup.CredentialFormPlaintext,
 	)
 
 	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -1600,7 +2196,7 @@ func TestBackupRestoreRejectsNonCanonicalMarketDataStringsAndRollsBack(t *testin
 			name:      "credentials",
 			wantField: "credentials",
 			mutate: func(data *backup.Data) {
-				data.MarketDataInstances[1].Credentials = " {} "
+				data.MarketDataInstances[1].Credentials = []byte(" {} ")
 			},
 		},
 		{
@@ -1646,7 +2242,7 @@ func TestBackupRestoreRejectsNonCanonicalMarketDataStringsAndRollsBack(t *testin
 				Sections: []backup.Section{backup.SectionMarketData},
 			}
 			data := backup.Data{
-				MarketDataInstances: []domain.MarketDataInstance{
+				MarketDataInstances: []backup.MarketDataInstance{
 					{
 						ExternalID: firstID,
 						Provider:   domain.MarketDataProviderBYO,
@@ -1673,6 +2269,7 @@ func TestBackupRestoreRejectsNonCanonicalMarketDataStringsAndRollsBack(t *testin
 				backup.RealmLabel{Code: string(domain.DefaultRealm)},
 				scope,
 				data,
+				backup.CredentialFormPlaintext,
 			)
 
 			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -1708,7 +2305,7 @@ func TestBackupRestoreRejectsZeroMarketDataInstanceIDAndRollsBack(t *testing.T) 
 		"test",
 		backup.RealmLabel{Code: string(domain.DefaultRealm)},
 		scope,
-		backup.Data{MarketDataInstances: []domain.MarketDataInstance{
+		backup.Data{MarketDataInstances: []backup.MarketDataInstance{
 			{
 				ExternalID: mustExternalID(t),
 				Provider:   domain.MarketDataProviderBYO,
@@ -1719,6 +2316,7 @@ func TestBackupRestoreRejectsZeroMarketDataInstanceIDAndRollsBack(t *testing.T) 
 				Label:    "zero-id",
 			},
 		}},
+		backup.CredentialFormPlaintext,
 	)
 
 	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -1769,6 +2367,7 @@ func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
 				Status: domain.OrderStatusSubmitted,
 			}},
 		}},
+		backup.CredentialFormPlaintext,
 	)
 
 	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -1792,15 +2391,12 @@ func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
 
 func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
 	tests := []struct {
-		name         string
-		mode         backup.RestoreMode
-		seedExisting bool
-		want         string
-		keys         func(*testing.T) []backup.SigningKey
+		name string
+		want string
+		keys func(*testing.T) []backup.SigningKey
 	}{
 		{
 			name: "algorithm",
-			mode: backup.RestoreModeOverwrite,
 			want: "algorithm",
 			keys: func(t *testing.T) []backup.SigningKey {
 				key := signingKeyForBackup(t, "bad-alg", 1, true)
@@ -1809,56 +2405,12 @@ func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
 			},
 		},
 		{
-			name: "private-key-seed",
-			mode: backup.RestoreModeOverwrite,
-			want: "private key seed length",
-			keys: func(t *testing.T) []backup.SigningKey {
-				key := signingKeyForBackup(t, "bad-private", 2, true)
-				key.PrivateKey = []byte("bad")
-				return []backup.SigningKey{key}
-			},
-		},
-		{
 			name: "public-key-length",
-			mode: backup.RestoreModeOverwrite,
 			want: "public key length",
 			keys: func(t *testing.T) []backup.SigningKey {
 				key := signingKeyForBackup(t, "bad-public", 3, true)
 				key.PublicKey = []byte("bad")
 				return []backup.SigningKey{key}
-			},
-		},
-		{
-			name: "public-key-mismatch",
-			mode: backup.RestoreModeOverwrite,
-			want: "does not match",
-			keys: func(t *testing.T) []backup.SigningKey {
-				key := signingKeyForBackup(t, "mismatch", 4, true)
-				other := signingKeyForBackup(t, "other", 5, false)
-				key.PublicKey = other.PublicKey
-				return []backup.SigningKey{key}
-			},
-		},
-		{
-			name: "two-archive-active-keys",
-			mode: backup.RestoreModeOverwrite,
-			want: "more than one active key",
-			keys: func(t *testing.T) []backup.SigningKey {
-				return []backup.SigningKey{
-					signingKeyForBackup(t, "active-1", 6, true),
-					signingKeyForBackup(t, "active-2", 7, true),
-				}
-			},
-		},
-		{
-			name:         "target-active-plus-new-active-key",
-			mode:         backup.RestoreModeInsertMissing,
-			seedExisting: true,
-			want:         "more than one active key",
-			keys: func(t *testing.T) []backup.SigningKey {
-				return []backup.SigningKey{
-					signingKeyForBackup(t, "new-active", 8, true),
-				}
 			},
 		},
 	}
@@ -1867,19 +2419,6 @@ func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			_, rs := newTestStore(t)
-			if test.seedExisting {
-				key := signingKeyForBackup(t, "existing-active", 9, true)
-				if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
-					CreatedAt:  key.CreatedAt,
-					KeyID:      key.KeyID,
-					Alg:        key.Alg,
-					PublicKey:  key.PublicKey,
-					PrivateKey: key.PrivateKey,
-					Active:     key.Active,
-				}); err != nil {
-					t.Fatalf("UpsertSigningKey: %v", err)
-				}
-			}
 			before := snapshotBackupData(t, ctx, rs)
 			scope := backup.Scope{
 				Sections: []backup.Section{backup.SectionGeneralSettings},
@@ -1890,10 +2429,11 @@ func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
 				backup.RealmLabel{Code: string(domain.DefaultRealm)},
 				scope,
 				backup.Data{SigningKeys: test.keys(t)},
+				backup.CredentialFormPlaintext,
 			)
 
 			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
-				Scope: scope, Mode: test.mode,
+				Scope: scope, Mode: backup.RestoreModeOverwrite,
 			})
 			if !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
@@ -1953,6 +2493,7 @@ func TestBackupRestoreReplaceAllKeepsLiveOnlyAccountInSelectedGroup(t *testing.T
 		backup.Data{
 			Groups: []backup.AccountGroup{{Code: "archive-g"}},
 		},
+		backup.CredentialFormPlaintext,
 	)
 	if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: backup.Scope{
@@ -2451,6 +2992,7 @@ var backupExportedTables = map[string]bool{
 var backupExcludedTables = map[string]bool{
 	"realm":                    true, // realm identity row, re-established by the target connector
 	"schema_migration":         true, // migration bookkeeping, owned by Migrate
+	"secret_state":             true, // installation key verifier, invalid across archive boundaries
 	"source_kind":              true, // immutable enum dictionary, seeded by Migrate
 	"order_event_type":         true, // immutable enum dictionary, seeded by Migrate
 	"order_side":               true, // immutable enum dictionary, seeded by Migrate
@@ -2531,6 +3073,7 @@ func TestBackupRestoreAtomicityLeavesRealmUnchanged(t *testing.T) {
 				},
 			}},
 		},
+		backup.CredentialFormPlaintext,
 	)
 	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: scope, Mode: backup.RestoreModeReplaceAll,
@@ -2605,6 +3148,7 @@ func TestBackupRestoreRejectsInvalidCommission(t *testing.T) {
 						Commission: tc.commission,
 					}},
 				},
+				backup.CredentialFormPlaintext,
 			)
 			if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
 				Scope: scope, Mode: backup.RestoreModeInsertMissing,
@@ -2660,6 +3204,7 @@ func TestBackupRestoreRejectsUnknownOrderStatusAndRollsBack(t *testing.T) {
 				Status:      domain.OrderStatus("unknown"),
 			}},
 		}},
+		backup.CredentialFormPlaintext,
 	)
 
 	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -2705,6 +3250,7 @@ func TestBackupRestoreRejectsInvalidAuditActionAndRollsBack(t *testing.T) {
 				Source:     domain.SourcePanel,
 			},
 		}},
+		backup.CredentialFormPlaintext,
 	)
 
 	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
@@ -2849,6 +3395,62 @@ func TestBackupRestoreAuditOnlyNoNewGroupStaysObservational(t *testing.T) {
 	}
 	if summary.RestartRequired {
 		t.Fatalf("RestartRequired = true for an audit-only restore that wrote no runtime row")
+	}
+}
+
+func TestBackupRestoreValidatesManifestRealmCodeBeforeTransaction(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+	}{
+		{name: "empty"},
+		{name: "over_64_code_points", code: strings.Repeat("界", 65)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, dst := newRealmStore(t, domain.DefaultRealm)
+			if err := dst.SetMcpAccess(ctx, "submit_order", true); err != nil {
+				t.Fatalf("SetMcpAccess: %v", err)
+			}
+			scope := backup.Scope{
+				Sections: []backup.Section{backup.SectionGeneralSettings},
+			}
+			archive := backup.NewArchive(
+				time.Now(),
+				"test",
+				backup.RealmLabel{Code: test.code},
+				scope,
+				backup.Data{McpAccess: map[string]bool{"submit_order": false}},
+				backup.CredentialFormPlaintext,
+			)
+
+			// A canceled context makes BeginTx fail. ErrInvalid must win, proving
+			// manifest validation happens before the transaction is opened.
+			restoreCtx, cancel := context.WithCancel(ctx)
+			cancel()
+			_, err := dst.RestoreBackup(restoreCtx, archive, backup.RestoreOptions{
+				Scope: scope,
+				Mode:  backup.RestoreModeReplaceAll,
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf(
+					"RestoreBackup(%s) error = %v, want manifest.realm.code ErrInvalid",
+					test.name,
+					err,
+				)
+			}
+			if !strings.Contains(err.Error(), "manifest.realm.code") {
+				t.Fatalf("RestoreBackup(%s) error = %v, want field name", test.name, err)
+			}
+			access, err := dst.ListMcpAccess(ctx)
+			if err != nil {
+				t.Fatalf("ListMcpAccess: %v", err)
+			}
+			if !access["submit_order"] {
+				t.Fatalf("mcp access changed after rejected restore: %+v", access)
+			}
+		})
 	}
 }
 

@@ -103,6 +103,7 @@ func testArchive(scope backup.Scope, data backup.Data) backup.Archive {
 		backup.RealmLabel{Code: string(domain.DefaultRealm)},
 		scope,
 		data,
+		backup.CredentialFormPlaintext,
 	)
 }
 
@@ -1510,6 +1511,7 @@ func TestLocalNode_ConcurrentRestoreSwapAndReads(t *testing.T) {
 			backup.Data{Accounts: []backup.Account{{
 				Code: fmt.Sprintf("acc-%d", i),
 			}}},
+			backup.CredentialFormPlaintext,
 		)
 		if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
 			Scope: backup.Scope{All: true},

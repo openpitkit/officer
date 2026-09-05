@@ -53,11 +53,11 @@ func (r *realmStore) rawDB() *sql.DB { return r.store.currentDB() }
 
 // newTestStore opens a fresh migrated SQLite store in a temp file and returns it
 // with its default realm handle.
-func newTestStore(t *testing.T) (Store, RealmStore) {
+func newTestStore(t *testing.T, opts ...Option) (Store, RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	s, err := New(path)
+	s, err := New(path, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

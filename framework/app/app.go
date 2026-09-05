@@ -33,6 +33,7 @@ import (
 	"go.openpit.dev/officer/framework/marketdata"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
@@ -42,14 +43,15 @@ import (
 type Config struct {
 	SQLitePath         string
 	RuntimeLibraryPath string
+	MasterKey          *secret.MasterKey
 }
 
 // FatalShutdownHook is invoked by the business node on unrecoverable
 // post-engine persistence failures.
 type FatalShutdownHook func(error)
 
-// StoreFactory opens the configured persistent store.
-type StoreFactory func(string) (store.Store, error)
+// StoreFactory opens the configured persistent store for cfg.
+type StoreFactory func(Config) (store.Store, error)
 
 // EngineBuildFactory returns the engine build function for cfg.
 type EngineBuildFactory func(Config) engine.BuildFunc
@@ -218,7 +220,7 @@ func (b *Builder) Build(
 		return nil, err
 	}
 
-	st, err := b.storeFactory(cfg.SQLitePath)
+	st, err := b.storeFactory(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
