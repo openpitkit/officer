@@ -120,11 +120,7 @@ CREATE TABLE asset_class (
 CREATE INDEX idx_asset_classes_title ON asset_class (title, code);
 
 -- Principals dictionary: actors that initiate control-plane actions.
-CREATE TABLE principal (
-    id    {{PK}},
-    code  TEXT NOT NULL UNIQUE,
-    title TEXT NOT NULL DEFAULT ''
-);
+{{PRINCIPAL}}
 
 -- Account groups dictionary. The engine runs the group on its surrogate id, so
 -- there is no separate engine id column.

@@ -46,6 +46,7 @@ const (
 // Render substitutes the dialect tokens in the canonical schema text.
 func Render(d Dialect, text string) string {
 	return strings.NewReplacer(
+		"{{PRINCIPAL}}", PrincipalTableSQL(d.PrimaryKey(), "principal"),
 		tokenPrimaryKey, d.PrimaryKey(),
 		tokenExternalID, d.ExternalID(),
 		tokenBool, d.Bool(),

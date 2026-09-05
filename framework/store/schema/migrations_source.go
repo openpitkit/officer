@@ -27,6 +27,9 @@ import (
 	"go.openpit.dev/officer/framework/migration"
 )
 
+//go:embed fragments/principal.sql
+var principalSQL string
+
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
@@ -39,6 +42,16 @@ type EmbeddedMigrationSource struct {
 // NewEmbeddedMigrationSource creates the canonical migration source for d.
 func NewEmbeddedMigrationSource(d Dialect) EmbeddedMigrationSource {
 	return EmbeddedMigrationSource{dialect: d}
+}
+
+// PrincipalTableSQL renders the canonical principal dictionary independently of
+// the rest of the store schema. primaryKey is trusted SQL for the surrogate key;
+// tableName is trusted SQL for a table identifier, optionally schema-qualified.
+// Dynamic identifiers must already be validated and quoted. Callers must never
+// pass unvalidated application input as either argument.
+func PrincipalTableSQL(primaryKey, tableName string) string {
+	return strings.NewReplacer("{{PK}}", primaryKey, "{{TABLE}}", tableName).
+		Replace(principalSQL)
 }
 
 // Migrations returns the canonical migrations with the dialect tokens rendered.
