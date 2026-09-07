@@ -80,6 +80,7 @@ type localNode struct {
 	build    engine.BuildFunc
 	db       store.Store
 	realm    store.RealmStore
+	realmID  domain.RealmID
 	fatal    func(error)
 
 	mutate     sync.Mutex
@@ -108,6 +109,13 @@ const (
 
 // LocalOption customizes a local node instance.
 type LocalOption func(*localNode)
+
+// WithRealm binds the node to an explicit dataset. Omitting this option keeps
+// the single-binary composition's domain.DefaultRealm. An explicit empty realm
+// is rejected by NewLocalNode.
+func WithRealm(realm domain.RealmID) LocalOption {
+	return func(n *localNode) { n.realmID = realm }
+}
 
 // WithFatalShutdownHook wires the process-level fail-stop hook for
 // unrecoverable post-engine persistence failures. A nil hook is ignored and
@@ -155,20 +163,23 @@ func NewLocalNode(
 		return nil, nil, fmt.Errorf("nil engine build func")
 	}
 
-	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
-	if err != nil {
-		return nil, nil, fmt.Errorf("bind realm: %w", err)
-	}
-
 	n := &localNode{
-		db:    st,
-		realm: realm,
-		build: build,
-		fatal: func(error) {},
+		db:      st,
+		build:   build,
+		realmID: domain.DefaultRealm,
+		fatal:   func(error) {},
 	}
 	for _, opt := range opts {
 		opt(n)
 	}
+	if err := domain.ValidateRealmID(n.realmID); err != nil {
+		return nil, nil, fmt.Errorf("bind realm: %w", err)
+	}
+	realm, err := st.ForRealm(ctx, n.realmID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("bind realm: %w", err)
+	}
+	n.realm = realm
 	if err := n.ensureOperatorPrincipal(ctx, realm); err != nil {
 		return nil, nil, err
 	}
@@ -722,7 +733,7 @@ func (n *localNode) ResetDatabase(
 		)
 	}
 	closer.CloseMarketDataService()
-	realm, err := n.db.ForRealm(durableCtx, domain.DefaultRealm)
+	realm, err := n.db.ForRealm(durableCtx, n.realmID)
 	if err != nil {
 		return committedFailure(
 			"rebind realm after database reset",

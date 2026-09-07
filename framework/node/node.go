@@ -25,8 +25,9 @@
 //
 // Identity at this seam follows the store: accounts and groups are addressed by
 // their public code, machine records (orders, order events) by their opaque
-// external id. The realm is bound once when the node is built and never appears
-// as a method parameter; the single-binary node binds domain.DefaultRealm.
+// external id. Each node is bound to one realm at construction. Router keys
+// carry the realm and shard used to select that node; the single-binary
+// deployment binds domain.DefaultRealm.
 package node
 
 import (
@@ -40,10 +41,15 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// Key is the routing key that identifies which node owns a given account. With
-// the realm bound on the node, the account code alone resolves an account to
-// exactly one node, so the key carries only the account code.
+// ShardID identifies one partition within a realm.
+type ShardID string
+
+// Key identifies an account within a realm and shard.
 type Key struct {
+	// Realm identifies the dataset that owns the account.
+	Realm domain.RealmID
+	// Shard identifies the partition within the realm.
+	Shard ShardID
 	// Account is the public code of the account being routed.
 	Account domain.AccountID
 }

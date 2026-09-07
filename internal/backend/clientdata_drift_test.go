@@ -42,6 +42,7 @@ import (
 	"go.openpit.dev/officer/framework/businesscsv"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/store/schema"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
@@ -2240,7 +2241,9 @@ func parseClientDataSchema() (map[string][]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	tables, err := parseClientDataSchemaSQL(string(raw))
+	sql := strings.ReplaceAll(string(raw), "{{PRINCIPAL}}",
+		schema.PrincipalTableSQL("{{PRIMARY_KEY}}", "principal"))
+	tables, err := parseClientDataSchemaSQL(sql)
 	if err != nil {
 		return nil, err
 	}
