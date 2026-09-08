@@ -37,6 +37,7 @@ func TestNodeHydratesAndResetsItsConfiguredDataset(t *testing.T) {
 		Realm:              "development-tenant",
 		DatabasePath:       filepath.Join(t.TempDir(), "node.sqlite"),
 		RuntimeLibraryPath: runtimeLibrary,
+		FatalShutdownHook:  func(error) {},
 	}
 	first, err := development.NewNode(ctx, cfg)
 	if err != nil {
@@ -79,11 +80,25 @@ func TestNodeHydratesAndResetsItsConfiguredDataset(t *testing.T) {
 }
 
 func TestNodeRequiresExplicitRuntimeResources(t *testing.T) {
+	fatalHook := func(error) {}
 	for _, cfg := range []development.Config{
-		{Realm: "tenant"},
-		{Realm: "tenant", DatabasePath: "node.sqlite"},
-		{Realm: "tenant", RuntimeLibraryPath: "runtime"},
-		{DatabasePath: "node.sqlite", RuntimeLibraryPath: "runtime"},
+		{Realm: "tenant", FatalShutdownHook: fatalHook},
+		{
+			Realm: "tenant", DatabasePath: "node.sqlite",
+			FatalShutdownHook: fatalHook,
+		},
+		{
+			Realm: "tenant", RuntimeLibraryPath: "runtime",
+			FatalShutdownHook: fatalHook,
+		},
+		{
+			DatabasePath: "node.sqlite", RuntimeLibraryPath: "runtime",
+			FatalShutdownHook: fatalHook,
+		},
+		{
+			Realm: "tenant", DatabasePath: "node.sqlite",
+			RuntimeLibraryPath: "runtime",
+		},
 	} {
 		if _, err := development.NewNode(context.Background(), cfg); err == nil {
 			t.Fatalf("incomplete config accepted: %+v", cfg)

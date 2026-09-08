@@ -35,11 +35,13 @@ type Config struct {
 	Realm              domain.RealmID
 	DatabasePath       string
 	RuntimeLibraryPath string
+	FatalShutdownHook  func(error)
 }
 
 // NewNode opens and initializes the SQLite store, hydrates the real engine,
 // and transfers ownership of both to the returned node. Close releases them.
-// Neither a database path nor a native runtime path is inferred.
+// The database path, native runtime path, and fatal shutdown hook are required;
+// none is inferred.
 func NewNode(ctx context.Context, cfg Config) (node.Node, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -47,8 +49,11 @@ func NewNode(ctx context.Context, cfg Config) (node.Node, error) {
 	if err := domain.ValidateRealmID(cfg.Realm); err != nil {
 		return nil, err
 	}
-	if cfg.DatabasePath == "" || cfg.RuntimeLibraryPath == "" {
-		return nil, errors.New("database path and native runtime library path are required")
+	if cfg.DatabasePath == "" || cfg.RuntimeLibraryPath == "" ||
+		cfg.FatalShutdownHook == nil {
+		return nil, errors.New(
+			"database path, native runtime library path, and fatal shutdown hook are required",
+		)
 	}
 	st, err := sqlite.New(cfg.DatabasePath, sqlite.WithRealm(cfg.Realm))
 	if err != nil {
@@ -58,7 +63,11 @@ func NewNode(ctx context.Context, cfg Config) (node.Node, error) {
 		return nil, errors.Join(fmt.Errorf("initialize node store: %w", err), st.Close())
 	}
 	target, _, err := node.NewLocalNode(
-		ctx, st, native.NewOpenPitEngineBuildFunc(cfg.RuntimeLibraryPath), node.WithRealm(cfg.Realm),
+		ctx,
+		st,
+		native.NewOpenPitEngineBuildFunc(cfg.RuntimeLibraryPath),
+		node.WithRealm(cfg.Realm),
+		node.WithFatalShutdownHook(cfg.FatalShutdownHook),
 	)
 	if err != nil {
 		return nil, errors.Join(err, st.Close())

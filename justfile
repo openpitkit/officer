@@ -167,10 +167,12 @@ check-js-dry: lint-js test-js
 vet:
     {{ python }} {{ just_helper }} go . vet -all {{ go_packages }}
 
-# Update Go module metadata.
+# Update Go module metadata. The root module depends on framework, so framework
+# is tidied first; the other order leaves the root go.sum computed against the
+# previous framework requirements whenever a dependency moves between them.
 tidy:
-    {{ python }} {{ just_helper }} go . mod tidy -go={{ go_version }}
     {{ python }} {{ just_helper }} go framework mod tidy -go={{ go_version }}
+    {{ python }} {{ just_helper }} go . mod tidy -go={{ go_version }}
 
 # Create the Semgrep venv only when it is not at the pinned version.
 install-semgrep:
@@ -197,8 +199,8 @@ lint-all-release-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout) l
 lint-go:
     {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
     {{ python }} {{ just_helper }} check-gofmt framework
-    {{ python }} {{ just_helper }} go . mod tidy -go={{ go_version }} -diff
     {{ python }} {{ just_helper }} go framework mod tidy -go={{ go_version }} -diff
+    {{ python }} {{ just_helper }} go . mod tidy -go={{ go_version }} -diff
     {{ python }} {{ just_helper }} go . vet -all {{ go_packages }}
     {{ python }} {{ just_helper }} go framework vet -all ./...
     {{ python }} {{ just_helper }} go-tool . golangci-lint run --timeout=5m {{ go_packages }}
@@ -211,8 +213,8 @@ lint-go-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout)
 lint-go-debug-dev pit_checkout="../pit": (dylib-debug-dev pit_checkout)
     {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
     {{ python }} {{ just_helper }} check-gofmt framework
-    go mod tidy -go={{ go_version }} -diff
     cd framework && go mod tidy -go={{ go_version }} -diff
+    go mod tidy -go={{ go_version }} -diff
     just _go-dev-mode debug {{ quote(pit_checkout) }} "." "vet" "-all" {{ go_packages }}
     just _go-dev-mode debug {{ quote(pit_checkout) }} "framework" "vet" "-all" "./..."
     just _go-tool-dev-mode debug {{ quote(pit_checkout) }} "." "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
@@ -222,8 +224,8 @@ lint-go-debug-dev pit_checkout="../pit": (dylib-debug-dev pit_checkout)
 lint-go-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
     {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
     {{ python }} {{ just_helper }} check-gofmt framework
-    go mod tidy -go={{ go_version }} -diff
     cd framework && go mod tidy -go={{ go_version }} -diff
+    go mod tidy -go={{ go_version }} -diff
     just _go-dev-mode release {{ quote(pit_checkout) }} "." "vet" "-all" {{ go_packages }}
     just _go-dev-mode release {{ quote(pit_checkout) }} "framework" "vet" "-all" "./..."
     just _go-tool-dev-mode release {{ quote(pit_checkout) }} "." "golangci-lint" "run" "--timeout=5m" {{ go_packages }}

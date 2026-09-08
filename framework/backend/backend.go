@@ -202,7 +202,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 // the account code alone resolves the owning node; the realm is never exposed on
 // a surface.
 func keyFor(id domain.AccountID) node.Key {
-	return node.Key{Account: id}
+	return node.Key{Realm: domain.DefaultRealm, Account: id}
 }
 
 // validateMissingAccountPolicy enforces the missing-account request contract:
