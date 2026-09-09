@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package backend preserves the open app's historical import path while the
+// Package backend preserves the application's historical import path while the
 // control-plane implementation lives in the framework module.
 package backend
 
@@ -60,7 +60,7 @@ const MarketDataFreshnessTTL = fwbackend.MarketDataFreshnessTTL
 const SubmitModeHold = fwbackend.SubmitModeHold
 const SubmitModeImmediate = fwbackend.SubmitModeImmediate
 
-// New constructs the open app's framework-backed control-plane service.
+// New constructs the application's framework-backed control-plane service.
 func New(
 	router node.NodeRouter,
 	md MarketDataRuntime,

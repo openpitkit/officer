@@ -24,32 +24,32 @@ import (
 )
 
 const (
-	privateRouteID         = "closedref.private.get"
-	privateRoutePermission = "closedref.private.read"
-	privateRoutePattern    = "/example/private"
+	hostRouteID         = "customhost.private.get"
+	hostRoutePermission = "customhost.private.read"
+	hostRoutePattern    = "/example/private"
 
-	replacedOpenRouteID = "health.get"
-	hiddenOpenRouteID   = "status.get"
-	removedOpenRouteID  = "accounts.list.get"
+	replacedBaseRouteID = "health.get"
+	hiddenBaseRouteID   = "status.get"
+	removedBaseRouteID  = "accounts.list.get"
 )
 
-func composeReferenceRoutes(registry *httpx.RouteRegistry) {
+func composeCustomHostRoutes(registry *httpx.RouteRegistry) {
 	registry.Register(httpx.Route{
-		ID:      privateRouteID,
+		ID:      hostRouteID,
 		Method:  http.MethodGet,
-		Pattern: privateRoutePattern,
-		Handler: http.HandlerFunc(privateRoute),
+		Pattern: hostRoutePattern,
+		Handler: http.HandlerFunc(hostRoute),
 	})
 	registry.Register(httpx.Route{
-		ID:      replacedOpenRouteID,
+		ID:      replacedBaseRouteID,
 		Method:  http.MethodGet,
 		Pattern: "/health",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			httpx.WriteJSON(w, http.StatusOK, map[string]string{"route": "replaced"})
 		}),
 	})
-	hideRoute(registry, hiddenOpenRouteID, hiddenRoutePermission)
-	registry.Unregister(removedOpenRouteID)
+	hideRoute(registry, hiddenBaseRouteID, hiddenRoutePermission)
+	registry.Unregister(removedBaseRouteID)
 }
 
 func hideRoute(registry *httpx.RouteRegistry, id string, permission string) {
@@ -63,6 +63,6 @@ func hideRoute(registry *httpx.RouteRegistry, id string, permission string) {
 	}
 }
 
-func privateRoute(w http.ResponseWriter, _ *http.Request) {
+func hostRoute(w http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"example": "ok"})
 }

@@ -26,7 +26,7 @@ import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { renderWithApi } from "@/test/apiClient";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
-const injectedBaseUrl = "https://closed.example/officer/api";
+const injectedBaseUrl = "https://host.example/officer/api";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {

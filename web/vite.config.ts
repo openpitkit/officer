@@ -19,7 +19,7 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
-import { createAppRouteManifest } from "./src/openRoutes";
+import { createAppRouteManifest } from "./src/appRoutes";
 
 const appRouteManifestFile = "app-route-manifest.json";
 

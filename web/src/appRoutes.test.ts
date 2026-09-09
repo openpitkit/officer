@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createAppRouteManifest } from "./openRoutes";
+import { createAppRouteManifest } from "./appRoutes";
 
 // The Vite plugin serving /app-route-manifest.json and the officer-test
 // Playwright harness both read this factory's value, so its inventory and entry

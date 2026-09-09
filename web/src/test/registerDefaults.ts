@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { registerOpenRowActions, registerOpenVocabulary } from "@/openDefaults";
+import { registerAppRowActions, registerAppVocabulary } from "@/appDefaults";
 
-registerOpenVocabulary();
-registerOpenRowActions();
+registerAppVocabulary();
+registerAppRowActions();

@@ -4,7 +4,7 @@ This package has two surfaces:
 
 - `@openpit/officer-web` is the reusable React framework library exported from
   `src/framework/index.ts`.
-- The open Pit Officer single-page app is the default consumer under `src/`.
+- The Pit Officer single-page app is the reference consumer under `src/`.
 
 The app is built with Vite and embedded into the Go binary via
 `go:embed web/dist`, then served from `/` by the Pit Officer HTTP layer in
@@ -12,16 +12,8 @@ The app is built with Vite and embedded into the Go binary via
 embedded build. It carries no risk logic; all validation is mirrored from the
 backend contract only to give fast form feedback.
 
-## Pages
-
-- **Dashboard** (`/`) - live engine/store health.
-- **Accounts** (`/accounts`) - create accounts, block/unblock with a reason.
-- **Limits** (`/limits`) - relational risk barriers per policy/scope, filtered
-  by account and policy, with an add/edit dialog and delete confirmation.
-- **Audit** (`/audit`) - the change log, newest first, with a page-size select.
-
-Client-side routing is provided by `react-router-dom`; the sidebar reflects the
-active route.
+Client-side routing is provided by `react-router-dom`; the route registry is
+`src/appRoutes.ts`, and the sidebar reflects the active route.
 
 ## Stack
 
@@ -89,8 +81,8 @@ framework shell.
 
 `src/register.ts` is the single open composition module. It registers routes,
 navigation entries, dashboard widgets, row actions, vocabulary, and locale
-catalogs under stable ids. Another consumer can replace an entry by registering
-the same id or remove it with the matching unregister API.
+catalogs under stable ids. A host application can replace an entry by
+registering the same id or remove it with the matching unregister API.
 
 `src/App.tsx` is intentionally kept as a minimal shell instead of being deleted.
 The current framework surface has `Sidebar` and `AppRoutes`, but no top-level
@@ -123,11 +115,11 @@ and `unregisterScope`; locale namespaces use `registerLocaleResources` or
 unregistering removes it, and permission fields hide rendered routes, nav
 entries, pages, and row actions without removing them.
 
-Authorization is supplied by `AuthProvider`. The open app mounts the allow-all
-default, while another consumer can pass a custom `hasPermission` predicate or a
-complete `AuthContextValue`; renderers consume it through `useHasPermission`.
+Authorization is supplied by `AuthProvider`. The app mounts the allow-all
+default, while a host application can pass a custom `hasPermission` predicate or
+a complete `AuthContextValue`; renderers consume it through `useHasPermission`.
 
-The reference composition under `src/examples/closedref` imports only
+The reference composition under `src/examples/customhost` imports only
 `@openpit/officer-web` for registry and auth surfaces. It adds a private page,
 nav entry, widget, row action, vocabulary, and locale namespace; replaces a page
 and widget by re-registering ids; hides an action through a custom

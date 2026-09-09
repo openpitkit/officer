@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-package openapp
+package officerapp
 
 import (
 	"context"

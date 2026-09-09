@@ -5,9 +5,15 @@ info:
   version: "1"
   description: >
     Control-plane REST API for the Pit Officer service. The public surface is
-    mounted at `/api/v1`; an identical mirror at `/app/api/v1` is reserved for
-    the operator dashboard. All responses are `application/json`. Errors use the
-    envelope `{"error":{"code":"...","message":"..."}}`. Money and size values
+    mounted at `/api/v1`; a mirror at `/app/api/v1` is reserved for the operator
+    dashboard and carries the same routes except the route manifest, which is
+    published only on `/api/v1`. Control endpoints answer `application/json`;
+    endpoints that hand back a file answer with that file's own media type.
+    A malformed request body, or one that violates the schema or a parameter
+    constraint, answers RFC 9457 `application/problem+json` - `400` for broken
+    syntax, `422` for a constraint violation. Every other error answers the
+    envelope `{"error":{"code":"...","message":"..."}}`.
+    Money and size values
     are exact decimal strings - never IEEE 754 floats.
   license:
     name: Apache 2.0

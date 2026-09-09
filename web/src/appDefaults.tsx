@@ -33,8 +33,8 @@ import {
   type LimitRowActionContext,
 } from "@/pages/rowActions";
 
-/** Register the open product vocabulary used by pages and validation. */
-export function registerOpenVocabulary(): void {
+/** Register the built-in vocabulary used by pages and validation. */
+export function registerAppVocabulary(): void {
   registerScope("broker");
   registerScope("global");
   registerScope("asset");
@@ -91,8 +91,8 @@ export function registerOpenVocabulary(): void {
   });
 }
 
-/** Register the open product row actions used by the default pages. */
-export function registerOpenRowActions(): void {
+/** Register the built-in row actions used by the default pages. */
+export function registerAppRowActions(): void {
   registerRowAction<Account, AccountRowActionContext>({
     id: "account-positions",
     kind: "account",

@@ -90,7 +90,7 @@ export function unregisterLocale(code: string): boolean {
   return true;
 }
 
-/** Reset runtime-supported locales to the open app defaults. */
+/** Reset runtime-supported locales to the application defaults. */
 export function resetLocales(): void {
   supportedLocales.splice(
     0,

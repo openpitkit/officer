@@ -27,7 +27,8 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
-// ExtraMount is a non-v1 route the consuming app mounts before the SPA fallback.
+// ExtraMount is a non-v1 route the host application mounts before the SPA
+// fallback.
 type ExtraMount struct {
 	Method  string
 	Pattern string

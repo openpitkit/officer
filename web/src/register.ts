@@ -31,6 +31,8 @@ import {
   Users,
 } from "lucide-react";
 
+import { registerAppRowActions, registerAppVocabulary } from "@/appDefaults";
+import { appRoutes } from "@/appRoutes";
 import {
   AboutNavEntry,
   NonReleaseNavEntry,
@@ -42,9 +44,7 @@ import {
   registerRoute,
   registerWidget,
 } from "@/framework";
-import { openLocaleResources } from "@/i18n";
-import { registerOpenRowActions, registerOpenVocabulary } from "@/openDefaults";
-import { openRoutes } from "@/openRoutes";
+import { appLocaleResources } from "@/i18n";
 import { Accounts } from "@/pages/Accounts";
 import { Assets } from "@/pages/Assets";
 import { Audit } from "@/pages/Audit";
@@ -64,7 +64,7 @@ import {
   McpAccessCard,
 } from "@/pages/dashboard/widgets";
 
-const openRouteComponents = {
+const appRouteComponents = {
   dashboard: Dashboard,
   accounts: Accounts,
   assets: Assets,
@@ -78,28 +78,28 @@ const openRouteComponents = {
   service: Service,
 } as const;
 
-// This module is the open product's complete registration against the framework
+// This module is the application's complete registration against the framework
 // extension points. Stable ids let consumers replace entries by re-registering
 // the id or remove entries through the matching unregister API.
-export function registerOpenOfficerDefaults(): void {
+export function registerOfficerDefaults(): void {
   // Locale catalogs: en, ru, zh-CN, all namespaces from src/i18n/locales.
-  registerLocaleResourceMap(openLocaleResources);
+  registerLocaleResourceMap(appLocaleResources);
 
   // Vocabulary ids include the generic rate-limit scopes and the semantic
   // underlying/settlement order-size scopes.
-  registerOpenVocabulary();
+  registerAppVocabulary();
 
   // Route ids: dashboard, accounts, policies, limits-redirect, positions,
   // orders, trading-redirect, market-data, audit, mcp-access, signing-keys,
   // service.
-  for (const route of openRoutes) {
+  for (const route of appRoutes) {
     if ("redirectTo" in route) {
       registerRoute(route);
       continue;
     }
     registerRoute({
       ...route,
-      Component: openRouteComponents[route.id],
+      Component: appRouteComponents[route.id],
     });
   }
 
@@ -245,7 +245,7 @@ export function registerOpenOfficerDefaults(): void {
 
   // Row action ids: account-positions, account-trading, account-policies,
   // account-audit, account-delete, group-delete, limit-edit, limit-delete.
-  registerOpenRowActions();
+  registerAppRowActions();
 }
 
-registerOpenOfficerDefaults();
+registerOfficerDefaults();

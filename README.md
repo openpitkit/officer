@@ -1,180 +1,60 @@
 # Pit Officer
 
-Pit Officer is an open-source control plane that sits over the
-embeddable [OpenPit](https://openpit.dev) pre-trade risk engine. It exposes the
-engine to operators and to AI agents without putting any risk logic of its own
-in front of the engine: Pit Officer hydrates, observes, and operates the
-engine; the engine alone evaluates orders.
+[![CI](https://github.com/openpitkit/officer/actions/workflows/ci.yml/badge.svg)](https://github.com/openpitkit/officer/actions/workflows/ci.yml) [![Go version](https://img.shields.io/badge/go-1.25.11%2B-00ADD8)](https://pkg.go.dev/go.openpit.dev/officer) [![Module](https://img.shields.io/badge/module-go.openpit.dev%2Fofficer-00ADD8)](https://pkg.go.dev/go.openpit.dev/officer) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/openpitkit/officer/blob/main/LICENSE)
 
-## Surfaces
+Pit Officer is a control plane for the embeddable [OpenPit](https://openpit.dev)
+pre-trade risk engine. It runs one engine in a local process over a local SQLite
+database and exposes it to operators through a web dashboard, to programs
+through a REST API, and to AI agents through an MCP server. The engine alone
+evaluates orders.
 
-### REST API
+## Capabilities
 
-The `serve` mode exposes a REST API under `/api/v1`. Interactive documentation
-is available at `/docs` (Swagger UI) once the service is running. The
-machine-readable OpenAPI 3 spec is at `/api/openapi.yaml`.
-
-All responses use `application/json`; errors return
-`{"error":{"code":"...","message":""}}`.
-
-### MCP tools
-
-The MCP surface is read-only and carries no secrets. Tool names:
-
-<!-- markdownlint-disable MD013 -->
-
-| Tool | Parameters | Returns |
-| --- | --- | --- |
-| `health` | - | Liveness state |
-| `get_account_state` | `account` (string) | Account detail and its limits |
-| `get_limits` | `account` (string, optional) | All limits or per-account limits |
-| `get_audit` | `category` (control \| trading \| all, default control), `account` (string, optional), `limit` (int, optional, default 50, cap 500) | Audit entries |
-
-<!-- markdownlint-enable MD013 -->
-
-JSON shapes are identical to the REST DTOs.
-
-### Dashboard pages
-
-The operator SPA (`serve` mode) provides four pages:
-
-- **Dashboard** - engine status and node health at a glance.
-- **Accounts** - list, create, block, and unblock accounts.
-- **Limits** - browse and edit risk limit barriers across all policies.
-- **Audit** - append-only audit trail of all control-plane actions.
-
-## Run modes
-
-Pit Officer ships as a single binary, `pit-officer`, with four subcommands:
-
-- `pit-officer mcp` - a local stdio [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-started/intro)
-  server. Intended to be launched on demand by an MCP client (an editor, an
-  agent runtime) over standard input/output. No network listener is opened.
-- `pit-officer serve` - an always-on service that exposes the same MCP surface
-  over streamable HTTP and serves the operator dashboard (an embedded
-  single-page app under `web/dist`). It binds a free loopback port by default
-  (`127.0.0.1:0`, OS-assigned); binding to a non-loopback address is an
-  explicit, deliberate operator decision.
-- `pit-officer dashboard` - print a running instance's dashboard URL and open
-  it in the browser. It opens no engine or store; it locates the instance via
-  the runtime-state file `serve` writes next to the database, so it must be run
-  with the same configuration (working directory / `PIT_OFFICER_SQLITE_PATH`).
-- `pit-officer healthcheck` - probe a running instance's `/healthz` and exit
-  non-zero if it is not 200. It also reads the runtime-state file, so it too
-  must share the `serve` configuration.
-
-Because `serve` binds a free port by default, the bound port is not known until
-it is listening. `serve` publishes its real address to a runtime-state file
-(`officer-runtime.json`) next to the database; `dashboard` and `healthcheck`
-read that file to find the live URL.
-
-## Configuration
-
-Pit Officer is configured through environment variables (or command-line flags that
-override them). Flags take precedence over the environment; the environment
-takes precedence over built-in defaults.
-
-<!-- markdownlint-disable MD013 -->
-
-| Environment variable | Flag | Default | Description |
-| --- | --- | --- | --- |
-| `PIT_OFFICER_HTTP_ADDR` | `-http-addr` | `127.0.0.1:0` | HTTP listen address used in `serve` mode. The default binds to loopback with an OS-assigned free port; use `pit-officer dashboard` to discover the URL. The container image overrides this to `0.0.0.0:8787` so a fixed, mapped port can be reached. |
-| `PIT_OFFICER_SQLITE_PATH` | `-sqlite-path` | `pit-officer.db` | On-disk path of the SQLite database. The container image sets this to `/data/pit-officer.db` and maps `/data` to a named volume. |
-| `OPENPIT_RUNTIME_LIBRARY_PATH` | `-runtime-library-path` | _(empty)_ | Path to a pre-extracted native OpenPit runtime library. When set, the binding skips its own extraction step. The stable container image leaves this unset. |
-| `PIT_OFFICER_MASTER_KEY` | - | _(empty)_ | Exactly 32 bytes in standard base64. Optional; when absent, secrets are stored unencrypted (the default). Officer never generates, stores, or recovers this key; the operator supplies it whole. It is deliberately not available as a command-line flag because process arguments are visible to other local processes. If both sources are configured with different values, or a configured source cannot be read, Officer refuses to start rather than running unencrypted. Once a database is sealed, Officer refuses to start without the matching key; the key is not recoverable, so losing it means that database cannot be opened again. |
-| `PIT_OFFICER_MASTER_KEY_FILE` | `-master-key-file` | _(empty)_ | Path to a file holding the same base64 value. Everything said about `PIT_OFFICER_MASTER_KEY` applies here too. |
-
-<!-- markdownlint-enable MD013 -->
-
-## Build
-
-### Prerequisites
-
-The OpenPit Go binding requires cgo. Stable builds use the published
-`go.openpit.dev/openpit` module pinned in `go.mod`, the same dependency
-users get with `go get`.
-
-- cgo enabled (`CGO_ENABLED=1`) and a working C toolchain.
-
-By default, the `just` recipes do not use a sibling Pit checkout and do not set
-`OPENPIT_RUNTIME_LIBRARY_PATH`. If that environment variable is already set by
-the caller, the binding still honors it in the normal Go way. Runnable binary
-builds (`just build`, `just run-serve`, and their `*-dev` variants) install and
-build the SPA before `go build` so the `//go:embed` directive captures
-`web/dist/index.html` and the dashboard assets. Go-only builds (`just build-go`
-or direct `go build` from a fresh checkout) use the committed `web/dist`
-placeholder and do not produce a dashboard-capable `serve` binary.
-
-With [Just](https://just.systems/):
-
-```bash
-go mod tidy   # update go.sum after editing go.mod
-just check    # format, lint, build, and test
-just build-go # compile Go packages only; no runnable dashboard bundle
-just build    # build the SPA first, then the pit-officer binary
-```
-
-Local OpenPit developer mode is explicit. These recipes build the native runtime
-from a local Pit checkout, resolve the Go binding from that same checkout via a
-temporary `go.work`, and leave the stable `go.mod` / `go.sum` unchanged. The
-default checkout path is `../pit` from this `officer/` directory; pass a path to
-override it.
-
-```bash
-just build-go-dev           # uses ../pit
-just build-dev              # uses ../pit
-just build-dev /path/to/pit # uses an explicit Pit checkout
-```
-
-Manual stable build:
-
-```bash
-CGO_ENABLED=1 go mod tidy
-
-# Install and build the SPA, then build the binary:
-cd web && npm install && npm run build && cd ..
-CGO_ENABLED=1 go build -o pit-officer ./cmd/pit-officer
-```
-
-Once `web/package-lock.json` is committed, replace `npm install` with `npm ci`
-for reproducible, lockfile-pinned installs.
+- **One local engine over one local store** - a single node built from SQLite at startup.
+- **A reusable framework**: [`framework/`](https://pkg.go.dev/go.openpit.dev/officer/framework) in Go and `web/src/framework/` in React, of which this application is one composition.
+- **A REST API over the control plane** - see the [API notes](docs/api.md).
+- **An MCP server** over stdio or streamable HTTP, with mutating tools off until an operator enables them by name.
+- **An operator dashboard**, an embedded single-page app driven by the same API.
+- **Signed order approvals** - an Ed25519 approval envelope for every order that passes pre-trade.
+- **An append-only audit trail** of every control-plane action.
+- **Market data through pluggable connectors**, configured and toggled at runtime.
+- **Optional at-rest encryption** of stored secrets under an operator-supplied master key.
 
 ## Run
 
-`serve` binds a free loopback port by default, so the URL is not known ahead of
-time. Start `serve`, then run `dashboard` to print and open it. `dashboard` and
-`healthcheck` locate the running instance through the runtime-state file `serve`
-writes next to the database, so they must use the same configuration (working
-directory / `PIT_OFFICER_SQLITE_PATH`) as the `serve` process.
-
-With [Just](https://just.systems/):
+Pit Officer is a single binary with four subcommands: `serve`, `mcp`,
+`dashboard`, `healthcheck`. With [Just](https://just.systems/):
 
 ```bash
-just run-mcp     # local stdio MCP server (rebuilds first)
-just run-serve   # build SPA + binary first, then serve the dashboard
-just dashboard   # print and open the running serve URL (no rebuild)
+just run-serve   # build the SPA and the binary, then serve
+just dashboard   # print the running instance's URLs and open the browser
+just run-mcp     # local stdio MCP server
 ```
 
-Local OpenPit developer mode:
+In a container, build the image with `just docker-build` and start it with
+`docker compose up`; `docker-compose.yml` pins the port, the database volume,
+and a read-only root filesystem.
+
+The subcommands, the environment variables and flags, and the authorization
+model are in the [configuration reference](docs/configuration.md).
+
+## Build
+
+Prerequisites: a C toolchain with cgo enabled, which the OpenPit Go binding
+requires; Go; Node and npm, for the dashboard bundle; Python 3, which the
+recipes use to drive Go, the linters, and Semgrep; golangci-lint; and
+[Just](https://just.systems/). Tool versions are pinned in
+`.github/ci-versions.env`.
 
 ```bash
-just run-mcp-dev             # uses ../pit
-just run-serve-dev           # uses ../pit
-just run-serve-dev /path/to/pit
+just frontend-ci-install  # npm ci in web/ from the committed lockfile
+just build                # build the SPA, then the pit-officer binary
+just check                # format checks, linters, Semgrep, tests, frontend bundles
 ```
 
-Manual:
-
-Use a binary built by `just build` or by the manual build sequence above. A
-binary produced by a Go-only build lacks the embedded dashboard assets and
-`serve` fails at startup.
-
-```bash
-./pit-officer mcp           # local stdio MCP server
-./pit-officer serve         # always-on dashboard + MCP-over-HTTP
-./pit-officer dashboard     # print and open the running serve URL
-./pit-officer healthcheck   # probe /healthz; exit non-zero if unhealthy
-```
+Importing the framework module, building against a local Pit checkout, building
+without Just, and the debug variants are covered in the
+[development notes](docs/development.md).
 
 ## License
 

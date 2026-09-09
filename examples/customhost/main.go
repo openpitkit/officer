@@ -26,57 +26,57 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/marketdata"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
-	"go.openpit.dev/officer/openapp"
+	"go.openpit.dev/officer/officerapp"
 )
 
-const hiddenRoutePermission = "closedref.hidden.route"
+const hiddenRoutePermission = "customhost.hidden.route"
 
-type referenceComposition struct {
+type customHostComposition struct {
 	Builder    *frameworkapp.Builder
 	Authorizer httpx.Authorizer
 }
 
 func main() {
-	if _, err := newReferenceComposition(); err != nil {
+	if _, err := newCustomHostComposition(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func newReferenceComposition() (referenceComposition, error) {
+func newCustomHostComposition() (customHostComposition, error) {
 	authorizer := newDenyOneAuthorizer(hiddenRoutePermission, hiddenToolID)
 
 	builder := frameworkapp.NewBuilder()
-	if err := openapp.Register(builder); err != nil {
-		return referenceComposition{}, err
+	if err := officerapp.Register(builder); err != nil {
+		return customHostComposition{}, err
 	}
 	builder.SetAuthorizer(authorizer)
-	if err := builder.RegisterMarketDataProvider(privateProvider()); err != nil {
-		return referenceComposition{},
-			fmt.Errorf("register private market data provider: %w", err)
+	if err := builder.RegisterMarketDataProvider(hostProvider()); err != nil {
+		return customHostComposition{},
+			fmt.Errorf("register custom host market data provider: %w", err)
 	}
-	builder.AddToolRegistrar(registerReferenceTools)
+	builder.AddToolRegistrar(registerCustomHostTools)
 	if err := builder.WrapRouteConfigBuilder(func(
-		open frameworkapp.RouteConfigBuilder,
+		base frameworkapp.RouteConfigBuilder,
 	) frameworkapp.RouteConfigBuilder {
 		return func(
 			svc backend.ControlPlane,
 			logs httpx.LogSource,
 		) frameworkapp.RouteConfig {
-			cfg := open(svc, logs)
-			composeReferenceRoutes(cfg.Routes)
+			cfg := base(svc, logs)
+			composeCustomHostRoutes(cfg.Routes)
 			cfg.Authorizer = authorizer
 			return cfg
 		}
 	}); err != nil {
-		return referenceComposition{},
-			fmt.Errorf("wrap reference route config builder: %w", err)
+		return customHostComposition{},
+			fmt.Errorf("wrap custom host route config builder: %w", err)
 	}
 
-	return referenceComposition{
+	return customHostComposition{
 		Builder:    builder,
 		Authorizer: authorizer,
 	}, nil
 }
 
-var _ marketdata.Connector = (*privateConnector)(nil)
-var _ http.HandlerFunc = privateRoute
+var _ marketdata.Connector = (*hostConnector)(nil)
+var _ http.HandlerFunc = hostRoute

@@ -26,30 +26,30 @@ import (
 	"go.openpit.dev/officer/framework/marketdata"
 )
 
-const privateProviderID = "example-private"
+const hostProviderID = "example-private"
 
-func privateProvider() marketdata.Provider {
+func hostProvider() marketdata.Provider {
 	return marketdata.Provider{
-		Type:  privateProviderID,
-		Title: "Example private provider",
+		Type:  hostProviderID,
+		Title: "Example custom host provider",
 		Build: func(domain.MarketDataInstance) (marketdata.Connector, error) {
-			return newPrivateConnector(), nil
+			return newHostConnector(), nil
 		},
 	}
 }
 
-func newPrivateConnector() *privateConnector {
-	return &privateConnector{stop: make(chan struct{})}
+func newHostConnector() *hostConnector {
+	return &hostConnector{stop: make(chan struct{})}
 }
 
-// privateConnector streams one quote and then stays subscribed. Its stop
+// hostConnector streams one quote and then stays subscribed. Its stop
 // channel is what Close signals, so the constructor is mandatory.
-type privateConnector struct {
+type hostConnector struct {
 	stop      chan struct{}
 	closeOnce sync.Once
 }
 
-func (c *privateConnector) Subscribe(
+func (c *hostConnector) Subscribe(
 	ctx context.Context,
 	subs []marketdata.Subscription,
 ) (<-chan marketdata.QuoteUpdate, error) {
@@ -84,15 +84,15 @@ func (c *privateConnector) Subscribe(
 	return ch, nil
 }
 
-func (c *privateConnector) Close() {
+func (c *hostConnector) Close() {
 	c.closeOnce.Do(func() {
 		close(c.stop)
 	})
 }
 
-func (*privateConnector) References() (marketdata.ProviderReferences, bool) {
+func (*hostConnector) References() (marketdata.ProviderReferences, bool) {
 	return marketdata.ProviderReferences{
-		DocsURL:    "https://openpit.dev/docs/examples/private-provider",
-		SymbolsURL: "https://openpit.dev/docs/examples/private-symbols",
+		DocsURL:    "https://example.com/docs/custom-host-provider",
+		SymbolsURL: "https://example.com/docs/custom-host-symbols",
 	}, true
 }

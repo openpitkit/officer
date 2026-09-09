@@ -31,7 +31,7 @@ add their own locale namespaces.
 
 Call resource registration before rendering components that read the new
 namespace. The app initializes i18next synchronously at module import, so a
-closed package can import `@openpit/officer-web` and register its catalogs at
+host application can import `@openpit/officer-web` and register its catalogs at
 module top level before mounting its composed app.
 
 The frontend auth predicate is intentionally rendering-only. It mirrors the

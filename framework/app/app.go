@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package app composes an Officer distribution from framework registries and
+// Package app composes an Officer application from framework registries and
 // concrete implementation hooks.
 package app
 
@@ -100,7 +100,7 @@ type ToolRegistrar func(*frameworkmcp.ToolRegistry, frameworkmcp.Source)
 // SPAFactory loads the embedded dashboard filesystem.
 type SPAFactory func() (fs.FS, error)
 
-// Builder collects the concrete hooks that make one Officer distribution.
+// Builder collects the concrete hooks that make one composition.
 type Builder struct {
 	storeFactory      StoreFactory
 	engineBuild       EngineBuildFactory

@@ -40,7 +40,7 @@ const modules = import.meta.glob<Catalog>("./locales/**/*.json", {
   eager: true,
 });
 
-export const openLocaleResources: Resource = {};
+export const appLocaleResources: Resource = {};
 for (const [path, mod] of Object.entries(modules)) {
   // Path shape: ./locales/<locale>/<namespace>.json
   const match = path.match(/\.\/locales\/([^/]+)\/([^/]+)\.json$/);
@@ -48,14 +48,14 @@ for (const [path, mod] of Object.entries(modules)) {
     continue;
   }
   const [, locale, namespace] = match;
-  (openLocaleResources[locale] ??= {})[namespace] = mod.default;
+  (appLocaleResources[locale] ??= {})[namespace] = mod.default;
 }
 
 void i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    resources: openLocaleResources,
+    resources: appLocaleResources,
     fallbackLng: DEFAULT_LOCALE,
     supportedLngs: getSupportedLocaleCodes(),
     // A detected language outside the supported set falls back to en rather

@@ -30,7 +30,7 @@ import {
   RegistryRowActions,
 } from "@openpit/officer-web";
 
-import { ClosedReferenceAuthProvider } from "./components";
+import { CustomHostAuthProvider } from "./components";
 import {
   hiddenActionID,
   privateActionID,
@@ -42,17 +42,17 @@ import {
   removedRouteID,
 } from "./ids";
 import {
-  registerClosedReferenceComposition,
-  unregisterClosedReferenceComposition,
+  registerCustomHostComposition,
+  unregisterCustomHostComposition,
 } from "./composition";
 
-describe("closed reference web composition", () => {
+describe("custom host web composition", () => {
   afterEach(() => {
-    unregisterClosedReferenceComposition();
+    unregisterCustomHostComposition();
   });
 
   it("adds private route, nav, action, widget, and vocabulary entries", () => {
-    registerClosedReferenceComposition();
+    registerCustomHostComposition();
 
     expect(getRoutes().some((entry) => entry.id === privatePageID)).toBe(true);
     expect(getNav("primary").some((entry) => entry.id === privateNavID)).toBe(
@@ -63,11 +63,11 @@ describe("closed reference web composition", () => {
     );
     expect(getScopes()).toContain(privateScopeID);
     expect(getPolicies()).toContain(privatePolicyID);
-    expect(i18n.t("closedref:page.title")).toBe("Private reference page");
+    expect(i18n.t("customhost:page.title")).toBe("Private reference page");
   });
 
   it("replaces entries by re-registering the same stable id", () => {
-    registerClosedReferenceComposition();
+    registerCustomHostComposition();
 
     const Page = getPage(privatePageID)?.Component;
     const Widget = getWidgets().find(
@@ -84,36 +84,36 @@ describe("closed reference web composition", () => {
     );
 
     expect(
-      screen.getByLabelText("closed-reference-replacement-page"),
+      screen.getByLabelText("customhost-replacement-page"),
     ).toHaveTextContent("Replacement private reference page");
     expect(
-      screen.getByLabelText("closed-reference-replacement-widget"),
+      screen.getByLabelText("customhost-replacement-widget"),
     ).toHaveTextContent("Replacement private reference widget");
   });
 
   it("hides entries through the auth predicate without removing them", () => {
-    registerClosedReferenceComposition();
+    registerCustomHostComposition();
 
     render(
-      <ClosedReferenceAuthProvider>
-        <RegistryRowActions kind="closedref" row={{}} ctx={{}} />
-      </ClosedReferenceAuthProvider>,
+      <CustomHostAuthProvider>
+        <RegistryRowActions kind="customhost" row={{}} ctx={{}} />
+      </CustomHostAuthProvider>,
     );
 
-    expect(screen.getByLabelText("closed-reference-action")).not.toBeNull();
-    expect(screen.queryByLabelText("closed-reference-hidden")).toBeNull();
+    expect(screen.getByLabelText("customhost-action")).not.toBeNull();
+    expect(screen.queryByLabelText("customhost-hidden")).toBeNull();
     expect(
-      getRoutes().some((entry) => entry.permission === "closedref.private"),
+      getRoutes().some((entry) => entry.permission === "customhost.private"),
     ).toBe(true);
   });
 
   it("removes entries through unregister APIs", () => {
-    registerClosedReferenceComposition();
+    registerCustomHostComposition();
 
     expect(getRoutes().some((entry) => entry.id === removedRouteID)).toBe(
       false,
     );
-    unregisterClosedReferenceComposition();
+    unregisterCustomHostComposition();
     expect(getRoutes().some((entry) => entry.id === privatePageID)).toBe(false);
     expect(getNav("primary").some((entry) => entry.id === privateNavID)).toBe(
       false,
@@ -125,17 +125,17 @@ describe("closed reference web composition", () => {
   });
 
   it("keeps hidden and private actions structurally registered", () => {
-    registerClosedReferenceComposition();
+    registerCustomHostComposition();
 
     render(
-      <ClosedReferenceAuthProvider>
-        <RegistryRowActions kind="closedref" row={{}} ctx={{}} />
-      </ClosedReferenceAuthProvider>,
+      <CustomHostAuthProvider>
+        <RegistryRowActions kind="customhost" row={{}} ctx={{}} />
+      </CustomHostAuthProvider>,
     );
 
-    expect(screen.queryByLabelText("closed-reference-hidden")).toBeNull();
-    expect(screen.getByLabelText("closed-reference-action")).not.toBeNull();
-    expect(getRowActions("closedref").map((entry) => entry.id)).toEqual([
+    expect(screen.queryByLabelText("customhost-hidden")).toBeNull();
+    expect(screen.getByLabelText("customhost-action")).not.toBeNull();
+    expect(getRowActions("customhost").map((entry) => entry.id)).toEqual([
       privateActionID,
       hiddenActionID,
     ]);

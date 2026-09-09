@@ -54,9 +54,9 @@ import {
   removedRouteID,
 } from "./ids";
 
-export function registerClosedReferenceComposition(): void {
-  unregisterClosedReferenceComposition();
-  registerLocaleResources("en", "closedref", {
+export function registerCustomHostComposition(): void {
+  unregisterCustomHostComposition();
+  registerLocaleResources("en", "customhost", {
     page: {
       title: "Private reference page",
       replacementTitle: "Replacement private reference page",
@@ -87,18 +87,18 @@ export function registerClosedReferenceComposition(): void {
   });
   registerPage({
     id: privatePageID,
-    titleKey: "closedref:page.title",
+    titleKey: "customhost:page.title",
     Component: PrivateReferencePage,
   });
   registerPage({
     id: privatePageID,
-    titleKey: "closedref:page.title",
+    titleKey: "customhost:page.title",
     Component: ReplacementPrivateReferencePage,
   });
   registerNav({
     id: privateNavID,
     to: "/private-reference",
-    labelKey: "closedref:nav.private",
+    labelKey: "customhost:nav.private",
     icon: KeyRound,
     section: "primary",
     order: 1000,
@@ -116,17 +116,17 @@ export function registerClosedReferenceComposition(): void {
   });
   registerRowAction<object, object>({
     id: privateActionID,
-    kind: "closedref",
+    kind: "customhost",
     order: 1000,
     permission: privatePermission,
-    render: () => <button type="button" aria-label="closed-reference-action" />,
+    render: () => <button type="button" aria-label="customhost-action" />,
   });
   registerRowAction<object, object>({
     id: hiddenActionID,
-    kind: "closedref",
+    kind: "customhost",
     order: 1010,
     permission: hiddenPermission,
-    render: () => <button type="button" aria-label="closed-reference-hidden" />,
+    render: () => <button type="button" aria-label="customhost-hidden" />,
   });
   registerRoute({
     id: removedRouteID,
@@ -137,7 +137,7 @@ export function registerClosedReferenceComposition(): void {
   unregisterRoute(removedRouteID);
 }
 
-export function unregisterClosedReferenceComposition(): void {
+export function unregisterCustomHostComposition(): void {
   unregisterRoute(privatePageID);
   unregisterRoute(removedRouteID);
   unregisterNav(privateNavID);

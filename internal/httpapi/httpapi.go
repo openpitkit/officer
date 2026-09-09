@@ -61,7 +61,7 @@ type Service interface {
 	ListAuditRows(context.Context, store.AuditListFilter) (store.AuditListPage, error)
 }
 
-// RegisterRoutes registers the open app's v1 route table into registry.
+// RegisterRoutes registers the application's v1 route table into registry.
 func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSource) {
 	register(registry, "health.get", http.MethodGet, "/health", handleV1Health)
 	register(registry, "status.get", http.MethodGet, "/status", handleV1Status(svc))
@@ -166,14 +166,14 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "market-data.search-symbols.post", http.MethodPost, "/market-data/instances/{id}/search-symbols", handleSearchMarketDataSymbols(svc))
 }
 
-// NewRouteRegistry builds the open app's v1 route registry.
+// NewRouteRegistry builds the application's v1 route registry.
 func NewRouteRegistry(svc Service, logs httpx.LogSource) *httpx.RouteRegistry {
 	registry := &httpx.RouteRegistry{}
 	RegisterRoutes(registry, svc, logs)
 	return registry
 }
 
-// BodyLimitPolicy returns the open app's per-path request body cap policy.
+// BodyLimitPolicy returns the application's per-path request body cap policy.
 func BodyLimitPolicy() func(*http.Request) int64 {
 	return httpx.BodyLimitPolicy(maxRequestBody, map[string]int64{
 		"/api/v1/backup/restore":     maxBackupRestoreBody,
@@ -181,7 +181,7 @@ func BodyLimitPolicy() func(*http.Request) int64 {
 	})
 }
 
-// ExtraMounts returns the open app's non-v1 HTTP routes.
+// ExtraMounts returns the application's non-v1 HTTP routes.
 func ExtraMounts() []httpx.ExtraMount {
 	return []httpx.ExtraMount{
 		{
@@ -203,7 +203,7 @@ func ExtraMounts() []httpx.ExtraMount {
 }
 
 // ServiceLifecycleRoutes returns the process lifecycle routes with handlers
-// supplied by the consuming Officer distribution.
+// supplied by the host application.
 func ServiceLifecycleRoutes(restart, stop http.Handler) []httpx.Route {
 	return []httpx.Route{
 		{

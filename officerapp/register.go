@@ -15,8 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package openapp registers the open Pit Officer concrete implementations.
-package openapp
+// Package officerapp registers the Pit Officer concrete implementations.
+package officerapp
 
 import (
 	"context"
@@ -41,10 +41,10 @@ import (
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
-// Register populates b with the open Officer concrete implementations.
+// Register populates b with the Pit Officer concrete implementations.
 func Register(b *frameworkapp.Builder) error {
 	if b == nil {
-		return errors.New("openapp: nil builder")
+		return errors.New("officerapp: nil builder")
 	}
 	b.SetStoreFactory(func(cfg frameworkapp.Config) (store.Store, error) {
 		if cfg.MasterKey != nil {
@@ -82,7 +82,7 @@ func Register(b *frameworkapp.Builder) error {
 		appmarketdata.MockProvider(),
 	} {
 		if err := b.RegisterMarketDataProvider(provider); err != nil {
-			return fmt.Errorf("openapp: register market data provider: %w", err)
+			return fmt.Errorf("officerapp: register market data provider: %w", err)
 		}
 	}
 	b.SetServiceFactory(func(

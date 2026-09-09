@@ -25,43 +25,43 @@ import (
 )
 
 const (
-	privateToolID  = "closedref_private"
+	hostToolID     = "customhost_private"
 	replacedToolID = "health"
 	hiddenToolID   = "get_limits"
 	removedToolID  = "cancel"
 )
 
-type privateToolInput struct {
+type hostToolInput struct {
 	Name string `json:"name,omitempty" jsonschema:"Optional subject name"`
 }
 
-type privateToolOutput struct {
+type hostToolOutput struct {
 	Message string `json:"message"`
 }
 
-func registerReferenceTools(reg *mcp.ToolRegistry, src mcp.Source) {
+func registerCustomHostTools(reg *mcp.ToolRegistry, src mcp.Source) {
 	reg.Register(replacedToolDescriptor())
 	reg.Unregister(removedToolID)
-	registerPrivateTool(reg, src)
+	registerHostTool(reg, src)
 }
 
-func registerPrivateTool(reg *mcp.ToolRegistry, _ mcp.Source) {
-	descriptor := privateToolDescriptor()
+func registerHostTool(reg *mcp.ToolRegistry, _ mcp.Source) {
+	descriptor := hostToolDescriptor()
 	descriptor.Register = func(server *sdkmcp.Server, deps mcp.RegisterDeps) {
 		sdkmcp.AddTool(server, &sdkmcp.Tool{
 			Name:        descriptor.Name,
 			Description: descriptor.Description,
-		}, mcp.Guard(descriptor, deps, privateToolHandler))
+		}, mcp.Guard(descriptor, deps, hostToolHandler))
 	}
 	reg.Register(descriptor)
 }
 
-func privateToolDescriptor() mcp.ToolDescriptor {
+func hostToolDescriptor() mcp.ToolDescriptor {
 	return mcp.ToolDescriptor{
-		Name:             privateToolID,
-		Title:            "Private reference",
-		Description:      "Return a canned private reference response.",
-		AgentDescription: "Return a canned private reference response.",
+		Name:             hostToolID,
+		Title:            "Custom host tool",
+		Description:      "Return a canned custom host response.",
+		AgentDescription: "Return a canned custom host response.",
 		Implemented:      true,
 		DefaultEnabled:   false,
 	}
@@ -70,9 +70,9 @@ func privateToolDescriptor() mcp.ToolDescriptor {
 func replacedToolDescriptor() mcp.ToolDescriptor {
 	descriptor := mcp.ToolDescriptor{
 		Name:             replacedToolID,
-		Title:            "Private health replacement",
-		Description:      "Replacement descriptor for the open health tool id.",
-		AgentDescription: "Replacement descriptor for the open health tool id.",
+		Title:            "Custom host health replacement",
+		Description:      "Replacement descriptor for the framework health tool id.",
+		AgentDescription: "Replacement descriptor for the framework health tool id.",
 		Implemented:      true,
 		DefaultEnabled:   true,
 	}
@@ -85,17 +85,17 @@ func replacedToolDescriptor() mcp.ToolDescriptor {
 	return descriptor
 }
 
-func privateToolHandler(
+func hostToolHandler(
 	_ context.Context,
 	_ *sdkmcp.ServerSession,
-	in privateToolInput,
-) (string, privateToolOutput, error) {
+	in hostToolInput,
+) (string, hostToolOutput, error) {
 	name := in.Name
 	if name == "" {
 		name = "operator"
 	}
-	msg := "private reference response for " + name
-	return msg, privateToolOutput{Message: msg}, nil
+	msg := "custom host response for " + name
+	return msg, hostToolOutput{Message: msg}, nil
 }
 
 func replacedToolHandler(
@@ -103,5 +103,5 @@ func replacedToolHandler(
 	_ *sdkmcp.ServerSession,
 	_ struct{},
 ) (string, map[string]string, error) {
-	return "closed health replacement", map[string]string{"tool": "replaced"}, nil
+	return "custom host health replacement", map[string]string{"tool": "replaced"}, nil
 }

@@ -49,11 +49,11 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-func TestReferenceCompositionAddReplaceHideRemove(t *testing.T) {
+func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
 	ctx := context.Background()
-	composition, err := newReferenceComposition()
+	composition, err := newCustomHostComposition()
 	if err != nil {
-		t.Fatalf("newReferenceComposition: %v", err)
+		t.Fatalf("newCustomHostComposition: %v", err)
 	}
 	composition.Builder.SetEngineBuildFactory(func(app.Config) engine.BuildFunc {
 		return func(engine.Snapshot) (engine.Engine, error) {
@@ -81,17 +81,17 @@ func TestReferenceCompositionAddReplaceHideRemove(t *testing.T) {
 	}
 	service := built.Service()
 
-	assertPrivateRouteAdded(t, router)
-	assertPrivateToolCatalogued(t, service)
-	assertPrivateProvider(t, ctx, service)
+	assertHostRouteAdded(t, router)
+	assertHostToolCatalogued(t, service)
+	assertHostProvider(t, ctx, service)
 	assertRouteAndToolReplacement(t, ctx, router, service)
 	assertRouteAndToolHidden(t, router, composition.Authorizer, service)
 	assertRouteAndToolRemoved(t, router, service)
 }
 
-func TestPrivateConnectorSubscribeEmptyClosesImmediately(t *testing.T) {
+func TestHostConnectorSubscribeEmptyClosesImmediately(t *testing.T) {
 	t.Parallel()
-	updates, err := newPrivateConnector().Subscribe(t.Context(), nil)
+	updates, err := newHostConnector().Subscribe(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestPrivateConnectorSubscribeEmptyClosesImmediately(t *testing.T) {
 	}
 }
 
-func TestPrivateConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
+func TestHostConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
 	t.Parallel()
 	const (
 		base  domain.EngineAssetID = 17
@@ -113,17 +113,17 @@ func TestPrivateConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
 	)
 	cases := []struct {
 		name string
-		stop func(*privateConnector, context.CancelFunc)
+		stop func(*hostConnector, context.CancelFunc)
 	}{
 		{
 			name: "context cancellation",
-			stop: func(_ *privateConnector, cancel context.CancelFunc) {
+			stop: func(_ *hostConnector, cancel context.CancelFunc) {
 				cancel()
 			},
 		},
 		{
 			name: "Close",
-			stop: func(connector *privateConnector, _ context.CancelFunc) {
+			stop: func(connector *hostConnector, _ context.CancelFunc) {
 				connector.Close()
 				connector.Close()
 			},
@@ -133,7 +133,7 @@ func TestPrivateConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
-			connector := newPrivateConnector()
+			connector := newHostConnector()
 			updates, err := connector.Subscribe(
 				ctx,
 				[]marketdata.Subscription{{
@@ -190,39 +190,39 @@ func TestPrivateConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
 	}
 }
 
-func assertPrivateRouteAdded(t *testing.T, router http.Handler) {
+func assertHostRouteAdded(t *testing.T, router http.Handler) {
 	t.Helper()
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(
 		rec,
-		httptest.NewRequest(http.MethodGet, "/api/v1"+privateRoutePattern, nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1"+hostRoutePattern, nil),
 	)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("private route status = %d, want 200", rec.Code)
+		t.Fatalf("custom host route status = %d, want 200", rec.Code)
 	}
 	var body map[string]string
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode private route: %v", err)
+		t.Fatalf("decode custom host route: %v", err)
 	}
 	if body["example"] != "ok" {
-		t.Fatalf("private route body = %#v", body)
+		t.Fatalf("custom host route body = %#v", body)
 	}
 }
 
-func assertPrivateToolCatalogued(t *testing.T, service backend.ControlPlane) {
+func assertHostToolCatalogued(t *testing.T, service backend.ControlPlane) {
 	t.Helper()
 
-	cmd, ok := mcpCommand(t, service, privateToolID)
+	cmd, ok := mcpCommand(t, service, hostToolID)
 	if !ok {
-		t.Fatalf("private tool missing from catalog")
+		t.Fatalf("custom host tool missing from catalog")
 	}
 	if cmd.Command.DefaultEnabled {
-		t.Fatalf("private tool should be disabled by default: %+v", cmd)
+		t.Fatalf("custom host tool should be disabled by default: %+v", cmd)
 	}
 }
 
-func assertPrivateProvider(
+func assertHostProvider(
 	t *testing.T,
 	ctx context.Context,
 	service backend.ControlPlane,
@@ -234,11 +234,11 @@ func assertPrivateProvider(
 		t.Fatalf("ListMarketData: %v", err)
 	}
 	for _, provider := range status.Providers {
-		if provider.Type == privateProviderID {
+		if provider.Type == hostProviderID {
 			return
 		}
 	}
-	t.Fatalf("private provider %q missing from %+v", privateProviderID, status.Providers)
+	t.Fatalf("custom host provider %q missing from %+v", hostProviderID, status.Providers)
 }
 
 func assertRouteAndToolReplacement(
@@ -255,7 +255,7 @@ func assertRouteAndToolReplacement(
 		t.Fatalf("replacement route = %d %q", rec.Code, rec.Body.String())
 	}
 	cmd, ok := mcpCommand(t, service, replacedToolID)
-	if !ok || cmd.Command.Title != "Private health replacement" {
+	if !ok || cmd.Command.Title != "Custom host health replacement" {
 		t.Fatalf("replacement tool catalog entry = %+v, ok=%v", cmd, ok)
 	}
 	if err := service.SetMcpAccess(ctx, replacedToolID, false); err != nil {
@@ -282,7 +282,7 @@ func assertRouteAndToolHidden(
 
 	hidden := mcp.Guard(
 		mcp.ToolDescriptor{Name: hiddenToolID, DefaultEnabled: true},
-		mcp.RegisterDeps{Source: &referenceSource{enabled: true}, Authorizer: authorizer},
+		mcp.RegisterDeps{Source: &customHostSource{enabled: true}, Authorizer: authorizer},
 		func(
 			context.Context,
 			*sdkmcp.ServerSession,
@@ -325,7 +325,7 @@ func assertRouteAndToolRemoved(
 		t.Fatalf("removed tool %q still catalogued", removedToolID)
 	}
 	if _, ok := mcpCommand(t, service, "get_account_state"); !ok {
-		t.Fatalf("untouched open tool get_account_state is missing")
+		t.Fatalf("untouched framework tool get_account_state is missing")
 	}
 }
 
@@ -348,15 +348,15 @@ func mcpCommand(
 	return backend.McpCommand{}, false
 }
 
-type referenceSource struct {
+type customHostSource struct {
 	enabled bool
 }
 
-func (s *referenceSource) Status(context.Context) (mcp.Status, error) {
+func (s *customHostSource) Status(context.Context) (mcp.Status, error) {
 	return mcp.Status{}, nil
 }
 
-func (s *referenceSource) GetAccountState(context.Context, domain.AccountID) (
+func (s *customHostSource) GetAccountState(context.Context, domain.AccountID) (
 	domain.Account,
 	node.AccountLimits,
 	error,
@@ -364,25 +364,25 @@ func (s *referenceSource) GetAccountState(context.Context, domain.AccountID) (
 	return domain.Account{}, node.AccountLimits{}, nil
 }
 
-func (s *referenceSource) ListGroups(context.Context) (
+func (s *customHostSource) ListGroups(context.Context) (
 	[]domain.AccountGroup,
 	error,
 ) {
 	return nil, nil
 }
 
-func (s *referenceSource) ListLimits(context.Context, domain.AccountID) (
+func (s *customHostSource) ListLimits(context.Context, domain.AccountID) (
 	node.AccountLimits,
 	error,
 ) {
 	return node.AccountLimits{}, nil
 }
 
-func (s *referenceSource) ListAudit(context.Context, int) ([]domain.AuditRow, error) {
+func (s *customHostSource) ListAudit(context.Context, int) ([]domain.AuditRow, error) {
 	return nil, nil
 }
 
-func (s *referenceSource) ListAuditFiltered(
+func (s *customHostSource) ListAuditFiltered(
 	context.Context,
 	domain.AuditFilter,
 	int,
@@ -390,21 +390,21 @@ func (s *referenceSource) ListAuditFiltered(
 	return nil, nil
 }
 
-func (s *referenceSource) CheckOrder(
+func (s *customHostSource) CheckOrder(
 	context.Context,
 	domain.OrderProbe,
 ) (domain.CheckResult, error) {
 	return domain.CheckResult{}, nil
 }
 
-func (s *referenceSource) GetOrder(
+func (s *customHostSource) GetOrder(
 	context.Context,
 	string,
 ) (domain.OrderDetail, error) {
 	return domain.OrderDetail{}, nil
 }
 
-func (s *referenceSource) SetMarketDataInstrumentEnabled(
+func (s *customHostSource) SetMarketDataInstrumentEnabled(
 	context.Context,
 	string,
 	string,
@@ -413,11 +413,11 @@ func (s *referenceSource) SetMarketDataInstrumentEnabled(
 	return nil
 }
 
-func (s *referenceSource) CommandEnabled(context.Context, string) (bool, error) {
+func (s *customHostSource) CommandEnabled(context.Context, string) (bool, error) {
 	return s.enabled, nil
 }
 
-func (s *referenceSource) SubmitOrderToken(
+func (s *customHostSource) SubmitOrderToken(
 	context.Context,
 	domain.Order,
 	string,
@@ -426,13 +426,13 @@ func (s *referenceSource) SubmitOrderToken(
 	return mcp.SubmitOrderTokenResult{}, nil
 }
 
-func (s *referenceSource) SubmitDropCopyOrder(
+func (s *customHostSource) SubmitDropCopyOrder(
 	context.Context, domain.Order, domain.MissingAccountPolicy,
 ) (mcp.SubmitDropCopyOrderResult, error) {
 	return mcp.SubmitDropCopyOrderResult{}, nil
 }
 
-func (s *referenceSource) ConfirmExecution(
+func (s *customHostSource) ConfirmExecution(
 	context.Context,
 	string,
 	string,
@@ -440,7 +440,7 @@ func (s *referenceSource) ConfirmExecution(
 	return domain.Order{}, mcp.Attestation{}, nil
 }
 
-func (s *referenceSource) CancelOrder(
+func (s *customHostSource) CancelOrder(
 	context.Context,
 	string,
 	string,

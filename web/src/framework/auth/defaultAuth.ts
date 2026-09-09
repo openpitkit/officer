@@ -18,7 +18,7 @@
 import type { AuthContextValue, Permission } from "./auth-context";
 
 /**
- * The open-source default: no real user, every permission granted.
+ * The built-in default: no real user, every permission granted.
  * Stateless - it never reads browserStorage and never calls the API.
  * The closed repo replaces this by supplying its own AuthContextValue to
  * AuthProvider.

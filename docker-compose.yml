@@ -17,7 +17,7 @@
 
 # docker-compose for pit-officer in `serve` mode.
 #
-# Build the stable image from the officer module root before `docker compose up`:
+# Build the image from the officer module root before `docker compose up`:
 #
 #   just docker-build
 

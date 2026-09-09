@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package mcp preserves the open app's historical MCP import path while the
+// Package mcp preserves the application's historical MCP import path while the
 // reusable MCP server machinery lives in the framework module.
 package mcp
 
@@ -43,20 +43,20 @@ type ToolDescriptor = frameworkmcp.ToolDescriptor
 type RegisterDeps = frameworkmcp.RegisterDeps
 type Authorizer = httpx.Authorizer
 
-// NewToolRegistry builds the open Pit Officer MCP registry.
+// NewToolRegistry builds the Pit Officer MCP registry.
 func NewToolRegistry(src Source) *ToolRegistry {
 	reg := frameworkmcp.NewToolRegistry()
 	tools.RegisterTools(reg, src)
 	return reg
 }
 
-// NewServer builds the open Pit Officer MCP server with the allow-all
+// NewServer builds the Pit Officer MCP server with the allow-all
 // authorizer used by the historical implementation.
 func NewServer(src Source, version VersionSource) (*sdkmcp.Server, error) {
 	return NewServerWithAuthorizer(src, version, httpx.AllowAll{})
 }
 
-// NewServerWithAuthorizer builds the open MCP server with an injected
+// NewServerWithAuthorizer builds the Pit Officer MCP server with an injected
 // framework authorizer.
 func NewServerWithAuthorizer(
 	src Source,
@@ -76,13 +76,13 @@ func NewServerWithRegistry(
 	return frameworkmcp.Build(reg, src, version, authorizer)
 }
 
-// RunStdio builds the open MCP server and serves it over stdio.
+// RunStdio builds the Pit Officer MCP server and serves it over stdio.
 func RunStdio(ctx context.Context, src Source, version VersionSource) error {
 	return RunStdioWithAuthorizer(ctx, src, version, httpx.AllowAll{})
 }
 
-// RunStdioWithAuthorizer serves the open MCP server over stdio with an injected
-// framework authorizer.
+// RunStdioWithAuthorizer serves the Pit Officer MCP server over stdio with an
+// injected framework authorizer.
 func RunStdioWithAuthorizer(
 	ctx context.Context,
 	src Source,
@@ -103,7 +103,7 @@ func RunStdioWithRegistry(
 	return frameworkmcp.RunStdio(ctx, reg, src, version, authorizer)
 }
 
-// Handler builds the streamable-HTTP MCP handler for the open tool set.
+// Handler builds the streamable-HTTP MCP handler for the built-in tool set.
 func Handler(src Source, version VersionSource) (http.Handler, error) {
 	return HandlerWithAuthorizer(src, version, httpx.AllowAll{})
 }

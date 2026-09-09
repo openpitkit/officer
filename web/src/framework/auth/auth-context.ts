@@ -22,11 +22,11 @@ import { createContext, useContext } from "react";
 
 import { allowAllAuth } from "./defaultAuth";
 
-/** A permission identifier. Open-source declares none. */
+/** A permission identifier. This package declares none. */
 export type Permission = string;
 
 /**
- * The current user. Deliberately thin in open-source, which has no real users.
+ * The current user. Deliberately thin: the built-in default has no real users.
  */
 export interface User {
   id?: string;
@@ -47,11 +47,11 @@ export const AuthContext = createContext<AuthContextValue | null>(null);
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   // Existing page tests render registry-consuming components without providers;
-  // the open app must therefore tolerate a missing provider as allow-all.
+  // the application must therefore tolerate a missing provider as allow-all.
   return ctx ?? allowAllAuth;
 }
 
-/** Access the current user, or null for the open-source default. */
+/** Access the current user, or null for the built-in default. */
 export function useUser(): User | null {
   return useAuth().user;
 }

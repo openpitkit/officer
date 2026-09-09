@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-export interface OpenRouteDefinition {
+export interface AppRouteDefinition {
   id: string;
   path: string;
   order: number;
@@ -32,7 +32,7 @@ export interface AppRouteManifestEntry {
 // This data-only registry is shared by the React runtime and Vite's generated
 // manifest asset. Keeping components out lets the build config import it
 // without pulling browser-only modules into Node.
-export const openRoutes = [
+export const appRoutes = [
   { id: "dashboard", path: "/", order: 10 },
   { id: "accounts", path: "/accounts", order: 20 },
   { id: "policies", path: "/policies", order: 30 },
@@ -56,7 +56,7 @@ export const openRoutes = [
   { id: "mcp-access", path: "/mcp-access", order: 100 },
   { id: "signing-keys", path: "/signing-keys", order: 110 },
   { id: "service", path: "/service", order: 120 },
-] as const satisfies readonly OpenRouteDefinition[];
+] as const satisfies readonly AppRouteDefinition[];
 
 // This shape is a cross-repository contract: the officer-test Playwright
 // harness fetches it from /app-route-manifest.json. Its consumer is outside
@@ -65,7 +65,7 @@ export function createAppRouteManifest(): {
   routes: AppRouteManifestEntry[];
 } {
   return {
-    routes: openRoutes.map((route) =>
+    routes: appRoutes.map((route) =>
       "redirectTo" in route
         ? {
             id: route.id,

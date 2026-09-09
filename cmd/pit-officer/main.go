@@ -56,7 +56,7 @@ import (
 	officerhttp "go.openpit.dev/officer/internal/httpapi"
 	"go.openpit.dev/officer/internal/logtail"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
-	"go.openpit.dev/officer/openapp"
+	"go.openpit.dev/officer/officerapp"
 )
 
 // mcpPath is the route the streamable-HTTP MCP handler is mounted under in
@@ -144,7 +144,7 @@ func setup(
 	}
 
 	builder := frameworkapp.NewBuilder()
-	if err := openapp.Register(builder); err != nil {
+	if err := officerapp.Register(builder); err != nil {
 		return nil, err
 	}
 	return builder.Build(ctx, frameworkapp.Config{

@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package httproutes composes the open app's HTTP route registry.
+// Package httproutes composes the application's HTTP route registry.
 package httproutes
 
 import (
@@ -26,7 +26,7 @@ import (
 	"go.openpit.dev/officer/internal/httpapi"
 )
 
-// Config is the open app HTTP composition output.
+// Config is the application HTTP composition output.
 type Config struct {
 	Routes      *httpx.RouteRegistry
 	Authorizer  httpx.Authorizer
@@ -34,7 +34,7 @@ type Config struct {
 	ExtraMounts []httpx.ExtraMount
 }
 
-// Build returns the open app's route registry and framework router options.
+// Build returns the application's route registry and framework router options.
 func Build(svc backend.ControlPlane, logs httpx.LogSource) Config {
 	return Config{
 		Routes:      httpapi.NewRouteRegistry(svc, logs),

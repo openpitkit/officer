@@ -55,7 +55,7 @@ describe("useOverview", () => {
     renderWithApi(<OverviewProbe />, {
       fetch: fetchMock as unknown as typeof fetch,
       config: {
-        baseUrl: "https://closed.example/officer/api",
+        baseUrl: "https://host.example/officer/api",
         headers: { "X-Static-Auth": "static-token" },
         getHeaders: () => ({ "X-Dynamic-Auth": "dynamic-token" }),
       },
@@ -66,7 +66,7 @@ describe("useOverview", () => {
     });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toMatch(/^https:\/\/closed\.example\/officer\/api\/overview\?/);
+    expect(url).toMatch(/^https:\/\/host\.example\/officer\/api\/overview\?/);
     expect(init.headers).toEqual(
       expect.objectContaining({
         "X-Static-Auth": "static-token",

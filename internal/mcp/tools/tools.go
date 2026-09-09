@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package tools registers the open Pit Officer MCP tool set.
+// Package tools registers the Pit Officer MCP tool set.
 package tools
 
 import (
@@ -96,7 +96,7 @@ const cancelToolDescription = "Cancel an untouched workflow order by presenting 
 	"leaves. After execution-report activity, submit an explicit report. " +
 	"Protected and disabled by default."
 
-// RegisterTools registers the open Pit Officer MCP tools and catalog entries.
+// RegisterTools registers the Pit Officer MCP tools and catalog entries.
 func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 	_ = src
 	if reg == nil {

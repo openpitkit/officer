@@ -22,11 +22,7 @@ import { AuthProvider } from "@openpit/officer-web";
 
 import { hiddenPermission } from "./ids";
 
-export function ClosedReferenceAuthProvider({
-  children,
-}: {
-  children: ReactNode;
-}) {
+export function CustomHostAuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthProvider
       hasPermission={(permission) => permission !== hiddenPermission}
@@ -39,17 +35,15 @@ export function ClosedReferenceAuthProvider({
 export function PrivateReferencePage() {
   const { t } = useTranslation();
   return (
-    <section aria-label="closed-reference-page">
-      {t("closedref:page.title")}
-    </section>
+    <section aria-label="customhost-page">{t("customhost:page.title")}</section>
   );
 }
 
 export function ReplacementPrivateReferencePage() {
   const { t } = useTranslation();
   return (
-    <section aria-label="closed-reference-replacement-page">
-      {t("closedref:page.replacementTitle")}
+    <section aria-label="customhost-replacement-page">
+      {t("customhost:page.replacementTitle")}
     </section>
   );
 }
@@ -57,17 +51,15 @@ export function ReplacementPrivateReferencePage() {
 export function PrivateReferenceWidget() {
   const { t } = useTranslation();
   return (
-    <aside aria-label="closed-reference-widget">
-      {t("closedref:widget.title")}
-    </aside>
+    <aside aria-label="customhost-widget">{t("customhost:widget.title")}</aside>
   );
 }
 
 export function ReplacementPrivateReferenceWidget() {
   const { t } = useTranslation();
   return (
-    <aside aria-label="closed-reference-replacement-widget">
-      {t("closedref:widget.replacementTitle")}
+    <aside aria-label="customhost-replacement-widget">
+      {t("customhost:widget.replacementTitle")}
     </aside>
   );
 }
