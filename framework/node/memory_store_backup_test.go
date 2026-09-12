@@ -53,6 +53,9 @@ func (r *memoryRealm) RestoreBackup(
 		return backup.RestoreSummary{}, err
 	}
 	data := archive.Data
+	if err := backup.ValidateAccountBlocks(data.Accounts); err != nil {
+		return backup.RestoreSummary{}, err
+	}
 	// Mirror the real store: the normalized scope drives whether runtime data can
 	// land (Normalize force-includes the accounts+groups and market-data parents an
 	// account-addressed restore lands). The node, not the store, classifies whether
@@ -162,7 +165,9 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 			PnlHaltReason: account.PnlHaltReason,
 			Currency:      account.Currency,
 			GroupCode:     account.GroupCode, Notes: account.Notes,
-			BlockReason: account.BlockReason, Blocked: account.Blocked,
+			BlockReason: account.BlockReason, BlockPolicy: account.BlockPolicy,
+			BlockCode: account.BlockCode, BlockDetails: account.BlockDetails,
+			Blocked: account.Blocked,
 		})
 	}
 	for _, balance := range r.balances {
@@ -299,7 +304,9 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 			Code: code, Title: account.Title, Pnl: pnl, PnlHaltReason: account.PnlHaltReason,
 			Currency: account.Currency, GroupCode: account.GroupCode,
 			Notes: account.Notes, BlockReason: account.BlockReason,
-			Blocked: account.Blocked, EngineAccountID: r.nextAccountID,
+			BlockPolicy: account.BlockPolicy, BlockCode: account.BlockCode,
+			BlockDetails: account.BlockDetails,
+			Blocked:      account.Blocked, EngineAccountID: r.nextAccountID,
 		}
 	}
 	r.balances = map[string]domain.Balance{}

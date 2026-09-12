@@ -338,6 +338,15 @@ type Account struct {
 	// BlockReason is the human-readable reason the account was blocked.
 	// Empty when the account is not blocked.
 	BlockReason string
+	// BlockPolicy is the engine policy that produced the account block. It is
+	// empty for operator-authored blocks and while the account is not blocked.
+	BlockPolicy string
+	// BlockCode is the stable reject code that produced the account block. It is
+	// empty for operator-authored blocks and while the account is not blocked.
+	BlockCode string
+	// BlockDetails is the engine's case-specific block detail. It is empty for
+	// operator-authored blocks and while the account is not blocked.
+	BlockDetails string
 	// EngineAccountID is the integer id the engine runs this account on: the
 	// account row's surrogate id. It is internal and never serialized on the wire
 	// (json:"-"); zero means unassigned. The engine layer consumes it on read

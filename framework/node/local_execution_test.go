@@ -676,7 +676,11 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.execReportBlocks = []domain.ExecutionAccountBlock{
-		{Account: "acc-1", Code: "test_block", Reason: "account block triggered"},
+		{
+			Account: "acc-1", Policy: "SpotFundsPolicy",
+			Code: domain.RejectCodePnlKillSwitchTriggered, Reason: "account block triggered",
+			Details: "account pnl below lower bound",
+		},
 	}
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
@@ -711,6 +715,11 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if !acc.Blocked || acc.BlockReason != "account block triggered" {
 		t.Fatalf("account block reason = %q, want the engine reason", acc.BlockReason)
 	}
+	if acc.BlockPolicy != "SpotFundsPolicy" ||
+		acc.BlockCode != domain.RejectCodePnlKillSwitchTriggered ||
+		acc.BlockDetails != "account pnl below lower bound" {
+		t.Fatalf("typed execution block = %+v, want full engine cause", acc)
+	}
 
 	detail, err := st.GetOrder(ctx, order.ExternalID)
 	if err != nil {
@@ -726,9 +735,11 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 		)
 	}
 	payload := detail.Events[0].Payload
-	if payload.RejectCode != "test_block" ||
+	if payload.RejectCode != domain.RejectCodePnlKillSwitchTriggered ||
 		payload.RejectScope != "account" ||
-		payload.RejectReason != "account block triggered" {
+		payload.RejectPolicy != "SpotFundsPolicy" ||
+		payload.RejectReason != "account block triggered" ||
+		payload.RejectDetails != "account pnl below lower bound" {
 		t.Fatalf("fill event reject payload = %+v", payload)
 	}
 
@@ -747,7 +758,7 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 		t.Fatalf("block not attributed to system with empty actor: %+v", rows[0])
 	}
 	if !strings.Contains(rows[0].Detail, "account block triggered") ||
-		!strings.Contains(rows[0].Detail, "code=test_block") ||
+		!strings.Contains(rows[0].Detail, "code="+domain.RejectCodePnlKillSwitchTriggered) ||
 		!strings.Contains(rows[0].Detail, order.ExternalID.String()) {
 		t.Fatalf("block detail missing reason, code or order: %q", rows[0].Detail)
 	}

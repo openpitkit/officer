@@ -556,6 +556,7 @@ func accountBlockPayload(blocks []domain.ExecutionAccountBlock) domain.OrderEven
 	return domain.OrderEventPayload{
 		RejectCode:    block.Code,
 		RejectScope:   "account",
+		RejectPolicy:  block.Policy,
 		RejectReason:  block.Reason,
 		RejectDetails: block.Details,
 	}

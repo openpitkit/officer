@@ -2221,7 +2221,7 @@ func TestRecordOrderSettlementTerminalEmptyLeavesKeepsQuantity(t *testing.T) {
 		AllowedFrom: []domain.OrderStatus{domain.OrderStatusSubmitted},
 		Blocks: []domain.ExecutionAccountBlock{{
 			Account: "acc-1",
-			Code:    "pnl_bound_breached",
+			Code:    domain.RejectCodePnlKillSwitchTriggered,
 			Reason:  "kill switch [code=pnl_bound_breached]",
 		}},
 	}); err != nil {
@@ -2276,12 +2276,10 @@ func TestRecordOrderSettlementAcceptsHighPrecisionBalance(t *testing.T) {
 	}
 }
 
-// TestRecordOrderSettlementNormalizesMirroredBlockReason pins the engine-mirror
-// write seam. The engine-boundary scrub only strips control characters, so a
-// format-class rune such as U+200B reaches this write; the restore path rejects
-// it. Persisting it verbatim would leave the realm - including Officer's own
-// rollback archive - unrestorable, so the mirror normalizes instead of rejecting.
-func TestRecordOrderSettlementNormalizesMirroredBlockReason(t *testing.T) {
+// TestRecordOrderSettlementNormalizesMirroredBlockText pins the engine-mirror
+// write seam. New SDK reject codes must still commit, while engine-composed text
+// is normalized into the bounded printable shape accepted by restore.
+func TestRecordOrderSettlementNormalizesMirroredBlockText(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 	created, err := rs.CreateOrder(ctx, sampleOrder())
 	if err != nil {
@@ -2297,8 +2295,10 @@ func TestRecordOrderSettlementNormalizesMirroredBlockReason(t *testing.T) {
 		AllowedFrom: domain.OrderStatusesEligibleForFill(),
 		Blocks: []domain.ExecutionAccountBlock{{
 			Account: "acc-1",
-			Code:    "pnl_bound_breached",
+			Policy:  "Spot\u200bFundsPolicy",
+			Code:    "code_45",
 			Reason:  reason,
+			Details: "account pnl below\x00 configured lower bound",
 		}},
 	}); err != nil {
 		t.Fatalf("RecordOrderSettlement: %v", err)
@@ -2320,8 +2320,18 @@ func TestRecordOrderSettlementNormalizesMirroredBlockReason(t *testing.T) {
 	if !strings.HasPrefix(account.BlockReason, "killswitch [code=pnl_bound_breached") {
 		t.Fatalf("block reason = %q, want the engine cause preserved", account.BlockReason)
 	}
-	if err := domain.ValidateBlockReason(account.BlockReason); err != nil {
-		t.Fatalf("persisted block reason is not restorable: %v", err)
+	if account.BlockPolicy != "SpotFundsPolicy" ||
+		account.BlockCode != "code_45" ||
+		account.BlockDetails != "account pnl below configured lower bound" {
+		t.Fatalf("typed settlement block = %+v, want full engine cause", account)
+	}
+	for field, value := range map[string]string{
+		"reason": account.BlockReason, "policy": account.BlockPolicy,
+		"details": account.BlockDetails,
+	} {
+		if err := domain.ValidateBlockText(value); err != nil {
+			t.Fatalf("persisted block %s is not restorable: %v", field, err)
+		}
 	}
 }
 

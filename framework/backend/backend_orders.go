@@ -180,6 +180,7 @@ func (s *Service) ApplyExecutionReport(
 			if event.Payload.RejectCode != "" || event.Payload.RejectReason != "" {
 				persistence.Blocks = []domain.ExecutionAccountBlock{{
 					Account: stored.Order.Account,
+					Policy:  event.Payload.RejectPolicy,
 					Code:    event.Payload.RejectCode,
 					Reason:  event.Payload.RejectReason,
 					Details: event.Payload.RejectDetails,

@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -145,9 +146,45 @@ func (r *memoryRealm) SetAccountBlocked(
 	if !ok {
 		return domain.ErrNotFound
 	}
-	account.Blocked = blocked
-	account.BlockReason = reason
+	if blocked {
+		if account.Blocked && account.BlockCode != "" {
+			return fmt.Errorf(
+				"account %q is already blocked by typed cause %q: %w",
+				code, account.BlockCode, domain.ErrConflict,
+			)
+		}
+		account.Blocked = true
+		account.BlockReason = reason
+		account.BlockPolicy = ""
+		account.BlockCode = ""
+		account.BlockDetails = ""
+	} else {
+		account.Blocked = false
+		account.BlockReason = ""
+		account.BlockPolicy = ""
+		account.BlockCode = ""
+		account.BlockDetails = ""
+	}
 	r.accounts[code] = account
+	return nil
+}
+
+func (r *memoryRealm) SetAccountBlock(
+	_ context.Context, block domain.AccountBlock,
+) error {
+	account, ok := r.accounts[block.Account]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	if account.Blocked {
+		return nil
+	}
+	account.Blocked = true
+	account.BlockReason = domain.NormalizeReason(block.Reason)
+	account.BlockPolicy = block.Policy
+	account.BlockCode = block.Code
+	account.BlockDetails = block.Details
+	r.accounts[block.Account] = account
 	return nil
 }
 

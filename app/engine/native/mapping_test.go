@@ -2433,6 +2433,66 @@ func TestEngine_CheckOrderStandingBlockIsRejectOnly(t *testing.T) {
 	}
 }
 
+// TestOpenPitEngineBuilder_RestoresTypedAccountBlockCause is the central
+// restart assertion: applyBlocks must reinstall the persisted SDK cause rather
+// than degrade it to an Engine/account_blocked reason-only block.
+func TestOpenPitEngineBuilder_RestoresTypedAccountBlockCause(t *testing.T) {
+	t.Parallel()
+	blocked := blockedAccount("acc-1", "lower bound breached: pnl -501 is below -500")
+	blocked.BlockPolicy = "SpotFundsPolicy"
+	blocked.BlockCode = domain.RejectCodePnlKillSwitchTriggered
+	blocked.BlockDetails = "account pnl -501 is below lower bound -500"
+	snap := Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{blocked},
+		Balances: []domain.Balance{
+			fundedBalance("acc-1", "USD", "1000000"),
+			fundedBalance("acc-1", "AAPL", "1000000"),
+		},
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+			Scope:      domain.ScopeAccount,
+			Account:    "acc-1",
+			Currency:   "USD",
+			LowerBound: "1",
+		}},
+	}
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	defer eng.Stop()
+
+	out, err := materializeCheckedOrder(
+		eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"),
+	)
+	if err != nil {
+		t.Fatalf("CheckOrder: %v", err)
+	}
+	if out.Passed || len(out.Rejects) != 1 {
+		t.Fatalf("checked order = %+v, want one standing typed reject", out)
+	}
+	got := out.Rejects[0]
+	if got.Policy != blocked.BlockPolicy || got.Code != blocked.BlockCode ||
+		got.Reason != blocked.BlockReason || got.Details != blocked.BlockDetails {
+		t.Fatalf("restored reject = %+v, want byte-identical cause from %+v", got, blocked)
+	}
+}
+
+func TestOpenPitEngineBuilder_RejectsUnknownPersistedAccountBlockCode(t *testing.T) {
+	t.Parallel()
+	blocked := blockedAccount("acc-1", "risk")
+	blocked.BlockPolicy = "SpotFundsPolicy"
+	blocked.BlockCode = "future_unknown_code"
+	_, err := newTestOpenPitEngineBuildFunc(t)(Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{blocked},
+	})
+	if err == nil || !strings.Contains(err.Error(), `account "acc-1"`) ||
+		!strings.Contains(err.Error(), `code "future_unknown_code"`) {
+		t.Fatalf("NewOpenPitEngineBuildFunc() = %v, want loud account/code error", err)
+	}
+}
+
 // TestEngine_CheckOrderKeepsShortRejectText proves a short engine reason is
 // transcribed instead of being classified as garbage: the operator sees the
 // engine's own wording.
@@ -3137,6 +3197,15 @@ func TestRejectCodeName_ArithmeticOverflow(t *testing.T) {
 	t.Parallel()
 	if got := rejectCodeName(reject.CodeArithmeticOverflow); got != "arithmetic_overflow" {
 		t.Fatalf("reject code name = %q, want arithmetic_overflow", got)
+	}
+}
+
+func TestRejectCodeNamesAreKnownPersistedCodes(t *testing.T) {
+	t.Parallel()
+	for sdkCode, name := range rejectCodeNames {
+		if !domain.KnownRejectCode(name) {
+			t.Errorf("SDK reject code %v maps to unknown persisted name %q", sdkCode, name)
+		}
 	}
 }
 

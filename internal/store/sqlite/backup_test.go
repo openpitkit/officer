@@ -97,6 +97,15 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 	}); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
+	if err := rs.SetAccountBlock(ctx, domain.AccountBlock{
+		Account: "acc-1",
+		Policy:  "SpotFundsPolicy",
+		Code:    domain.RejectCodePnlKillSwitchTriggered,
+		Reason:  "lower bound breached: pnl -501 is below -500",
+		Details: "account pnl -501 is below lower bound -500",
+	}); err != nil {
+		t.Fatalf("SetAccountBlock: %v", err)
+	}
 	if err := rs.UpsertBalance(ctx, domain.Balance{
 		Account: "acc-1", Asset: "USD", Available: "1000", UpdatedAt: time.Now().UTC(),
 		RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
@@ -1998,6 +2007,45 @@ func TestBackupRestoreReplaceAllUsesArchiveGroupForActivityPrune(t *testing.T) {
 	}
 }
 
+func TestRestoreRejectsUnknownAccountBlockCodeBeforeCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "keep", Title: "before"}); err != nil {
+		t.Fatalf("CreateAccount(keep): %v", err)
+	}
+	scope := backup.Scope{Sections: []backup.Section{backup.SectionAccountsGroups}}
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		scope,
+		backup.Data{Accounts: []backup.Account{
+			{Code: "valid-first"},
+			{
+				Code: "malformed", Blocked: true, BlockPolicy: "FuturePolicy",
+				BlockCode: "future_unknown_code", BlockReason: "risk",
+			},
+		}},
+		backup.CredentialFormPlaintext,
+	)
+	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope,
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if !errors.Is(err, domain.ErrInvalid) ||
+		!strings.Contains(err.Error(), `unknown blockCode "future_unknown_code"`) {
+		t.Fatalf("RestoreBackup() = %v, want loud unknown blockCode error", err)
+	}
+	if _, ok, getErr := rs.GetAccount(ctx, "valid-first"); getErr != nil || ok {
+		t.Fatalf("valid row before malformed cause committed: ok %v, err %v", ok, getErr)
+	}
+	kept, ok, getErr := rs.GetAccount(ctx, "keep")
+	if getErr != nil || !ok || kept.Title != "before" {
+		t.Fatalf("preexisting row changed: account %+v, ok %v, err %v", kept, ok, getErr)
+	}
+}
+
 // TestRestoreValidatesDictionaryCodes proves the restore path is behind the
 // same code-validation seam as the live API. An archive is caller-supplied
 // data, so without this a hand-crafted file could plant a code carrying a NUL,
@@ -3805,7 +3853,10 @@ func assertRealmsEqualOnPublicIdentity(
 	}
 	if srcAcc.Code != dstAcc.Code || srcAcc.GroupCode != dstAcc.GroupCode ||
 		srcAcc.Title != dstAcc.Title || srcAcc.Notes != dstAcc.Notes ||
-		srcAcc.PnlHaltReason != dstAcc.PnlHaltReason {
+		srcAcc.PnlHaltReason != dstAcc.PnlHaltReason ||
+		srcAcc.Blocked != dstAcc.Blocked || srcAcc.BlockReason != dstAcc.BlockReason ||
+		srcAcc.BlockPolicy != dstAcc.BlockPolicy || srcAcc.BlockCode != dstAcc.BlockCode ||
+		srcAcc.BlockDetails != dstAcc.BlockDetails {
 		t.Fatalf("account public identity differs: %+v vs %+v", srcAcc, dstAcc)
 	}
 

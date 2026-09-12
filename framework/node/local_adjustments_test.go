@@ -1269,7 +1269,7 @@ func TestLocalNode_ApplyAdjustmentMirrorsEngineAccountBlock(t *testing.T) {
 		AccountBlocks: []domain.AccountBlock{{
 			Account: "acc-1",
 			Policy:  domain.PolicySpotFundsPnlBoundsKillSwitch,
-			Code:    "pnl_bounds",
+			Code:    domain.RejectCodePnlKillSwitchTriggered,
 			Reason:  "realized pnl below bound",
 			Details: "bound=-100",
 		}},
@@ -1294,6 +1294,11 @@ func TestLocalNode_ApplyAdjustmentMirrorsEngineAccountBlock(t *testing.T) {
 	if !strings.Contains(account.BlockReason, "realized pnl below bound") {
 		t.Fatalf("block reason = %q, want the engine reason", account.BlockReason)
 	}
+	if account.BlockPolicy != domain.PolicySpotFundsPnlBoundsKillSwitch ||
+		account.BlockCode != domain.RejectCodePnlKillSwitchTriggered ||
+		account.BlockDetails != "bound=-100" {
+		t.Fatalf("typed adjustment block = %+v, want full engine cause", account)
+	}
 	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
 		Actions: []domain.AuditAction{domain.AuditActionBlock},
 	}, 10)
@@ -1314,7 +1319,7 @@ func TestLocalNode_ApplyAdjustmentMirrorsBlockWithoutOutcome(t *testing.T) {
 		AccountBlocks: []domain.AccountBlock{{
 			Account: "acc-1",
 			Policy:  domain.PolicySpotFundsPnlBoundsKillSwitch,
-			Code:    "pnl_bounds",
+			Code:    domain.RejectCodePnlKillSwitchTriggered,
 			Reason:  "realized pnl below bound",
 		}},
 	}}

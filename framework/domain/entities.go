@@ -404,10 +404,16 @@ func NormalizeReason(reason string) string {
 // ValidateBlockReason applies the shared reason rule to an operator-supplied
 // block reason. The prefix keeps the operator-facing wording of the block paths.
 func ValidateBlockReason(reason string) error {
-	if err := ValidateReason(reason); err != nil {
+	if err := ValidateBlockText(reason); err != nil {
 		return fmt.Errorf("block %w", err)
 	}
 	return nil
+}
+
+// ValidateBlockText applies the shared bounded-printable reason rule to any
+// free-form text carried by an account block cause.
+func ValidateBlockText(text string) error {
+	return ValidateReason(text)
 }
 
 // ValidateTitle returns ErrInvalid when a display title contains invalid UTF-8,

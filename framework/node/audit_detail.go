@@ -191,10 +191,10 @@ func executionReportDetail(
 	return detail
 }
 
-// blockDetail renders one operator-initiated account block. The reason is the
-// only record of why the operator acted: account.block_reason is overwritten in
-// place and cleared on unblock, so after block-unblock-block the first reason
-// survives nowhere else.
+// blockDetail renders one operator-initiated account block. Re-blocking an
+// operator-authored cause replaces account.block_reason, while a typed cause
+// conflicts until unblocked, so the audit trail preserves every applied
+// operator reason that the mutable account row no longer carries.
 func blockDetail(id domain.AccountID, reason string) string {
 	return blockReasonDetail("block account", id.String(), reason)
 }

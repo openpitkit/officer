@@ -764,11 +764,17 @@ type RealmStore interface {
 	// counts and total count before paging.
 	ListAccountRows(ctx context.Context, filter AccountListFilter) (AccountListPage, error)
 
-	// SetAccountBlocked updates the blocked flag and block reason of the
-	// identified account. Returns domain.ErrNotFound when absent.
+	// SetAccountBlocked applies an operator-authored reason-only block or clears
+	// an account block. Re-blocking replaces an operator reason and returns
+	// domain.ErrConflict for a typed cause; unblocking clears the reason and all
+	// typed-cause fields together. Returns domain.ErrNotFound when absent.
 	SetAccountBlocked(
 		ctx context.Context, code domain.AccountID, blocked bool, reason string,
 	) error
+
+	// SetAccountBlock mirrors an engine-authored typed account block. Re-blocking
+	// keeps the first stored cause. Returns domain.ErrNotFound when absent.
+	SetAccountBlock(ctx context.Context, block domain.AccountBlock) error
 
 	// SetAccountGroup sets the group link of the identified account to the group
 	// with groupCode; an empty groupCode clears it. Returns domain.ErrNotFound

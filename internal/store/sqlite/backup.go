@@ -310,6 +310,9 @@ func (r *realmStore) RestoreBackup(
 	// Re-narrow the archive to the restore scope so a caller may restore a subset
 	// of a full archive; the archive already filtered to its own scope at export.
 	data := backup.FilterData(archive.Data, scope)
+	if err := backup.ValidateAccountBlocks(data.Accounts); err != nil {
+		return backup.RestoreSummary{}, fmt.Errorf("backup account block invalid: %w", err)
+	}
 
 	db, err := r.db()
 	if err != nil {

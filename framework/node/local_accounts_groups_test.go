@@ -829,6 +829,102 @@ func TestLocalNode_SetGroupBlockedPostEngineStoreFailureFatals(t *testing.T) {
 	}
 }
 
+func TestLocalNode_ReblockOperatorAccountReplacesReasonAndAudits(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	for _, reason := range []string{"first operator reason", "replacement operator reason"} {
+		if err := n.SetAccountBlocked(
+			ctx, testKey(id), true, reason, domain.MissingAccountCreate, testCaller,
+		); err != nil {
+			t.Fatalf("SetAccountBlocked(%q): %v", reason, err)
+		}
+	}
+
+	assertFakeOrderBlock(t, eng, id, true, "replacement operator reason")
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if account.BlockReason != "replacement operator reason" || account.BlockCode != "" {
+		t.Fatalf("stored replacement = %+v", account)
+	}
+	rows, err := st.ListAudit(ctx, 20)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	details := make([]string, 0, len(rows))
+	for _, row := range rows {
+		details = append(details, row.Detail)
+	}
+	for _, want := range []string{
+		"block account acc-1: first operator reason",
+		"block account acc-1: replacement operator reason",
+	} {
+		if !slices.Contains(details, want) {
+			t.Fatalf("audit details = %v, want %q", details, want)
+		}
+	}
+}
+
+func TestLocalNode_ReblockTypedAccountConflictsWithoutAudit(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	typed := domain.AccountBlock{
+		Account: id,
+		Policy:  "SpotFundsPolicy",
+		Code:    domain.RejectCodePnlKillSwitchTriggered,
+		Reason:  "persisted typed reason",
+		Details: "persisted typed details",
+	}
+	account := testAccount(id)
+	account.Blocked = true
+	account.BlockReason = typed.Reason
+	account.BlockPolicy = typed.Policy
+	account.BlockCode = typed.Code
+	account.BlockDetails = typed.Details
+	if _, err := n.CreateAccount(ctx, account, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	before, err := st.ListAudit(ctx, 20)
+	if err != nil {
+		t.Fatalf("ListAudit(before): %v", err)
+	}
+	err = n.SetAccountBlocked(
+		ctx, testKey(id), true, "operator override",
+		domain.MissingAccountCreate, testCaller,
+	)
+	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), typed.Code) {
+		t.Fatalf("SetAccountBlocked = %v, want typed-cause ErrConflict", err)
+	}
+	after, err := st.ListAudit(ctx, 20)
+	if err != nil {
+		t.Fatalf("ListAudit(after): %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("audit rows grew from %d to %d after refused re-block", len(before), len(after))
+	}
+	assertFakeTypedOrderBlock(t, eng, id, typed)
+	stored, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if stored.BlockReason != typed.Reason || stored.BlockPolicy != typed.Policy ||
+		stored.BlockCode != typed.Code || stored.BlockDetails != typed.Details {
+		t.Fatalf("typed cause changed after refused re-block: %+v", stored)
+	}
+}
+
 // TestLocalNode_BlockAccountAuditRecordsReason proves the operator's reason
 // reaches the audit trail and survives there. account.block_reason is
 // overwritten in place and cleared on unblock, so after block-unblock-block the

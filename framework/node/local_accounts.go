@@ -83,7 +83,13 @@ func (n *localNode) CreateAccount(
 	if created.Blocked {
 		initialBlock = &accountRuntimeBlock{
 			blocked: true,
-			reason:  created.BlockReason,
+			cause: domain.AccountBlock{
+				Account: created.Code,
+				Policy:  created.BlockPolicy,
+				Code:    created.BlockCode,
+				Reason:  created.BlockReason,
+				Details: created.BlockDetails,
+			},
 		}
 	}
 	_, engineApplied, applyErr := n.runAccountRuntimeChain(
@@ -301,14 +307,20 @@ type accountGroupMembershipChainState struct {
 	previous domain.Account
 }
 
-// SetAccountBlocked blocks or unblocks an account through one SDK account
-// chain. The final engine hook persists the store state and audit row before
-// the lane is released. missing decides whether a kill-switch aimed at an
-// account Officer does not know yet registers it first or is rejected.
+// SetAccountBlocked blocks or unblocks an account through its SDK account lane.
+// First-time blocks and unblocks keep persistence and audit in one chain;
+// operator re-blocks use the lane's reason-replacement operation. missing
+// decides whether a kill-switch aimed at an account Officer does not know yet
+// registers it first or is rejected.
 func (n *localNode) SetAccountBlocked(
 	ctx context.Context, key Key, blocked bool, reason string,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) error {
+	if blocked {
+		if err := domain.ValidateBlockReason(reason); err != nil {
+			return err
+		}
+	}
 	// Resolve the account before entering the lane: the exclusive helper takes
 	// the identity gate itself, which the lane's read lock would deadlock against,
 	// and a created account must be published before the lane resolves it.
@@ -328,14 +340,62 @@ func (n *localNode) SetAccountBlocked(
 		}
 	}()
 
-	if _, ok, readErr := n.realm.GetAccount(ctx, key.Account); readErr != nil {
+	previous, ok, readErr := n.realm.GetAccount(ctx, key.Account)
+	if readErr != nil {
 		return fmt.Errorf("read account for block: %w", readErr)
-	} else if !ok {
+	}
+	if !ok {
 		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
 	}
 	source, err := eng.AccountID(key.Account)
 	if err != nil {
 		return err
+	}
+	if err := validateAccountAdministrativeSource(previous, source); err != nil {
+		return fmt.Errorf("read account for block: %w", err)
+	}
+	if blocked && previous.Blocked {
+		if previous.BlockCode != "" {
+			return fmt.Errorf(
+				"account %q is already blocked by typed cause %q; unblock it before applying an operator reason: %w",
+				key.Account, previous.BlockCode, domain.ErrConflict,
+			)
+		}
+		pending := eng.AsyncEngine().Accounts().ReplaceBlockReason(
+			ctx, source, reason,
+		)
+		if _, replaceErr := pending.Await(context.Background()); replaceErr != nil {
+			return fmt.Errorf("replace account block reason: %w", replaceErr)
+		}
+		mutationCtx := context.WithoutCancel(ctx)
+		if storeErr := n.realm.SetAccountBlocked(
+			mutationCtx, key.Account, true, reason,
+		); storeErr != nil {
+			return n.fatalPostEnginePersistence(
+				"set account blocked",
+				key.Account,
+				errors.Join(
+					fmt.Errorf("set account blocked: %w", storeErr),
+					asyncengine.ErrChainRetryUnsafe,
+				),
+			)
+		}
+		if auditErr := n.audit(mutationCtx, caller, store.AuditEntry{
+			Action:       domain.AuditActionBlock,
+			Account:      key.Account,
+			AccountTitle: previous.Title,
+			Detail:       blockDetail(key.Account, reason),
+		}); auditErr != nil {
+			return n.fatalPostCommitAudit(
+				"audit account block",
+				key.Account,
+				errors.Join(
+					fmt.Errorf("audit account block: %w", auditErr),
+					asyncengine.ErrChainRetryUnsafe,
+				),
+			)
+		}
+		return nil
 	}
 	state := &accountBlockChainState{
 		administrativeChainState: administrativeChainState{ctx: ctx},
@@ -399,14 +459,6 @@ func (n *localNode) SetAccountBlocked(
 	}
 	builder := asyncengine.Chain(source, begin)
 	if blocked {
-		builder.UnblockAccount(asyncengine.UnblockHooks[*accountBlockChainState]{
-			OnUnblocked: func(
-				_ context.Context, state *accountBlockChainState,
-			) error {
-				state.engineApplied = true
-				return nil
-			},
-		})
 		builder.BlockAccount(asyncengine.BlockHooks[*accountBlockChainState]{
 			Reason: func(
 				_ context.Context, state *accountBlockChainState,
@@ -538,10 +590,12 @@ func (n *localNode) mirrorPolicyConfigurationBlocks(
 			continue
 		}
 
-		// The engine reason is normalized for restore validation, never rewritten.
-		if err := n.realm.SetAccountBlocked(
-			ctx, block.Account, true, domain.NormalizeReason(block.Reason),
-		); err != nil {
+		// The cause is engine-composed, so normalize every free-text field rather
+		// than refusing and losing a real kill-switch record.
+		block.Policy = domain.NormalizeReason(block.Policy)
+		block.Reason = domain.NormalizeReason(block.Reason)
+		block.Details = domain.NormalizeReason(block.Details)
+		if err := n.realm.SetAccountBlock(ctx, block); err != nil {
 			return n.fatalPostEngineAuditByCode(
 				"record policy configuration block", "account", block.Account.String(),
 				fmt.Errorf("record policy configuration block: %w", err),

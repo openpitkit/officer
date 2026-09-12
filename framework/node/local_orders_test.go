@@ -176,6 +176,23 @@ func (e *fakeEngine) AsyncEngine() *asyncengine.AsyncEngine {
 	return async
 }
 
+func (e *fakeEngine) RestoredAccountBlockCause(
+	block domain.AccountBlock,
+) (reject.AccountBlock, error) {
+	var code reject.Code
+	switch block.Code {
+	case domain.RejectCodePnlKillSwitchTriggered:
+		code = reject.CodePnlKillSwitchTriggered
+	case domain.RejectCodeRiskLimitExceeded:
+		code = reject.CodeRiskLimitExceeded
+	default:
+		return reject.AccountBlock{}, fmt.Errorf("unknown persisted account block code %q", block.Code)
+	}
+	return reject.AccountBlock{
+		Policy: block.Policy, Code: code, Reason: block.Reason, Details: block.Details,
+	}, nil
+}
+
 func (e *fakeEngine) administrativeDriver() asyncengine.Driver {
 	e.AsyncEngine()
 	runtime, ok := fakeOrderAsyncEngines.Load(e)
@@ -274,6 +291,39 @@ func assertFakeOrderBlock(
 			rejects[0].Reason,
 			wantReason,
 		)
+	}
+}
+
+func assertFakeTypedOrderBlock(
+	t *testing.T,
+	eng *fakeEngine,
+	account domain.AccountID,
+	want domain.AccountBlock,
+) {
+	t.Helper()
+	order, err := eng.OrderModel(domain.Order{
+		Account: account, BaseAsset: "AAPL", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+		AmountValue: "1", Price: "100",
+	})
+	if err != nil {
+		t.Fatalf("OrderModel(%s): %v", account, err)
+	}
+	request, rejects, err := eng.administrativeDriver().StartPreTrade(order)
+	if request != nil {
+		request.Close()
+	}
+	if err != nil {
+		t.Fatalf("StartPreTrade(%s): %v", account, err)
+	}
+	wantCause, err := eng.RestoredAccountBlockCause(want)
+	if err != nil {
+		t.Fatalf("RestoredAccountBlockCause(%s): %v", account, err)
+	}
+	if len(rejects) != 1 || rejects[0].Policy != want.Policy ||
+		rejects[0].Code != wantCause.Code ||
+		rejects[0].Reason != want.Reason || rejects[0].Details != want.Details {
+		t.Fatalf("StartPreTrade(%s) reject = %+v, want typed cause %+v", account, rejects, want)
 	}
 }
 
@@ -1861,7 +1911,11 @@ func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.execReportBlocks = []domain.ExecutionAccountBlock{
-		{Account: "acc-1", Code: "test_block", Reason: "account block triggered"},
+		{
+			Account: "acc-1", Policy: "SpotFundsPolicy",
+			Code: domain.RejectCodePnlKillSwitchTriggered, Reason: "account block triggered",
+			Details: "account pnl below lower bound",
+		},
 	}
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()

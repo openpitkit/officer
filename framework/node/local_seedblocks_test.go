@@ -60,8 +60,8 @@ func seedBlockBuild(eng *seedBlockEngine) engine.BuildFunc {
 func seedBlockOf(account domain.AccountID) domain.AccountBlock {
 	return domain.AccountBlock{
 		Account: account,
-		Policy:  "openpit.spot_funds",
-		Code:    "pnl_bound_breached",
+		Policy:  "SpotFundsPolicy",
+		Code:    domain.RejectCodePnlKillSwitchTriggered,
 		Reason:  "lower bound breached",
 		Details: "realized pnl -50000, lower_bound -100",
 	}
@@ -112,6 +112,11 @@ func assertBlockedByEngine(
 	}
 	if !strings.Contains(stored.BlockReason, "lower bound breached") {
 		t.Fatalf("block reason = %q, want the engine cause", stored.BlockReason)
+	}
+	want := seedBlockOf(account)
+	if stored.BlockPolicy != want.Policy || stored.BlockCode != want.Code ||
+		stored.BlockDetails != want.Details {
+		t.Fatalf("typed seed block = %+v, want %+v", stored, want)
 	}
 
 	rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{

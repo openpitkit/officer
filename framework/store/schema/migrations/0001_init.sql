@@ -155,7 +155,10 @@ CREATE TABLE account (
     pnl_halt_reason TEXT    NOT NULL DEFAULT '',
     notes        TEXT    NOT NULL DEFAULT '',
     blocked      {{BOOL}} NOT NULL DEFAULT 0,
-    block_reason TEXT    NOT NULL DEFAULT ''
+    block_reason TEXT    NOT NULL DEFAULT '',
+    block_policy TEXT    NOT NULL DEFAULT '',
+    block_code   TEXT    NOT NULL DEFAULT '',
+    block_details TEXT   NOT NULL DEFAULT ''
 );
 
 CREATE INDEX idx_accounts_group ON account (group_id);

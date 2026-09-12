@@ -53,7 +53,12 @@
         "code": "acc-1",
         "title": "Account 1",
         "groupCode": "grp-1",
-        "notes": "primary"
+        "notes": "primary",
+        "blockReason": "lower bound breached: pnl -501 is below -500",
+        "blockPolicy": "SpotFundsPolicy",
+        "blockCode": "pnl_kill_switch_triggered",
+        "blockDetails": "account pnl -501 is below lower bound -500",
+        "blocked": true
       }
     ],
     "balances": [

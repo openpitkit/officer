@@ -32,6 +32,7 @@
 package backup
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -252,8 +253,61 @@ type Account struct {
 	Notes string `json:"notes,omitempty"`
 	// BlockReason is the reason the account was blocked; empty when not blocked.
 	BlockReason string `json:"blockReason,omitempty"`
+	// BlockPolicy is the engine policy that produced the block.
+	BlockPolicy string `json:"blockPolicy,omitempty"`
+	// BlockCode is the stable engine reject code that produced the block.
+	BlockCode string `json:"blockCode,omitempty"`
+	// BlockDetails is the engine's case-specific block detail.
+	BlockDetails string `json:"blockDetails,omitempty"`
 	// Blocked reports whether the account is kill-switched.
 	Blocked bool `json:"blocked,omitempty"`
+}
+
+// ValidateAccountBlock rejects inconsistent or unrestorable account-block
+// archive state. Reason-only blocked accounts are operator-authored and valid;
+// typed causes require a known reject code.
+func ValidateAccountBlock(account Account) error {
+	if err := domain.ValidateBlockText(account.BlockPolicy); err != nil {
+		return fmt.Errorf("account %q blockPolicy: %w", account.Code, err)
+	}
+	if err := domain.ValidateBlockText(account.BlockDetails); err != nil {
+		return fmt.Errorf("account %q blockDetails: %w", account.Code, err)
+	}
+	hasCause := account.BlockReason != "" || account.BlockPolicy != "" ||
+		account.BlockCode != "" || account.BlockDetails != ""
+	if !account.Blocked && hasCause {
+		return fmt.Errorf(
+			"account %q has block cause while not blocked: %w",
+			account.Code, domain.ErrInvalid,
+		)
+	}
+	if account.BlockCode == "" {
+		if account.BlockPolicy != "" || account.BlockDetails != "" {
+			return fmt.Errorf(
+				"account %q has typed block fields without blockCode: %w",
+				account.Code, domain.ErrInvalid,
+			)
+		}
+		return nil
+	}
+	if !domain.KnownRejectCode(account.BlockCode) {
+		return fmt.Errorf(
+			"account %q has unknown blockCode %q: %w",
+			account.Code, account.BlockCode, domain.ErrInvalid,
+		)
+	}
+	return nil
+}
+
+// ValidateAccountBlocks validates every portable account block before a store
+// restore starts its transaction.
+func ValidateAccountBlocks(accounts []Account) error {
+	for _, account := range accounts {
+		if err := ValidateAccountBlock(account); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AccountGroup is the portable archive form of an account-group dictionary row.

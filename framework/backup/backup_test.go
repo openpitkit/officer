@@ -57,7 +57,11 @@ func TestFixtureArchiveDecodes(t *testing.T) {
 		t.Fatalf("assets = %d, want 2", len(data.Assets))
 	}
 	if len(data.Accounts) != 1 || data.Accounts[0].Code != "acc-1" ||
-		data.Accounts[0].GroupCode != "grp-1" {
+		data.Accounts[0].GroupCode != "grp-1" ||
+		data.Accounts[0].BlockPolicy != "SpotFundsPolicy" ||
+		data.Accounts[0].BlockCode != domain.RejectCodePnlKillSwitchTriggered ||
+		data.Accounts[0].BlockReason != "lower bound breached: pnl -501 is below -500" ||
+		data.Accounts[0].BlockDetails != "account pnl -501 is below lower bound -500" {
 		t.Fatalf("accounts not portable: %+v", data.Accounts)
 	}
 	if len(data.Groups) != 1 || data.Groups[0].Code != "grp-1" {
@@ -94,6 +98,76 @@ func TestFixtureArchiveDecodes(t *testing.T) {
 	}
 	if data.McpAccess["submit_order"] != true {
 		t.Fatalf("mcp access not preserved: %+v", data.McpAccess)
+	}
+}
+
+func TestValidateAccountBlockRejectsMalformedCause(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		account Account
+		want    string
+	}{
+		{
+			name: "cause on unblocked account",
+			account: Account{
+				Code: "acc-1", BlockCode: domain.RejectCodePnlKillSwitchTriggered,
+			},
+			want: "while not blocked",
+		},
+		{
+			name: "unknown code",
+			account: Account{
+				Code: "acc-1", Blocked: true, BlockCode: "future_unknown_code",
+			},
+			want: "unknown blockCode \"future_unknown_code\"",
+		},
+		{
+			name: "typed fields without code",
+			account: Account{
+				Code: "acc-1", Blocked: true, BlockPolicy: "SpotFundsPolicy",
+			},
+			want: "without blockCode",
+		},
+		{
+			name: "over-length policy",
+			account: Account{
+				Code:        "acc-1",
+				Blocked:     true,
+				BlockPolicy: strings.Repeat("p", 4097),
+				BlockCode:   domain.RejectCodePnlKillSwitchTriggered,
+			},
+			want: "blockPolicy",
+		},
+		{
+			name: "non-UTF-8 details",
+			account: Account{
+				Code:         "acc-1",
+				Blocked:      true,
+				BlockCode:    domain.RejectCodePnlKillSwitchTriggered,
+				BlockDetails: string([]byte{0xff}),
+			},
+			want: "blockDetails",
+		},
+		{
+			name: "NUL details",
+			account: Account{
+				Code:         "acc-1",
+				Blocked:      true,
+				BlockCode:    domain.RejectCodePnlKillSwitchTriggered,
+				BlockDetails: "before\x00after",
+			},
+			want: "blockDetails",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAccountBlock(test.account)
+			if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ValidateAccountBlock() = %v, want ErrInvalid containing %q", err, test.want)
+			}
+		})
 	}
 }
 

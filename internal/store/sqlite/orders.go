@@ -1897,13 +1897,23 @@ func (r *realmStore) recordOrderSettlementTx(
 		if err != nil {
 			return "", err
 		}
-		// The reason is engine-composed, never operator input: refusing it would
-		// drop a real kill-switch record, so it is normalized to the rule the
-		// restore path validates rather than rejected.
+		// The cause is engine-composed, never operator input: refusing a newer
+		// engine code or malformed text would drop a real kill-switch record. Keep
+		// the code verbatim and normalize its text to the restore rule.
 		if _, err := tx.ExecContext(
 			ctx,
-			`UPDATE account SET blocked = ?, block_reason = ? WHERE id = ?`,
-			true, domain.NormalizeReason(blk.Reason), blkAccountID,
+			`UPDATE account
+			 SET blocked = 1,
+			     block_reason = CASE WHEN blocked = 0 THEN ? ELSE block_reason END,
+			     block_policy = CASE WHEN blocked = 0 THEN ? ELSE block_policy END,
+			     block_code = CASE WHEN blocked = 0 THEN ? ELSE block_code END,
+			     block_details = CASE WHEN blocked = 0 THEN ? ELSE block_details END
+			 WHERE id = ?`,
+			domain.NormalizeReason(blk.Reason),
+			domain.NormalizeReason(blk.Policy),
+			blk.Code,
+			domain.NormalizeReason(blk.Details),
+			blkAccountID,
 		); err != nil {
 			return "", fmt.Errorf("store: settlement mirror block %q: %w", blk.Account, err)
 		}

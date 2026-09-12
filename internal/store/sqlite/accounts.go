@@ -1100,7 +1100,7 @@ func scanGroupRow(row *sql.Row) (domain.AccountGroup, error) {
 // surrogate group id never leaves the store.
 const accountSelect = `
 SELECT a.id, a.code, a.title, a.pnl, a.pnl_halt_reason, ac.code, g.code, gc.code, dc.code,
-       a.notes, a.blocked, a.block_reason
+       a.notes, a.blocked, a.block_reason, a.block_policy, a.block_code, a.block_details
 FROM account a
 LEFT JOIN asset ac ON ac.id = a.currency_asset_id
 LEFT JOIN account_group g ON g.id = a.group_id
@@ -1114,6 +1114,29 @@ LEFT JOIN asset dc ON dc.id = dg.currency_asset_id`
 func (r *realmStore) CreateAccount(
 	ctx context.Context, account domain.Account,
 ) (created domain.Account, err error) {
+	if account.Blocked {
+		if account.BlockCode == "" {
+			if err := domain.ValidateBlockReason(account.BlockReason); err != nil {
+				return domain.Account{}, fmt.Errorf(
+					"account %q block reason: %w", account.Code, err,
+				)
+			}
+			if account.BlockPolicy != "" || account.BlockDetails != "" {
+				return domain.Account{}, fmt.Errorf(
+					"account %q has typed block fields without block code: %w",
+					account.Code, domain.ErrInvalid,
+				)
+			}
+		} else if err := validateTypedAccountBlock(domain.AccountBlock{
+			Account: account.Code,
+			Policy:  account.BlockPolicy,
+			Code:    account.BlockCode,
+			Reason:  account.BlockReason,
+			Details: account.BlockDetails,
+		}); err != nil {
+			return domain.Account{}, err
+		}
+	}
 	db, err := r.db()
 	if err != nil {
 		return domain.Account{}, err
@@ -1145,13 +1168,21 @@ func (r *realmStore) CreateAccount(
 	if account.Pnl != "" && account.PnlHaltReason == "" {
 		storedPnl = account.Pnl
 	}
+	if !account.Blocked {
+		account.BlockReason = ""
+		account.BlockPolicy = ""
+		account.BlockCode = ""
+		account.BlockDetails = ""
+	}
 	_, err = tx.ExecContext(
 		ctx,
 		`INSERT INTO account
-		 (code, title, group_id, currency_asset_id, pnl, pnl_halt_reason, notes, blocked, block_reason)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (code, title, group_id, currency_asset_id, pnl, pnl_halt_reason, notes, blocked,
+		  block_reason, block_policy, block_code, block_details)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		account.Code.String(), account.Title,
-		groupID, currencyID, storedPnl, account.PnlHaltReason, account.Notes, account.Blocked, account.BlockReason,
+		groupID, currencyID, storedPnl, account.PnlHaltReason, account.Notes, account.Blocked,
+		account.BlockReason, account.BlockPolicy, account.BlockCode, account.BlockDetails,
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -1240,7 +1271,7 @@ GROUP BY a.id` + having
 	queryArgs := append([]any{}, args...)
 	query := `
 SELECT a.id, a.code, a.title, a.pnl, a.pnl_halt_reason, ac.code, g.code, gc.code, dc.code,
-       a.notes, a.blocked, a.block_reason,
+       a.notes, a.blocked, a.block_reason, a.block_policy, a.block_code, a.block_details,
        COUNT(b.asset_id) AS position_count
 ` + from + accountListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
@@ -1260,23 +1291,119 @@ SELECT a.id, a.code, a.title, a.pnl, a.pnl_halt_reason, ac.code, g.code, gc.code
 	return fwstore.AccountListPage{Rows: result, Total: total}, nil
 }
 
-// SetAccountBlocked updates the blocked flag and block reason of the account.
+// SetAccountBlocked applies an operator-authored reason-only block or clears an
+// account block. Re-blocking replaces another operator reason, but a typed
+// engine cause conflicts until it is explicitly unblocked.
 func (r *realmStore) SetAccountBlocked(
 	ctx context.Context, code domain.AccountID, blocked bool, reason string,
 ) error {
+	if blocked {
+		if err := domain.ValidateBlockReason(reason); err != nil {
+			return fmt.Errorf("store: account %q block reason: %w", code, err)
+		}
+	}
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	var res sql.Result
+	if blocked {
+		res, err = db.ExecContext(
+			ctx,
+			`UPDATE account
+			 SET blocked = 1,
+			     block_reason = ?, block_policy = '', block_code = '', block_details = ''
+			 WHERE code = ? AND (blocked = 0 OR block_code = '')`,
+			reason, code.String(),
+		)
+	} else {
+		res, err = db.ExecContext(
+			ctx,
+			`UPDATE account
+			 SET blocked = 0, block_reason = '', block_policy = '', block_code = '', block_details = ''
+			 WHERE code = ?`,
+			code.String(),
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("store: set account blocked: %w", err)
+	}
+	if blocked {
+		affected, rowsErr := res.RowsAffected()
+		if rowsErr != nil {
+			return fmt.Errorf("store: account block rows affected: %w", rowsErr)
+		}
+		if affected == 0 {
+			var storedBlocked bool
+			var blockCode string
+			if readErr := db.QueryRowContext(
+				ctx,
+				`SELECT blocked, block_code FROM account WHERE code = ?`,
+				code.String(),
+			).Scan(&storedBlocked, &blockCode); readErr != nil {
+				if errors.Is(readErr, sql.ErrNoRows) {
+					return fmt.Errorf("account %q: %w", code, domain.ErrNotFound)
+				}
+				return fmt.Errorf("store: read account block conflict: %w", readErr)
+			}
+			return fmt.Errorf(
+				"account %q is already blocked by typed cause %q; unblock it before applying an operator reason: %w",
+				code, blockCode, domain.ErrConflict,
+			)
+		}
+		return nil
+	}
+	return notFoundIfNoRows(res, "account", code.String())
+}
+
+// SetAccountBlock mirrors an engine-authored typed block. Every assignment is
+// conditional on the account being unblocked so a later write cannot replace
+// the engine's first latched cause.
+func (r *realmStore) SetAccountBlock(
+	ctx context.Context, block domain.AccountBlock,
+) error {
+	if err := validateTypedAccountBlock(block); err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
 	res, err := db.ExecContext(
 		ctx,
-		`UPDATE account SET blocked = ?, block_reason = ? WHERE code = ?`,
-		blocked, reason, code.String(),
+		`UPDATE account
+		 SET blocked = 1,
+		     block_reason = CASE WHEN blocked = 0 THEN ? ELSE block_reason END,
+		     block_policy = CASE WHEN blocked = 0 THEN ? ELSE block_policy END,
+		     block_code = CASE WHEN blocked = 0 THEN ? ELSE block_code END,
+		     block_details = CASE WHEN blocked = 0 THEN ? ELSE block_details END
+		 WHERE code = ?`,
+		block.Reason, block.Policy, block.Code, block.Details,
+		block.Account.String(),
 	)
 	if err != nil {
-		return fmt.Errorf("store: set account blocked: %w", err)
+		return fmt.Errorf("store: set typed account block: %w", err)
 	}
-	return notFoundIfNoRows(res, "account", code.String())
+	return notFoundIfNoRows(res, "account", block.Account.String())
+}
+
+func validateTypedAccountBlock(block domain.AccountBlock) error {
+	if !domain.KnownRejectCode(block.Code) {
+		return fmt.Errorf(
+			"store: account %q block code %q: %w",
+			block.Account, block.Code, domain.ErrInvalid,
+		)
+	}
+	if err := domain.ValidateBlockReason(block.Reason); err != nil {
+		return fmt.Errorf("store: account %q block reason: %w", block.Account, err)
+	}
+	if err := domain.ValidateBlockText(block.Policy); err != nil {
+		return fmt.Errorf("store: account %q block policy: %w", block.Account, err)
+	}
+	if err := domain.ValidateBlockText(block.Details); err != nil {
+		return fmt.Errorf("store: account %q block details: %w", block.Account, err)
+	}
+	return nil
 }
 
 // SetAccountGroup sets the account's group link, resolving the group code; an
@@ -1502,6 +1629,7 @@ func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
 		&engineID, &account.Code, &account.Title, &pnl, &account.PnlHaltReason, &currency,
 		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
+		&account.BlockPolicy, &account.BlockCode, &account.BlockDetails,
 		&positionCount,
 	); err != nil {
 		return fwstore.AccountListRow{}, fmt.Errorf("store: scan account row: %w", err)
@@ -1527,6 +1655,7 @@ func scanAccount(rows *sql.Rows) (domain.Account, error) {
 		&engineID, &account.Code, &account.Title, &pnl, &account.PnlHaltReason, &currency,
 		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
+		&account.BlockPolicy, &account.BlockCode, &account.BlockDetails,
 	); err != nil {
 		return domain.Account{}, fmt.Errorf("store: scan account: %w", err)
 	}
@@ -1791,6 +1920,7 @@ func scanAccountRow(row *sql.Row) (domain.Account, error) {
 		&engineID, &account.Code, &account.Title, &pnl, &account.PnlHaltReason, &currency,
 		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
+		&account.BlockPolicy, &account.BlockCode, &account.BlockDetails,
 	); err != nil {
 		return domain.Account{}, err
 	}

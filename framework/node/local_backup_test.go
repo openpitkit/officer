@@ -553,6 +553,9 @@ func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
 			{
 				Code: "existing", GroupCode: "desk", Currency: "USD", Pnl: "7",
 				Blocked: true, BlockReason: "restored account block",
+				BlockPolicy:  "SpotFundsPolicy",
+				BlockCode:    domain.RejectCodePnlKillSwitchTriggered,
+				BlockDetails: "restored account block details",
 			},
 			{Code: "added", GroupCode: "desk", Pnl: "3"},
 		},
@@ -591,7 +594,10 @@ func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
 	assertFakeAccountGroup(t, eng, "existing", "desk")
 	assertFakeAccountPnl(t, eng, "existing", "USD", "7")
 	assertFakeBalances(t, eng, "existing", "USD", "12", "2", "1")
-	assertFakeOrderBlock(t, eng, "existing", true, "restored account block")
+	assertFakeTypedOrderBlock(t, eng, "existing", domain.AccountBlock{
+		Policy: "SpotFundsPolicy", Code: domain.RejectCodePnlKillSwitchTriggered,
+		Reason: "restored account block", Details: "restored account block details",
+	})
 	assertFakeOrderBlock(t, eng, "added", true, "restored group block")
 	if len(eng.configureCalls) != 1 ||
 		eng.configureCalls[0].policy != domain.PolicyRateLimit ||

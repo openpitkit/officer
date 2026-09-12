@@ -107,6 +107,9 @@ func (r *realmStore) exportAccounts(ctx context.Context) ([]backup.Account, erro
 			GroupCode:     a.GroupCode,
 			Notes:         a.Notes,
 			BlockReason:   a.BlockReason,
+			BlockPolicy:   a.BlockPolicy,
+			BlockCode:     a.BlockCode,
+			BlockDetails:  a.BlockDetails,
 			Blocked:       a.Blocked,
 		})
 	}

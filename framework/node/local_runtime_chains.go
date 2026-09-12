@@ -25,6 +25,7 @@ import (
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -38,7 +39,11 @@ type accountRuntimePnl struct {
 
 type accountRuntimeBlock struct {
 	blocked bool
-	reason  string
+	cause   domain.AccountBlock
+}
+
+type restoredAccountBlockCauseMapper interface {
+	RestoredAccountBlockCause(domain.AccountBlock) (reject.AccountBlock, error)
 }
 
 type accountRuntimeChainState struct {
@@ -82,6 +87,24 @@ func (n *localNode) runAccountRuntimeChain(
 	}
 	if err := validateAccountAdministrativeSource(account, source); err != nil {
 		return nil, false, err
+	}
+	var typedCause reject.AccountBlock
+	typedBlock := block != nil && block.blocked && block.cause.Code != ""
+	if typedBlock {
+		mapper, ok := eng.(restoredAccountBlockCauseMapper)
+		if !ok {
+			return nil, false, fmt.Errorf(
+				"engine: restore typed account block %q: adapter does not support typed causes",
+				account.Code,
+			)
+		}
+		typedCause, err = mapper.RestoredAccountBlockCause(block.cause)
+		if err != nil {
+			return nil, false, fmt.Errorf(
+				"engine: restore typed account block %q with code %q: %w",
+				account.Code, block.cause.Code, err,
+			)
+		}
 	}
 	state := &accountRuntimeChainState{
 		ctx:      ctx,
@@ -135,7 +158,10 @@ func (n *localNode) runAccountRuntimeChain(
 			return nil, state.err
 		}
 		if block != nil && (current.Blocked != block.blocked ||
-			current.BlockReason != block.reason) {
+			current.BlockReason != block.cause.Reason ||
+			current.BlockPolicy != block.cause.Policy ||
+			current.BlockCode != block.cause.Code ||
+			current.BlockDetails != block.cause.Details) {
 			state.err = fmt.Errorf(
 				"account %q block state changed before %s: %w",
 				current.Code, operation, domain.ErrInvalid,
@@ -241,21 +267,27 @@ func (n *localNode) runAccountRuntimeChain(
 					},
 				},
 			)
-			builder.BlockAccount(
-				asyncengine.BlockHooks[*accountRuntimeChainState]{
-					Reason: func(
-						context.Context, *accountRuntimeChainState,
-					) (string, error) {
-						return block.reason, nil
+			if typedBlock {
+				// The caller submits the typed block after this chain resolves. A
+				// chain hook runs on the account lane's own worker and must not
+				// submit another task to that same bounded queue.
+			} else {
+				builder.BlockAccount(
+					asyncengine.BlockHooks[*accountRuntimeChainState]{
+						Reason: func(
+							context.Context, *accountRuntimeChainState,
+						) (string, error) {
+							return block.cause.Reason, nil
+						},
+						OnBlocked: func(
+							_ context.Context, state *accountRuntimeChainState,
+						) error {
+							state.engineApplied = true
+							return nil
+						},
 					},
-					OnBlocked: func(
-						_ context.Context, state *accountRuntimeChainState,
-					) error {
-						state.engineApplied = true
-						return nil
-					},
-				},
-			)
+				)
+			}
 		} else {
 			builder.UnblockAccount(
 				asyncengine.UnblockHooks[*accountRuntimeChainState]{
@@ -289,9 +321,22 @@ func (n *localNode) runAccountRuntimeChain(
 	_, chainErr := runner.Run(
 		ctx, eng.AsyncEngine(),
 	).Await(context.Background())
-	return state.pnlBlocks, state.engineApplied, accountChainRunError(
-		operation, state.err, chainErr,
-	)
+	runErr := accountChainRunError(operation, state.err, chainErr)
+	if runErr == nil && typedBlock {
+		pending := eng.AsyncEngine().Accounts().BlockWithCause(
+			state.ctx, source, typedCause,
+		)
+		if _, waitErr := pending.Await(context.Background()); waitErr != nil {
+			state.engineApplied = true
+			runErr = fmt.Errorf(
+				"%s typed account block: %w",
+				operation, errors.Join(waitErr, asyncengine.ErrChainRetryUnsafe),
+			)
+		} else {
+			state.engineApplied = true
+		}
+	}
+	return state.pnlBlocks, state.engineApplied, runErr
 }
 
 type groupRuntimeBlock struct {

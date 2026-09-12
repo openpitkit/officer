@@ -250,12 +250,15 @@ func restoreRuntimeShapeChanged(
 }
 
 type restoreAccountRuntime struct {
-	group       string
-	currency    string
-	pnl         string
-	haltReason  domain.PnlHaltReason
-	blockReason string
-	blocked     bool
+	group        string
+	currency     string
+	pnl          string
+	haltReason   domain.PnlHaltReason
+	blockReason  string
+	blockPolicy  string
+	blockCode    string
+	blockDetails string
+	blocked      bool
 }
 
 func accountRuntimeMap(
@@ -267,6 +270,8 @@ func accountRuntimeMap(
 			group: account.GroupCode, currency: account.Currency,
 			pnl: account.Pnl, haltReason: account.PnlHaltReason,
 			blocked: account.Blocked, blockReason: account.BlockReason,
+			blockPolicy: account.BlockPolicy, blockCode: account.BlockCode,
+			blockDetails: account.BlockDetails,
 		}
 	}
 	return out
@@ -561,7 +566,10 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		previous, existed := before.accounts[code]
 		next := after.accounts[code]
 		if existed && previous.Blocked == next.Blocked &&
-			previous.BlockReason == next.BlockReason {
+			previous.BlockReason == next.BlockReason &&
+			previous.BlockPolicy == next.BlockPolicy &&
+			previous.BlockCode == next.BlockCode &&
+			previous.BlockDetails == next.BlockDetails {
 			continue
 		}
 		if !existed && !next.Blocked {
@@ -579,7 +587,13 @@ func (n *localNode) applyRestoreRuntimeDelta(
 			nil,
 			&accountRuntimeBlock{
 				blocked: next.Blocked,
-				reason:  next.BlockReason,
+				cause: domain.AccountBlock{
+					Account: next.Code,
+					Policy:  next.BlockPolicy,
+					Code:    next.BlockCode,
+					Reason:  next.BlockReason,
+					Details: next.BlockDetails,
+				},
 			},
 		); err != nil {
 			return fmt.Errorf("apply restored account %q block: %w", code, err)

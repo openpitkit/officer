@@ -859,6 +859,7 @@ func (s *Service) CancelOrder(
 			if event.Payload.RejectCode != "" || event.Payload.RejectReason != "" {
 				persistence.Blocks = []domain.ExecutionAccountBlock{{
 					Account: stored.Order.Account,
+					Policy:  event.Payload.RejectPolicy,
 					Code:    event.Payload.RejectCode,
 					Reason:  event.Payload.RejectReason,
 					Details: event.Payload.RejectDetails,
@@ -1184,7 +1185,9 @@ func (s *Service) buildExecutionReportPayload(
 		b := persistence.Blocks[0]
 		payload.RejectCode = b.Code
 		payload.RejectScope = "account"
+		payload.RejectPolicy = b.Policy
 		payload.RejectReason = b.Reason
+		payload.RejectDetails = b.Details
 	}
 	return payload, nil
 }

@@ -324,8 +324,14 @@ func (r *memoryRealm) RecordOrderSettlement(
 		if !ok {
 			continue
 		}
+		if account.Blocked {
+			continue
+		}
 		account.Blocked = true
-		account.BlockReason = block.Reason
+		account.BlockReason = domain.NormalizeReason(block.Reason)
+		account.BlockPolicy = block.Policy
+		account.BlockCode = block.Code
+		account.BlockDetails = block.Details
 		r.accounts[block.Account] = account
 	}
 	for _, event := range st.Events {

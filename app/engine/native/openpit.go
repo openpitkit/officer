@@ -256,6 +256,14 @@ func (e *openPitEngine) SeedAccountBlocks() []domain.AccountBlock {
 	return e.seedAccountBlocks
 }
 
+// RestoredAccountBlockCause maps a persisted Officer block back to the SDK
+// value used by the async online-restore path.
+func (e *openPitEngine) RestoredAccountBlockCause(
+	block domain.AccountBlock,
+) (reject.AccountBlock, error) {
+	return accountBlockCauseFrom(block)
+}
+
 // NewOpenPitEngineBuildFunc returns the stage-2 OpenPit builder for one local
 // node. Its engine handles share one market-data service generation. A closed
 // wrapper is treated as absent and replaced by the next build; later builds
@@ -352,9 +360,6 @@ func buildOpenPitEngine(
 		return nil, service, err
 	}
 
-	if err := applyBlocks(eng, snap.Accounts); err != nil {
-		return releaseOnErr(err)
-	}
 	if err := hydrateGroups(eng, snap.Accounts, res); err != nil {
 		return releaseOnErr(err)
 	}
@@ -915,7 +920,10 @@ func policyName(policy string) string {
 // service via WithMarketOrders(service, defaultMarketOrderSlippageBps): market
 // orders are priced off the mark quote rather than rejected. Instruments without
 // a live quote reject with MarkPriceUnavailable instead of UnsupportedOrderType.
-// Persisted account P&L state is applied after Build through AsyncEngine lanes.
+// Persisted account blocks are applied immediately after Build, before a P&L
+// barrier can evaluate the implicit zero accumulator and latch a different
+// first cause. Persisted account P&L state is applied later through
+// AsyncEngine lanes.
 // Runtime P&L-bounds changes only replace barrier axes; they never reset or
 // seed the live accumulator. Operator-configurable slippage and runtime
 // enable/disable remain future work.
@@ -987,22 +995,25 @@ func buildEngine(
 			"engine: build openpit engine: %w", err,
 		)
 	}
+	releaseOnErr := func(
+		err error,
+	) (
+		*openpit.Engine,
+		*bindmd.Service,
+		map[string]struct{},
+		[]domain.AccountBlock,
+		bool,
+		error,
+	) {
+		eng.Stop()
+		closeCreatedService()
+		return nil, nil, nil, nil, false, err
+	}
+	if err := applyBlocks(eng, snap.Accounts); err != nil {
+		return releaseOnErr(err)
+	}
 	var buildBlocks []domain.AccountBlock
 	if len(snap.SpotFundsPnlBoundsLimits) > 0 {
-		releaseOnErr := func(
-			err error,
-		) (
-			*openpit.Engine,
-			*bindmd.Service,
-			map[string]struct{},
-			[]domain.AccountBlock,
-			bool,
-			error,
-		) {
-			eng.Stop()
-			closeCreatedService()
-			return nil, nil, nil, nil, false, err
-		}
 		configuration, err := configureSpotFundsPnlBounds(
 			eng.Configure(), res, snap.SpotFundsPnlBoundsLimits,
 		)
@@ -1015,7 +1026,7 @@ func buildEngine(
 }
 
 // applyBlocks blocks every blocked account in accounts on the engine with its
-// persisted reason, addressing each by its stored engine account id.
+// persisted cause, addressing each by its stored engine account id.
 func applyBlocks(eng *openpit.Engine, accounts []domain.Account) error {
 	handle := eng.Accounts()
 	for _, account := range accounts {
@@ -1026,7 +1037,29 @@ func applyBlocks(eng *openpit.Engine, accounts []domain.Account) error {
 		if err != nil {
 			return fmt.Errorf("engine: block account %q: %w", account.Code, err)
 		}
-		handle.Block(accountID, account.BlockReason)
+		if account.BlockCode == "" {
+			handle.Block(accountID, account.BlockReason)
+			continue
+		}
+		cause, err := accountBlockCauseFrom(domain.AccountBlock{
+			Account: account.Code,
+			Policy:  account.BlockPolicy,
+			Code:    account.BlockCode,
+			Reason:  account.BlockReason,
+			Details: account.BlockDetails,
+		})
+		if err != nil {
+			return fmt.Errorf(
+				"engine: block account %q with persisted code %q: %w",
+				account.Code, account.BlockCode, err,
+			)
+		}
+		if err := handle.BlockWithCause(accountID, cause); err != nil {
+			return fmt.Errorf(
+				"engine: block account %q with persisted code %q: %w",
+				account.Code, account.BlockCode, err,
+			)
+		}
 	}
 	return nil
 }

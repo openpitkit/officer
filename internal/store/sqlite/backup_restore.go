@@ -325,20 +325,22 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 				ctx,
 				`UPDATE account
 				 SET title = ?, group_id = ?, currency_asset_id = ?, pnl = ?, pnl_halt_reason = ?,
-				     notes = ?, blocked = ?, block_reason = ?
+				     notes = ?, blocked = ?, block_reason = ?, block_policy = ?, block_code = ?,
+				     block_details = ?
 				 WHERE code = ?`,
 				a.Title, groupID, currencyID, storedPnl, a.PnlHaltReason, a.Notes, a.Blocked,
-				a.BlockReason, a.Code,
+				a.BlockReason, a.BlockPolicy, a.BlockCode, a.BlockDetails, a.Code,
 			); err != nil {
 				return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 			}
 		} else if _, err := rt.tx.ExecContext(
 			ctx,
 			`INSERT INTO account
-			 (code, title, group_id, currency_asset_id, pnl, pnl_halt_reason, notes, blocked, block_reason)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 (code, title, group_id, currency_asset_id, pnl, pnl_halt_reason, notes, blocked,
+			  block_reason, block_policy, block_code, block_details)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			a.Code, a.Title, groupID, currencyID, storedPnl, a.PnlHaltReason, a.Notes, a.Blocked,
-			a.BlockReason,
+			a.BlockReason, a.BlockPolicy, a.BlockCode, a.BlockDetails,
 		); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 		}

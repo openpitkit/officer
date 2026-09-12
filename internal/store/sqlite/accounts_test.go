@@ -23,10 +23,170 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
 )
+
+func TestAccountBlockFirstCauseWinsAndUnblockClears(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	first := domain.AccountBlock{
+		Account: "acc-1",
+		Policy:  "SpotFundsPolicy",
+		Code:    domain.RejectCodePnlKillSwitchTriggered,
+		Reason:  "first reason",
+		Details: "first details",
+	}
+	second := domain.AccountBlock{
+		Account: "acc-1",
+		Policy:  "AnotherPolicy",
+		Code:    domain.RejectCodeRiskLimitExceeded,
+		Reason:  "second reason",
+		Details: "second details",
+	}
+	if err := rs.SetAccountBlock(ctx, first); err != nil {
+		t.Fatalf("SetAccountBlock(first): %v", err)
+	}
+	if err := rs.SetAccountBlock(ctx, second); err != nil {
+		t.Fatalf("SetAccountBlock(second): %v", err)
+	}
+	if err := rs.SetAccountBlocked(ctx, "acc-1", true, "operator later"); !errors.Is(
+		err, domain.ErrConflict,
+	) {
+		t.Fatalf("SetAccountBlocked(operator later) = %v, want ErrConflict", err)
+	}
+	got, ok, err := rs.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount after blocks = ok %v, err %v", ok, err)
+	}
+	if got.BlockReason != first.Reason || got.BlockPolicy != first.Policy ||
+		got.BlockCode != first.Code || got.BlockDetails != first.Details {
+		t.Fatalf("stored cause = %+v, want first %+v", got, first)
+	}
+
+	if err := rs.SetAccountBlocked(ctx, "acc-1", false, "ignored"); err != nil {
+		t.Fatalf("SetAccountBlocked(unblock): %v", err)
+	}
+	got, _, err = rs.GetAccount(ctx, "acc-1")
+	if err != nil {
+		t.Fatalf("GetAccount after unblock: %v", err)
+	}
+	if got.Blocked || got.BlockReason != "" || got.BlockPolicy != "" ||
+		got.BlockCode != "" || got.BlockDetails != "" {
+		t.Fatalf("unblocked account retained cause: %+v", got)
+	}
+
+	if err := rs.SetAccountBlocked(ctx, "acc-1", true, "operator first"); err != nil {
+		t.Fatalf("SetAccountBlocked(operator first): %v", err)
+	}
+	if err := rs.SetAccountBlock(ctx, first); err != nil {
+		t.Fatalf("SetAccountBlock(after operator): %v", err)
+	}
+	got, _, _ = rs.GetAccount(ctx, "acc-1")
+	if got.BlockReason != "operator first" || got.BlockPolicy != "" ||
+		got.BlockCode != "" || got.BlockDetails != "" {
+		t.Fatalf("operator-first block was replaced: %+v", got)
+	}
+}
+
+func TestSetAccountBlockedReplacesOperatorReason(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := rs.SetAccountBlocked(ctx, "acc-1", true, "first"); err != nil {
+		t.Fatalf("SetAccountBlocked(first): %v", err)
+	}
+	if err := rs.SetAccountBlocked(ctx, "acc-1", true, "replacement"); err != nil {
+		t.Fatalf("SetAccountBlocked(replacement): %v", err)
+	}
+	got, ok, err := rs.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount = %+v, %v, %v", got, ok, err)
+	}
+	if got.BlockReason != "replacement" || got.BlockPolicy != "" ||
+		got.BlockCode != "" || got.BlockDetails != "" {
+		t.Fatalf("operator replacement = %+v", got)
+	}
+}
+
+func TestCreateAccountRejectsInvalidTypedCauseBeforeInsert(t *testing.T) {
+	tests := []struct {
+		name    string
+		account domain.Account
+	}{
+		{
+			name: "unknown code",
+			account: domain.Account{
+				Blocked: true, BlockPolicy: "FuturePolicy",
+				BlockCode: "future_unknown_code", BlockReason: "risk",
+			},
+		},
+		{
+			name: "typed fields without code",
+			account: domain.Account{
+				Blocked: true, BlockPolicy: "SpotFundsPolicy", BlockReason: "risk",
+			},
+		},
+		{
+			name: "non-printable policy",
+			account: domain.Account{
+				Blocked: true, BlockPolicy: "Spot\x00FundsPolicy",
+				BlockCode: domain.RejectCodePnlKillSwitchTriggered, BlockReason: "risk",
+			},
+		},
+		{
+			name: "over-length details",
+			account: domain.Account{
+				Blocked: true, BlockPolicy: "SpotFundsPolicy",
+				BlockCode:   domain.RejectCodePnlKillSwitchTriggered,
+				BlockReason: "risk", BlockDetails: strings.Repeat("d", 4097),
+			},
+		},
+	}
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, rs := newTestStore(t)
+			test.account.Code = domain.AccountID(fmt.Sprintf("acc-%d", i))
+			_, err := rs.CreateAccount(ctx, test.account)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("CreateAccount(invalid typed cause) = %v, want ErrInvalid", err)
+			}
+			if _, ok, getErr := rs.GetAccount(ctx, test.account.Code); getErr != nil || ok {
+				t.Fatalf("invalid account committed: ok=%v err=%v", ok, getErr)
+			}
+		})
+	}
+}
+
+func TestSetAccountBlockRejectsMalformedTextBeforeUpdate(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	err := rs.SetAccountBlock(ctx, domain.AccountBlock{
+		Account: "acc-1",
+		Policy:  "Spot\x00FundsPolicy",
+		Code:    domain.RejectCodePnlKillSwitchTriggered,
+		Reason:  "risk",
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetAccountBlock(malformed policy) = %v, want ErrInvalid", err)
+	}
+	got, ok, getErr := rs.GetAccount(ctx, "acc-1")
+	if getErr != nil || !ok || got.Blocked {
+		t.Fatalf("malformed typed cause changed account: %+v ok=%v err=%v", got, ok, getErr)
+	}
+}
 
 func TestSetAccountPnl(t *testing.T) {
 	ctx := context.Background()

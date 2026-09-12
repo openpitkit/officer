@@ -57,6 +57,26 @@ func TestBuildExecutionReportPayloadSignsWriteSetLeaves(t *testing.T) {
 	}
 }
 
+func TestBuildExecutionReportPayloadCarriesTypedBlockCause(t *testing.T) {
+	t.Parallel()
+	block := domain.ExecutionAccountBlock{
+		Account: "acc-1", Policy: "SpotFundsPolicy",
+		Code: domain.RejectCodePnlKillSwitchTriggered, Reason: "lower bound breached",
+		Details: "account pnl below lower bound",
+	}
+	payload, err := (&Service{}).buildExecutionReportPayload(
+		domain.Order{Account: block.Account},
+		engine.ExecutionReportPersistence{Blocks: []domain.ExecutionAccountBlock{block}},
+	)
+	if err != nil {
+		t.Fatalf("buildExecutionReportPayload: %v", err)
+	}
+	if payload.RejectPolicy != block.Policy || payload.RejectCode != block.Code ||
+		payload.RejectReason != block.Reason || payload.RejectDetails != block.Details {
+		t.Fatalf("signed block cause = %+v, want %+v", payload, block)
+	}
+}
+
 // TestBuildImmediateSettlementPayloadSignsWriteSetLeaves exercises the
 // assembly site the immediate submit signs through.
 func TestBuildImmediateSettlementPayloadSignsWriteSetLeaves(t *testing.T) {

@@ -2019,6 +2019,24 @@ func rejectCodeName(code reject.Code) string {
 	return fmt.Sprintf("code_%d", uint32(code))
 }
 
+// accountBlockCauseFrom restores the SDK account-block value represented by a
+// persisted Officer block. The reverse lookup is derived from rejectCodeNames
+// so capture and restore cannot drift onto separate code vocabularies.
+func accountBlockCauseFrom(block domain.AccountBlock) (reject.AccountBlock, error) {
+	code, ok := rejectCodesByName[block.Code]
+	if !ok {
+		return reject.AccountBlock{}, fmt.Errorf(
+			"unknown persisted account block code %q", block.Code,
+		)
+	}
+	return reject.AccountBlock{
+		Policy:  block.Policy,
+		Code:    code,
+		Reason:  block.Reason,
+		Details: block.Details,
+	}, nil
+}
+
 // rejectScopeName maps a binding reject scope onto a stable string.
 func rejectScopeName(scope reject.Scope) string {
 	switch scope {
@@ -2035,48 +2053,56 @@ func rejectScopeName(scope reject.Scope) string {
 // codes. It is the persisted vocabulary, decoupled from the numeric enum values
 // so a code reorder in the SDK cannot silently change stored strings.
 var rejectCodeNames = map[reject.Code]string{
-	reject.CodeMissingRequiredField:            "missing_required_field",
-	reject.CodeInvalidFieldFormat:              "invalid_field_format",
-	reject.CodeInvalidFieldValue:               "invalid_field_value",
-	reject.CodeUnsupportedOrderType:            "unsupported_order_type",
-	reject.CodeUnsupportedTimeInForce:          "unsupported_time_in_force",
-	reject.CodeUnsupportedOrderAttribute:       "unsupported_order_attribute",
-	reject.CodeDuplicateClientOrderID:          "duplicate_client_order_id",
-	reject.CodeTooLateToEnter:                  "too_late_to_enter",
-	reject.CodeExchangeClosed:                  "exchange_closed",
-	reject.CodeUnknownInstrument:               "unknown_instrument",
-	reject.CodeUnknownAccount:                  "unknown_account",
-	reject.CodeUnknownVenue:                    "unknown_venue",
-	reject.CodeUnknownClearingAccount:          "unknown_clearing_account",
-	reject.CodeUnknownCollateralAsset:          "unknown_collateral_asset",
-	reject.CodeInsufficientFunds:               "insufficient_funds",
-	reject.CodeInsufficientMargin:              "insufficient_margin",
-	reject.CodeInsufficientPosition:            "insufficient_position",
-	reject.CodeCreditLimitExceeded:             "credit_limit_exceeded",
-	reject.CodeRiskLimitExceeded:               "risk_limit_exceeded",
-	reject.CodeOrderExceedsLimit:               "order_exceeds_limit",
-	reject.CodeOrderQtyExceedsLimit:            "order_qty_exceeds_limit",
-	reject.CodeOrderNotionalExceedsLimit:       "order_notional_exceeds_limit",
-	reject.CodePositionLimitExceeded:           "position_limit_exceeded",
-	reject.CodeConcentrationLimitExceeded:      "concentration_limit_exceeded",
-	reject.CodeLeverageLimitExceeded:           "leverage_limit_exceeded",
-	reject.CodeRateLimitExceeded:               "rate_limit_exceeded",
-	reject.CodePnlKillSwitchTriggered:          "pnl_kill_switch_triggered",
-	reject.CodeAccountBlocked:                  "account_blocked",
-	reject.CodeAccountNotAuthorized:            "account_not_authorized",
-	reject.CodeComplianceRestriction:           "compliance_restriction",
-	reject.CodeInstrumentRestricted:            "instrument_restricted",
-	reject.CodeJurisdictionRestriction:         "jurisdiction_restriction",
-	reject.CodeWashTradePrevention:             "wash_trade_prevention",
-	reject.CodeSelfMatchPrevention:             "self_match_prevention",
-	reject.CodeShortSaleRestriction:            "short_sale_restriction",
-	reject.CodeRiskConfigurationMissing:        "risk_configuration_missing",
-	reject.CodeReferenceDataUnavailable:        "reference_data_unavailable",
-	reject.CodeOrderValueCalculationFailed:     "order_value_calculation_failed",
-	reject.CodeSystemUnavailable:               "system_unavailable",
-	reject.CodeMarkPriceUnavailable:            "mark_price_unavailable",
-	reject.CodeAccountAdjustmentBoundsExceeded: "account_adjustment_bounds_exceeded",
-	reject.CodeArithmeticOverflow:              "arithmetic_overflow",
-	reject.CodeCustom:                          "custom",
-	reject.CodeOther:                           "other",
+	reject.CodeMissingRequiredField:            domain.RejectCodeMissingRequiredField,
+	reject.CodeInvalidFieldFormat:              domain.RejectCodeInvalidFieldFormat,
+	reject.CodeInvalidFieldValue:               domain.RejectCodeInvalidFieldValue,
+	reject.CodeUnsupportedOrderType:            domain.RejectCodeUnsupportedOrderType,
+	reject.CodeUnsupportedTimeInForce:          domain.RejectCodeUnsupportedTimeInForce,
+	reject.CodeUnsupportedOrderAttribute:       domain.RejectCodeUnsupportedOrderAttribute,
+	reject.CodeDuplicateClientOrderID:          domain.RejectCodeDuplicateClientOrderID,
+	reject.CodeTooLateToEnter:                  domain.RejectCodeTooLateToEnter,
+	reject.CodeExchangeClosed:                  domain.RejectCodeExchangeClosed,
+	reject.CodeUnknownInstrument:               domain.RejectCodeUnknownInstrument,
+	reject.CodeUnknownAccount:                  domain.RejectCodeUnknownAccount,
+	reject.CodeUnknownVenue:                    domain.RejectCodeUnknownVenue,
+	reject.CodeUnknownClearingAccount:          domain.RejectCodeUnknownClearingAccount,
+	reject.CodeUnknownCollateralAsset:          domain.RejectCodeUnknownCollateralAsset,
+	reject.CodeInsufficientFunds:               domain.RejectCodeInsufficientFunds,
+	reject.CodeInsufficientMargin:              domain.RejectCodeInsufficientMargin,
+	reject.CodeInsufficientPosition:            domain.RejectCodeInsufficientPosition,
+	reject.CodeCreditLimitExceeded:             domain.RejectCodeCreditLimitExceeded,
+	reject.CodeRiskLimitExceeded:               domain.RejectCodeRiskLimitExceeded,
+	reject.CodeOrderExceedsLimit:               domain.RejectCodeOrderExceedsLimit,
+	reject.CodeOrderQtyExceedsLimit:            domain.RejectCodeOrderQtyExceedsLimit,
+	reject.CodeOrderNotionalExceedsLimit:       domain.RejectCodeOrderNotionalExceedsLimit,
+	reject.CodePositionLimitExceeded:           domain.RejectCodePositionLimitExceeded,
+	reject.CodeConcentrationLimitExceeded:      domain.RejectCodeConcentrationLimitExceeded,
+	reject.CodeLeverageLimitExceeded:           domain.RejectCodeLeverageLimitExceeded,
+	reject.CodeRateLimitExceeded:               domain.RejectCodeRateLimitExceeded,
+	reject.CodePnlKillSwitchTriggered:          domain.RejectCodePnlKillSwitchTriggered,
+	reject.CodeAccountBlocked:                  domain.RejectCodeAccountBlocked,
+	reject.CodeAccountNotAuthorized:            domain.RejectCodeAccountNotAuthorized,
+	reject.CodeComplianceRestriction:           domain.RejectCodeComplianceRestriction,
+	reject.CodeInstrumentRestricted:            domain.RejectCodeInstrumentRestricted,
+	reject.CodeJurisdictionRestriction:         domain.RejectCodeJurisdictionRestriction,
+	reject.CodeWashTradePrevention:             domain.RejectCodeWashTradePrevention,
+	reject.CodeSelfMatchPrevention:             domain.RejectCodeSelfMatchPrevention,
+	reject.CodeShortSaleRestriction:            domain.RejectCodeShortSaleRestriction,
+	reject.CodeRiskConfigurationMissing:        domain.RejectCodeRiskConfigurationMissing,
+	reject.CodeReferenceDataUnavailable:        domain.RejectCodeReferenceDataUnavailable,
+	reject.CodeOrderValueCalculationFailed:     domain.RejectCodeOrderValueCalculationFailed,
+	reject.CodeSystemUnavailable:               domain.RejectCodeSystemUnavailable,
+	reject.CodeMarkPriceUnavailable:            domain.RejectCodeMarkPriceUnavailable,
+	reject.CodeAccountAdjustmentBoundsExceeded: domain.RejectCodeAccountAdjustmentBoundsExceeded,
+	reject.CodeArithmeticOverflow:              domain.RejectCodeArithmeticOverflow,
+	reject.CodeCustom:                          domain.RejectCodeCustom,
+	reject.CodeOther:                           domain.RejectCodeOther,
 }
+
+var rejectCodesByName = func() map[string]reject.Code {
+	reverse := make(map[string]reject.Code, len(rejectCodeNames))
+	for code, name := range rejectCodeNames {
+		reverse[name] = code
+	}
+	return reverse
+}()

@@ -295,6 +295,27 @@ var clientDataAllowlist = []clientDataAllow{
 	},
 	{
 		Surface: driftSchema,
+		Entity:  "account",
+		Field:   "block_policy",
+		Kind:    "business-csv-uncovered",
+		Why:     "the export omits the engine policy that caused an account block",
+	},
+	{
+		Surface: driftSchema,
+		Entity:  "account",
+		Field:   "block_code",
+		Kind:    "business-csv-uncovered",
+		Why:     "the export omits the engine reject code that caused an account block",
+	},
+	{
+		Surface: driftSchema,
+		Entity:  "account",
+		Field:   "block_details",
+		Kind:    "business-csv-uncovered",
+		Why:     "the export omits engine-specific account block details",
+	},
+	{
+		Surface: driftSchema,
 		Entity:  "order_record",
 		Field:   "leaves_quantity",
 		Kind:    "business-csv-uncovered",
@@ -854,6 +875,9 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"notes":             "Notes",
 			"blocked":           "Blocked",
 			"block_reason":      "BlockReason",
+			"block_policy":      "BlockPolicy",
+			"block_code":        "BlockCode",
+			"block_details":     "BlockDetails",
 		},
 		businessCSV: map[string]string{
 			"code":              "code",
@@ -865,6 +889,9 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"notes":             "notes",
 			"blocked":           "blocked",
 			"block_reason":      "block_reason",
+			"block_policy":      "",
+			"block_code":        "",
+			"block_details":     "",
 		},
 	},
 	"balance": {
@@ -1429,14 +1456,17 @@ func seedClientDataDriftRealm(
 	// a halt reason is set. One account cannot carry both sentinels, so the
 	// pair is split across two accounts and each surface covers the union.
 	if _, err := rs.CreateAccount(ctx, domain.Account{
-		Code:        "acc-1",
-		Title:       "Account Sentinel",
-		Currency:    "USD",
-		Pnl:         "12.34",
-		GroupCode:   "grp-1",
-		Notes:       "account notes sentinel",
-		BlockReason: "account block sentinel",
-		Blocked:     true,
+		Code:         "acc-1",
+		Title:        "Account Sentinel",
+		Currency:     "USD",
+		Pnl:          "12.34",
+		GroupCode:    "grp-1",
+		Notes:        "account notes sentinel",
+		BlockReason:  "account block sentinel",
+		BlockPolicy:  domain.PolicySpotFundsPnlBoundsKillSwitch,
+		BlockCode:    domain.RejectCodePnlKillSwitchTriggered,
+		BlockDetails: "account block details sentinel",
+		Blocked:      true,
 	}); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -1448,6 +1478,9 @@ func seedClientDataDriftRealm(
 		GroupCode:     "grp-1",
 		Notes:         "halted account notes sentinel",
 		BlockReason:   "halted account block sentinel",
+		BlockPolicy:   domain.PolicySpotFundsPnlBoundsKillSwitch,
+		BlockCode:     domain.RejectCodePnlKillSwitchTriggered,
+		BlockDetails:  "halted account block details sentinel",
 		Blocked:       true,
 	}); err != nil {
 		t.Fatalf("CreateAccount halted: %v", err)
