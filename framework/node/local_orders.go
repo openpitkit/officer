@@ -340,6 +340,10 @@ func (n *localNode) submitOrder(
 		rejects []reject.Reject,
 	) error {
 		state.result = eng.RejectedOrder(state.order, rejects)
+		if len(state.result.Rejects) == 0 {
+			state.err = fmt.Errorf("submit order: engine rejection has no reject reason")
+			return state.err
+		}
 		if attestFor != nil {
 			state.attest = attestFor(state.order, state.result)
 		}
@@ -474,14 +478,40 @@ func (n *localNode) auditSubmittedOrder(
 			)
 		}
 	}
+	return n.auditOrderDecision(
+		ctx, key, order, result.Accepted, result.Rejects, caller,
+	)
+}
+
+func (n *localNode) auditOrderDecision(
+	ctx context.Context,
+	key Key,
+	order domain.Order,
+	accepted bool,
+	rejects []domain.OrderReject,
+	caller domain.Caller,
+) error {
 	action := domain.AuditActionSubmitOrder
 	if order.DropCopy {
 		action = domain.AuditActionSubmitDropCopy
 	}
+	verdict := "accept"
+	rejectCode := ""
+	if !accepted {
+		if len(rejects) == 0 {
+			return n.fatalPostEnginePersistence(
+				"audit submit order",
+				key.Account,
+				fmt.Errorf("audit submit order: engine rejection has no reject reason"),
+			)
+		}
+		verdict = "reject"
+		rejectCode = rejects[0].Code
+	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  action,
-		Account: key.Account,
-		Detail:  submitOrderDetail(order, result.Accepted),
+		Action: action, Account: key.Account,
+		OrderID: order.ExternalID.String(), Verdict: verdict, RejectCode: rejectCode,
+		Detail: submitOrderDetail(order, accepted),
 	}); err != nil {
 		return n.fatalPostEnginePersistence(
 			"audit submit order",
@@ -500,12 +530,13 @@ func orderAcceptedSettlement(
 		return domain.OrderSettlement{}, err
 	}
 	return domain.OrderSettlement{
-		Account:     key.Account,
-		Order:       order.ExternalID,
-		OrderStatus: domain.OrderStatusCommitted,
-		Leaves:      openingLeaves,
-		Balances:    balanceSettlementsFrom(result.Outcomes),
-		Blocks:      result.Blocks,
+		Account:          key.Account,
+		Order:            order.ExternalID,
+		OrderStatus:      domain.OrderStatusCommitted,
+		Leaves:           openingLeaves,
+		ReservedQuantity: openingLeaves,
+		Balances:         balanceSettlementsFrom(result.Outcomes),
+		Blocks:           result.Blocks,
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
 			fillSettlementEvent(order.ExternalID, domain.OrderEventCommitted, caller, domain.OrderEventPayload{}),
@@ -576,7 +607,8 @@ func orderRejectedSettlement(
 		// recorded exactly as the accepted path records the engine's delta.
 		// Leaving it empty would misrepresent that engine-authored zero as
 		// unknown.
-		Leaves: "0",
+		Leaves:           "0",
+		ReservedQuantity: "0",
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeRejected, caller, payload),
 		},
@@ -678,6 +710,12 @@ func (n *localNode) submitImmediate(
 		rejects []reject.Reject,
 	) error {
 		state.result = eng.RejectedImmediate(state.order, rejects)
+		if len(state.result.Rejects) == 0 {
+			state.err = fmt.Errorf(
+				"submit immediate: engine rejection has no reject reason",
+			)
+			return state.err
+		}
 		if attestFor != nil {
 			state.attest = attestFor(state.order, state.result)
 		}
@@ -692,7 +730,11 @@ func (n *localNode) submitImmediate(
 			return state.err
 		}
 		state.order = persisted
-		return nil
+		state.err = n.auditOrderDecision(
+			state.ctx, key, state.order, state.result.Accepted,
+			state.result.Rejects, caller,
+		)
+		return state.err
 	}
 	if draft.DropCopy {
 		builder.ApplyDropCopy(
@@ -850,7 +892,8 @@ func (n *localNode) auditImmediateSubmission(
 			fmt.Errorf("immediate execution report missing"),
 		)
 	}
-	// The adapter-built report request carries the leaves sent to the SDK.
+	// The adapter-built report request carries the reservation remainder sent
+	// to the SDK.
 	reported := executionReportInputFromRequest(*result.ExecutionReport)
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionExecutionReport,
@@ -868,7 +911,9 @@ func (n *localNode) auditImmediateSubmission(
 			fmt.Errorf("audit immediate execution report: %w", err),
 		)
 	}
-	return nil
+	return n.auditOrderDecision(
+		ctx, key, order, result.Accepted, result.Rejects, caller,
+	)
 }
 
 // immediateReconciliationError reports state the engine already applied and the
@@ -1080,7 +1125,8 @@ func (n *localNode) confirmOrder(
 
 // CancelOrder forwards a terminal execution report for an untouched workflow
 // order. Caller leaves update history when supplied; the engine receives the
-// order's previously recorded leaves. The stored engine lock is restored.
+// order's own recorded reservation remainder. The stored engine lock is
+// restored.
 func (n *localNode) CancelOrder(
 	ctx context.Context,
 	order domain.ExternalID,
@@ -1166,14 +1212,16 @@ func (n *localNode) cancelOrder(
 			)
 			return nil, state.err
 		}
-		state.leavesQuantity, err = executionEngineLeaves(state.in, detail)
+		state.reservationRemainder, err = executionReservedQuantity(state.in, detail)
 		if err != nil {
-			state.err = fmt.Errorf("build cancellation leaves: %w", err)
+			state.err = fmt.Errorf(
+				"build cancellation reservation remainder: %w", err,
+			)
 			return nil, state.err
 		}
 		state.request = domain.ExecutionReportRequestFromInput(state.in)
 		state.report, err = eng.ExecutionReportModel(
-			state.in, state.leavesQuantity,
+			state.in, state.reservationRemainder,
 		)
 		if err != nil {
 			state.err = fmt.Errorf(
@@ -1192,15 +1240,20 @@ func (n *localNode) cancelOrder(
 		persistence := stampExecutionReportPersistence(
 			*state.result.Persistence, caller, state.request,
 		)
+		reservedQuantity, err := reservationAfterOutcomes(state.order, persistence.Balances)
+		if err != nil {
+			return n.fatalPostEnginePersistence("record cancellation reservation", routeDetail.Order.Account, err)
+		}
 		settlement := domain.OrderSettlement{
-			Account:     state.in.Account,
-			Order:       order,
-			OrderStatus: persistence.OrderStatus,
-			Leaves:      persistence.Leaves,
-			Balances:    persistence.Balances,
-			Events:      persistence.Events,
-			Trade:       persistence.Trade,
-			Blocks:      persistence.Blocks,
+			ReservedQuantity: reservedQuantity,
+			Account:          state.in.Account,
+			Order:            order,
+			OrderStatus:      persistence.OrderStatus,
+			Leaves:           persistence.Leaves,
+			Balances:         persistence.Balances,
+			Events:           persistence.Events,
+			Trade:            persistence.Trade,
+			Blocks:           persistence.Blocks,
 		}
 		if _, err := recordOrderSettlementWithAttestation(
 			ctx, n.realm, settlement, attest,
@@ -1223,7 +1276,7 @@ func (n *localNode) cancelOrder(
 		}
 		detailText := executionReportDetail(
 			state.in,
-			state.leavesQuantity,
+			state.reservationRemainder,
 			domain.OrderStatusCancelled,
 			len(state.result.Blocks),
 		)
@@ -1239,6 +1292,7 @@ func (n *localNode) cancelOrder(
 			)
 		}
 		state.order.Status = persistence.OrderStatus
+		state.order.ReservedQuantity = reservedQuantity
 		if persistence.Leaves != "" {
 			state.order.Leaves = persistence.Leaves
 		}
@@ -1284,6 +1338,7 @@ func submittedOrderDraft(key Key, o domain.Order, caller domain.Caller) domain.O
 	o.Source = caller.Source
 	o.Principal = caller.Principal
 	o.Status = domain.OrderStatusSubmitted
+	o.ReservedQuantity = "0"
 	return o
 }
 
@@ -1326,7 +1381,12 @@ func immediateAcceptedSettlement(
 		),
 	)
 	events = append(events, persistence.Events...)
+	reservedQuantity, err := reservationAfterOutcomes(order, persistence.Balances)
+	if err != nil {
+		return domain.OrderSettlement{}, err
+	}
 	return domain.OrderSettlement{
+		ReservedQuantity:     reservedQuantity,
 		Account:              key.Account,
 		Order:                order.ExternalID,
 		ReportID:             &result.ExecutionReport.ExternalID,

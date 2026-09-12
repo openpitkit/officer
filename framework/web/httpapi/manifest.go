@@ -37,7 +37,7 @@ type runtimeRouteManifestEntry struct {
 func newRuntimeRouteManifestHandler(routes []Route, authorizer Authorizer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		caller := auth.CallerFromContext(r.Context())
-		entries := make([]runtimeRouteManifestEntry, 0, len(routes))
+		entries := make([]runtimeRouteManifestEntry, 0, len(routes)+1)
 		for _, route := range routes {
 			if err := authorizer.Authorize(
 				r.Context(), caller, route.Permission,
@@ -49,6 +49,10 @@ func newRuntimeRouteManifestHandler(routes []Route, authorizer Authorizer) http.
 				Path:   route.Pattern,
 			})
 		}
+		entries = append(entries, runtimeRouteManifestEntry{
+			Method: http.MethodGet,
+			Path:   runtimeRouteManifestPath,
+		})
 		WriteJSON(w, http.StatusOK, runtimeRouteManifest{Routes: entries})
 	})
 }

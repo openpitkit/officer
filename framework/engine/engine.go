@@ -266,8 +266,12 @@ type OrderChainAdapter interface {
 type AccountChainAdapter interface {
 	// AccountID resolves an Officer account alias to its stable SDK chain key.
 	AccountID(domain.AccountID) (param.AccountID, error)
+	// ExecutionReportModel maps a report with reservationRemainder set to
+	// the order's recorded reservation remainder. It is never empty and is not
+	// the caller-reported leaves quantity.
 	ExecutionReportModel(
-		domain.ExecutionReportInput, string,
+		in domain.ExecutionReportInput,
+		reservationRemainder string,
 	) (model.ExecutionReport, error)
 	SettledExecutionReport(
 		domain.ExecutionReportInput,

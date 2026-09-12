@@ -402,7 +402,7 @@ func WriteErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrTooLarge):
 		WriteErrMsg(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
 	case errors.Is(err, domain.ErrInvalid):
-		WriteValidationProblem(w, err.Error(), "", "")
+		WriteValidationErr(w, err)
 	case errors.Is(err, domain.ErrForbidden):
 		WriteErrMsg(w, http.StatusForbidden, "forbidden", domain.ErrForbidden.Error())
 	// A rejected missing account is matched before the generic not-found case so
@@ -561,12 +561,20 @@ func writeCurrencyChangeBlockedErr(w http.ResponseWriter, err error) {
 		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
+	if errors.Is(typed, domain.ErrCurrencyValuedLimit) {
+		errorBody["constraint"] = "currency_valued_limit"
+	}
 	WriteJSON(w, http.StatusConflict, map[string]any{"error": errorBody})
 }
 
-// WriteValidationErrMsg writes a syntactically valid request constraint failure.
-func WriteValidationErrMsg(w http.ResponseWriter, message string) {
-	WriteValidationProblem(w, message, "", "")
+// WriteValidationErr writes a syntactically valid request constraint failure.
+func WriteValidationErr(w http.ResponseWriter, err error) {
+	WriteValidationProblem(
+		w,
+		err.Error(),
+		domain.ValidationPointer(err),
+		domain.ValidationConstraint(err),
+	)
 }
 
 // WriteErrMsg writes the legacy error envelope for non-validation errors. It

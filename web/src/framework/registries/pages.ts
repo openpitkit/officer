@@ -23,7 +23,7 @@ import type { Permission } from "../auth/auth-context";
  * Routes carry their default Component. Page entries override the component
  * rendered for that route id; re-registering the same id replaces the override,
  * and unregistering removes it so rendering falls back to the route default.
- * Closed apps hide pages by unregistering route/nav ids or gating with when,
+ * Host apps hide pages by unregistering route/nav ids or gating with when,
  * replace pages here, and remove structure with the route/nav unregister APIs.
  */
 export interface PageEntry {

@@ -119,13 +119,18 @@ func (l LimitRate) Validate() error {
 	// modelled as an integer here rather than a decimal string: any in-range
 	// value round-trips through the engine without a non-canonical encoding.
 	if l.MaxOrders == 0 || l.MaxOrders > 1_000_000_000 {
-		return fmt.Errorf("max_orders must be > 0 and <= 1e9: %w", ErrInvalid)
+		return invalidField(
+			"/maxOrders", "range",
+			fmt.Errorf(
+				"max_orders must be > 0 and <= 1e9: %w", ErrInvalid,
+			),
+		)
 	}
 	if l.Window <= 0 {
-		return fmt.Errorf("window must be > 0: %w", ErrInvalid)
+		return invalidField("/windowMs", "range", fmt.Errorf("window must be > 0: %w", ErrInvalid))
 	}
 	if l.Window > 24*time.Hour {
-		return fmt.Errorf("window must be <= 24h: %w", ErrInvalid)
+		return invalidField("/windowMs", "range", fmt.Errorf("window must be <= 24h: %w", ErrInvalid))
 	}
 	return nil
 }
@@ -140,43 +145,58 @@ func (l LimitOrderSize) Validate() error {
 		return err
 	}
 	if l.MaxQuantity == "" && l.MaxNotional == "" {
-		return fmt.Errorf(
-			"order_size_limit requires at least max_quantity or max_notional: %w",
-			ErrInvalid,
+		return invalidField(
+			"/maxQuantity", "required",
+			fmt.Errorf(
+				"order_size_limit requires at least max_quantity or max_notional: %w",
+				ErrInvalid,
+			),
 		)
 	}
 	switch l.Scope {
 	case ScopeUnderlyingAsset, ScopeAccountUnderlyingAsset:
 		if l.MaxQuantity == "" {
-			return fmt.Errorf(
-				"scope %q requires max_quantity: %w", l.Scope, ErrInvalid,
+			return invalidField(
+				"/maxQuantity", "required",
+				fmt.Errorf(
+					"scope %q requires max_quantity: %w", l.Scope, ErrInvalid,
+				),
 			)
 		}
 		if l.MaxNotional != "" {
-			return fmt.Errorf(
-				"scope %q must not carry max_notional: %w", l.Scope, ErrInvalid,
+			return invalidField(
+				"/maxNotional", "unsupported_value",
+				fmt.Errorf(
+					"scope %q must not carry max_notional: %w", l.Scope, ErrInvalid,
+				),
 			)
 		}
 	case ScopeSettlementAsset, ScopeAccountSettlementAsset:
 		if l.MaxNotional == "" {
-			return fmt.Errorf(
-				"scope %q requires max_notional: %w", l.Scope, ErrInvalid,
+			return invalidField(
+				"/maxNotional", "required",
+				fmt.Errorf(
+					"scope %q requires max_notional: %w", l.Scope, ErrInvalid,
+				),
 			)
 		}
 		if l.MaxQuantity != "" {
-			return fmt.Errorf(
-				"scope %q must not carry max_quantity: %w", l.Scope, ErrInvalid,
+			return invalidField(
+				"/maxQuantity", "unsupported_value",
+				fmt.Errorf(
+					"scope %q must not carry max_quantity: %w", l.Scope, ErrInvalid,
+				),
 			)
 		}
 	}
 	if l.MaxQuantity != "" {
 		if err := validatePositiveDecimal(l.MaxQuantity); err != nil {
-			return fmt.Errorf("max_quantity: %w", err)
+			return invalidField("/maxQuantity", "positive_decimal", fmt.Errorf("max_quantity: %w", err))
 		}
 	}
 	if l.MaxNotional != "" {
 		if err := validatePositiveDecimal(l.MaxNotional); err != nil {
-			return fmt.Errorf("max_notional: %w", err)
+			return invalidField("/maxNotional", "positive_decimal", fmt.Errorf("max_notional: %w", err))
 		}
 	}
 	return nil
@@ -191,12 +211,15 @@ func (l LimitSpotFundsPnlBounds) Validate() error {
 		return err
 	}
 	if l.Currency == "" {
-		return fmt.Errorf("currency is required: %w", ErrInvalid)
+		return invalidField("/currency", "required", fmt.Errorf("currency is required: %w", ErrInvalid))
 	}
 	if l.LowerBound == "" && l.UpperBound == "" {
-		return fmt.Errorf(
-			"spot_funds_pnl_bounds_kill_switch requires at least lower_bound or upper_bound: %w",
-			ErrInvalid,
+		return invalidField(
+			"/lowerBound", "required",
+			fmt.Errorf(
+				"spot_funds_pnl_bounds_kill_switch requires at least lower_bound or upper_bound: %w",
+				ErrInvalid,
+			),
 		)
 	}
 	if err := validatePnlBounds(l.LowerBound, l.UpperBound); err != nil {
@@ -213,7 +236,7 @@ func ValidateLimitScopeAndAxes(
 ) error {
 	allowed, ok := allowedScopes[policy]
 	if !ok {
-		return fmt.Errorf("unknown policy %q: %w", policy, ErrInvalid)
+		return invalidField("/scope", "unsupported_value", fmt.Errorf("unknown policy %q: %w", policy, ErrInvalid))
 	}
 	scopeOK := false
 	for _, s := range allowed {
@@ -223,7 +246,12 @@ func ValidateLimitScopeAndAxes(
 		}
 	}
 	if !scopeOK {
-		return fmt.Errorf("scope %q not allowed for policy %q: %w", scope, policy, ErrInvalid)
+		return invalidField(
+			"/scope", "enum",
+			fmt.Errorf(
+				"scope %q not allowed for policy %q: %w", scope, policy, ErrInvalid,
+			),
+		)
 	}
 
 	needsAccount := scope == ScopeAccount || scope == ScopeAccountAsset ||
@@ -240,27 +268,57 @@ func ValidateLimitScopeAndAxes(
 	// so no charset check here.
 	if needsAccount {
 		if account == "" {
-			return fmt.Errorf("scope %q requires an account: %w", scope, ErrInvalid)
+			return invalidField(
+				"/account", "required",
+				fmt.Errorf(
+					"scope %q requires an account: %w", scope, ErrInvalid,
+				),
+			)
 		}
 		if err := ValidateAccountID(account); err != nil {
 			return err
 		}
 	} else if account != "" {
-		return fmt.Errorf("scope %q must not have account: %w", scope, ErrInvalid)
+		return invalidField(
+			"/account", "unsupported_value",
+			fmt.Errorf(
+				"scope %q must not have account: %w", scope, ErrInvalid,
+			),
+		)
 	}
 	if needsAccountGroup {
 		if accountGroup == "" {
-			return fmt.Errorf("scope %q requires an account_group: %w", scope, ErrInvalid)
+			return invalidField(
+				"/accountGroup", "required",
+				fmt.Errorf(
+					"scope %q requires an account_group: %w", scope, ErrInvalid,
+				),
+			)
 		}
 	} else if accountGroup != "" {
-		return fmt.Errorf("scope %q must not have account_group: %w", scope, ErrInvalid)
+		return invalidField(
+			"/accountGroup", "unsupported_value",
+			fmt.Errorf(
+				"scope %q must not have account_group: %w", scope, ErrInvalid,
+			),
+		)
 	}
 	if needsAsset {
 		if asset == "" {
-			return fmt.Errorf("scope %q requires an asset: %w", scope, ErrInvalid)
+			return invalidField(
+				"/asset", "required",
+				fmt.Errorf(
+					"scope %q requires an asset: %w", scope, ErrInvalid,
+				),
+			)
 		}
 	} else if asset != "" {
-		return fmt.Errorf("scope %q must not have asset: %w", scope, ErrInvalid)
+		return invalidField(
+			"/asset", "unsupported_value",
+			fmt.Errorf(
+				"scope %q must not have asset: %w", scope, ErrInvalid,
+			),
+		)
 	}
 	return nil
 }
@@ -271,17 +329,32 @@ func validatePnlBounds(lowerBound, upperBound string) error {
 	if lowerBound != "" {
 		lowerD, err = decimal.NewFromString(lowerBound)
 		if err != nil {
-			return fmt.Errorf("lower_bound is not a valid decimal: %w", ErrInvalid)
+			return invalidField(
+				"/lowerBound", "decimal",
+				fmt.Errorf(
+					"lower_bound is not a valid decimal: %w", ErrInvalid,
+				),
+			)
 		}
 	}
 	if upperBound != "" {
 		upperD, err = decimal.NewFromString(upperBound)
 		if err != nil {
-			return fmt.Errorf("upper_bound is not a valid decimal: %w", ErrInvalid)
+			return invalidField(
+				"/upperBound", "decimal",
+				fmt.Errorf(
+					"upper_bound is not a valid decimal: %w", ErrInvalid,
+				),
+			)
 		}
 	}
 	if lowerBound != "" && upperBound != "" && lowerD.GreaterThan(upperD) {
-		return fmt.Errorf("lower_bound must be <= upper_bound: %w", ErrInvalid)
+		return invalidField(
+			"/lowerBound", "range",
+			fmt.Errorf(
+				"lower_bound must be <= upper_bound: %w", ErrInvalid,
+			),
+		)
 	}
 	return nil
 }

@@ -282,7 +282,8 @@ CREATE INDEX idx_adjustments_status ON adjustment (status_id, at DESC, id DESC);
 -- the caller-supplied value verbatim, with an empty value leaving the column
 -- unchanged. Terminal status and engine blocks do not change that rule; SDK
 -- leaves travel separately, and the column holds what was reported, never a
--- quantity Officer worked out for itself.
+-- quantity Officer worked out for itself. reserved_quantity separately tracks
+-- this order's own reservation using engine balance deltas, including zero.
 -- lock is the SDK-serialized pretrade.Lock blob, persisted verbatim; the store
 -- never decodes it. price is empty for market orders. Signed attestations, when
 -- present, live per-event in the event_attestation companion, not inline here.
@@ -299,6 +300,7 @@ CREATE TABLE order_record (
     amount_kind_id  INTEGER NOT NULL REFERENCES order_amount_kind(id),
     amount_value    {{DECIMAL}} NOT NULL,
     leaves_quantity {{DECIMAL}} NOT NULL DEFAULT '',
+    reserved_quantity {{DECIMAL}} NOT NULL DEFAULT '',
     price           {{DECIMAL}} NOT NULL DEFAULT '',
     status_id       INTEGER NOT NULL REFERENCES order_status(id),
     drop_copy       INTEGER NOT NULL DEFAULT 0,
@@ -425,7 +427,10 @@ CREATE TABLE audit (
     at            TEXT NOT NULL,
     action_id     INTEGER NOT NULL REFERENCES audit_action(id),
     source_id     INTEGER NOT NULL REFERENCES source_kind(id),
-    detail        TEXT NOT NULL DEFAULT ''
+    detail        TEXT NOT NULL DEFAULT '',
+    order_id      TEXT NOT NULL DEFAULT '',
+    verdict       TEXT NOT NULL DEFAULT '',
+    reject_code   TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX idx_audit_at ON audit (at DESC, id DESC);

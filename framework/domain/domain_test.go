@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -1071,10 +1072,9 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 	}
 }
 
-// TestExecutionReportValidationPointer pins that a refusal naming one request
-// member carries that member on the error itself, so a surface renders the
-// pointer instead of matching the message text.
-func TestExecutionReportValidationPointer(t *testing.T) {
+// TestValidationMetadata pins that an execution-report refusal naming one
+// request member carries its JSON pointer and constraint.
+func TestValidationMetadata(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name       string
@@ -1093,6 +1093,22 @@ func TestExecutionReportValidationPointer(t *testing.T) {
 			in:         domain.ExecutionReportInput{OrderStatus: "nope"},
 			want:       "/status",
 			constraint: "format",
+		},
+		{
+			name: "filled without quantity",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusFilled,
+			},
+			want:       "/quantity",
+			constraint: "required_for_status",
+		},
+		{
+			name: "partially filled without quantity",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusPartiallyFilled,
+			},
+			want:       "/quantity",
+			constraint: "required_for_status",
 		},
 		{
 			name: "one-sided commission",
@@ -1156,30 +1172,30 @@ func TestExecutionReportValidationPointer(t *testing.T) {
 			if !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("error = %v, want ErrInvalid", err)
 			}
-			if got := domain.ExecutionReportValidationPointer(err); got != tc.want {
+			if got := domain.ValidationPointer(err); got != tc.want {
 				t.Fatalf("pointer = %q, want %q (error %v)", got, tc.want, err)
 			}
-			if got := domain.ExecutionReportValidationConstraint(err); got != tc.constraint {
+			if got := domain.ValidationConstraint(err); got != tc.constraint {
 				t.Fatalf("constraint = %q, want %q (error %v)", got, tc.constraint, err)
 			}
 		})
 	}
 }
 
-// TestExecutionReportValidationPointerIgnoresOtherErrors pins that the accessor
-// answers for execution-report refusals only.
-func TestExecutionReportValidationPointerIgnoresOtherErrors(t *testing.T) {
+// TestValidationMetadataIgnoresOtherErrors pins that the accessors are safe on
+// ordinary errors and nil.
+func TestValidationMetadataIgnoresOtherErrors(t *testing.T) {
 	t.Parallel()
-	if got := domain.ExecutionReportValidationPointer(domain.ErrInvalid); got != "" {
+	if got := domain.ValidationPointer(domain.ErrInvalid); got != "" {
 		t.Fatalf("pointer = %q, want empty for a plain error", got)
 	}
-	if got := domain.ExecutionReportValidationPointer(nil); got != "" {
+	if got := domain.ValidationPointer(nil); got != "" {
 		t.Fatalf("pointer = %q, want empty for no error", got)
 	}
-	if got := domain.ExecutionReportValidationConstraint(domain.ErrInvalid); got != "" {
+	if got := domain.ValidationConstraint(domain.ErrInvalid); got != "" {
 		t.Fatalf("constraint = %q, want empty for a plain error", got)
 	}
-	if got := domain.ExecutionReportValidationConstraint(nil); got != "" {
+	if got := domain.ValidationConstraint(nil); got != "" {
 		t.Fatalf("constraint = %q, want empty for no error", got)
 	}
 }
@@ -1580,6 +1596,7 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrAccountMissing":          domain.ErrAccountMissing,
 		"ErrAlreadyExists":           domain.ErrAlreadyExists,
 		"ErrConflict":                domain.ErrConflict,
+		"ErrCurrencyValuedLimit":     domain.ErrCurrencyValuedLimit,
 		"ErrEngineRestarting":        domain.ErrEngineRestarting,
 		"ErrExecutionReportRequired": domain.ErrExecutionReportRequired,
 		"ErrForbidden":               domain.ErrForbidden,
@@ -1669,4 +1686,31 @@ func exportedDomainErrorVariableNames(t *testing.T) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// TestWithValidationPointerRelabelsWrappedError keeps validation details while
+// replacing the pointer through an error wrapper.
+func TestWithValidationPointerRelabelsWrappedError(t *testing.T) {
+	t.Parallel()
+
+	original := domain.ValidateAccountID("")
+	wrapped := fmt.Errorf("validate create request: %w", original)
+	got := domain.WithValidationPointer("/code", wrapped)
+	if pointer := domain.ValidationPointer(got); pointer != "/code" {
+		t.Errorf("pointer = %q, want %q", pointer, "/code")
+	}
+	if constraint := domain.ValidationConstraint(got); constraint != "required" {
+		t.Errorf("constraint = %q, want %q", constraint, "required")
+	}
+	if !errors.Is(got, domain.ErrInvalid) {
+		t.Errorf("error = %v, want ErrInvalid", got)
+	}
+	if got.Error() != wrapped.Error() {
+		t.Errorf("message = %q, want %q", got, wrapped)
+	}
+
+	nonValidation := errors.New("not a validation error")
+	if got := domain.WithValidationPointer("/code", nonValidation); got != nonValidation {
+		t.Errorf("non-validation error = %v, want unchanged %v", got, nonValidation)
+	}
 }

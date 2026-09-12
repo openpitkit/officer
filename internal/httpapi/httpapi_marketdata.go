@@ -339,7 +339,9 @@ func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
 			return
 		}
 		if strings.TrimSpace(req.Query) == "" {
-			httpx.WriteValidationErrMsg(w, "query is required")
+			httpx.WriteValidationProblem(
+				w, "query is required", "/query", "required",
+			)
 			return
 		}
 		// The strike is an optional, caller-supplied decimal criterion. Validate it

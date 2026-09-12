@@ -42,7 +42,7 @@ import (
 const auditSelect = `
 SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
        au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
-       au.source_id, au.detail
+       au.source_id, au.detail, au.order_id, au.verdict, au.reject_code
 FROM audit au`
 
 // AppendAudit persists a new append-only audit record, assigning the external id
@@ -94,12 +94,24 @@ func (r *realmStore) AppendAuditBatch(
 	return nil
 }
 
+func validateAuditDecision(
+	action domain.AuditAction,
+	orderID, verdict, rejectCode string,
+) error {
+	return domain.ValidateAuditDecision(action, orderID, verdict, rejectCode)
+}
+
 func appendAudit(
 	ctx context.Context,
 	q sqlReadWriter,
 	dictionaries *enumDictionaries,
 	entry fwstore.AuditEntry,
 ) error {
+	if err := validateAuditDecision(
+		entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
+	); err != nil {
+		return err
+	}
 	xid, err := newExternalID()
 	if err != nil {
 		return err
@@ -128,11 +140,12 @@ func appendAudit(
 		ctx,
 		`INSERT INTO audit
 		 (external_id, account_code, account_title, asset_code,
-		  group_code, actor_code, actor_title, at, action_id, source_id, detail)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  group_code, actor_code, actor_title, at, action_id, source_id, detail,
+		  order_id, verdict, reject_code)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), entry.Account.String(), accountTitle, entry.Asset,
 		entry.Group, entry.Actor, actorTitle, nowStr(), actionID, sourceID,
-		entry.Detail,
+		entry.Detail, entry.OrderID, entry.Verdict, entry.RejectCode,
 	); err != nil {
 		return fmt.Errorf("store: append audit: %w", err)
 	}
@@ -280,7 +293,7 @@ func buildAuditListQuery(
 	query := `
 SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
        au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
-       au.source_id, au.detail
+       au.source_id, au.detail, au.order_id, au.verdict, au.reject_code
 FROM audit au` +
 		whereFromClauses(clauses) +
 		` ORDER BY au.at DESC, au.id DESC`
@@ -371,16 +384,17 @@ func scanAuditListRow(
 		at                                                     string
 		actionID, sourceID                                     int64
 		detail                                                 string
+		orderID, verdict, rejectCode                           string
 	)
 	if err := rows.Scan(
 		&extID, &account, &accountTitle, &asset, &group, &actor,
-		&actorTitle, &at, &actionID, &sourceID, &detail,
+		&actorTitle, &at, &actionID, &sourceID, &detail, &orderID, &verdict, &rejectCode,
 	); err != nil {
 		return domain.AuditRow{}, fmt.Errorf("store: scan audit row: %w", err)
 	}
 	row, err := auditRowFromScanned(
 		dictionaries, extID, account, accountTitle, asset, group, actor, actorTitle,
-		at, actionID, sourceID, detail,
+		at, actionID, sourceID, detail, orderID, verdict, rejectCode,
 	)
 	if err != nil {
 		return domain.AuditRow{}, err
@@ -397,16 +411,17 @@ func scanAuditRow(dictionaries *enumDictionaries, rows *sql.Rows) (domain.AuditR
 		at                                                     string
 		actionID, sourceID                                     int64
 		detail                                                 string
+		orderID, verdict, rejectCode                           string
 	)
 	if err := rows.Scan(
 		&extID, &account, &accountTitle, &asset, &group, &actor, &actorTitle,
-		&at, &actionID, &sourceID, &detail,
+		&at, &actionID, &sourceID, &detail, &orderID, &verdict, &rejectCode,
 	); err != nil {
 		return domain.AuditRow{}, fmt.Errorf("store: scan audit: %w", err)
 	}
 	return auditRowFromScanned(
 		dictionaries, extID, account, accountTitle, asset, group, actor, actorTitle,
-		at, actionID, sourceID, detail,
+		at, actionID, sourceID, detail, orderID, verdict, rejectCode,
 	)
 }
 
@@ -423,6 +438,7 @@ func auditRowFromScanned(
 	actionID int64,
 	sourceID int64,
 	detail string,
+	orderID, verdict, rejectCode string,
 ) (domain.AuditRow, error) {
 	xid, err := domain.ExternalIDFromBytes(extID)
 	if err != nil {
@@ -452,6 +468,7 @@ func auditRowFromScanned(
 		Action:       domain.AuditAction(action),
 		Source:       domain.Source(source),
 		Detail:       detail,
+		OrderID:      orderID, Verdict: verdict, RejectCode: rejectCode,
 	}, nil
 }
 

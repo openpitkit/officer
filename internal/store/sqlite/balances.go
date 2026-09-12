@@ -157,12 +157,13 @@ func (r *realmStore) ListBalances(
 	return result, nil
 }
 
-// ListAccountsBlockingCurrencyChange returns candidates carrying state that
-// prevents an effective account-currency change. Numeric-zero amounts do not
-// count, while halt reasons, active orders and applicable P&L bounds do.
+// ListAccountsBlockingCurrencyChange returns candidates and the independent
+// conditions that prevent an effective account-currency change. Numeric-zero
+// amounts do not count, while halt reasons, active orders and applicable P&L
+// bounds do.
 func (r *realmStore) ListAccountsBlockingCurrencyChange(
 	ctx context.Context, accounts []domain.AccountID,
-) ([]domain.AccountID, error) {
+) ([]fwstore.CurrencyChangeBlocker, error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -175,7 +176,13 @@ func (r *realmStore) ListAccountsBlockingCurrencyChange(
 		strings.Repeat("?,", len(activeStatusIDs)),
 		",",
 	)
-	args := make([]any, 0, len(activeStatusIDs)+len(accounts))
+	args := make([]any, 0, 3+len(activeStatusIDs)+len(accounts))
+	args = append(
+		args,
+		domain.ScopeAccount,
+		domain.ScopeAccountGroup,
+		domain.ScopeGlobal,
+	)
 	args = append(args, activeStatusIDs...)
 	accountWhere := ""
 	if len(accounts) > 0 {
@@ -184,53 +191,69 @@ func (r *realmStore) ListAccountsBlockingCurrencyChange(
 			placeholders = append(placeholders, "?")
 			args = append(args, account.String())
 		}
-		accountWhere = " AND a.code IN (" + strings.Join(placeholders, ", ") + ")"
+		accountWhere = " WHERE a.code IN (" + strings.Join(placeholders, ", ") + ")"
 	}
-	query := `SELECT DISTINCT a.code
-FROM account a
-LEFT JOIN balance b ON b.account_id = a.id
-WHERE (
-    (b.available <> '' AND b.available COLLATE DECIMAL <> '0') OR
-    (b.held <> '' AND b.held COLLATE DECIMAL <> '0') OR
-    (b.incoming <> '' AND b.incoming COLLATE DECIMAL <> '0') OR
-    (b.average_entry_price <> '' AND
-     b.average_entry_price COLLATE DECIMAL <> '0') OR
-    b.realized_pnl_halt_reason <> '' OR
-    (b.realized_pnl IS NOT NULL AND b.realized_pnl <> '' AND
-     b.realized_pnl COLLATE DECIMAL <> '0') OR
-    a.pnl_halt_reason <> '' OR
-    (a.pnl IS NOT NULL AND a.pnl <> '' AND
-     a.pnl COLLATE DECIMAL <> '0') OR
-    EXISTS (
-        SELECT 1
-        FROM order_record o
-        WHERE o.account_id = a.id
-          AND o.status_id IN (` + activeStatusPlaceholders + `)
-    ) OR
+	query := `WITH blockers AS (
+SELECT a.code,
     EXISTS (
         SELECT 1
         FROM limit_spot_funds_pnl_bound l
         WHERE (l.lower_bound <> '' OR l.upper_bound <> '')
           AND (
-              l.account_id = a.id OR
-              l.account_group_id = a.group_id OR
-              (l.account_id IS NULL AND l.account_group_id IS NULL)
+              (l.scope = ? AND l.account_id = a.id) OR
+              (l.scope = ? AND l.account_group_id = a.group_id) OR
+              l.scope = ?
           )
-    )
-)` + accountWhere + `
-ORDER BY a.code`
+    ) AS currency_valued_limit,
+    (
+        EXISTS (
+            SELECT 1
+            FROM balance b
+            WHERE b.account_id = a.id
+              AND (
+                  (b.available <> '' AND b.available COLLATE DECIMAL <> '0') OR
+                  (b.held <> '' AND b.held COLLATE DECIMAL <> '0') OR
+                  (b.incoming <> '' AND b.incoming COLLATE DECIMAL <> '0') OR
+                  (b.average_entry_price <> '' AND
+                   b.average_entry_price COLLATE DECIMAL <> '0') OR
+                  b.realized_pnl_halt_reason <> '' OR
+                  (b.realized_pnl IS NOT NULL AND b.realized_pnl <> '' AND
+                   b.realized_pnl COLLATE DECIMAL <> '0')
+              )
+        ) OR
+        a.pnl_halt_reason <> '' OR
+        (a.pnl IS NOT NULL AND a.pnl <> '' AND
+         a.pnl COLLATE DECIMAL <> '0') OR
+        EXISTS (
+            SELECT 1
+            FROM order_record o
+            WHERE o.account_id = a.id
+              AND o.status_id IN (` + activeStatusPlaceholders + `)
+        )
+    ) AS other_blocker
+FROM account a
+` + accountWhere + `
+)
+SELECT code, currency_valued_limit, other_blocker
+FROM blockers
+WHERE currency_valued_limit OR other_blocker
+ORDER BY code`
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list currency change blockers: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	result := make([]domain.AccountID, 0)
+	result := make([]fwstore.CurrencyChangeBlocker, 0)
 	for rows.Next() {
-		var account domain.AccountID
-		if err := rows.Scan(&account); err != nil {
+		var blocker fwstore.CurrencyChangeBlocker
+		if err := rows.Scan(
+			&blocker.Account,
+			&blocker.CurrencyValuedLimit,
+			&blocker.Other,
+		); err != nil {
 			return nil, fmt.Errorf("store: scan currency change blocker: %w", err)
 		}
-		result = append(result, account)
+		result = append(result, blocker)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: iterate currency change blockers: %w", err)
@@ -303,11 +326,13 @@ func balanceListWhere(filter fwstore.BalanceListFilter) (string, []any) {
 		&clauses, &args, "b.average_entry_price", balanceAccountCurrency,
 		filter.AverageEntryPrice,
 	)
-	appendDenominatedDecimalRangeFilter(
-		&clauses, &args, "b.realized_pnl", balanceAccountCurrency,
-		filter.RealizedPnl,
+	appendPnlRangeFilter(
+		&clauses, &args, "b.realized_pnl", "b.realized_pnl_halt_reason",
+		balanceAccountCurrency, filter.RealizedPnl,
+		filter.IncludeUnsetRealizedPnl, filter.IncludeHaltedRealizedPnl,
 	)
-	if filter.Sort.Column == "realizedPnl" && filter.RealizedPnl.Empty() {
+	if filter.Sort.Column == "realizedPnl" && filter.RealizedPnl.Empty() &&
+		!filter.IncludeUnsetRealizedPnl && !filter.IncludeHaltedRealizedPnl {
 		clauses = append(clauses, balanceAccountCurrency+" = ?")
 		args = append(args, filter.RealizedPnl.Currency)
 	}
@@ -340,8 +365,8 @@ func balanceListOrderBy(sort fwstore.SortSpec) string {
 	}
 	prefix := ""
 	if sort.Column == "realizedPnl" {
-		prefix = "CASE WHEN b.realized_pnl IS NULL OR b.realized_pnl = '' " +
-			"THEN 1 ELSE 0 END ASC, "
+		prefix = "CASE WHEN b.realized_pnl IS NULL OR " +
+			"b.realized_pnl = '' THEN 1 ELSE 0 END ASC, "
 	}
 	return "\nORDER BY " + prefix + column + " " + direction +
 		", a.code " + tieDirection + ", ast.code " + tieDirection

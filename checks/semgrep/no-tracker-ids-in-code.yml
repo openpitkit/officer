@@ -26,7 +26,7 @@ rules:
       pending work in words.
     severity: ERROR
     languages: [generic]
-    pattern-regex: '\bOF-\d+\b|\bOPENPIT-\d+\b|\bSDK-\d+\b|\bCLD-\d+\b|\bCLW-\d+\b'
+    pattern-regex: '\bOF-\d+\b|\bOPENPIT-\d+\b|\bSDK-\d+\b'
     paths:
       exclude:
         - /web/node_modules
@@ -36,7 +36,5 @@ rules:
         - .ruff_cache
         - __pycache__
         - .tmp
-        - .wt
-        - .serena
         - .git
         - CHANGELOG.md

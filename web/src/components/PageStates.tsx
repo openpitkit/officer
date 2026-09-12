@@ -19,7 +19,9 @@ import { AlertTriangle, Inbox, RefreshCw, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import type { LoadState } from "@/api/usePolling";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
@@ -138,6 +140,58 @@ export function ErrorBanner({
           <X className="h-3.5 w-3.5" />
         </button>
       )}
+    </div>
+  );
+}
+
+function hasStaleData(load: LoadState<unknown>) {
+  return load.state === "ready" && load.error !== null;
+}
+
+/** Marks retained data as stale in compact layouts. */
+export function CompactStaleState({ load }: { load: LoadState<unknown> }) {
+  const { t } = useTranslation();
+  if (!hasStaleData(load)) {
+    return null;
+  }
+  return (
+    <Badge
+      role="status"
+      aria-label={`${t("states.stale")}: ${load.error}`}
+      variant="warn"
+    >
+      {t("states.stale")}
+    </Badge>
+  );
+}
+
+/** Marks retained data as stale when a background refresh fails. */
+export function StaleState({
+  load,
+  reload,
+}: {
+  load: LoadState<unknown>;
+  reload: () => void;
+}) {
+  const { t } = useTranslation();
+  if (!hasStaleData(load)) {
+    return null;
+  }
+  return (
+    <div
+      role="status"
+      aria-label={t("states.stale")}
+      className="flex items-center gap-3 rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-text"
+    >
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+      <div className="flex-1">
+        <p>{t("states.staleDescription")}</p>
+        <p className="break-words text-muted-lt">{load.error}</p>
+      </div>
+      <Button size="sm" variant="outline" onClick={reload}>
+        <RefreshCw className="h-3.5 w-3.5" />
+        {t("actions.retry")}
+      </Button>
     </div>
   );
 }

@@ -45,6 +45,7 @@ import {
   EmptyState,
   ErrorBanner,
   ErrorState,
+  StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
@@ -927,6 +928,7 @@ export function Limits() {
       <PolicyDescription policy={policyFilter} />
 
       {load.state === "loading" && <TableSkeleton cols={6} />}
+      <StaleState load={load} reload={reload} />
       {load.state === "error" && (
         <ErrorState message={load.error} onRetry={reload} />
       )}

@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
@@ -40,7 +42,7 @@ type executionReportChainState struct {
 	in                   domain.ExecutionReportInput
 	request              *domain.ExecutionReportRequest
 	order                domain.Order
-	leavesQuantity       string
+	reservationRemainder string
 	report               model.ExecutionReport
 	result               engine.ExecutionReportResult
 	err                  error
@@ -244,6 +246,7 @@ func (n *localNode) applyExecutionReport(
 		}
 		state.forcedTerminalBypass = in.Force &&
 			domain.OrderStatusTerminal(detail.Order.Status)
+		state.order = detail.Order
 		state.in = in
 		state.in.Account = detail.Order.Account
 		state.in.BaseAsset = detail.Order.BaseAsset
@@ -252,15 +255,15 @@ func (n *localNode) applyExecutionReport(
 		if len(state.in.Lock) == 0 && len(detail.Order.Lock) > 0 {
 			state.in.Lock = detail.Order.Lock
 		}
-		leavesQuantity, err := executionEngineLeaves(state.in, detail)
+		reservationRemainder, err := executionReservedQuantity(state.in, detail)
 		if err != nil {
 			state.err = err
 			return nil, err
 		}
-		state.leavesQuantity = leavesQuantity
+		state.reservationRemainder = reservationRemainder
 		state.overFilled = executionReportOverFilled(state.in, detail)
 		state.report, err = eng.ExecutionReportModel(
-			state.in, state.leavesQuantity,
+			state.in, state.reservationRemainder,
 		)
 		if err != nil {
 			state.err = fmt.Errorf("apply execution report: %w", err)
@@ -275,7 +278,12 @@ func (n *localNode) applyExecutionReport(
 		persistence := stampExecutionReportPersistence(
 			*state.result.Persistence, caller, request,
 		)
+		reservedQuantity, err := reservationAfterOutcomes(state.order, persistence.Balances)
+		if err != nil {
+			return n.fatalPostEnginePersistence("record execution reservation", account, err)
+		}
 		settlement := domain.OrderSettlement{
+			ReservedQuantity:     reservedQuantity,
 			Account:              state.in.Account,
 			Order:                state.in.Order,
 			ReportID:             &state.in.ExternalID,
@@ -311,12 +319,13 @@ func (n *localNode) applyExecutionReport(
 
 		detailText := executionReportDetail(
 			state.in,
-			state.leavesQuantity,
+			state.reservationRemainder,
 			status,
 			len(state.result.Blocks),
 		)
 		if state.overFilled {
-			detailText += " overfill=true"
+			detailText += " overfill=true preReportReserveQty=" +
+				state.order.ReservedQuantity
 		}
 		if state.forcedTerminalBypass {
 			detailText += " forced=true"
@@ -349,59 +358,88 @@ func (n *localNode) applyExecutionReport(
 	return state.result, nil
 }
 
-// executionEngineLeaves selects leaves using their source before the report
-// changes the stored order. A fill sends the caller's exact value. A terminal
-// no-fill report sends the previously recorded order value, regardless of
-// whether the caller supplied a replacement for persistence. Other reports do
-// not send leaves to the engine.
-//
-// Every recorded order carries leaves: the accepted path stores the engine's
-// opening quantity and the pre-trade reject stores the engine's zero. An empty
-// one is therefore a corrupt record rather than caller input, and releasing the
-// reservation without it would guess a quantity Officer never received.
-func executionEngineLeaves(
+// executionReservedQuantity supplies the SDK's reservation context after this
+// report's trade. It uses the recorded engine reservation, never venue leaves.
+// The engine still applies the complete trade and owns every ledger mutation.
+func executionReservedQuantity(
 	in domain.ExecutionReportInput, detail domain.OrderDetail,
 ) (string, error) {
+	reserved, err := domain.ParseOpenQuantity(detail.Order.ReservedQuantity)
+	if err != nil {
+		return "", fmt.Errorf("stored order %s reservation: %w", detail.Order.ExternalID, err)
+	}
 	if in.FillQuantity != "" && in.FillPrice != "" {
-		return in.LeavesQuantity, nil
+		filled, err := domain.ParseOpenQuantity(in.FillQuantity)
+		if err != nil {
+			return "", fmt.Errorf("execution report fill quantity: %w: %w", err, domain.ErrInvalid)
+		}
+		reserved = reserved.Sub(filled)
+		// An overfill exhausts this order's reservation. The full venue fill
+		// still reaches the engine; its ledger deltas are never capped here.
+		if reserved.IsNegative() {
+			return "0", nil
+		}
 	}
-	if in.OrderStatus != domain.OrderStatusCancelled &&
-		in.OrderStatus != domain.OrderStatusRejected &&
-		in.OrderStatus != domain.OrderStatusRolledBack {
-		return "", nil
-	}
-	if detail.Order.Leaves == "" {
-		return "", fmt.Errorf(
-			"stored order %s leaves are empty", detail.Order.ExternalID,
-		)
-	}
-	// Officer wrote the recorded value itself, so a corrupt one is an internal
-	// fault and must not answer the caller as invalid input. Only the syntax is
-	// checked: the stored string, not a reparsed one, is what the engine gets.
-	if _, err := domain.ParseOpenQuantity(detail.Order.Leaves); err != nil {
-		return "", fmt.Errorf("stored order leaves: %w", err)
-	}
-	return detail.Order.Leaves, nil
+	return reserved.String(), nil
 }
 
-// executionReportOverFilled reports that a terminal report's own fill exceeds
-// the open quantity Officer has on record. Nothing is adjusted because of it -
-// the caller's account of the fill stands and every quantity is forwarded and
-// stored verbatim - but the audit row is the only place the disagreement can be
-// seen by whoever reconciles the reservation. A value neither side can parse is
-// no evidence of a mismatch, so it stays silent.
+// reservationAfterOutcomes advances only this order's reservation using the
+// engine's base-asset deltas. A block with no movement retains the reserve.
+func reservationAfterOutcomes(
+	order domain.Order, balances []domain.BalanceSettlement,
+) (string, error) {
+	reserved, err := domain.ParseOpenQuantity(order.ReservedQuantity)
+	if err != nil {
+		return "", fmt.Errorf("stored order %s reservation: %w", order.ExternalID, err)
+	}
+	for _, balance := range balances {
+		if balance.Asset != order.BaseAsset {
+			continue
+		}
+		var value string
+		switch order.Side {
+		case domain.OrderSideBuy:
+			value = balance.Outcome.IncomingDelta
+		case domain.OrderSideSell:
+			value = balance.Outcome.HeldDelta
+		default:
+			return "", fmt.Errorf("order %s has unsupported side %q", order.ExternalID, order.Side)
+		}
+		// Omitted delta means the engine did not move this reservation leg.
+		if value == "" {
+			continue
+		}
+		delta, err := decimal.NewFromString(value)
+		if err != nil {
+			return "", fmt.Errorf("order %s reservation delta: %w", order.ExternalID, err)
+		}
+		reserved = reserved.Add(delta)
+	}
+	// An overfill may leave negative engine holdings, which remain untouched.
+	// There is no positive reservation left for this order to release again.
+	if reserved.IsNegative() {
+		return "0", nil
+	}
+	return reserved.String(), nil
+}
+
+// executionReportOverFilled reports that this report's own fill exceeds the
+// engine reservation recorded for the order, on any fill status. Nothing is
+// adjusted because of it - the caller's account of the fill stands and every
+// quantity is forwarded and stored verbatim - but the audit row is the only
+// place the disagreement can be seen by whoever reconciles the reservation. A
+// value neither side can parse is no evidence of a mismatch, so it stays silent.
 func executionReportOverFilled(
 	in domain.ExecutionReportInput, detail domain.OrderDetail,
 ) bool {
-	if !domain.OrderStatusTerminal(in.OrderStatus) ||
-		in.FillQuantity == "" || detail.Order.Leaves == "" {
+	if in.FillQuantity == "" || detail.Order.ReservedQuantity == "" {
 		return false
 	}
 	filled, err := domain.ParseOpenQuantity(in.FillQuantity)
 	if err != nil {
 		return false
 	}
-	recorded, err := domain.ParseOpenQuantity(detail.Order.Leaves)
+	recorded, err := domain.ParseOpenQuantity(detail.Order.ReservedQuantity)
 	if err != nil {
 		return false
 	}

@@ -88,7 +88,8 @@ func TestSetAccountPnl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAccountsBlockingCurrencyChange: %v", err)
 	}
-	if len(blockers) != 1 || blockers[0] != "acc-1" {
+	if len(blockers) != 1 || blockers[0].Account != "acc-1" ||
+		!blockers[0].Other || blockers[0].CurrencyValuedLimit {
 		t.Fatalf("currency blockers = %v, want acc-1", blockers)
 	}
 }

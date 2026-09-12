@@ -50,6 +50,13 @@ import (
 // the timestamp. Account and Actor are optional dictionary references by code,
 // snapshot strings, preserved unchanged when dictionaries are later deleted.
 type AuditEntry struct {
+	// OrderID is the opaque public order handle for a trading decision.
+	// It is empty for actions that do not describe an order decision.
+	OrderID string
+	// Verdict is "accept" or "reject" for a decision, empty for other actions.
+	Verdict string
+	// RejectCode is the primary engine reject code; empty for accepted decisions.
+	RejectCode string
 	// Actor is the code of the principal who initiated the action; empty for a
 	// system-initiated action.
 	Actor string
@@ -250,13 +257,27 @@ func (p PageSpec) Empty() bool {
 type AccountListFilter struct {
 	// GroupCode narrows accounts to one exact group code. A non-nil empty
 	// string selects accounts with no assigned group.
-	GroupCode   *string
-	Code        TextMatcher
-	BlockReason TextMatcher
-	Status      StatusFilter
-	Position    CountRangeFilter
-	Sort        SortSpec
-	Page        PageSpec
+	GroupCode        *string
+	Code             TextMatcher
+	BlockReason      TextMatcher
+	Status           StatusFilter
+	Position         CountRangeFilter
+	Pnl              DenominatedDecimalRangeFilter
+	IncludeUnsetPnl  bool
+	IncludeHaltedPnl bool
+	Sort             SortSpec
+	Page             PageSpec
+}
+
+// Validate rejects P&L selection without an explicit denomination.
+func (f AccountListFilter) Validate() error {
+	if err := f.Pnl.Validate("pnl"); err != nil {
+		return err
+	}
+	if (f.IncludeUnsetPnl || f.IncludeHaltedPnl) && f.Pnl.Currency == "" {
+		return fmt.Errorf("pnl: %w", ErrCurrencyRequired)
+	}
+	return nil
 }
 
 // AccountListRow is an account row plus list-only aggregates.
@@ -321,17 +342,19 @@ type OrderListPage struct {
 // in the account currency instead, which varies per row, so each carries the
 // currency its own bounds are expressed in.
 type BalanceListFilter struct {
-	Account           TextMatcher
-	GroupCode         *string
-	Asset             TextMatcher
-	Available         DecimalRangeFilter
-	Held              DecimalRangeFilter
-	Incoming          DecimalRangeFilter
-	AverageEntryPrice DenominatedDecimalRangeFilter
-	RealizedPnl       DenominatedDecimalRangeFilter
-	UpdatedAt         TimeRangeFilter
-	Sort              SortSpec
-	Page              PageSpec
+	Account                  TextMatcher
+	GroupCode                *string
+	Asset                    TextMatcher
+	Available                DecimalRangeFilter
+	Held                     DecimalRangeFilter
+	Incoming                 DecimalRangeFilter
+	AverageEntryPrice        DenominatedDecimalRangeFilter
+	RealizedPnl              DenominatedDecimalRangeFilter
+	IncludeUnsetRealizedPnl  bool
+	IncludeHaltedRealizedPnl bool
+	UpdatedAt                TimeRangeFilter
+	Sort                     SortSpec
+	Page                     PageSpec
 }
 
 // Validate reports whether every denominated threshold names its currency.
@@ -342,7 +365,8 @@ func (f BalanceListFilter) Validate() error {
 	if err := f.RealizedPnl.Validate("realizedPnl"); err != nil {
 		return err
 	}
-	if f.Sort.Column == "realizedPnl" && f.RealizedPnl.Currency == "" {
+	if (f.Sort.Column == "realizedPnl" || f.IncludeUnsetRealizedPnl ||
+		f.IncludeHaltedRealizedPnl) && f.RealizedPnl.Currency == "" {
 		return fmt.Errorf("realizedPnl: %w", ErrCurrencyRequired)
 	}
 	return nil
@@ -357,6 +381,19 @@ type BalanceListRow struct {
 type BalanceListPage struct {
 	Rows  []BalanceListRow
 	Total int
+}
+
+// CurrencyChangeBlocker describes the independent reasons one account blocks
+// an effective-currency change.
+type CurrencyChangeBlocker struct {
+	// Account is the account whose current state prevents the change.
+	Account domain.AccountID
+	// CurrencyValuedLimit reports whether an armed currency-denominated limit
+	// applies to the account.
+	CurrencyValuedLimit bool
+	// Other reports whether economic state, a halt, or an active order also
+	// prevents the change.
+	Other bool
 }
 
 // GroupListFilter narrows account-group list reads in the store.
@@ -791,13 +828,13 @@ type RealmStore interface {
 		ctx context.Context, account domain.AccountID, asset string,
 	) ([]domain.Balance, error)
 
-	// ListAccountsBlockingCurrencyChange returns candidate account codes whose
-	// economic state, halt reason, active order or account-currency-denominated
-	// limit prevents changing the effective currency. Unset and numeric-zero
-	// amounts do not count. Empty accounts means all accounts.
+	// ListAccountsBlockingCurrencyChange returns candidate accounts and the
+	// independent conditions that prevent changing their effective currency.
+	// Unset and numeric-zero amounts do not count. Empty accounts means all
+	// accounts.
 	ListAccountsBlockingCurrencyChange(
 		ctx context.Context, accounts []domain.AccountID,
-	) ([]domain.AccountID, error)
+	) ([]CurrencyChangeBlocker, error)
 
 	// ListBalanceRows returns balances matching filter, with total count before
 	// paging. It returns filter validation errors, including a denominated range

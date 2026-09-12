@@ -26,7 +26,7 @@ function PermissionProbe() {
   const hasPermission = useHasPermission();
   return (
     <output aria-label="permission">
-      {hasPermission("closed.permission") ? "allowed" : "denied"}
+      {hasPermission("host.permission") ? "allowed" : "denied"}
     </output>
   );
 }
@@ -48,7 +48,7 @@ describe("AuthProvider", () => {
       id: "auth-gated-action",
       kind: "auth-smoke",
       order: 10,
-      permission: "closed.permission",
+      permission: "host.permission",
       render: () => <button type="button">Gated action</button>,
     });
     registerRowAction<object, object>({

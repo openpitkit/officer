@@ -149,18 +149,19 @@ func seedSigningKey(t *testing.T, ctx context.Context, rs RealmStore, keyID stri
 // sampleOrder is a fully-populated submitted limit order on the seeded fixtures.
 func sampleOrder() domain.Order {
 	return domain.Order{
-		Account:     "acc-1",
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Principal:   "operator",
-		Source:      domain.SourcePanel,
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "10",
-		Price:       "150.25",
-		Status:      domain.OrderStatusSubmitted,
-		DropCopy:    true,
-		Lock:        []byte{0x00, 0x01, 0x02, 0xff, 0x10},
+		ReservedQuantity: "0",
+		Account:          "acc-1",
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Principal:        "operator",
+		Source:           domain.SourcePanel,
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "10",
+		Price:            "150.25",
+		Status:           domain.OrderStatusSubmitted,
+		DropCopy:         true,
+		Lock:             []byte{0x00, 0x01, 0x02, 0xff, 0x10},
 	}
 }
 

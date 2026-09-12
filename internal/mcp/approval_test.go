@@ -341,7 +341,7 @@ func TestSubmitDropCopyOrderHappyPath(t *testing.T) {
 		t.Fatalf("drop-copy calls = %d, want 1", src.dropCopyCalls)
 	}
 	if src.dropCopyCaller.Source != domain.SourceMCP ||
-		src.dropCopyCaller.Principal != "mcp" {
+		src.dropCopyCaller.Principal != domain.PrincipalOperator {
 		t.Fatalf("drop-copy caller = %+v, want MCP caller", src.dropCopyCaller)
 	}
 	if res.StructuredContent.OrderExternalID != testOrderEID ||

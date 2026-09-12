@@ -1618,17 +1618,18 @@ func TestLocalNode_MissingAccountAdminRejectsWithResolver(t *testing.T) {
 
 func restoredOrder(id domain.ExternalID, account domain.AccountID) domain.Order {
 	return domain.Order{
-		ExternalID:  id,
-		Account:     account,
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "2",
-		Price:       "400",
-		Leaves:      "2",
-		Source:      domain.SourceAPI,
-		Status:      domain.OrderStatusCommitted,
+		ExternalID:       id,
+		Account:          account,
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "2",
+		Price:            "400",
+		Leaves:           "2",
+		ReservedQuantity: "2",
+		Source:           domain.SourceAPI,
+		Status:           domain.OrderStatusCommitted,
 	}
 }
 
@@ -1689,16 +1690,17 @@ func TestLocalNode_TerminalCancellationUsesStoredZeroOverReportedLeaves(t *testi
 	const account domain.AccountID = "acc-1"
 	seedTestAccount(t, st, account)
 	order, err := st.CreateOrder(ctx, domain.Order{
-		Account:     account,
-		Source:      domain.SourceAPI,
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "2",
-		Leaves:      "0",
-		Price:       "400",
-		Status:      domain.OrderStatusCommitted,
+		Account:          account,
+		Source:           domain.SourceAPI,
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "2",
+		Leaves:           "0",
+		ReservedQuantity: "0",
+		Price:            "400",
+		Status:           domain.OrderStatusCommitted,
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)

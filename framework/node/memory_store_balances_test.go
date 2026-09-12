@@ -87,7 +87,7 @@ func (r *memoryRealm) balanceWithAccountCurrency(
 
 func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 	_ context.Context, accounts []domain.AccountID,
-) ([]domain.AccountID, error) {
+) ([]store.CurrencyChangeBlocker, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	allow := make(map[domain.AccountID]struct{}, len(accounts))
@@ -101,18 +101,34 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 		_, ok := allow[account]
 		return ok
 	}
-	seen := make(map[domain.AccountID]struct{})
+	seen := make(map[domain.AccountID]store.CurrencyChangeBlocker)
+	mark := func(account domain.AccountID, currencyValuedLimit bool) {
+		if !allowed(account) {
+			return
+		}
+		if _, ok := r.accounts[account]; !ok {
+			return
+		}
+		blocker := seen[account]
+		blocker.Account = account
+		if currencyValuedLimit {
+			blocker.CurrencyValuedLimit = true
+		} else {
+			blocker.Other = true
+		}
+		seen[account] = blocker
+	}
 	for accountID, account := range r.accounts {
 		if !allowed(accountID) {
 			continue
 		}
 		if account.PnlHaltReason != "" || !decimalZeroOrEmpty(account.Pnl) {
-			seen[accountID] = struct{}{}
+			mark(accountID, false)
 		}
 	}
 	for _, balance := range r.balances {
 		if allowed(balance.Account) && balanceHoldsValue(balance) {
-			seen[balance.Account] = struct{}{}
+			mark(balance.Account, false)
 		}
 	}
 	for _, order := range r.orders {
@@ -122,7 +138,7 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 		if slices.Contains(
 			domain.OrderStatusesEligibleForFill(), order.Status,
 		) {
-			seen[order.Account] = struct{}{}
+			mark(order.Account, false)
 		}
 	}
 	for _, limit := range r.spotFundsPnlBoundsLimits {
@@ -132,27 +148,26 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 		switch limit.Scope {
 		case domain.ScopeGlobal:
 			for accountID := range r.accounts {
-				if allowed(accountID) {
-					seen[accountID] = struct{}{}
-				}
+				mark(accountID, true)
 			}
 		case domain.ScopeAccount:
-			if allowed(limit.Account) {
-				seen[limit.Account] = struct{}{}
-			}
+			mark(limit.Account, true)
 		case domain.ScopeAccountGroup:
+			if limit.AccountGroup == "" {
+				continue
+			}
 			for accountID, account := range r.accounts {
 				if allowed(accountID) && account.GroupCode == limit.AccountGroup {
-					seen[accountID] = struct{}{}
+					mark(accountID, true)
 				}
 			}
 		}
 	}
-	out := make([]domain.AccountID, 0, len(seen))
-	for account := range seen {
-		out = append(out, account)
+	out := make([]store.CurrencyChangeBlocker, 0, len(seen))
+	for _, blocker := range seen {
+		out = append(out, blocker)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	sort.Slice(out, func(i, j int) bool { return out[i].Account < out[j].Account })
 	return out, nil
 }
 
@@ -197,9 +212,15 @@ func TestMemoryRealmListAccountsBlockingCurrencyChangeIncludesAccountPnl(t *test
 	if err != nil {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(all): %v", err)
 	}
-	if len(got) != 3 || got[0] != "account-pnl" || got[1] != "halted-pnl" ||
-		got[2] != "halted-stale-pnl" {
+	if len(got) != 3 || got[0].Account != "account-pnl" ||
+		got[1].Account != "halted-pnl" ||
+		got[2].Account != "halted-stale-pnl" {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(all) = %v, want all non-empty P&L states", got)
+	}
+	for _, blocker := range got {
+		if !blocker.Other || blocker.CurrencyValuedLimit {
+			t.Fatalf("P&L blocker facts = %+v, want other only", blocker)
+		}
 	}
 
 	got, err = realm.ListAccountsBlockingCurrencyChange(
@@ -218,7 +239,8 @@ func TestMemoryRealmListAccountsBlockingCurrencyChangeIncludesAccountPnl(t *test
 	if err != nil {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(halted-pnl): %v", err)
 	}
-	if len(got) != 2 || got[0] != "halted-pnl" || got[1] != "halted-stale-pnl" {
+	if len(got) != 2 || got[0].Account != "halted-pnl" ||
+		got[1].Account != "halted-stale-pnl" {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(halted-pnl) = %v, want both halted accounts", got)
 	}
 }
@@ -247,7 +269,8 @@ func TestMemoryRealmListAccountsBlockingCurrencyChangeOrderStatuses(t *testing.T
 			if err != nil {
 				t.Fatalf("ListAccountsBlockingCurrencyChange(%s): %v", status, err)
 			}
-			if len(got) != 1 || got[0] != account {
+			if len(got) != 1 || got[0].Account != account ||
+				!got[0].Other || got[0].CurrencyValuedLimit {
 				t.Fatalf("active order %s blockers = %v, want %s", status, got, account)
 			}
 		})

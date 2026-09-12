@@ -19,6 +19,8 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +29,19 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/internal/store/sqlite"
 )
+
+type sqliteBalanceListService struct {
+	*fakeService
+	realm store.RealmStore
+}
+
+func (s *sqliteBalanceListService) ListBalanceRows(
+	ctx context.Context, filter store.BalanceListFilter,
+) (store.BalanceListPage, error) {
+	return s.realm.ListBalanceRows(ctx, filter)
+}
 
 func TestListBalances_PropagatesFilters(t *testing.T) {
 	svc := &fakeService{}
@@ -86,12 +100,16 @@ func TestListBalances_PropagatesDenominatedFilterCurrency(t *testing.T) {
 		http.MethodGet,
 		"/api/v1/balances?realizedPnlMode=gt&realizedPnlMin=50"+
 			"&realizedPnlCurrency=USD"+
+			"&includeUnsetRealizedPnl=true&includeHaltedRealizedPnl=true"+
 			"&averageEntryPriceMode=lt&averageEntryPriceMax=200"+
 			"&averageEntryPriceCurrency=EUR",
 		nil,
 	))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if !svc.balanceFilter.IncludeUnsetRealizedPnl || !svc.balanceFilter.IncludeHaltedRealizedPnl {
+		t.Fatalf("P&L category flags = %+v", svc.balanceFilter)
 	}
 	pnl := svc.balanceFilter.RealizedPnl
 	if pnl.Currency != "USD" {
@@ -132,6 +150,91 @@ func TestListBalances_RejectsDenominatedFilterWithoutCurrency(t *testing.T) {
 			if !svc.balanceFilter.RealizedPnl.Empty() ||
 				!svc.balanceFilter.AverageEntryPrice.Empty() {
 				t.Fatalf("rejected filter reached the store: %+v", svc.balanceFilter)
+			}
+		})
+	}
+}
+
+func TestPnlCategoryFlagsRequireBooleansAndCurrency(t *testing.T) {
+	for _, tc := range []struct {
+		path       string
+		pointer    string
+		constraint string
+	}{
+		{
+			path:    "/api/v1/balances?includeUnsetRealizedPnl=true",
+			pointer: "/realizedPnlCurrency", constraint: "required",
+		},
+		{
+			path:    "/api/v1/balances?includeHaltedRealizedPnl=true",
+			pointer: "/realizedPnlCurrency", constraint: "required",
+		},
+		{
+			path: "/api/v1/balances?includeUnsetRealizedPnl=maybe&" +
+				"realizedPnlCurrency=USD",
+			pointer: "/includeUnsetRealizedPnl", constraint: "boolean",
+		},
+		{
+			path: "/api/v1/balances?includeHaltedRealizedPnl=&" +
+				"realizedPnlCurrency=USD",
+			pointer: "/includeHaltedRealizedPnl", constraint: "boolean",
+		},
+		{
+			path:    "/api/v1/accounts?includeUnsetPnl=true",
+			pointer: "/pnlCurrency", constraint: "required",
+		},
+		{
+			path:    "/api/v1/accounts?includeHaltedPnl=true",
+			pointer: "/pnlCurrency", constraint: "required",
+		},
+		{
+			path:    "/api/v1/accounts?includeUnsetPnl=1&pnlCurrency=USD",
+			pointer: "/includeUnsetPnl", constraint: "boolean",
+		},
+		{
+			path: "/api/v1/accounts?includeHaltedPnl=false&" +
+				"includeHaltedPnl=true&pnlCurrency=USD",
+			pointer: "/includeHaltedPnl", constraint: "boolean",
+		},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			svc := &fakeService{}
+			router, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(
+				rec,
+				httptest.NewRequest(http.MethodGet, tc.path, nil),
+			)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf(
+					"invalid category query: status=%d body=%s",
+					rec.Code,
+					rec.Body,
+				)
+			}
+			var body struct {
+				Errors []struct {
+					Pointer    string `json:"pointer"`
+					Constraint string `json:"constraint"`
+				} `json:"errors"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode validation response: %v", err)
+			}
+			if len(body.Errors) != 1 {
+				t.Fatalf("validation errors = %+v, want one", body.Errors)
+			}
+			if got := body.Errors[0]; got.Pointer != tc.pointer ||
+				got.Constraint != tc.constraint {
+				t.Fatalf(
+					"validation metadata = %+v, want pointer %q constraint %q",
+					got,
+					tc.pointer,
+					tc.constraint,
+				)
 			}
 		})
 	}
@@ -203,6 +306,80 @@ func TestListBalances_PropagatesScopedRealizedPnlSort(t *testing.T) {
 		!svc.balanceFilter.Sort.Descending ||
 		svc.balanceFilter.RealizedPnl.Currency != "USD" {
 		t.Fatalf("filter = %+v", svc.balanceFilter)
+	}
+}
+
+func TestListBalances_RealizedPnlCurrencyScopesOnlySort(t *testing.T) {
+	ctx := context.Background()
+	database, err := sqlite.New(t.TempDir() + "/officer.db")
+	if err != nil {
+		t.Fatalf("sqlite.New: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	realm, err := database.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm: %v", err)
+	}
+	for _, asset := range []string{"AAPL", "EUR", "USD"} {
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", asset, err)
+		}
+	}
+	for _, account := range []domain.Account{
+		{Code: "acc-eur", Currency: "EUR"},
+		{Code: "acc-usd", Currency: "USD"},
+	} {
+		if _, err := realm.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", account.Code, err)
+		}
+		if err := realm.UpsertBalance(ctx, domain.Balance{
+			Account: account.Code, Asset: "AAPL", RealizedPnl: "1",
+		}); err != nil {
+			t.Fatalf("UpsertBalance(%s): %v", account.Code, err)
+		}
+	}
+	svc := &sqliteBalanceListService{fakeService: &fakeService{}, realm: realm}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(query string) struct {
+		Balances []balanceDTO `json:"balances"`
+		Total    int          `json:"total"`
+	} {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(
+			http.MethodGet, "/api/v1/balances?"+query, nil,
+		))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %q = %d: %s", query, rec.Code, rec.Body.String())
+		}
+		var response struct {
+			Balances []balanceDTO `json:"balances"`
+			Total    int          `json:"total"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+			t.Fatalf("decode GET %q: %v", query, err)
+		}
+		return response
+	}
+
+	all := request("realizedPnlMode=all&realizedPnlCurrency=USD")
+	if all.Total != 2 || len(all.Balances) != 2 {
+		t.Fatalf("bare realizedPnlCurrency returned %+v, want both currencies", all)
+	}
+	sorted := request("sort=realizedPnl&realizedPnlCurrency=USD")
+	if sorted.Total != 1 || len(sorted.Balances) != 1 ||
+		sorted.Balances[0].Account != "acc-usd" {
+		t.Fatalf("realizedPnl sort returned %+v, want only USD account", sorted)
 	}
 }
 

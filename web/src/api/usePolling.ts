@@ -20,7 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /** Async load lifecycle for a value of type T. */
 export type LoadState<T> =
   | { state: "loading"; data: null; error: null }
-  | { state: "ready"; data: T; error: null }
+  | { state: "ready"; data: T; error: string | null }
   | { state: "error"; data: null; error: string };
 
 export interface PollingResult<T> {
@@ -103,7 +103,9 @@ export function usePolling<T>(
             // asked for a fresh reload; keep prior data only on a passive
             // background poll failure so drafts survive a transient blip.
             prev.state === "ready" && !reloadRun
-              ? prev
+              ? prev.error === message
+                ? prev
+                : { ...prev, error: message }
               : { state: "error", data: null, error: message },
           );
         });

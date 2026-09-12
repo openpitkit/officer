@@ -639,6 +639,44 @@ paths:
         - $ref: "#/components/parameters/PositionCountMode"
         - $ref: "#/components/parameters/PositionCountMin"
         - $ref: "#/components/parameters/PositionCountMax"
+        - name: pnlMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Compare the account P&L, independently of position P&L.
+        - name: pnlMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for account P&L.
+        - name: pnlMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for account P&L.
+        - name: pnlCurrency
+          in: query
+          schema:
+            type: string
+          description: >-
+            Required for P&L bounds or category flags. Only meaningful amounts
+            in this resolved account currency are compared; no conversion is
+            performed. Explicit category flags also admit non-numeric rows,
+            which carry no amount to compare in any currency.
+        - name: includeUnsetPnl
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Include unset account P&L alongside matching amounts.
+        - name: includeHaltedPnl
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Include halted account P&L alongside matching amounts.
         - name: blockReason
           in: query
           schema:
@@ -1723,11 +1761,26 @@ paths:
             type: string
           description: >-
             Asset code the realized-P&L bounds are expressed in. Required
-            whenever the mode is not `all`: the column is denominated per row
+            whenever the mode is not `all` or a category flag is enabled:
+            the column is denominated per row
             in the account currency, so a bare number cannot be compared
             against it and there is no default. Only rows whose account
             currency is this asset are compared; rows in another currency, or
             with none, are excluded rather than converted.
+            Explicit category flags also admit non-numeric rows, which carry
+            no amount to compare in any currency.
+        - name: includeUnsetRealizedPnl
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Include unset position P&L alongside matching amounts.
+        - name: includeHaltedRealizedPnl
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Include halted position P&L alongside matching amounts.
         - name: updatedAtMode
           in: query
           schema:
@@ -1756,7 +1809,7 @@ paths:
             Balance list sort key. `realizedPnl` requires
             `realizedPnlCurrency`; only rows in that resolved account currency
             are included, exact decimals are compared numerically, and rows
-            without a P&L value come first in both directions.
+            without a P&L value come last in both directions.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -2142,9 +2195,10 @@ paths:
         account, and side are taken from the parent order.
 
         Reports are serialized on the account pipeline. Caller-reported
-        `leavesQuantity` is recorded verbatim when supplied. For a terminal
-        non-trade report, the SDK instead receives the order's leaves recorded
-        before this report. Reports for ordinary orders are signed and attested
+        `leavesQuantity` is recorded verbatim when supplied. Reservation
+        accounting follows the order's engine-applied movements independently:
+        a fill consumes its portion, and finalization releases only the actual
+        remaining reservation. Reports for ordinary orders are signed and attested
         fail-closed. Reports for drop-copy orders remain unsigned and unattested
         because drop-copy did not enforce a pre-trade verdict.
       tags: [orders]
@@ -2162,10 +2216,10 @@ paths:
                 and non-empty `leavesQuantity`, even with a commission.
                 Every other status rejects fill fields and accepts optional
                 `leavesQuantity`. A supplied leaves value is recorded verbatim
-                on the order, report event, and attestation. For `cancelled`,
-                `rejected`, and `rolled_back`, the SDK receives the order's
-                previously recorded leaves instead; other non-fill reports send
-                no SDK leaves. Commission is independent and does not change
+                on the order, report event, and attestation. This reported value
+                never sets the financial reservation to release. A non-fill
+                report retains the actual reservation until finalization.
+                Commission is independent and does not change
                 leaves requirements. A null or empty commission pair means no
                 commission; otherwise amount and currency must both be
                 non-empty. An empty string is an unsupplied member everywhere
@@ -2244,9 +2298,10 @@ paths:
                     Caller-reported open base quantity. Required and non-empty
                     for `filled` or `partially_filled`; otherwise optional.
                     Officer records a supplied value verbatim on the order, in
-                    the report event, and in the attestation. For a terminal
-                    non-trade report, the SDK receives the order's previously
-                    recorded leaves, not this supplied value. Empty means absent.
+                    the report event, and in the attestation. This value never
+                    sets the financial reservation to release: the SDK receives
+                    the order's own recorded reservation remainder, which Officer
+                    tracks from the engine's balance movements. Empty means absent.
                 lockPrice:
                   type: string
                   description: >
@@ -3312,9 +3367,8 @@ paths:
         Verifies the approval token and records a terminal cancellation report
         for an order with no prior execution-report activity. Optional
         caller-reported `leavesQuantity` is recorded verbatim in the order,
-        report event, and attestation when supplied. The SDK receives the
-        order's leaves recorded before cancellation; omitted or empty
-        `leavesQuantity` remains absent.
+        report event, and attestation when supplied. Cancellation releases the
+        actual reservation; omitted or empty `leavesQuantity` remains absent.
         If activity already exists, the caller must submit an explicit execution
         report instead.
       tags: [signing]
@@ -4348,7 +4402,7 @@ components:
             constraint:
               type: string
               enum:
-                [economically_empty, all_members_economically_empty]
+                [economically_empty, all_members_economically_empty, currency_valued_limit]
 
     DependentCount:
       type: object
@@ -5272,7 +5326,8 @@ components:
             verbatim, at terminal status too, and a report that supplies none
             leaves the record as it was. Officer derives nothing here: no
             subtraction for a fill, no zero for terminal status, no blank-out
-            for an engine block.
+            for an engine block. This field does not denote the remaining
+            financial reservation.
         price:
           type: string
           description: Exact decimal string.
@@ -5836,6 +5891,16 @@ components:
       type: object
       required: [id, at, actor, actorTitle, action, account, accountTitle, asset, group, detail, source]
       properties:
+        orderId:
+          type: string
+          description: Opaque order handle for an order decision; omitted for unrelated actions.
+        verdict:
+          type: string
+          enum: [accept, reject]
+          description: Recorded engine decision; omitted for unrelated actions.
+        rejectCode:
+          type: string
+          description: Primary engine reject code; omitted for accepted decisions and unrelated actions.
         id:
           description: The audit row's opaque public handle.
           $ref: "#/components/schemas/Id"

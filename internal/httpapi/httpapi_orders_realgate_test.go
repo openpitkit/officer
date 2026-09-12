@@ -20,6 +20,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -66,16 +67,17 @@ func TestApplyExecutionReport_RealTerminalGate(t *testing.T) {
 	const acct domain.AccountID = "acc-1"
 	seedRealAccountAndAssets(t, realm, acct)
 	order, err := realm.CreateOrder(ctx, domain.Order{
-		Account:     acct,
-		Source:      domain.SourceAPI,
-		Principal:   domain.PrincipalOperator,
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "2",
-		Price:       "400",
-		Status:      domain.OrderStatusFilled,
+		Account:          acct,
+		Source:           domain.SourceAPI,
+		Principal:        domain.PrincipalOperator,
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "2",
+		Price:            "400",
+		Status:           domain.OrderStatusFilled,
+		ReservedQuantity: "0",
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder (terminal): %v", err)
@@ -131,16 +133,17 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 	const acct domain.AccountID = "acc-1"
 	seedRealAccountAndAssets(t, realm, acct)
 	order, err := realm.CreateOrder(ctx, domain.Order{
-		Account:     acct,
-		Source:      domain.SourceAPI,
-		Principal:   domain.PrincipalOperator,
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "10",
-		Price:       "150",
-		Status:      domain.OrderStatusSubmitted,
+		Account:          acct,
+		Source:           domain.SourceAPI,
+		Principal:        domain.PrincipalOperator,
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "10",
+		Price:            "150",
+		Status:           domain.OrderStatusSubmitted,
+		ReservedQuantity: "10",
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
@@ -259,26 +262,29 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 	}
 }
 
-// TestApplyExecutionReport_RealWorkflowOmitsEngineLeaves proves an R3 report
-// records caller leaves while sending no leaves at all to the engine.
-func TestApplyExecutionReport_RealWorkflowOmitsEngineLeaves(t *testing.T) {
+// TestApplyExecutionReport_RealWorkflowCarriesRecordedReservation proves an R3
+// report records caller leaves while sending the recorded reservation remainder
+// to the engine.
+func TestApplyExecutionReport_RealWorkflowCarriesRecordedReservation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	handler, realm, eng := newRealServiceRouterWithEngine(t)
+	handler, realm, eng, _ := newRealServiceRouterWithEngine(t)
 
 	const account domain.AccountID = "acc-1"
 	seedRealAccountAndAssets(t, realm, account)
 	order, err := realm.CreateOrder(ctx, domain.Order{
-		Account:     account,
-		Source:      domain.SourceAPI,
-		Principal:   domain.PrincipalOperator,
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "10",
-		Price:       "150",
-		Status:      domain.OrderStatusSubmitted,
+		Account:          account,
+		Source:           domain.SourceAPI,
+		Principal:        domain.PrincipalOperator,
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "10",
+		Price:            "150",
+		Status:           domain.OrderStatusSubmitted,
+		Leaves:           "10",
+		ReservedQuantity: "10",
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
@@ -296,8 +302,11 @@ func TestApplyExecutionReport_RealWorkflowOmitsEngineLeaves(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("workflow report: status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
-	if len(eng.executionReportLeaves) != 1 || eng.executionReportLeaves[0] != "" {
-		t.Fatalf("engine leaves = %+v, want one empty value", eng.executionReportLeaves)
+	if len(eng.executionReportLeaves) != 1 || eng.executionReportLeaves[0] != "10" {
+		t.Fatalf(
+			"engine reservation remainder = %+v, want 10",
+			eng.executionReportLeaves,
+		)
 	}
 	detail, err := realm.GetOrder(ctx, order.ExternalID)
 	if err != nil {
@@ -312,13 +321,82 @@ func TestApplyExecutionReport_RealWorkflowOmitsEngineLeaves(t *testing.T) {
 	}
 }
 
+// TestSubmitOrder_RealStoreRequiresRegisteredCallerPrincipal proves the caller
+// principal copied onto an order must exist in the store dictionary.
+func TestSubmitOrder_RealStoreRequiresRegisteredCallerPrincipal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, realm, _, service := newRealServiceRouterWithEngine(t)
+
+	const account domain.AccountID = "acc-1"
+	seedRealAccountAndAssets(t, realm, account)
+	order := domain.Order{
+		ExternalID:  "operator-principal-order",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "150",
+	}
+	submitted, err := service.SubmitOrder(
+		ctx,
+		node.Key{Account: account},
+		order,
+		domain.MissingAccountReject,
+		domain.Caller{
+			Source:    domain.SourceMCP,
+			Principal: domain.PrincipalOperator,
+		},
+	)
+	if err != nil {
+		t.Fatalf("operator submission: %v", err)
+	}
+	detail, err := realm.GetOrder(ctx, submitted.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder(operator submission): %v", err)
+	}
+	if detail.Order.Principal != domain.PrincipalOperator {
+		t.Fatalf(
+			"stored principal = %q, want %q",
+			detail.Order.Principal,
+			domain.PrincipalOperator,
+		)
+	}
+
+	const missingPrincipal = "principal-not-in-dictionary"
+	order.ExternalID = "missing-principal-order"
+	_, err = service.SubmitOrder(
+		ctx,
+		node.Key{Account: account},
+		order,
+		domain.MissingAccountReject,
+		domain.Caller{
+			Source:    domain.SourceMCP,
+			Principal: missingPrincipal,
+		},
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing-principal submission error = %v, want ErrInvalid", err)
+	}
+	if _, getErr := realm.GetOrder(ctx, order.ExternalID); !errors.Is(
+		getErr,
+		domain.ErrNotFound,
+	) {
+		t.Fatalf(
+			"GetOrder(missing-principal submission) = %v, want ErrNotFound",
+			getErr,
+		)
+	}
+}
+
 // newRealServiceRouter builds the full production chain a handler test would
 // otherwise stub: a real SQLite store, a real localNode over an engine fake, a
 // real NodeRouter, a real backend.Service, and the real HTTP router. It returns
 // the mounted handler and the bound realm store for direct seeding.
 func newRealServiceRouter(t *testing.T) (http.Handler, store.RealmStore) {
 	t.Helper()
-	handler, realm, _ := newRealServiceRouterWithEngine(t)
+	handler, realm, _, _ := newRealServiceRouterWithEngine(t)
 	return handler, realm
 }
 
@@ -326,6 +404,7 @@ func newRealServiceRouterWithEngine(t *testing.T) (
 	http.Handler,
 	store.RealmStore,
 	*realGateEngine,
+	node.Node,
 ) {
 	t.Helper()
 	ctx := context.Background()
@@ -382,7 +461,7 @@ func newRealServiceRouterWithEngine(t *testing.T) (
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
-	return handler, realm, eng
+	return handler, realm, eng, n
 }
 
 // seedRealAccountAndAssets registers the account and instrument assets the order

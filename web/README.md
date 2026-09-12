@@ -62,24 +62,24 @@ Hosts inject API transport through `ApiClientProvider`:
 ```
 
 `baseUrl`, `fetch`, static `headers`, async per-request `getHeaders`, and
-`translate` are supplied by the host. The open app passes
+`translate` are supplied by the host. The app passes
 `baseUrl: "/app/api/v1"` and `translate: i18n.t`, and injects no additional
 headers.
 
-The open app still carries a temporary compatibility shim at `src/api/client.ts`
+The app still carries a temporary compatibility shim at `src/api/client.ts`
 for existing page and hook imports. The shim is app-bound and delegates to the
 same `createApiClient` and `createOfficerApi` factories; no request transport or
 base URL is implemented there. New framework consumers should import from
 `@openpit/officer-web`.
 
-## Open app composition
+## App composition
 
-The open SPA is a thin framework consumer. `src/main.tsx` initializes i18n,
+The SPA is a thin framework consumer. `src/main.tsx` initializes i18n,
 runs `src/register.ts`, injects the same-origin API client with
 `baseUrl: "/app/api/v1"`, mounts the allow-all `AuthProvider`, and renders the
 framework shell.
 
-`src/register.ts` is the single open composition module. It registers routes,
+`src/register.ts` is the single composition module. It registers routes,
 navigation entries, dashboard widgets, row actions, vocabulary, and locale
 catalogs under stable ids. A host application can replace an entry by
 registering the same id or remove it with the matching unregister API.
@@ -93,7 +93,7 @@ adding a new framework API.
 
 The reusable package is `@openpit/officer-web`, exported from
 `src/framework/index.ts` and built with `npm run build:lib` into `web/lib`.
-The open SPA is a thin consumer of the same library: `src/main.tsx` imports
+The SPA is a thin consumer of the same library: `src/main.tsx` imports
 `src/register.ts`, injects `baseUrl: "/app/api/v1"`, mounts the allow-all
 `AuthProvider`, and renders the framework shell.
 

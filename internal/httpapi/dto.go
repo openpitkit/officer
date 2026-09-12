@@ -203,6 +203,9 @@ type policyDTO struct {
 // auditDTO is the wire shape of a single audit row. An audit row is a machine
 // record: its public handle is the opaque id; no surrogate id appears.
 type auditDTO struct {
+	OrderID      string    `json:"orderId,omitempty"`
+	Verdict      string    `json:"verdict,omitempty"`
+	RejectCode   string    `json:"rejectCode,omitempty"`
 	At           time.Time `json:"at"`
 	ID           string    `json:"id"`
 	Actor        string    `json:"actor"`
@@ -402,6 +405,7 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 // handle is its opaque id; no surrogate id is serialized.
 func toAuditDTO(row domain.AuditRow) auditDTO {
 	return auditDTO{
+		OrderID: row.OrderID, Verdict: row.Verdict, RejectCode: row.RejectCode,
 		ID:           row.ExternalID.String(),
 		At:           row.At,
 		Actor:        row.Actor,

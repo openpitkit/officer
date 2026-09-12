@@ -23,7 +23,6 @@ import (
 	"compress/flate"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -48,8 +47,11 @@ func handleExportBackup(svc Service) http.HandlerFunc {
 			return
 		}
 		if !validBackupScope(req.Scope) {
-			httpx.WriteValidationErrMsg(
-				w, "backup scope must include all or at least one section",
+			httpx.WriteValidationProblem(
+				w,
+				"backup scope must include all or at least one section",
+				"/scope",
+				"required",
 			)
 			return
 		}
@@ -142,21 +144,34 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Mode == "" {
-			httpx.WriteValidationErrMsg(w, "restore mode is required")
+			httpx.WriteValidationProblem(
+				w, "restore mode is required", "/mode", "required",
+			)
 			return
 		}
 		if !validRestoreMode(req.Mode) {
-			httpx.WriteValidationErrMsg(w, "unknown restore mode")
+			httpx.WriteValidationProblem(
+				w, "unknown restore mode", "/mode", "enum",
+			)
 			return
 		}
 		if !validBackupScope(req.Scope) {
-			httpx.WriteValidationErrMsg(
-				w, "restore scope must include all or at least one section",
+			message := "restore scope contains an unknown section"
+			constraint := "enum"
+			normalized := req.Scope.Normalize()
+			if !normalized.All && len(normalized.Sections) == 0 {
+				message = "restore scope must include all or at least one section"
+				constraint = "required"
+			}
+			httpx.WriteValidationProblem(
+				w, message, "/scope", constraint,
 			)
 			return
 		}
 		if req.ArchiveFile == "" && len(req.Archive.Manifest.Sections) == 0 {
-			httpx.WriteValidationErrMsg(w, "backup archive is required")
+			httpx.WriteValidationProblem(
+				w, "backup archive is required", "/archive", "required",
+			)
 			return
 		}
 		archive := req.Archive
@@ -164,7 +179,7 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 			parsed, err := parseBackupArchiveFile(req.ArchiveFilename,
 				req.ArchiveFile)
 			if err != nil {
-				httpx.WriteValidationErrMsg(w, err.Error())
+				httpx.WriteValidationErr(w, err)
 				return
 			}
 			archive = parsed
@@ -189,8 +204,11 @@ func handleResetDatabase(svc Service) http.HandlerFunc {
 			return
 		}
 		if !req.Confirm {
-			httpx.WriteValidationErrMsg(
-				w, "database reset confirmation is required",
+			httpx.WriteValidationProblem(
+				w,
+				"database reset confirmation is required",
+				"/confirm",
+				"required",
 			)
 			return
 		}
@@ -246,7 +264,9 @@ func parseBackupArchiveFile(
 ) (backup.Archive, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return backup.Archive{}, fmt.Errorf("invalid backup file encoding")
+		return backup.Archive{}, domain.NewValidationError(
+			"/archiveFile", "encoding", "invalid backup file encoding",
+		)
 	}
 	if isZipPayload(raw) {
 		raw, err = readBackupJSONFromZip(raw)
@@ -266,9 +286,15 @@ func parseBackupArchiveFile(
 
 func invalidBackupArchiveJSONError(filename string) error {
 	if filename == "" {
-		return errors.New("invalid backup archive JSON")
+		return domain.NewValidationError(
+			"/archiveFile", "format", "invalid backup archive JSON",
+		)
 	}
-	return fmt.Errorf("invalid backup archive JSON in %s", filename)
+	return domain.NewValidationError(
+		"/archiveFile",
+		"format",
+		fmt.Sprintf("invalid backup archive JSON in %s", filename),
+	)
 }
 
 func isZipPayload(raw []byte) bool {
@@ -282,7 +308,9 @@ func isZipPayload(raw []byte) bool {
 func readBackupJSONFromZip(raw []byte) ([]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
-		return nil, fmt.Errorf("invalid backup zip archive")
+		return nil, domain.NewValidationError(
+			"/archiveFile", "format", "invalid backup zip archive",
+		)
 	}
 	var candidate *zip.File
 	for _, file := range zr.File {
@@ -290,24 +318,38 @@ func readBackupJSONFromZip(raw []byte) ([]byte, error) {
 			continue
 		}
 		if candidate != nil {
-			return nil, fmt.Errorf("backup zip contains multiple JSON files")
+			return nil, domain.NewValidationError(
+				"/archiveFile", "format",
+				"backup zip contains multiple JSON files",
+			)
 		}
 		candidate = file
 	}
 	if candidate == nil {
-		return nil, fmt.Errorf("backup zip contains no JSON archive")
+		return nil, domain.NewValidationError(
+			"/archiveFile", "format", "backup zip contains no JSON archive",
+		)
 	}
 	rc, err := candidate.Open()
 	if err != nil {
-		return nil, fmt.Errorf("open backup JSON from zip: %w", err)
+		return nil, domain.NewValidationError(
+			"/archiveFile", "format",
+			fmt.Sprintf("open backup JSON from zip: %v", err),
+		)
 	}
 	defer func() { _ = rc.Close() }()
 	body, err := io.ReadAll(io.LimitReader(rc, maxBackupRestoreBody+1))
 	if err != nil {
-		return nil, fmt.Errorf("read backup JSON from zip: %w", err)
+		return nil, domain.NewValidationError(
+			"/archiveFile", "format",
+			fmt.Sprintf("read backup JSON from zip: %v", err),
+		)
 	}
 	if int64(len(body)) > maxBackupRestoreBody {
-		return nil, fmt.Errorf("backup JSON in zip exceeds size limit")
+		return nil, domain.NewValidationError(
+			"/archiveFile", "too_large",
+			"backup JSON in zip exceeds size limit",
+		)
 	}
 	return body, nil
 }

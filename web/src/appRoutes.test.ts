@@ -25,7 +25,7 @@ import { createAppRouteManifest } from "./appRoutes";
 // asserted: repeating JSON.stringify in the test would pin the test's copy of
 // the format rather than the emitted document.
 describe("app route manifest", () => {
-  it("lists every open route in the cross-repository shape", () => {
+  it("lists every app route in the cross-repository shape", () => {
     expect(createAppRouteManifest()).toEqual({
       routes: [
         { id: "dashboard", path: "/", kind: "canonical" },

@@ -16,35 +16,66 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useOverview } from "@/api/useOverview";
+import { useMcpAccess } from "@/api/useMcpAccess";
 import { Dashboard } from "@/pages/Dashboard";
+import { McpAccessCard } from "@/pages/dashboard/widgets";
 
 vi.mock("@/api/useOverview", () => ({ useOverview: vi.fn() }));
+vi.mock("@/api/useMcpAccess", () => ({ useMcpAccess: vi.fn() }));
 vi.mock("@/components/Page", () => ({
   Page: ({ children }: { children: React.ReactNode }) => (
     <main>{children}</main>
   ),
 }));
-vi.mock("@/components/PageStates", () => ({
+vi.mock("@/components/PageStates", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/PageStates")>()),
   ErrorState: () => <div data-testid="error-state" />,
   TableSkeleton: () => <div data-testid="table-skeleton" />,
 }));
 vi.mock("@/framework", () => ({
   DashboardWidgets: ({ ids }: { ids: string[] }) => (
     <div>
-      {ids.map((id) => (
-        <span key={id}>{id}</span>
-      ))}
+      {ids.includes("mcp-access-card") && <McpAccessCard />}
+      {ids.includes("audit-strip") && <span>audit-strip</span>}
     </div>
   ),
 }));
 
 const useOverviewMock = vi.mocked(useOverview);
+const useMcpAccessMock = vi.mocked(useMcpAccess);
+
+function renderDashboard() {
+  return render(
+    <MemoryRouter>
+      <Dashboard />
+    </MemoryRouter>,
+  );
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useMcpAccessMock.mockReturnValue({
+    load: {
+      state: "ready",
+      data: [
+        {
+          name: "list_orders",
+          title: "List orders",
+          agentDescription: "List orders",
+          mutating: false,
+          protective: false,
+          implemented: true,
+          enabled: true,
+        },
+      ],
+      error: null,
+    },
+    reload: vi.fn(),
+  });
 });
 
 describe("Dashboard first load", () => {
@@ -54,7 +85,7 @@ describe("Dashboard first load", () => {
       reload: vi.fn(),
     });
 
-    render(<Dashboard />);
+    renderDashboard();
 
     expect(screen.getByTestId("table-skeleton")).toBeInTheDocument();
     expect(screen.getByText("audit-strip")).toBeInTheDocument();
@@ -66,7 +97,7 @@ describe("Dashboard first load", () => {
       reload: vi.fn(),
     });
 
-    render(<Dashboard />);
+    renderDashboard();
 
     expect(screen.getByTestId("error-state")).toBeInTheDocument();
     expect(screen.getByText("audit-strip")).toBeInTheDocument();
@@ -94,8 +125,54 @@ describe("Dashboard first load", () => {
       reload: vi.fn(),
     });
 
-    render(<Dashboard />);
+    renderDashboard();
 
     expect(screen.getByText("audit-strip")).toBeInTheDocument();
+  });
+
+  it("marks nested MCP data stale while the overview stays healthy", () => {
+    useOverviewMock.mockReturnValue({
+      load: {
+        state: "ready",
+        data: {
+          counts: {
+            accounts: 0,
+            accountsActive: 0,
+            groups: 0,
+            groupsActive: 0,
+            limits: 0,
+            ordersActive: 0,
+            ordersToday: 0,
+            ordersTotal: 0,
+          },
+          activity: [],
+        },
+        error: null,
+      },
+      reload: vi.fn(),
+    });
+    useMcpAccessMock.mockReturnValue({
+      load: {
+        state: "ready",
+        data: [
+          {
+            name: "list_orders",
+            title: "List orders",
+            agentDescription: "List orders",
+            mutating: false,
+            protective: false,
+            implemented: true,
+            enabled: true,
+          },
+        ],
+        error: "MCP refresh failed",
+      },
+      reload: vi.fn(),
+    });
+
+    renderDashboard();
+
+    expect(screen.getByText("list_orders")).toBeInTheDocument();
+    expect(screen.getByText("Stale data")).toBeInTheDocument();
   });
 });

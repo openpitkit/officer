@@ -87,7 +87,7 @@ func handleListGroups(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := groupListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteValidationErrMsg(w, err.Error())
+			httpx.WriteValidationErr(w, err)
 			return
 		}
 		groups, err := svc.ListGroupRows(r.Context(), filter)

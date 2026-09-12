@@ -34,6 +34,7 @@ import {
   EmptyState,
   ErrorBanner,
   ErrorState,
+  StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
@@ -1682,6 +1683,7 @@ export function Assets() {
             />
           </FilterBar>
 
+          <StaleState load={load} reload={reload} />
           {loadError !== null && assets === null ? (
             <ErrorState message={loadError} onRetry={reload} />
           ) : assets === null ? (
@@ -1788,6 +1790,7 @@ export function Assets() {
             />
           </FilterBar>
 
+          <StaleState load={classesLoad} reload={reloadClasses} />
           {classesError !== null && classes === null ? (
             <ErrorState message={classesError} onRetry={reloadClasses} />
           ) : classes === null ? (

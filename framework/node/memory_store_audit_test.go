@@ -19,14 +19,23 @@ package node
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
 
-func (r *memoryRealm) AppendAudit(_ context.Context, entry store.AuditEntry) error {
+func (r *memoryRealm) AppendAudit(
+	_ context.Context, entry store.AuditEntry,
+) error {
+	if err := domain.ValidateAuditDecision(
+		entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
+	); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.audit = append(r.audit, r.auditRow(entry))
@@ -36,6 +45,13 @@ func (r *memoryRealm) AppendAudit(_ context.Context, entry store.AuditEntry) err
 func (r *memoryRealm) AppendAuditBatch(
 	_ context.Context, entries []store.AuditEntry,
 ) error {
+	for _, entry := range entries {
+		if err := domain.ValidateAuditDecision(
+			entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
+		); err != nil {
+			return err
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, entry := range entries {
@@ -44,8 +60,122 @@ func (r *memoryRealm) AppendAuditBatch(
 	return nil
 }
 
+type auditCallTrackingRealm struct {
+	store.RealmStore
+	appendCalls      int
+	appendBatchCalls int
+}
+
+func (r *auditCallTrackingRealm) AppendAudit(
+	context.Context, store.AuditEntry,
+) error {
+	r.appendCalls++
+	return errors.New("AppendAudit reached")
+}
+
+func (r *auditCallTrackingRealm) AppendAuditBatch(
+	context.Context, []store.AuditEntry,
+) error {
+	r.appendBatchCalls++
+	return errors.New("AppendAuditBatch reached")
+}
+
+func TestLocalNodeValidatesAuditDecisionBeforeStore(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single entry", func(t *testing.T) {
+		realm := &auditCallTrackingRealm{
+			RealmStore: newMemoryStore("audit-funnel-single.db").realm,
+		}
+		n := &localNode{realm: realm}
+		err := n.audit(context.Background(), domain.Caller{}, store.AuditEntry{
+			Action:  domain.AuditActionCreateAccount,
+			Verdict: "accept",
+		})
+		const want = "store: audit action \"create_account\" has decision metadata: invalid"
+		if err == nil || err.Error() != want {
+			t.Fatalf("audit error = %v, want %q", err, want)
+		}
+		if realm.appendCalls != 0 {
+			t.Fatalf("AppendAudit calls = %d, want 0", realm.appendCalls)
+		}
+	})
+
+	t.Run("batch", func(t *testing.T) {
+		realm := &auditCallTrackingRealm{
+			RealmStore: newMemoryStore("audit-funnel-batch.db").realm,
+		}
+		n := &localNode{realm: realm}
+		err := n.auditBatch(context.Background(), domain.Caller{}, []store.AuditEntry{
+			{Action: domain.AuditActionCreateAccount},
+			{
+				Action:  domain.AuditActionCreateAccount,
+				OrderID: "decision-on-unrelated-action",
+			},
+		})
+		const want = "store: audit action \"create_account\" has decision metadata: invalid"
+		if err == nil || err.Error() != want {
+			t.Fatalf("auditBatch error = %v, want %q", err, want)
+		}
+		if realm.appendBatchCalls != 0 {
+			t.Fatalf(
+				"AppendAuditBatch calls = %d, want 0",
+				realm.appendBatchCalls,
+			)
+		}
+	})
+}
+
+func TestMemoryRealmValidatesAuditDecisionMetadata(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single entry", func(t *testing.T) {
+		realm := newMemoryStore("audit-single.db").realm
+		err := realm.AppendAudit(context.Background(), store.AuditEntry{
+			Action:  domain.AuditActionCreateAccount,
+			Verdict: "accept",
+		})
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("AppendAudit error = %v, want ErrInvalid", err)
+		}
+		rows, listErr := realm.ListAudit(context.Background(), 10)
+		if listErr != nil {
+			t.Fatalf("ListAudit: %v", listErr)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("invalid audit entry persisted rows: %+v", rows)
+		}
+	})
+
+	t.Run("atomic batch", func(t *testing.T) {
+		realm := newMemoryStore("audit-batch.db").realm
+		err := realm.AppendAuditBatch(context.Background(), []store.AuditEntry{
+			{
+				Action: domain.AuditActionCreateAccount,
+				Detail: "first row must roll back",
+			},
+			{
+				Action:  domain.AuditActionCreateAccount,
+				OrderID: "decision-on-unrelated-action",
+				Detail:  "invalid decision metadata",
+			},
+		})
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("AppendAuditBatch error = %v, want ErrInvalid", err)
+		}
+		rows, listErr := realm.ListAudit(context.Background(), 10)
+		if listErr != nil {
+			t.Fatalf("ListAudit: %v", listErr)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("invalid audit batch persisted partial rows: %+v", rows)
+		}
+	})
+}
+
 func (r *memoryRealm) auditRow(entry store.AuditEntry) domain.AuditRow {
 	return domain.AuditRow{
+		OrderID: entry.OrderID, Verdict: entry.Verdict, RejectCode: entry.RejectCode,
 		At:           time.Now().UTC(),
 		ExternalID:   r.nextExternalID(),
 		Actor:        entry.Actor,

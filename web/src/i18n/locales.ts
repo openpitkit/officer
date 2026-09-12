@@ -73,7 +73,7 @@ export function registerLocale(locale: Locale): void {
   refreshSupportedLanguages();
 }
 
-/** Remove an extension locale or reset an open app locale override. */
+/** Remove an extension locale or reset an application locale override. */
 export function unregisterLocale(code: string): boolean {
   const defaultLocale = LOCALES.find((entry) => entry.code === code);
   const index = supportedLocales.findIndex((entry) => entry.code === code);

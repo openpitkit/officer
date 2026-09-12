@@ -28,7 +28,7 @@ func handleListTrades(svc Service) http.HandlerFunc {
 		q := r.URL.Query()
 		filter, err := tradeListFilterFromQuery(q)
 		if err != nil {
-			httpx.WriteValidationErrMsg(w, err.Error())
+			httpx.WriteValidationErr(w, err)
 			return
 		}
 		page, err := svc.ListTradeRows(r.Context(), filter)

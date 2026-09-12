@@ -107,6 +107,7 @@ import {
   EmptyState,
   ErrorBanner,
   ErrorState,
+  StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
@@ -5879,6 +5880,7 @@ export function Orders() {
       {tab === "orders" && (
         <>
           {ordersResult.load.state === "loading" && <TableSkeleton cols={10} />}
+          <StaleState {...ordersResult} />
           {ordersResult.load.state === "error" && (
             <ErrorState
               message={ordersResult.load.error}
@@ -5923,6 +5925,7 @@ export function Orders() {
       {tab === "trades" && (
         <>
           {tradesResult.load.state === "loading" && <TableSkeleton cols={10} />}
+          <StaleState {...tradesResult} />
           {tradesResult.load.state === "error" && (
             <ErrorState
               message={tradesResult.load.error}

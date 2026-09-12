@@ -15,8 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useCallback } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { useCallback, useEffect } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -72,6 +72,7 @@ function ReloadProbe({
   return (
     <>
       <span>{load.state === "ready" ? load.data : load.state}</span>
+      <span>{load.error}</span>
       <button type="button" onClick={reload}>
         reload
       </button>
@@ -79,7 +80,70 @@ function ReloadProbe({
   );
 }
 
+function IdentityProbe({
+  fetcher,
+  onLoadChange,
+}: {
+  fetcher: (signal: AbortSignal) => Promise<string>;
+  onLoadChange: () => void;
+}) {
+  const { load } = usePolling(fetcher, 60000);
+  useEffect(onLoadChange, [load, onLoadChange]);
+  return <span>{load.state === "ready" ? load.data : load.state}</span>;
+}
+
 describe("usePolling", () => {
+  it("marks retained data stale and clears the error after recovery", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi
+        .fn<(signal: AbortSignal) => Promise<string>>()
+        .mockResolvedValueOnce("first")
+        .mockRejectedValueOnce(new Error("poll failed"))
+        .mockResolvedValueOnce("recovered");
+
+      await act(async () => {
+        render(<ReloadProbe fetcher={fetcher} />);
+      });
+      expect(screen.getByText("first")).toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(60000));
+      expect(screen.getByText("first")).toBeInTheDocument();
+      expect(screen.getByText("poll failed")).toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(60000));
+      expect(screen.getByText("recovered")).toBeInTheDocument();
+      expect(screen.queryByText("poll failed")).not.toBeInTheDocument();
+      expect(screen.queryByText("first")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not notify load consumers for an unchanged passive failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const onLoadChange = vi.fn();
+      const fetcher = vi
+        .fn<(signal: AbortSignal) => Promise<string>>()
+        .mockResolvedValueOnce("first")
+        .mockRejectedValueOnce(new Error("poll failed"))
+        .mockRejectedValueOnce(new Error("poll failed"));
+
+      await act(async () => {
+        render(<IdentityProbe fetcher={fetcher} onLoadChange={onLoadChange} />);
+      });
+      await act(() => vi.advanceTimersByTimeAsync(60000));
+      const changesAfterFirstFailure = onLoadChange.mock.calls.length;
+
+      await act(() => vi.advanceTimersByTimeAsync(60000));
+
+      expect(onLoadChange).toHaveBeenCalledTimes(changesAfterFirstFailure);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refetches immediately when the refresh key changes", async () => {
     const fetchSpy = vi.fn();
     const { rerender } = render(

@@ -85,6 +85,7 @@ import {
   EmptyState,
   ErrorBanner,
   ErrorState,
+  StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
@@ -1404,6 +1405,21 @@ function AdjustmentPanel({
   const { t } = useTranslation("positions");
   const { t: tc } = useTranslation();
   const { createAdjustment } = useOfficerApi();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const focusInsideRef = useRef(false);
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    panelRef.current?.focus();
+    return () => {
+      if (
+        focusInsideRef.current &&
+        previousFocus instanceof HTMLElement &&
+        previousFocus.isConnected
+      ) {
+        previousFocus.focus();
+      }
+    };
+  }, []);
   const [account, setAccount] = useState(initialAccount);
   const [asset, setAsset] = useState(initialAsset);
   const [available, setAvailable] =
@@ -1607,9 +1623,23 @@ function AdjustmentPanel({
   return (
     <>
       <div
+        ref={panelRef}
+        tabIndex={-1}
         role="region"
         aria-label={t("panel.title")}
         className="space-y-4 border-l-2 border-l-accent bg-surface-2 px-4 py-4"
+        onFocusCapture={() => {
+          focusInsideRef.current = true;
+        }}
+        onBlurCapture={(event) => {
+          const nextFocus = event.relatedTarget;
+          if (
+            !(nextFocus instanceof Node) ||
+            !event.currentTarget.contains(nextFocus)
+          ) {
+            focusInsideRef.current = false;
+          }
+        }}
         onKeyDown={(event) => {
           if (event.key !== "Escape") {
             return;
@@ -4475,6 +4505,7 @@ export function Positions() {
           </div>
 
           {balancesLoad.load.state === "loading" && <TableSkeleton cols={9} />}
+          <StaleState {...balancesLoad} />
           {balancesLoad.load.state === "error" && (
             <ErrorState
               message={balancesLoad.load.error}
@@ -4537,6 +4568,7 @@ export function Positions() {
           {adjustmentsLoad.load.state === "loading" && (
             <TableSkeleton cols={9} />
           )}
+          <StaleState {...adjustmentsLoad} />
           {adjustmentsLoad.load.state === "error" && (
             <ErrorState
               message={adjustmentsLoad.load.error}

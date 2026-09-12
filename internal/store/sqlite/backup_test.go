@@ -122,6 +122,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 		Principal: "operator", Source: domain.SourcePanel, Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "10",
 		Price: "150", Status: domain.OrderStatusFilled, DropCopy: true,
+		ReservedQuantity: "0",
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
@@ -1244,6 +1245,13 @@ func TestBackupRoundTripIntoIsolatedRealm(t *testing.T) {
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	orderXID := seedRealm(t, ctx, src)
+	if err := src.AppendAudit(ctx, AuditEntry{
+		Action: domain.AuditActionSubmitOrder, Account: "acc-1",
+		OrderID: orderXID.String(), Verdict: "reject", RejectCode: "order_qty_exceeds_limit",
+		Source: domain.SourceAPI,
+	}); err != nil {
+		t.Fatalf("AppendAudit(decision): %v", err)
+	}
 
 	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
 	if err != nil {
@@ -1263,6 +1271,22 @@ func TestBackupRoundTripIntoIsolatedRealm(t *testing.T) {
 	}
 
 	assertRealmsEqualOnPublicIdentity(t, ctx, src, dst, orderXID)
+	restoredAudit, err := dst.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	found := false
+	for _, row := range restoredAudit {
+		if row.OrderID == orderXID.String() {
+			found = true
+			if row.Verdict != "reject" || row.RejectCode != "order_qty_exceeds_limit" {
+				t.Fatalf("restored decision = %+v", row)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("restored audit lost the structured order decision")
+	}
 
 	// Engine ids in the destination are valid and in range (freshly assigned).
 	acc, ok, err := dst.GetAccount(ctx, "acc-1")
@@ -1287,6 +1311,7 @@ func TestBackupRoundTripPreservesExecutionReportIdentityAndEventLinks(t *testing
 		Principal: "operator", Source: domain.SourceAPI, Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "2",
 		Price: "151", Status: domain.OrderStatusSubmitted,
+		ReservedQuantity: "0",
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
@@ -1598,6 +1623,7 @@ func TestBackupRestoreOverwriteReconcilesReparentedReportLinks(t *testing.T) {
 		Principal: "operator", Source: domain.SourceAPI, Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
 		Price: "151", Status: domain.OrderStatusSubmitted,
+		ReservedQuantity: "0",
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder source: %v", err)
@@ -2357,14 +2383,16 @@ func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
 				QuoteAsset: "USD", Principal: "operator", Source: domain.SourcePanel,
 				Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 				AmountValue: "10", Leaves: "10", Price: "150",
-				Status: domain.OrderStatusSubmitted,
+				Status:           domain.OrderStatusSubmitted,
+				ReservedQuantity: "0",
 			}},
 			{Order: domain.Order{
 				ExternalID: badID, Account: "acc-1", BaseAsset: "AAPL",
 				QuoteAsset: "USD", Principal: "operator", Source: domain.SourcePanel,
 				Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 				AmountValue: "10", Leaves: "1e5", Price: "150",
-				Status: domain.OrderStatusSubmitted,
+				Status:           domain.OrderStatusSubmitted,
+				ReservedQuantity: "0",
 			}},
 		}},
 		backup.CredentialFormPlaintext,
@@ -2386,6 +2414,50 @@ func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
 	after := snapshotBackupData(t, ctx, rs)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+	}
+}
+
+func TestBackupRestorePreservesReservationSeparatelyFromReportedLeaves(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	input := sampleOrder()
+	input.Status = domain.OrderStatusCommitted
+	input.Leaves = "99.00"
+	input.ReservedQuantity = "3.5"
+	order, err := rs.CreateOrder(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	scope := backup.Scope{Sections: []backup.Section{backup.SectionActivityHistory}}
+	archive, err := rs.ExportBackup(ctx, scope)
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Account: order.Account, Order: order.ExternalID,
+		OrderStatus: domain.OrderStatusCommitted, ReservedQuantity: "1", Leaves: "77",
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+	options := backup.RestoreOptions{Scope: scope, Mode: backup.RestoreModeOverwrite}
+	if _, err := rs.RestoreBackup(ctx, archive, options); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	detail, err := rs.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "99.00" || detail.Order.ReservedQuantity != "3.5" {
+		t.Fatalf("reservation and reported leaves did not round-trip independently: %+v", detail.Order)
+	}
+	before := snapshotBackupData(t, ctx, rs)
+	for _, invalid := range []string{"", "-1", "1e3", "not-a-number"} {
+		archive.Data.Orders[0].Order.ReservedQuantity = invalid
+		if _, err := rs.RestoreBackup(ctx, archive, options); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("RestoreBackup reservation %q: %v, want invalid", invalid, err)
+		}
+		if after := snapshotBackupData(t, ctx, rs); !reflect.DeepEqual(after, before) {
+			t.Fatalf("invalid reservation %q changed the database", invalid)
+		}
 	}
 }
 
@@ -3178,30 +3250,32 @@ func TestBackupRestoreRejectsUnknownOrderStatusAndRollsBack(t *testing.T) {
 		scope,
 		backup.Data{Orders: []backup.OrderRecord{
 			{Order: domain.Order{
-				ExternalID:  firstID,
-				Account:     "acc-1",
-				BaseAsset:   "AAPL",
-				QuoteAsset:  "USD",
-				Principal:   "operator",
-				Source:      domain.SourcePanel,
-				Side:        domain.OrderSideBuy,
-				AmountKind:  domain.OrderAmountKindQuantity,
-				AmountValue: "10",
-				Price:       "150",
-				Status:      domain.OrderStatusSubmitted,
+				ExternalID:       firstID,
+				Account:          "acc-1",
+				BaseAsset:        "AAPL",
+				QuoteAsset:       "USD",
+				Principal:        "operator",
+				Source:           domain.SourcePanel,
+				Side:             domain.OrderSideBuy,
+				AmountKind:       domain.OrderAmountKindQuantity,
+				AmountValue:      "10",
+				ReservedQuantity: "0",
+				Price:            "150",
+				Status:           domain.OrderStatusSubmitted,
 			}},
 			{Order: domain.Order{
-				ExternalID:  badID,
-				Account:     "acc-1",
-				BaseAsset:   "AAPL",
-				QuoteAsset:  "USD",
-				Principal:   "operator",
-				Source:      domain.SourcePanel,
-				Side:        domain.OrderSideBuy,
-				AmountKind:  domain.OrderAmountKindQuantity,
-				AmountValue: "10",
-				Price:       "150",
-				Status:      domain.OrderStatus("unknown"),
+				ExternalID:       badID,
+				Account:          "acc-1",
+				BaseAsset:        "AAPL",
+				QuoteAsset:       "USD",
+				Principal:        "operator",
+				Source:           domain.SourcePanel,
+				Side:             domain.OrderSideBuy,
+				AmountKind:       domain.OrderAmountKindQuantity,
+				AmountValue:      "10",
+				ReservedQuantity: "0",
+				Price:            "150",
+				Status:           domain.OrderStatus("unknown"),
 			}},
 		}},
 		backup.CredentialFormPlaintext,
@@ -3269,6 +3343,195 @@ func TestBackupRestoreRejectsInvalidAuditActionAndRollsBack(t *testing.T) {
 	after := snapshotBackupData(t, ctx, rs)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+	}
+}
+
+func TestBackupRestoreRejectsInvalidAuditDecisionAndRollsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		action     domain.AuditAction
+		verdict    string
+		rejectCode string
+		orderID    string
+		context    string
+	}{
+		{
+			name: "invalid verdict", action: domain.AuditActionSubmitOrder,
+			verdict: "banana", orderID: "order-1", context: "verdict",
+		},
+		{
+			name:    "reject code without reject verdict",
+			action:  domain.AuditActionSubmitOrder,
+			verdict: "accept", rejectCode: "order_size",
+			orderID: "order-1", context: "reject code",
+		},
+		{
+			name:    "verdict without order id",
+			action:  domain.AuditActionSubmitOrder,
+			verdict: "accept", context: "order id",
+		},
+		{
+			name:    "order id without verdict",
+			action:  domain.AuditActionSubmitDropCopy,
+			orderID: "order-1", context: "verdict",
+		},
+		{
+			name:    "unrelated action with order id",
+			action:  domain.AuditActionCreateAccount,
+			orderID: "order-1", context: "decision metadata",
+		},
+		{
+			name:    "unrelated action with verdict",
+			action:  domain.AuditActionCreateAccount,
+			verdict: "accept", context: "decision metadata",
+		},
+		{
+			name:       "unrelated action with reject code",
+			action:     domain.AuditActionCreateAccount,
+			rejectCode: "order_size", context: "decision metadata",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, rs := newTestStore(t)
+			before := snapshotBackupData(t, ctx, rs)
+			firstID := mustExternalID(t)
+			badID := mustExternalID(t)
+			scope := backup.Scope{
+				Sections: []backup.Section{backup.SectionAuditLog},
+			}
+			archive := backup.NewArchive(
+				time.Now().UTC(),
+				"test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)},
+				scope,
+				backup.Data{Audit: []domain.AuditRow{
+					{
+						ExternalID: firstID,
+						Action:     domain.AuditActionCreateAccount,
+						Source:     domain.SourcePanel,
+					},
+					{
+						ExternalID: badID,
+						Action:     tc.action,
+						Source:     domain.SourcePanel,
+						OrderID:    tc.orderID,
+						Verdict:    tc.verdict,
+						RejectCode: tc.rejectCode,
+					},
+				}},
+				backup.CredentialFormPlaintext,
+			)
+
+			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: scope, Mode: backup.RestoreModeOverwrite,
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+			}
+			for _, want := range []string{
+				string(backup.SectionAuditLog), "audit",
+				badID.String(), tc.context,
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf(
+						"RestoreBackup error = %q, want context %q",
+						err,
+						want,
+					)
+				}
+			}
+			after := snapshotBackupData(t, ctx, rs)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf(
+					"database changed after rejected restore:\n before=%+v\n after=%+v",
+					before,
+					after,
+				)
+			}
+		})
+	}
+}
+
+func TestBackupRestoreAcceptsValidAuditDecisionMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		entry domain.AuditRow
+	}{
+		{
+			name: "unrelated action",
+			entry: domain.AuditRow{
+				Action: domain.AuditActionCreateAccount,
+			},
+		},
+		{
+			name: "accepted order",
+			entry: domain.AuditRow{
+				Action:  domain.AuditActionSubmitOrder,
+				OrderID: "opaque-accepted-order",
+				Verdict: "accept",
+			},
+		},
+		{
+			name: "rejected drop copy without code",
+			entry: domain.AuditRow{
+				Action:  domain.AuditActionSubmitDropCopy,
+				OrderID: "opaque-rejected-drop-copy",
+				Verdict: "reject",
+			},
+		},
+		{
+			name: "rejected order with code",
+			entry: domain.AuditRow{
+				Action:  domain.AuditActionSubmitOrder,
+				OrderID: "opaque-rejected-order",
+				Verdict: "reject", RejectCode: "order_size",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, rs := newTestStore(t)
+			entry := tc.entry
+			entry.ExternalID = mustExternalID(t)
+			entry.Source = domain.SourcePanel
+			scope := backup.Scope{
+				Sections: []backup.Section{backup.SectionAuditLog},
+			}
+			archive := backup.NewArchive(
+				time.Now().UTC(),
+				"test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)},
+				scope,
+				backup.Data{Audit: []domain.AuditRow{entry}},
+				backup.CredentialFormPlaintext,
+			)
+
+			if _, err := rs.RestoreBackup(
+				ctx,
+				archive,
+				backup.RestoreOptions{
+					Scope: scope, Mode: backup.RestoreModeOverwrite,
+				},
+			); err != nil {
+				t.Fatalf("RestoreBackup: %v", err)
+			}
+			rows, err := rs.ListAudit(ctx, 10)
+			if err != nil {
+				t.Fatalf("ListAudit: %v", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("restored audit rows = %+v, want one", rows)
+			}
+			got := rows[0]
+			if got.ExternalID != entry.ExternalID ||
+				got.Action != entry.Action ||
+				got.OrderID != entry.OrderID ||
+				got.Verdict != entry.Verdict ||
+				got.RejectCode != entry.RejectCode {
+				t.Fatalf("restored audit row = %+v, want %+v", got, entry)
+			}
+		})
 	}
 }
 

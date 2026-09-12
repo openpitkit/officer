@@ -38,6 +38,4 @@ rules:
         - .ruff_cache
         - __pycache__
         - .tmp
-        - .wt
-        - .serena
         - .git

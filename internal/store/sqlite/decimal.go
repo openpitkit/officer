@@ -18,6 +18,7 @@
 package sqlite
 
 import (
+	"strings"
 	"time"
 
 	fwstore "go.openpit.dev/officer/framework/store"
@@ -80,6 +81,34 @@ func appendDenominatedDecimalRangeFilter(
 	*clauses = append(*clauses, currencyExpr+" = ?")
 	*args = append(*args, filter.Currency)
 	appendDecimalRangeFilter(clauses, args, column, filter.Range)
+}
+
+// appendPnlRangeFilter compares only meaningful amounts in the requested
+// currency. Explicit category flags admit non-numeric rows without assigning
+// them an amount or a denomination.
+func appendPnlRangeFilter(
+	clauses *[]string, args *[]any,
+	column, haltColumn, currencyExpr string,
+	filter fwstore.DenominatedDecimalRangeFilter,
+	includeUnset, includeHalted bool,
+) {
+	if filter.Empty() && !includeUnset && !includeHalted {
+		return
+	}
+	numeric := []string{
+		column + " IS NOT NULL", column + " <> ''", currencyExpr + " = ?",
+	}
+	*args = append(*args, filter.Currency)
+	appendDecimalRangeFilter(&numeric, args, column, filter.Range)
+	categories := []string{"(" + strings.Join(numeric, " AND ") + ")"}
+	if includeUnset {
+		categories = append(categories,
+			"(("+column+" IS NULL OR "+column+" = '') AND "+haltColumn+" = '')")
+	}
+	if includeHalted {
+		categories = append(categories, "("+haltColumn+" <> '')")
+	}
+	*clauses = append(*clauses, "("+strings.Join(categories, " OR ")+")")
 }
 
 func appendTimeRangeFilter(

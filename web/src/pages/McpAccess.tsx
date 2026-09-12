@@ -24,6 +24,7 @@ import { ConnectAgent } from "@/components/ConnectAgent";
 import {
   ErrorBanner,
   ErrorState,
+  StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
@@ -305,6 +306,7 @@ export function McpAccess() {
 
       {isLoading && commands === null && <TableSkeleton cols={4} />}
 
+      <StaleState load={load} reload={reload} />
       {load.state === "error" && commands === null && (
         <ErrorState
           message={load.error}

@@ -52,6 +52,7 @@ import { Page } from "@/components/Page";
 import {
   ErrorBanner,
   ErrorState,
+  StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
@@ -3840,6 +3841,7 @@ export function MarketData() {
       {mutationError && <ErrorBanner message={mutationError} />}
 
       {load.state === "loading" && <TableSkeleton rows={3} cols={5} />}
+      <StaleState load={load} reload={reload} />
       {load.state === "error" && (
         <ErrorState message={load.error} onRetry={reload} />
       )}

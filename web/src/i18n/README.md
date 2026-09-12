@@ -1,7 +1,7 @@
 # i18n
 
 Internationalization for the Pit Officer SPA, built on
-[react-i18next](https://react.i18next.com/). The open app ships `en`, `ru`, and
+[react-i18next](https://react.i18next.com/). The bundled SPA ships `en`, `ru`, and
 `zh-CN` catalogs and exposes registration seams for framework consumers that
 add their own locale namespaces.
 
@@ -17,9 +17,9 @@ add their own locale namespaces.
   catalog)` or `registerLocaleResourceMap(resources)` from module top level.
   The helper uses i18next `addResourceBundle` with deep merge and overwrite, so
   extensions can add namespaces or intentionally replace keys after init.
-- `locales.ts` is the open supported-locale list (`{ code, endonym }`). External
+- `locales.ts` is the built-in supported-locale list (`{ code, endonym }`). External
   consumers can pair `registerLocale({ code, endonym })` with
-  `registerLocaleResources` to add a language at runtime; the open constants
+  `registerLocaleResources` to add a language at runtime; the built-in constants
   `DEFAULT_LOCALE`, `LOCALES`, and `LOCALE_CODES` stay unchanged.
 - `LocaleProvider.tsx` mirrors the active language onto `<html lang>`, the same
   way `theme/ThemeProvider` mirrors the palette. Detection and persistence are

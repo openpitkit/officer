@@ -300,7 +300,8 @@ func TestListAccountsBlockingCurrencyChangeIncludesBalanceRowsAndAccountPnl(t *t
 	if err != nil {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(filtered): %v", err)
 	}
-	if len(filtered) != 1 || filtered[0] != "acc-2" {
+	if len(filtered) != 1 || filtered[0].Account != "acc-2" ||
+		!filtered[0].Other || filtered[0].CurrencyValuedLimit {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(filtered) = %v, want acc-2", filtered)
 	}
 
@@ -308,7 +309,8 @@ func TestListAccountsBlockingCurrencyChangeIncludesBalanceRowsAndAccountPnl(t *t
 	if err != nil {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(account P&L): %v", err)
 	}
-	if len(filtered) != 1 || filtered[0] != "acc-3" {
+	if len(filtered) != 1 || filtered[0].Account != "acc-3" ||
+		!filtered[0].Other || filtered[0].CurrencyValuedLimit {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(account P&L) = %v, want acc-3", filtered)
 	}
 
@@ -317,7 +319,8 @@ func TestListAccountsBlockingCurrencyChangeIncludesBalanceRowsAndAccountPnl(t *t
 	if err != nil {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(halt-only): %v", err)
 	}
-	if len(filtered) != 2 || filtered[0] != "acc-5" || filtered[1] != "acc-6" {
+	if len(filtered) != 2 || filtered[0].Account != "acc-5" ||
+		filtered[1].Account != "acc-6" {
 		t.Fatalf("ListAccountsBlockingCurrencyChange(halt-only) = %v, want acc-5 and acc-6", filtered)
 	}
 }
@@ -395,7 +398,8 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 		got, err := rs.ListAccountsBlockingCurrencyChange(
 			ctx, []domain.AccountID{"acc-1"},
 		)
-		if err != nil || len(got) != 1 || got[0] != "acc-1" {
+		if err != nil || len(got) != 1 || got[0].Account != "acc-1" ||
+			!got[0].Other || got[0].CurrencyValuedLimit {
 			t.Fatalf("active order blockers = %v, err=%v", got, err)
 		}
 
@@ -466,11 +470,61 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 			got, err := rs.ListAccountsBlockingCurrencyChange(
 				ctx, []domain.AccountID{"acc-1"},
 			)
-			if err != nil || len(got) != 1 || got[0] != "acc-1" {
+			if err != nil || len(got) != 1 || got[0].Account != "acc-1" ||
+				!got[0].CurrencyValuedLimit || got[0].Other {
 				t.Fatalf("PnL bound blockers = %v, err=%v", got, err)
 			}
 		})
 	}
+
+	t.Run("P&L bounds and economic state are independent", func(t *testing.T) {
+		ctx, rs := seedBalanceFixtures(t)
+		if err := rs.UpsertBalance(ctx, domain.Balance{
+			Account: "acc-1", Asset: "AAPL", Available: "1",
+		}); err != nil {
+			t.Fatalf("UpsertBalance: %v", err)
+		}
+		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
+		}); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+		}
+		got, err := rs.ListAccountsBlockingCurrencyChange(
+			ctx, []domain.AccountID{"acc-1"},
+		)
+		if err != nil || len(got) != 1 || got[0].Account != "acc-1" ||
+			!got[0].CurrencyValuedLimit || !got[0].Other {
+			t.Fatalf("combined blocker facts = %v, err=%v", got, err)
+		}
+	})
+
+	t.Run("default group P&L bounds do not match an ungrouped account", func(t *testing.T) {
+		ctx, rs := seedBalanceFixtures(t)
+		sqliteRealm := rs.(*realmStore)
+		db, err := sqliteRealm.db()
+		if err != nil {
+			t.Fatalf("db: %v", err)
+		}
+		currencyID, err := resolveAssetID(ctx, db, "USD")
+		if err != nil {
+			t.Fatalf("resolve currency: %v", err)
+		}
+		if _, err := db.ExecContext(
+			ctx,
+			`INSERT INTO limit_spot_funds_pnl_bound
+			 (scope, account_id, account_group_id, currency_asset_id, lower_bound)
+			 VALUES (?, NULL, NULL, ?, ?)`,
+			domain.ScopeAccountGroup, currencyID, "-100",
+		); err != nil {
+			t.Fatalf("insert default group P&L bounds: %v", err)
+		}
+		got, err := rs.ListAccountsBlockingCurrencyChange(
+			ctx, []domain.AccountID{"acc-1"},
+		)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("default group P&L bound blockers = %v, err=%v", got, err)
+		}
+	})
 
 	t.Run("rate and order size limits are not denominated", func(t *testing.T) {
 		ctx, rs := seedBalanceFixtures(t)
@@ -515,10 +569,10 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 	})
 }
 
-func accountIDsToStrings(ids []domain.AccountID) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, id.String())
+func accountIDsToStrings(blockers []fwstore.CurrencyChangeBlocker) []string {
+	out := make([]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		out = append(out, blocker.Account.String())
 	}
 	return out
 }
@@ -830,6 +884,9 @@ func TestBalanceListRowsComparesOnlyWithinNamedCurrency(t *testing.T) {
 	// comparison, it is not an identity filter.
 	got = listAccounts(t, fwstore.BalanceListFilter{
 		Asset: fwstore.ExactTextMatcher("AAPL"),
+		RealizedPnl: fwstore.DenominatedDecimalRangeFilter{
+			Currency: "USD",
+		},
 	})
 	if len(got) != 3 {
 		t.Fatalf("unfiltered AAPL rows = %v, want every seeded row", got)
@@ -858,8 +915,10 @@ func TestBalanceListRowsSortsRealizedPnlWithinCurrency(t *testing.T) {
 		account  domain.AccountID
 		currency string
 		pnl      string
+		halt     domain.PnlHaltReason
 	}{
 		{account: "acc-empty", currency: "USD"},
+		{account: "acc-halted", currency: "USD", pnl: "123", halt: domain.PnlHaltReasonMissingFx},
 		{account: "acc-negative", currency: "USD", pnl: "-2.5"},
 		{account: "acc-nine", currency: "USD", pnl: "9"},
 		{account: "acc-large", currency: "USD", pnl: "100000000000000000000.1"},
@@ -873,6 +932,7 @@ func TestBalanceListRowsSortsRealizedPnlWithinCurrency(t *testing.T) {
 		}
 		if err := rs.UpsertBalance(ctx, domain.Balance{
 			Account: seed.account, Asset: "AAPL", RealizedPnl: seed.pnl,
+			RealizedPnlHaltReason: seed.halt,
 		}); err != nil {
 			t.Fatalf("UpsertBalance(%s): %v", seed.account, err)
 		}
@@ -900,14 +960,64 @@ func TestBalanceListRowsSortsRealizedPnlWithinCurrency(t *testing.T) {
 	}
 
 	if got := list(false); !slices.Equal(got, []domain.AccountID{
-		"acc-negative", "acc-nine", "acc-large", "acc-empty",
+		"acc-negative", "acc-nine", "acc-large", "acc-empty", "acc-halted",
 	}) {
 		t.Fatalf("ascending rows = %v", got)
 	}
 	if got := list(true); !slices.Equal(got, []domain.AccountID{
-		"acc-large", "acc-nine", "acc-negative", "acc-empty",
+		"acc-large", "acc-nine", "acc-negative", "acc-halted", "acc-empty",
 	}) {
 		t.Fatalf("descending rows = %v", got)
+	}
+}
+
+func TestBalanceListRowsRealizedPnlSortPreservesUnsetAcrossCurrencies(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+		t.Fatalf("CreateAsset(EUR): %v", err)
+	}
+	for _, account := range []domain.Account{
+		{Code: "acc-usd", Currency: "USD"},
+		{Code: "acc-eur", Currency: "EUR"},
+	} {
+		if _, err := rs.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", account.Code, err)
+		}
+		if err := rs.UpsertBalance(ctx, domain.Balance{
+			Account: account.Code, Asset: "AAPL",
+		}); err != nil {
+			t.Fatalf("UpsertBalance(%s): %v", account.Code, err)
+		}
+	}
+
+	list := func(includeUnset bool) []domain.AccountID {
+		t.Helper()
+		page, err := rs.ListBalanceRows(ctx, fwstore.BalanceListFilter{
+			RealizedPnl:             fwstore.DenominatedDecimalRangeFilter{Currency: "USD"},
+			IncludeUnsetRealizedPnl: includeUnset,
+			Sort:                    fwstore.SortSpec{Column: "realizedPnl"},
+		})
+		if err != nil {
+			t.Fatalf("ListBalanceRows: %v", err)
+		}
+		got := make([]domain.AccountID, 0, len(page.Rows))
+		for _, row := range page.Rows {
+			got = append(got, row.Balance.Account)
+		}
+		if page.Total != len(got) {
+			t.Fatalf("Total = %d, want %d matching rows", page.Total, len(got))
+		}
+		slices.Sort(got)
+		return got
+	}
+
+	if got := list(true); !slices.Equal(
+		got, []domain.AccountID{"acc-eur", "acc-usd"},
+	) {
+		t.Fatalf("sort with unset category = %v, want both currencies", got)
+	}
+	if got := list(false); !slices.Equal(got, []domain.AccountID{"acc-usd"}) {
+		t.Fatalf("plain realized P&L sort = %v, want only USD", got)
 	}
 }
 

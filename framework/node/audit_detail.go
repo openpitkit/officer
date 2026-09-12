@@ -170,7 +170,7 @@ func submitOrderDetail(order domain.Order, accepted bool) string {
 // blocks it produced.
 func executionReportDetail(
 	in domain.ExecutionReportInput,
-	sdkLeavesQuantity string,
+	reservationRemainder string,
 	status domain.OrderStatus,
 	blocks int,
 ) string {
@@ -185,8 +185,8 @@ func executionReportDetail(
 		status,
 		blocks,
 	)
-	if sdkLeavesQuantity != "" {
-		detail += fmt.Sprintf(" sdkLeavesQty=%s", sdkLeavesQuantity)
+	if reservationRemainder != "" {
+		detail += fmt.Sprintf(" reservationRemainder=%s", reservationRemainder)
 	}
 	return detail
 }

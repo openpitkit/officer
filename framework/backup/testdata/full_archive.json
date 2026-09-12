@@ -107,6 +107,7 @@
           "At": "2026-06-22T10:00:00Z",
           "ExternalID": "AQEBAQEBAQEBAQEBAQEBAQ",
           "AmountValue": "10",
+          "ReservedQuantity": "0",
           "Price": "150",
           "Principal": "",
           "BaseAsset": "AAPL",

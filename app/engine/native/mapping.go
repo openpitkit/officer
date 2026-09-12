@@ -1599,26 +1599,26 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 
 // executionReportFrom maps a domain execution-report input onto a
 // model.ExecutionReport: the operation (instrument/account/side) and the fill
-// (last trade price+quantity, explicit engine leaves quantity when present, the
-// terminal-status flag, and the original engine pre-trade lock). Request
-// leaves remains separate for persistence. The account is resolved to its
-// stored engine id.
+// (last trade price+quantity, the recorded reservation remainder, the terminal
+// status flag, and the original engine pre-trade lock). Caller-reported leaves
+// remain separate for persistence. The account is resolved to its stored
+// engine id.
 func executionReportFrom(
 	in domain.ExecutionReportInput,
-	leavesQuantity string,
+	reservationRemainder string,
 	res idResolver,
 ) (model.ExecutionReport, error) {
 	account, err := res.account(in.Account)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	return executionReportFromAccount(in, account, leavesQuantity, res)
+	return executionReportFromAccount(in, account, reservationRemainder, res)
 }
 
 func executionReportFromAccount(
 	in domain.ExecutionReportInput,
 	account param.AccountID,
-	leavesQuantity string,
+	reservationRemainder string,
 	res idResolver,
 ) (model.ExecutionReport, error) {
 	base, err := res.asset(in.BaseAsset)
@@ -1635,15 +1635,17 @@ func executionReportFromAccount(
 	}
 	targetStatus := in.OrderStatus
 	isFinal := domain.OrderStatusTerminal(targetStatus)
-	var leaves *param.Quantity
-	if leavesQuantity != "" {
-		value, err := param.NewQuantityFromString(leavesQuantity)
+	var remainingReservation *param.Quantity
+	if reservationRemainder != "" {
+		value, err := param.NewQuantityFromString(reservationRemainder)
 		if err != nil {
 			return model.ExecutionReport{}, fmt.Errorf(
-				"engine: leaves quantity %q: %w", leavesQuantity, err,
+				"engine: reservation remainder %q: %w",
+				reservationRemainder,
+				err,
 			)
 		}
-		leaves = &value
+		remainingReservation = &value
 	}
 
 	hasFill, err := executionReportHasFill(in)
@@ -1656,9 +1658,9 @@ func executionReportFromAccount(
 			"engine: fill status %q requires fill price and quantity: %w",
 			targetStatus, domain.ErrInvalid)
 	}
-	if hasFill && leaves == nil {
+	if hasFill && remainingReservation == nil {
 		return model.ExecutionReport{}, errors.New(
-			"engine: fill report has no selected leaves quantity")
+			"engine: fill report has no reservation remainder")
 	}
 	lockBytes, err := executionReportLockBytes(in)
 	if err != nil {
@@ -1694,8 +1696,8 @@ func executionReportFromAccount(
 		}
 		fill.SetFee(commission)
 	}
-	if leaves != nil {
-		fill.SetRemainingReservedQuantity(*leaves)
+	if remainingReservation != nil {
+		fill.SetRemainingReservedQuantity(*remainingReservation)
 	}
 	fill.SetIsFinal(isFinal)
 	if lockBytes != nil {

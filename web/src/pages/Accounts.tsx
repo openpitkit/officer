@@ -53,6 +53,7 @@ import {
   EmptyState,
   ErrorBanner,
   ErrorState,
+  StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
@@ -4284,6 +4285,7 @@ export function Accounts() {
   const [editAccountTarget, setEditAccountTarget] = useState<Account | null>(
     null,
   );
+  const [blockNotice, setBlockNotice] = useState<string | null>(null);
   const [blockAccountTarget, setBlockAccountTarget] = useState<Account | null>(
     null,
   );
@@ -4459,6 +4461,11 @@ export function Accounts() {
       }
     >
       <p className="text-xs text-muted-lt">{t("page.description")}</p>
+      {blockNotice !== null && (
+        <p role="status" className="text-xs text-text">
+          {blockNotice}
+        </p>
+      )}
 
       <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
         {(["accounts", "groups"] as AccountsTab[]).map((tabId) => (
@@ -4515,6 +4522,7 @@ export function Accounts() {
             }}
             onOpenAdvanced={() => setGroupAdvancedOpen(true)}
           />
+          <StaleState load={groupsLoad} reload={reloadAll} />
           {groupLoadError !== null && groups === null ? (
             <ErrorState message={groupLoadError} onRetry={reloadAll} />
           ) : groups === null ? (
@@ -4620,6 +4628,7 @@ export function Accounts() {
             onOpenAdvanced={() => setAccountAdvancedOpen(true)}
             accountGlobalToggle={accountGlobalToggle}
           />
+          <StaleState load={accountsLoad} reload={reloadAll} />
           {accountLoadError !== null && accounts === null ? (
             <ErrorState message={accountLoadError} onRetry={reloadAll} />
           ) : pagedAccounts === null ? (
@@ -4742,7 +4751,8 @@ export function Accounts() {
         onOpenChange={(next) => {
           if (!next) setBlockAccountTarget(null);
         }}
-        onDone={() => {
+        onDone={(updated) => {
+          setBlockNotice(t("blockAccount.applied", { account: updated.code }));
           setBlockAccountTarget(null);
           setLocalAccounts(null);
           reloadAccounts();
@@ -4756,6 +4766,7 @@ export function Accounts() {
         }}
         onDone={() => {
           const unblocked = unblockAccountTarget;
+          setBlockNotice(null);
           setUnblockAccountTarget(null);
           if (unblocked !== null) {
             setBlockedDetailsTarget((current) =>

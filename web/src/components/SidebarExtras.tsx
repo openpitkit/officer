@@ -22,6 +22,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import { useMarketData } from "@/api/useMarketData";
 import { useService } from "@/api/useService";
+import { CompactStaleState } from "@/components/PageStates";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { useSidebar } from "@/components/sidebar-context";
 import { Button } from "@/components/ui/button";
@@ -58,6 +59,7 @@ function RestartRequiredNavIndicator() {
     >
       <AlertTriangle className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
       <span className="flex-1 text-left">{t("nav.restartRequired")}</span>
+      <CompactStaleState load={load} />
     </Link>
   );
 }
@@ -86,6 +88,7 @@ function NonReleaseNavIndicator() {
     >
       <AlertTriangle className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
       <span className="flex-1 text-left">{t("brand.nonRelease")}</span>
+      <CompactStaleState load={load} />
     </Link>
   );
 }

@@ -270,6 +270,43 @@ beforeEach(async () => {
 });
 
 describe("Positions adjustment panel", () => {
+  it("returns focus to the opener when the panel closes from within", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const opener = screen.getByRole("button", {
+      name: /open adjustment panel for bucks mcmoneyface aapl/i,
+    });
+    await user.click(opener);
+
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    expect(panel).toHaveFocus();
+
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+
+    expect(opener).toHaveFocus();
+  });
+
+  it("does not move focus back when it left the adjustment panel", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    const outsideControl = screen.getByRole("button", {
+      name: /open new adjustment panel/i,
+    });
+    outsideControl.focus();
+    fireEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+
+    expect(outsideControl).toHaveFocus();
+  });
+
   it("cancels after closing an open identity autocomplete", async () => {
     const user = userEvent.setup();
     renderPositions();

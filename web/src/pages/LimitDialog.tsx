@@ -770,6 +770,7 @@ export function LimitDialog({
             {validation && (
               <p
                 id="kind-currency-error"
+                role="alert"
                 className="text-[0.6875rem] text-[var(--danger)]"
               >
                 {tv(validation.key, validation.values)}

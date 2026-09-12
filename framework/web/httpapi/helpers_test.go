@@ -412,3 +412,88 @@ func TestWriteErrExecutionReportRequired(t *testing.T) {
 			body.Error.Message, domain.ErrExecutionReportRequired.Error())
 	}
 }
+
+func TestWriteErrValidationMetadata(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	_, err := domain.ExecutionReportRequiresEngine(domain.ExecutionReportInput{
+		OrderStatus: domain.OrderStatusFilled,
+	})
+	if err == nil {
+		t.Fatal("expected execution-report validation error")
+	}
+	WriteErr(rec, err)
+	want := httptest.NewRecorder()
+	WriteValidationProblem(
+		want,
+		err.Error(),
+		domain.ValidationPointer(err),
+		domain.ValidationConstraint(err),
+	)
+	if rec.Code != want.Code || !bytes.Equal(rec.Body.Bytes(), want.Body.Bytes()) {
+		t.Fatalf(
+			"WriteErr response = (%d, %q), want (%d, %q)",
+			rec.Code, rec.Body, want.Code, want.Body,
+		)
+	}
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf(
+			"status = %d, want %d",
+			rec.Code,
+			http.StatusUnprocessableEntity,
+		)
+	}
+	var body ProblemDetails
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Errors) != 1 {
+		t.Fatalf("errors = %+v, want one validation error", body.Errors)
+	}
+	got := body.Errors[0]
+	if got.Code != "validation" ||
+		got.Pointer != "/quantity" ||
+		got.Constraint != "required_for_status" {
+		t.Fatalf(
+			"validation metadata = %+v, want code, pointer, and constraint",
+			got,
+		)
+	}
+	if body.Detail != err.Error() {
+		t.Fatalf("detail = %q, want %q", body.Detail, err)
+	}
+}
+
+func TestWriteErrValidationNestedPointer(t *testing.T) {
+	rec := httptest.NewRecorder()
+	err := domain.NewValidationError(
+		"/commission/amount",
+		"format",
+		"commission amount must be a valid decimal",
+	)
+
+	WriteErr(rec, err)
+
+	var body ProblemDetails
+	if decodeErr := json.NewDecoder(rec.Body).Decode(&body); decodeErr != nil {
+		t.Fatalf("decode response: %v", decodeErr)
+	}
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf(
+			"status = %d, want %d",
+			rec.Code,
+			http.StatusUnprocessableEntity,
+		)
+	}
+	if len(body.Errors) != 1 {
+		t.Fatalf("errors = %+v, want one validation error", body.Errors)
+	}
+	got := body.Errors[0]
+	if got.Pointer != "/commission/amount" || got.Constraint != "format" {
+		t.Fatalf(
+			"validation metadata = %+v, want nested pointer and format constraint",
+			got,
+		)
+	}
+}

@@ -92,8 +92,9 @@ const confirmExecutionToolDescription = "Record confirmation history for a " +
 const cancelToolName = "cancel"
 const cancelToolDescription = "Cancel an untouched workflow order by presenting " +
 	"its approval token. Optional caller-reported leavesQuantity is recorded " +
-	"verbatim when supplied; the SDK receives the order's previously recorded " +
-	"leaves. After execution-report activity, submit an explicit report. " +
+	"verbatim when supplied; the SDK receives the order's own recorded " +
+	"reservation remainder. After execution-report activity, submit an explicit " +
+	"report. " +
 	"Protected and disabled by default."
 
 // RegisterTools registers the Pit Officer MCP tools and catalog entries.
@@ -428,7 +429,7 @@ type confirmExecutionOutput struct {
 type cancelInput struct {
 	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
 	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
-	LeavesQuantity  string `json:"leavesQuantity,omitempty" jsonschema:"Optional caller-reported open base quantity recorded verbatim when supplied; the SDK cancellation uses the order's previously recorded leaves; whitespace is supplied data and is validated by the report contract"`
+	LeavesQuantity  string `json:"leavesQuantity,omitempty" jsonschema:"Optional caller-reported open base quantity recorded verbatim when supplied; the SDK receives the order's own recorded reservation remainder; whitespace is supplied data and is validated by the report contract"`
 	Reason          string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
 }
 

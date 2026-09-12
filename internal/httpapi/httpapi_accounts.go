@@ -45,7 +45,7 @@ func handleListAccounts(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := accountListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteValidationErrMsg(w, err.Error())
+			httpx.WriteValidationErr(w, err)
 			return
 		}
 		accounts, err := svc.ListAccountRows(r.Context(), filter)

@@ -265,6 +265,7 @@
     "exportAccountsCsv": "Export accounts CSV"
   },
   "blockAccount": {
+    "applied": "Block applied to account {{account}}.",
     "titlePrefix": "Block account",
     "description": "Blocking halts new orders for this account. A reason is required and is recorded in the audit log.",
     "reasonLabel": "Reason",

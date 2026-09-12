@@ -75,6 +75,15 @@ func TestLocalNode_SetAccountCurrencyAuditsAndGuardsOpenBalances(t *testing.T) {
 		!strings.Contains(err.Error(), "carry state that prevents a currency change") {
 		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict", err)
 	}
+	after, err := st.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit after refusal: %v", err)
+	}
+	if len(after) != len(rows)+1 || after[0].Action != domain.AuditActionSetAccountCurrency ||
+		after[0].Account != id || !strings.Contains(after[0].Detail, "USD -> EUR") ||
+		!strings.Contains(after[0].Detail, "refused:") {
+		t.Fatalf("refused currency audit = %+v", after)
+	}
 }
 
 func TestLocalNode_CreateAssetPublishesLiveResolver(t *testing.T) {
@@ -631,8 +640,14 @@ func TestLocalNode_SetAccountCurrencyBlocksAccountPnlHalt(t *testing.T) {
 	if auditErr != nil {
 		t.Fatalf("ListAudit(after): %v", auditErr)
 	}
-	if !reflect.DeepEqual(afterAudit, beforeAudit) {
-		t.Fatalf("audit changed on refusal: before=%+v after=%+v", beforeAudit, afterAudit)
+	if len(afterAudit) != len(beforeAudit)+1 || !reflect.DeepEqual(afterAudit[1:], beforeAudit) {
+		t.Fatalf("refusal must append one audit row: before=%+v after=%+v", beforeAudit, afterAudit)
+	}
+	row := afterAudit[0]
+	if row.Action != domain.AuditActionSetAccountCurrency || row.Account != id ||
+		row.Actor != "operator" || row.Source != "api" ||
+		!strings.HasPrefix(row.Detail, "set account currency acc-1 EUR -> USD refused: ") {
+		t.Fatalf("currency refusal audit = %+v", row)
 	}
 }
 
@@ -657,7 +672,10 @@ func TestLocalNode_InheritedCurrencyChangesBlockHaltedPnl(t *testing.T) {
 			t.Fatalf("CreateAccount: %v", err)
 		}
 		eng.accountPnlStateCalls = nil
-		assertAuditUnchanged := assertNoNewAudit(t, n, ctx)
+		assertAuditRefusal := assertCurrencyRefusalAudit(t, n, ctx, domain.AuditRow{
+			Action: domain.AuditActionSetGroupCurrency, Group: "desk",
+			Detail: "set group currency desk EUR -> GBP",
+		})
 		err := n.SetGroupCurrency(ctx, "desk", "GBP", testCaller)
 		var blocked domain.CurrencyChangeBlockedError
 		if !errors.Is(err, domain.ErrConflict) || !errors.As(err, &blocked) ||
@@ -671,7 +689,7 @@ func TestLocalNode_InheritedCurrencyChangesBlockHaltedPnl(t *testing.T) {
 		if len(eng.accountPnlStateCalls) != 0 {
 			t.Fatalf("group refusal restated runtime P&L: %v", eng.accountPnlStateCalls)
 		}
-		assertAuditUnchanged()
+		assertAuditRefusal()
 	})
 
 	t.Run("default group currency", func(t *testing.T) {
@@ -687,7 +705,10 @@ func TestLocalNode_InheritedCurrencyChangesBlockHaltedPnl(t *testing.T) {
 			t.Fatalf("CreateAccount: %v", err)
 		}
 		eng.accountPnlStateCalls = nil
-		assertAuditUnchanged := assertNoNewAudit(t, n, ctx)
+		assertAuditRefusal := assertCurrencyRefusalAudit(t, n, ctx, domain.AuditRow{
+			Action: domain.AuditActionSetGroupCurrency,
+			Detail: "set group currency default <unset> -> USD",
+		})
 		err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller)
 		var blocked domain.CurrencyChangeBlockedError
 		if !errors.Is(err, domain.ErrConflict) || !errors.As(err, &blocked) ||
@@ -700,7 +721,7 @@ func TestLocalNode_InheritedCurrencyChangesBlockHaltedPnl(t *testing.T) {
 		if len(eng.accountPnlStateCalls) != 0 {
 			t.Fatalf("default refusal restated runtime P&L: %v", eng.accountPnlStateCalls)
 		}
-		assertAuditUnchanged()
+		assertAuditRefusal()
 	})
 }
 
@@ -739,8 +760,14 @@ func TestLocalNode_CurrencyChangeBlocksActiveOrder(t *testing.T) {
 	if auditErr != nil {
 		t.Fatalf("ListAudit(after): %v", auditErr)
 	}
-	if !reflect.DeepEqual(afterAudit, beforeAudit) {
-		t.Fatalf("audit changed on refusal: before=%+v after=%+v", beforeAudit, afterAudit)
+	if len(afterAudit) != len(beforeAudit)+1 || !reflect.DeepEqual(afterAudit[1:], beforeAudit) {
+		t.Fatalf("refusal must append one audit row: before=%+v after=%+v", beforeAudit, afterAudit)
+	}
+	row := afterAudit[0]
+	if row.Action != domain.AuditActionSetAccountCurrency || row.Account != id ||
+		row.Actor != "operator" || row.Source != "api" ||
+		!strings.HasPrefix(row.Detail, "set account currency acc-1 EUR -> USD refused: ") {
+		t.Fatalf("currency refusal audit = %+v", row)
 	}
 }
 
@@ -819,18 +846,24 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 		}
-		assertAuditUnchanged := assertNoNewAudit(t, n, ctx)
+		assertAuditRefusal := assertCurrencyRefusalAudit(t, n, ctx, domain.AuditRow{
+			Action: domain.AuditActionSetAccountCurrency, Account: "acc-1",
+			Detail: "set account currency acc-1 EUR -> USD",
+		})
 		err := n.SetAccountCurrency(ctx, testKey("acc-1"), "USD", testCaller)
 		var blocked domain.CurrencyChangeBlockedError
 		if !errors.As(err, &blocked) || blocked.Scope != domain.ScopeAccount ||
 			blocked.TargetID != "acc-1" {
 			t.Fatalf("SetAccountCurrency = %#v, want account limit refusal", err)
 		}
+		if !errors.Is(err, domain.ErrCurrencyValuedLimit) {
+			t.Fatalf("currency limit refusal lost its cause: %v", err)
+		}
 		account, ok, getErr := st.GetAccount(ctx, "acc-1")
 		if getErr != nil || !ok || account.Currency != "EUR" {
 			t.Fatalf("account after refusal = %+v, ok=%v err=%v", account, ok, getErr)
 		}
-		assertAuditUnchanged()
+		assertAuditRefusal()
 	})
 
 	t.Run("group scope on group change", func(t *testing.T) {
@@ -858,18 +891,24 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 		}
-		assertAuditUnchanged := assertNoNewAudit(t, n, ctx)
+		assertAuditRefusal := assertCurrencyRefusalAudit(t, n, ctx, domain.AuditRow{
+			Action: domain.AuditActionSetGroupCurrency, Group: "desk",
+			Detail: "set group currency desk EUR -> USD",
+		})
 		err := n.SetGroupCurrency(ctx, "desk", "USD", testCaller)
 		var blocked domain.CurrencyChangeBlockedError
 		if !errors.As(err, &blocked) || blocked.Scope != domain.ScopeAccountGroup ||
 			blocked.TargetID != "desk" {
 			t.Fatalf("SetGroupCurrency = %#v, want group limit refusal", err)
 		}
+		if !errors.Is(err, domain.ErrCurrencyValuedLimit) {
+			t.Fatalf("currency limit refusal lost its cause: %v", err)
+		}
 		group, ok, getErr := st.GetGroup(ctx, "desk")
 		if getErr != nil || !ok || group.Currency != "EUR" {
 			t.Fatalf("group after refusal = %+v, ok=%v err=%v", group, ok, getErr)
 		}
-		assertAuditUnchanged()
+		assertAuditRefusal()
 	})
 
 	for _, tc := range []struct {
@@ -910,7 +949,10 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 			if err := st.PutSpotFundsPnlBoundsLimit(ctx, tc.limit); err != nil {
 				t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 			}
-			assertAuditUnchanged := assertNoNewAudit(t, n, ctx)
+			assertAuditRefusal := assertCurrencyRefusalAudit(t, n, ctx, domain.AuditRow{
+				Action: domain.AuditActionSetGroupCurrency,
+				Detail: "set group currency default <unset> -> USD",
+			})
 			err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller)
 			var blocked domain.CurrencyChangeBlockedError
 			if !errors.As(err, &blocked) ||
@@ -918,11 +960,47 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 				blocked.TargetID != "-" {
 				t.Fatalf("SetDefaultGroupCurrency = %#v, want default refusal", err)
 			}
+			if !errors.Is(err, domain.ErrCurrencyValuedLimit) {
+				t.Fatalf("currency limit refusal lost its cause: %v", err)
+			}
 			if _, ok, getErr := st.GetGroup(ctx, ""); getErr != nil || ok {
 				t.Fatalf("default group after refusal: ok=%v err=%v", ok, getErr)
 			}
-			assertAuditUnchanged()
+			assertAuditRefusal()
 		})
+	}
+}
+
+func TestLocalNode_CurrencyChangeBalanceDominatesCurrencyValuedLimit(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "EUR", "USD")
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", Currency: "EUR",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "USD", Available: "1",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	if err := st.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeGlobal, Currency: "EUR", LowerBound: "-10",
+	}); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+
+	err := n.SetAccountCurrency(ctx, testKey("acc-1"), "USD", testCaller)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("SetAccountCurrency = %v, want ErrConflict", err)
+	}
+	if errors.Is(err, domain.ErrCurrencyValuedLimit) {
+		t.Fatalf("balance blocker reported as currency-valued limit: %v", err)
+	}
+	if !strings.Contains(err.Error(), "carry state that prevents a currency change") {
+		t.Fatalf("SetAccountCurrency = %v, want ordinary currency refusal", err)
 	}
 }
 
@@ -1162,6 +1240,12 @@ func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
 			t.Fatalf("CreateAccount: %v", err)
 		}
 
+		assertAuditRefusal := assertCurrencyRefusalAudit(t, n, ctx, domain.AuditRow{
+			Action:  domain.AuditActionSetGroup,
+			Account: "account",
+			Group:   "desk-eur",
+			Detail:  "set account group account USD -> EUR",
+		})
 		err := n.SetAccountGroup(
 			ctx,
 			testKey("account"),
@@ -1175,6 +1259,7 @@ func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
 			blocked.TargetID != "account" {
 			t.Fatalf("SetAccountGroup error = %#v, want typed account currency guard", err)
 		}
+		assertAuditRefusal()
 	})
 
 	t.Run("group currency mutation", func(t *testing.T) {
@@ -1247,9 +1332,15 @@ func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
 
 		next := newFakeEngine()
 		prepareGroupDeleteRebuild(n, probe, next)
+		assertAuditRefusal := assertCurrencyRefusalAudit(t, n, ctx, domain.AuditRow{
+			Action: domain.AuditActionDeleteGroup,
+			Group:  "desk-eur",
+			Detail: "delete group desk-eur EUR",
+		})
 		assertAccountPnlCurrencyGuard(
 			t, n.DeleteGroup(ctx, "desk-eur", false, testCaller), "account",
 		)
+		assertAuditRefusal()
 		account, ok, err := st.GetAccount(ctx, "account")
 		if err != nil || !ok || account.GroupCode != "desk-eur" {
 			t.Fatalf("member after refused group deletion: %+v ok=%v err=%v", account, ok, err)
@@ -1257,8 +1348,8 @@ func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
 	})
 }
 
-func assertNoNewAudit(
-	t *testing.T, n *localNode, ctx context.Context,
+func assertCurrencyRefusalAudit(
+	t *testing.T, n *localNode, ctx context.Context, expected domain.AuditRow,
 ) func() {
 	t.Helper()
 	before, err := n.ListAudit(ctx, 100)
@@ -1271,8 +1362,14 @@ func assertNoNewAudit(
 		if err != nil {
 			t.Fatalf("ListAudit(after): %v", err)
 		}
-		if !reflect.DeepEqual(after, before) {
-			t.Fatalf("audit changed on refusal: before=%+v after=%+v", before, after)
+		if len(after) != len(before)+1 || !reflect.DeepEqual(after[1:], before) {
+			t.Fatalf("refusal must append one audit row: before=%+v after=%+v", before, after)
+		}
+		row := after[0]
+		if row.Action != expected.Action || row.Account != expected.Account ||
+			row.Group != expected.Group || row.Actor != "operator" || row.Source != "api" ||
+			!strings.HasPrefix(row.Detail, expected.Detail+" refused: ") {
+			t.Fatalf("refusal audit = %+v, want decision for %+v", row, expected)
 		}
 	}
 }
@@ -1976,6 +2073,6 @@ type failCurrencyChangeBlockersRealm struct {
 
 func (r *failCurrencyChangeBlockersRealm) ListAccountsBlockingCurrencyChange(
 	context.Context, []domain.AccountID,
-) ([]domain.AccountID, error) {
+) ([]store.CurrencyChangeBlocker, error) {
 	return nil, r.err
 }

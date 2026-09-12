@@ -486,7 +486,8 @@ export interface BalanceListFilters extends PageRequest, SortSpec {
   realizedPnlMin?: string;
   realizedPnlMax?: string;
   /** Asset the realized-P&L bounds are expressed in. Required whenever the
-   *  mode is not `all`; see `averageEntryPriceCurrency`. */
+   *  mode is not `all` or the list is sorted by `realizedPnl`; see
+   *  `averageEntryPriceCurrency`. */
   realizedPnlCurrency?: string;
   updatedAtMode?: RangeFilterMode;
   updatedAfter?: string;

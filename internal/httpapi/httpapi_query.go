@@ -294,11 +294,15 @@ func decimalRangeFromQuery(
 			return store.DecimalRangeFilter{}, err
 		}
 		if minDec.GreaterThan(maxDec) {
-			return store.DecimalRangeFilter{}, fmt.Errorf("invalid %s range", modeKey)
+			return store.DecimalRangeFilter{}, domain.NewValidationError(
+				"/"+modeKey, "range", fmt.Sprintf("invalid %s range", modeKey),
+			)
 		}
 		return store.DecimalRangeFilter{Min: &minValue, Max: &maxValue}, nil
 	default:
-		return store.DecimalRangeFilter{}, fmt.Errorf("invalid %s", modeKey)
+		return store.DecimalRangeFilter{}, domain.NewValidationError(
+			"/"+modeKey, "enum", fmt.Sprintf("invalid %s", modeKey),
+		)
 	}
 }
 
@@ -311,11 +315,15 @@ func decimalBoundFromQuery(
 ) (string, decimal.Decimal, error) {
 	raw := q.Get(key)
 	if raw == "" {
-		return "", decimal.Decimal{}, fmt.Errorf("missing %s", key)
+		return "", decimal.Decimal{}, domain.NewValidationError(
+			"/"+key, "required", fmt.Sprintf("missing %s", key),
+		)
 	}
 	value, err := decimal.NewFromString(raw)
 	if err != nil {
-		return "", decimal.Decimal{}, fmt.Errorf("invalid %s", key)
+		return "", decimal.Decimal{}, domain.NewValidationError(
+			"/"+key, "decimal", fmt.Sprintf("invalid %s", key),
+		)
 	}
 	return raw, value, nil
 }
@@ -495,14 +503,23 @@ func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 	if err != nil {
 		return store.AccountListFilter{}, err
 	}
+	pnl, err := denominatedDecimalRangeFromQuery(q, "pnl")
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
+	includeUnset, includeHalted, err := pnlStateFlagsFromQuery(q, "includeUnsetPnl", "includeHaltedPnl")
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
 	filter := store.AccountListFilter{
 		Code:        code,
 		BlockReason: blockReason,
 		Status:      status,
 		Position:    position,
-		GroupCode:   nil,
-		Sort:        sortSpec,
-		Page:        page,
+		Pnl:         pnl, IncludeUnsetPnl: includeUnset, IncludeHaltedPnl: includeHalted,
+		GroupCode: nil,
+		Sort:      sortSpec,
+		Page:      page,
 	}
 	if values, ok := q["group"]; ok {
 		group := ""
@@ -510,6 +527,11 @@ func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 			group = values[0]
 		}
 		filter.GroupCode = &group
+	}
+	if err := filter.Validate(); err != nil {
+		return store.AccountListFilter{}, domain.NewValidationError(
+			"/pnlCurrency", "required", err.Error(),
+		)
 	}
 	return filter, nil
 }
@@ -585,6 +607,10 @@ func balanceListFilterFromQuery(q url.Values) (store.BalanceListFilter, error) {
 	if err != nil {
 		return store.BalanceListFilter{}, err
 	}
+	includeUnset, includeHalted, err := pnlStateFlagsFromQuery(q, "includeUnsetRealizedPnl", "includeHaltedRealizedPnl")
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
 	updatedAt, err := timeRangeFromQuery(q, "updatedAtMode", "updatedAfter", "updatedBefore")
 	if err != nil {
 		return store.BalanceListFilter{}, err
@@ -598,16 +624,17 @@ func balanceListFilterFromQuery(q url.Values) (store.BalanceListFilter, error) {
 		return store.BalanceListFilter{}, err
 	}
 	filter := store.BalanceListFilter{
-		Account:           account,
-		Asset:             asset,
-		Available:         available,
-		Held:              held,
-		Incoming:          incoming,
-		AverageEntryPrice: averageEntryPrice,
-		RealizedPnl:       realizedPnl,
-		UpdatedAt:         updatedAt,
-		Sort:              sortSpec,
-		Page:              page,
+		Account:                 account,
+		Asset:                   asset,
+		Available:               available,
+		Held:                    held,
+		Incoming:                incoming,
+		AverageEntryPrice:       averageEntryPrice,
+		RealizedPnl:             realizedPnl,
+		IncludeUnsetRealizedPnl: includeUnset, IncludeHaltedRealizedPnl: includeHalted,
+		UpdatedAt: updatedAt,
+		Sort:      sortSpec,
+		Page:      page,
 	}
 	if values, ok := q["groupCode"]; ok {
 		groupCode := ""
@@ -617,7 +644,9 @@ func balanceListFilterFromQuery(q url.Values) (store.BalanceListFilter, error) {
 		filter.GroupCode = &groupCode
 	}
 	if err := filter.Validate(); err != nil {
-		return store.BalanceListFilter{}, err
+		return store.BalanceListFilter{}, domain.NewValidationError(
+			"/realizedPnlCurrency", "required", err.Error(),
+		)
 	}
 	return filter, nil
 }
@@ -635,10 +664,35 @@ func denominatedDecimalRangeFromQuery(
 	if err != nil {
 		return store.DenominatedDecimalRangeFilter{}, err
 	}
-	return store.DenominatedDecimalRangeFilter{
+	filter := store.DenominatedDecimalRangeFilter{
 		Range:    value,
 		Currency: q.Get(field + "Currency"),
-	}, nil
+	}
+	if err := filter.Validate(field); err != nil {
+		return store.DenominatedDecimalRangeFilter{}, domain.NewValidationError(
+			"/"+field+"Currency", "required", err.Error(),
+		)
+	}
+	return filter, nil
+}
+
+// pnlStateFlagsFromQuery reads opt-in non-numeric P&L categories.
+// An omitted flag is false; a supplied flag must be exactly true or false.
+func pnlStateFlagsFromQuery(q url.Values, unsetKey, haltedKey string) (bool, bool, error) {
+	var flags [2]bool
+	for i, key := range []string{unsetKey, haltedKey} {
+		values, present := q[key]
+		if !present {
+			continue
+		}
+		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+			return false, false, domain.NewValidationError(
+				"/"+key, "boolean", key+" must be true or false",
+			)
+		}
+		flags[i] = values[0] == "true"
+	}
+	return flags[0], flags[1], nil
 }
 
 func orderSideFromQuery(q url.Values) (*domain.OrderSide, error) {

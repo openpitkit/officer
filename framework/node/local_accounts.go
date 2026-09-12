@@ -568,6 +568,11 @@ func (n *localNode) mirrorPolicyConfigurationBlocks(
 func (n *localNode) audit(ctx context.Context, caller domain.Caller, entry store.AuditEntry) error {
 	entry.Actor = caller.Principal
 	entry.Source = caller.Source
+	if err := domain.ValidateAuditDecision(
+		entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
+	); err != nil {
+		return err
+	}
 	return n.realm.AppendAudit(ctx, entry)
 }
 
@@ -577,6 +582,14 @@ func (n *localNode) auditBatch(
 	for i := range entries {
 		entries[i].Actor = caller.Principal
 		entries[i].Source = caller.Source
+		if err := domain.ValidateAuditDecision(
+			entries[i].Action,
+			entries[i].OrderID,
+			entries[i].Verdict,
+			entries[i].RejectCode,
+		); err != nil {
+			return err
+		}
 	}
 	return n.realm.AppendAuditBatch(ctx, entries)
 }
@@ -826,8 +839,19 @@ func (n *localNode) SetAccountGroup(
 						state.err = guardErr
 						return nil, state.err
 					}
-					state.err = domain.NewCurrencyChangeBlockedError(
-						domain.ScopeAccount, key.Account.String(), guardErr,
+					state.err = n.auditCurrencyChangeRefusal(
+						state.ctx, caller, store.AuditEntry{
+							Action:  domain.AuditActionSetGroup,
+							Account: key.Account, AccountTitle: current.Title,
+							Group: groupCode,
+							Detail: currencyDetail(
+								"set account group", key.Account.String(),
+								current.EffectiveCurrency, nextEffective,
+							),
+						},
+						domain.NewCurrencyChangeBlockedError(
+							domain.ScopeAccount, key.Account.String(), guardErr,
+						),
 					)
 					return nil, state.err
 				}

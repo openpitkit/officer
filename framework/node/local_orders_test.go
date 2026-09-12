@@ -59,6 +59,19 @@ type fakeOrderChainDriver struct {
 	trading asyncengine.Driver
 }
 
+type rejectWithoutReasonAfterReservationEngine struct {
+	*fakeEngine
+}
+
+func (e *rejectWithoutReasonAfterReservationEngine) ReservedOrder(
+	order domain.Order, _ asyncengine.OperationResult,
+) (engine.OrderResult, error) {
+	if err := e.recordChainSubmit(order); err != nil {
+		return engine.OrderResult{}, err
+	}
+	return engine.OrderResult{Accepted: false}, nil
+}
+
 type persistedAccountMismatchRealm struct {
 	store.RealmStore
 }
@@ -770,15 +783,15 @@ func (d *fakeOrderChainDriver) ApplyExecutionReport(
 	if d.owner.failExecReport {
 		return pretrade.PostTradeResult{}, errors.New("exec report failed")
 	}
-	leavesQuantity := ""
+	reservationRemainder := ""
 	if fill, ok := report.Fill().Get(); ok {
 		if leaves, ok := fill.RemainingReservedQuantity().Get(); ok {
-			leavesQuantity = leaves.String()
+			reservationRemainder = leaves.String()
 		}
 	}
 	d.owner.stateMu.Lock()
 	d.owner.execReportLeaves = append(
-		d.owner.execReportLeaves, leavesQuantity,
+		d.owner.execReportLeaves, reservationRemainder,
 	)
 	d.owner.stateMu.Unlock()
 	return d.trading.ApplyExecutionReport(report)
@@ -894,7 +907,7 @@ func (e *fakeEngine) OrderModel(o domain.Order) (model.Order, error) {
 
 func (e *fakeEngine) ExecutionReportModel(
 	in domain.ExecutionReportInput,
-	leavesQuantity string,
+	reservationRemainder string,
 ) (model.ExecutionReport, error) {
 	if in.Commission != nil {
 		if err := e.checkKnownAsset(in.Commission.Currency); err != nil {
@@ -938,8 +951,8 @@ func (e *fakeEngine) ExecutionReportModel(
 		}
 		fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
 	}
-	if leavesQuantity != "" {
-		leaves, err := param.NewQuantityFromString(leavesQuantity)
+	if reservationRemainder != "" {
+		leaves, err := param.NewQuantityFromString(reservationRemainder)
 		if err != nil {
 			return model.ExecutionReport{}, err
 		}
@@ -1270,10 +1283,12 @@ func (e *fakeEngine) RejectedImmediate(
 	o domain.Order, _ []reject.Reject,
 ) engine.ImmediateResult {
 	_ = e.recordChainSubmit(o)
-	return engine.ImmediateResult{
-		Accepted: false,
-		Rejects:  []domain.OrderReject{*e.submitReject},
+	result := engine.ImmediateResult{Accepted: false}
+	if e.submitReject != nil &&
+		*e.submitReject != (domain.OrderReject{}) {
+		result.Rejects = []domain.OrderReject{*e.submitReject}
 	}
+	return result
 }
 
 func (e *fakeEngine) PrepareImmediateReservation(
@@ -1508,7 +1523,10 @@ func TestLocalNode_SubmitOrderRejectedRecordsZeroLeaves(t *testing.T) {
 		t.Fatalf("forced terminal report after reject: %v", err)
 	}
 	if len(eng.execReportLeaves) != 1 || eng.execReportLeaves[0] != "0" {
-		t.Fatalf("engine terminal leaves = %+v, want recorded zero", eng.execReportLeaves)
+		t.Fatalf(
+			"engine terminal reservation remainder = %+v, want recorded zero",
+			eng.execReportLeaves,
+		)
 	}
 }
 
@@ -1833,7 +1851,7 @@ func TestLocalNode_CancelVolumeOrderUsesPreReportLeaves(t *testing.T) {
 		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 	}
 	if got := eng.execReportLeaves[0]; got != "5" {
-		t.Fatalf("cancellation selected leaves = %q, want stored leaves 5", got)
+		t.Fatalf("cancellation reservation remainder = %q, want stored reservation 5", got)
 	}
 }
 
@@ -1858,7 +1876,7 @@ func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
 		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 	}
 	if got := eng.execReportLeaves[0]; got != "2" {
-		t.Fatalf("cancellation selected leaves = %q, want stored leaves 2", got)
+		t.Fatalf("cancellation reservation remainder = %q, want stored reservation 2", got)
 	}
 	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
 		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
@@ -1868,7 +1886,7 @@ func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
 	}
 	if len(rows) != 1 ||
 		!strings.Contains(rows[0].Detail, "leavesQty=0") ||
-		!strings.Contains(rows[0].Detail, "sdkLeavesQty=2") ||
+		!strings.Contains(rows[0].Detail, "reservationRemainder=2") ||
 		strings.Contains(rows[0].Detail, "releaseApplied=") {
 		t.Fatalf(
 			"blocked cancellation audit = %+v, want no local release marker",
@@ -1973,7 +1991,7 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 	// zero in the adapter-built report request.
 	if len(audit) != 1 || audit[0].Account != "acc-1" ||
 		!strings.Contains(audit[0].Detail, "qty=2 leavesQty=0 filled") ||
-		!strings.Contains(audit[0].Detail, "sdkLeavesQty=0") {
+		!strings.Contains(audit[0].Detail, "reservationRemainder=0") {
 		t.Fatalf("immediate execution-report audit = %+v", audit)
 	}
 }
@@ -2031,6 +2049,405 @@ func TestLocalNode_SubmitDropCopyPersistsBlockCallerAndAudit(t *testing.T) {
 	if len(rows) != 1 || rows[0].Account != "acc-1" ||
 		rows[0].Actor != domain.PrincipalOperator {
 		t.Fatalf("drop-copy audit rows = %+v", rows)
+	}
+}
+
+func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name            string
+		submitImmediate bool
+		externalID      domain.ExternalID
+		dropCopy        bool
+		rejected        bool
+		action          domain.AuditAction
+		wantExecution   int
+		wantBlocks      int
+	}{
+		{
+			name:       "submit order/accepted order",
+			externalID: "regular-accepted-order",
+			action:     domain.AuditActionSubmitOrder,
+			wantBlocks: 1,
+		},
+		{
+			name:       "submit order/rejected order",
+			externalID: "regular-rejected-order",
+			rejected:   true,
+			action:     domain.AuditActionSubmitOrder,
+		},
+		{
+			name:       "submit order/accepted drop copy",
+			externalID: "regular-accepted-drop-copy",
+			dropCopy:   true,
+			action:     domain.AuditActionSubmitDropCopy,
+			wantBlocks: 1,
+		},
+		{
+			name:       "submit order/rejected drop copy",
+			externalID: "regular-rejected-drop-copy",
+			dropCopy:   true,
+			rejected:   true,
+			action:     domain.AuditActionSubmitDropCopy,
+		},
+		{
+			name:            "submit immediate/accepted order",
+			submitImmediate: true,
+			externalID:      "immediate-accepted-order",
+			action:          domain.AuditActionSubmitOrder,
+			wantExecution:   1,
+		},
+		{
+			name:            "submit immediate/rejected order",
+			submitImmediate: true,
+			externalID:      "immediate-rejected-order",
+			rejected:        true,
+			action:          domain.AuditActionSubmitOrder,
+		},
+		{
+			name:            "submit immediate/accepted drop copy",
+			submitImmediate: true,
+			externalID:      "immediate-accepted-drop-copy",
+			dropCopy:        true,
+			action:          domain.AuditActionSubmitDropCopy,
+			wantExecution:   1,
+			wantBlocks:      1,
+		},
+		{
+			name:            "submit immediate/rejected drop copy",
+			submitImmediate: true,
+			externalID:      "immediate-rejected-drop-copy",
+			dropCopy:        true,
+			rejected:        true,
+			action:          domain.AuditActionSubmitDropCopy,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			eng.submitBlocks = []domain.ExecutionAccountBlock{{
+				Account: "acc-1", Policy: "pnl_bounds",
+				Code: "account_blocked", Reason: "kill-switch tripped",
+			}}
+			if tc.rejected {
+				eng.submitReject = &domain.OrderReject{
+					Code: "order_size", Scope: "account",
+					Policy: "order-size",
+				}
+			}
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+			caller := domain.Caller{
+				Source:    domain.SourceAPI,
+				Principal: domain.PrincipalOperator,
+			}
+			input := domain.Order{
+				ExternalID: tc.externalID,
+				Account:    "acc-1", DropCopy: tc.dropCopy,
+				BaseAsset: "AAPL", QuoteAsset: "USD",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "1", Price: "100",
+			}
+			var order domain.Order
+			var err error
+			if tc.submitImmediate {
+				var result engine.ImmediateResult
+				order, result, err = n.SubmitImmediate(
+					ctx,
+					testKey("acc-1"),
+					input,
+					domain.MissingAccountCreate,
+					caller,
+				)
+				if err != nil {
+					t.Fatalf("SubmitImmediate: %v", err)
+				}
+				if result.Accepted == tc.rejected {
+					t.Fatalf(
+						"accepted = %v, want %v",
+						result.Accepted,
+						!tc.rejected,
+					)
+				}
+			} else {
+				order, err = n.SubmitOrder(
+					ctx,
+					testKey("acc-1"),
+					input,
+					domain.MissingAccountCreate,
+					caller,
+				)
+				if err != nil {
+					t.Fatalf("SubmitOrder: %v", err)
+				}
+			}
+
+			decisionRows, err := st.ListAuditFiltered(
+				ctx,
+				domain.AuditFilter{Actions: []domain.AuditAction{
+					domain.AuditActionSubmitOrder,
+					domain.AuditActionSubmitDropCopy,
+				}},
+				10,
+			)
+			if err != nil {
+				t.Fatalf("ListAuditFiltered(decisions): %v", err)
+			}
+			if len(decisionRows) != 1 {
+				t.Fatalf(
+					"decision audit rows = %+v, want exactly one",
+					decisionRows,
+				)
+			}
+			got := decisionRows[0]
+			wantVerdict := "accept"
+			wantRejectCode := ""
+			if tc.rejected {
+				wantVerdict = "reject"
+				wantRejectCode = "order_size"
+			}
+			if got.Action != tc.action ||
+				got.OrderID != order.ExternalID.String() ||
+				got.Verdict != wantVerdict ||
+				got.RejectCode != wantRejectCode ||
+				got.Account != "acc-1" ||
+				got.Actor != domain.PrincipalOperator ||
+				got.Source != domain.SourceAPI {
+				t.Fatalf(
+					"decision audit row = %+v, want action=%q order=%q "+
+						"verdict=%q reject=%q account and caller",
+					got,
+					tc.action,
+					order.ExternalID,
+					wantVerdict,
+					wantRejectCode,
+				)
+			}
+
+			executionRows, err := st.ListAuditFiltered(
+				ctx,
+				domain.AuditFilter{Actions: []domain.AuditAction{
+					domain.AuditActionExecutionReport,
+				}},
+				10,
+			)
+			if err != nil {
+				t.Fatalf("ListAuditFiltered(execution): %v", err)
+			}
+			if len(executionRows) != tc.wantExecution {
+				t.Fatalf(
+					"execution audit rows = %+v, want %d",
+					executionRows,
+					tc.wantExecution,
+				)
+			}
+			blockRows, err := st.ListAuditFiltered(
+				ctx,
+				domain.AuditFilter{Actions: []domain.AuditAction{
+					domain.AuditActionBlock,
+				}},
+				10,
+			)
+			if err != nil {
+				t.Fatalf("ListAuditFiltered(blocks): %v", err)
+			}
+			if len(blockRows) != tc.wantBlocks {
+				t.Fatalf(
+					"block audit rows = %+v, want %d",
+					blockRows,
+					tc.wantBlocks,
+				)
+			}
+		})
+	}
+}
+
+func TestLocalNode_SubmitImmediateDecisionAuditFailureFatals(t *testing.T) {
+	t.Parallel()
+	auditCause := errors.New("immediate decision audit failed")
+	st := newRealmWrapStore(
+		newMemoryStore("node.db"),
+		func(r store.RealmStore) store.RealmStore {
+			return &failActionAuditRealm{
+				RealmStore: r,
+				action:     domain.AuditActionSubmitOrder,
+				err:        auditCause,
+			}
+		},
+	)
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	eng := newFakeEngine()
+	var fatalErr error
+	n := newTestNodeWithStore(
+		t,
+		st,
+		eng,
+		WithFatalShutdownHook(func(err error) {
+			fatalErr = err
+		}),
+	)
+	_, _, err := n.SubmitImmediate(
+		ctx,
+		testKey("acc-1"),
+		domain.Order{
+			BaseAsset: "AAPL", QuoteAsset: "USD",
+			Side:        domain.OrderSideBuy,
+			AmountKind:  domain.OrderAmountKindQuantity,
+			AmountValue: "1", Price: "100",
+		},
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if !errors.Is(err, auditCause) {
+		t.Fatalf("SubmitImmediate error = %v, want audit cause", err)
+	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("SubmitImmediate error = %v, want retry-unsafe marker", err)
+	}
+	if fatalErr == nil || !errors.Is(fatalErr, auditCause) {
+		t.Fatalf("fatal error = %v, want audit cause", fatalErr)
+	}
+	if !strings.Contains(fatalErr.Error(), `operation="audit submit order"`) {
+		t.Fatalf("fatal error = %q, want audit operation", fatalErr)
+	}
+	if len(eng.submitCalls) != 1 {
+		t.Fatalf("submit calls = %+v, want one engine apply", eng.submitCalls)
+	}
+}
+
+func TestLocalNode_SubmitImmediateRejectWithoutReasonFailsBeforePersistence(
+	t *testing.T,
+) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitReject = &domain.OrderReject{}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	const externalID domain.ExternalID = "immediate-reject-without-reason"
+
+	_, _, err := n.SubmitImmediate(
+		ctx,
+		testKey("acc-1"),
+		domain.Order{
+			ExternalID: externalID,
+			BaseAsset:  "AAPL", QuoteAsset: "USD",
+			Side:        domain.OrderSideBuy,
+			AmountKind:  domain.OrderAmountKindQuantity,
+			AmountValue: "1", Price: "100",
+		},
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "engine rejection has no reject reason") {
+		t.Fatalf("SubmitImmediate error = %v, want missing reject reason", err)
+	}
+	if _, getErr := st.GetOrder(ctx, externalID); !errors.Is(
+		getErr,
+		domain.ErrNotFound,
+	) {
+		t.Fatalf("GetOrder after rejected submission = %v, want not found", getErr)
+	}
+	decisionRows, listErr := st.ListAuditFiltered(
+		ctx,
+		domain.AuditFilter{Actions: []domain.AuditAction{
+			domain.AuditActionSubmitOrder,
+			domain.AuditActionSubmitDropCopy,
+		}},
+		10,
+	)
+	if listErr != nil {
+		t.Fatalf("ListAuditFiltered: %v", listErr)
+	}
+	if len(decisionRows) != 0 {
+		t.Fatalf(
+			"missing-reason submission persisted decision rows: %+v",
+			decisionRows,
+		)
+	}
+	if len(eng.submitCalls) != 1 {
+		t.Fatalf("submit calls = %+v, want one engine rejection", eng.submitCalls)
+	}
+}
+
+func TestLocalNode_SubmitOrderAcceptedPathRejectWithoutReasonFatals(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newMemoryStore("node.db")
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	baseEngine := newFakeEngine()
+	eng := &rejectWithoutReasonAfterReservationEngine{fakeEngine: baseEngine}
+	var captured engine.Snapshot
+	baseBuild := fakeBuild(baseEngine, &captured)
+	build := func(snapshot engine.Snapshot) (engine.Engine, error) {
+		if _, err := baseBuild(snapshot); err != nil {
+			return nil, err
+		}
+		return eng, nil
+	}
+	var fatalErr error
+	service, _, err := NewLocalNode(
+		ctx,
+		st,
+		build,
+		WithFatalShutdownHook(func(err error) {
+			fatalErr = err
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	n := service.(*localNode)
+	seedTestPrincipal(t, n)
+
+	const externalID domain.ExternalID = "accepted-path-reject-without-reason"
+	_, err = n.SubmitOrder(
+		ctx,
+		testKey("acc-1"),
+		domain.Order{
+			ExternalID:  externalID,
+			BaseAsset:   "AAPL",
+			QuoteAsset:  "USD",
+			Side:        domain.OrderSideBuy,
+			AmountKind:  domain.OrderAmountKindQuantity,
+			AmountValue: "1",
+			Price:       "100",
+		},
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "engine rejection has no reject reason") {
+		t.Fatalf("SubmitOrder error = %v, want missing reject reason", err)
+	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("SubmitOrder error = %v, want retry-unsafe marker", err)
+	}
+	if len(baseEngine.submitCalls) != 1 {
+		t.Fatalf(
+			"submit calls = %+v, want one applied reservation",
+			baseEngine.submitCalls,
+		)
+	}
+	if fatalErr == nil ||
+		!strings.Contains(fatalErr.Error(), "operation=\"audit submit order\"") ||
+		!strings.Contains(fatalErr.Error(), "engine rejection has no reject reason") {
+		t.Fatalf("fatal error = %v, want audit operation and missing reason", fatalErr)
+	}
+	if _, getErr := n.realm.GetOrder(ctx, externalID); getErr != nil {
+		t.Fatalf("GetOrder after fatal audit failure: %v", getErr)
 	}
 }
 

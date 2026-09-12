@@ -138,7 +138,8 @@ func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
 		t.Fatalf("manifest content type = %q", got)
 	}
 	want := "{\"routes\":[{\"method\":\"GET\",\"path\":\"/first\"}," +
-		"{\"method\":\"POST\",\"path\":\"/second/{id}\"}]}\n"
+		"{\"method\":\"POST\",\"path\":\"/second/{id}\"}," +
+		"{\"method\":\"GET\",\"path\":\"/route-manifest.json\"}]}\n"
 	if rec.Body.String() != want {
 		t.Fatalf("manifest = %q, want %q", rec.Body.String(), want)
 	}
@@ -183,7 +184,8 @@ func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("manifest status = %d, want 200", rec.Code)
 	}
-	want := "{\"routes\":[{\"method\":\"GET\",\"path\":\"/public\"}]}\n"
+	want := "{\"routes\":[{\"method\":\"GET\",\"path\":\"/public\"}," +
+		"{\"method\":\"GET\",\"path\":\"/route-manifest.json\"}]}\n"
 	if rec.Body.String() != want {
 		t.Fatalf("manifest = %q, want %q", rec.Body.String(), want)
 	}

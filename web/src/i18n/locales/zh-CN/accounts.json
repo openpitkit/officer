@@ -265,6 +265,7 @@
     "exportAccountsCsv": "导出账户 CSV"
   },
   "blockAccount": {
+    "applied": "已对账户 {{account}} 应用封锁。",
     "titlePrefix": "封锁账户",
     "description": "封锁将停止该账户的新订单。必须提供原因，并将记录至审计日志。",
     "reasonLabel": "原因",

@@ -20,7 +20,7 @@ import { useTranslation } from "react-i18next";
 
 import { useOverview } from "@/api/useOverview";
 import { Page } from "@/components/Page";
-import { ErrorState, TableSkeleton } from "@/components/PageStates";
+import { ErrorState, StaleState, TableSkeleton } from "@/components/PageStates";
 import { Button } from "@/components/ui/button";
 import { DashboardWidgets } from "@/framework";
 import type { DashboardReadyWidgetProps } from "@/pages/dashboard/widgets";
@@ -60,6 +60,7 @@ export function Dashboard() {
       }
     >
       {load.state === "loading" && <TableSkeleton rows={3} cols={3} />}
+      <StaleState load={load} reload={reload} />
       {load.state === "error" && (
         <ErrorState message={load.error} onRetry={reload} />
       )}

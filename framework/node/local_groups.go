@@ -536,7 +536,7 @@ func (n *localNode) DeleteGroup(
 	}
 	defer n.endEngineRestart()
 
-	_, ok, err := n.realm.GetGroup(ctx, code)
+	group, ok, err := n.realm.GetGroup(ctx, code)
 	if err != nil {
 		return fmt.Errorf("read group for delete: %w", err)
 	}
@@ -551,9 +551,15 @@ func (n *localNode) DeleteGroup(
 		if !errors.Is(err, domain.ErrConflict) {
 			return err
 		}
-		return domain.NewCurrencyChangeBlockedError(
+		return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
+			Action: domain.AuditActionDeleteGroup,
+			Group:  code,
+			Detail: fmt.Sprintf(
+				"delete group %s %s", code, currencyValue(group.Currency),
+			),
+		}, domain.NewCurrencyChangeBlockedError(
 			domain.ScopeAccountGroup, code, err,
-		)
+		))
 	}
 
 	snapshot, _, err := n.loadSnapshot(ctx)

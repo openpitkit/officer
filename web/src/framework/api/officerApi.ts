@@ -3413,10 +3413,12 @@ export interface ExecutionReportBody {
   /** A fill is allowed only for `filled` or `partially_filled`. */
   quantity?: string;
   price?: string;
-  /** Caller-reported open base quantity. Required for `filled` and
-   *  `partially_filled`; otherwise optional. A supplied value is recorded
-   *  verbatim. For terminal non-trade reports, the SDK instead receives the
-   *  order's previously recorded leaves. */
+  /** Caller-reported open base quantity. Required and non-empty for `filled`
+   *  or `partially_filled`; otherwise optional. Officer records a supplied
+   *  value verbatim on the order, in the report event, and in the attestation.
+   *  This value never sets the financial reservation to release: the SDK
+   *  receives the order's own recorded reservation remainder, which Officer
+   *  tracks from the engine's balance movements. Empty means absent. */
   leavesQuantity?: string;
   lockPrice?: string;
   /** A null or empty pair means no commission. Otherwise amount and currency
@@ -3512,11 +3514,14 @@ export interface ConfirmOrderBody {
 
 /** POST /orders/{id}/cancel body: the approval token from the workflow, optional
  *  caller-reported leaves recorded verbatim, and an optional reason. The SDK
- *  cancellation uses the order's previously recorded leaves. */
+ *  receives the order's own recorded reservation remainder. */
 export interface CancelOrderBody {
   token: string;
-  /** A supplied value is recorded verbatim. Omitted or empty means absent;
-   *  whitespace is supplied malformed data. */
+  /** Caller-reported open base quantity. Officer records a supplied value
+   *  verbatim on the order, in the report event, and in the attestation. This
+   *  value never sets the financial reservation to release: the SDK receives
+   *  the order's own recorded reservation remainder, which Officer tracks from
+   *  the engine's balance movements. Empty means absent. */
   leavesQuantity?: string;
   reason?: string;
 }

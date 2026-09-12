@@ -1210,6 +1210,9 @@ func (r *realmStore) ListAccounts(ctx context.Context) ([]domain.Account, error)
 func (r *realmStore) ListAccountRows(
 	ctx context.Context, filter fwstore.AccountListFilter,
 ) (fwstore.AccountListPage, error) {
+	if err := filter.Validate(); err != nil {
+		return fwstore.AccountListPage{}, err
+	}
 	where, args := accountListWhere(filter)
 	having, havingArgs := countHaving(
 		"", fwstore.CountRangeFilter{}, "COUNT(b.asset_id)", filter.Position,
@@ -1566,6 +1569,10 @@ func accountListWhere(filter fwstore.AccountListFilter) (string, []any) {
 			args = append(args, *filter.GroupCode)
 		}
 	}
+	appendPnlRangeFilter(
+		&clauses, &args, "a.pnl", "a.pnl_halt_reason", balanceAccountCurrency,
+		filter.Pnl, filter.IncludeUnsetPnl, filter.IncludeHaltedPnl,
+	)
 	if len(clauses) == 0 {
 		return "", args
 	}

@@ -28,7 +28,7 @@ func handleListAssets(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := assetListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteValidationErrMsg(w, err.Error())
+			httpx.WriteValidationErr(w, err)
 			return
 		}
 		page, err := svc.ListAssetRows(r.Context(), filter)
@@ -110,7 +110,7 @@ func handleListAssetClasses(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := assetClassListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteValidationErrMsg(w, err.Error())
+			httpx.WriteValidationErr(w, err)
 			return
 		}
 		page, err := svc.ListAssetClassRows(r.Context(), filter)

@@ -95,7 +95,7 @@ func handleListOrders(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := orderListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteValidationErrMsg(w, err.Error())
+			httpx.WriteValidationErr(w, err)
 			return
 		}
 		orders, err := svc.ListOrderRows(r.Context(), filter)
@@ -493,12 +493,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			in.ExternalID = reportID
 		}
 		if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
-			httpx.WriteValidationProblem(
-				w,
-				err.Error(),
-				domain.ExecutionReportValidationPointer(err),
-				domain.ExecutionReportValidationConstraint(err),
-			)
+			httpx.WriteErr(w, err)
 			return
 		}
 		orderID, err := domain.ParseExternalID(id)

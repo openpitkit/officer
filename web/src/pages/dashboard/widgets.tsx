@@ -29,6 +29,7 @@ import type {
 import { useAudit } from "@/api/useAudit";
 import { useMarketData } from "@/api/useMarketData";
 import { useMcpAccess } from "@/api/useMcpAccess";
+import { CompactStaleState } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime } from "@/i18n/format";
@@ -153,6 +154,7 @@ export function McpAccessCard() {
           {load.state === "loading" && (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
           )}
+          <CompactStaleState load={load} />
           {load.state === "error" && (
             <span className="text-xs text-muted-lt">{load.error}</span>
           )}
@@ -196,6 +198,7 @@ export function MarketDataCard() {
           {load.state === "loading" && (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
           )}
+          <CompactStaleState load={load} />
           {load.state === "error" && (
             <span className="text-xs text-muted-lt">{load.error}</span>
           )}
@@ -456,6 +459,7 @@ export function AuditStrip() {
       <CardHeader className="flex-row items-center gap-2">
         <Activity className="h-4 w-4 text-muted" />
         <CardTitle>{t("audit.title")}</CardTitle>
+        <CompactStaleState load={load} />
       </CardHeader>
       <CardContent className="space-y-0 pb-2">
         {load.state === "loading" && (

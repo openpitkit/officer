@@ -458,6 +458,8 @@
     "system": "System"
   },
   "states": {
+    "stale": "Stale data",
+    "staleDescription": "Refresh failed. Showing the last received data.",
     "loadError": "Could not load data",
     "loading": "Loading",
     "copyableSnippet": "Copyable snippet"

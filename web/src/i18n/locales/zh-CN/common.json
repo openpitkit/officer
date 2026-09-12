@@ -458,6 +458,8 @@
     "system": "跟随系统"
   },
   "states": {
+    "stale": "数据已过时",
+    "staleDescription": "刷新失败。当前显示最后收到的数据。",
     "loadError": "数据加载失败",
     "loading": "正在加载",
     "copyableSnippet": "可复制片段"

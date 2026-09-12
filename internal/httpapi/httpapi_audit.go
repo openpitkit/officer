@@ -32,7 +32,7 @@ func handleListAudit(svc Service) http.HandlerFunc {
 		q := r.URL.Query()
 		filter, err := auditListFilterFromQuery(q)
 		if err != nil {
-			httpx.WriteValidationErrMsg(w, err.Error())
+			httpx.WriteValidationErr(w, err)
 			return
 		}
 		if filter.Page.Limit > auditCapREST {

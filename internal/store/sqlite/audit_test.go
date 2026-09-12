@@ -24,6 +24,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -51,10 +52,11 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 
 	if err := rs.AppendAudit(ctx, AuditEntry{
 		Actor:   "operator",
-		Action:  domain.AuditActionCreateAccount,
+		Action:  domain.AuditActionSubmitOrder,
 		Account: "acc-1",
-		Detail:  "created acc-1",
-		Source:  domain.SourcePanel,
+		OrderID: "aW50ZWdyYXRpb24tYXVkaQ", Verdict: "reject", RejectCode: "order_qty_exceeds_limit",
+		Detail: "order rejected",
+		Source: domain.SourcePanel,
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
@@ -93,6 +95,9 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 	// The control-action row surfaces the account and actor codes; the system row
 	// surfaces neither and defaults its source to system.
 	control := rows[1]
+	if control.OrderID != "aW50ZWdyYXRpb24tYXVkaQ" || control.Verdict != "reject" || control.RejectCode != "order_qty_exceeds_limit" {
+		t.Fatalf("decision fields = %+v", control)
+	}
 	if control.Account != "acc-1" || control.Actor != "operator" {
 		t.Fatalf("control row refs = (%q, %q), want (acc-1, operator)", control.Account, control.Actor)
 	}
@@ -107,7 +112,7 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 		t.Fatalf("ListAuditRows(external id): %v", err)
 	}
 	if len(exact.Rows) != 1 ||
-		exact.Rows[0].ExternalID != control.ExternalID {
+		exact.Rows[0] != control {
 		t.Fatalf("external id page = %+v", exact.Rows)
 	}
 	system := rows[0]
@@ -125,6 +130,133 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("ListAudit(0) len = %d, want 0", len(empty))
+	}
+}
+
+func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
+	valid := []struct {
+		name  string
+		entry AuditEntry
+	}{
+		{
+			name: "accepted order",
+			entry: AuditEntry{
+				Action:  domain.AuditActionSubmitOrder,
+				OrderID: "opaque-accepted-order",
+				Verdict: "accept",
+			},
+		},
+		{
+			name: "rejected drop copy with code",
+			entry: AuditEntry{
+				Action:     domain.AuditActionSubmitDropCopy,
+				OrderID:    "opaque-rejected-drop-copy",
+				Verdict:    "reject",
+				RejectCode: "order_size",
+			},
+		},
+		{
+			name: "rejected order without code",
+			entry: AuditEntry{
+				Action:  domain.AuditActionSubmitOrder,
+				OrderID: "opaque-rejected-order",
+				Verdict: "reject",
+			},
+		},
+		{
+			name: "unrelated action without decision metadata",
+			entry: AuditEntry{
+				Action: domain.AuditActionCreateAccount,
+			},
+		},
+	}
+	for _, tc := range valid {
+		t.Run("valid "+tc.name, func(t *testing.T) {
+			ctx, rs := seedAuditFixtures(t)
+			if err := rs.AppendAudit(ctx, tc.entry); err != nil {
+				t.Fatalf("AppendAudit: %v", err)
+			}
+			rows, err := rs.ListAudit(ctx, 10)
+			if err != nil {
+				t.Fatalf("ListAudit: %v", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("audit rows = %+v, want one", rows)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name  string
+		entry AuditEntry
+	}{
+		{
+			name: "unknown verdict",
+			entry: AuditEntry{
+				Action:  domain.AuditActionSubmitOrder,
+				OrderID: "opaque-order",
+				Verdict: "maybe",
+			},
+		},
+		{
+			name: "missing order id",
+			entry: AuditEntry{
+				Action:  domain.AuditActionSubmitOrder,
+				Verdict: "accept",
+			},
+		},
+		{
+			name: "missing verdict",
+			entry: AuditEntry{
+				Action:  domain.AuditActionSubmitDropCopy,
+				OrderID: "opaque-order",
+			},
+		},
+		{
+			name: "accept with reject code",
+			entry: AuditEntry{
+				Action:  domain.AuditActionSubmitOrder,
+				OrderID: "opaque-order",
+				Verdict: "accept", RejectCode: "order_size",
+			},
+		},
+		{
+			name: "unrelated action with order id",
+			entry: AuditEntry{
+				Action:  domain.AuditActionCreateAccount,
+				OrderID: "opaque-order",
+			},
+		},
+		{
+			name: "unrelated action with verdict",
+			entry: AuditEntry{
+				Action:  domain.AuditActionCreateAccount,
+				Verdict: "accept",
+			},
+		},
+		{
+			name: "unrelated action with reject code",
+			entry: AuditEntry{
+				Action:     domain.AuditActionCreateAccount,
+				RejectCode: "order_size",
+			},
+		},
+	}
+	for _, tc := range invalid {
+		t.Run("invalid "+tc.name, func(t *testing.T) {
+			ctx, rs := seedAuditFixtures(t)
+			err := rs.AppendAudit(ctx, tc.entry)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("AppendAudit error = %v, want ErrInvalid", err)
+			}
+			rows, listErr := rs.ListAudit(ctx, 10)
+			if listErr != nil {
+				t.Fatalf("ListAudit: %v", listErr)
+			}
+			if len(rows) != 0 {
+				t.Fatalf("rejected audit entry persisted rows: %+v", rows)
+			}
+		})
 	}
 }
 
@@ -150,6 +282,28 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Fatalf("failed batch persisted partial rows: %+v", rows)
+	}
+
+	err = rs.AppendAuditBatch(ctx, []AuditEntry{
+		{
+			Action: domain.AuditActionCreateAccount,
+			Detail: "first metadata row must roll back",
+		},
+		{
+			Action:  domain.AuditActionCreateAccount,
+			OrderID: "decision-on-unrelated-action",
+			Detail:  "invalid decision metadata",
+		},
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("AppendAuditBatch metadata error = %v, want ErrInvalid", err)
+	}
+	rows, listErr = rs.ListAudit(ctx, 10)
+	if listErr != nil {
+		t.Fatalf("ListAudit after metadata batch: %v", listErr)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("invalid metadata batch persisted partial rows: %+v", rows)
 	}
 
 	if err := rs.AppendAuditBatch(ctx, []AuditEntry{
@@ -274,7 +428,11 @@ func TestAuditFiltered(t *testing.T) {
 	mustAppend(AuditEntry{Action: domain.AuditActionBlock, Account: "acc-1", Source: domain.SourcePanel})
 	mustAppend(AuditEntry{Action: domain.AuditActionUnblock, Account: "acc-1", Source: domain.SourceAPI})
 	mustAppend(AuditEntry{Action: domain.AuditActionBlock, Account: "acc-2", Source: domain.SourcePanel})
-	mustAppend(AuditEntry{Action: domain.AuditActionSubmitOrder, Account: "acc-2", Source: domain.SourceMCP})
+	mustAppend(AuditEntry{
+		Action:  domain.AuditActionSubmitOrder,
+		Account: "acc-2", Source: domain.SourceMCP,
+		OrderID: "opaque-filter-order", Verdict: "accept",
+	})
 
 	// Account filter narrows to acc-1's two rows.
 	rows, err := rs.ListAuditFiltered(ctx, domain.AuditFilter{Account: "acc-1"}, 10)
@@ -465,6 +623,7 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 	mustAppend(AuditEntry{
 		Actor: "robot", Action: domain.AuditActionSubmitOrder,
 		Account: "acc-1", Source: domain.SourceMCP, Detail: "row-other",
+		OrderID: "opaque-page-order", Verdict: "accept",
 	})
 
 	r := rs.(*realmStore)

@@ -44,19 +44,23 @@ import (
 // Otherwise a hand-crafted archive could plant a code carrying a NUL, a
 // newline, or an unbounded length.
 
+func restoreValidationError(err error) error {
+	return domain.WithValidationPointer("", err)
+}
+
 // restoreAssetClasses inserts (or updates) the asset-class dictionary before the
 // assets, so an asset's class_id foreign key resolves on import.
 func (rt *restoreTx) restoreAssetClasses(
 	ctx context.Context, classes []domain.AssetClass,
 ) error {
 	for _, c := range classes {
-		if err := domain.ValidateAssetClassID(c.Code); err != nil {
+		if err := restoreValidationError(domain.ValidateAssetClassID(c.Code)); err != nil {
 			return fmt.Errorf("store: restore asset class %q: %w", c.Code, err)
 		}
-		if err := domain.ValidateTitle(c.Title); err != nil {
+		if err := restoreValidationError(domain.ValidateTitle(c.Title)); err != nil {
 			return fmt.Errorf("store: restore asset class %q: %w", c.Code, err)
 		}
-		if err := domain.ValidateNotes(c.Notes); err != nil {
+		if err := restoreValidationError(domain.ValidateNotes(c.Notes)); err != nil {
 			return fmt.Errorf("store: restore asset class %q: %w", c.Code, err)
 		}
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM asset_class WHERE code = ?`, c.Code)
@@ -86,14 +90,14 @@ func (rt *restoreTx) restoreAssetClasses(
 
 func (rt *restoreTx) restoreAssets(ctx context.Context, assets []backup.Asset) error {
 	for _, a := range assets {
-		if err := domain.ValidateAsset(a.Code); err != nil {
+		if err := restoreValidationError(domain.ValidateAsset(a.Code)); err != nil {
 			return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
 		}
-		if err := domain.ValidateTitle(a.Title); err != nil {
+		if err := restoreValidationError(domain.ValidateTitle(a.Title)); err != nil {
 			return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
 		}
 		if a.AssetClass != "" {
-			if err := domain.ValidateAssetClassID(a.AssetClass); err != nil {
+			if err := restoreValidationError(domain.ValidateAssetClassID(a.AssetClass)); err != nil {
 				return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
 			}
 		}
@@ -132,10 +136,10 @@ func (rt *restoreTx) restoreAssets(ctx context.Context, assets []backup.Asset) e
 
 func (rt *restoreTx) restorePrincipals(ctx context.Context, principals []domain.Principal) error {
 	for _, p := range principals {
-		if err := domain.ValidatePrincipalID(p.Code); err != nil {
+		if err := restoreValidationError(domain.ValidatePrincipalID(p.Code)); err != nil {
 			return fmt.Errorf("store: restore principal %q: %w", p.Code, err)
 		}
-		if err := domain.ValidateTitle(p.Title); err != nil {
+		if err := restoreValidationError(domain.ValidateTitle(p.Title)); err != nil {
 			return fmt.Errorf("store: restore principal %q: %w", p.Code, err)
 		}
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM principal WHERE code = ?`, p.Code)
@@ -173,16 +177,16 @@ func (rt *restoreTx) restoreGroups(
 	// currency travels separately through restoreDefaultGroupCurrency, so the
 	// non-empty group-code contract applies to every row here.
 	for _, g := range groups {
-		if err := domain.ValidateGroupID(g.Code); err != nil {
+		if err := restoreValidationError(domain.ValidateGroupID(g.Code)); err != nil {
 			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
 		}
-		if err := domain.ValidateTitle(g.Title); err != nil {
+		if err := restoreValidationError(domain.ValidateTitle(g.Title)); err != nil {
 			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
 		}
-		if err := domain.ValidateNotes(g.Notes); err != nil {
+		if err := restoreValidationError(domain.ValidateNotes(g.Notes)); err != nil {
 			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
 		}
-		if err := domain.ValidateBlockReason(g.BlockReason); err != nil {
+		if err := restoreValidationError(domain.ValidateBlockReason(g.BlockReason)); err != nil {
 			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
 		}
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM account_group WHERE code = ?`, g.Code)
@@ -268,20 +272,22 @@ func (rt *restoreTx) restoreDefaultGroupCurrency(
 // account runs on its surrogate id (the engine account id).
 func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Account) error {
 	for _, a := range accounts {
-		if err := domain.ValidateAccountID(domain.AccountID(a.Code)); err != nil {
+		if err := restoreValidationError(
+			domain.ValidateAccountID(domain.AccountID(a.Code)),
+		); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 		}
-		if err := domain.ValidateTitle(a.Title); err != nil {
+		if err := restoreValidationError(domain.ValidateTitle(a.Title)); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 		}
-		if err := domain.ValidateNotes(a.Notes); err != nil {
+		if err := restoreValidationError(domain.ValidateNotes(a.Notes)); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 		}
-		if err := domain.ValidateBlockReason(a.BlockReason); err != nil {
+		if err := restoreValidationError(domain.ValidateBlockReason(a.BlockReason)); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 		}
 		if a.GroupCode != "" {
-			if err := domain.ValidateGroupID(a.GroupCode); err != nil {
+			if err := restoreValidationError(domain.ValidateGroupID(a.GroupCode)); err != nil {
 				return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 			}
 		}
@@ -290,7 +296,7 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 				return fmt.Errorf("store: restore account %q pnl %q: %w", a.Code, a.Pnl, err)
 			}
 		}
-		if err := domain.ValidatePnlHaltReason(a.PnlHaltReason); err != nil {
+		if err := restoreValidationError(domain.ValidatePnlHaltReason(a.PnlHaltReason)); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 		}
 		// Restore stores what the archive carried: an absent P&L stays absent
@@ -345,7 +351,9 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 
 func (rt *restoreTx) restoreBalances(ctx context.Context, balances []backup.Balance) error {
 	for _, b := range balances {
-		if err := domain.ValidatePnlHaltReason(b.RealizedPnlHaltReason); err != nil {
+		if err := restoreValidationError(
+			domain.ValidatePnlHaltReason(b.RealizedPnlHaltReason),
+		); err != nil {
 			return fmt.Errorf("store: restore balance %q/%q: %w", b.Account, b.Asset, err)
 		}
 		for _, field := range []struct {
@@ -361,7 +369,7 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []backup.Bala
 			if field.value == "" {
 				continue
 			}
-			if err := domain.ValidateDecimal(field.value); err != nil {
+			if err := restoreValidationError(domain.ValidateDecimal(field.value)); err != nil {
 				return fmt.Errorf(
 					"store: restore balance %q/%q %s: %w",
 					b.Account, b.Asset, field.name, err,
@@ -417,7 +425,7 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []backup.Bala
 
 func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error {
 	for _, l := range data.RateLimits {
-		if err := l.Validate(); err != nil {
+		if err := restoreValidationError(l.Validate()); err != nil {
 			return fmt.Errorf(
 				"store: restore rate_limit scope %q account %q asset %q: %w",
 				l.Scope,
@@ -441,7 +449,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
 	for _, l := range data.OrderSizeLimits {
-		if err := l.Validate(); err != nil {
+		if err := restoreValidationError(l.Validate()); err != nil {
 			return fmt.Errorf(
 				"store: restore order_size_limit scope %q account %q asset %q: %w",
 				l.Scope,
@@ -466,7 +474,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
 	for _, l := range data.SpotFundsPnlBoundsLimits {
-		if err := l.Validate(); err != nil {
+		if err := restoreValidationError(l.Validate()); err != nil {
 			return fmt.Errorf(
 				"store: restore spot_funds_pnl_bounds_kill_switch scope %q "+
 					"account %q account group %q currency %q: %w",
@@ -597,7 +605,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 			)
 		}
 		inst := restoredMarketDataInstance(archived, "")
-		if err := domain.ValidateMarketDataInstance(inst); err != nil {
+		if err := restoreValidationError(domain.ValidateMarketDataInstance(inst)); err != nil {
 			return fmt.Errorf(
 				"store: restore market-data instance %q: %w",
 				inst.ExternalID,
@@ -632,7 +640,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 			)
 		} else {
 			inst = restoredMarketDataInstance(archived, string(credentials))
-			if err := domain.ValidateMarketDataInstance(inst); err != nil {
+			if err := restoreValidationError(domain.ValidateMarketDataInstance(inst)); err != nil {
 				return fmt.Errorf(
 					"store: restore market-data instance %q: %w",
 					inst.ExternalID,
@@ -640,7 +648,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 				)
 			}
 			if rt.validateMarketDataInstance != nil {
-				if err := rt.validateMarketDataInstance(inst); err != nil {
+				if err := restoreValidationError(rt.validateMarketDataInstance(inst)); err != nil {
 					return fmt.Errorf(
 						"store: restore market-data instance %q: %w",
 						inst.ExternalID,
@@ -693,14 +701,14 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 	// Instruments resolve their instance by the preserved external id and their
 	// asset by code; they upsert on (instance, external_symbol).
 	for _, instr := range data.MarketDataInstruments {
-		if err := domain.ValidateMarketDataInstrument(domain.MarketDataInstrument{
+		if err := restoreValidationError(domain.ValidateMarketDataInstrument(domain.MarketDataInstrument{
 			Instance:       instr.Instance,
 			ExternalSymbol: instr.ExternalSymbol,
 			BaseAsset:      instr.BaseAsset,
 			QuoteAsset:     instr.QuoteAsset,
 			ManualPrice:    instr.ManualPrice,
 			Enabled:        instr.Enabled,
-		}); err != nil {
+		})); err != nil {
 			return fmt.Errorf(
 				"store: restore market-data instrument %q/%q: %w",
 				instr.Instance,
@@ -805,7 +813,7 @@ func (rt *restoreTx) openArchivedMarketDataCredentials(
 // and the signing keys. Signing keys are dictionary support rows referenced by
 // order approvals through key_id, so they must land before activity history.
 func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Data) error {
-	if err := validateRestoredSigningKeys(data.SigningKeys); err != nil {
+	if err := restoreValidationError(validateRestoredSigningKeys(data.SigningKeys)); err != nil {
 		return err
 	}
 	for command, enabled := range data.McpAccess {
@@ -1067,6 +1075,10 @@ func (rt *restoreTx) restoreAdjustment(
 
 func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) error {
 	o := rec.Order
+	if _, err := domain.ParseOpenQuantity(o.ReservedQuantity); err != nil {
+		return fmt.Errorf("store: restore %s order %q reservation: %w: %w",
+			backup.SectionActivityHistory, o.ExternalID, err, domain.ErrInvalid)
+	}
 	if o.Leaves != "" {
 		if _, err := domain.ParseOpenQuantity(o.Leaves); err != nil {
 			return fmt.Errorf(
@@ -1146,12 +1158,12 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 			`UPDATE order_record
 			 SET account_id = ?, base_asset_id = ?, quote_asset_id = ?, principal_id = ?,
 			     at = ?, source_id = ?, side_id = ?, amount_kind_id = ?, amount_value = ?,
-			     leaves_quantity = ?, price = ?,
+			     leaves_quantity = ?, reserved_quantity = ?, price = ?,
 			     status_id = ?, drop_copy = ?, lock = ?
 			 WHERE external_id = ?`,
 			accountID, baseID, quoteID, principalID, atOrNow(o.At), sourceID,
 			sideID, amountKindID, o.AmountValue,
-			o.Leaves, o.Price,
+			o.Leaves, o.ReservedQuantity, o.Price,
 			statusID, o.DropCopy, nullableBlob(o.Lock), o.ExternalID.Bytes(),
 		); err != nil {
 			return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
@@ -1161,11 +1173,11 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 		`INSERT OR REPLACE INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
 		  at, source_id, side_id, amount_kind_id, amount_value,
-		  leaves_quantity, price, status_id, drop_copy, lock)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  leaves_quantity, reserved_quantity, price, status_id, drop_copy, lock)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		o.ExternalID.Bytes(), accountID, baseID, quoteID, principalID,
 		atOrNow(o.At), sourceID, sideID, amountKindID,
-		o.AmountValue, o.Leaves, o.Price,
+		o.AmountValue, o.Leaves, o.ReservedQuantity, o.Price,
 		statusID, o.DropCopy, nullableBlob(o.Lock),
 	); err != nil {
 		return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
@@ -1479,7 +1491,7 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 	// Validate the commission before persisting: an archived one-sided or
 	// malformed commission is failed here rather than deferred to a later read,
 	// where a single bad row breaks the CommissionSubtotals rollup.
-	if err := validateCommission(t.Commission); err != nil {
+	if err := restoreValidationError(validateCommission(t.Commission)); err != nil {
 		return fmt.Errorf("store: restore trade %q: %w", t.ExternalID, err)
 	}
 	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(t.Source)))
@@ -1521,6 +1533,16 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 
 func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) error {
 	for _, row := range rows {
+		if err := restoreValidationError(validateAuditDecision(
+			row.Action, row.OrderID, row.Verdict, row.RejectCode,
+		)); err != nil {
+			return fmt.Errorf(
+				"store: restore %s audit %q decision metadata: %w",
+				backup.SectionAuditLog,
+				row.ExternalID,
+				err,
+			)
+		}
 		exists, err := rowExists(
 			ctx, rt.tx, `SELECT 1 FROM audit WHERE external_id = ?`, row.ExternalID.Bytes(),
 		)
@@ -1556,11 +1578,13 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 			ctx,
 			`INSERT OR REPLACE INTO audit
 			 (external_id, account_code, account_title, asset_code,
-			  group_code, actor_code, actor_title, at, action_id, source_id, detail)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  group_code, actor_code, actor_title, at, action_id, source_id, detail,
+			  order_id, verdict, reject_code)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			row.ExternalID.Bytes(), row.Account.String(),
 			row.AccountTitle, row.Asset, row.Group, row.Actor, row.ActorTitle,
 			atOrNow(row.At), actionID, sourceID, row.Detail,
+			row.OrderID, row.Verdict, row.RejectCode,
 		); err != nil {
 			return fmt.Errorf("store: restore audit %q: %w", row.ExternalID, err)
 		}

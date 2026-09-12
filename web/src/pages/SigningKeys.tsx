@@ -24,6 +24,7 @@ import { CopyableSnippet } from "@/components/CopyableSnippet";
 import {
   ErrorBanner,
   ErrorState,
+  StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
@@ -475,6 +476,7 @@ export function SigningKeys() {
         <ErrorBanner message={error} onDismiss={() => setError(null)} />
       )}
 
+      <StaleState load={load} reload={reload} />
       {load.state === "error" && (
         <ErrorState
           message={load.error}

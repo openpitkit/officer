@@ -48,7 +48,11 @@ import { useService } from "@/api/useService";
 import { useServiceLogs } from "@/api/useServiceLogs";
 import { useMcpAccess } from "@/api/useMcpAccess";
 import { ConnectAgent } from "@/components/ConnectAgent";
-import { ErrorState } from "@/components/PageStates";
+import {
+  CompactStaleState,
+  ErrorState,
+  StaleState,
+} from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { StatRow } from "@/components/StatRow";
 import { StatusDot } from "@/components/StatusDot";
@@ -266,6 +270,7 @@ function LogsCard() {
         </div>
       </CardHeader>
       <CardContent>
+        <StaleState load={load} reload={reload} />
         {load.state === "error" ? (
           <p className="text-xs text-muted-lt italic">{load.error}</p>
         ) : lines.length === 0 ? (
@@ -1165,9 +1170,12 @@ export function ServiceCard({
 
               <div>
                 <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <p className="text-xs font-medium text-muted">
-                    {t("api.mcp")}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-medium text-muted">
+                      {t("api.mcp")}
+                    </p>
+                    <CompactStaleState load={mcpLoad} />
+                  </div>
                   <div className="flex items-center gap-2">
                     <span className="nums text-[0.6875rem] text-muted-lt">
                       /mcp
@@ -1358,6 +1366,7 @@ export function Service() {
           ))}
         </div>
       )}
+      <StaleState load={load} reload={reload} />
       {load.state === "error" && (
         <ErrorState message={load.error} onRetry={reload} />
       )}

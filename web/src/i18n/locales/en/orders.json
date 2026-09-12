@@ -247,12 +247,12 @@
       "statusHelp": {
         "submitted": "Records the order as submitted to the venue. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
         "accepted": "Records venue acceptance of the order. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
-        "rejected": "Closes the order as rejected and releases its pre-trade lock. The previously recorded leaves quantity is the lock's size. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
+        "rejected": "Closes the order as rejected and releases its pre-trade lock. The lock released is the order's own recorded reservation remainder, not the reported leaves quantity. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
         "committed": "Records the order as committed. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
-        "rolled_back": "Closes the order as rolled back and releases its pre-trade lock. The previously recorded leaves quantity is the lock's size. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
+        "rolled_back": "Closes the order as rolled back and releases its pre-trade lock. The lock released is the order's own recorded reservation remainder, not the reported leaves quantity. Fill fields are not available for this status; a supplied commission is still processed by the engine.",
         "filled": "Records a fill and closes the order. Fill and leaves quantity are required.",
         "partially_filled": "Records a fill and leaves the order open. Fill and leaves quantity are required.",
-        "cancelled": "Closes the order and releases its pre-trade lock. The previously recorded leaves quantity is the lock's size. Fill fields are not available for this status; a supplied commission is still processed by the engine."
+        "cancelled": "Closes the order and releases its pre-trade lock. The lock released is the order's own recorded reservation remainder, not the reported leaves quantity. Fill fields are not available for this status; a supplied commission is still processed by the engine."
       },
       "finalFill": "Final fill (closes the order)",
       "force": "Force: bypass the check that prevents reports on finalized orders",

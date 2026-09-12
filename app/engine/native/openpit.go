@@ -443,9 +443,9 @@ func (e *openPitEngine) ResolveGroup(
 // ExecutionReportModel maps an Officer report to the SDK chain input.
 func (e *openPitEngine) ExecutionReportModel(
 	in domain.ExecutionReportInput,
-	leavesQuantity string,
+	reservationRemainder string,
 ) (model.ExecutionReport, error) {
-	return executionReportFrom(in, leavesQuantity, e.res)
+	return executionReportFrom(in, reservationRemainder, e.res)
 }
 
 // AccountAdjustmentModels maps Officer adjustment requests to one SDK batch.

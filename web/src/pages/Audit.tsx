@@ -22,7 +22,12 @@ import { useSearchParams } from "react-router-dom";
 
 import type { AuditActionGroup, AuditEntry } from "@/api/types";
 import { useAuditActions, useAuditPage } from "@/api/useAudit";
-import { EmptyState, ErrorState, TableSkeleton } from "@/components/PageStates";
+import {
+  EmptyState,
+  ErrorState,
+  StaleState,
+  TableSkeleton,
+} from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import {
@@ -880,6 +885,8 @@ export function Audit() {
       {(catalogue.load.state === "loading" || load.state === "loading") && (
         <TableSkeleton cols={7} />
       )}
+      <StaleState {...catalogue} />
+      <StaleState load={load} reload={reload} />
       {catalogue.load.state === "error" && (
         <ErrorState message={catalogue.load.error} onRetry={catalogue.reload} />
       )}

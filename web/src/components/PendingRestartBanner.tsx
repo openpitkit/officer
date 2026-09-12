@@ -20,6 +20,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useMarketData } from "@/api/useMarketData";
+import { CompactStaleState } from "@/components/PageStates";
 import { Button } from "@/components/ui/button";
 import { useOfficerApi } from "@/framework";
 
@@ -49,6 +50,7 @@ export function PendingRestartBanner() {
       <div className="min-w-0 flex-1">
         <p className="font-semibold text-text">{t("restart.requiredTitle")}</p>
         <p className="text-xs text-muted-lt">{t("restart.requiredDetail")}</p>
+        <CompactStaleState load={load} />
       </div>
       <Button
         type="button"

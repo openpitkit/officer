@@ -81,7 +81,9 @@ func (s *Service) CreateAccount(
 	ctx context.Context, account domain.Account,
 ) (domain.Account, error) {
 	id := account.Code
-	if err := domain.ValidateAccountID(id); err != nil {
+	if err := domain.WithValidationPointer(
+		"/code", domain.ValidateAccountID(id),
+	); err != nil {
 		return domain.Account{}, err
 	}
 	if err := domain.ValidateTitle(account.Title); err != nil {
@@ -110,7 +112,9 @@ func (s *Service) UpdateAccount(
 	if err := domain.ValidateAccountID(oldID); err != nil {
 		return domain.Account{}, err
 	}
-	if err := domain.ValidateAccountID(account.Code); err != nil {
+	if err := domain.WithValidationPointer(
+		"/code", domain.ValidateAccountID(account.Code),
+	); err != nil {
 		return domain.Account{}, err
 	}
 	if err := domain.ValidateTitle(account.Title); err != nil {
@@ -216,7 +220,9 @@ func (s *Service) SetAccountGroup(
 		return err
 	}
 	if groupCode != "" {
-		if err := domain.ValidateGroupID(groupCode); err != nil {
+		if err := domain.WithValidationPointer(
+			"/group", domain.ValidateGroupID(groupCode),
+		); err != nil {
 			return err
 		}
 	}

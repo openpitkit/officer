@@ -102,9 +102,13 @@ func (n *localNode) SetAccountCurrency(
 				state.err = guardErr
 				return nil, state.err
 			}
-			state.err = domain.NewCurrencyChangeBlockedError(
+			state.err = n.auditCurrencyChangeRefusal(state.ctx, caller, store.AuditEntry{
+				Action:  domain.AuditActionSetAccountCurrency,
+				Account: key.Account, AccountTitle: previous.Title,
+				Detail: currencyDetail("set account currency", key.Account.String(), previous.Currency, currency),
+			}, domain.NewCurrencyChangeBlockedError(
 				domain.ScopeAccount, key.Account.String(), guardErr,
-			)
+			))
 			return nil, state.err
 		}
 		if previous.Currency == currency {
@@ -254,9 +258,13 @@ func (n *localNode) ensureAccountCurrencyAssetRegisteredExclusive(
 		if !errors.Is(err, domain.ErrConflict) {
 			return err
 		}
-		return domain.NewCurrencyChangeBlockedError(
+		return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
+			Action:  domain.AuditActionSetAccountCurrency,
+			Account: account, AccountTitle: previous.Title,
+			Detail: currencyDetail("set account currency", account.String(), previous.Currency, currency),
+		}, domain.NewCurrencyChangeBlockedError(
 			domain.ScopeAccount, account.String(), err,
-		)
+		))
 	}
 	if _, ok, err := n.realm.GetAsset(ctx, currency); err != nil {
 		return fmt.Errorf("read currency asset for registration: %w", err)
@@ -368,9 +376,12 @@ func (n *localNode) setGroupCurrency(
 			if !errors.Is(err, domain.ErrConflict) {
 				return err
 			}
-			return domain.NewCurrencyChangeBlockedError(
+			return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
+				Action: domain.AuditActionSetGroupCurrency, Group: code,
+				Detail: currencyDetail("set group currency", code, prevCurrency, currency),
+			}, domain.NewCurrencyChangeBlockedError(
 				domain.ScopeAccountGroup, code, err,
-			)
+			))
 		}
 		previous = prev
 	} else {
@@ -384,9 +395,12 @@ func (n *localNode) setGroupCurrency(
 			if !errors.Is(err, domain.ErrConflict) {
 				return err
 			}
-			return domain.NewCurrencyChangeBlockedError(
+			return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
+				Action: domain.AuditActionSetGroupCurrency,
+				Detail: currencyDetail("set group currency", "default", prevCurrency, currency),
+			}, domain.NewCurrencyChangeBlockedError(
 				domain.ScopeAccountGroup, "-", err,
-			)
+			))
 		}
 	}
 	if prevCurrency == currency {
@@ -450,9 +464,12 @@ func (n *localNode) setGroupCurrency(
 					state.err = guardErr
 					return nil, state.err
 				}
-				state.err = domain.NewCurrencyChangeBlockedError(
+				state.err = n.auditCurrencyChangeRefusal(state.ctx, caller, store.AuditEntry{
+					Action: domain.AuditActionSetGroupCurrency,
+					Detail: currencyDetail("set group currency", "default", current.Currency, currency),
+				}, domain.NewCurrencyChangeBlockedError(
 					domain.ScopeAccountGroup, "-", guardErr,
-				)
+				))
 				return nil, state.err
 			}
 		} else if guardErr := n.guardGroupCurrencyChange(
@@ -462,9 +479,12 @@ func (n *localNode) setGroupCurrency(
 				state.err = guardErr
 				return nil, state.err
 			}
-			state.err = domain.NewCurrencyChangeBlockedError(
+			state.err = n.auditCurrencyChangeRefusal(state.ctx, caller, store.AuditEntry{
+				Action: domain.AuditActionSetGroupCurrency, Group: code,
+				Detail: currencyDetail("set group currency", code, current.Currency, currency),
+			}, domain.NewCurrencyChangeBlockedError(
 				domain.ScopeAccountGroup, code, guardErr,
-			)
+			))
 			return nil, state.err
 		}
 		state.previous = current
@@ -628,10 +648,15 @@ func (n *localNode) guardEffectiveCurrencyChange(
 }
 
 type currencyChangeCandidatesBlockedError struct {
-	offenders []domain.AccountID
+	offenders           []domain.AccountID
+	currencyValuedLimit bool
 }
 
 func (e currencyChangeCandidatesBlockedError) Error() string {
+	if e.currencyValuedLimit {
+		return fmt.Sprintf("%d account(s): %s: %s", len(e.offenders),
+			domain.ErrCurrencyValuedLimit, domain.ErrConflict)
+	}
 	return fmt.Sprintf(
 		"%d account(s) carry state that prevents a currency change: %s",
 		len(e.offenders), domain.ErrConflict,
@@ -640,6 +665,10 @@ func (e currencyChangeCandidatesBlockedError) Error() string {
 
 func (e currencyChangeCandidatesBlockedError) Unwrap() error {
 	return domain.ErrConflict
+}
+
+func (e currencyChangeCandidatesBlockedError) Is(target error) bool {
+	return target == domain.ErrCurrencyValuedLimit && e.currencyValuedLimit
 }
 
 func (n *localNode) guardCurrencyCandidates(
@@ -656,7 +685,17 @@ func (n *localNode) guardCurrencyCandidates(
 	if len(offenders) == 0 {
 		return nil
 	}
-	return currencyChangeCandidatesBlockedError{offenders: offenders}
+	blockedAccounts := make([]domain.AccountID, 0, len(offenders))
+	currencyValuedLimit := true
+	for _, offender := range offenders {
+		blockedAccounts = append(blockedAccounts, offender.Account)
+		if !offender.CurrencyValuedLimit || offender.Other {
+			currencyValuedLimit = false
+		}
+	}
+	return currencyChangeCandidatesBlockedError{
+		offenders: blockedAccounts, currencyValuedLimit: currencyValuedLimit,
+	}
 }
 
 func (n *localNode) guardGroupDeleteCurrencyChange(
@@ -675,6 +714,18 @@ func (n *localNode) guardGroupDeleteCurrencyChange(
 		}
 	}
 	return n.guardCurrencyCandidates(ctx, candidates)
+}
+
+// auditCurrencyChangeRefusal records the attempted denomination change before
+// returning its business refusal. An audit failure is an operational error.
+func (n *localNode) auditCurrencyChangeRefusal(
+	ctx context.Context, caller domain.Caller, entry store.AuditEntry, refusal error,
+) error {
+	entry.Detail += fmt.Sprintf(" refused: %v", refusal)
+	if err := n.audit(context.WithoutCancel(ctx), caller, entry); err != nil {
+		return fmt.Errorf("audit refused currency change (%v): %w", refusal, err)
+	}
+	return refusal
 }
 
 func currencyDetail(prefix, target, before, after string) string {

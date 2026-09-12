@@ -77,6 +77,9 @@ var (
 	// already in a terminal or incompatible state. The surface layer maps it to
 	// an HTTP 409.
 	ErrConflict = registerSentinel(errors.New("conflict"))
+	// ErrCurrencyValuedLimit identifies a currency change blocked by an armed
+	// currency-denominated limit, independently of balances.
+	ErrCurrencyValuedLimit = registerSentinel(errors.New("currency-valued limit prevents currency change"))
 	// ErrExecutionReportRequired marks an order whose recorded execution-report
 	// activity makes an inferred lifecycle shortcut unsafe. The caller must submit
 	// a complete execution report instead.
@@ -213,11 +216,14 @@ func ValidateMissingAccountPolicy(policy MissingAccountPolicy) error {
 	case MissingAccountCreate, MissingAccountReject:
 		return nil
 	case "":
-		return fmt.Errorf("missingAccount is required: %w", ErrInvalid)
+		return invalidField("/missingAccount", "required", fmt.Errorf("missingAccount is required: %w", ErrInvalid))
 	default:
-		return fmt.Errorf(
-			"missingAccount %q must be %q or %q: %w",
-			string(policy), MissingAccountCreate, MissingAccountReject, ErrInvalid,
+		return invalidField(
+			"/missingAccount", "unsupported_value",
+			fmt.Errorf(
+				"missingAccount %q must be %q or %q: %w",
+				string(policy), MissingAccountCreate, MissingAccountReject, ErrInvalid,
+			),
 		)
 	}
 }
@@ -240,9 +246,12 @@ func ValidateDropCopyMissingAccountPolicy(policy MissingAccountPolicy) error {
 		return err
 	}
 	if policy != MissingAccountCreate {
-		return fmt.Errorf(
-			"drop-copy reports an execution that already happened and cannot reject a missing account; use missingAccount=%s: %w",
-			MissingAccountCreate, ErrInvalid,
+		return invalidField(
+			"/missingAccount", "unsupported_value",
+			fmt.Errorf(
+				"drop-copy reports an execution that already happened and cannot reject a missing account; use missingAccount=%s: %w",
+				MissingAccountCreate, ErrInvalid,
+			),
 		)
 	}
 	return nil
@@ -495,6 +504,52 @@ func AllAuditActions() []AuditAction {
 	}
 }
 
+// ValidateAuditDecision enforces the metadata contract for order-decision audit
+// rows. Submit actions require an order id and an accept or reject verdict;
+// other actions must not carry decision metadata.
+func ValidateAuditDecision(
+	action AuditAction, orderID, verdict, rejectCode string,
+) error {
+	decisionAction := action == AuditActionSubmitOrder ||
+		action == AuditActionSubmitDropCopy
+	if !decisionAction {
+		if orderID != "" || verdict != "" || rejectCode != "" {
+			return fmt.Errorf(
+				"store: audit action %q has decision metadata: %w",
+				action,
+				ErrInvalid,
+			)
+		}
+		return nil
+	}
+	if orderID == "" {
+		return fmt.Errorf(
+			"store: audit action %q decision order id is required: %w",
+			action,
+			ErrInvalid,
+		)
+	}
+	switch verdict {
+	case "accept":
+		if rejectCode != "" {
+			return fmt.Errorf(
+				"store: audit action %q accept verdict has reject code: %w",
+				action,
+				ErrInvalid,
+			)
+		}
+	case "reject":
+	default:
+		return fmt.Errorf(
+			"store: audit action %q decision verdict %q is invalid: %w",
+			action,
+			verdict,
+			ErrInvalid,
+		)
+	}
+	return nil
+}
+
 // AuditActionsByCategory returns every audit action in the given category,
 // in the canonical order of AllAuditActions.
 func AuditActionsByCategory(category AuditCategory) []AuditAction {
@@ -539,6 +594,13 @@ type AuditFilter struct {
 // never appears here. Account and Actor are immutable snapshot strings, so
 // deleting the dictionaries they named does not mutate audit history.
 type AuditRow struct {
+	// OrderID is the opaque public order handle for a trading decision.
+	// It is empty for actions that do not describe an order decision.
+	OrderID string
+	// Verdict is "accept" or "reject" for a decision, empty for other actions.
+	Verdict string
+	// RejectCode is the primary engine reject code; empty for accepted decisions.
+	RejectCode string
 	// At is the wall-clock time the action was recorded, in UTC.
 	At time.Time
 	// ExternalID is the opaque public handle of this audit row.
@@ -611,23 +673,38 @@ type CheckResult struct {
 func ValidateAccountID(id AccountID) error {
 	s := string(id)
 	if s == "" {
-		return fmt.Errorf("account id is empty: %w", ErrInvalid)
+		return invalidField("/account", "required", fmt.Errorf("account id is empty: %w", ErrInvalid))
 	}
 	if !utf8.ValidString(s) {
-		return fmt.Errorf("account id contains invalid UTF-8: %w", ErrInvalid)
+		return invalidField("/account", "format", fmt.Errorf("account id contains invalid UTF-8: %w", ErrInvalid))
 	}
 	if isPathDotSegment(s) {
-		return fmt.Errorf("account id %q is a reserved path segment: %w", s, ErrInvalid)
+		return invalidField(
+			"/account", "format",
+			fmt.Errorf(
+				"account id %q is a reserved path segment: %w", s, ErrInvalid,
+			),
+		)
 	}
 	if utf8.RuneCountInString(s) > 64 {
-		return fmt.Errorf("account id exceeds 64 code points: %w", ErrInvalid)
+		return invalidField("/account", "max_length", fmt.Errorf("account id exceeds 64 code points: %w", ErrInvalid))
 	}
 	if strings.TrimSpace(s) != s {
-		return fmt.Errorf("account id has leading or trailing whitespace: %w", ErrInvalid)
+		return invalidField(
+			"/account", "format",
+			fmt.Errorf(
+				"account id has leading or trailing whitespace: %w", ErrInvalid,
+			),
+		)
 	}
 	for _, r := range s {
 		if !unicode.IsPrint(r) {
-			return fmt.Errorf("account id contains non-printable character: %w", ErrInvalid)
+			return invalidField(
+				"/account", "format",
+				fmt.Errorf(
+					"account id contains non-printable character: %w", ErrInvalid,
+				),
+			)
 		}
 	}
 	return nil

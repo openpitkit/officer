@@ -238,26 +238,41 @@ const ReservedGroupCode = "-"
 // default-group route and could never be renamed or deleted again.
 func ValidateGroupID(id string) error {
 	if id == "" {
-		return fmt.Errorf("group id is empty: %w", ErrInvalid)
+		return invalidField("/code", "required", fmt.Errorf("group id is empty: %w", ErrInvalid))
 	}
 	if !utf8.ValidString(id) {
-		return fmt.Errorf("group id contains invalid UTF-8: %w", ErrInvalid)
+		return invalidField("/code", "format", fmt.Errorf("group id contains invalid UTF-8: %w", ErrInvalid))
 	}
 	if id == ReservedGroupCode {
-		return fmt.Errorf("group id %q is reserved: %w", id, ErrInvalid)
+		return invalidField("/code", "format", fmt.Errorf("group id %q is reserved: %w", id, ErrInvalid))
 	}
 	if isPathDotSegment(id) {
-		return fmt.Errorf("group id %q is a reserved path segment: %w", id, ErrInvalid)
+		return invalidField(
+			"/code", "format",
+			fmt.Errorf(
+				"group id %q is a reserved path segment: %w", id, ErrInvalid,
+			),
+		)
 	}
 	if utf8.RuneCountInString(id) > 64 {
-		return fmt.Errorf("group id exceeds 64 code points: %w", ErrInvalid)
+		return invalidField("/code", "max_length", fmt.Errorf("group id exceeds 64 code points: %w", ErrInvalid))
 	}
 	if strings.TrimSpace(id) != id {
-		return fmt.Errorf("group id has leading or trailing whitespace: %w", ErrInvalid)
+		return invalidField(
+			"/code", "format",
+			fmt.Errorf(
+				"group id has leading or trailing whitespace: %w", ErrInvalid,
+			),
+		)
 	}
 	for _, r := range id {
 		if !unicode.IsPrint(r) {
-			return fmt.Errorf("group id contains non-printable character: %w", ErrInvalid)
+			return invalidField(
+				"/code", "format",
+				fmt.Errorf(
+					"group id contains non-printable character: %w", ErrInvalid,
+				),
+			)
 		}
 	}
 	return nil
@@ -270,23 +285,38 @@ func ValidateGroupID(id string) error {
 // same code contract as groups.
 func ValidateAssetClassID(id string) error {
 	if id == "" {
-		return fmt.Errorf("asset class id is empty: %w", ErrInvalid)
+		return invalidField("/code", "required", fmt.Errorf("asset class id is empty: %w", ErrInvalid))
 	}
 	if !utf8.ValidString(id) {
-		return fmt.Errorf("asset class id contains invalid UTF-8: %w", ErrInvalid)
+		return invalidField("/code", "format", fmt.Errorf("asset class id contains invalid UTF-8: %w", ErrInvalid))
 	}
 	if isPathDotSegment(id) {
-		return fmt.Errorf("asset class id %q is a reserved path segment: %w", id, ErrInvalid)
+		return invalidField(
+			"/code", "format",
+			fmt.Errorf(
+				"asset class id %q is a reserved path segment: %w", id, ErrInvalid,
+			),
+		)
 	}
 	if utf8.RuneCountInString(id) > 64 {
-		return fmt.Errorf("asset class id exceeds 64 code points: %w", ErrInvalid)
+		return invalidField("/code", "max_length", fmt.Errorf("asset class id exceeds 64 code points: %w", ErrInvalid))
 	}
 	if strings.TrimSpace(id) != id {
-		return fmt.Errorf("asset class id has leading or trailing whitespace: %w", ErrInvalid)
+		return invalidField(
+			"/code", "format",
+			fmt.Errorf(
+				"asset class id has leading or trailing whitespace: %w", ErrInvalid,
+			),
+		)
 	}
 	for _, r := range id {
 		if !unicode.IsPrint(r) {
-			return fmt.Errorf("asset class id contains non-printable character: %w", ErrInvalid)
+			return invalidField(
+				"/code", "format",
+				fmt.Errorf(
+					"asset class id contains non-printable character: %w", ErrInvalid,
+				),
+			)
 		}
 	}
 	return nil
@@ -296,10 +326,10 @@ func ValidateAssetClassID(id string) error {
 // 4096 code points.
 func ValidateNotes(notes string) error {
 	if !utf8.ValidString(notes) {
-		return fmt.Errorf("notes contain invalid UTF-8: %w", ErrInvalid)
+		return invalidField("/notes", "format", fmt.Errorf("notes contain invalid UTF-8: %w", ErrInvalid))
 	}
 	if utf8.RuneCountInString(notes) > 4096 {
-		return fmt.Errorf("notes exceed 4096 code points: %w", ErrInvalid)
+		return invalidField("/notes", "max_length", fmt.Errorf("notes exceed 4096 code points: %w", ErrInvalid))
 	}
 	return nil
 }
@@ -320,14 +350,24 @@ func isReasonRune(r rune) bool { return unicode.IsPrint(r) }
 // Empty reasons are allowed.
 func ValidateReason(reason string) error {
 	if !utf8.ValidString(reason) {
-		return fmt.Errorf("reason contains invalid UTF-8: %w", ErrInvalid)
+		return invalidField("/reason", "format", fmt.Errorf("reason contains invalid UTF-8: %w", ErrInvalid))
 	}
 	if utf8.RuneCountInString(reason) > maxReasonRunes {
-		return fmt.Errorf("reason exceeds %d code points: %w", maxReasonRunes, ErrInvalid)
+		return invalidField(
+			"/reason", "max_length",
+			fmt.Errorf(
+				"reason exceeds %d code points: %w", maxReasonRunes, ErrInvalid,
+			),
+		)
 	}
 	for _, r := range reason {
 		if !isReasonRune(r) {
-			return fmt.Errorf("reason contains non-printable character: %w", ErrInvalid)
+			return invalidField(
+				"/reason", "format",
+				fmt.Errorf(
+					"reason contains non-printable character: %w", ErrInvalid,
+				),
+			)
 		}
 	}
 	return nil
@@ -375,14 +415,19 @@ func ValidateBlockReason(reason string) error {
 // are allowed.
 func ValidateTitle(title string) error {
 	if !utf8.ValidString(title) {
-		return fmt.Errorf("title contains invalid UTF-8: %w", ErrInvalid)
+		return invalidField("/title", "format", fmt.Errorf("title contains invalid UTF-8: %w", ErrInvalid))
 	}
 	if utf8.RuneCountInString(title) > 256 {
-		return fmt.Errorf("title exceeds 256 code points: %w", ErrInvalid)
+		return invalidField("/title", "max_length", fmt.Errorf("title exceeds 256 code points: %w", ErrInvalid))
 	}
 	for _, r := range title {
 		if !unicode.IsPrint(r) {
-			return fmt.Errorf("title contains non-printable character: %w", ErrInvalid)
+			return invalidField(
+				"/title", "format",
+				fmt.Errorf(
+					"title contains non-printable character: %w", ErrInvalid,
+				),
+			)
 		}
 	}
 	return nil
@@ -404,8 +449,8 @@ type Balance struct {
 	// Incoming is funds in-flight (e.g. pending settlement).
 	Incoming string
 	// RealizedPnl is the cumulative realized P&L for this (account, asset), as
-	// last reported by the engine, denominated in AccountCurrency. A fresh or
-	// untracked row uses "0".
+	// last reported by the engine, denominated in AccountCurrency. Empty means
+	// the engine has not established a meaningful P&L value.
 	RealizedPnl string
 	// RealizedPnlHaltReason explains why the engine stopped calculating this
 	// position P&L. When set, RealizedPnl is historical rather than current.
@@ -757,50 +802,57 @@ func ExecutionReportStatusChangeEvent(status OrderStatus) (OrderEventType, bool)
 	}
 }
 
-type executionReportValidationError struct {
+type validationError struct {
 	message    string
 	pointer    string
 	constraint string
-	cause      error
 }
 
-func (e executionReportValidationError) Error() string { return e.message }
+func (e validationError) Error() string { return e.message }
 
-func (e executionReportValidationError) Unwrap() error { return e.cause }
+func (e validationError) Unwrap() error { return ErrInvalid }
 
 // ValidationPointer reports the JSON pointer of the refused request member, or
 // an empty string when the refusal belongs to the report as a whole. The rule
 // and the member it blames are decided together here; a surface that renders
 // the pointer must read it rather than infer one from the message text.
-func (e executionReportValidationError) ValidationPointer() string {
+func (e validationError) ValidationPointer() string {
 	return e.pointer
 }
 
-func (e executionReportValidationError) ValidationConstraint() string {
+func (e validationError) ValidationConstraint() string {
 	return e.constraint
 }
 
+// NewValidationError creates a structured validation error.
+func NewValidationError(pointer, constraint, message string) error {
+	return validationError{
+		message: message, pointer: pointer, constraint: constraint,
+	}
+}
+
+func invalidField(pointer, constraint string, cause error) error {
+	return NewValidationError(pointer, constraint, cause.Error())
+}
+
+// WithValidationPointer returns err with its JSON pointer replaced.
+func WithValidationPointer(pointer string, err error) error {
+	var validation validationError
+	if !errors.As(err, &validation) {
+		return err
+	}
+	validation.message = err.Error()
+	validation.pointer = pointer
+	return validation
+}
+
 func invalidExecutionReport(message string) error {
-	return executionReportValidationError{
-		message:    message,
-		constraint: "execution_report",
-		cause:      ErrInvalid,
-	}
+	return NewValidationError("", "execution_report", message)
 }
 
-func invalidExecutionReportMember(pointer, constraint, message string) error {
-	return executionReportValidationError{
-		message:    message,
-		pointer:    pointer,
-		constraint: constraint,
-		cause:      ErrInvalid,
-	}
-}
-
-// ExecutionReportValidationPointer returns the refused member's JSON pointer
-// carried by an execution-report validation error, or an empty string when the
-// error names no single member or is of another kind.
-func ExecutionReportValidationPointer(err error) string {
+// ValidationPointer returns the refused member's JSON pointer carried by a
+// validation error, or an empty string when no single member is named.
+func ValidationPointer(err error) string {
 	var pointed interface{ ValidationPointer() string }
 	if errors.As(err, &pointed) {
 		return pointed.ValidationPointer()
@@ -808,9 +860,9 @@ func ExecutionReportValidationPointer(err error) string {
 	return ""
 }
 
-// ExecutionReportValidationConstraint returns the machine-readable reason for
-// an execution report validation error, if one is available.
-func ExecutionReportValidationConstraint(err error) string {
+// ValidationConstraint returns the machine-readable validation reason, if one
+// is available.
+func ValidationConstraint(err error) string {
 	var constrained interface{ ValidationConstraint() string }
 	if errors.As(err, &constrained) {
 		return constrained.ValidationConstraint()
@@ -835,12 +887,12 @@ func executionReportCarriesEnginePayload(in ExecutionReportInput) bool {
 func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 	status := in.OrderStatus
 	if status == "" {
-		return false, invalidExecutionReportMember(
+		return false, NewValidationError(
 			"/status", "required", "status is required",
 		)
 	}
 	if !OrderStatusSupported(status) {
-		return false, invalidExecutionReportMember(
+		return false, NewValidationError(
 			"/status", "format", fmt.Sprintf("invalid status %q", status),
 		)
 	}
@@ -858,7 +910,8 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 		)
 	}
 	if !hasQuantity && isFillStatus {
-		return false, invalidExecutionReport(
+		return false, NewValidationError(
+			"/quantity", "required_for_status",
 			"quantity and price are required for filled or partially_filled statuses",
 		)
 	}
@@ -877,21 +930,21 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 		hasAmount := in.Commission.Amount != ""
 		hasCurrency := in.Commission.Currency != ""
 		if hasAmount != hasCurrency {
-			return false, invalidExecutionReportMember(
+			return false, NewValidationError(
 				"/commission",
 				"paired_fields",
 				"commission amount and currency must be provided together",
 			)
 		}
 		if !hasAmount {
-			return false, invalidExecutionReportMember(
+			return false, NewValidationError(
 				"/commission", "required",
 				"commission amount and currency are required",
 			)
 		}
 	}
 	if hasQuantity && in.LeavesQuantity == "" {
-		return false, invalidExecutionReportMember(
+		return false, NewValidationError(
 			"/leavesQuantity", "required",
 			"leavesQuantity is required for reports with a fill",
 		)
@@ -914,7 +967,7 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 // where the same syntax failure is an internal fault instead.
 func ValidateLeavesQuantity(value string) error {
 	if _, err := ParseOpenQuantity(value); err != nil {
-		return invalidExecutionReportMember(
+		return NewValidationError(
 			"/leavesQuantity", "format",
 			fmt.Sprintf("invalid leavesQuantity: %v", err),
 		)
@@ -924,13 +977,13 @@ func ValidateLeavesQuantity(value string) error {
 
 func validateExecutionReportLockPrice(value string) error {
 	if value != strings.TrimSpace(value) || strings.ContainsAny(value, "eE") {
-		return invalidExecutionReportMember(
+		return NewValidationError(
 			"/lockPrice", "format",
 			fmt.Sprintf("invalid lockPrice: %q is not a plain decimal", value),
 		)
 	}
 	if _, err := decimal.NewFromString(value); err != nil {
-		return invalidExecutionReportMember(
+		return NewValidationError(
 			"/lockPrice", "format",
 			fmt.Sprintf("invalid lockPrice: %q: %v", value, err),
 		)
@@ -997,6 +1050,10 @@ type Order struct {
 	// writes its caller's leaves verbatim, at terminal status too, and a report
 	// that supplies none leaves the recorded value untouched.
 	Leaves string
+	// ReservedQuantity is the remaining base quantity of this order's own
+	// pre-trade reservation. It follows engine balance deltas independently of
+	// caller-reported Leaves and is retained across restart and backup restore.
+	ReservedQuantity string
 	// Price is the limit price (exact decimal string); empty for market orders.
 	Price string
 	// Principal is the code of the principal who submitted the order; empty when
@@ -1384,6 +1441,9 @@ type OrderSettlement struct {
 	// Leaves is the exact open base quantity supplied with this settlement.
 	// Empty leaves the stored value unchanged; terminal status does not alter it.
 	Leaves string
+	// ReservedQuantity is the reservation remainder after applying the engine
+	// outcomes. Empty leaves it unchanged; an explicit zero records exhaustion.
+	ReservedQuantity string
 	// Order is the opaque public handle of the order being settled.
 	Order ExternalID
 	// AllowedFrom is an optional status WHERE-guard: when non-empty the order
