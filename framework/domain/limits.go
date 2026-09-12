@@ -144,15 +144,6 @@ func (l LimitOrderSize) Validate() error {
 	); err != nil {
 		return err
 	}
-	if l.MaxQuantity == "" && l.MaxNotional == "" {
-		return invalidField(
-			"/maxQuantity", "required",
-			fmt.Errorf(
-				"order_size_limit requires at least max_quantity or max_notional: %w",
-				ErrInvalid,
-			),
-		)
-	}
 	switch l.Scope {
 	case ScopeUnderlyingAsset, ScopeAccountUnderlyingAsset:
 		if l.MaxQuantity == "" {
@@ -189,6 +180,15 @@ func (l LimitOrderSize) Validate() error {
 			)
 		}
 	}
+	if l.MaxQuantity == "" && l.MaxNotional == "" {
+		return invalidField(
+			"", "",
+			fmt.Errorf(
+				"order_size_limit requires at least max_quantity or max_notional: %w",
+				ErrInvalid,
+			),
+		)
+	}
 	if l.MaxQuantity != "" {
 		if err := validatePositiveDecimal(l.MaxQuantity); err != nil {
 			return invalidField("/maxQuantity", "positive_decimal", fmt.Errorf("max_quantity: %w", err))
@@ -215,7 +215,7 @@ func (l LimitSpotFundsPnlBounds) Validate() error {
 	}
 	if l.LowerBound == "" && l.UpperBound == "" {
 		return invalidField(
-			"/lowerBound", "required",
+			"", "",
 			fmt.Errorf(
 				"spot_funds_pnl_bounds_kill_switch requires at least lower_bound or upper_bound: %w",
 				ErrInvalid,
@@ -350,7 +350,7 @@ func validatePnlBounds(lowerBound, upperBound string) error {
 	}
 	if lowerBound != "" && upperBound != "" && lowerD.GreaterThan(upperD) {
 		return invalidField(
-			"/lowerBound", "range",
+			"", "",
 			fmt.Errorf(
 				"lower_bound must be <= upper_bound: %w", ErrInvalid,
 			),

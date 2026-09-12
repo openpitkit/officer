@@ -1399,6 +1399,22 @@ func TestLimitOrderSize_Validate(t *testing.T) {
 	}
 }
 
+func TestLimitOrderSize_EitherOrValidationUsesRequestRoot(t *testing.T) {
+	t.Parallel()
+
+	err := (domain.LimitOrderSize{Scope: domain.ScopeBroker}).Validate()
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("neither ceiling: error = %v, want ErrInvalid", err)
+	}
+	if got := domain.ValidationPointer(err); got != "" {
+		t.Fatalf("neither ceiling: pointer = %q, want request root", got)
+	}
+	if got := domain.ValidationConstraint(err); got != "" {
+		t.Fatalf("neither ceiling: constraint = %q, want empty", got)
+	}
+
+}
+
 func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 	t.Parallel()
 
@@ -1482,6 +1498,39 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 				t.Fatalf("expected ErrInvalid, got %v", err)
 			}
 		})
+	}
+}
+
+func TestLimitSpotFundsPnlBounds_EitherOrValidationUsesRequestRoot(t *testing.T) {
+	t.Parallel()
+
+	err := (domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeGlobal, Currency: "USD",
+	}).Validate()
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("neither bound: error = %v, want ErrInvalid", err)
+	}
+	if got := domain.ValidationPointer(err); got != "" {
+		t.Fatalf("neither bound: pointer = %q, want request root", got)
+	}
+	if got := domain.ValidationConstraint(err); got != "" {
+		t.Fatalf("neither bound: constraint = %q, want empty", got)
+	}
+
+	err = (domain.LimitSpotFundsPnlBounds{
+		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
+		LowerBound: "10",
+		UpperBound: "1",
+	}).Validate()
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("inverted bounds: error = %v, want ErrInvalid", err)
+	}
+	if got := domain.ValidationPointer(err); got != "" {
+		t.Fatalf("inverted bounds: pointer = %q, want request root", got)
+	}
+	if got := domain.ValidationConstraint(err); got != "" {
+		t.Fatalf("inverted bounds: constraint = %q, want empty", got)
 	}
 }
 
