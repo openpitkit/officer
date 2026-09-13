@@ -1797,7 +1797,14 @@ func TestLocalNode_RefusedAssetDeleteKeepsConcurrentQuoteConsistent(t *testing.T
 	if sinkResult.update != update {
 		t.Fatalf("engine quote = %+v, want %+v", sinkResult.update, update)
 	}
+	// The manager records the accepted snapshot only after the sink push
+	// returns, so the sink result can be observed before the snapshot is.
+	deadline := time.Now().Add(5 * time.Second)
 	quotes := manager.QuoteSnapshots()
+	for len(quotes) != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		quotes = manager.QuoteSnapshots()
+	}
 	if len(quotes) != 1 {
 		t.Fatalf("manager quote snapshots = %+v, want one quote", quotes)
 	}
