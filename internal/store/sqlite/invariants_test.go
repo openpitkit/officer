@@ -54,6 +54,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // TestRealmSweep_ExternalIDAndCodeInvariants builds a representative realm with
@@ -226,7 +227,7 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	assertExternalID(t, "adjustment", adj.ExternalID)
 
 	// Audit row.
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Actor:   "operator",
 		Action:  domain.AuditActionCreateAccount,
 		Account: "acc-1",
@@ -706,14 +707,14 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 	if len(limits) != 2 {
 		t.Fatalf("spot funds limits count = %d, want 2: %+v", len(limits), limits)
 	}
-	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{})
+	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{})
 	if err != nil {
 		t.Fatalf("ListPolicyRows: %v", err)
 	}
 	var found bool
 	var foundAccount bool
 	for _, row := range page.Rows {
-		if row.Kind != PolicyKindSpotFundsPnlBounds {
+		if row.Kind != fwstore.PolicyKindSpotFundsPnlBounds {
 			continue
 		}
 		if row.AccountGroup == "desk-a" &&

@@ -35,8 +35,6 @@ type limitTestNode struct {
 	putCalls    int
 }
 
-func (n *limitTestNode) Owns(node.Key) bool { return true }
-
 func (n *limitTestNode) DeleteLimit(
 	_ context.Context, _ node.LimitTarget, _ domain.Caller,
 ) (marketdata.Sink, error) {
@@ -56,11 +54,7 @@ func (n *limitTestNode) PutSpotFundsPnlBoundsLimit(
 
 func newLimitTestService(t *testing.T, n *limitTestNode) *Service {
 	t.Helper()
-	router, err := node.NewLocalRouter(n)
-	if err != nil {
-		t.Fatalf("NewLocalRouter: %v", err)
-	}
-	return &Service{router: router}
+	return &Service{node: n}
 }
 
 func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {

@@ -87,7 +87,7 @@ func TestDeleteAccountBuildFailureLeavesStoreAndOldEngineUntouched(t *testing.T)
 	n.build = func(engine.Snapshot) (engine.Engine, error) {
 		return nil, buildErr
 	}
-	err = n.DeleteAccount(ctx, testKey(account.Code), false, testCaller)
+	err = n.DeleteAccount(ctx, account.Code, false, testCaller)
 	if !errors.Is(err, buildErr) {
 		t.Fatalf("DeleteAccount error = %v, want build failure", err)
 	}
@@ -130,7 +130,7 @@ func TestDeleteAccountStoreFailureKeepsPreparedEngineUncommitted(t *testing.T) {
 		return &failAccountDeleteRealm{RealmStore: r, err: deleteErr}
 	})
 	old := newFakeEngine()
-	n := newTestNodeWithStore(t, wrapped, old)
+	n := newTestNodeWithStore(t, wrapped, old, failOnFatal(t))
 	account, err := n.CreateAccount(ctx, testAccount("retained"), testCaller)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
@@ -139,7 +139,7 @@ func TestDeleteAccountStoreFailureKeepsPreparedEngineUncommitted(t *testing.T) {
 	var snapshot engine.Snapshot
 	n.build = fakeBuild(next, &snapshot)
 
-	err = n.DeleteAccount(ctx, testKey(account.Code), false, testCaller)
+	err = n.DeleteAccount(ctx, account.Code, false, testCaller)
 	if !errors.Is(err, domain.ErrHasDependents) {
 		t.Fatalf("DeleteAccount error = %v, want has-dependents failure", err)
 	}
@@ -177,9 +177,9 @@ func TestDeleteAccountAuditFailureFailsStopAfterSuccessfulRebuild(t *testing.T) 
 	})
 	old := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, wrapped, old, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, wrapped, old, func(err error) {
 		fatalErr = err
-	}))
+	})
 	account, err := n.CreateAccount(ctx, testAccount("deleted"), testCaller)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
@@ -188,7 +188,7 @@ func TestDeleteAccountAuditFailureFailsStopAfterSuccessfulRebuild(t *testing.T) 
 	var snapshot engine.Snapshot
 	n.build = fakeBuild(next, &snapshot)
 
-	err = n.DeleteAccount(ctx, testKey(account.Code), false, testCaller)
+	err = n.DeleteAccount(ctx, account.Code, false, testCaller)
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("DeleteAccount error = %v, want audit failure", err)
 	}

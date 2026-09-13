@@ -29,7 +29,7 @@ import (
 // Counts is the headline tally on the operator overview: how many accounts,
 // groups, and risk barriers the deployment holds.
 type Counts struct {
-	// Accounts is the number of accounts across all nodes.
+	// Accounts is the number of accounts.
 	Accounts int
 	// AccountsActive is the number of accounts that are not blocked.
 	AccountsActive int
@@ -39,13 +39,12 @@ type Counts struct {
 	GroupsActive int
 	// Limits is the number of risk barriers.
 	Limits int
-	// OrdersActive is the number of non-terminal orders, aggregated across
-	// nodes.
+	// OrdersActive is the number of non-terminal orders.
 	OrdersActive int
 	// OrdersToday is the number of orders recorded since the caller-supplied
-	// today boundary, aggregated across nodes.
+	// today boundary.
 	OrdersToday int
-	// OrdersTotal is the total number of orders recorded, aggregated across nodes.
+	// OrdersTotal is the total number of orders recorded.
 	OrdersTotal int
 }
 
@@ -112,23 +111,17 @@ func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, erro
 	limitCount := len(limits.RateLimits) + len(limits.OrderSizeLimits) +
 		len(limits.SpotFundsPnlBoundsLimits)
 
-	var ordersActive, ordersToday, ordersTotal int
-	for i, target := range s.router.All() {
-		total, err := target.CountOrders(ctx)
-		if err != nil {
-			return Overview{}, fmt.Errorf("backend: node %d count orders: %w", i, err)
-		}
-		active, err := target.CountActiveOrders(ctx)
-		if err != nil {
-			return Overview{}, fmt.Errorf("backend: node %d count active orders: %w", i, err)
-		}
-		today, err := target.CountOrdersSince(ctx, since)
-		if err != nil {
-			return Overview{}, fmt.Errorf("backend: node %d count orders since: %w", i, err)
-		}
-		ordersTotal += total
-		ordersActive += active
-		ordersToday += today
+	ordersTotal, err := s.node.CountOrders(ctx)
+	if err != nil {
+		return Overview{}, fmt.Errorf("backend: count orders: %w", err)
+	}
+	ordersActive, err := s.node.CountActiveOrders(ctx)
+	if err != nil {
+		return Overview{}, fmt.Errorf("backend: count active orders: %w", err)
+	}
+	ordersToday, err := s.node.CountOrdersSince(ctx, since)
+	if err != nil {
+		return Overview{}, fmt.Errorf("backend: count orders since: %w", err)
 	}
 
 	audit, err := s.ListAudit(ctx, overviewActivityCap)
@@ -248,8 +241,7 @@ type ServiceInfo struct {
 
 // ServiceInfo reports the service identity and build posture. The engine
 // version, build profile, and the database path/reachability are sourced from
-// the node health already gathered by Status; in the single-node deployment the
-// first node supplies them.
+// the node health reported by Status.
 func (s *Service) ServiceInfo(ctx context.Context) (ServiceInfo, error) {
 	status, err := s.Status(ctx)
 	if err != nil {

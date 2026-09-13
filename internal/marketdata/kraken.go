@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -46,8 +47,8 @@ type krakenConnector struct {
 	dial         func(context.Context, string) (krakenConn, error)
 	sleep        func(context.Context, time.Duration) error
 	fetchSymbols func(ctx context.Context) (map[string]struct{}, error)
-	report       StatusReporter
-	diagReport   DiagnosticReporter
+	report       fwmarketdata.StatusReporter
+	diagReport   fwmarketdata.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	readTimeout  time.Duration
@@ -72,7 +73,7 @@ type liveKrakenConn struct {
 }
 
 type krakenSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	symbol string
 }
 
@@ -132,7 +133,7 @@ func (c liveKrakenConn) Close(code websocket.StatusCode, reason string) error {
 	return c.conn.Close(code, reason)
 }
 
-func (c *krakenConnector) SetStatusReporter(report StatusReporter) {
+func (c *krakenConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -142,17 +143,17 @@ func (c *krakenConnector) reportStatus(ok bool, errMsg string) {
 	}
 }
 
-func (c *krakenConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *krakenConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *krakenConnector) reportDiag(diag Diagnostic) {
+func (c *krakenConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
-func (c *krakenConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
+func (c *krakenConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
 	diagCtx, cancel := context.WithTimeout(ctx, krakenDiagnoseTimeout)
 	defer cancel()
 
@@ -161,7 +162,7 @@ func (c *krakenConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 		return nil, err
 	}
 
-	var findings []Diagnostic
+	var findings []fwmarketdata.Diagnostic
 	for _, sub := range c.subs {
 		if _, ok := known[sub.symbol]; !ok {
 			findings = append(findings, krakenUnknownSymbolDiag(sub, known))
@@ -170,8 +171,8 @@ func (c *krakenConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 	return findings, nil
 }
 
-func (c *krakenConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *krakenConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL:    "https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/ticker",
 		SymbolsURL: krakenAssetPairsURL,
 	}, true
@@ -179,39 +180,39 @@ func (c *krakenConnector) References() (ProviderReferences, bool) {
 
 func (c *krakenConnector) VerifySymbol(
 	ctx context.Context, external string,
-) (SymbolVerification, error) {
+) (fwmarketdata.SymbolVerification, error) {
 	verifyCtx, cancel := context.WithTimeout(ctx, krakenDiagnoseTimeout)
 	defer cancel()
 
 	known, err := c.fetchSymbols(verifyCtx)
 	if err != nil {
-		return SymbolVerification{}, err
+		return fwmarketdata.SymbolVerification{}, err
 	}
 
 	symbol := strings.TrimSpace(external)
 	if symbol == "" {
-		return SymbolVerification{}, nil
+		return fwmarketdata.SymbolVerification{}, nil
 	}
 	if _, ok := known[symbol]; ok {
-		return SymbolVerification{Exists: true}, nil
+		return fwmarketdata.SymbolVerification{Exists: true}, nil
 	}
 	canonical := canonicalKrakenSymbol(symbol)
 	if canonical != symbol {
 		if _, ok := known[canonical]; ok {
-			return SymbolVerification{Suggestion: canonical}, nil
+			return fwmarketdata.SymbolVerification{Suggestion: canonical}, nil
 		}
 	}
 	if folded := strings.ToUpper(symbol); folded != symbol && folded != canonical {
 		if _, ok := known[folded]; ok {
-			return SymbolVerification{Suggestion: folded}, nil
+			return fwmarketdata.SymbolVerification{Suggestion: folded}, nil
 		}
 	}
-	return SymbolVerification{}, nil
+	return fwmarketdata.SymbolVerification{}, nil
 }
 
 func (c *krakenConnector) SearchSymbols(
-	ctx context.Context, query SymbolSearchQuery,
-) ([]SymbolMatch, error) {
+	ctx context.Context, query fwmarketdata.SymbolSearchQuery,
+) ([]fwmarketdata.SymbolMatch, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, krakenDiagnoseTimeout)
 	defer cancel()
 
@@ -223,8 +224,8 @@ func (c *krakenConnector) SearchSymbols(
 }
 
 func (c *krakenConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	normalized, err := normalizeKrakenSubscriptions(subs)
 	if err != nil {
 		return nil, err
@@ -234,7 +235,7 @@ func (c *krakenConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -245,7 +246,7 @@ func (c *krakenConnector) Subscribe(
 }
 
 func (c *krakenConnector) run(
-	ctx context.Context, subs []krakenSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []krakenSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	subs = c.validateSymbols(ctx, subs)
 	if len(subs) == 0 {
@@ -281,14 +282,14 @@ func (c *krakenConnector) validateSymbols(
 
 	known, err := c.fetchSymbols(validateCtx)
 	if err != nil {
-		c.reportDiag(Diagnostic{
+		c.reportDiag(fwmarketdata.Diagnostic{
 			Level:       DiagWarn,
 			Code:        CodeSelfDiagnosisFailed,
 			Kind:        DiagKindProvider,
 			Title:       "Self-diagnosis failed",
 			Detail:      "symbol validation unavailable: " + err.Error(),
 			Remediation: "Couldn't validate against the provider; try Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 		})
 		return subs
 	}
@@ -306,14 +307,14 @@ func (c *krakenConnector) validateSymbols(
 
 func krakenUnknownSymbolDiag(
 	sub krakenSubscription, known map[string]struct{},
-) Diagnostic {
+) fwmarketdata.Diagnostic {
 	remediation := "Remove this instrument and add one with a valid Kraken WS symbol" +
 		" (e.g. BTC/USD). See the valid symbols list."
 	suggestions := symbolPrefixSuggestionsFromSet(known, sub.External)
 	if len(suggestions) > 0 {
 		remediation += " Did you mean: " + strings.Join(suggestions, ", ") + "?"
 	}
-	return Diagnostic{
+	return fwmarketdata.Diagnostic{
 		Level:       DiagError,
 		Code:        CodeUnknownSymbol,
 		Kind:        DiagKindConfig,
@@ -321,7 +322,7 @@ func krakenUnknownSymbolDiag(
 		Title:       fmt.Sprintf("Symbol %q not found on Kraken", sub.External),
 		Detail:      fmt.Sprintf("The configured external symbol %q is not a Kraken WS ticker symbol.", sub.External),
 		Remediation: remediation,
-		Actions: []DiagnosticAction{
+		Actions: []fwmarketdata.DiagnosticAction{
 			{Type: ActionRemoveInstrument, Target: sub.External},
 			{Type: ActionOpenSymbols},
 		},
@@ -329,7 +330,7 @@ func krakenUnknownSymbolDiag(
 }
 
 func (c *krakenConnector) stream(
-	ctx context.Context, subs []krakenSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []krakenSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (bool, error) {
 	conn, err := c.dial(ctx, krakenStreamURL)
 	if err != nil {
@@ -373,14 +374,14 @@ func (c *krakenConnector) stream(
 				framesReceived++
 				if framesReceived >= unparsableThreshold && framesParsed == 0 {
 					unparsableReported = true
-					c.reportDiag(Diagnostic{
+					c.reportDiag(fwmarketdata.Diagnostic{
 						Level:       DiagError,
 						Code:        CodeUnparsableData,
 						Kind:        DiagKindProvider,
 						Title:       "Receiving data but cannot parse it",
 						Detail:      "The source is sending data but Officer could not decode it (likely a format mismatch).",
 						Remediation: "This is an internal issue, not your configuration - please report it.",
-						Actions:     []DiagnosticAction{{Type: ActionRestart}},
+						Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}},
 					})
 				}
 			}
@@ -447,7 +448,7 @@ func krakenSymbolsFromAssetPairs(pairs krakenAssetPairsResponse) map[string]stru
 }
 
 func normalizeKrakenSubscriptions(
-	subs []Subscription,
+	subs []fwmarketdata.Subscription,
 ) ([]krakenSubscription, error) {
 	normalized := make([]krakenSubscription, 0, len(subs))
 	for _, sub := range subs {
@@ -515,7 +516,7 @@ func krakenSubscribeError(payload []byte) (string, bool) {
 
 func parseKrakenQuoteUpdates(
 	payload []byte, subs []krakenSubscription,
-) ([]QuoteUpdate, bool) {
+) ([]fwmarketdata.QuoteUpdate, bool) {
 	var frame krakenFrameHeader
 	if err := json.Unmarshal(payload, &frame); err != nil {
 		return nil, false
@@ -530,7 +531,7 @@ func parseKrakenQuoteUpdates(
 	if err := json.Unmarshal(frame.Data, &rows); err != nil {
 		return nil, false
 	}
-	updates := make([]QuoteUpdate, 0, len(rows))
+	updates := make([]fwmarketdata.QuoteUpdate, 0, len(rows))
 	for _, fields := range rows {
 		update, ok := quoteUpdateFromKrakenFields(fields, subs)
 		if ok {
@@ -545,25 +546,25 @@ func parseKrakenQuoteUpdates(
 
 func quoteUpdateFromKrakenFields(
 	fields map[string]json.RawMessage, subs []krakenSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	symbol := canonicalKrakenSymbol(rawString(fields["symbol"]))
 	if symbol == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	timestampText := rawString(fields["timestamp"])
 	if timestampText == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	asOf, err := time.Parse(time.RFC3339Nano, timestampText)
 	if err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 
 	for _, sub := range subs {
 		if sub.symbol != symbol {
 			continue
 		}
-		return QuoteUpdate{
+		return fwmarketdata.QuoteUpdate{
 			AsOf:  asOf.UTC(),
 			Base:  sub.Base,
 			Quote: sub.Quote,
@@ -572,7 +573,7 @@ func quoteUpdateFromKrakenFields(
 			Ask:   rawDecimalString(fields["ask"]),
 		}, true
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }
 
 func canonicalKrakenSymbol(symbol string) string {

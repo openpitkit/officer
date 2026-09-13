@@ -133,7 +133,7 @@ type AdjustmentBatchReject = domain.AdjustmentOutcomeRejected
 type OrderResult struct {
 	// Lock is the non-empty SDK-serialized reservation lock captured before the
 	// reservation was committed, ready to persist verbatim on an accepted order.
-	// Display prices are derived later via LockDisplayPrices.
+	// Display prices are derived later via LockSettlementPrice.
 	Lock []byte
 	// Blocks are account blocks the engine recorded while creating the
 	// reservation. They are non-empty only for a non-enforcing drop-copy path and
@@ -180,7 +180,7 @@ type ImmediateResult struct {
 	ExecutionReport *domain.ExecutionReportRequest
 	// Lock is the non-empty SDK-serialized reservation lock captured before
 	// commit, ready to persist verbatim on an accepted order. Display prices are
-	// derived later via LockDisplayPrices.
+	// derived later via LockSettlementPrice.
 	Lock []byte
 	// Blocks are the account blocks the engine recorded while settling the
 	// immediate fill.
@@ -485,9 +485,13 @@ type Engine interface {
 	MarketDataSink() marketdata.Sink
 
 	// Stop halts the engine and releases its engine-specific native resources. It
-	// must not close a market-data service the engine shares. Where it holds one,
-	// its owner releases it separately; for a node-built engine, the node does so
-	// at final shutdown after the last Stop. After Stop the engine is no longer
-	// usable. Stop is idempotent.
+	// must not close a market-data service the engine shares; that is
+	// CloseMarketDataService. After Stop the engine is no longer usable. Stop is
+	// idempotent.
 	Stop()
+
+	// CloseMarketDataService releases the market-data service the engine shares
+	// with the engines rebuilt before and after it. The node calls it after the
+	// final Stop at shutdown and when a database reset rotates the service.
+	CloseMarketDataService()
 }

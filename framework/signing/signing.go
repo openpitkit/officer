@@ -16,11 +16,16 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Package signing defines the approval-token signing seam used by the Officer
-// backend without binding it to a concrete key-management implementation.
+// backend without binding it to a concrete key-management implementation. It
+// also owns the approval envelope wire form: every signer produces it, and every
+// verifier and reproduction reader decodes it.
 package signing
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -168,4 +173,59 @@ type VerifyParams struct {
 type VerifyResult struct {
 	Payload domain.ApprovalPayload
 	Signed  bool
+}
+
+// Envelope is the wire form of a signed (or eSign-off) approval token. Signature
+// is omitted under alg "none".
+type Envelope struct {
+	Approval  domain.ApprovalPayload `json:"approval"`
+	Signature string                 `json:"signature,omitempty"`
+	KeyID     string                 `json:"keyId,omitempty"`
+	Alg       string                 `json:"alg"`
+}
+
+// CanonicalBytes returns the canonical wire bytes of payload: json.Marshal of
+// the concrete struct (Go emits fields in declaration order, deterministic). It
+// asserts byte-stability by marshalling twice and comparing.
+//
+// The struct field DECLARATION ORDER in domain.ApprovalPayload is load-bearing:
+// it defines the canonical/signed form, so reordering its fields silently
+// changes these bytes and invalidates every previously issued token (their
+// signatures no longer verify against the re-ordered canonical form). Never
+// reorder ApprovalPayload's fields to "tidy" them.
+func CanonicalBytes(payload domain.ApprovalPayload) ([]byte, error) {
+	b1, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("signing: marshal payload: %w", err)
+	}
+	b2, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("signing: marshal payload: %w", err)
+	}
+	if string(b1) != string(b2) {
+		return nil, errors.New("signing: canonical bytes not stable across marshals")
+	}
+	return b1, nil
+}
+
+// BuildEnvelope encodes env to its base64url token form.
+func BuildEnvelope(env Envelope) (string, error) {
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return "", fmt.Errorf("signing: marshal envelope: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// DecodeEnvelope decodes a base64url token back into its envelope.
+func DecodeEnvelope(token string) (Envelope, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("signing: decode token: %w", domain.ErrInvalid)
+	}
+	var env Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return Envelope{}, fmt.Errorf("signing: unmarshal envelope: %w", domain.ErrInvalid)
+	}
+	return env, nil
 }

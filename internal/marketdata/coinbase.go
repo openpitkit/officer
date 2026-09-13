@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -44,8 +45,8 @@ type coinbaseConnector struct {
 	dial         func(context.Context, string) (coinbaseConn, error)
 	sleep        func(context.Context, time.Duration) error
 	fetchSymbols func(context.Context) (map[string]struct{}, error)
-	report       StatusReporter
-	diagReport   DiagnosticReporter
+	report       fwmarketdata.StatusReporter
+	diagReport   fwmarketdata.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	readTimeout  time.Duration
@@ -68,7 +69,7 @@ type liveCoinbaseConn struct {
 }
 
 type coinbaseSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	productID string
 }
 
@@ -90,9 +91,9 @@ type coinbaseTickerEvent struct {
 	BestAsk   string
 }
 
-var _ Connector = (*coinbaseConnector)(nil)
-var _ SymbolVerifier = (*coinbaseConnector)(nil)
-var _ Diagnosable = (*coinbaseConnector)(nil)
+var _ fwmarketdata.Connector = (*coinbaseConnector)(nil)
+var _ fwmarketdata.SymbolVerifier = (*coinbaseConnector)(nil)
+var _ fwmarketdata.Diagnosable = (*coinbaseConnector)(nil)
 
 // NewCoinbaseConnector builds a Coinbase Exchange ticker-stream connector.
 func NewCoinbaseConnector() *coinbaseConnector {
@@ -131,7 +132,7 @@ func (c liveCoinbaseConn) Close(code websocket.StatusCode, reason string) error 
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *coinbaseConnector) SetStatusReporter(report StatusReporter) {
+func (c *coinbaseConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -142,19 +143,19 @@ func (c *coinbaseConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *coinbaseConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *coinbaseConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *coinbaseConnector) reportDiag(diag Diagnostic) {
+func (c *coinbaseConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
 // References returns the Coinbase API documentation and product-list URLs.
-func (c *coinbaseConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *coinbaseConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL:    "https://docs.cdp.coinbase.com/exchange/websocket-feed/channels",
 		SymbolsURL: coinbaseProductsURL,
 	}, true
@@ -163,20 +164,20 @@ func (c *coinbaseConnector) References() (ProviderReferences, bool) {
 // VerifySymbol checks external against the Coinbase product catalogue.
 func (c *coinbaseConnector) VerifySymbol(
 	ctx context.Context, external string,
-) (SymbolVerification, error) {
+) (fwmarketdata.SymbolVerification, error) {
 	verifyCtx, cancel := context.WithTimeout(ctx, coinbaseDiagnoseTimeout)
 	defer cancel()
 
 	known, err := c.fetchSymbols(verifyCtx)
 	if err != nil {
-		return SymbolVerification{}, err
+		return fwmarketdata.SymbolVerification{}, err
 	}
 	return verifySymbolFromSet(known, external), nil
 }
 
 func (c *coinbaseConnector) SearchSymbols(
-	ctx context.Context, query SymbolSearchQuery,
-) ([]SymbolMatch, error) {
+	ctx context.Context, query fwmarketdata.SymbolSearchQuery,
+) ([]fwmarketdata.SymbolMatch, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, coinbaseDiagnoseTimeout)
 	defer cancel()
 
@@ -189,7 +190,7 @@ func (c *coinbaseConnector) SearchSymbols(
 
 // Diagnose returns a diagnostic for each stored Coinbase subscription whose
 // product id is not listed by the provider catalogue.
-func (c *coinbaseConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
+func (c *coinbaseConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
 	diagCtx, cancel := context.WithTimeout(ctx, coinbaseDiagnoseTimeout)
 	defer cancel()
 
@@ -197,7 +198,7 @@ func (c *coinbaseConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) 
 	if err != nil {
 		return nil, err
 	}
-	var findings []Diagnostic
+	var findings []fwmarketdata.Diagnostic
 	for _, sub := range c.subs {
 		if _, ok := known[sub.productID]; ok {
 			continue
@@ -211,8 +212,8 @@ func (c *coinbaseConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) 
 }
 
 func (c *coinbaseConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	normalized, err := normalizeCoinbaseSubscriptions(subs)
 	if err != nil {
 		return nil, err
@@ -222,7 +223,7 @@ func (c *coinbaseConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -233,7 +234,7 @@ func (c *coinbaseConnector) Subscribe(
 }
 
 func (c *coinbaseConnector) run(
-	ctx context.Context, subs []coinbaseSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []coinbaseSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	subs = c.validateSymbols(ctx, subs)
 	if len(subs) == 0 {
@@ -268,14 +269,14 @@ func (c *coinbaseConnector) validateSymbols(
 
 	known, err := c.fetchSymbols(validateCtx)
 	if err != nil {
-		c.reportDiag(Diagnostic{
+		c.reportDiag(fwmarketdata.Diagnostic{
 			Level:       DiagWarn,
 			Code:        CodeSelfDiagnosisFailed,
 			Kind:        DiagKindProvider,
 			Title:       "Self-diagnosis failed",
 			Detail:      "symbol validation unavailable: " + err.Error(),
 			Remediation: "Couldn't validate against the provider; try Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 		})
 		return subs
 	}
@@ -295,7 +296,7 @@ func (c *coinbaseConnector) validateSymbols(
 }
 
 func (c *coinbaseConnector) stream(
-	ctx context.Context, subs []coinbaseSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []coinbaseSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (bool, error) {
 	conn, err := c.dial(ctx, coinbaseFeedURL)
 	if err != nil {
@@ -355,7 +356,7 @@ func (c *coinbaseConnector) Close() {
 }
 
 func normalizeCoinbaseSubscriptions(
-	subs []Subscription,
+	subs []fwmarketdata.Subscription,
 ) ([]coinbaseSubscription, error) {
 	normalized := make([]coinbaseSubscription, 0, len(subs))
 	for _, sub := range subs {
@@ -420,10 +421,10 @@ func fetchCoinbaseSymbols(ctx context.Context) (map[string]struct{}, error) {
 
 func parseCoinbaseQuoteUpdate(
 	payload []byte, subs []coinbaseSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	message := coinbaseTickerEvent{
 		Type:      rawString(fields["type"]),
@@ -434,24 +435,24 @@ func parseCoinbaseQuoteUpdate(
 		BestAsk:   rawString(fields["best_ask"]),
 	}
 	if message.Type != "ticker" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	asOf, err := time.Parse(time.RFC3339Nano, message.Time)
 	if err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	productID := strings.ToUpper(strings.TrimSpace(message.ProductID))
 	if productID == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	if message.Price == "" && message.BestBid == "" && message.BestAsk == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	for _, sub := range subs {
 		if sub.productID != productID {
 			continue
 		}
-		return QuoteUpdate{
+		return fwmarketdata.QuoteUpdate{
 			AsOf:  asOf.UTC(),
 			Base:  sub.Base,
 			Quote: sub.Quote,
@@ -460,7 +461,7 @@ func parseCoinbaseQuoteUpdate(
 			Ask:   message.BestAsk,
 		}, true
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }
 
 func coinbaseControlError(payload []byte) (string, bool) {

@@ -3,18 +3,88 @@
 Everything a contributor needs beyond the build in the README: the developer-only
 recipes, and how they differ from the default ones.
 
-## The framework module
+## Importable packages
 
-The root module is the application. `framework/` is the module a program imports
-to build a composition of its own:
+A program imports Officer from the one module:
 
 ```bash
-go get go.openpit.dev/officer/framework
+go get go.openpit.dev/officer
 ```
 
 Before `1.0` the public interface is not stable: a minor version may change it,
 a patch version carries fixes only. Pick a version constraint that tolerates
 that.
+
+These are the packages, by path under `go.openpit.dev/officer`; everything else
+is a command or under `internal/`, and cannot be imported:
+
+- the root - `Register` and `Config`, the open composition `pit-officer` runs.
+- `web` - the embedded dashboard build (`Dist`).
+- `httpapi` - the REST routes (`RouteConfig`) and the service lifecycle routes.
+- `mcptools` - the MCP tool set (`RegisterTools`).
+- `engine` - the OpenPit engine adapter (`NewOpenPitEngineBuildFunc`).
+- `signing` - the Ed25519 approval signer and its replay guard.
+- `framework/app` - the `Builder` of a composition and the `App` it builds.
+- `framework/auth` - the request caller in the context, and `CallerResolver`.
+- `framework/backend` - the control-plane service behind REST and MCP.
+- `framework/backup` - the realm-portable backup archive format.
+- `framework/businesscsv` - the business-entity CSV and ZIP format.
+- `framework/domain` - the transport-agnostic value types.
+- `framework/engine` - the seam between the control plane and an engine.
+- `framework/marketdata` - market-data connectors, providers, and registry.
+- `framework/mcp` - the MCP tool registry and the guard around every tool call.
+- `framework/mcp/catalog` - the MCP command catalogue, without the MCP SDK.
+- `framework/migration` - a version-tracked database migration runner.
+- `framework/node` - one engine and its store, bound to one realm.
+- `framework/secret` - sealing of secret values under a master key.
+- `framework/signing` - the approval-signing seam and the approval envelope.
+- `framework/store` - the database connector seam, scoped by realm.
+- `framework/store/schema` - the canonical store schema every connector shares.
+- `framework/web/httpapi` - the HTTP router, route registry, and `Authorizer`.
+
+`checks/public-packages.txt` is meant to hold these packages and the two
+commands, `cmd/pit-officer` and `examples/customhost`; `just lint-go` fails
+when the paths `go list ./...` reports outside `web/node_modules/` and without
+an `internal` path element drift from the list.
+
+### Composing your own Officer
+
+`Register` fills a builder with the open composition: the SQLite store, one
+local node over the default realm running the OpenPit engine, the signer, the
+control-plane service, the built-in market-data providers, the REST routes, the
+MCP tools, the dashboard, allow-all authorization, and an operator caller for
+every request. A `Set` call after it replaces that part; `AddToolRegistrar` and
+`RegisterMarketDataProvider` add to it. `Build` then opens and migrates the
+store and builds the node:
+
+```go
+builder := app.NewBuilder() // go.openpit.dev/officer/framework/app
+cfg := officer.Config{SQLitePath: "officer.db"}
+if err := officer.Register(builder, cfg); err != nil {
+    return err
+}
+builder.SetAuthorizer(authorizer) // decides per REST route ID or MCP tool name
+if err := builder.RegisterMarketDataProvider(provider); err != nil {
+    return err
+}
+builder.AddToolRegistrar(registerTools)
+
+officerApp, err := builder.Build(ctx, logger, onFatal)
+if err != nil {
+    return err
+}
+defer officerApp.Close()
+```
+
+`onFatal` receives an unrecoverable persistence error; `cmd/pit-officer` logs it
+and exits. It is required: `Build` rejects a nil hook.
+`officerApp.RunMCPStdio` serves MCP over stdio as a given caller, and
+`officerApp.BuildServeHandler` returns the HTTP handler for the dashboard, REST,
+and MCP over HTTP; `cmd/pit-officer` runs both.
+
+`examples/customhost` is the worked example: it replaces the authorizer, adds a
+market-data provider, and adds, replaces, and removes MCP tools and REST routes
+on top of the open composition.
 
 ## Two build modes
 
@@ -75,17 +145,10 @@ cd web && npm ci && npm run build && cd ..
 CGO_ENABLED=1 go build -o pit-officer ./cmd/pit-officer
 ```
 
-Build the SPA first. `//go:embed web/dist` takes whatever is in that directory
+Build the SPA first. `//go:embed dist` takes whatever is in that directory
 at build time, and a fresh checkout carries only the placeholder file there; a
 binary built over the placeholder has no `index.html` to serve, and `serve`
 fails when it builds the SPA handler at startup.
-
-## Modules and tidying
-
-The tree holds two Go modules: the root, and `framework/`, which the root
-requires through a `replace` directive. `just tidy` tidies `framework` first and
-the root second. The other order leaves the root `go.sum` computed against the
-previous framework requirements whenever a dependency moves between them.
 
 ## Frontend
 
@@ -94,7 +157,7 @@ previous framework requirements whenever a dependency moves between them.
 use. `just build-js` builds the SPA into `web/dist`, and `just build-js-lib`
 builds the publishable framework library into `web/lib`. Only
 `web/dist/embed-placeholder.txt` is committed; the rest of `web/dist` is build
-output, and `//go:embed web/dist` takes whatever is in that directory when the
+output, and `//go:embed dist` takes whatever is in that directory when the
 Go build runs.
 
 ## Gates

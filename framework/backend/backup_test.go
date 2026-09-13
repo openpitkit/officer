@@ -50,10 +50,6 @@ type backupRestoreTestNode struct {
 	restoredArchive backup.Archive
 }
 
-func (n *backupRestoreTestNode) Owns(node.Key) bool {
-	return true
-}
-
 func (n *backupRestoreTestNode) ListMarketDataInstances(
 	context.Context,
 ) ([]domain.MarketDataInstance, error) {
@@ -192,10 +188,6 @@ func newBackupRestoreTestService(
 		}},
 		removeAfterRestore: removeAfterRestore,
 	}
-	router, err := node.NewLocalRouter(n)
-	if err != nil {
-		t.Fatalf("NewLocalRouter: %v", err)
-	}
 	md := &backupRestoreTestRuntime{}
 	registry := marketdata.NewRegistry()
 	if err := registry.Register(marketdata.Provider{
@@ -210,7 +202,7 @@ func newBackupRestoreTestService(
 	// New guarantees signer is never a nil interface; a literal built here has
 	// to uphold that invariant itself.
 	return &Service{
-		router:   router,
+		node:     n,
 		md:       md,
 		registry: registry,
 		signer:   fwsigning.ServiceOrUnavailable(nil),

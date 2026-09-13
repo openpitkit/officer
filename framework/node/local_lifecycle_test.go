@@ -20,6 +20,7 @@ package node
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestLocalNode_SharedMarketDataServiceClosesOnlyAtFinalShutdown(t *testing.T
 		return lifecycleMarketDataEngine{Engine: built, owner: owner}, nil
 	}
 
-	nodeValue, _, err := NewLocalNode(ctx, st, build)
+	nodeValue, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, build, failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestNewLocalNode_SeedsBuildAndAudits(t *testing.T) {
 
 	eng := newFakeEngine()
 	var seed engine.Snapshot
-	n, got, err := NewLocalNode(ctx, st, fakeBuild(eng, &seed))
+	n, got, err := NewLocalNode(ctx, domain.DefaultRealm, st, fakeBuild(eng, &seed), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -195,7 +196,7 @@ func TestNewLocalNode_BuildFailure(t *testing.T) {
 	failBuild := func(engine.Snapshot) (engine.Engine, error) {
 		return nil, errors.New("build boom")
 	}
-	if _, _, err := NewLocalNode(ctx, st, failBuild); err == nil {
+	if _, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, failBuild, failOnFatal(t)); err == nil {
 		t.Fatalf("NewLocalNode: want error on build failure")
 	}
 
@@ -220,7 +221,7 @@ func TestNewLocalNode_NilArgs(t *testing.T) {
 	build := func(engine.Snapshot) (engine.Engine, error) {
 		return newFakeEngine(), nil
 	}
-	if _, _, err := NewLocalNode(ctx, nil, build); err == nil {
+	if _, _, err := NewLocalNode(ctx, domain.DefaultRealm, nil, build, failOnFatal(t)); err == nil {
 		t.Fatalf("want error for nil store")
 	}
 
@@ -229,8 +230,12 @@ func TestNewLocalNode_NilArgs(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	if _, _, err := NewLocalNode(ctx, st, nil); err == nil {
+	if _, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, nil, failOnFatal(t)); err == nil {
 		t.Fatalf("want error for nil build func")
+	}
+	if _, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, build, nil); err == nil ||
+		!strings.Contains(err.Error(), "nil fatal shutdown hook") {
+		t.Fatalf("NewLocalNode(nil fatal hook) = %v, want the missing hook named", err)
 	}
 }
 
@@ -246,7 +251,7 @@ func TestLocalNode_CheckOrderDelegatesToEngine(t *testing.T) {
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: "1", Price: "100",
 	}
-	out, err := n.CheckOrder(ctx, testKey("acc-1"), probe)
+	out, err := n.CheckOrder(ctx, probe)
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -282,7 +287,7 @@ func TestLocalNode_CheckOrderWritesNoAudit(t *testing.T) {
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
 	}
 	for i := 0; i < 3; i++ {
-		if _, err := n.CheckOrder(ctx, testKey("acc-1"), probe); err != nil {
+		if _, err := n.CheckOrder(ctx, probe); err != nil {
 			t.Fatalf("CheckOrder #%d: %v", i, err)
 		}
 	}

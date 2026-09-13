@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 )
 
@@ -42,14 +43,15 @@ type LogSource interface {
 
 // RouterConfig configures NewRouter.
 type RouterConfig struct {
-	Routes      *RouteRegistry
-	Authorizer  Authorizer
-	SPA         fs.FS
-	MCP         http.Handler
-	MCPPath     string
-	Logs        LogSource
-	BodyLimit   func(*http.Request) int64
-	ExtraMounts []ExtraMount
+	Routes         *RouteRegistry
+	Authorizer     Authorizer
+	CallerResolver auth.CallerResolver
+	SPA            fs.FS
+	MCP            http.Handler
+	MCPPath        string
+	Logs           LogSource
+	BodyLimit      func(*http.Request) int64
+	ExtraMounts    []ExtraMount
 }
 
 // NewRouter builds the framework HTTP handler.
@@ -59,6 +61,9 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	}
 	if cfg.Authorizer == nil {
 		return nil, errors.New("httpapi: nil authorizer")
+	}
+	if cfg.CallerResolver == nil {
+		return nil, errors.New("httpapi: nil caller resolver")
 	}
 	if cfg.SPA == nil {
 		return nil, errors.New("httpapi: nil SPA filesystem")
@@ -77,6 +82,7 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 		"/api/v1",
 		routes,
 		cfg.Authorizer,
+		cfg.CallerResolver,
 		domain.SourceAPI,
 		cfg.BodyLimit,
 		newRuntimeRouteManifestHandler(routes, cfg.Authorizer),
@@ -86,6 +92,7 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 		"/app/api/v1",
 		routes,
 		cfg.Authorizer,
+		cfg.CallerResolver,
 		domain.SourcePanel,
 		cfg.BodyLimit,
 		nil,
@@ -116,12 +123,13 @@ func mountV1(
 	prefix string,
 	routes []Route,
 	authorizer Authorizer,
+	callerResolver auth.CallerResolver,
 	source domain.Source,
 	bodyLimit func(*http.Request) int64,
 	manifest http.Handler,
 ) {
 	router.Route(prefix, func(v1 chi.Router) {
-		base := Chain{LimitBody(bodyLimit), StampSource(source)}
+		base := Chain{LimitBody(bodyLimit), ResolveCaller(callerResolver, source)}
 		if manifest != nil {
 			register(
 				v1,
@@ -133,7 +141,7 @@ func mountV1(
 		for _, route := range routes {
 			chain := make(Chain, 0, len(base)+1)
 			chain = append(chain, base...)
-			chain = append(chain, AuthorizeMiddleware(authorizer, route.Permission))
+			chain = append(chain, AuthorizeMiddleware(authorizer, route.ID))
 			register(v1, route.Method, route.Pattern, chain.Then(route.Handler))
 		}
 	})

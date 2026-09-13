@@ -34,10 +34,6 @@ type assetUpdateTestNode struct {
 	engineHandle int
 }
 
-func (n *assetUpdateTestNode) Owns(node.Key) bool {
-	return true
-}
-
 func (n *assetUpdateTestNode) UpdateAsset(
 	_ context.Context,
 	oldCode string,
@@ -73,11 +69,7 @@ func newAssetUpdateTestService(
 	md MarketDataRuntime,
 ) *Service {
 	t.Helper()
-	router, err := node.NewLocalRouter(n)
-	if err != nil {
-		t.Fatalf("NewLocalRouter: %v", err)
-	}
-	return &Service{router: router, md: md}
+	return &Service{node: n, md: md}
 }
 
 func assetUpdateTestAsset(code string) domain.Asset {

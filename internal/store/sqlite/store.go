@@ -68,16 +68,6 @@ type sqliteStore struct {
 // Option customizes a SQLite store instance.
 type Option func(*sqliteStore)
 
-// WithRealm binds the single-realm connector to a non-default realm id. When
-// unset the connector serves domain.DefaultRealm.
-func WithRealm(realm domain.RealmID) Option {
-	return func(s *sqliteStore) {
-		if realm != "" {
-			s.realm = realm
-		}
-	}
-}
-
 // WithMasterKey records the master key considered by the migration-time secret
 // state machine.
 func WithMasterKey(key secret.MasterKey) Option {
@@ -87,14 +77,21 @@ func WithMasterKey(key secret.MasterKey) Option {
 	}
 }
 
-// New opens (creating if absent) the SQLite database at path. The
-// caller must run Migrate before any read or write, then obtain a RealmStore
-// from ForRealm. Close releases the underlying connection pool.
+// New opens (creating if absent) the SQLite database at path and binds the
+// single-realm connector to realm. An empty or invalid realm is rejected with
+// an error wrapping domain.ErrInvalid before the database is opened. The caller
+// must run Migrate before any read or write, then obtain the RealmStore from
+// ForRealm with the same realm. Close releases the underlying connection pool.
 //
 // The connection opens the path as given; only Path() resolves to an absolute
 // filesystem path so the operator sees the full location. filepath.Abs returns
 // an already-absolute path unchanged and keeps the original string on error.
-func New(path string, opts ...Option) (fwstore.Store, error) {
+func New(
+	path string, realm domain.RealmID, opts ...Option,
+) (fwstore.Store, error) {
+	if err := domain.ValidateRealmID(realm); err != nil {
+		return nil, fmt.Errorf("store: bind realm: %w", err)
+	}
 	filesystemPath, _, _ := strings.Cut(path, "?")
 	_, statErr := os.Stat(filesystemPath)
 	databaseCreated := errors.Is(statErr, os.ErrNotExist)
@@ -113,7 +110,7 @@ func New(path string, opts ...Option) (fwstore.Store, error) {
 	s := &sqliteStore{
 		dialect:         sqliteDialect{},
 		path:            displayPath,
-		realm:           domain.DefaultRealm,
+		realm:           realm,
 		databaseCreated: databaseCreated,
 	}
 	s.db.Store(db)
@@ -149,15 +146,13 @@ func sqliteDSN(path string) string {
 }
 
 // ForRealm returns the data-access handle bound to realm. The single-realm
-// connector accepts only its own realm id and domain.DefaultRealm; any other id
-// is rejected with an error wrapping domain.ErrInvalid. The bound realm's
-// identity row is ensured so backup labelling and future placement have it.
+// connector accepts only its bound realm id; any other id, the empty one
+// included, is rejected with an error wrapping domain.ErrInvalid. The bound
+// realm's identity row is ensured so backup labelling and future placement have
+// it.
 func (s *sqliteStore) ForRealm(
 	ctx context.Context, realm domain.RealmID,
 ) (fwstore.RealmStore, error) {
-	if realm == "" {
-		realm = domain.DefaultRealm
-	}
 	if realm != s.realm {
 		return nil, fmt.Errorf(
 			"store: realm %q not served by this single-realm connector (serves %q): %w",

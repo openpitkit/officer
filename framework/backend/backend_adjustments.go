@@ -21,15 +21,14 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
 
-// ApplyAdjustment validates the account id and asset, routes to the owning
-// node, and applies one spot-funds adjustment. The returned record carries the
+// ApplyAdjustment validates the account id and asset and applies one
+// spot-funds adjustment. The returned record carries the
 // accepted-or-rejected outcome; a policy reject is a successful call, not an
 // error, and is persisted to the adjustment history and audit log like an
 // accepted one. missing is the caller's required choice for an account that does
@@ -59,12 +58,8 @@ func (s *Service) ApplyAdjustment(
 		}
 		req.RealizedPnl = normalized
 	}
-	n, err := s.router.Route(keyFor(account))
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.ApplyAdjustment(
-		ctx, keyFor(account), externalID, req, missing, auth.CallerFromContext(ctx),
+	return s.node.ApplyAdjustment(
+		ctx, account, externalID, req, missing, auth.CallerFromContext(ctx),
 	)
 }
 
@@ -92,13 +87,9 @@ func (s *Service) SetBalanceRealizedPnl(
 	if err != nil {
 		return domain.Balance{}, err
 	}
-	n, err := s.router.Route(keyFor(account))
-	if err != nil {
-		return domain.Balance{}, fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.SetBalanceRealizedPnl(
+	return s.node.SetBalanceRealizedPnl(
 		ctx,
-		keyFor(account),
+		account,
 		asset,
 		normalized,
 		missing,
@@ -107,7 +98,7 @@ func (s *Service) SetBalanceRealizedPnl(
 }
 
 // ListBalances returns the balance rows for the realm, optionally narrowed to a
-// non-empty account and/or asset. It aggregates across nodes.
+// non-empty account and/or asset.
 func (s *Service) ListBalances(
 	ctx context.Context, account domain.AccountID, asset string,
 ) ([]domain.Balance, error) {
@@ -125,33 +116,14 @@ func (s *Service) ListBalances(
 	return balances, nil
 }
 
-// ListBalanceRows returns balance rows aggregated across all nodes.
+// ListBalanceRows returns balance rows matching filter.
 func (s *Service) ListBalanceRows(
 	ctx context.Context, filter store.BalanceListFilter,
 ) (store.BalanceListPage, error) {
 	if err := filter.Validate(); err != nil {
 		return store.BalanceListPage{}, err
 	}
-	nodes := s.router.All()
-	if len(nodes) == 1 {
-		return nodes[0].ListBalanceRows(ctx, filter)
-	}
-	nodeFilter := filter
-	nodeFilter.Page = nodePageForMerge(filter.Page)
-	balances := make([]store.BalanceListRow, 0)
-	total := 0
-	for i, n := range nodes {
-		part, err := n.ListBalanceRows(ctx, nodeFilter)
-		if err != nil {
-			return store.BalanceListPage{},
-				fmt.Errorf("backend: node %d list balance rows: %w", i, err)
-		}
-		total += part.Total
-		balances = append(balances, part.Rows...)
-	}
-	sortBalanceRows(balances, filter.Sort)
-	balances = pageBalanceRows(balances, filter.Page)
-	return store.BalanceListPage{Rows: balances, Total: total}, nil
+	return s.node.ListBalanceRows(ctx, filter)
 }
 
 // ListAdjustments validates the account id and returns the most recent n
@@ -162,18 +134,11 @@ func (s *Service) ListAdjustments(
 	if err := domain.ValidateAccountID(account); err != nil {
 		return nil, err
 	}
-	target, err := s.router.Route(keyFor(account))
-	if err != nil {
-		return nil, fmt.Errorf("backend: route account: %w", err)
-	}
-	return target.ListAdjustments(ctx, account, source, n)
+	return s.node.ListAdjustments(ctx, account, source, n)
 }
 
-// ListAllAdjustments returns the most recent n adjustments aggregated across
-// all nodes and accounts, optionally narrowed to a non-empty account and/or
-// source.
-// It backs GET /adjustments. Per-node results are already newest-first; the
-// merged slice is sorted newest-first and bounded to n.
+// ListAllAdjustments returns the most recent n adjustments across accounts,
+// newest first, optionally narrowed to a non-empty account and/or source.
 func (s *Service) ListAllAdjustments(
 	ctx context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.AccountAdjustmentRecord, error) {
@@ -181,107 +146,31 @@ func (s *Service) ListAllAdjustments(
 		if err := domain.ValidateAccountID(account); err != nil {
 			return nil, err
 		}
-		return s.ListAdjustments(ctx, account, source, n)
+		return s.node.ListAdjustments(ctx, account, source, n)
 	}
-	recs := make([]domain.AccountAdjustmentRecord, 0)
-	for i, target := range s.router.All() {
-		part, err := target.ListAdjustments(ctx, "", source, n)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list adjustments: %w", i, err)
-		}
-		recs = append(recs, part...)
+	recs, err := s.node.ListAdjustments(ctx, "", source, n)
+	if err != nil {
+		return nil, err
 	}
+	// Newest first, as sortOrdersNewestFirst orders orders.
 	sort.Slice(recs, func(i, j int) bool {
 		if !recs[i].At.Equal(recs[j].At) {
 			return recs[i].At.After(recs[j].At)
 		}
 		return recs[i].ExternalID.String() > recs[j].ExternalID.String()
 	})
-	if n > 0 && len(recs) > n {
-		recs = recs[:n]
-	}
 	return recs, nil
 }
 
-// ListAdjustmentRows returns adjustments with DB-side filters/counts from each
-// node.
+// ListAdjustmentRows returns adjustments with DB-side filters and counts.
 func (s *Service) ListAdjustmentRows(
 	ctx context.Context, filter store.AdjustmentListFilter,
 ) (store.AdjustmentListPage, error) {
-	nodes := s.router.All()
-	if len(nodes) == 1 {
-		target, ok := nodes[0].(adjustmentRowNode)
-		if !ok {
-			return store.AdjustmentListPage{}, fmt.Errorf(
-				"backend: node list adjustment rows: %w", domain.ErrNotImplemented,
-			)
-		}
-		return target.ListAdjustmentRows(ctx, filter)
+	target, ok := s.node.(adjustmentRowNode)
+	if !ok {
+		return store.AdjustmentListPage{}, fmt.Errorf(
+			"backend: node list adjustment rows: %w", domain.ErrNotImplemented,
+		)
 	}
-	rows := make([]domain.AccountAdjustmentRecord, 0)
-	total := 0
-	nodeFilter := filter
-	nodeFilter.Page = nodePageForMerge(filter.Page)
-	for i, n := range nodes {
-		target, ok := n.(adjustmentRowNode)
-		if !ok {
-			return store.AdjustmentListPage{}, fmt.Errorf(
-				"backend: node %d list adjustment rows: %w", i, domain.ErrNotImplemented,
-			)
-		}
-		part, err := target.ListAdjustmentRows(ctx, nodeFilter)
-		if err != nil {
-			return store.AdjustmentListPage{}, fmt.Errorf(
-				"backend: node %d list adjustment rows: %w", i, err,
-			)
-		}
-		total += part.Total
-		rows = append(rows, part.Rows...)
-	}
-	sortAdjustmentRows(rows, filter.Sort)
-	rows = pageAdjustmentRows(rows, filter.Page)
-	return store.AdjustmentListPage{Rows: rows, Total: total}, nil
-}
-
-func sortAdjustmentRows(rows []domain.AccountAdjustmentRecord, spec store.SortSpec) {
-	desc := spec.Descending
-	column := spec.Column
-	if column == "" {
-		column = "at"
-		desc = true
-	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		left, right := rows[i], rows[j]
-		cmp := 0
-		switch column {
-		case "account":
-			cmp = strings.Compare(left.Account.String(), right.Account.String())
-		case "asset":
-			cmp = strings.Compare(left.Asset, right.Asset)
-		case "principal":
-			cmp = strings.Compare(left.Principal, right.Principal)
-		case "source":
-			cmp = strings.Compare(string(left.Source), string(right.Source))
-		case "status":
-			cmp = strings.Compare(adjustmentStatus(left), adjustmentStatus(right))
-		case "at":
-			cmp = timeCompare(left.At, right.At)
-		default:
-			cmp = timeCompare(left.At, right.At)
-		}
-		if cmp == 0 {
-			cmp = strings.Compare(left.ExternalID.String(), right.ExternalID.String())
-		}
-		if desc {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
-}
-
-func adjustmentStatus(rec domain.AccountAdjustmentRecord) string {
-	if rec.Rejected != nil {
-		return string(domain.AdjustmentStatusRejected)
-	}
-	return string(domain.AdjustmentStatusAccepted)
+	return target.ListAdjustmentRows(ctx, filter)
 }

@@ -26,9 +26,13 @@ package auth
 
 import (
 	"context"
+	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
 )
+
+// CallerResolver resolves the request identity without choosing its surface.
+type CallerResolver func(*http.Request) (domain.Caller, error)
 
 // callerContextKey is the unexported context key the caller is carried under. A
 // package-private type keeps the key from colliding with other context values.
@@ -49,6 +53,13 @@ var systemCaller = domain.Caller{Source: domain.SourceSystem}
 // resolved principal (and role) ride the same value.
 func ContextWithCaller(ctx context.Context, caller domain.Caller) context.Context {
 	return context.WithValue(ctx, callerContextKey{}, caller)
+}
+
+// LookupCaller returns the caller stamped into ctx and whether one was stamped.
+// Unlike CallerFromContext it does not default an unstamped ctx to the system.
+func LookupCaller(ctx context.Context) (domain.Caller, bool) {
+	c, ok := ctx.Value(callerContextKey{}).(domain.Caller)
+	return c, ok
 }
 
 // CallerFromContext returns the caller stamped into ctx, or the system caller

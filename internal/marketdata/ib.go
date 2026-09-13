@@ -35,6 +35,7 @@ import (
 	"unsafe"
 
 	"github.com/scmhub/ibapi"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -63,8 +64,8 @@ const (
 type ibConnector struct {
 	newClient  func(ibapi.EWrapper) ibClient
 	sleep      func(context.Context, time.Duration) error
-	report     StatusReporter
-	diagReport DiagnosticReporter
+	report     fwmarketdata.StatusReporter
+	diagReport fwmarketdata.DiagnosticReporter
 	now        func() time.Time
 
 	cfg            ibConfig
@@ -175,13 +176,13 @@ type ibContractConfig struct {
 }
 
 type ibSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	contract *ibapi.Contract
 	reqID    ibapi.TickerID
 }
 
 type ibPartialQuote struct {
-	Subscription
+	fwmarketdata.Subscription
 	lastTradeMark string
 	computedMark  string
 	sourceAsOf    time.Time
@@ -194,7 +195,7 @@ type ibWrapper struct {
 	ibapi.Wrapper
 
 	reportStatus func(bool, string)
-	reportDiag   func(Diagnostic)
+	reportDiag   func(fwmarketdata.Diagnostic)
 	now          func() time.Time
 
 	readyOnce sync.Once
@@ -208,7 +209,7 @@ type ibWrapper struct {
 	ready     chan struct{}
 	lost      chan error
 	ctx       context.Context
-	out       chan<- QuoteUpdate
+	out       chan<- fwmarketdata.QuoteUpdate
 }
 
 func init() {
@@ -387,7 +388,7 @@ func unsafeReflectValue(value reflect.Value) reflect.Value {
 }
 
 // SetStatusReporter installs the runtime connection status callback.
-func (c *ibConnector) SetStatusReporter(report StatusReporter) {
+func (c *ibConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -398,25 +399,25 @@ func (c *ibConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the structured diagnostic callback.
-func (c *ibConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *ibConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *ibConnector) reportDiag(diag Diagnostic) {
+func (c *ibConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
 // Diagnose returns no-data findings for the active IB subscriptions.
-func (c *ibConnector) Diagnose(context.Context) ([]Diagnostic, error) {
+func (c *ibConnector) Diagnose(context.Context) ([]fwmarketdata.Diagnostic, error) {
 	c.subsMu.Lock()
 	subs := append([]ibSubscription(nil), c.subs...)
 	c.subsMu.Unlock()
 
-	findings := make([]Diagnostic, 0, len(subs))
+	findings := make([]fwmarketdata.Diagnostic, 0, len(subs))
 	for _, sub := range subs {
-		findings = append(findings, Diagnostic{
+		findings = append(findings, fwmarketdata.Diagnostic{
 			Level:       DiagWarn,
 			Code:        CodeNoData,
 			Kind:        DiagKindProvider,
@@ -424,23 +425,23 @@ func (c *ibConnector) Diagnose(context.Context) ([]Diagnostic, error) {
 			Detail:      "Interactive Brokers has not emitted a quote for this subscription.",
 			Remediation: "Check TWS/Gateway contract resolution, market-data permissions, and the requested marketDataType.",
 			Instrument:  sub.External,
-			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 		})
 	}
 	return findings, nil
 }
 
 // References returns operator documentation links for the IB provider.
-func (c *ibConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *ibConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL: "https://interactivebrokers.github.io/tws-api/md_request.html",
 	}, true
 }
 
 // Subscribe starts streaming normalized quotes for the requested subscriptions.
 func (c *ibConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	if c.configErr != nil {
 		return nil, c.configErr
 	}
@@ -455,7 +456,7 @@ func (c *ibConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -474,8 +475,8 @@ func (c *ibConnector) Subscribe(
 // connect/transport/provider failure; an IB "no security definition" (code 200),
 // a timeout, and a zero-match resolve all return a nil slice with a nil error.
 func (c *ibConnector) SearchSymbols(
-	ctx context.Context, query SymbolSearchQuery,
-) (result []SymbolMatch, err error) {
+	ctx context.Context, query fwmarketdata.SymbolSearchQuery,
+) (result []fwmarketdata.SymbolMatch, err error) {
 	if c.configErr != nil {
 		return nil, c.configErr
 	}
@@ -535,7 +536,7 @@ func (c *ibConnector) SearchSymbols(
 	return nil, nil
 }
 
-func ibSearchContracts(query SymbolSearchQuery) ([]*ibapi.Contract, error) {
+func ibSearchContracts(query fwmarketdata.SymbolSearchQuery) ([]*ibapi.Contract, error) {
 	pattern := strings.TrimSpace(query.Query)
 	if pattern == "" {
 		return nil, nil
@@ -560,7 +561,7 @@ func ibSearchContracts(query SymbolSearchQuery) ([]*ibapi.Contract, error) {
 	}, nil
 }
 
-func ibSearchQueryHasCriteria(query SymbolSearchQuery) bool {
+func ibSearchQueryHasCriteria(query fwmarketdata.SymbolSearchQuery) bool {
 	return strings.TrimSpace(query.SecType) != "" ||
 		strings.TrimSpace(query.Exchange) != "" ||
 		strings.TrimSpace(query.Currency) != "" ||
@@ -569,7 +570,7 @@ func ibSearchQueryHasCriteria(query SymbolSearchQuery) bool {
 		strings.TrimSpace(query.Strike) != ""
 }
 
-func ibSearchContractFromQuery(query SymbolSearchQuery) (*ibapi.Contract, error) {
+func ibSearchContractFromQuery(query fwmarketdata.SymbolSearchQuery) (*ibapi.Contract, error) {
 	symbol := strings.TrimSpace(query.Query)
 	currency := strings.TrimSpace(query.Currency)
 	if base, quote, ok := splitSymbolPair(symbol); ok {
@@ -595,7 +596,7 @@ func ibSearchContractFromQuery(query SymbolSearchQuery) (*ibapi.Contract, error)
 
 func ibSearchContract(
 	symbol, secType, exchange, currency string,
-	query SymbolSearchQuery,
+	query fwmarketdata.SymbolSearchQuery,
 ) *ibapi.Contract {
 	return &ibapi.Contract{
 		Symbol:                       strings.TrimSpace(symbol),
@@ -608,7 +609,7 @@ func ibSearchContract(
 }
 
 func (c *ibConnector) run(
-	ctx context.Context, subs []ibSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []ibSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	attempt := 0
 	for {
@@ -631,7 +632,7 @@ func (c *ibConnector) run(
 // stream runs one connection attempt; the bool reports whether ≥1 quote was
 // delivered, so run resets its reconnect backoff after a healthy connection.
 func (c *ibConnector) stream(
-	ctx context.Context, subs []ibSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []ibSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (delivered bool, err error) {
 	wrapper := newIBWrapper(ctx, subs, out, c.now, c.reportStatus, c.reportDiag)
 	client := c.newClient(wrapper)
@@ -646,14 +647,14 @@ func (c *ibConnector) stream(
 			if err != nil && !errors.Is(err, context.Canceled) {
 				err = errors.Join(err, disconnectErr)
 			}
-			c.reportDiag(Diagnostic{
+			c.reportDiag(fwmarketdata.Diagnostic{
 				Level:       DiagError,
 				Code:        CodeConnectionError,
 				Kind:        DiagKindProvider,
 				Title:       "Interactive Brokers disconnect failed",
 				Detail:      disconnectErr.Error(),
 				Remediation: "Check that TWS/Gateway released the client ID, then Restart feeds.",
-				Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+				Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 			})
 		}
 	}()
@@ -734,10 +735,10 @@ func (c *ibConnector) Close() {
 func newIBWrapper(
 	ctx context.Context,
 	subs []ibSubscription,
-	out chan<- QuoteUpdate,
+	out chan<- fwmarketdata.QuoteUpdate,
 	now func() time.Time,
 	reportStatus func(bool, string),
-	reportDiag func(Diagnostic),
+	reportDiag func(fwmarketdata.Diagnostic),
 ) *ibWrapper {
 	subMap := make(map[ibapi.TickerID]ibSubscription, len(subs))
 	quotes := make(map[ibapi.TickerID]ibPartialQuote, len(subs))
@@ -794,14 +795,14 @@ func (w *ibWrapper) Error(
 		return
 	}
 
-	diag := Diagnostic{
+	diag := fwmarketdata.Diagnostic{
 		Level:       DiagError,
 		Code:        CodeConnectionError,
 		Kind:        DiagKindProvider,
 		Title:       "Interactive Brokers error",
 		Detail:      fmt.Sprintf("IB API error %d: %s", code, detail),
 		Remediation: "Check the TWS/Gateway API settings, market-data permissions, and contract configuration.",
-		Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+		Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 	}
 	switch {
 	case ibInformationalError(code):
@@ -834,7 +835,7 @@ func (w *ibWrapper) Error(
 			diag.Title = "IB contract not found"
 			diag.Detail = fmt.Sprintf("IB did not resolve contract %q: %s", sub.External, detail)
 			diag.Remediation = "Adjust the external symbol or the IB contract override, then Restart feeds."
-			diag.Actions = []DiagnosticAction{
+			diag.Actions = []fwmarketdata.DiagnosticAction{
 				{Type: ActionRemoveInstrument, Target: sub.External},
 				{Type: ActionOpenDocs},
 			}
@@ -896,12 +897,12 @@ func (w *ibWrapper) TickString(reqID ibapi.TickerID, tickType ibapi.TickType, va
 
 func (w *ibWrapper) setQuoteField(
 	reqID ibapi.TickerID, tickType ibapi.TickType, field string, value string,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	partial, ok := w.quotes[reqID]
 	if !ok {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	switch field {
 	case "bid":
@@ -925,12 +926,12 @@ func (w *ibWrapper) setQuoteField(
 
 func (w *ibWrapper) clearQuoteField(
 	reqID ibapi.TickerID, field string,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	partial, ok := w.quotes[reqID]
 	if !ok {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	switch field {
 	case "bid":
@@ -946,12 +947,12 @@ func (w *ibWrapper) clearQuoteField(
 	return w.quoteUpdate(partial), true
 }
 
-func (w *ibWrapper) quoteUpdate(partial ibPartialQuote) QuoteUpdate {
+func (w *ibWrapper) quoteUpdate(partial ibPartialQuote) fwmarketdata.QuoteUpdate {
 	asOf := partial.sourceAsOf
 	if asOf.IsZero() {
 		asOf = w.now()
 	}
-	return QuoteUpdate{
+	return fwmarketdata.QuoteUpdate{
 		AsOf:  asOf,
 		Base:  partial.Base,
 		Quote: partial.Quote,
@@ -972,14 +973,14 @@ func (w *ibWrapper) reportTickNoData(reqID ibapi.TickerID, tickType ibapi.TickTy
 	sub, hasSub := w.subs[reqID]
 	w.mu.Unlock()
 
-	diag := Diagnostic{
+	diag := fwmarketdata.Diagnostic{
 		Level:       DiagWarn,
 		Code:        CodeNoData,
 		Kind:        DiagKindProvider,
 		Title:       "IB tick has no data",
 		Detail:      fmt.Sprintf("IB returned no data for %s.", ibapi.TickName(tickType)),
 		Remediation: "Check IB market-data permissions and contract availability.",
-		Actions:     []DiagnosticAction{{Type: ActionOpenDocs}},
+		Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionOpenDocs}},
 	}
 	if hasSub {
 		diag.Instrument = sub.External
@@ -987,7 +988,7 @@ func (w *ibWrapper) reportTickNoData(reqID ibapi.TickerID, tickType ibapi.TickTy
 	w.reportDiag(diag)
 }
 
-func (w *ibWrapper) emit(update QuoteUpdate) {
+func (w *ibWrapper) emit(update fwmarketdata.QuoteUpdate) {
 	if w.out == nil {
 		return
 	}
@@ -1012,7 +1013,7 @@ func (w *ibWrapper) MarketDataType(reqID ibapi.TickerID, marketDataType int64) {
 		name = fmt.Sprintf("unknown(%d)", marketDataType)
 	}
 	if marketDataType == int64(ibapi.REALTIME) {
-		w.reportDiag(Diagnostic{
+		w.reportDiag(fwmarketdata.Diagnostic{
 			Level:      DiagInfo,
 			Routine:    true,
 			Code:       CodeDataFreshness,
@@ -1023,7 +1024,7 @@ func (w *ibWrapper) MarketDataType(reqID ibapi.TickerID, marketDataType int64) {
 		})
 		return
 	}
-	w.reportDiag(Diagnostic{
+	w.reportDiag(fwmarketdata.Diagnostic{
 		Level:       DiagWarn,
 		Code:        CodeDataFreshness,
 		Kind:        DiagKindProvider,
@@ -1031,7 +1032,7 @@ func (w *ibWrapper) MarketDataType(reqID ibapi.TickerID, marketDataType int64) {
 		Detail:      "Interactive Brokers is serving " + name + " market data.",
 		Remediation: "Check account entitlements or the requested marketDataType in provider credentials.",
 		Instrument:  w.instrumentName(reqID),
-		Actions:     []DiagnosticAction{{Type: ActionOpenDocs}},
+		Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionOpenDocs}},
 	})
 }
 
@@ -1060,7 +1061,7 @@ func (w *ibWrapper) signalLost(err error) {
 }
 
 type ibSearchResult struct {
-	matches []SymbolMatch
+	matches []fwmarketdata.SymbolMatch
 	reqID   int64
 }
 
@@ -1074,7 +1075,7 @@ type ibSearchWrapper struct {
 	ibapi.Wrapper
 
 	mu        sync.Mutex
-	acc       map[int64][]SymbolMatch
+	acc       map[int64][]fwmarketdata.SymbolMatch
 	done      map[int64]struct{}
 	readyOnce sync.Once
 	errOnce   sync.Once
@@ -1087,7 +1088,7 @@ func newIBSearchWrapper(
 	results chan ibSearchResult, errs chan error,
 ) *ibSearchWrapper {
 	return &ibSearchWrapper{
-		acc:     make(map[int64][]SymbolMatch),
+		acc:     make(map[int64][]fwmarketdata.SymbolMatch),
 		done:    make(map[int64]struct{}),
 		ready:   make(chan struct{}),
 		results: results,
@@ -1116,7 +1117,7 @@ func (w *ibSearchWrapper) ConnectAck() {}
 
 func (w *ibSearchWrapper) waitResult(
 	ctx context.Context, reqID int64, timeout time.Duration,
-) ([]SymbolMatch, error) {
+) ([]fwmarketdata.SymbolMatch, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
@@ -1145,7 +1146,7 @@ func (w *ibSearchWrapper) ContractDetailsEnd(reqID int64) {
 	w.finish(reqID, nil)
 }
 
-func (w *ibSearchWrapper) finish(reqID int64, matches []SymbolMatch) {
+func (w *ibSearchWrapper) finish(reqID int64, matches []fwmarketdata.SymbolMatch) {
 	w.mu.Lock()
 	if _, ok := w.done[reqID]; ok {
 		w.mu.Unlock()
@@ -1187,8 +1188,8 @@ func (w *ibSearchWrapper) Error(
 	})
 }
 
-func symbolMatchFromDetails(cd *ibapi.ContractDetails) SymbolMatch {
-	return SymbolMatch{
+func symbolMatchFromDetails(cd *ibapi.ContractDetails) fwmarketdata.SymbolMatch {
+	return fwmarketdata.SymbolMatch{
 		Symbol:                       cd.Contract.Symbol,
 		Name:                         cd.LongName,
 		SecType:                      cd.Contract.SecType,
@@ -1335,7 +1336,7 @@ func normalizeIBMarketDataType(typ int64) (int64, error) {
 }
 
 func normalizeIBSubscriptions(
-	cfg ibConfig, subs []Subscription,
+	cfg ibConfig, subs []fwmarketdata.Subscription,
 ) ([]ibSubscription, error) {
 	normalized := make([]ibSubscription, 0, len(subs))
 	for i, sub := range subs {

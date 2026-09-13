@@ -44,7 +44,7 @@ import (
 // read those two tables directly with SQL through the shared connection (see
 // seedBalance/getBalanceRow/seedSigningKey) rather than the stubbed public
 // methods, which keeps the orders-group coverage self-contained.
-func seedOrderFixtures(t *testing.T) (context.Context, RealmStore) {
+func seedOrderFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -66,7 +66,7 @@ func seedOrderFixtures(t *testing.T) (context.Context, RealmStore) {
 // seedBalance inserts a balance row directly, resolving the account and asset to
 // their surrogate ids; the public UpsertBalance is another sub-agent's stub.
 func seedBalance(
-	t *testing.T, ctx context.Context, rs RealmStore,
+	t *testing.T, ctx context.Context, rs fwstore.RealmStore,
 	account domain.AccountID, asset, available, held, incoming, realized string,
 ) {
 	t.Helper()
@@ -99,7 +99,7 @@ type balanceRow struct {
 // getBalanceRow reads a balance row directly; the public GetBalance is another
 // sub-agent's stub. The bool is false when no row exists.
 func getBalanceRow(
-	t *testing.T, ctx context.Context, rs RealmStore, account domain.AccountID, asset string,
+	t *testing.T, ctx context.Context, rs fwstore.RealmStore, account domain.AccountID, asset string,
 ) (balanceRow, bool) {
 	t.Helper()
 	r := rs.(*realmStore)
@@ -130,7 +130,7 @@ func getBalanceRow(
 // seedSigningKey inserts a signing key row directly so an event_attestation row
 // can satisfy its ON DELETE RESTRICT FK; the public UpsertSigningKey is another
 // sub-agent's stub.
-func seedSigningKey(t *testing.T, ctx context.Context, rs RealmStore, keyID string) {
+func seedSigningKey(t *testing.T, ctx context.Context, rs fwstore.RealmStore, keyID string) {
 	t.Helper()
 	seed := []byte("00000000000000000000000000000001")
 	publicKey := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
@@ -1962,7 +1962,7 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 					RealizedPnlResult: "10",
 				},
 			},
-			Audit: AuditEntry{
+			Audit: fwstore.AuditEntry{
 				Action:  domain.AuditActionAdjustment,
 				Account: "acc-1",
 				Asset:   "USD",

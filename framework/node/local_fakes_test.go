@@ -1348,7 +1348,7 @@ func newTestNode(t *testing.T, eng *fakeEngine) (*localNode, store.RealmStore) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	var seed engine.Snapshot
-	n, _, err := NewLocalNode(ctx, st, fakeBuild(eng, &seed))
+	n, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, fakeBuild(eng, &seed), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -1359,19 +1359,29 @@ func newTestNode(t *testing.T, eng *fakeEngine) (*localNode, store.RealmStore) {
 
 // newTestNodeWithStore builds a localNode over the supplied store (typically a
 // realmWrapStore around a real temp SQLite store) and the fake engine. It mirrors
-// newTestNode but lets a test inject a failing realm decorator.
+// newTestNode but lets a test inject a failing realm decorator and its
+// fatal-shutdown hook; a test that expects no fail-stop passes failOnFatal(t).
 func newTestNodeWithStore(
-	t *testing.T, st store.Store, eng *fakeEngine, opts ...LocalOption,
+	t *testing.T, st store.Store, eng *fakeEngine, fatal func(error),
 ) *localNode {
 	t.Helper()
 	var seed engine.Snapshot
-	n, _, err := NewLocalNode(context.Background(), st, fakeBuild(eng, &seed), opts...)
+	n, _, err := NewLocalNode(context.Background(), domain.DefaultRealm, st, fakeBuild(eng, &seed), fatal)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	local := n.(*localNode)
 	seedTestPrincipal(t, local)
 	return local
+}
+
+// failOnFatal returns the fatal-shutdown hook of a test that expects no
+// fail-stop: any call fails the test.
+func failOnFatal(t *testing.T) func(error) {
+	t.Helper()
+	return func(err error) {
+		t.Errorf("unexpected fatal shutdown: %v", err)
+	}
 }
 
 // seedTestPrincipal registers the operator principal a node mutation stamps as
@@ -1433,10 +1443,6 @@ func seedTestAccount(t *testing.T, realm store.RealmStore, id domain.AccountID) 
 		!errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreateAccount(%s): %v", id, err)
 	}
-}
-
-func testKey(id domain.AccountID) Key {
-	return Key{Account: id}
 }
 
 func testAccount(id domain.AccountID) domain.Account {

@@ -27,6 +27,10 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+func testCallerResolver(*http.Request) (domain.Caller, error) {
+	return domain.Caller{Principal: domain.PrincipalOperator}, nil
+}
+
 func TestRouteRegistryReplaceAndUnregister(t *testing.T) {
 	var registry RouteRegistry
 	registry.Register(Route{
@@ -66,8 +70,9 @@ func TestRouteRegistryReplaceAndUnregister(t *testing.T) {
 	}
 
 	router, err := NewRouter(RouterConfig{
-		Routes:     &registry,
-		Authorizer: AllowAll{},
+		Routes:         &registry,
+		Authorizer:     AllowAll{},
+		CallerResolver: testCallerResolver,
 		SPA: fstest.MapFS{
 			"index.html": {Data: []byte("<html></html>")},
 		},
@@ -105,8 +110,9 @@ func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
 		Handler: http.NotFoundHandler(),
 	})
 	router, err := NewRouter(RouterConfig{
-		Routes:     &registry,
-		Authorizer: AllowAll{},
+		Routes:         &registry,
+		Authorizer:     AllowAll{},
+		CallerResolver: testCallerResolver,
 		SPA: fstest.MapFS{
 			"index.html": {Data: []byte("<html></html>")},
 		},
@@ -162,16 +168,17 @@ func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
 	var registry RouteRegistry
 	registry.Register(Route{
 		ID: "public", Method: http.MethodGet, Pattern: "/public",
-		Handler: http.NotFoundHandler(), Permission: "read",
+		Handler: http.NotFoundHandler(),
 	})
 	registry.Register(Route{
 		ID: "secret", Method: http.MethodPost, Pattern: "/secret",
-		Handler: http.NotFoundHandler(), Permission: "admin",
+		Handler: http.NotFoundHandler(),
 	})
 	router, err := NewRouter(RouterConfig{
-		Routes: &registry, Authorizer: denyPermission("admin"),
-		SPA:       fstest.MapFS{"index.html": {Data: []byte("<html></html>")}},
-		BodyLimit: BodyLimitPolicy(1024, nil),
+		Routes: &registry, Authorizer: denyIdentifier("secret"),
+		CallerResolver: testCallerResolver,
+		SPA:            fstest.MapFS{"index.html": {Data: []byte("<html></html>")}},
+		BodyLimit:      BodyLimitPolicy(1024, nil),
 	})
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -194,26 +201,25 @@ func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
 func TestNewRouterCustomAuthorizer(t *testing.T) {
 	var registry RouteRegistry
 	registry.Register(Route{
-		ID:         "open",
-		Method:     http.MethodGet,
-		Pattern:    "/open",
-		Permission: "read",
+		ID:      "open",
+		Method:  http.MethodGet,
+		Pattern: "/open",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("ok"))
 		}),
 	})
 	registry.Register(Route{
-		ID:         "denied",
-		Method:     http.MethodGet,
-		Pattern:    "/denied",
-		Permission: "deny",
+		ID:      "denied",
+		Method:  http.MethodGet,
+		Pattern: "/denied",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("blocked"))
 		}),
 	})
 	router, err := NewRouter(RouterConfig{
-		Routes:     &registry,
-		Authorizer: denyPermission("deny"),
+		Routes:         &registry,
+		Authorizer:     denyIdentifier("denied"),
+		CallerResolver: testCallerResolver,
 		SPA: fstest.MapFS{
 			"index.html": {Data: []byte("<html></html>")},
 		},
@@ -236,13 +242,86 @@ func TestNewRouterCustomAuthorizer(t *testing.T) {
 	}
 }
 
+func TestRouteAuthorizerReceivesRouteID(t *testing.T) {
+	var registry RouteRegistry
+	registry.Register(Route{
+		ID:      "route.stable-id",
+		Method:  http.MethodGet,
+		Pattern: "/tracked",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	})
+	authorizer := &recordingAuthorizer{}
+	router, err := NewRouter(RouterConfig{
+		Routes:     &registry,
+		Authorizer: authorizer,
+		CallerResolver: func(*http.Request) (domain.Caller, error) {
+			return domain.Caller{Principal: "alice", Role: "admin"}, nil
+		},
+		SPA: fstest.MapFS{
+			"index.html": {Data: []byte("<html></html>")},
+		},
+		BodyLimit: BodyLimitPolicy(1024, nil),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tracked", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("tracked route status = %d, want 204", rec.Code)
+	}
+	if len(authorizer.calls) != 1 {
+		t.Fatalf("authorization calls = %+v, want one call", authorizer.calls)
+	}
+	call := authorizer.calls[0]
+	if call.identifier != "route.stable-id" || call.source != domain.SourceAPI ||
+		call.principal != "alice" || call.role != "admin" {
+		t.Fatalf("authorization call = %+v, want API route ID", call)
+	}
+}
+
+func TestResolverErrorRejectsRequestBeforeHandler(t *testing.T) {
+	var registry RouteRegistry
+	handlerCalled := false
+	registry.Register(Route{
+		ID: "blocked", Method: http.MethodPost, Pattern: "/blocked",
+		Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			handlerCalled = true
+		}),
+	})
+	router, err := NewRouter(RouterConfig{
+		Routes: &registry, Authorizer: AllowAll{},
+		CallerResolver: func(*http.Request) (domain.Caller, error) {
+			return domain.Caller{}, domain.ErrForbidden
+		},
+		SPA:       fstest.MapFS{"index.html": {Data: []byte("<html></html>")}},
+		BodyLimit: BodyLimitPolicy(1024, nil),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/blocked", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if handlerCalled {
+		t.Fatal("handler ran after caller resolver rejected the request")
+	}
+}
+
 func TestNewRouterCustomMCPPath(t *testing.T) {
 	t.Parallel()
 
 	var registry RouteRegistry
 	router, err := NewRouter(RouterConfig{
-		Routes:     &registry,
-		Authorizer: AllowAll{},
+		Routes:         &registry,
+		Authorizer:     AllowAll{},
+		CallerResolver: testCallerResolver,
 		SPA: fstest.MapFS{
 			"index.html": {Data: []byte("<html></html>")},
 		},
@@ -272,17 +351,42 @@ func TestNewRouterCustomMCPPath(t *testing.T) {
 	}
 }
 
-type denyPermission string
+type denyIdentifier string
 
-func (d denyPermission) Authorize(
+func (d denyIdentifier) Authorize(
 	_ context.Context,
 	_ domain.Caller,
-	permission string,
+	identifier string,
 ) error {
-	if permission == string(d) {
+	if identifier == string(d) {
 		return domain.ErrForbidden
 	}
 	return nil
 }
 
-var _ Authorizer = denyPermission("")
+var _ Authorizer = denyIdentifier("")
+
+type authorizationCall struct {
+	source     domain.Source
+	principal  string
+	role       string
+	identifier string
+}
+
+type recordingAuthorizer struct {
+	calls []authorizationCall
+}
+
+func (a *recordingAuthorizer) Authorize(
+	_ context.Context,
+	caller domain.Caller,
+	identifier string,
+) error {
+	a.calls = append(a.calls, authorizationCall{
+		source:     caller.Source,
+		principal:  caller.Principal,
+		role:       caller.Role,
+		identifier: identifier,
+	})
+	return nil
+}

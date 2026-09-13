@@ -144,7 +144,7 @@ func TestLocalNode_SeedAccountBlocksFromStartupBuildReachStore(t *testing.T) {
 	eng := newSeedBlockEngine()
 	eng.seedBlocks = []domain.AccountBlock{seedBlockOf(account)}
 
-	n, _, err := NewLocalNode(context.Background(), st, seedBlockBuild(eng))
+	n, _, err := NewLocalNode(context.Background(), domain.DefaultRealm, st, seedBlockBuild(eng), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestLocalNode_SeedAccountBlocksFromRebuildReachStore(t *testing.T) {
 	eng := newSeedBlockEngine()
 	ctx := context.Background()
 
-	n, _, err := NewLocalNode(ctx, st, seedBlockBuild(eng))
+	n, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, seedBlockBuild(eng), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestLocalNode_NoSeedAccountBlocksLeavesAccountsTradable(t *testing.T) {
 	st := newSeedBlockStore(t, account)
 	eng := newSeedBlockEngine()
 
-	n, _, err := NewLocalNode(context.Background(), st, seedBlockBuild(eng))
+	n, _, err := NewLocalNode(context.Background(), domain.DefaultRealm, st, seedBlockBuild(eng), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -208,8 +208,9 @@ func TestLocalNode_SeedAccountBlockWithoutAccountFailsClosed(t *testing.T) {
 
 	var fatal error
 	_, _, err := NewLocalNode(
-		context.Background(), st, seedBlockBuild(eng),
-		WithFatalShutdownHook(func(hookErr error) { fatal = hookErr }),
+		context.Background(),
+		domain.DefaultRealm, st, seedBlockBuild(eng),
+		func(hookErr error) { fatal = hookErr },
 	)
 	if err == nil {
 		t.Fatal("NewLocalNode succeeded, want failure on an unattributable block")

@@ -42,10 +42,10 @@ func TestLocalNode_SetAccountCurrencyAuditsAndGuardsOpenBalances(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "USD", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency: %v", err)
 	}
-	account, _, err := n.GetAccountState(ctx, testKey(id))
+	account, _, err := n.GetAccountState(ctx, id)
 	if err != nil {
 		t.Fatalf("GetAccountState: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestLocalNode_SetAccountCurrencyAuditsAndGuardsOpenBalances(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
-	err = n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
+	err = n.SetAccountCurrency(ctx, id, "EUR", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
 		!strings.Contains(err.Error(), "carry state that prevents a currency change") {
 		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict", err)
@@ -106,7 +106,7 @@ func TestLocalNode_CreateAssetPublishesLiveResolver(t *testing.T) {
 	}
 	if _, err := n.ApplyAdjustment(
 		ctx,
-		testKey(account),
+		account,
 		"",
 		domain.AdjustmentRequest{
 			Asset: "GOLD",
@@ -174,7 +174,7 @@ func TestLocalNode_CreateAssetAuditFailureFatals(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	n := newTestNodeWithStore(t, st, newFakeEngine())
+	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); !errors.Is(err, auditErr) {
@@ -206,7 +206,7 @@ func TestLocalNode_UpdateAssetRenameKeepsEngineStateWithOrdersAndMarketData(t *t
 	})
 	original := newFakeEngine()
 	original.enforceResolver = true
-	n := newTestNodeWithStore(t, st, original)
+	n := newTestNodeWithStore(t, st, original, failOnFatal(t))
 	for _, code := range []string{baseAsset, quoteAsset} {
 		if _, err := n.CreateAsset(ctx, domain.Asset{Code: code}, testCaller); err != nil {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
@@ -438,7 +438,7 @@ func TestLocalNode_UpdateAssetRenameFailedRollbackEscalates(t *testing.T) {
 	})
 	eng := newFakeEngine()
 	eng.renameAssetResolverErr = errors.New("asset resolver rename failed")
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestLocalNode_SetAccountCurrencyGuardsRealizedPnlRows(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "USD", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency: %v", err)
 	}
 	if err := st.UpsertBalance(ctx, domain.Balance{
@@ -558,7 +558,7 @@ func TestLocalNode_SetAccountCurrencyGuardsRealizedPnlRows(t *testing.T) {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	err := n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "EUR", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
 		!strings.Contains(err.Error(), "state that prevents a currency change") {
 		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict", err)
@@ -585,13 +585,13 @@ func TestLocalNode_SetAccountCurrencyGuardsRetainedBalancePnlHalt(t *testing.T) 
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
 	var blocked domain.CurrencyChangeBlockedError
 	if !errors.Is(err, domain.ErrConflict) || !errors.As(err, &blocked) ||
 		blocked.Scope != domain.ScopeAccount || blocked.TargetID != id.String() {
 		t.Fatalf("SetAccountCurrency = %#v, want typed account currency guard", err)
 	}
-	account, _, err := n.GetAccountState(ctx, testKey(id))
+	account, _, err := n.GetAccountState(ctx, id)
 	if err != nil {
 		t.Fatalf("GetAccountState: %v", err)
 	}
@@ -620,7 +620,7 @@ func TestLocalNode_SetAccountCurrencyBlocksAccountPnlHalt(t *testing.T) {
 		t.Fatalf("ListAudit(before): %v", err)
 	}
 
-	err = n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	err = n.SetAccountCurrency(ctx, id, "USD", testCaller)
 	var blocked domain.CurrencyChangeBlockedError
 	if !errors.Is(err, domain.ErrConflict) || !errors.As(err, &blocked) ||
 		blocked.Scope != domain.ScopeAccount || blocked.TargetID != id.String() {
@@ -746,7 +746,7 @@ func TestLocalNode_CurrencyChangeBlocksActiveOrder(t *testing.T) {
 		t.Fatalf("ListAudit(before): %v", err)
 	}
 
-	err = n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	err = n.SetAccountCurrency(ctx, id, "USD", testCaller)
 	var blocked domain.CurrencyChangeBlockedError
 	if !errors.Is(err, domain.ErrConflict) || !errors.As(err, &blocked) ||
 		blocked.Scope != domain.ScopeAccount || blocked.TargetID != id.String() {
@@ -850,7 +850,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 			Action: domain.AuditActionSetAccountCurrency, Account: "acc-1",
 			Detail: "set account currency acc-1 EUR -> USD",
 		})
-		err := n.SetAccountCurrency(ctx, testKey("acc-1"), "USD", testCaller)
+		err := n.SetAccountCurrency(ctx, "acc-1", "USD", testCaller)
 		var blocked domain.CurrencyChangeBlockedError
 		if !errors.As(err, &blocked) || blocked.Scope != domain.ScopeAccount ||
 			blocked.TargetID != "acc-1" {
@@ -992,7 +992,7 @@ func TestLocalNode_CurrencyChangeBalanceDominatesCurrencyValuedLimit(t *testing.
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 
-	err := n.SetAccountCurrency(ctx, testKey("acc-1"), "USD", testCaller)
+	err := n.SetAccountCurrency(ctx, "acc-1", "USD", testCaller)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("SetAccountCurrency = %v, want ErrConflict", err)
 	}
@@ -1025,7 +1025,7 @@ func TestLocalNode_SetAccountCurrencyDoesNotRestateHaltWhenEffectiveUnchanged(
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := n.SetAccountCurrency(ctx, testKey(id), "", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency: %v", err)
 	}
 	if len(eng.accountPnlStateCalls) != 0 {
@@ -1062,7 +1062,7 @@ func TestLocalNode_SetAccountCurrencyBlocksStalePnlBehindHalt(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
 	var blocked domain.CurrencyChangeBlockedError
 	if !errors.As(err, &blocked) || blocked.Scope != domain.ScopeAccount ||
 		blocked.TargetID != id.String() {
@@ -1094,7 +1094,7 @@ func TestLocalNode_SetAccountCurrencyBlockerReadFailureLeavesStateUntouched(t *t
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	eng := newFakeEngine()
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	createCurrencyAssets(t, n.realm, "EUR", "USD")
 	const id domain.AccountID = "acc-1"
 	if _, err := n.CreateAccount(ctx, domain.Account{
@@ -1104,7 +1104,7 @@ func TestLocalNode_SetAccountCurrencyBlockerReadFailureLeavesStateUntouched(t *t
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
 	if !errors.Is(err, readErr) {
 		t.Fatalf("SetAccountCurrency error = %v, want open-balance read failure", err)
 	}
@@ -1130,7 +1130,7 @@ func TestLocalNode_SetAccountCurrencyGuardsAverageEntryPriceOne(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
-	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); !errors.Is(err, domain.ErrConflict) {
+	if err := n.SetAccountCurrency(ctx, id, "USD", testCaller); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("SetAccountCurrency = %v, want average-entry-price guard", err)
 	}
 }
@@ -1150,7 +1150,7 @@ func TestLocalNode_SetAccountCurrencyKeepsHealthyPnl(t *testing.T) {
 	}
 	// A healthy non-zero P&L would be guarded, so the account carries none: the
 	// assertion is that a non-halted account is never reset.
-	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "USD", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency: %v", err)
 	}
 	if len(eng.accountPnlStateCalls) != 0 {
@@ -1159,7 +1159,7 @@ func TestLocalNode_SetAccountCurrencyKeepsHealthyPnl(t *testing.T) {
 			eng.accountPnlStateCalls,
 		)
 	}
-	account, _, err := n.GetAccountState(ctx, testKey(id))
+	account, _, err := n.GetAccountState(ctx, id)
 	if err != nil {
 		t.Fatalf("GetAccountState: %v", err)
 	}
@@ -1193,7 +1193,7 @@ func TestLocalNode_SetAccountCurrencyGuardsHaltedAccountHoldingPositions(t *test
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	err := n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "EUR", testCaller)
 	if !errors.Is(err, domain.ErrConflict) ||
 		!strings.Contains(err.Error(), "state that prevents a currency change") {
 		t.Fatalf("SetAccountCurrency guarded = %v, want ErrConflict", err)
@@ -1217,7 +1217,7 @@ func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
 		for _, currency := range []string{"EUR", ""} {
 			assertAccountPnlCurrencyGuard(
 				t,
-				n.SetAccountCurrency(ctx, testKey("account"), currency, testCaller),
+				n.SetAccountCurrency(ctx, "account", currency, testCaller),
 				"account",
 			)
 		}
@@ -1248,7 +1248,7 @@ func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
 		})
 		err := n.SetAccountGroup(
 			ctx,
-			testKey("account"),
+			"account",
 			"desk-eur",
 			domain.MissingAccountCreate,
 			testCaller,
@@ -1393,7 +1393,7 @@ func TestLocalNode_SetAccountCurrencyGuardLeavesNoAssetBeforeLane(t *testing.T) 
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "USD", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency: %v", err)
 	}
 	if err := st.UpsertBalance(ctx, domain.Balance{
@@ -1404,7 +1404,7 @@ func TestLocalNode_SetAccountCurrencyGuardLeavesNoAssetBeforeLane(t *testing.T) 
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	err := n.SetAccountCurrency(ctx, testKey(id), "CHF", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "CHF", testCaller)
 	var blocked domain.CurrencyChangeBlockedError
 	if !errors.Is(err, domain.ErrConflict) || !errors.As(err, &blocked) ||
 		blocked.Scope != domain.ScopeAccount || blocked.TargetID != id.String() {
@@ -1501,7 +1501,7 @@ func TestLocalNode_SetAccountCurrencyUnchangedSkipsAssetRegistration(t *testing.
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "USD", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency initial: %v", err)
 	}
 	rowsBefore, err := n.ListAudit(ctx, 100)
@@ -1515,7 +1515,7 @@ func TestLocalNode_SetAccountCurrencyUnchangedSkipsAssetRegistration(t *testing.
 		err:        lookupErr,
 	}
 
-	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "USD", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency unchanged: %v", err)
 	}
 	rowsAfter, err := n.ListAudit(ctx, 100)
@@ -1532,7 +1532,7 @@ func TestLocalNode_SetAccountCurrencyRejectsUnknownAccountBeforeAssetCreation(t 
 	n, _ := newTestNode(t, newFakeEngine())
 	ctx := context.Background()
 
-	err := n.SetAccountCurrency(ctx, testKey("missing"), "CHF", testCaller)
+	err := n.SetAccountCurrency(ctx, "missing", "CHF", testCaller)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("SetAccountCurrency = %v, want ErrNotFound", err)
 	}
@@ -1558,10 +1558,10 @@ func TestLocalNode_SetAccountCurrencyCreatesAndPublishesMissingAsset(t *testing.
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := n.SetAccountCurrency(ctx, testKey(id), "CHF", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "CHF", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency: %v", err)
 	}
-	account, _, err := n.GetAccountState(ctx, testKey(id))
+	account, _, err := n.GetAccountState(ctx, id)
 	if err != nil {
 		t.Fatalf("GetAccountState: %v", err)
 	}
@@ -1576,7 +1576,7 @@ func TestLocalNode_SetAccountCurrencyCreatesAndPublishesMissingAsset(t *testing.
 		if asset.Code == "CHF" {
 			if _, err := n.ApplyAdjustment(
 				ctx,
-				testKey(id),
+				id,
 				"",
 				domain.AdjustmentRequest{
 					Asset: "CHF",
@@ -1610,7 +1610,7 @@ func TestLocalNode_SetAccountCurrencyValidatesStoredAssetBeforeEngine(t *testing
 		RealmStore: n.realm,
 		asset:      "USD",
 	}
-	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("SetAccountCurrency = %v, want ErrInvalid", err)
 	}
@@ -1635,7 +1635,7 @@ func TestLocalNode_SetAccountCurrencyRejectsStoredLiveAssetMismatch(t *testing.T
 		RealmStore: n.realm,
 		asset:      "USD",
 	}
-	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("SetAccountCurrency = %v, want ErrInvalid", err)
 	}
@@ -1658,7 +1658,7 @@ func TestLocalNode_SetAccountCurrencyPostEngineStoreFailureFatals(t *testing.T) 
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, id, "EUR", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency initial: %v", err)
 	}
 	cause := errors.New("store account currency failed")
@@ -1666,7 +1666,7 @@ func TestLocalNode_SetAccountCurrencyPostEngineStoreFailureFatals(t *testing.T) 
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 
-	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
 	if !errors.Is(err, cause) || !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
 		t.Fatalf("SetAccountCurrency error = %v, want cause and retry-unsafe marker", err)
 	}
@@ -2019,7 +2019,7 @@ func TestLocalNode_CurrencyAutoCreatesAssets(t *testing.T) {
 		t.Fatalf("GetAsset(CAD) = ok %v err %v, want auto-created", ok, err)
 	}
 
-	if err := n.SetAccountCurrency(ctx, testKey("acc-1"), "SEK", testCaller); err != nil {
+	if err := n.SetAccountCurrency(ctx, "acc-1", "SEK", testCaller); err != nil {
 		t.Fatalf("SetAccountCurrency auto-create: %v", err)
 	}
 	if _, ok, err := st.GetAsset(ctx, "SEK"); err != nil || !ok {

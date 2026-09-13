@@ -57,7 +57,7 @@ func TestLocalNodeRetainsConfiguredRealmAcrossReset(t *testing.T) {
 				}
 				return lifecycleMarketDataEngine{Engine: built, owner: &lifecycleMarketDataServiceOwner{}}, nil
 			}
-			target, _, err := NewLocalNode(ctx, st, build, WithRealm(realm))
+			target, _, err := NewLocalNode(ctx, realm, st, build, failOnFatal(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,9 +76,12 @@ func TestLocalNodeRetainsConfiguredRealmAcrossReset(t *testing.T) {
 	}
 }
 
-func TestLocalNodeRejectsExplicitEmptyRealmBeforeBinding(t *testing.T) {
+func TestLocalNodeRejectsEmptyRealmBeforeBinding(t *testing.T) {
 	st := &configuredRealmStore{memoryStore: newMemoryStore("realm.db"), selected: domain.DefaultRealm}
-	_, _, err := NewLocalNode(context.Background(), st, fakeBuild(newFakeEngine(), new(engine.Snapshot)), WithRealm(""))
+	_, _, err := NewLocalNode(
+		context.Background(), "", st, fakeBuild(newFakeEngine(), new(engine.Snapshot)),
+		failOnFatal(t),
+	)
 	if !errors.Is(err, domain.ErrInvalid) || len(st.bindings) != 0 {
 		t.Fatalf("invalid realm: %v; bindings = %v", err, st.bindings)
 	}

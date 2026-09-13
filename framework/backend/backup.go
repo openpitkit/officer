@@ -35,10 +35,7 @@ func (s *Service) ExportBackup(
 	ctx context.Context,
 	scope backup.Scope,
 ) (backup.Archive, string, error) {
-	n, err := s.groupNode()
-	if err != nil {
-		return backup.Archive{}, "", err
-	}
+	n := s.node
 	archive, err := n.ExportBackup(ctx, scope, auth.CallerFromContext(ctx))
 	if err != nil {
 		return backup.Archive{}, "", fmt.Errorf("backend: export backup: %w", err)
@@ -90,19 +87,17 @@ func (s *Service) RestoreBackup(
 			Enabled:     archived.Enabled,
 		})
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return backup.RestoreSummary{}, err
-	}
+	n := s.node
 
 	mdPlan := marketDataRestorePlan{}
 	if s.md != nil {
-		mdPlan, err = planMarketDataRestore(
+		plan, err := planMarketDataRestore(
 			ctx, n, archive, opts, marketDataInstances,
 		)
 		if err != nil {
 			return backup.RestoreSummary{}, err
 		}
+		mdPlan = plan
 	}
 	mdStopped := false
 	if mdPlan.restart && s.md != nil {
@@ -452,10 +447,7 @@ func (s *Service) ResetDatabase(ctx context.Context) error {
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
+	n := s.node
 
 	mdStopped := false
 	if s.md != nil {

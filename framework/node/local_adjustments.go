@@ -116,7 +116,7 @@ func snapshotAdjustmentRequest(snapshot domain.Balance) domain.AdjustmentRequest
 // ErrNoChange and records no adjustment, balance, or audit, even when the
 // request carried a realized P&L.
 func (n *localNode) ApplyAdjustment(
-	ctx context.Context, key Key, externalID domain.ExternalID,
+	ctx context.Context, account domain.AccountID, externalID domain.ExternalID,
 	req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
@@ -126,7 +126,7 @@ func (n *localNode) ApplyAdjustment(
 	// Resolve the account and auto-create the asset before entering the chain,
 	// publishing a new account's stable id through the live resolver first.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, missing, "adjustment", caller, req.Asset,
+		ctx, account, missing, "adjustment", caller, req.Asset,
 	); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
@@ -138,14 +138,14 @@ func (n *localNode) ApplyAdjustment(
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	defer done()
-	source, err := eng.AccountID(key.Account)
+	source, err := eng.AccountID(account)
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	state := &adjustmentChainState{
 		ctx:           ctx,
 		adapter:       eng,
-		account:       key.Account,
+		account:       account,
 		reqs:          []domain.AdjustmentRequest{req},
 		balanceExists: true,
 	}
@@ -157,7 +157,7 @@ func (n *localNode) ApplyAdjustment(
 		requiresExistingBalance := adjustmentRequiresExistingBalance(req)
 		if requiresExistingBalance {
 			_, exists, err := n.realm.GetBalance(
-				ctx, key.Account, req.Asset,
+				ctx, account, req.Asset,
 			)
 			if err != nil {
 				state.err = fmt.Errorf(
@@ -240,7 +240,7 @@ func (n *localNode) ApplyAdjustment(
 		// the record so the store uses it (else the store mints one on append).
 		rec := domain.AccountAdjustmentRecord{
 			ExternalID: externalID,
-			Account:    key.Account,
+			Account:    account,
 			Source:     caller.Source,
 			Principal:  caller.Principal,
 			Request:    req,
@@ -253,7 +253,7 @@ func (n *localNode) ApplyAdjustment(
 		var deleteBalance *store.BalanceKey
 		if state.result.Accepted != nil {
 			adjustedBalance, deleteKey, balanceErr :=
-				n.adjustedBalanceCommand(ctx, key, req.Asset, *state.result.Accepted)
+				n.adjustedBalanceCommand(ctx, account, req.Asset, *state.result.Accepted)
 			if balanceErr != nil {
 				state.err = balanceErr
 				return balanceErr
@@ -264,10 +264,10 @@ func (n *localNode) ApplyAdjustment(
 
 		audit := n.auditEntry(caller, store.AuditEntry{
 			Action:  domain.AuditActionAdjustment,
-			Account: key.Account,
+			Account: account,
 			Asset:   req.Asset,
 			Detail: adjustmentDetail(
-				key.Account, req.Asset, state.result.Accepted != nil,
+				account, req.Asset, state.result.Accepted != nil,
 			),
 		})
 		stored, recordErr := n.realm.RecordAccountAdjustment(
@@ -280,7 +280,7 @@ func (n *localNode) ApplyAdjustment(
 		if recordErr != nil {
 			state.err = n.fatalPostEnginePersistence(
 				"record account adjustment",
-				key.Account,
+				account,
 				fmt.Errorf("record adjustment: %w", recordErr),
 			)
 			return state.err
@@ -295,7 +295,7 @@ func (n *localNode) ApplyAdjustment(
 	) error {
 		state.err = n.accountChainTerminalError(
 			"apply adjustment",
-			key.Account,
+			account,
 			state.err,
 			state.engineApplied,
 			state.persistenceCompleted,
@@ -318,12 +318,12 @@ func (n *localNode) ApplyAdjustment(
 // one per-(account, asset) balance row through the adjustment history path.
 // missing is handled as in ApplyAdjustment, which this runs through.
 func (n *localNode) SetBalanceRealizedPnl(
-	ctx context.Context, key Key, asset string, realizedPnl string,
+	ctx context.Context, account domain.AccountID, asset string, realizedPnl string,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Balance, error) {
 	rec, err := n.ApplyAdjustment(
 		ctx,
-		key,
+		account,
 		domain.ExternalID(""),
 		domain.AdjustmentRequest{Asset: asset, RealizedPnl: realizedPnl},
 		missing,
@@ -332,7 +332,7 @@ func (n *localNode) SetBalanceRealizedPnl(
 	if err != nil {
 		return domain.Balance{}, err
 	}
-	return n.balanceFromRealizedPnlRecord(ctx, key, rec, realizedPnl)
+	return n.balanceFromRealizedPnlRecord(ctx, account, rec, realizedPnl)
 }
 
 func adjustmentResultNoChange(result engine.AdjustmentResult) bool {
@@ -361,10 +361,10 @@ func (n *localNode) mirrorAdjustmentAccountBlocks(
 }
 
 func (n *localNode) adjustedBalanceCommand(
-	ctx context.Context, key Key, asset string,
+	ctx context.Context, account domain.AccountID, asset string,
 	outcome domain.AdjustmentOutcomeAccepted,
 ) (*domain.Balance, *store.BalanceKey, error) {
-	balance, err := n.adjustedBalance(ctx, key, asset, outcome)
+	balance, err := n.adjustedBalance(ctx, account, asset, outcome)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -373,16 +373,16 @@ func (n *localNode) adjustedBalanceCommand(
 }
 
 func (n *localNode) adjustedBalance(
-	ctx context.Context, key Key, asset string,
+	ctx context.Context, account domain.AccountID, asset string,
 	outcome domain.AdjustmentOutcomeAccepted,
 ) (domain.Balance, error) {
-	prev, _, err := n.realm.GetBalance(ctx, key.Account, asset)
+	prev, _, err := n.realm.GetBalance(ctx, account, asset)
 	if err != nil {
 		return domain.Balance{}, fmt.Errorf("read balance for adjustment: %w", err)
 	}
 	realizedPnl := pick(outcome.RealizedPnlResult, prev.RealizedPnl)
 	balance := domain.Balance{
-		Account:     key.Account,
+		Account:     account,
 		Asset:       asset,
 		Available:   pick(outcome.BalanceResult, prev.Available),
 		Held:        pick(outcome.HeldResult, prev.Held),
@@ -400,7 +400,7 @@ func (n *localNode) adjustedBalance(
 
 func (n *localNode) balanceFromRealizedPnlRecord(
 	ctx context.Context,
-	key Key,
+	code domain.AccountID,
 	rec domain.AccountAdjustmentRecord,
 	realizedPnl string,
 ) (domain.Balance, error) {
@@ -412,22 +412,22 @@ func (n *localNode) balanceFromRealizedPnlRecord(
 	if rec.Request.Asset == "" {
 		return domain.Balance{}, fmt.Errorf("realized pnl adjustment missing asset")
 	}
-	stored, ok, err := n.realm.GetBalance(ctx, key.Account, rec.Request.Asset)
+	stored, ok, err := n.realm.GetBalance(ctx, code, rec.Request.Asset)
 	if err != nil {
 		return domain.Balance{}, fmt.Errorf("read stored realized pnl balance: %w", err)
 	}
 	if ok {
 		return stored, nil
 	}
-	account, ok, err := n.realm.GetAccount(ctx, key.Account)
+	account, ok, err := n.realm.GetAccount(ctx, code)
 	if err != nil {
 		return domain.Balance{}, fmt.Errorf("read account for realized pnl balance: %w", err)
 	}
 	if !ok {
-		return domain.Balance{}, fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+		return domain.Balance{}, fmt.Errorf("account %q: %w", code, domain.ErrNotFound)
 	}
 	return domain.Balance{
-		Account:         key.Account,
+		Account:         code,
 		Asset:           rec.Request.Asset,
 		RealizedPnl:     realizedPnl,
 		AccountCurrency: account.EffectiveCurrency,

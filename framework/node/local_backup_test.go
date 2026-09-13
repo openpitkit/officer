@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -242,7 +241,7 @@ func TestLocalNode_RestoreBackupPublishesInsertedAccountOnline(t *testing.T) {
 	}
 	if _, err := n.ApplyAdjustment(
 		ctx,
-		testKey("restored"),
+		"restored",
 		"",
 		domain.AdjustmentRequest{
 			Asset: "restored-asset",
@@ -300,7 +299,7 @@ func TestLocalNode_RestoreBackupSettingsOnlyPublishesInsertedAssetOnline(
 	}
 	if _, err := n.ApplyAdjustment(
 		ctx,
-		testKey("restored"),
+		"restored",
 		"",
 		domain.AdjustmentRequest{
 			Asset: "restored-asset",
@@ -330,7 +329,7 @@ func TestLocalNode_RestoreBackupSerializesAssetClassificationWithDelete(
 	})
 	eng := newFakeEngine()
 	eng.enforceResolver = true
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	asset, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller)
 	if err != nil {
 		t.Fatalf("CreateAsset: %v", err)
@@ -454,7 +453,7 @@ func TestLocalNode_RestoreBackupAssetOnlyRuntimeDeltaPublishesOnline(
 	}
 	if _, err := n.ApplyAdjustment(
 		ctx,
-		testKey("restored"),
+		"restored",
 		"",
 		domain.AdjustmentRequest{
 			Asset: "restored-asset",
@@ -483,7 +482,7 @@ func TestLocalNode_RestoreBackupDetachesReconciliationAfterCommit(t *testing.T) 
 	})
 	eng := newFakeEngine()
 	eng.enforceResolver = true
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	probe.afterCommit = cancel
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
@@ -654,7 +653,7 @@ func TestLocalNode_RestoreBackupReservesRestartBeforeCommit(t *testing.T) {
 		return probe
 	})
 	old := newFakeEngine()
-	n := newTestNodeWithStore(t, st, old)
+	n := newTestNodeWithStore(t, st, old, failOnFatal(t))
 	if _, err := n.CreateAccount(ctx, testAccount("delete-me"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -992,7 +991,7 @@ func TestLocalNode_RestoreBackupAuditFailureKeepsCommittedRuntimeAndFatals(t *te
 		}
 		return nextEngine, nil
 	}
-	nn, _, err := NewLocalNode(ctx, st, build)
+	nn, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, build, failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -1059,7 +1058,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnAuditFailureWithoutRuntime(t *te
 	st := newRealmWrapStore(real, func(r store.RealmStore) store.RealmStore {
 		return &failRestoreAuditRealm{RealmStore: r}
 	})
-	n := newTestNodeWithStore(t, st, oldEngine)
+	n := newTestNodeWithStore(t, st, oldEngine, failOnFatal(t))
 	if _, err := n.CreateAccount(ctx, testAccount("keep-runtime"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -1145,7 +1144,7 @@ func TestLocalNode_RestoreBackupRollbackSuccessIsInternal(t *testing.T) {
 	st := newRealmWrapStore(real, func(r store.RealmStore) store.RealmStore {
 		return &failRestoreAuditDomainSentinelRealm{RealmStore: r, cause: auditErr}
 	})
-	n := newTestNodeWithStore(t, st, oldEngine)
+	n := newTestNodeWithStore(t, st, oldEngine, failOnFatal(t))
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 	archive := testArchive(
@@ -1196,7 +1195,7 @@ func TestLocalNode_RestoreBackupRollbackPreservesExactSelectors(t *testing.T) {
 		probe = &restoreScopeProbeRealm{RealmStore: r}
 		return probe
 	})
-	n := newTestNodeWithStore(t, st, newFakeEngine())
+	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
 	scope := backup.Scope{
 		Sections: []backup.Section{backup.SectionUserSettings},
 		Accounts: backup.EntitySelector{
@@ -1255,7 +1254,7 @@ func TestLocalNode_RestoreBackupJoinsRollbackRestoreFailure(t *testing.T) {
 			rollbackErr: rollbackErr,
 		}
 	})
-	n := newTestNodeWithStore(t, st, newFakeEngine())
+	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 	archive := testArchive(
@@ -1290,7 +1289,7 @@ func TestLocalNode_ResetDatabaseRebuildFailureIsFatal(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	old := newFakeEngine()
-	n := newTestNodeWithStore(t, st, old)
+	n := newTestNodeWithStore(t, st, old, failOnFatal(t))
 	if _, err := n.CreateAccount(ctx, testAccount("reset-me"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -1321,7 +1320,8 @@ func TestLocalNode_ResetDatabaseDetachesReconciliationAfterCommit(t *testing.T) 
 	next := newFakeEngine()
 	builds := 0
 	nn, _, err := NewLocalNode(
-		context.Background(), st,
+		context.Background(),
+		domain.DefaultRealm, st,
 		func(engine.Snapshot) (engine.Engine, error) {
 			builds++
 			if builds == 1 {
@@ -1329,6 +1329,7 @@ func TestLocalNode_ResetDatabaseDetachesReconciliationAfterCommit(t *testing.T) 
 			}
 			return next, nil
 		},
+		failOnFatal(t),
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
@@ -1374,7 +1375,7 @@ func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
 		}
 		return nextEngine, nil
 	}
-	nn, _, err := NewLocalNode(ctx, st, build)
+	nn, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, build, failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -1432,49 +1433,6 @@ func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
 	}
 }
 
-type engineWithoutMarketDataServiceCloser struct {
-	engine.Engine
-}
-
-func TestLocalNode_ResetDatabaseRequiresMarketDataServiceCloser(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := newMemoryStore("reset-missing-market-data-rotation.db")
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	inner := newFakeEngine()
-	var seed engine.Snapshot
-	nn, _, err := NewLocalNode(ctx, st, func(snapshot engine.Snapshot) (engine.Engine, error) {
-		built, buildErr := fakeBuild(inner, &seed)(snapshot)
-		if buildErr != nil {
-			return nil, buildErr
-		}
-		return engineWithoutMarketDataServiceCloser{Engine: built}, nil
-	})
-	if err != nil {
-		t.Fatalf("NewLocalNode: %v", err)
-	}
-	n := nn.(*localNode)
-	seedTestPrincipal(t, n)
-	var fatalErr error
-	n.fatal = func(err error) { fatalErr = err }
-
-	_, err = n.ResetDatabase(ctx, testCaller)
-	var reconciliation internalPostCommitNodeMutationFailure
-	if !errors.As(err, &reconciliation) {
-		t.Fatalf("ResetDatabase error = %T %v, want reconciliation error", err, err)
-	}
-	const missingCapability = "missing CloseMarketDataService"
-	if !strings.Contains(err.Error(), missingCapability) {
-		t.Fatalf("ResetDatabase error = %q, want %q", err, missingCapability)
-	}
-	if fatalErr == nil || !strings.Contains(fatalErr.Error(), missingCapability) {
-		t.Fatalf("fatal error = %v, want %q", fatalErr, missingCapability)
-	}
-}
-
 func TestLocalNode_ConcurrentRestoreSwapAndReads(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1494,7 +1452,7 @@ func TestLocalNode_ConcurrentRestoreSwapAndReads(t *testing.T) {
 				return
 			default:
 			}
-			if _, err := n.CheckOrder(ctx, testKey("acc-1"), probe); err != nil {
+			if _, err := n.CheckOrder(ctx, probe); err != nil {
 				errs <- err
 				return
 			}
@@ -1548,7 +1506,7 @@ func TestLocalNode_ErrorMessagesNoNodePrefix(t *testing.T) {
 
 	// GetAccountState on a missing account must surface a not-found error whose
 	// message does not start with "node: ".
-	_, _, err := n.GetAccountState(ctx, testKey("no-such-account"))
+	_, _, err := n.GetAccountState(ctx, "no-such-account")
 	if err == nil {
 		t.Fatal("want error for missing account, got nil")
 	}
@@ -1563,7 +1521,7 @@ func TestLocalNode_ErrorMessagesNoNodePrefix(t *testing.T) {
 	// A rejecting SetAccountBlocked on a missing account must also not carry
 	// "node: ".
 	err = n.SetAccountBlocked(
-		ctx, testKey("no-such-account"), true, "test",
+		ctx, "no-such-account", true, "test",
 		domain.MissingAccountReject, testCaller,
 	)
 	if err == nil {
@@ -1596,7 +1554,7 @@ func TestLocalNode_MissingAccountAdminRejectsWithResolver(t *testing.T) {
 	// SetAccountBlocked on a missing account must be ErrAccountMissing (404),
 	// not the resolver's ErrInvalid (400).
 	err := n.SetAccountBlocked(
-		ctx, testKey("no-such-account"), true, "risk",
+		ctx, "no-such-account", true, "risk",
 		domain.MissingAccountReject, testCaller,
 	)
 	if err == nil {
@@ -1611,7 +1569,7 @@ func TestLocalNode_MissingAccountAdminRejectsWithResolver(t *testing.T) {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 	err = n.SetAccountGroup(
-		ctx, testKey("no-such-account"), "desk-a",
+		ctx, "no-such-account", "desk-a",
 		domain.MissingAccountReject, testCaller,
 	)
 	if err == nil {
@@ -1662,7 +1620,7 @@ func TestLocalNode_TerminalCancellationUsesRestoredLeaves(t *testing.T) {
 	}
 
 	const leaves = "2"
-	if _, err := n.ApplyExecutionReport(ctx, testKey(account), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          orderID,
 		LeavesQuantity: leaves,
 		OrderStatus:    domain.OrderStatusCancelled,
@@ -1712,7 +1670,7 @@ func TestLocalNode_TerminalCancellationUsesStoredZeroOverReportedLeaves(t *testi
 		t.Fatalf("CreateOrder: %v", err)
 	}
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(account), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		LeavesQuantity: "2",
 		OrderStatus:    domain.OrderStatusCancelled,

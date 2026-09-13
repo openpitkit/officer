@@ -109,10 +109,10 @@ func TestLocalNode_BlockUnblockAccount(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller); err != nil {
+	if err := n.SetAccountBlocked(ctx, id, true, "risk", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("block: %v", err)
 	}
-	account, _, err := n.GetAccountState(ctx, testKey(id))
+	account, _, err := n.GetAccountState(ctx, id)
 	if err != nil {
 		t.Fatalf("GetAccountState: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestLocalNode_BlockUnblockAccount(t *testing.T) {
 	}
 	assertFakeOrderBlock(t, eng, id, true, "risk")
 
-	if err := n.SetAccountBlocked(ctx, testKey(id), false, "", domain.MissingAccountCreate, testCaller); err != nil {
+	if err := n.SetAccountBlocked(ctx, id, false, "", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("unblock: %v", err)
 	}
 	assertFakeOrderBlock(t, eng, id, false, "")
@@ -150,7 +150,7 @@ func TestLocalNode_SetAccountBlockedChecksCapturedContext(t *testing.T) {
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	err := n.SetAccountBlocked(
-		cancelled, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller,
+		cancelled, id, true, "risk", domain.MissingAccountCreate, testCaller,
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SetAccountBlocked error = %v, want context cancellation", err)
@@ -176,7 +176,7 @@ func TestLocalNode_SetAccountGroupPersistsMembership(t *testing.T) {
 	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, id, "desk-a", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup: %v", err)
 	}
 	account, ok, err := n.realm.GetAccount(ctx, id)
@@ -205,7 +205,7 @@ func TestLocalNode_SetAccountGroupAutoCreatesUnknownGroup(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := n.SetAccountGroup(ctx, testKey(id), "new-desk", domain.MissingAccountCreate, testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, id, "new-desk", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup into unknown group: %v", err)
 	}
 
@@ -331,7 +331,7 @@ func TestLocalNode_SetGroupBlockedReplacesUnmirroredEngineReason(t *testing.T) {
 	}
 	if err := n.SetAccountGroup(
 		ctx,
-		testKey("acc-1"),
+		"acc-1",
 		"desk-a",
 		domain.MissingAccountReject,
 		testCaller,
@@ -379,16 +379,16 @@ func TestLocalNode_SetAccountBlockedAuditFailureFatals(t *testing.T) {
 
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	const id domain.AccountID = "acc-1"
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
 	err := n.SetAccountBlocked(
-		ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller,
+		ctx, id, true, "risk", domain.MissingAccountCreate, testCaller,
 	)
 	if errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("SetAccountBlocked error = %v, must hide domain sentinel", err)
@@ -463,9 +463,9 @@ func TestLocalNode_SetAccountGroupAuditFailureFatals(t *testing.T) {
 
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	const id domain.AccountID = "acc-1"
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
@@ -474,7 +474,7 @@ func TestLocalNode_SetAccountGroupAuditFailureFatals(t *testing.T) {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 
-	err := n.SetAccountGroup(ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller)
+	err := n.SetAccountGroup(ctx, id, "desk-a", domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("SetAccountGroup error = %v, want audit failure", err)
 	}
@@ -513,9 +513,9 @@ func TestLocalNode_SetGroupBlockedAuditFailureFatals(t *testing.T) {
 
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestLocalNode_SetGroupNotesAutoCreatesRegisteredGroup(t *testing.T) {
 
 	// The group is now engine-registered, so moving an account into it succeeds
 	// against the strict resolver.
-	if err := n.SetAccountGroup(ctx, testKey(id), "new-desk", domain.MissingAccountCreate, testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, id, "new-desk", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup into notes-created group: %v", err)
 	}
 	account, ok, err := st.GetAccount(ctx, id)
@@ -602,7 +602,7 @@ func newLaneProbeNode(
 		t.Fatalf("Migrate: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	return n, probe
 }
 
@@ -676,7 +676,7 @@ func TestLocalNode_SetAccountBlockedStoreWriteInsideChain(t *testing.T) {
 	}
 	assertAdministrativeStoreWriteSerialized(t, eng, probe, id, func() error {
 		return n.SetAccountBlocked(
-			ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller,
+			ctx, id, true, "risk", domain.MissingAccountCreate, testCaller,
 		)
 	})
 }
@@ -698,7 +698,7 @@ func TestLocalNode_SetAccountBlockedPostEngineStoreFailureFatals(t *testing.T) {
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 	err := n.SetAccountBlocked(
-		ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller,
+		ctx, id, true, "risk", domain.MissingAccountCreate, testCaller,
 	)
 	if !errors.Is(err, cause) || !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
 		t.Fatalf("SetAccountBlocked error = %v, want cause and retry-unsafe marker", err)
@@ -727,7 +727,7 @@ func TestLocalNode_SetAccountGroupStoreWriteInsideAccountChain(t *testing.T) {
 	}
 	assertAdministrativeStoreWriteSerialized(t, eng, probe, id, func() error {
 		return n.SetAccountGroup(
-			ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller,
+			ctx, id, "desk-a", domain.MissingAccountCreate, testCaller,
 		)
 	})
 }
@@ -753,7 +753,7 @@ func TestLocalNode_SetAccountGroupPostEngineStoreFailureFatals(t *testing.T) {
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 	err := n.SetAccountGroup(
-		ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller,
+		ctx, id, "desk-a", domain.MissingAccountCreate, testCaller,
 	)
 	if !errors.Is(err, cause) || !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
 		t.Fatalf("SetAccountGroup error = %v, want cause and retry-unsafe marker", err)
@@ -841,14 +841,14 @@ func TestLocalNode_ReblockOperatorAccountReplacesReasonAndAudits(t *testing.T) {
 	}
 	for _, reason := range []string{"first operator reason", "replacement operator reason"} {
 		if err := n.SetAccountBlocked(
-			ctx, testKey(id), true, reason, domain.MissingAccountCreate, testCaller,
+			ctx, id, true, reason, domain.MissingAccountCreate, testCaller,
 		); err != nil {
 			t.Fatalf("SetAccountBlocked(%q): %v", reason, err)
 		}
 	}
 
 	assertFakeOrderBlock(t, eng, id, true, "replacement operator reason")
-	account, _, err := n.GetAccountState(ctx, testKey(id))
+	account, _, err := n.GetAccountState(ctx, id)
 	if err != nil {
 		t.Fatalf("GetAccountState: %v", err)
 	}
@@ -901,7 +901,7 @@ func TestLocalNode_ReblockTypedAccountConflictsWithoutAudit(t *testing.T) {
 		t.Fatalf("ListAudit(before): %v", err)
 	}
 	err = n.SetAccountBlocked(
-		ctx, testKey(id), true, "operator override",
+		ctx, id, true, "operator override",
 		domain.MissingAccountCreate, testCaller,
 	)
 	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), typed.Code) {
@@ -915,7 +915,7 @@ func TestLocalNode_ReblockTypedAccountConflictsWithoutAudit(t *testing.T) {
 		t.Fatalf("audit rows grew from %d to %d after refused re-block", len(before), len(after))
 	}
 	assertFakeTypedOrderBlock(t, eng, id, typed)
-	stored, _, err := n.GetAccountState(ctx, testKey(id))
+	stored, _, err := n.GetAccountState(ctx, id)
 	if err != nil {
 		t.Fatalf("GetAccountState: %v", err)
 	}
@@ -942,20 +942,20 @@ func TestLocalNode_BlockAccountAuditRecordsReason(t *testing.T) {
 	block := func(reason string) {
 		t.Helper()
 		if err := n.SetAccountBlocked(
-			ctx, testKey(id), true, reason, domain.MissingAccountCreate, testCaller,
+			ctx, id, true, reason, domain.MissingAccountCreate, testCaller,
 		); err != nil {
 			t.Fatalf("block %q: %v", reason, err)
 		}
 	}
 	block("margin breach")
 	if err := n.SetAccountBlocked(
-		ctx, testKey(id), false, "", domain.MissingAccountCreate, testCaller,
+		ctx, id, false, "", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("unblock: %v", err)
 	}
 	block("suspected fraud")
 
-	account, _, err := n.GetAccountState(ctx, testKey(id))
+	account, _, err := n.GetAccountState(ctx, id)
 	if err != nil {
 		t.Fatalf("GetAccountState: %v", err)
 	}
@@ -1161,7 +1161,7 @@ func TestLocalNode_SetAccountGroupAuditFilesMoveUnderBothGroups(t *testing.T) {
 	}
 
 	if err := n.SetAccountGroup(
-		ctx, testKey(id), "desk-b", domain.MissingAccountCreate, testCaller,
+		ctx, id, "desk-b", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("SetAccountGroup: %v", err)
 	}
@@ -1203,7 +1203,7 @@ func TestLocalNode_SetAccountGroupAuditFilesOpenEndedMoveOnce(t *testing.T) {
 	}
 
 	if err := n.SetAccountGroup(
-		ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller,
+		ctx, id, "desk-a", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("SetAccountGroup join: %v", err)
 	}
@@ -1214,7 +1214,7 @@ func TestLocalNode_SetAccountGroupAuditFilesOpenEndedMoveOnce(t *testing.T) {
 	}
 
 	if err := n.SetAccountGroup(
-		ctx, testKey(id), "", domain.MissingAccountCreate, testCaller,
+		ctx, id, "", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("SetAccountGroup leave: %v", err)
 	}

@@ -76,7 +76,8 @@ func submitShortcutOrder(
 			Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "20"},
 		},
 	}
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -249,7 +250,7 @@ func TestLocalNode_CancelOrderAttestorFailureFailsStop(t *testing.T) {
 		t,
 		wrapped,
 		eng,
-		WithFatalShutdownHook(func(err error) { fatalErr = err }),
+		func(err error) { fatalErr = err },
 	)
 	order := submitShortcutOrder(t, n, n.realm, eng)
 	eng.execReportOutcomes = []engine.BalanceOutcome{{
@@ -350,14 +351,13 @@ func TestLocalNode_ShortcutsRequireExplicitReportAfterActivity(t *testing.T) {
 
 	if _, err := n.ApplyExecutionReport(
 		ctx,
-		testKey("acc-1"),
+
 		domain.ExecutionReportInput{
 			Order:          order.ExternalID,
 			LeavesQuantity: "19",
 			OrderStatus:    domain.OrderStatusCommitted,
 		},
-		testCaller,
-	); err != nil {
+		testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
 	if _, err := n.ConfirmOrder(ctx, order.ExternalID, testCaller); !errors.Is(err, domain.ErrExecutionReportRequired) {

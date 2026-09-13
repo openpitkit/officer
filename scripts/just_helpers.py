@@ -247,6 +247,40 @@ def command_check_gofmt(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def command_check_public_packages(_: argparse.Namespace) -> None:
+    allowlist = ROOT / "checks" / "public-packages.txt"
+    try:
+        listed = set(allowlist.read_text(encoding="utf-8").splitlines())
+    except OSError as exc:
+        raise SystemExit(
+            f"could not read public package allowlist {allowlist}: {exc}"
+        ) from None
+
+    # Every package of the module, commands included. web/node_modules is npm
+    # install output, never committed, and some npm packages ship Go sources.
+    node_modules = "go.openpit.dev/officer/web/node_modules/"
+    result = run(
+        ["go", "list", "-find", "-f", "{{.ImportPath}}", "./..."],
+        capture=True,
+        env=go_env(),
+    )
+    public: set[str] = set()
+    for import_path in result.stdout.splitlines():
+        if import_path.startswith(node_modules):
+            continue
+        if "internal" not in import_path.split("/"):
+            public.add(import_path)
+
+    unlisted = sorted(public - listed)
+    missing = sorted(listed - public)
+    for import_path in unlisted:
+        print(f"public package not listed in {allowlist}: {import_path}")
+    for import_path in missing:
+        print(f"listed in {allowlist} but not a public package: {import_path}")
+    if unlisted or missing:
+        raise SystemExit(1)
+
+
 def windows_cgo_compiler_command(compiler: Sequence[str]) -> str:
     compiler_key = tuple(compiler)
     cached = _WINDOWS_CGO_COMPILER_COMMANDS.get(compiler_key)
@@ -310,19 +344,11 @@ def command_check_cgo_toolchain(_: argparse.Namespace) -> None:
 
 
 def command_go(args: argparse.Namespace) -> None:
-    run(
-        ["go", *normalize_go_args(args.go_args)],
-        cwd=ROOT / args.module_dir,
-        env=go_env(),
-    )
+    run(["go", *normalize_go_args(args.go_args)], env=go_env())
 
 
 def command_go_tool(args: argparse.Namespace) -> None:
-    run(
-        args.tool_args,
-        cwd=ROOT / args.module_dir,
-        env=go_env(),
-    )
+    run(args.tool_args, env=go_env())
 
 
 def command_dylib_dev(args: argparse.Namespace) -> None:
@@ -357,7 +383,6 @@ def write_dev_workspace(pit_checkout: str, workspace_dir: Path) -> Path:
             "work",
             "init",
             str(ROOT),
-            str(ROOT / "framework"),
             str(pit_dir / "bindings" / "go"),
         ],
         cwd=workspace_dir,
@@ -372,7 +397,6 @@ def command_go_dev(args: argparse.Namespace) -> None:
         workspace_file = write_dev_workspace(args.pit_checkout, work_dir)
         run(
             ["go", *normalize_go_args(args.go_args)],
-            cwd=ROOT / args.module_dir,
             env=dev_go_env(args.pit_checkout, workspace_file, mode),
         )
 
@@ -384,7 +408,6 @@ def command_go_tool_dev(args: argparse.Namespace) -> None:
         workspace_file = write_dev_workspace(args.pit_checkout, work_dir)
         run(
             args.tool_args,
-            cwd=ROOT / args.module_dir,
             env=dev_go_env(args.pit_checkout, workspace_file, mode),
         )
 
@@ -420,17 +443,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparser.add_argument("paths", nargs="+")
     subparser.set_defaults(func=command_check_gofmt)
 
+    subparsers.add_parser("check-public-packages").set_defaults(
+        func=command_check_public_packages
+    )
+
     subparsers.add_parser("check-cgo-toolchain").set_defaults(
         func=command_check_cgo_toolchain
     )
 
     subparser = subparsers.add_parser("go")
-    subparser.add_argument("module_dir")
     subparser.add_argument("go_args", nargs=argparse.REMAINDER)
     subparser.set_defaults(func=command_go)
 
     subparser = subparsers.add_parser("go-tool")
-    subparser.add_argument("module_dir")
     subparser.add_argument("tool_args", nargs=argparse.REMAINDER)
     subparser.set_defaults(func=command_go_tool)
 
@@ -442,14 +467,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparser = subparsers.add_parser("go-dev")
     subparser.add_argument("mode", choices=sorted(BUILD_MODES))
     subparser.add_argument("pit_checkout")
-    subparser.add_argument("module_dir")
     subparser.add_argument("go_args", nargs=argparse.REMAINDER)
     subparser.set_defaults(func=command_go_dev)
 
     subparser = subparsers.add_parser("go-tool-dev")
     subparser.add_argument("mode", choices=sorted(BUILD_MODES))
     subparser.add_argument("pit_checkout")
-    subparser.add_argument("module_dir")
     subparser.add_argument("tool_args", nargs=argparse.REMAINDER)
     subparser.set_defaults(func=command_go_tool_dev)
 

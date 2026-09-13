@@ -120,7 +120,7 @@ func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
 	}
 	order := testOrder(t, st, id)
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -178,7 +178,7 @@ func TestLocalNode_ApplyExecutionReportLeavesAccountPnlUnchangedWithoutMatch(t *
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	order := testOrder(t, st, id)
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		FillQuantity:   "2",
 		FillPrice:      "400",
@@ -220,9 +220,9 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 
 	// Seed the order through the underlying real store; the failing wrapper only
 	// rejects the settlement write, so routing reads and the order create succeed.
@@ -232,7 +232,7 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 	}
 	order := testOrder(t, realm, "acc-1")
 
-	_, err = n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	_, err = n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -243,6 +243,7 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 		LockPrice:      "400",
 		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
+
 	if errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ApplyExecutionReport error = %v, must hide domain.ErrInvalid", err)
 	}
@@ -336,7 +337,7 @@ func TestLocalNode_ApplyExecutionReportChainFailurePhases(t *testing.T) {
 				t,
 				st,
 				eng,
-				WithFatalShutdownHook(func(err error) { fatalErr = err }),
+				func(err error) { fatalErr = err },
 			)
 			order := testOrder(t, n.realm, "acc-1")
 			if test.phase == "before_engine" {
@@ -349,7 +350,7 @@ func TestLocalNode_ApplyExecutionReportChainFailurePhases(t *testing.T) {
 
 			_, err := n.ApplyExecutionReport(
 				ctx,
-				testKey("acc-1"),
+
 				domain.ExecutionReportInput{
 					Order:          order.ExternalID,
 					FillQuantity:   "2",
@@ -357,8 +358,8 @@ func TestLocalNode_ApplyExecutionReportChainFailurePhases(t *testing.T) {
 					LeavesQuantity: "0",
 					OrderStatus:    domain.OrderStatusFilled,
 				},
-				testCaller,
-			)
+				testCaller)
+
 			if test.phase == "before_engine" {
 				if !errors.Is(err, domain.ErrTerminalOrder) {
 					t.Fatalf("ApplyExecutionReport = %v, want terminal order", err)
@@ -401,9 +402,9 @@ func TestLocalNode_ApplyExecutionReportDuplicateIDDoesNotReachEngineOrFatal(t *t
 	st := newMemoryStore("node.db")
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	ctx := context.Background()
 	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
 	if err != nil {
@@ -426,7 +427,7 @@ func TestLocalNode_ApplyExecutionReportDuplicateIDDoesNotReachEngineOrFatal(t *t
 		LockPrice:      "400",
 		OrderStatus:    domain.OrderStatusFilled,
 	}
-	first, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), input, testCaller)
+	first, err := n.ApplyExecutionReport(ctx, input, testCaller)
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport first: %v", err)
 	}
@@ -436,7 +437,7 @@ func TestLocalNode_ApplyExecutionReportDuplicateIDDoesNotReachEngineOrFatal(t *t
 
 	input.Order = secondOrder.ExternalID
 	input.ExternalID = first.ReportID
-	_, err = n.ApplyExecutionReport(ctx, testKey("acc-1"), input, testCaller)
+	_, err = n.ApplyExecutionReport(ctx, input, testCaller)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("duplicate ApplyExecutionReport = %v, want ErrAlreadyExists", err)
 	}
@@ -469,16 +470,17 @@ func TestLocalNode_ApplyExecutionReportWorkflowAuditFailureFatalsAfterCommit(
 
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	realm := st.realm
 	order := testOrder(t, realm, "acc-1")
 
-	_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:       order.ExternalID,
 		OrderStatus: domain.OrderStatusAccepted,
 	}, testCaller)
+
 	if errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ApplyExecutionReport error = %v, must hide domain sentinel", err)
 	}
@@ -531,7 +533,7 @@ func TestLocalNode_ApplyExecutionReportDeletesComputedZeroSettledPosition(t *tes
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -541,6 +543,7 @@ func TestLocalNode_ApplyExecutionReportDeletesComputedZeroSettledPosition(t *tes
 		LeavesQuantity: "0",
 		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
+
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -573,7 +576,7 @@ func TestLocalNode_ApplyExecutionReportDeletesEmptySettledPosition(t *testing.T)
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -583,6 +586,7 @@ func TestLocalNode_ApplyExecutionReportDeletesEmptySettledPosition(t *testing.T)
 		LeavesQuantity: "0",
 		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
+
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -603,7 +607,7 @@ func TestLocalNode_ApplyExecutionReportIgnoresReportAssetFields(t *testing.T) {
 	}
 	order := testOrder(t, st, id)
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "GOLD",
 		QuoteAsset:     "EUR",
@@ -638,7 +642,8 @@ func TestLocalNode_ApplyExecutionReportUsesOrderAccountOverRouteKey(t *testing.T
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -650,7 +655,7 @@ func TestLocalNode_ApplyExecutionReportUsesOrderAccountOverRouteKey(t *testing.T
 		t.Fatalf("SubmitOrder: %v", err)
 	}
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey("fresh-report"), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		FillQuantity:   "2",
 		FillPrice:      "100",
@@ -691,7 +696,7 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	}
 	order := testOrder(t, st, id)
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -781,7 +786,7 @@ func TestLocalNode_ApplyExecutionReportForce(t *testing.T) {
 		t.Fatalf("UpdateOrderStatus: %v", err)
 	}
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -848,11 +853,12 @@ func TestLocalNode_ForcedRejectedReportWithNoStoredReservation(t *testing.T) {
 		t.Fatalf("CreateOrder: %v", err)
 	}
 
-	_, err = n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	_, err = n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:       order.ExternalID,
 		Force:       true,
 		OrderStatus: domain.OrderStatusRejected,
 	}, testCaller)
+
 	if err == nil {
 		t.Fatal("forced rejected report accepted an unset reservation")
 	}
@@ -879,12 +885,12 @@ func TestLocalNode_RepeatedForcedCancellationUsesPreReportReservation(t *testing
 		LeavesQuantity: "3",
 		OrderStatus:    domain.OrderStatusCancelled,
 	}
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), report, testCaller); err != nil {
+	if _, err := n.ApplyExecutionReport(ctx, report, testCaller); err != nil {
 		t.Fatalf("first terminal report: %v", err)
 	}
 	report.Force = true
 	eng.execReportOutcomes = nil
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), report, testCaller); err != nil {
+	if _, err := n.ApplyExecutionReport(ctx, report, testCaller); err != nil {
 		t.Fatalf("repeated forced terminal report: %v", err)
 	}
 	if len(eng.execReportLeaves) != 2 ||
@@ -917,7 +923,7 @@ func TestLocalNode_TerminalNoFillStatusesRejectFill(t *testing.T) {
 			order := testOrder(t, st, "acc-1")
 			_, err := n.ApplyExecutionReport(
 				context.Background(),
-				testKey("acc-1"),
+
 				domain.ExecutionReportInput{
 					Order:          order.ExternalID,
 					FillQuantity:   "0.5",
@@ -925,8 +931,8 @@ func TestLocalNode_TerminalNoFillStatusesRejectFill(t *testing.T) {
 					LeavesQuantity: "1.25",
 					OrderStatus:    status,
 				},
-				testCaller,
-			)
+				testCaller)
+
 			if !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("ApplyExecutionReport = %v, want ErrInvalid", err)
 			}
@@ -963,11 +969,12 @@ func TestLocalNode_TerminalNoFillWithNoStoredReservationErrors(t *testing.T) {
 		t.Fatalf("CreateOrder: %v", err)
 	}
 
-	_, err = n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	_, err = n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		LeavesQuantity: "4",
 		OrderStatus:    domain.OrderStatusCancelled,
 	}, testCaller)
+
 	if err == nil {
 		t.Fatal("terminal report accepted empty stored reservation")
 	}
@@ -1008,13 +1015,12 @@ func TestLocalNode_TerminalNoFillUsesReservationWithoutStoredLeaves(t *testing.T
 
 	if _, err := n.ApplyExecutionReport(
 		ctx,
-		testKey(id),
+
 		domain.ExecutionReportInput{
 			Order:       order.ExternalID,
 			OrderStatus: domain.OrderStatusCancelled,
 		},
-		testCaller,
-	); err != nil {
+		testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
 	if len(eng.execReportLeaves) != 1 || eng.execReportLeaves[0] != "4" {
@@ -1045,7 +1051,7 @@ func TestLocalNode_TerminalOverFillPreservesRawLeavesAndSuppliesZeroRemainder(t 
 	ctx := context.Background()
 	order := testOrder(t, st, "acc-1")
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		FillQuantity:   "6",
 		FillPrice:      "400",
@@ -1101,7 +1107,7 @@ func TestLocalNode_PartialOverFillAuditsRecordedReservation(t *testing.T) {
 
 	if _, err := n.ApplyExecutionReport(
 		ctx,
-		testKey("acc-1"),
+
 		domain.ExecutionReportInput{
 			Order:          order.ExternalID,
 			FillQuantity:   "5",
@@ -1109,8 +1115,7 @@ func TestLocalNode_PartialOverFillAuditsRecordedReservation(t *testing.T) {
 			LeavesQuantity: "0",
 			OrderStatus:    domain.OrderStatusPartiallyFilled,
 		},
-		testCaller,
-	); err != nil {
+		testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
 	if len(eng.execReportLeaves) != 1 || eng.execReportLeaves[0] != "0" {
@@ -1154,7 +1159,7 @@ func TestLocalNode_TerminalFillWithinRecordedReservationHasNoOverFillMarker(t *t
 	ctx := context.Background()
 	order := testOrder(t, st, "acc-1")
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		FillQuantity:   "2",
 		FillPrice:      "400",
@@ -1193,7 +1198,7 @@ func TestLocalNode_TerminalReportRecordsCallerLeavesAndForwardsReservation(t *te
 		t.Fatalf("RecordOrderSettlement: %v", err)
 	}
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		LeavesQuantity: "0.250",
 		OrderStatus:    domain.OrderStatusCancelled,
@@ -1246,10 +1251,11 @@ func TestLocalNode_CorruptStoredLeavesDoesNotBlockCancellation(t *testing.T) {
 				t.Fatalf("RecordOrderSettlement: %v", err)
 			}
 
-			_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+			_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 				Order:       order.ExternalID,
 				OrderStatus: domain.OrderStatusCancelled,
 			}, testCaller)
+
 			if err != nil {
 				t.Fatalf("ApplyExecutionReport: %v", err)
 			}
@@ -1285,7 +1291,7 @@ func TestLocalNode_ApplyExecutionReportForceOnOpenOrderDoesNotAuditForced(t *tes
 	}
 	order := testOrder(t, st, id)
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -1327,7 +1333,7 @@ func TestLocalNode_ApplyExecutionReportForceWorkflowAuditsBypass(t *testing.T) {
 		t.Fatalf("UpdateOrderStatus: %v", err)
 	}
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:       order.ExternalID,
 		Force:       true,
 		OrderStatus: domain.OrderStatusAccepted,
@@ -1364,7 +1370,7 @@ func TestLocalNode_ApplyExecutionReportStatusOnlyNoAccountWrites(t *testing.T) {
 	}
 	order := testOrder(t, st, id)
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:       order.ExternalID,
 		BaseAsset:   "UNUSED_BASE",
 		QuoteAsset:  "UNUSED_QUOTE",
@@ -1428,7 +1434,7 @@ func TestLocalNode_ApplyExecutionReportUsesOrderFields(t *testing.T) {
 	}
 	order := testOrder(t, st, id)
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		Account:        "wrong-account",
 		BaseAsset:      "WRONG",
@@ -1468,7 +1474,7 @@ func TestLocalNode_ApplyExecutionReportIgnoresCanceledContext(t *testing.T) {
 
 	reportCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := n.ApplyExecutionReport(reportCtx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(reportCtx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -1501,7 +1507,7 @@ func TestLocalNode_ApplyExecutionReportUsesAccountChain(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	order := testOrder(t, st, id)
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -1528,7 +1534,7 @@ func TestLocalNode_ApplyExecutionReportRejectsChainAccountMismatch(t *testing.T)
 
 	_, err := n.ApplyExecutionReport(
 		ctx,
-		testKey("acc-1"),
+
 		domain.ExecutionReportInput{
 			Order:          order.ExternalID,
 			FillQuantity:   "1",
@@ -1536,8 +1542,8 @@ func TestLocalNode_ApplyExecutionReportRejectsChainAccountMismatch(t *testing.T)
 			LeavesQuantity: "0",
 			OrderStatus:    domain.OrderStatusFilled,
 		},
-		testCaller,
-	)
+		testCaller)
+
 	if !errors.Is(err, asyncengine.ErrChainAccountMismatch) {
 		t.Fatalf(
 			"ApplyExecutionReport error = %v, want ErrChainAccountMismatch",
@@ -1573,7 +1579,7 @@ func TestLocalNode_ApplyExecutionReportRoutesFillableStatusesThroughEngine(t *te
 
 			const id domain.AccountID = "acc-1"
 			order := testOrder(t, st, id)
-			if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+			if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 				Order:          order.ExternalID,
 				FillQuantity:   "1",
 				FillPrice:      "400",
@@ -1626,13 +1632,14 @@ func TestLocalNode_ApplyExecutionReportRejectsFillWithNonFillStatus(t *testing.T
 
 			const id domain.AccountID = "acc-1"
 			order := testOrder(t, st, id)
-			_, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+			_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 				Order:          order.ExternalID,
 				FillQuantity:   "1",
 				FillPrice:      "400",
 				LeavesQuantity: "1",
 				OrderStatus:    status,
 			}, testCaller)
+
 			if !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("ApplyExecutionReport = %v, want ErrInvalid", err)
 			}
@@ -1689,7 +1696,7 @@ func TestLocalNode_ApplyExecutionReportRoutesTerminalReportsThroughEngine(t *tes
 				t.Fatalf("UpdateOrderStatus: %v", err)
 			}
 			commission := &domain.Commission{Amount: "-0.25", Currency: "USD"}
-			if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+			if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 				Order:          order.ExternalID,
 				LeavesQuantity: tc.leaves,
 				Commission:     commission,
@@ -1751,7 +1758,7 @@ func TestLocalNode_ApplyExecutionReportRegistersThirdCommissionAsset(t *testing.
 	if _, ok, err := st.GetAsset(ctx, "BNB"); err != nil || ok {
 		t.Fatalf("GetAsset(BNB) before report = ok %v err %v, want absent", ok, err)
 	}
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		LeavesQuantity: "2",
 		Commission:     &domain.Commission{Amount: "-0.01", Currency: "BNB"},
@@ -1810,7 +1817,7 @@ func TestLocalNode_ApplyExecutionReportPersistsAuditSafeOriginalRequest(t *testi
 		Force:          true,
 	}
 	want := domain.ExecutionReportRequestFromInput(in)
-	result, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller)
+	result, err := n.ApplyExecutionReport(ctx, in, testCaller)
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -1866,11 +1873,12 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 
 			const id domain.AccountID = "acc-1"
 			order := testOrder(t, st, id)
-			result, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+			result, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 				ExternalID:  reportID,
 				Order:       order.ExternalID,
 				OrderStatus: tc.status,
 			}, testCaller)
+
 			if err != nil {
 				t.Fatalf("ApplyExecutionReport: %v", err)
 			}
@@ -1978,7 +1986,7 @@ func TestLocalNode_ApplyExecutionReportRejectsInvalidWorkflowReport(t *testing.T
 			in := tc.in
 			in.Order = order.ExternalID
 
-			if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller); !errors.Is(err, domain.ErrInvalid) {
+			if _, err := n.ApplyExecutionReport(ctx, in, testCaller); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("ApplyExecutionReport error = %v, want ErrInvalid", err)
 			}
 			if len(eng.execReportCalls) != 0 {
@@ -2008,7 +2016,7 @@ func TestLocalNode_ApplyExecutionReportWorkflowLeavesRecordsCallerValue(t *testi
 	ctx := context.Background()
 	order := testOrder(t, st, "acc-1")
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		LeavesQuantity: "1.23000",
 		OrderStatus:    domain.OrderStatusAccepted,
@@ -2061,7 +2069,7 @@ func TestLocalNode_ApplyExecutionReportWorkflowCommissionLeaves(t *testing.T) {
 			n, st := newTestNode(t, eng)
 			ctx := context.Background()
 			order := testOrder(t, st, "acc-1")
-			if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"),
+			if _, err := n.ApplyExecutionReport(ctx,
 				domain.ExecutionReportInput{
 					Order:          order.ExternalID,
 					LeavesQuantity: tc.leaves,
@@ -2070,8 +2078,7 @@ func TestLocalNode_ApplyExecutionReportWorkflowCommissionLeaves(t *testing.T) {
 						Currency: "USD",
 					},
 					OrderStatus: domain.OrderStatusAccepted,
-				}, testCaller,
-			); err != nil {
+				}, testCaller); err != nil {
 				t.Fatalf("ApplyExecutionReport: %v", err)
 			}
 			if len(eng.execReportCalls) != 1 {
@@ -2107,7 +2114,7 @@ func TestLocalNode_ApplyExecutionReportNilPersistenceErrors(t *testing.T) {
 		t,
 		st,
 		eng,
-		WithFatalShutdownHook(func(err error) { fatalErr = err }),
+		func(err error) { fatalErr = err },
 	)
 	realm := n.realm
 
@@ -2117,13 +2124,14 @@ func TestLocalNode_ApplyExecutionReportNilPersistenceErrors(t *testing.T) {
 	}
 	order := testOrder(t, realm, id)
 
-	_, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		FillQuantity:   "1",
 		FillPrice:      "400",
 		LeavesQuantity: "0",
 		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
+
 	if errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ApplyExecutionReport nil persistence = %v, must hide ErrInvalid", err)
 	}
@@ -2170,7 +2178,7 @@ func TestLocalNode_PartialFillCancellationUsesPreReportReservation(t *testing.T)
 		t.Fatalf("initial leaves = %q, want 2", order.Leaves)
 	}
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
@@ -2192,7 +2200,7 @@ func TestLocalNode_PartialFillCancellationUsesPreReportReservation(t *testing.T)
 	if partial.Order.Leaves != "1" || partial.Order.ReservedQuantity != "1" {
 		t.Fatalf("leaves after partial = %q, want 1", partial.Order.Leaves)
 	}
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		LeavesQuantity: "0",
 		OrderStatus:    domain.OrderStatusCancelled,
@@ -2293,7 +2301,7 @@ func TestLocalNode_ApplyExecutionReportRejectsInvalidStatusBeforeEngine(t *testi
 	}
 	order := testOrder(t, st, id)
 
-	_, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:        order.ExternalID,
 		BaseAsset:    "AAPL",
 		QuoteAsset:   "USD",
@@ -2304,6 +2312,7 @@ func TestLocalNode_ApplyExecutionReportRejectsInvalidStatusBeforeEngine(t *testi
 		Force:        true,
 		OrderStatus:  domain.OrderStatus("bogus"),
 	}, testCaller)
+
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ApplyExecutionReport invalid status = %v, want invalid", err)
 	}
@@ -2325,12 +2334,13 @@ func TestLocalNode_ApplyExecutionReportRejectsFillOnWorkflowStatus(t *testing.T)
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 	order := testOrder(t, st, "acc-1")
-	_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:        order.ExternalID,
 		FillQuantity: "1",
 		FillPrice:    "400",
 		OrderStatus:  domain.OrderStatusAccepted,
 	}, testCaller)
+
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ApplyExecutionReport = %v, want invalid", err)
 	}
@@ -2347,13 +2357,14 @@ func TestLocalNode_TerminalFillReleasesOwnRemainderAndPreservesReportedLeaves(t 
 
 	const id domain.AccountID = "acc-1"
 	order := testOrder(t, st, id)
-	_, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		FillQuantity:   "1",
 		FillPrice:      "400",
 		LeavesQuantity: "0",
 		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
+
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport terminal fill: %v", err)
 	}
@@ -2393,7 +2404,7 @@ func TestLocalNode_TerminalFillWithoutLeavesIsRejected(t *testing.T) {
 
 	const id domain.AccountID = "acc-1"
 	order := testOrder(t, st, id)
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:        order.ExternalID,
 		FillQuantity: "1",
 		FillPrice:    "400",

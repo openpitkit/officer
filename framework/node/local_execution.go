@@ -159,24 +159,22 @@ func (n *localNode) runExecutionReportChain(
 // Engine settlement writes report events, an optional trade, per-asset
 // balances, engine-block UPDATEs, and reflected status/leaves atomically.
 func (n *localNode) ApplyExecutionReport(
-	ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
+	ctx context.Context, in domain.ExecutionReportInput, caller domain.Caller,
 ) (engine.ExecutionReportResult, error) {
-	return n.applyExecutionReport(ctx, key, in, caller, nil)
+	return n.applyExecutionReport(ctx, in, caller, nil)
 }
 
 func (n *localNode) ApplyExecutionReportWithAttestation(
 	ctx context.Context,
-	key Key,
 	in domain.ExecutionReportInput,
 	caller domain.Caller,
 	attest store.EventAttestor,
 ) (engine.ExecutionReportResult, error) {
-	return n.applyExecutionReport(ctx, key, in, caller, attest)
+	return n.applyExecutionReport(ctx, in, caller, attest)
 }
 
 func (n *localNode) applyExecutionReport(
 	ctx context.Context,
-	key Key,
 	in domain.ExecutionReportInput,
 	caller domain.Caller,
 	attest store.EventAttestor,
@@ -607,7 +605,7 @@ func (n *localNode) requireExecutionReportIDAvailable(
 // retry never clobbers it. The event is already durable, so this mutation only
 // adds the envelope; it never touches money or status.
 func (n *localNode) PersistEventAttestation(
-	ctx context.Context, _ Key, eventID domain.ExternalID, att domain.EventAttestation,
+	ctx context.Context, eventID domain.ExternalID, att domain.EventAttestation,
 ) error {
 	if err := n.beginMutation(); err != nil {
 		return err
@@ -742,7 +740,7 @@ func (n *localNode) ListTradeRows(
 // check mutates no state and writes no audit row, but it still runs through the
 // account lane so dry-runs cannot observe account state out of order with fills.
 func (n *localNode) CheckOrder(
-	ctx context.Context, _ Key, probe domain.OrderProbe,
+	ctx context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
 	eng, done := n.beginLaneRead()
 	defer done()

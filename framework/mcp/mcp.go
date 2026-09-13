@@ -23,16 +23,16 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/auth"
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/mcp/catalog"
 	"go.openpit.dev/officer/framework/node"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
-
-var mcpCaller = domain.Caller{Source: domain.SourceMCP, Principal: domain.PrincipalOperator}
 
 const serverName = "pit-officer"
 
@@ -196,6 +196,7 @@ type ToolDescriptor struct {
 type RegisterDeps struct {
 	Source     Source
 	Authorizer httpx.Authorizer
+	Caller     domain.Caller
 }
 
 // ToolRegistry stores descriptors in registration order, keyed by stable name.
@@ -274,29 +275,41 @@ func Build(
 	src Source,
 	version VersionSource,
 	authorizer httpx.Authorizer,
+	caller domain.Caller,
 ) (*sdkmcp.Server, error) {
 	if src == nil {
 		return nil, fmt.Errorf("mcp: nil source")
 	}
 	if authorizer == nil {
-		authorizer = httpx.AllowAll{}
+		return nil, fmt.Errorf("mcp: nil authorizer")
 	}
+	return buildServer(reg, src, version, authorizer, caller), nil
+}
+
+func buildServer(
+	reg *ToolRegistry,
+	src Source,
+	version VersionSource,
+	authorizer httpx.Authorizer,
+	caller domain.Caller,
+) *sdkmcp.Server {
 	serverVersion := ""
 	if version != nil {
 		serverVersion = version.Version()
 	}
+	caller.Source = domain.SourceMCP
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{
 		Name:    serverName,
 		Version: serverVersion,
 	}, nil)
-	deps := RegisterDeps{Source: src, Authorizer: authorizer}
+	deps := RegisterDeps{Source: src, Authorizer: authorizer, Caller: caller}
 	for _, d := range reg.Descriptors() {
 		if d.Register == nil {
 			continue
 		}
 		d.Register(server, deps)
 	}
-	return server, nil
+	return server
 }
 
 // ToolBody is the typed body wrapped by Guard.
@@ -322,12 +335,11 @@ func Guard[In, Out any](
 		ss *sdkmcp.ServerSession,
 		p *sdkmcp.CallToolParamsFor[In],
 	) (*sdkmcp.CallToolResultFor[Out], error) {
-		ctx = auth.ContextWithCaller(ctx, mcpCaller)
-		authorizer := deps.Authorizer
-		if authorizer == nil {
-			authorizer = httpx.AllowAll{}
+		ctx = auth.ContextWithCaller(ctx, deps.Caller)
+		if deps.Authorizer == nil {
+			return toolErr[Out]("permission denied"), nil
 		}
-		if err := authorizer.Authorize(ctx, mcpCaller, d.Name); err != nil {
+		if err := deps.Authorizer.Authorize(ctx, deps.Caller, d.Name); err != nil {
 			return toolErr[Out]("permission denied"), nil
 		}
 		if ok, disabled := commandGate[Out](ctx, deps.Source, d); !ok {
@@ -402,8 +414,9 @@ func RunStdio(
 	src Source,
 	version VersionSource,
 	authorizer httpx.Authorizer,
+	caller domain.Caller,
 ) error {
-	server, err := Build(reg, src, version, authorizer)
+	server, err := Build(reg, src, version, authorizer, caller)
 	if err != nil {
 		return fmt.Errorf("mcp: build server: %w", err)
 	}
@@ -419,14 +432,273 @@ func Handler(
 	src Source,
 	version VersionSource,
 	authorizer httpx.Authorizer,
+	callerResolver auth.CallerResolver,
 ) (http.Handler, error) {
-	server, err := Build(reg, src, version, authorizer)
-	if err != nil {
-		return nil, fmt.Errorf("mcp: build server: %w", err)
+	if reg == nil {
+		return nil, fmt.Errorf("mcp: nil registry")
 	}
-	handler := sdkmcp.NewStreamableHTTPHandler(
-		func(*http.Request) *sdkmcp.Server { return server },
+	if src == nil {
+		return nil, fmt.Errorf("mcp: nil source")
+	}
+	if authorizer == nil {
+		return nil, fmt.Errorf("mcp: nil authorizer")
+	}
+	if callerResolver == nil {
+		return nil, fmt.Errorf("mcp: nil caller resolver")
+	}
+	handler := &sessionBindingHandler{
+		callers: make(map[string]domain.Caller),
+	}
+	handler.sdk = sdkmcp.NewStreamableHTTPHandler(
+		func(r *http.Request) *sdkmcp.Server {
+			caller := auth.CallerFromContext(r.Context())
+			return buildServer(reg, src, version, authorizer, caller)
+		},
 		nil,
 	)
-	return handler, nil
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caller, err := callerResolver(r)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		caller.Source = domain.SourceMCP
+		ctx := auth.ContextWithCaller(r.Context(), caller)
+		handler.serveHTTP(w, r.WithContext(ctx), caller)
+	}), nil
+}
+
+type sessionBindingHandler struct {
+	sdk     http.Handler
+	mu      sync.Mutex
+	callers map[string]domain.Caller
+}
+
+func (h *sessionBindingHandler) serveHTTP(
+	w http.ResponseWriter,
+	r *http.Request,
+	caller domain.Caller,
+) {
+	sessionID := r.Header.Get("Mcp-Session-Id")
+	if sessionID != "" {
+		h.mu.Lock()
+		boundCaller, exists := h.callers[sessionID]
+		h.mu.Unlock()
+		if !exists {
+			httpx.WriteErr(w, fmt.Errorf("mcp: session %q: %w", sessionID, domain.ErrNotFound))
+			return
+		}
+		if boundCaller != caller {
+			httpx.WriteErr(w, domain.ErrForbidden)
+			return
+		}
+	}
+
+	recorder := &sessionResponseWriter{ResponseWriter: w}
+	if sessionID == "" {
+		recorder.beforeWrite = func() {
+			openedSessionID := recorder.Header().Get("Mcp-Session-Id")
+			if openedSessionID == "" {
+				return
+			}
+			h.mu.Lock()
+			h.callers[openedSessionID] = caller
+			h.mu.Unlock()
+		}
+	}
+	h.sdk.ServeHTTP(recorder, r)
+
+	if r.Method == http.MethodDelete && recorder.status == http.StatusNoContent {
+		h.mu.Lock()
+		delete(h.callers, sessionID)
+		h.mu.Unlock()
+	}
+}
+
+type sessionResponseWriter struct {
+	http.ResponseWriter
+	beforeWrite func()
+	wroteHeader bool
+	status      int
+}
+
+func (w *sessionResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	w.status = status
+	if w.beforeWrite != nil {
+		w.beforeWrite()
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *sessionResponseWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *sessionResponseWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *sessionResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+// SourceFor adapts a control plane to the MCP Source seam. Health maps onto the
+// deployment Status shape, the approval, drop-copy, and attestation results map
+// onto their MCP carriers, and every other call passes through unchanged.
+func SourceFor(cp backend.ControlPlane) Source {
+	return controlPlaneSource{cp: cp}
+}
+
+type controlPlaneSource struct {
+	cp backend.ControlPlane
+}
+
+func (s controlPlaneSource) Status(ctx context.Context) (Status, error) {
+	status, err := s.cp.Status(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+
+	nodes := make([]NodeHealth, 0, len(status.Nodes))
+	for _, n := range status.Nodes {
+		nodes = append(nodes, NodeHealth{
+			Engine: EngineHealth{
+				Version:      n.Engine.Version,
+				BuildProfile: n.Engine.BuildProfile,
+				Running:      n.Engine.Running,
+			},
+			Store: StoreHealth{
+				Path:          n.Store.Path,
+				SchemaVersion: n.Store.SchemaVersion,
+				Reachable:     n.Store.Reachable,
+			},
+		})
+	}
+	return Status{Nodes: nodes, Healthy: status.Healthy}, nil
+}
+
+func (s controlPlaneSource) GetAccountState(
+	ctx context.Context, id domain.AccountID,
+) (domain.Account, node.AccountLimits, error) {
+	return s.cp.GetAccountState(ctx, id)
+}
+
+func (s controlPlaneSource) ListGroups(
+	ctx context.Context,
+) ([]domain.AccountGroup, error) {
+	return s.cp.ListGroups(ctx)
+}
+
+func (s controlPlaneSource) ListLimits(
+	ctx context.Context, account domain.AccountID,
+) (node.AccountLimits, error) {
+	return s.cp.ListLimits(ctx, account)
+}
+
+func (s controlPlaneSource) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error) {
+	return s.cp.ListAudit(ctx, n)
+}
+
+func (s controlPlaneSource) ListAuditFiltered(
+	ctx context.Context, filter domain.AuditFilter, n int,
+) ([]domain.AuditRow, error) {
+	return s.cp.ListAuditFiltered(ctx, filter, n)
+}
+
+func (s controlPlaneSource) CheckOrder(
+	ctx context.Context, probe domain.OrderProbe,
+) (domain.CheckResult, error) {
+	return s.cp.CheckOrder(ctx, probe)
+}
+
+func (s controlPlaneSource) GetOrder(
+	ctx context.Context, externalID string,
+) (domain.OrderDetail, error) {
+	return s.cp.GetOrder(ctx, externalID)
+}
+
+func (s controlPlaneSource) SetMarketDataInstrumentEnabled(
+	ctx context.Context, instanceID, externalSymbol string, enabled bool,
+) error {
+	return s.cp.SetMarketDataInstrumentEnabled(ctx, instanceID, externalSymbol, enabled)
+}
+
+func (s controlPlaneSource) CommandEnabled(ctx context.Context, command string) (bool, error) {
+	return s.cp.CommandEnabled(ctx, command)
+}
+
+func (s controlPlaneSource) SubmitOrderToken(
+	ctx context.Context,
+	o domain.Order,
+	mode string,
+	missing domain.MissingAccountPolicy,
+) (SubmitOrderTokenResult, error) {
+	tok, err := s.cp.SubmitOrderToken(ctx, o, mode, missing)
+	if err != nil {
+		return SubmitOrderTokenResult{}, err
+	}
+	return SubmitOrderTokenResult{
+		Token:           tok.Token,
+		KeyID:           tok.KeyID,
+		OrderExternalID: tok.OrderExternalID,
+		Verdict:         tok.Verdict,
+		Reasons:         tok.Reasons,
+	}, nil
+}
+
+func (s controlPlaneSource) SubmitDropCopyOrder(
+	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
+) (SubmitDropCopyOrderResult, error) {
+	order, err := s.cp.SubmitDropCopyOrder(ctx, o, missing)
+	if err != nil {
+		return SubmitDropCopyOrderResult{}, err
+	}
+	return SubmitDropCopyOrderResult{
+		OrderExternalID: order.ExternalID.String(),
+		Status:          order.Status,
+	}, nil
+}
+
+func (s controlPlaneSource) ConfirmExecution(
+	ctx context.Context, orderExternalID, token string,
+) (domain.Order, Attestation, error) {
+	order, att, err := s.cp.ConfirmExecution(ctx, orderExternalID, token)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	return order, attestationFromBackend(att), nil
+}
+
+func (s controlPlaneSource) CancelOrder(
+	ctx context.Context, orderExternalID, token, leavesQuantity, reason string,
+) (domain.Order, Attestation, error) {
+	order, att, err := s.cp.CancelOrder(
+		ctx, orderExternalID, token, leavesQuantity, reason,
+	)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	return order, attestationFromBackend(att), nil
+}
+
+// attestationFromBackend maps the backend attestation onto the surface-agnostic
+// MCP carrier, mirroring the token and key id the HTTP surface exposes.
+func attestationFromBackend(att backend.Attestation) Attestation {
+	return Attestation{
+		Token:  att.Token,
+		KeyID:  att.KeyID,
+		Signed: att.Signed,
+	}
 }

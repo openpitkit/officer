@@ -117,6 +117,7 @@ type ControlPlane interface {
 	) (store.AuditListPage, error)
 	ListMcpAccess(ctx context.Context) ([]McpCommand, error)
 	SetMcpAccess(ctx context.Context, command string, enabled bool) error
+	CommandEnabled(ctx context.Context, command string) (bool, error)
 	WelcomeSeen(ctx context.Context) (bool, error)
 	SetWelcomeSeen(ctx context.Context, seen bool) error
 	ListMarketData(ctx context.Context) (MarketDataStatus, error)

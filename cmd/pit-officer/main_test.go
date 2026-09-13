@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,7 +47,9 @@ func TestSetupResolvesMasterKey(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := setup(context.Background(), cfg, logger, func(error) {}); err == nil {
+	if _, err := setup(context.Background(), cfg, logger, func(err error) {
+		t.Errorf("unexpected fatal shutdown: %v", err)
+	}); err == nil {
 		t.Fatal("setup() error = nil")
 	} else {
 		if !strings.Contains(err.Error(), "master key environment variable") {
@@ -55,6 +58,84 @@ func TestSetupResolvesMasterKey(t *testing.T) {
 		if strings.Contains(err.Error(), malformedKey) {
 			t.Fatalf("setup() error exposes key material: %v", err)
 		}
+	}
+}
+
+func TestSetupRejectsARuntimeLibraryPathTheProcessDidNotStartWith(t *testing.T) {
+	const configured = "/nonexistent/openpit-runtime-other"
+	sqlitePath := filepath.Join(t.TempDir(), "officer.db")
+	cfg, err := config.Load([]string{
+		"-mode", "serve", "-runtime-library-path", configured, "-sqlite-path", sqlitePath,
+	}, os.LookupEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	app, err := setup(context.Background(), cfg, logger, func(err error) {
+		t.Errorf("unexpected fatal shutdown: %v", err)
+	})
+	if err == nil {
+		_ = app.Close()
+		t.Fatal("setup accepted a runtime library path the process did not start with")
+	}
+	processPath := os.Getenv(config.EnvRuntimeLibraryPath)
+	for _, want := range []string{
+		fmt.Sprintf("%q", configured),
+		fmt.Sprintf("%s=%q", config.EnvRuntimeLibraryPath, processPath),
+		"loaded at process start",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("setup() error = %v, want it to contain %s", err, want)
+		}
+	}
+	if _, statErr := os.Stat(sqlitePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("database stat = %v, want setup to fail before opening the store", statErr)
+	}
+}
+
+func TestCheckRuntimeLibraryPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		configured  string
+		processPath string
+		wantErr     bool
+	}{
+		{name: "not configured", configured: "", processPath: "/a/b"},
+		{name: "neither set", configured: "", processPath: ""},
+		{name: "same path", configured: "/a/b", processPath: "/a/b"},
+		{name: "trailing slash", configured: "/a/b/", processPath: "/a/b"},
+		{name: "unclean process path", configured: "/a/b", processPath: " /a/./b/ "},
+		{name: "different path", configured: "/a/c", processPath: "/a/b", wantErr: true},
+		{name: "variable unset", configured: "/a/b", processPath: "", wantErr: true},
+		{name: "blank against set", configured: " ", processPath: "/a/b", wantErr: true},
+		{name: "blank against unset", configured: " ", processPath: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := checkRuntimeLibraryPath(tt.configured, tt.processPath)
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("checkRuntimeLibraryPath(%q, %q) = %v, want nil",
+						tt.configured, tt.processPath, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("checkRuntimeLibraryPath(%q, %q) = nil, want a mismatch",
+					tt.configured, tt.processPath)
+			}
+			for _, want := range []string{
+				fmt.Sprintf("%q", tt.configured),
+				fmt.Sprintf("%s=%q", config.EnvRuntimeLibraryPath, tt.processPath),
+				"loaded at process start",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %v, want it to contain %s", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -100,16 +181,12 @@ func TestServiceLifecycleHandlerAuditsBeforeAccepting(t *testing.T) {
 	t.Parallel()
 	requests := make(chan lifecycleAction, 1)
 	var recordedAction lifecycleAction
-	var recordedSource domain.Source
+	var recordedCaller domain.Caller
 	controller := &serviceLifecycleController{
 		requests: requests,
-		record: func(
-			_ context.Context,
-			action lifecycleAction,
-			source domain.Source,
-		) error {
+		record: func(ctx context.Context, action lifecycleAction) error {
 			recordedAction = action
-			recordedSource = source
+			recordedCaller = auth.CallerFromContext(ctx)
 			return nil
 		},
 	}
@@ -126,9 +203,11 @@ func TestServiceLifecycleHandlerAuditsBeforeAccepting(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
 	}
-	if recordedAction != lifecycleRestart || recordedSource != domain.SourcePanel {
-		t.Fatalf("recorded = (%q, %q), want restart from panel",
-			recordedAction, recordedSource)
+	if recordedAction != lifecycleRestart ||
+		recordedCaller.Source != domain.SourcePanel ||
+		recordedCaller.Principal != domain.PrincipalOperator {
+		t.Fatalf("recorded = (%q, %+v), want restart from panel operator",
+			recordedAction, recordedCaller)
 	}
 	select {
 	case got := <-requests:
@@ -145,7 +224,7 @@ func TestServiceLifecycleHandlerRejectsWhenAuditFails(t *testing.T) {
 	requests := make(chan lifecycleAction, 1)
 	controller := &serviceLifecycleController{
 		requests: requests,
-		record: func(context.Context, lifecycleAction, domain.Source) error {
+		record: func(context.Context, lifecycleAction) error {
 			return errors.New("audit failed")
 		},
 	}

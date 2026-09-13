@@ -248,27 +248,25 @@ type submitImmediateChainState struct {
 // pre_trade_rejected and rejected status. missing decides whether an order for
 // an account Officer does not know yet registers that account or is rejected.
 func (n *localNode) SubmitOrder(
-	ctx context.Context, key Key, o domain.Order,
+	ctx context.Context, o domain.Order,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Order, error) {
-	order, _, err := n.submitOrder(ctx, key, o, missing, caller, nil)
+	order, _, err := n.submitOrder(ctx, o, missing, caller, nil)
 	return order, err
 }
 
 func (n *localNode) SubmitOrderWithAttestation(
 	ctx context.Context,
-	key Key,
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
-	return n.submitOrder(ctx, key, o, missing, caller, attestFor)
+	return n.submitOrder(ctx, o, missing, caller, attestFor)
 }
 
 func (n *localNode) submitOrder(
 	ctx context.Context,
-	key Key,
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
@@ -277,7 +275,7 @@ func (n *localNode) submitOrder(
 	// Resolve the account and register both order assets before the chain source
 	// is converted to its stable SDK identifiers.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, missing, "submit order", caller,
+		ctx, o.Account, missing, "submit order", caller,
 		o.BaseAsset, o.QuoteAsset,
 	); err != nil {
 		return domain.Order{}, engine.OrderResult{}, err
@@ -288,7 +286,7 @@ func (n *localNode) submitOrder(
 	}
 	defer done()
 
-	draft := submittedOrderDraft(key, o, caller)
+	draft := submittedOrderDraft(o, caller)
 	source, err := eng.OrderModel(draft)
 	if err != nil {
 		return domain.Order{}, engine.OrderResult{},
@@ -348,18 +346,18 @@ func (n *localNode) submitOrder(
 			state.attest = attestFor(state.order, state.result)
 		}
 		settlement := orderRejectedSettlement(
-			key, state.order, state.result.Rejects, caller,
+			o.Account, state.order, state.result.Rejects, caller,
 		)
 		persisted, persistErr := state.bridge.complete(settlement)
 		if persistErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record order submission", key.Account, persistErr,
+				"record order submission", o.Account, persistErr,
 			)
 			return state.err
 		}
 		state.order = persisted
 		state.err = n.auditSubmittedOrder(
-			state.ctx, key, state.order, state.result, caller,
+			state.ctx, o.Account, state.order, state.result, caller,
 		)
 		return state.err
 	}
@@ -379,7 +377,7 @@ func (n *localNode) submitOrder(
 					return asyncengine.DecisionRollback, state.err
 				}
 				return n.materializeReservedOrder(
-					key, caller, attestFor, state, result,
+					o.Account, caller, attestFor, state, result,
 				)
 			},
 		})
@@ -399,7 +397,7 @@ func (n *localNode) submitOrder(
 					return asyncengine.DecisionRollback, state.err
 				}
 				return n.materializeReservedOrder(
-					key, caller, attestFor, state, result,
+					o.Account, caller, attestFor, state, result,
 				)
 			},
 		})
@@ -410,7 +408,7 @@ func (n *localNode) submitOrder(
 		persisted, persistErr := state.bridge.complete(state.settlement)
 		if persistErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record order submission", key.Account, persistErr,
+				"record order submission", o.Account, persistErr,
 			)
 			return state.err
 		}
@@ -420,7 +418,7 @@ func (n *localNode) submitOrder(
 		_ context.Context, state *submitOrderChainState,
 	) error {
 		state.err = n.auditSubmittedOrder(
-			state.ctx, key, state.order, state.result, caller,
+			state.ctx, o.Account, state.order, state.result, caller,
 		)
 		return state.err
 	}).Finally(func(
@@ -441,7 +439,7 @@ func (n *localNode) submitOrder(
 }
 
 func (n *localNode) materializeReservedOrder(
-	key Key,
+	account domain.AccountID,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 	state *submitOrderChainState,
@@ -452,7 +450,7 @@ func (n *localNode) materializeReservedOrder(
 		state.attest = attestFor(state.order, state.result)
 	}
 	settlement, err := orderAcceptedSettlement(
-		key, state.order, state.result, caller,
+		account, state.order, state.result, caller,
 	)
 	if err != nil {
 		state.err = fmt.Errorf("submit order: materialize settlement: %w", err)
@@ -464,7 +462,7 @@ func (n *localNode) materializeReservedOrder(
 
 func (n *localNode) auditSubmittedOrder(
 	ctx context.Context,
-	key Key,
+	account domain.AccountID,
 	order domain.Order,
 	result engine.OrderResult,
 	caller domain.Caller,
@@ -474,18 +472,18 @@ func (n *localNode) auditSubmittedOrder(
 			ctx, order.ExternalID, result.Blocks,
 		); err != nil {
 			return n.fatalPostEnginePersistence(
-				"audit pre-trade engine blocks", key.Account, err,
+				"audit pre-trade engine blocks", account, err,
 			)
 		}
 	}
 	return n.auditOrderDecision(
-		ctx, key, order, result.Accepted, result.Rejects, caller,
+		ctx, account, order, result.Accepted, result.Rejects, caller,
 	)
 }
 
 func (n *localNode) auditOrderDecision(
 	ctx context.Context,
-	key Key,
+	account domain.AccountID,
 	order domain.Order,
 	accepted bool,
 	rejects []domain.OrderReject,
@@ -501,7 +499,7 @@ func (n *localNode) auditOrderDecision(
 		if len(rejects) == 0 {
 			return n.fatalPostEnginePersistence(
 				"audit submit order",
-				key.Account,
+				account,
 				fmt.Errorf("audit submit order: engine rejection has no reject reason"),
 			)
 		}
@@ -509,13 +507,13 @@ func (n *localNode) auditOrderDecision(
 		rejectCode = rejects[0].Code
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action: action, Account: key.Account,
+		Action: action, Account: account,
 		OrderID: order.ExternalID.String(), Verdict: verdict, RejectCode: rejectCode,
 		Detail: submitOrderDetail(order, accepted),
 	}); err != nil {
 		return n.fatalPostEnginePersistence(
 			"audit submit order",
-			key.Account,
+			account,
 			fmt.Errorf("audit submit order: %w", err),
 		)
 	}
@@ -523,14 +521,14 @@ func (n *localNode) auditOrderDecision(
 }
 
 func orderAcceptedSettlement(
-	key Key, order domain.Order, result engine.OrderResult, caller domain.Caller,
+	account domain.AccountID, order domain.Order, result engine.OrderResult, caller domain.Caller,
 ) (domain.OrderSettlement, error) {
 	openingLeaves, err := openingLeavesFromOutcomes(order, result.Outcomes)
 	if err != nil {
 		return domain.OrderSettlement{}, err
 	}
 	return domain.OrderSettlement{
-		Account:          key.Account,
+		Account:          account,
 		Order:            order.ExternalID,
 		OrderStatus:      domain.OrderStatusCommitted,
 		Leaves:           openingLeaves,
@@ -586,7 +584,7 @@ func openingLeavesFromOutcomes(
 }
 
 func orderRejectedSettlement(
-	key Key, order domain.Order, rejects []domain.OrderReject, caller domain.Caller,
+	account domain.AccountID, order domain.Order, rejects []domain.OrderReject, caller domain.Caller,
 ) domain.OrderSettlement {
 	payload := domain.OrderEventPayload{
 		Rejects: append([]domain.OrderReject(nil), rejects...),
@@ -600,7 +598,7 @@ func orderRejectedSettlement(
 		payload.RejectDetails = r.Details
 	}
 	return domain.OrderSettlement{
-		Account:     key.Account,
+		Account:     account,
 		Order:       order.ExternalID,
 		OrderStatus: domain.OrderStatusRejected,
 		// A pre-trade reject is the engine's answer that nothing was reserved,
@@ -621,26 +619,24 @@ func orderRejectedSettlement(
 // reject the order is recorded rejected. missing is handled as in SubmitOrder.
 // The backend audits the issued approval.
 func (n *localNode) SubmitImmediate(
-	ctx context.Context, key Key, o domain.Order,
+	ctx context.Context, o domain.Order,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Order, engine.ImmediateResult, error) {
-	return n.submitImmediate(ctx, key, o, missing, caller, nil)
+	return n.submitImmediate(ctx, o, missing, caller, nil)
 }
 
 func (n *localNode) SubmitImmediateWithAttestation(
 	ctx context.Context,
-	key Key,
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
-	return n.submitImmediate(ctx, key, o, missing, caller, attestFor)
+	return n.submitImmediate(ctx, o, missing, caller, attestFor)
 }
 
 func (n *localNode) submitImmediate(
 	ctx context.Context,
-	key Key,
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
@@ -649,7 +645,7 @@ func (n *localNode) submitImmediate(
 	// Resolve the account and register both order assets before converting the
 	// chain source (see SubmitOrder).
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, missing, "submit immediate", caller,
+		ctx, o.Account, missing, "submit immediate", caller,
 		o.BaseAsset, o.QuoteAsset,
 	); err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
@@ -660,7 +656,7 @@ func (n *localNode) submitImmediate(
 	}
 	defer done()
 
-	draft := submittedOrderDraft(key, o, caller)
+	draft := submittedOrderDraft(o, caller)
 	source, err := eng.OrderModel(draft)
 	if err != nil {
 		return domain.Order{}, engine.ImmediateResult{},
@@ -720,18 +716,18 @@ func (n *localNode) submitImmediate(
 			state.attest = attestFor(state.order, state.result)
 		}
 		settlement := orderRejectedSettlement(
-			key, state.order, state.result.Rejects, caller,
+			o.Account, state.order, state.result.Rejects, caller,
 		)
 		persisted, persistErr := state.bridge.complete(settlement)
 		if persistErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record immediate submission", key.Account, persistErr,
+				"record immediate submission", o.Account, persistErr,
 			)
 			return state.err
 		}
 		state.order = persisted
 		state.err = n.auditOrderDecision(
-			state.ctx, key, state.order, state.result.Accepted,
+			state.ctx, o.Account, state.order, state.result.Accepted,
 			state.result.Rejects, caller,
 		)
 		return state.err
@@ -821,18 +817,18 @@ func (n *localNode) submitImmediate(
 		_ context.Context, state *submitImmediateChainState,
 	) error {
 		settlement, settlementErr := immediateAcceptedSettlement(
-			key, state.order, state.result, caller,
+			o.Account, state.order, state.result, caller,
 		)
 		if settlementErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record immediate submission", key.Account, settlementErr,
+				"record immediate submission", o.Account, settlementErr,
 			)
 			return state.err
 		}
 		persisted, persistErr := state.bridge.complete(settlement)
 		if persistErr != nil {
 			state.err = n.fatalPostEnginePersistence(
-				"record immediate submission", key.Account, persistErr,
+				"record immediate submission", o.Account, persistErr,
 			)
 			return state.err
 		}
@@ -842,7 +838,7 @@ func (n *localNode) submitImmediate(
 		_ context.Context, state *submitImmediateChainState,
 	) error {
 		state.err = n.auditImmediateSubmission(
-			state.ctx, key, state.order, state.result, caller,
+			state.ctx, o.Account, state.order, state.result, caller,
 		)
 		return state.err
 	}).Finally(func(
@@ -873,7 +869,7 @@ func (n *localNode) submitImmediate(
 
 func (n *localNode) auditImmediateSubmission(
 	ctx context.Context,
-	key Key,
+	account domain.AccountID,
 	order domain.Order,
 	result engine.ImmediateResult,
 	caller domain.Caller,
@@ -882,13 +878,13 @@ func (n *localNode) auditImmediateSubmission(
 		ctx, order.ExternalID, result.Blocks,
 	); err != nil {
 		return n.fatalPostEnginePersistence(
-			"audit immediate engine blocks", key.Account, err,
+			"audit immediate engine blocks", account, err,
 		)
 	}
 	if result.ExecutionReport == nil {
 		return n.fatalPostEnginePersistence(
 			"audit immediate execution report",
-			key.Account,
+			account,
 			fmt.Errorf("immediate execution report missing"),
 		)
 	}
@@ -897,7 +893,7 @@ func (n *localNode) auditImmediateSubmission(
 	reported := executionReportInputFromRequest(*result.ExecutionReport)
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionExecutionReport,
-		Account: key.Account,
+		Account: account,
 		Detail: executionReportDetail(
 			reported,
 			reported.LeavesQuantity,
@@ -907,12 +903,12 @@ func (n *localNode) auditImmediateSubmission(
 	}); err != nil {
 		return n.fatalPostEnginePersistence(
 			"audit immediate execution report",
-			key.Account,
+			account,
 			fmt.Errorf("audit immediate execution report: %w", err),
 		)
 	}
 	return n.auditOrderDecision(
-		ctx, key, order, result.Accepted, result.Rejects, caller,
+		ctx, account, order, result.Accepted, result.Rejects, caller,
 	)
 }
 
@@ -1333,8 +1329,7 @@ func orderEventExists(events []domain.OrderEvent, eventType domain.OrderEventTyp
 	return false
 }
 
-func submittedOrderDraft(key Key, o domain.Order, caller domain.Caller) domain.Order {
-	o.Account = key.Account
+func submittedOrderDraft(o domain.Order, caller domain.Caller) domain.Order {
 	o.Source = caller.Source
 	o.Principal = caller.Principal
 	o.Status = domain.OrderStatusSubmitted
@@ -1352,7 +1347,7 @@ func submittedOrderEvent(caller domain.Caller) domain.OrderEvent {
 }
 
 func immediateAcceptedSettlement(
-	key Key,
+	account domain.AccountID,
 	order domain.Order,
 	result engine.ImmediateResult,
 	caller domain.Caller,
@@ -1387,7 +1382,7 @@ func immediateAcceptedSettlement(
 	}
 	return domain.OrderSettlement{
 		ReservedQuantity:     reservedQuantity,
-		Account:              key.Account,
+		Account:              account,
 		Order:                order.ExternalID,
 		ReportID:             &result.ExecutionReport.ExternalID,
 		OrderStatus:          persistence.OrderStatus,

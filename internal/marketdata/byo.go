@@ -19,6 +19,7 @@ package marketdata
 
 import (
 	"context"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"sync"
 )
 
@@ -33,7 +34,7 @@ import (
 // closes the channel. A push that observes the closed flag returns without
 // touching the channel.
 type byoConnector struct {
-	ch     chan QuoteUpdate
+	ch     chan fwmarketdata.QuoteUpdate
 	done   chan struct{}
 	closed bool
 
@@ -49,7 +50,7 @@ func NewBYOConnector(buffer int) *byoConnector {
 		buffer = 1
 	}
 	return &byoConnector{
-		ch:   make(chan QuoteUpdate, buffer),
+		ch:   make(chan fwmarketdata.QuoteUpdate, buffer),
 		done: make(chan struct{}),
 	}
 }
@@ -58,8 +59,8 @@ func NewBYOConnector(buffer int) *byoConnector {
 // subscription set is accepted for interface symmetry but not used: the customer
 // is responsible for pushing only quotes for instruments they enabled.
 func (c *byoConnector) Subscribe(
-	_ context.Context, _ []Subscription,
-) (<-chan QuoteUpdate, error) {
+	_ context.Context, _ []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	return c.ch, nil
 }
 
@@ -68,7 +69,7 @@ func (c *byoConnector) Subscribe(
 // connector or unavailable consumer never blocks the producer indefinitely.
 // The in-flight count registered under the lock guarantees Close cannot close
 // the channel mid-send.
-func (c *byoConnector) Push(ctx context.Context, update QuoteUpdate) error {
+func (c *byoConnector) Push(ctx context.Context, update fwmarketdata.QuoteUpdate) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()

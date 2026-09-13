@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -46,8 +47,8 @@ type okxConnector struct {
 	dial         func(context.Context, string) (okxConn, error)
 	sleep        func(context.Context, time.Duration) error
 	fetchSymbols func(context.Context) (map[string]struct{}, error)
-	report       StatusReporter
-	diagReport   DiagnosticReporter
+	report       fwmarketdata.StatusReporter
+	diagReport   fwmarketdata.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	pingInterval time.Duration
@@ -71,7 +72,7 @@ type liveOKXConn struct {
 }
 
 type okxSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	instID string
 }
 
@@ -93,9 +94,9 @@ type okxTickerData struct {
 	TS     string `json:"ts"`
 }
 
-var _ Connector = (*okxConnector)(nil)
-var _ SymbolVerifier = (*okxConnector)(nil)
-var _ Diagnosable = (*okxConnector)(nil)
+var _ fwmarketdata.Connector = (*okxConnector)(nil)
+var _ fwmarketdata.SymbolVerifier = (*okxConnector)(nil)
+var _ fwmarketdata.Diagnosable = (*okxConnector)(nil)
 
 // NewOKXConnector builds an OKX public ticker-stream connector.
 func NewOKXConnector() *okxConnector {
@@ -135,7 +136,7 @@ func (c liveOKXConn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *okxConnector) SetStatusReporter(report StatusReporter) {
+func (c *okxConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -146,19 +147,19 @@ func (c *okxConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *okxConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *okxConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *okxConnector) reportDiag(diag Diagnostic) {
+func (c *okxConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
 // References returns the OKX API documentation and instrument-list URLs.
-func (c *okxConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *okxConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL:    "https://www.okx.com/docs-v5/en/#websocket-api-public-channel-tickers-channel",
 		SymbolsURL: okxInstrumentsURL,
 	}, true
@@ -167,20 +168,20 @@ func (c *okxConnector) References() (ProviderReferences, bool) {
 // VerifySymbol checks external against the OKX spot-instrument catalogue.
 func (c *okxConnector) VerifySymbol(
 	ctx context.Context, external string,
-) (SymbolVerification, error) {
+) (fwmarketdata.SymbolVerification, error) {
 	verifyCtx, cancel := context.WithTimeout(ctx, okxDiagnoseTimeout)
 	defer cancel()
 
 	known, err := c.fetchSymbols(verifyCtx)
 	if err != nil {
-		return SymbolVerification{}, err
+		return fwmarketdata.SymbolVerification{}, err
 	}
 	return verifySymbolFromSet(known, external), nil
 }
 
 func (c *okxConnector) SearchSymbols(
-	ctx context.Context, query SymbolSearchQuery,
-) ([]SymbolMatch, error) {
+	ctx context.Context, query fwmarketdata.SymbolSearchQuery,
+) ([]fwmarketdata.SymbolMatch, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, okxDiagnoseTimeout)
 	defer cancel()
 
@@ -193,7 +194,7 @@ func (c *okxConnector) SearchSymbols(
 
 // Diagnose returns a diagnostic for each stored OKX subscription whose
 // instrument id is not listed by the provider catalogue.
-func (c *okxConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
+func (c *okxConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
 	diagCtx, cancel := context.WithTimeout(ctx, okxDiagnoseTimeout)
 	defer cancel()
 
@@ -201,7 +202,7 @@ func (c *okxConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 	if err != nil {
 		return nil, err
 	}
-	var findings []Diagnostic
+	var findings []fwmarketdata.Diagnostic
 	for _, sub := range c.subs {
 		if _, ok := known[sub.instID]; ok {
 			continue
@@ -215,8 +216,8 @@ func (c *okxConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 }
 
 func (c *okxConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	normalized, err := normalizeOKXSubscriptions(subs)
 	if err != nil {
 		return nil, err
@@ -226,7 +227,7 @@ func (c *okxConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -237,7 +238,7 @@ func (c *okxConnector) Subscribe(
 }
 
 func (c *okxConnector) run(
-	ctx context.Context, subs []okxSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []okxSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	subs = c.validateSymbols(ctx, subs)
 	if len(subs) == 0 {
@@ -272,14 +273,14 @@ func (c *okxConnector) validateSymbols(
 
 	known, err := c.fetchSymbols(validateCtx)
 	if err != nil {
-		c.reportDiag(Diagnostic{
+		c.reportDiag(fwmarketdata.Diagnostic{
 			Level:       DiagWarn,
 			Code:        CodeSelfDiagnosisFailed,
 			Kind:        DiagKindProvider,
 			Title:       "Self-diagnosis failed",
 			Detail:      "symbol validation unavailable: " + err.Error(),
 			Remediation: "Couldn't validate against the provider; try Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 		})
 		return subs
 	}
@@ -299,7 +300,7 @@ func (c *okxConnector) validateSymbols(
 }
 
 func (c *okxConnector) stream(
-	ctx context.Context, subs []okxSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []okxSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (bool, error) {
 	conn, err := c.dial(ctx, okxPublicFeedURL)
 	if err != nil {
@@ -370,7 +371,7 @@ func (c *okxConnector) Close() {
 	c.wg.Wait()
 }
 
-func normalizeOKXSubscriptions(subs []Subscription) ([]okxSubscription, error) {
+func normalizeOKXSubscriptions(subs []fwmarketdata.Subscription) ([]okxSubscription, error) {
 	normalized := make([]okxSubscription, 0, len(subs))
 	for _, sub := range subs {
 		instID := strings.TrimSpace(sub.External)
@@ -468,21 +469,21 @@ func fetchOKXSymbols(ctx context.Context) (map[string]struct{}, error) {
 
 func parseOKXQuoteUpdate(
 	payload []byte, subs []okxSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	var arg map[string]json.RawMessage
 	if err := json.Unmarshal(fields["arg"], &arg); err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	if rawString(arg["channel"]) != "tickers" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	var data []json.RawMessage
 	if err := json.Unmarshal(fields["data"], &data); err != nil || len(data) == 0 {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	for _, rawEvent := range data {
 		var eventFields map[string]json.RawMessage
@@ -504,7 +505,7 @@ func parseOKXQuoteUpdate(
 			return update, true
 		}
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }
 
 func okxControlError(payload []byte) (string, bool) {
@@ -540,23 +541,23 @@ func okxControlAck(payload []byte) bool {
 
 func quoteUpdateFromOKXEvent(
 	event okxTickerData, subs []okxSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	ts, err := parseMillis(event.TS)
 	if err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	instID := strings.ToUpper(strings.TrimSpace(event.InstID))
 	if instID == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	if event.Last == "" && event.BidPx == "" && event.AskPx == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	for _, sub := range subs {
 		if sub.instID != instID {
 			continue
 		}
-		return QuoteUpdate{
+		return fwmarketdata.QuoteUpdate{
 			AsOf:  time.UnixMilli(ts).UTC(),
 			Base:  sub.Base,
 			Quote: sub.Quote,
@@ -565,7 +566,7 @@ func quoteUpdateFromOKXEvent(
 			Ask:   event.AskPx,
 		}, true
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }
 
 func parseMillis(value string) (int64, error) {

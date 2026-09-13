@@ -570,8 +570,8 @@ type StoreHealth struct {
 // rejects a non-matching realm id with an error wrapping domain.ErrInvalid.
 type Store interface {
 	// ForRealm returns the data-access handle bound to realm. The single-realm
-	// connector accepts only its own realm id (and domain.DefaultRealm) and
-	// returns an error wrapping domain.ErrInvalid for any other id.
+	// connector accepts only its bound realm id and returns an error wrapping
+	// domain.ErrInvalid for any other id.
 	ForRealm(ctx context.Context, realm domain.RealmID) (RealmStore, error)
 
 	// Migrate brings the database schema up to the version this build expects.

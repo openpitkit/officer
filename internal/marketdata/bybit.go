@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -47,8 +48,8 @@ type bybitConnector struct {
 	dial         func(context.Context, string) (bybitConn, error)
 	sleep        func(context.Context, time.Duration) error
 	fetchSymbols func(context.Context, string) (map[string]struct{}, error)
-	report       StatusReporter
-	diagReport   DiagnosticReporter
+	report       fwmarketdata.StatusReporter
+	diagReport   fwmarketdata.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	pingInterval time.Duration
@@ -73,7 +74,7 @@ type liveBybitConn struct {
 }
 
 type bybitSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	symbol string
 	topic  string
 }
@@ -112,9 +113,9 @@ type bybitTickerEvent struct {
 	TS    int64
 }
 
-var _ Connector = (*bybitConnector)(nil)
-var _ SymbolVerifier = (*bybitConnector)(nil)
-var _ Diagnosable = (*bybitConnector)(nil)
+var _ fwmarketdata.Connector = (*bybitConnector)(nil)
+var _ fwmarketdata.SymbolVerifier = (*bybitConnector)(nil)
+var _ fwmarketdata.Diagnosable = (*bybitConnector)(nil)
 
 // NewBybitConnector builds a Bybit v5 ticker-stream connector.
 func NewBybitConnector(credentials string) (*bybitConnector, error) {
@@ -159,7 +160,7 @@ func (c liveBybitConn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *bybitConnector) SetStatusReporter(report StatusReporter) {
+func (c *bybitConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -170,19 +171,19 @@ func (c *bybitConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *bybitConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *bybitConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *bybitConnector) reportDiag(diag Diagnostic) {
+func (c *bybitConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
 // References returns the Bybit API documentation and instrument-list URLs.
-func (c *bybitConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *bybitConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL:    "https://bybit-exchange.github.io/docs/v5/websocket/public/ticker",
 		SymbolsURL: bybitInstrumentsURL(c.category),
 	}, true
@@ -192,20 +193,20 @@ func (c *bybitConnector) References() (ProviderReferences, bool) {
 // connector's configured category.
 func (c *bybitConnector) VerifySymbol(
 	ctx context.Context, external string,
-) (SymbolVerification, error) {
+) (fwmarketdata.SymbolVerification, error) {
 	verifyCtx, cancel := context.WithTimeout(ctx, bybitDiagnoseTimeout)
 	defer cancel()
 
 	known, err := c.fetchSymbols(verifyCtx, c.category)
 	if err != nil {
-		return SymbolVerification{}, err
+		return fwmarketdata.SymbolVerification{}, err
 	}
 	return verifySymbolFromSet(known, external), nil
 }
 
 func (c *bybitConnector) SearchSymbols(
-	ctx context.Context, query SymbolSearchQuery,
-) ([]SymbolMatch, error) {
+	ctx context.Context, query fwmarketdata.SymbolSearchQuery,
+) ([]fwmarketdata.SymbolMatch, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, bybitDiagnoseTimeout)
 	defer cancel()
 
@@ -218,7 +219,7 @@ func (c *bybitConnector) SearchSymbols(
 
 // Diagnose returns a diagnostic for each stored Bybit subscription whose symbol
 // is not listed by the provider catalogue for the configured category.
-func (c *bybitConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
+func (c *bybitConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
 	diagCtx, cancel := context.WithTimeout(ctx, bybitDiagnoseTimeout)
 	defer cancel()
 
@@ -226,7 +227,7 @@ func (c *bybitConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 	if err != nil {
 		return nil, err
 	}
-	var findings []Diagnostic
+	var findings []fwmarketdata.Diagnostic
 	for _, sub := range c.subs {
 		if _, ok := known[sub.symbol]; ok {
 			continue
@@ -240,8 +241,8 @@ func (c *bybitConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 }
 
 func (c *bybitConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	normalized, err := normalizeBybitSubscriptions(subs)
 	if err != nil {
 		return nil, err
@@ -251,7 +252,7 @@ func (c *bybitConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -262,7 +263,7 @@ func (c *bybitConnector) Subscribe(
 }
 
 func (c *bybitConnector) run(
-	ctx context.Context, subs []bybitSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []bybitSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	subs = c.validateSymbols(ctx, subs)
 	if len(subs) == 0 {
@@ -298,14 +299,14 @@ func (c *bybitConnector) validateSymbols(
 
 	known, err := c.fetchSymbols(validateCtx, c.category)
 	if err != nil {
-		c.reportDiag(Diagnostic{
+		c.reportDiag(fwmarketdata.Diagnostic{
 			Level:       DiagWarn,
 			Code:        CodeSelfDiagnosisFailed,
 			Kind:        DiagKindProvider,
 			Title:       "Self-diagnosis failed",
 			Detail:      "symbol validation unavailable: " + err.Error(),
 			Remediation: "Couldn't validate against the provider; try Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 		})
 		return subs
 	}
@@ -325,7 +326,7 @@ func (c *bybitConnector) validateSymbols(
 }
 
 func (c *bybitConnector) stream(
-	ctx context.Context, subs []bybitSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []bybitSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (bool, error) {
 	conn, err := c.dial(ctx, bybitPublicFeedBaseURL+c.category)
 	if err != nil {
@@ -424,7 +425,7 @@ func bybitInstrumentsURL(category string) string {
 }
 
 func normalizeBybitSubscriptions(
-	subs []Subscription,
+	subs []fwmarketdata.Subscription,
 ) ([]bybitSubscription, error) {
 	normalized := make([]bybitSubscription, 0, len(subs))
 	for _, sub := range subs {
@@ -603,20 +604,20 @@ func parseBybitQuoteUpdate(
 	payload []byte,
 	subs []bybitSubscription,
 	state map[string]bybitTickerSnapshot,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	event, ok := parseBybitTickerEvent(payload)
 	if !ok {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	if event.TS <= 0 {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	symbol := strings.ToUpper(strings.TrimSpace(event.Patch.Symbol))
 	if symbol == "" {
 		symbol = strings.TrimPrefix(strings.ToUpper(event.Topic), "TICKERS.")
 	}
 	if symbol == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	for _, sub := range subs {
 		if sub.symbol != symbol && !strings.EqualFold(sub.topic, event.Topic) {
@@ -624,9 +625,9 @@ func parseBybitQuoteUpdate(
 		}
 		snapshot, ok := mergeBybitTickerEvent(event, sub.symbol, state)
 		if !ok {
-			return QuoteUpdate{}, false
+			return fwmarketdata.QuoteUpdate{}, false
 		}
-		return QuoteUpdate{
+		return fwmarketdata.QuoteUpdate{
 			AsOf:  time.UnixMilli(event.TS).UTC(),
 			Base:  sub.Base,
 			Quote: sub.Quote,
@@ -635,7 +636,7 @@ func parseBybitQuoteUpdate(
 			Ask:   snapshot.Ask1Price,
 		}, true
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }
 
 func parseBybitTickerEvent(payload []byte) (bybitTickerEvent, bool) {

@@ -27,12 +27,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestNormalizeBinanceSubscriptions(t *testing.T) {
 	t.Parallel()
 
-	subs, err := normalizeBinanceSubscriptions([]Subscription{
+	subs, err := normalizeBinanceSubscriptions([]fwmarketdata.Subscription{
 		{External: "btcusdt", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 		{External: "ethusd", Base: testMarketDataAssetID("Eth"), Quote: testMarketDataAssetID("Usd")},
 	})
@@ -53,7 +54,7 @@ func TestNormalizeBinanceSubscriptions(t *testing.T) {
 func TestParseBinanceQuoteUpdate(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
+	subs := mustNormalizeBinanceSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	payload := []byte(`{"stream":"btcusdt@ticker","data":{"E":1710000000123,"s":"BTCUSDT","c":"65000.10","b":"65000.01","a":"65000.02"}}`)
@@ -76,7 +77,7 @@ func TestParseBinanceQuoteUpdate(t *testing.T) {
 func TestBinanceConnector_ReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
+	subs := mustNormalizeBinanceSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	first := &fakeBinanceConn{
@@ -120,7 +121,7 @@ func TestBinanceConnector_ReconnectsAndResubscribes(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -128,7 +129,7 @@ func TestBinanceConnector_ReconnectsAndResubscribes(t *testing.T) {
 		close(ch)
 	}()
 
-	got := make([]QuoteUpdate, 0, 2)
+	got := make([]fwmarketdata.QuoteUpdate, 0, 2)
 	for update := range ch {
 		got = append(got, update)
 		if len(got) == 2 {
@@ -148,7 +149,7 @@ func TestBinanceConnector_ReconnectsAndResubscribes(t *testing.T) {
 func TestBinanceConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
+	subs := mustNormalizeBinanceSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conns := []*fakeBinanceConn{
@@ -198,13 +199,13 @@ func TestBinanceConnector_ResetsBackoffAfterRead(t *testing.T) {
 		reconnectMax: 4 * time.Millisecond,
 	}
 
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	go func() {
 		connector.run(context.Background(), subs, ch)
 		close(ch)
 	}()
 
-	var got []QuoteUpdate
+	var got []fwmarketdata.QuoteUpdate
 	for update := range ch {
 		got = append(got, update)
 	}
@@ -224,13 +225,13 @@ func TestBinanceConnector_ResetsBackoffAfterRead(t *testing.T) {
 func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
+	subs := mustNormalizeBinanceSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "NOPEUSDT", Base: testMarketDataAssetID("NOPE"), Quote: testMarketDataAssetID("USDT")},
 	})
 	var (
 		statusOK bool
 		status   string
-		diags    []Diagnostic
+		diags    []fwmarketdata.Diagnostic
 	)
 	connector := &binanceConnector{
 		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
@@ -240,12 +241,12 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 			statusOK = ok
 			status = errMsg
 		},
-		diagReport: func(diag Diagnostic) {
+		diagReport: func(diag fwmarketdata.Diagnostic) {
 			diags = append(diags, diag)
 		},
 	}
 
-	connector.run(context.Background(), subs, make(chan QuoteUpdate))
+	connector.run(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate))
 
 	if statusOK {
 		t.Fatal("status ok = true, want false")
@@ -261,7 +262,7 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 func TestBinanceConnector_DiagnoseUnknownSymbolSuggestsExternalPrefix(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{{
+	subs := mustNormalizeBinanceSubscriptions(t, []fwmarketdata.Subscription{{
 		External: "BTCUSDTT",
 		Base:     testMarketDataAssetID("opaque-base-key"),
 		Quote:    testMarketDataAssetID("opaque-quote-key"),
@@ -311,7 +312,7 @@ func TestBinanceConnector_CloseStopsSubscription(t *testing.T) {
 		reconnectMax: time.Millisecond,
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	if err != nil {
@@ -345,7 +346,7 @@ func TestBinanceConnector_CloseBeforeSubscribeDoesNotBreakLaterClose(t *testing.
 	}
 
 	connector.Close()
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	if err != nil {
@@ -460,7 +461,7 @@ func TestBinanceConnector_VerifySymbolFetchError(t *testing.T) {
 }
 
 func mustNormalizeBinanceSubscriptions(
-	t *testing.T, subs []Subscription,
+	t *testing.T, subs []fwmarketdata.Subscription,
 ) []binanceSubscription {
 	t.Helper()
 	normalized, err := normalizeBinanceSubscriptions(subs)

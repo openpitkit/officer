@@ -22,11 +22,10 @@ import "net/http"
 
 // Route is a single REST route registered as data.
 type Route struct {
-	ID         string
-	Method     string
-	Pattern    string
-	Handler    http.Handler
-	Permission string
+	ID      string
+	Method  string
+	Pattern string
+	Handler http.Handler
 }
 
 // RouteRegistry collects v1 routes in insertion order, keyed by stable route id.

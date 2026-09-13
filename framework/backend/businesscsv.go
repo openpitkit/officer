@@ -110,14 +110,6 @@ func (s *Service) businessCSVOrderLockPrice(order domain.Order) string {
 	if len(order.Lock) == 0 {
 		return ""
 	}
-	if s.lockSettlement == nil {
-		slog.Warn(
-			"order CSV lock price unavailable",
-			"order", order.ExternalID,
-			"error", "lock display decoder is unavailable",
-		)
-		return ""
-	}
 	price, err := s.lockSettlement(order.Lock, order)
 	if err != nil {
 		slog.Warn(
@@ -167,11 +159,7 @@ func (s *Service) businessCSVAccounts(
 func (s *Service) auditBusinessCSV(
 	ctx context.Context, action domain.AuditAction, detail string,
 ) error {
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.AppendAudit(ctx, store.AuditEntry{
+	return s.node.AppendAudit(ctx, store.AuditEntry{
 		Action: action,
 		Detail: detail,
 	}, auth.CallerFromContext(ctx))
@@ -218,13 +206,9 @@ func (s *Service) ListAllOrders(
 			return nil, err
 		}
 	}
-	orders := make([]domain.Order, 0)
-	for i, target := range s.router.All() {
-		part, err := target.ListAllOrders(ctx, account, source)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list all orders: %w", i, err)
-		}
-		orders = append(orders, part...)
+	orders, err := s.node.ListAllOrders(ctx, account, source)
+	if err != nil {
+		return nil, err
 	}
 	sortOrdersNewestFirst(orders)
 	return orders, nil
@@ -239,13 +223,9 @@ func (s *Service) ListAllTrades(
 			return nil, err
 		}
 	}
-	trades := make([]domain.Trade, 0)
-	for i, target := range s.router.All() {
-		part, err := target.ListAllTrades(ctx, account, source)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list all trades: %w", i, err)
-		}
-		trades = append(trades, part...)
+	trades, err := s.node.ListAllTrades(ctx, account, source)
+	if err != nil {
+		return nil, err
 	}
 	sortTradesNewestFirst(trades)
 	return trades, nil

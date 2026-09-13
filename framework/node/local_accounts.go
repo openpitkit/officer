@@ -313,7 +313,7 @@ type accountGroupMembershipChainState struct {
 // decides whether a kill-switch aimed at an account Officer does not know yet
 // registers it first or is rejected.
 func (n *localNode) SetAccountBlocked(
-	ctx context.Context, key Key, blocked bool, reason string,
+	ctx context.Context, account domain.AccountID, blocked bool, reason string,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) error {
 	if blocked {
@@ -325,7 +325,7 @@ func (n *localNode) SetAccountBlocked(
 	// the identity gate itself, which the lane's read lock would deadlock against,
 	// and a created account must be published before the lane resolves it.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, missing, blockOperation(blocked), caller,
+		ctx, account, missing, blockOperation(blocked), caller,
 	); err != nil {
 		return err
 	}
@@ -340,14 +340,14 @@ func (n *localNode) SetAccountBlocked(
 		}
 	}()
 
-	previous, ok, readErr := n.realm.GetAccount(ctx, key.Account)
+	previous, ok, readErr := n.realm.GetAccount(ctx, account)
 	if readErr != nil {
 		return fmt.Errorf("read account for block: %w", readErr)
 	}
 	if !ok {
-		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+		return fmt.Errorf("account %q: %w", account, domain.ErrNotFound)
 	}
-	source, err := eng.AccountID(key.Account)
+	source, err := eng.AccountID(account)
 	if err != nil {
 		return err
 	}
@@ -358,7 +358,7 @@ func (n *localNode) SetAccountBlocked(
 		if previous.BlockCode != "" {
 			return fmt.Errorf(
 				"account %q is already blocked by typed cause %q; unblock it before applying an operator reason: %w",
-				key.Account, previous.BlockCode, domain.ErrConflict,
+				account, previous.BlockCode, domain.ErrConflict,
 			)
 		}
 		pending := eng.AsyncEngine().Accounts().ReplaceBlockReason(
@@ -369,11 +369,11 @@ func (n *localNode) SetAccountBlocked(
 		}
 		mutationCtx := context.WithoutCancel(ctx)
 		if storeErr := n.realm.SetAccountBlocked(
-			mutationCtx, key.Account, true, reason,
+			mutationCtx, account, true, reason,
 		); storeErr != nil {
 			return n.fatalPostEnginePersistence(
 				"set account blocked",
-				key.Account,
+				account,
 				errors.Join(
 					fmt.Errorf("set account blocked: %w", storeErr),
 					asyncengine.ErrChainRetryUnsafe,
@@ -382,13 +382,13 @@ func (n *localNode) SetAccountBlocked(
 		}
 		if auditErr := n.audit(mutationCtx, caller, store.AuditEntry{
 			Action:       domain.AuditActionBlock,
-			Account:      key.Account,
+			Account:      account,
 			AccountTitle: previous.Title,
-			Detail:       blockDetail(key.Account, reason),
+			Detail:       blockDetail(account, reason),
 		}); auditErr != nil {
 			return n.fatalPostCommitAudit(
 				"audit account block",
-				key.Account,
+				account,
 				errors.Join(
 					fmt.Errorf("audit account block: %w", auditErr),
 					asyncengine.ErrChainRetryUnsafe,
@@ -407,14 +407,14 @@ func (n *localNode) SetAccountBlocked(
 			state.err = fmt.Errorf("engine: account block cancelled: %w", ctxErr)
 			return nil, state.err
 		}
-		previous, ok, readErr := n.realm.GetAccount(state.ctx, key.Account)
+		previous, ok, readErr := n.realm.GetAccount(state.ctx, account)
 		if readErr != nil {
 			state.err = fmt.Errorf("read account for block: %w", readErr)
 			return nil, state.err
 		}
 		if !ok {
 			state.err = fmt.Errorf(
-				"account %q: %w", key.Account, domain.ErrNotFound,
+				"account %q: %w", account, domain.ErrNotFound,
 			)
 			return nil, state.err
 		}
@@ -433,22 +433,22 @@ func (n *localNode) SetAccountBlocked(
 		mutationCtx := context.WithoutCancel(state.ctx)
 		state.failureOperation = "set account blocked"
 		if err := n.realm.SetAccountBlocked(
-			mutationCtx, key.Account, state.blocked, state.reason,
+			mutationCtx, account, state.blocked, state.reason,
 		); err != nil {
 			state.err = fmt.Errorf("set account blocked: %w", err)
 			return state.err
 		}
 		state.persistenceCompleted = true
 		action := domain.AuditActionBlock
-		detail := blockDetail(key.Account, state.reason)
+		detail := blockDetail(account, state.reason)
 		if !state.blocked {
 			action = domain.AuditActionUnblock
-			detail = unblockDetail(key.Account, state.reason)
+			detail = unblockDetail(account, state.reason)
 		}
 		state.failureOperation = "audit account block"
 		if err := n.audit(mutationCtx, caller, store.AuditEntry{
 			Action:       action,
-			Account:      key.Account,
+			Account:      account,
 			AccountTitle: state.previous.Title,
 			Detail:       detail,
 		}); err != nil {
@@ -488,7 +488,7 @@ func (n *localNode) SetAccountBlocked(
 		state.err = n.administrativeChainTerminalError(
 			"account block",
 			"account",
-			key.Account.String(),
+			account.String(),
 			&state.administrativeChainState,
 			outcome,
 		)
@@ -661,17 +661,17 @@ func (n *localNode) AppendAudit(
 // GetAccountState returns the account row and the barriers whose scope has the
 // account axis and matches the account.
 func (n *localNode) GetAccountState(
-	ctx context.Context, key Key,
+	ctx context.Context, code domain.AccountID,
 ) (domain.Account, AccountLimits, error) {
-	account, ok, err := n.realm.GetAccount(ctx, key.Account)
+	account, ok, err := n.realm.GetAccount(ctx, code)
 	if err != nil {
 		return domain.Account{}, AccountLimits{}, fmt.Errorf("get account: %w", err)
 	}
 	if !ok {
 		return domain.Account{}, AccountLimits{}, fmt.Errorf(
-			"account %q: %w", key.Account, domain.ErrNotFound)
+			"account %q: %w", code, domain.ErrNotFound)
 	}
-	limits, err := n.listLimits(ctx, key.Account)
+	limits, err := n.listLimits(ctx, code)
 	if err != nil {
 		return domain.Account{}, AccountLimits{}, fmt.Errorf("list account limits: %w", err)
 	}
@@ -689,7 +689,7 @@ func (n *localNode) GetAccountState(
 // group but route through their first account. missing decides whether an
 // account Officer does not know yet is registered before the move or rejected.
 func (n *localNode) SetAccountGroup(
-	ctx context.Context, key Key, groupCode string,
+	ctx context.Context, account domain.AccountID, groupCode string,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) error {
 	if err := n.beginLiveIdentityPublication(); err != nil {
@@ -701,7 +701,7 @@ func (n *localNode) SetAccountGroup(
 	// non-acquiring helper; ensureAccountAndAssetsRegisteredExclusive would
 	// deadlock re-entering the same gate.
 	if err := n.ensureAccount(
-		ctx, key.Account, missing, "set account group", caller,
+		ctx, account, missing, "set account group", caller,
 	); err != nil {
 		return err
 	}
@@ -713,17 +713,17 @@ func (n *localNode) SetAccountGroup(
 		}
 	}
 
-	previous, ok, err := n.realm.GetAccount(ctx, key.Account)
+	previous, ok, err := n.realm.GetAccount(ctx, account)
 	if err != nil {
 		return fmt.Errorf("read account for set group: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+		return fmt.Errorf("account %q: %w", account, domain.ErrNotFound)
 	}
 	if previous.GroupCode == groupCode {
 		return nil
 	}
-	routingAccount, err := eng.AccountID(key.Account)
+	routingAccount, err := eng.AccountID(account)
 	if err != nil {
 		return err
 	}
@@ -753,14 +753,14 @@ func (n *localNode) SetAccountGroup(
 		mutationCtx := context.WithoutCancel(state.ctx)
 		state.failureOperation = "set account group"
 		if err := n.realm.SetAccountGroup(
-			mutationCtx, key.Account, groupCode,
+			mutationCtx, account, groupCode,
 		); err != nil {
 			state.err = fmt.Errorf("set account group: %w", err)
 			return state.err
 		}
 		state.persistenceCompleted = true
 		detail := setAccountGroupDetail(
-			key.Account, state.previous.GroupCode, groupCode,
+			account, state.previous.GroupCode, groupCode,
 		)
 		groupCodes := accountGroupAuditCodes(
 			state.previous.GroupCode, groupCode,
@@ -769,7 +769,7 @@ func (n *localNode) SetAccountGroup(
 		for _, code := range groupCodes {
 			entries = append(entries, store.AuditEntry{
 				Action:       domain.AuditActionSetGroup,
-				Account:      key.Account,
+				Account:      account,
 				AccountTitle: state.previous.Title,
 				Group:        code,
 				Detail:       detail,
@@ -799,7 +799,7 @@ func (n *localNode) SetAccountGroup(
 				return nil, state.err
 			}
 			current, found, readErr := n.realm.GetAccount(
-				state.ctx, key.Account,
+				state.ctx, account,
 			)
 			if readErr != nil {
 				state.err = fmt.Errorf(
@@ -809,14 +809,14 @@ func (n *localNode) SetAccountGroup(
 			}
 			if !found {
 				state.err = fmt.Errorf(
-					"account %q: %w", key.Account, domain.ErrNotFound,
+					"account %q: %w", account, domain.ErrNotFound,
 				)
 				return nil, state.err
 			}
 			if current.GroupCode != previous.GroupCode {
 				state.err = fmt.Errorf(
 					"account %q group changed from %q to %q: %w",
-					key.Account,
+					account,
 					previous.GroupCode,
 					current.GroupCode,
 					domain.ErrInvalid,
@@ -885,7 +885,7 @@ func (n *localNode) SetAccountGroup(
 				)
 				if guardErr := n.guardEffectiveCurrencyChange(
 					state.ctx,
-					[]domain.AccountID{key.Account},
+					[]domain.AccountID{account},
 					current.EffectiveCurrency,
 					nextEffective,
 				); guardErr != nil {
@@ -896,15 +896,15 @@ func (n *localNode) SetAccountGroup(
 					state.err = n.auditCurrencyChangeRefusal(
 						state.ctx, caller, store.AuditEntry{
 							Action:  domain.AuditActionSetGroup,
-							Account: key.Account, AccountTitle: current.Title,
+							Account: account, AccountTitle: current.Title,
 							Group: groupCode,
 							Detail: currencyDetail(
-								"set account group", key.Account.String(),
+								"set account group", account.String(),
 								current.EffectiveCurrency, nextEffective,
 							),
 						},
 						domain.NewCurrencyChangeBlockedError(
-							domain.ScopeAccount, key.Account.String(), guardErr,
+							domain.ScopeAccount, account.String(), guardErr,
 						),
 					)
 					return nil, state.err
@@ -956,7 +956,7 @@ func (n *localNode) SetAccountGroup(
 			state.err = n.administrativeChainTerminalError(
 				"set account group",
 				"account",
-				key.Account.String(),
+				account.String(),
 				&state.administrativeChainState,
 				outcome,
 			)
@@ -1049,20 +1049,20 @@ func accountGroupAuditCodes(prevGroupCode, groupCode string) []string {
 // no account-lane hop is needed: it writes only the notes store row, which no
 // engine lane touches.
 func (n *localNode) SetAccountNotes(
-	ctx context.Context, key Key, notes string, caller domain.Caller,
+	ctx context.Context, account domain.AccountID, notes string, caller domain.Caller,
 ) error {
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
 
-	if err := n.realm.SetAccountNotes(ctx, key.Account, notes); err != nil {
+	if err := n.realm.SetAccountNotes(ctx, account, notes); err != nil {
 		return fmt.Errorf("set account notes: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetNotes,
-		Account: key.Account,
-		Detail:  fmt.Sprintf("set notes account %s", key.Account),
+		Account: account,
+		Detail:  fmt.Sprintf("set notes account %s", account),
 	}); err != nil {
 		return fmt.Errorf("audit set account notes: %w", err)
 	}
@@ -1075,7 +1075,7 @@ func (n *localNode) SetAccountNotes(
 // account while the operator-facing code changes.
 func (n *localNode) UpdateAccount(
 	ctx context.Context,
-	key Key,
+	oldCode domain.AccountID,
 	account domain.Account,
 	caller domain.Caller,
 ) (domain.Account, error) {
@@ -1084,15 +1084,15 @@ func (n *localNode) UpdateAccount(
 	}
 	defer n.endLiveIdentityPublication()
 
-	prev, ok, err := n.realm.GetAccount(ctx, key.Account)
+	prev, ok, err := n.realm.GetAccount(ctx, oldCode)
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("read account for update: %w", err)
 	}
 	if !ok {
 		return domain.Account{},
-			fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+			fmt.Errorf("account %q: %w", oldCode, domain.ErrNotFound)
 	}
-	updated, err := n.realm.UpdateAccount(ctx, key.Account, account)
+	updated, err := n.realm.UpdateAccount(ctx, oldCode, account)
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("update account: %w", err)
 	}
@@ -1143,19 +1143,19 @@ func (n *localNode) UpdateAccount(
 // surviving rows, and audits the action. Account retirement is not available
 // through the SDK runtime API yet, so this remains an intentional rebuild path.
 func (n *localNode) DeleteAccount(
-	ctx context.Context, key Key, force bool, caller domain.Caller,
+	ctx context.Context, code domain.AccountID, force bool, caller domain.Caller,
 ) error {
 	if err := n.beginEngineRestart(); err != nil {
 		return err
 	}
 	defer n.endEngineRestart()
 
-	account, ok, err := n.realm.GetAccount(ctx, key.Account)
+	account, ok, err := n.realm.GetAccount(ctx, code)
 	if err != nil {
 		return fmt.Errorf("read account for delete: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+		return fmt.Errorf("account %q: %w", code, domain.ErrNotFound)
 	}
 
 	snapshot, _, err := n.loadSnapshot(ctx)

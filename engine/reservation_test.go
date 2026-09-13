@@ -1,0 +1,1836 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://openpit.dev and the OWNERS file for details.
+
+// These tests exercise reservation settlement against a real OpenPit engine and
+// so require the native runtime dylib at run time (set
+// OPENPIT_RUNTIME_LIBRARY_PATH or build the workspace dylib first, as documented
+// for the Go bindings). They build one real engine through buildEngine, seed an
+// account balance, and drive order and execution-report paths through the adapter.
+
+package engine
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+
+	"go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/pretrade/policies"
+	"go.openpit.dev/openpit/reject"
+	"go.openpit.dev/openpit/tx"
+
+	"go.openpit.dev/officer/framework/domain"
+	fwengine "go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/internal/store/sqlite"
+)
+
+const (
+	testAccount   = "1"
+	testQuote     = "USD"
+	testBase      = "AAPL"
+	testQuoteFund = "1000"
+	testQty       = "5"
+	testLimit     = "100" // 5 * 100 = 500 quote, leaves 500 after one hold
+)
+
+// testOrderXID returns a deterministic non-zero external id for a reservation
+// test order, standing in for the store-assigned handle so the intent carries a
+// real order ref. seed is folded into the bytes so distinct orders differ.
+func testOrderXID(seed byte) domain.ExternalID {
+	var raw [domain.ExternalIDByteLen]byte
+	raw[0] = seed
+	raw[domain.ExternalIDByteLen-1] = 0x5a
+	id, err := domain.ExternalIDFromBytes(raw[:])
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func testAsyncEngine(t *testing.T, eng *openpit.Engine) *asyncengine.AsyncEngine {
+	t.Helper()
+	async, err := asyncengine.NewBuilder(eng).
+		WithStopUnderlying(eng.Stop).
+		Dynamic().
+		Build()
+	if err != nil {
+		t.Fatalf("build async engine: %v", err)
+	}
+	return async
+}
+
+func newTestSharedMarketDataService(t *testing.T) *sharedMarketDataService {
+	t.Helper()
+	service, err := openpit.NewEngineBuilder().FullSync().
+		MarketData(defaultQuoteTTL).
+		Build()
+	if err != nil {
+		t.Fatalf("build market-data service: %v", err)
+	}
+	return &sharedMarketDataService{service: service}
+}
+
+// newTestEngine builds a real engine adapter with one account ("1") that carries
+// a stored engine id and is seeded with testQuoteFund of the quote asset, enough
+// to reserve exactly two test orders. The adapter is stopped via t.Cleanup.
+func newTestEngine(t *testing.T) *openPitEngine {
+	t.Helper()
+	snap := fwengine.Snapshot{
+		Accounts: []domain.Account{account(testAccount)},
+		Assets:   []domain.Asset{testAsset(testBase), testAsset(testQuote)},
+	}
+	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	eng, service, registered, _, _, err := buildEngine(snap, res, nil)
+	if err != nil {
+		t.Fatalf("build engine: %v", err)
+	}
+	adapter := newOpenPitEngine(
+		testAsyncEngine(t, eng),
+		eng.Configure(),
+		&sharedMarketDataService{service: service},
+		registered,
+		nil,
+		res,
+	).(*openPitEngine)
+	t.Cleanup(func() {
+		adapter.Stop()
+		adapter.CloseMarketDataService()
+	})
+
+	if err := seedBalances(eng, []domain.Balance{{
+		Account:   domain.AccountID(testAccount),
+		Asset:     testQuote,
+		Available: testQuoteFund,
+	}}, res); err != nil {
+		t.Fatalf("seed balance: %v", err)
+	}
+	return adapter
+}
+
+// newUnpricedTestEngine builds the adapter with validation only, deliberately
+// omitting SpotFunds and every other policy that could contribute a lock price.
+func newUnpricedTestEngine(t *testing.T) *openPitEngine {
+	t.Helper()
+	snap := fwengine.Snapshot{
+		Accounts: []domain.Account{account(testAccount)},
+		Assets:   []domain.Asset{testAsset(testBase), testAsset(testQuote)},
+	}
+	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	eng, err := openpit.NewEngineBuilder().AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		Build()
+	if err != nil {
+		t.Fatalf("build unpriced engine: %v", err)
+	}
+	adapter := newOpenPitEngine(
+		testAsyncEngine(t, eng),
+		eng.Configure(),
+		newTestSharedMarketDataService(t),
+		map[string]struct{}{},
+		nil,
+		res,
+	).(*openPitEngine)
+	t.Cleanup(func() {
+		adapter.Stop()
+		adapter.CloseMarketDataService()
+	})
+	return adapter
+}
+
+// testOrder is a limit buy that costs 500 quote, so a 1000-quote balance funds
+// exactly two of them. A limit price keeps the estimate source "limit" and
+// avoids needing a live market quote.
+func testOrder() domain.Order {
+	return domain.Order{
+		Account:     domain.AccountID(testAccount),
+		BaseAsset:   testBase,
+		QuoteAsset:  testQuote,
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: testQty,
+		Price:       testLimit,
+	}
+}
+
+func materializeOrderResult(
+	eng fwengine.Engine, order domain.Order,
+) (fwengine.OrderResult, error) {
+	e, ok := eng.(*openPitEngine)
+	if !ok {
+		return fwengine.OrderResult{}, fmt.Errorf("test engine type %T is not native", eng)
+	}
+	source, err := e.OrderModel(order)
+	if err != nil {
+		return fwengine.OrderResult{}, err
+	}
+	ctx := context.Background()
+	if order.DropCopy {
+		operation, rejects, applyErr := e.AsyncEngine().ApplyDropCopy(
+			ctx, source,
+		).Await(ctx)
+		if applyErr != nil {
+			return fwengine.OrderResult{}, applyErr
+		}
+		if len(rejects) > 0 {
+			return e.RejectedOrder(order, rejects), nil
+		}
+		if operation == nil {
+			return fwengine.OrderResult{}, errors.New("drop-copy operation missing")
+		}
+		result, materializeErr := e.AppliedDropCopyOrder(order, operation)
+		if materializeErr != nil {
+			_, rollbackErr := operation.RollbackAndClose(ctx).Await(ctx)
+			return fwengine.OrderResult{}, errors.Join(materializeErr, rollbackErr)
+		}
+		_, commitErr := operation.CommitAndClose(ctx).Await(ctx)
+		return result, commitErr
+	}
+	reservation, rejects, executeErr := e.AsyncEngine().ExecutePreTrade(
+		ctx, source,
+	).Await(ctx)
+	if executeErr != nil {
+		return fwengine.OrderResult{}, executeErr
+	}
+	if len(rejects) > 0 {
+		return e.RejectedOrder(order, rejects), nil
+	}
+	if reservation == nil {
+		return fwengine.OrderResult{}, errors.New("reservation missing")
+	}
+	result, materializeErr := e.ReservedOrder(order, reservation)
+	if materializeErr != nil {
+		_, rollbackErr := reservation.RollbackAndClose(ctx).Await(ctx)
+		return fwengine.OrderResult{}, errors.Join(materializeErr, rollbackErr)
+	}
+	_, commitErr := reservation.CommitAndClose(ctx).Await(ctx)
+	return result, commitErr
+}
+
+func materializeImmediateResult(
+	eng fwengine.Engine, order domain.Order,
+) (fwengine.ImmediateResult, error) {
+	e, ok := eng.(*openPitEngine)
+	if !ok {
+		return fwengine.ImmediateResult{}, fmt.Errorf("test engine type %T is not native", eng)
+	}
+	source, err := e.OrderModel(order)
+	if err != nil {
+		return fwengine.ImmediateResult{}, err
+	}
+	ctx := context.Background()
+	var prepared fwengine.ImmediatePreparation
+	if order.DropCopy {
+		operation, rejects, applyErr := e.AsyncEngine().ApplyDropCopy(
+			ctx, source,
+		).Await(ctx)
+		if applyErr != nil {
+			return fwengine.ImmediateResult{}, applyErr
+		}
+		if len(rejects) > 0 {
+			return e.RejectedImmediate(order, rejects), nil
+		}
+		if operation == nil {
+			return fwengine.ImmediateResult{}, errors.New("drop-copy operation missing")
+		}
+		prepared, err = e.PrepareImmediateDropCopy(order, operation)
+		if err != nil {
+			_, rollbackErr := operation.RollbackAndClose(ctx).Await(ctx)
+			return fwengine.ImmediateResult{}, errors.Join(err, rollbackErr)
+		}
+		if _, err := operation.CommitAndClose(ctx).Await(ctx); err != nil {
+			return fwengine.ImmediateResult{}, err
+		}
+	} else {
+		reservation, rejects, executeErr := e.AsyncEngine().ExecutePreTrade(
+			ctx, source,
+		).Await(ctx)
+		if executeErr != nil {
+			return fwengine.ImmediateResult{}, executeErr
+		}
+		if len(rejects) > 0 {
+			return e.RejectedImmediate(order, rejects), nil
+		}
+		if reservation == nil {
+			return fwengine.ImmediateResult{}, errors.New("reservation missing")
+		}
+		prepared, err = e.PrepareImmediateReservation(order, reservation)
+		if err != nil {
+			_, rollbackErr := reservation.RollbackAndClose(ctx).Await(ctx)
+			return fwengine.ImmediateResult{}, errors.Join(err, rollbackErr)
+		}
+		if _, err := reservation.CommitAndClose(ctx).Await(ctx); err != nil {
+			return fwengine.ImmediateResult{}, err
+		}
+	}
+	postTrade, err := e.AsyncEngine().ApplyExecutionReport(
+		ctx, prepared.ExecutionReport,
+	).Await(ctx)
+	if err != nil {
+		return fwengine.ImmediateResult{}, err
+	}
+	return e.SettleImmediate(order, prepared, postTrade)
+}
+
+func materializeExecutionReport(
+	eng fwengine.Engine,
+	in domain.ExecutionReportInput,
+	leavesQuantity string,
+) (fwengine.ExecutionReportResult, error) {
+	e, ok := eng.(*openPitEngine)
+	if !ok {
+		return fwengine.ExecutionReportResult{}, fmt.Errorf(
+			"test engine type %T is not native", eng,
+		)
+	}
+	accountID, err := e.AccountID(in.Account)
+	if err != nil {
+		return fwengine.ExecutionReportResult{}, err
+	}
+	report, err := e.ExecutionReportModel(in, leavesQuantity)
+	if err != nil {
+		return fwengine.ExecutionReportResult{}, err
+	}
+	ctx := context.Background()
+	postTrade, err := e.AsyncEngine().ApplyExecutionReport(ctx, report).Await(ctx)
+	if err != nil {
+		return fwengine.ExecutionReportResult{}, fmt.Errorf(
+			"engine: apply execution report: %w", err,
+		)
+	}
+	return e.SettledExecutionReport(in, accountID, postTrade)
+}
+
+func setTestAccountPnlState(
+	ctx context.Context,
+	e *openPitEngine,
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) ([]domain.AccountBlock, error) {
+	accountID, err := e.AccountID(testAccount)
+	if err != nil {
+		return nil, err
+	}
+	assignment, err := e.SpotFundsAccountPnlAssignment(pnl, haltReason)
+	if err != nil {
+		return nil, err
+	}
+	result, err := fwengine.SetSpotFundsAccountPnl(
+		ctx, e.AsyncEngine(), accountID, assignment,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return e.AppliedSpotFundsAccountPnl(
+		testAccount, pnl, haltReason, result,
+	)
+}
+
+func TestSpotFundsAccountPnlAssignmentRejectsInvalidState(t *testing.T) {
+	t.Parallel()
+	e := &openPitEngine{}
+	for _, test := range []struct {
+		name       string
+		pnl        string
+		haltReason domain.PnlHaltReason
+	}{
+		{name: "both", pnl: "1", haltReason: domain.PnlHaltReasonMissingFx},
+		{name: "empty"},
+		{name: "unknown reason", haltReason: "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := e.SpotFundsAccountPnlAssignment(
+				test.pnl,
+				test.haltReason,
+			)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf(
+					"SpotFundsAccountPnlAssignment() error = %v, want ErrInvalid",
+					err,
+				)
+			}
+		})
+	}
+}
+
+func materializeCheckedOrder(
+	eng fwengine.Engine, probe domain.OrderProbe,
+) (domain.CheckResult, error) {
+	e, ok := eng.(*openPitEngine)
+	if !ok {
+		return domain.CheckResult{}, fmt.Errorf("test engine type %T is not native", eng)
+	}
+	source, err := e.CheckOrderModel(probe)
+	if err != nil {
+		return domain.CheckResult{}, err
+	}
+	ctx := context.Background()
+	var result domain.CheckResult
+	chain := asyncengine.Chain(source, func(context.Context) (struct{}, error) {
+		return struct{}{}, nil
+	}).CheckOrder(func(
+		_ context.Context, _ struct{}, checked asyncengine.OrderCheckResult,
+	) error {
+		var checkedErr error
+		result, checkedErr = e.CheckedOrder(probe, checked)
+		return checkedErr
+	})
+	_, err = chain.Run(ctx, e.AsyncEngine()).Await(ctx)
+	return result, err
+}
+
+func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
+	e := newTestEngine(t)
+
+	res, err := materializeImmediateResult(e, testOrder())
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
+	}
+	if res.Persistence == nil || res.Persistence.Leaves != "0" {
+		t.Fatalf("immediate leaves persistence = %+v, want zero", res.Persistence)
+	}
+	if res.SettlementLockPrice == "" {
+		t.Fatal("SubmitImmediate: empty settlement lock price")
+	}
+	if len(res.Lock) == 0 {
+		t.Fatal("SubmitImmediate: empty serialized lock")
+	}
+	seen := make(map[string]struct{}, len(res.Outcomes))
+	var quote *domain.AdjustmentOutcomeAccepted
+	for i := range res.Outcomes {
+		outcome := &res.Outcomes[i]
+		if _, duplicate := seen[outcome.Asset]; duplicate {
+			t.Fatalf("SubmitImmediate returned duplicate final asset %q: %+v",
+				outcome.Asset, res.Outcomes)
+		}
+		seen[outcome.Asset] = struct{}{}
+		if outcome.Asset == testQuote {
+			quote = &outcome.Outcome
+		}
+	}
+	if quote == nil || quote.HeldDelta != "0" || quote.HeldResult != "0" {
+		t.Fatalf("quote outcome = %+v, want reservation and settlement held effects netted to zero",
+			quote)
+	}
+	if res.AccountPnl != "" || res.AccountPnlHaltReason != "" {
+		t.Fatalf(
+			"account pnl outcome = (%q, %q), want no opening-fill P&L outcome",
+			res.AccountPnl,
+			res.AccountPnlHaltReason,
+		)
+	}
+}
+
+func TestSubmitImmediate_DropCopySettlesWhileAccountIsBlocked(t *testing.T) {
+	acct := blockedAccount(testAccount, "account block")
+	acct.Currency = testQuote
+	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{acct},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	e := eng.(*openPitEngine)
+	t.Cleanup(e.Stop)
+
+	order := testOrder()
+	order.DropCopy = true
+	result, err := materializeImmediateResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitImmediate(drop copy): %v", err)
+	}
+	if !result.Accepted || len(result.Rejects) != 0 {
+		t.Fatalf("drop-copy immediate result = %+v, want accepted", result)
+	}
+	if result.FillQuantity != testQty {
+		t.Fatalf("fill quantity = %q, want %q", result.FillQuantity, testQty)
+	}
+}
+
+// lockSpyPolicyGroupID tags the extra lock leg executionLockSpy contributes. It
+// is deliberately not the default policy group: SpotFunds owns that one, and a
+// lock rebuilt from a single settlement price carries the default group alone,
+// so a non-default leg is what tells the engine's own lock apart from a
+// reconstruction.
+const lockSpyPolicyGroupID model.PolicyGroupID = 42
+
+// executionLockSpy is a pre-trade policy that records one lock price under
+// lockSpyPolicyGroupID and captures the pre-trade lock of every execution report
+// the engine receives, so a test can assert which lock the adapter handed back.
+// It mirrors the order's limit price so the settlement estimate - the last lock
+// price - stays the price the fill settles at.
+type executionLockSpy struct {
+	price        param.Price
+	pushErr      error
+	reportLocks  [][]byte
+	reportLeaves []string
+	guard        sync.Mutex
+}
+
+func (*executionLockSpy) Close() {}
+
+func (*executionLockSpy) Name() string { return "officer-test-lock-spy" }
+
+func (*executionLockSpy) PolicyGroupID() model.PolicyGroupID {
+	return lockSpyPolicyGroupID
+}
+
+func (*executionLockSpy) CheckPreTradeStart(
+	pretrade.Context, model.Order,
+) []reject.Reject {
+	return nil
+}
+
+func (s *executionLockSpy) PerformPreTradeCheck(
+	_ pretrade.Context,
+	_ model.Order,
+	_ tx.Mutations,
+	result pretrade.Result,
+) []reject.Reject {
+	if err := result.PushLockPrice(s.price); err != nil {
+		s.guard.Lock()
+		s.pushErr = err
+		s.guard.Unlock()
+	}
+	return nil
+}
+
+func (s *executionLockSpy) ApplyExecutionReport(
+	_ pretrade.PostTradeContext,
+	report model.ExecutionReport,
+	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
+) []reject.AccountBlock {
+	// Copy: the report and its lock belong to the binding for this call only.
+	var lock []byte
+	var leaves string
+	if fill, ok := report.Fill().Get(); ok {
+		lock = append([]byte(nil), fill.Lock()...)
+		if quantity, ok := fill.RemainingReservedQuantity().Get(); ok {
+			leaves = quantity.String()
+		}
+	}
+	s.guard.Lock()
+	defer s.guard.Unlock()
+	s.reportLocks = append(s.reportLocks, lock)
+	s.reportLeaves = append(s.reportLeaves, leaves)
+	return nil
+}
+
+func (*executionLockSpy) ApplyAccountAdjustment(
+	accountadjustment.Context,
+	param.AccountID,
+	model.AccountAdjustment,
+	tx.Mutations,
+	pretrade.AccountOutcomes,
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
+}
+
+func (s *executionLockSpy) recordedReportLocks() [][]byte {
+	s.guard.Lock()
+	defer s.guard.Unlock()
+	return append([][]byte(nil), s.reportLocks...)
+}
+
+func (s *executionLockSpy) recordedReportLeaves() []string {
+	s.guard.Lock()
+	defer s.guard.Unlock()
+	return append([]string(nil), s.reportLeaves...)
+}
+
+func (s *executionLockSpy) pushError() error {
+	s.guard.Lock()
+	defer s.guard.Unlock()
+	return s.pushErr
+}
+
+// newLockSpyTestEngine builds the adapter over a real engine carrying the
+// ordinary Officer policy set plus spy, so every accepted order produces a
+// pre-trade lock with one default-group leg (SpotFunds) and one non-default leg.
+func newLockSpyTestEngine(t *testing.T, spy *executionLockSpy) *openPitEngine {
+	t.Helper()
+	snap := fwengine.Snapshot{
+		Accounts: []domain.Account{account(testAccount)},
+		Assets:   []domain.Asset{testAsset(testBase), testAsset(testQuote)},
+	}
+	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	eng, err := openpit.NewEngineBuilder().AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		Builtin(policies.BuildSpotFunds().PolicyGroupID(0)).
+		PreTrade(spy).
+		Build()
+	if err != nil {
+		t.Fatalf("build lock spy engine: %v", err)
+	}
+	adapter := newOpenPitEngine(
+		testAsyncEngine(t, eng),
+		eng.Configure(),
+		newTestSharedMarketDataService(t),
+		map[string]struct{}{nameSpotFunds: {}},
+		nil,
+		res,
+	).(*openPitEngine)
+	t.Cleanup(func() {
+		adapter.Stop()
+		adapter.CloseMarketDataService()
+	})
+
+	if err := seedBalances(eng, []domain.Balance{{
+		Account:   domain.AccountID(testAccount),
+		Asset:     testQuote,
+		Available: testQuoteFund,
+	}}, res); err != nil {
+		t.Fatalf("seed balance: %v", err)
+	}
+	return adapter
+}
+
+// TestSubmitImmediate_ReportCarriesEngineLockAndLeaves pins the pre-trade lock
+// and explicit zero leaves that the immediate execution report hands back to
+// the engine. A lock is an opaque engine artifact, so the report must carry the
+// one this very operation produced; rebuilding it from the settlement price
+// yields a single default-group entry and silently drops every other policy
+// group's leg. The spy reads the report the engine actually received, so the
+// assertions hold for both the regular pre-trade and drop-copy branches.
+func TestSubmitImmediate_ReportCarriesEngineLockAndLeaves(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		dropCopy bool
+	}{
+		{name: "pre trade"},
+		{name: "drop copy", dropCopy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			price, err := param.NewPriceFromString(testLimit)
+			if err != nil {
+				t.Fatalf("lock spy price: %v", err)
+			}
+			spy := &executionLockSpy{price: price}
+			e := newLockSpyTestEngine(t, spy)
+
+			order := testOrder()
+			order.DropCopy = test.dropCopy
+			res, err := materializeImmediateResult(e, order)
+			if err != nil {
+				t.Fatalf("SubmitImmediate: %v", err)
+			}
+			if !res.Accepted {
+				t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
+			}
+			if err := spy.pushError(); err != nil {
+				t.Fatalf("lock spy PushLockPrice: %v", err)
+			}
+
+			locks := spy.recordedReportLocks()
+			if len(locks) != 1 {
+				t.Fatalf("execution reports reaching the engine = %d, want 1", len(locks))
+			}
+			leaves := spy.recordedReportLeaves()
+			if len(leaves) != 1 || leaves[0] != "0" {
+				t.Fatalf("engine leaves = %q, want explicit zero", leaves)
+			}
+			// The result carries the same serialized lock the report was built
+			// from, so the report's in-process lock must decode from it.
+			want, err := unmarshalLock(res.Lock)
+			if err != nil {
+				t.Fatalf("unmarshal returned lock: %v", err)
+			}
+			if !bytes.Equal(locks[0], want.Bytes()) {
+				t.Fatal("execution report did not carry the engine's own pre-trade lock")
+			}
+			prices, err := pretrade.NewLockFromBytes(locks[0]).
+				PricesOf(lockSpyPolicyGroupID)
+			if err != nil {
+				t.Fatalf("read report lock spy-group prices: %v", err)
+			}
+			if len(prices) != 1 {
+				t.Fatalf(
+					"report lock spy-group prices = %d, want the engine lock's own leg",
+					len(prices),
+				)
+			}
+		})
+	}
+}
+
+func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.New(t.TempDir()+"/officer.db", domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("sqlite.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	n, _, err := node.NewLocalNode(
+		ctx,
+		domain.DefaultRealm,
+		store,
+		NewOpenPitEngineBuildFunc(),
+		func(err error) { t.Errorf("unexpected fatal shutdown: %v", err) },
+	)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	t.Cleanup(func() { _ = n.Close() })
+
+	accountID := domain.AccountID("my3")
+	caller := domain.Caller{
+		Source:    domain.SourcePanel,
+		Principal: domain.PrincipalOperator,
+	}
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:     accountID,
+		Currency: "USDT",
+	}, caller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := n.ApplyAdjustment(
+		ctx,
+		accountID,
+		testOrderXID(0x01),
+		domain.AdjustmentRequest{
+			Asset:             "USDT",
+			AverageEntryPrice: "1",
+			RealizedPnl:       "0",
+			Balance: &domain.AdjustmentAmount{
+				Mode:  domain.AdjustmentModeAbsolute,
+				Value: "1000000",
+			},
+		},
+		domain.MissingAccountCreate,
+		caller,
+	); err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+
+	buy := domain.Order{
+		Account:     accountID,
+		BaseAsset:   "BTC",
+		QuoteAsset:  "USDT",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "73406.8115",
+	}
+	if _, result, err := n.SubmitImmediate(ctx, buy, domain.MissingAccountCreate, caller); err != nil || !result.Accepted {
+		t.Fatalf("buy SubmitImmediate: %v result=%+v", err, result)
+	}
+
+	sell := buy
+	sell.Side = domain.OrderSideSell
+	sell.Price = "54268.522"
+	_, result, err := n.SubmitImmediate(ctx, sell, domain.MissingAccountCreate, caller)
+	if err != nil || !result.Accepted {
+		t.Fatalf("sell SubmitImmediate: %v result=%+v", err, result)
+	}
+	balance, ok, err := n.GetBalance(ctx, accountID, "BTC")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance BTC: ok=%v err=%v", ok, err)
+	}
+	if balance.Available != "0" || balance.Held != "0" || balance.Incoming != "0" {
+		t.Fatalf("BTC balance = %+v, want no open position", balance)
+	}
+	if balance.AverageEntryPrice != "" {
+		t.Fatalf("BTC average entry price = %q, want empty", balance.AverageEntryPrice)
+	}
+	if balance.RealizedPnl != "-19138.2895" {
+		t.Fatalf("BTC realized PnL = %q, want -19138.2895", balance.RealizedPnl)
+	}
+}
+
+func TestSubmitImmediate_OpeningFillDoesNotEmitNoopAccountPnl(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.EffectiveCurrency = testQuote
+	acct.Pnl = "7.25"
+	engine, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{acct},
+		Balances: []domain.Balance{{
+			Account: domain.AccountID(testAccount), Asset: testQuote,
+			Available: testQuoteFund,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	e := engine.(*openPitEngine)
+	t.Cleanup(e.Stop)
+
+	res, err := materializeImmediateResult(e, testOrder())
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
+	}
+	if res.AccountPnl != "" || res.AccountPnlHaltReason != "" {
+		t.Fatalf(
+			"account pnl outcome = (%q, %q), want no opening-fill P&L outcome",
+			res.AccountPnl,
+			res.AccountPnlHaltReason,
+		)
+	}
+}
+
+// TestApplyExecutionReport_SettlesFillNoBlock drives a fill end to end through
+// the real engine and the real executionReportFrom mapping: submit a spot BUY
+// (holding quote funds), then apply a fill report carrying an explicit leaves
+// quantity. It asserts the report settles with no account
+// block and produces a per-asset outcome for each spot leg. This locks in that
+// the mapper sets leaves quantity and terminal order status; without them the engine
+// rejects the fill with missing_required_field and blocks the account.
+func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
+	e := newTestEngine(t)
+
+	submitted, err := materializeOrderResult(e, testOrder())
+	if err != nil || !submitted.Accepted {
+		t.Fatalf("SubmitOrder: %v accepted=%v", err, submitted.Accepted)
+	}
+
+	// A full fill of the 5-unit order at the reservation's settlement lock price
+	// nets the held quote to zero: leaves is 0 and the fill is final.
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   testQty,
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0")
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(result.Blocks) != 0 {
+		t.Fatalf("fill must not block the account, got blocks=%+v", result.Blocks)
+	}
+	// Both spot legs settle: the base (AAPL) and the quote (USD).
+	outcomes := map[string]domain.AdjustmentOutcomeAccepted{}
+	for _, o := range result.Outcomes {
+		outcomes[o.Asset] = o.Outcome
+	}
+	if _, ok := outcomes[testBase]; !ok {
+		t.Fatalf("want outcomes for %s and %s, got %+v", testBase, testQuote, result.Outcomes)
+	}
+	if _, ok := outcomes[testQuote]; !ok {
+		t.Fatalf("want outcomes for %s and %s, got %+v", testBase, testQuote, result.Outcomes)
+	}
+	if base := outcomes[testBase]; base.BalanceDelta != testQty || base.BalanceResult != testQty {
+		t.Fatalf("base outcome = %+v, want balance +%s result %s", base, testQty, testQty)
+	}
+	if quote := outcomes[testQuote]; quote.BalanceDelta != "" ||
+		quote.HeldDelta != "-500" || quote.HeldResult != "0" {
+		t.Fatalf("quote outcome = %+v, want held-only release without balance double count", quote)
+	}
+}
+
+// TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK reproduces a complete
+// position close. Officer seeds average price and realized PnL into OpenPit,
+// forwards the fill, and exposes the SDK outcome unchanged. Commission mapping
+// is covered independently so this test does not assume how SDK versions assign
+// fees to PnL.
+func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	engine, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{acct},
+		Balances: []domain.Balance{
+			{
+				Account: domain.AccountID(testAccount), Asset: testBase,
+				Available: "1", AverageEntryPrice: "99000", RealizedPnl: "7",
+			},
+			{
+				Account: domain.AccountID(testAccount), Asset: testQuote,
+				Available: "1000000", RealizedPnl: "0",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	e := engine.(*openPitEngine)
+	t.Cleanup(e.Stop)
+
+	order := domain.Order{
+		Account: domain.AccountID(testAccount), BaseAsset: testBase, QuoteAsset: testQuote,
+		Side: domain.OrderSideSell, AmountKind: domain.OrderAmountKindQuantity,
+		AmountValue: "1", Price: "50000",
+	}
+	submitted, err := materializeOrderResult(e, order)
+	if err != nil || !submitted.Accepted {
+		t.Fatalf("SubmitOrder: %v accepted=%v rejects=%+v", err, submitted.Accepted, submitted.Rejects)
+	}
+
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
+		BaseAsset: testBase, QuoteAsset: testQuote,
+		FillQuantity: "1", FillPrice: "50000", LeavesQuantity: "0",
+		LockPrice: submitted.SettlementLockPrice,
+		Lock:      submitted.Lock,
+		Account:   domain.AccountID(testAccount), Side: domain.OrderSideSell,
+		OrderStatus: domain.OrderStatusFilled,
+	}, "0")
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	var base *domain.AdjustmentOutcomeAccepted
+	for i := range result.Outcomes {
+		if result.Outcomes[i].Asset == testBase {
+			base = &result.Outcomes[i].Outcome
+			break
+		}
+	}
+	if base == nil {
+		t.Fatalf("base outcome missing: %+v", result.Outcomes)
+	}
+	if base.RealizedPnlDelta != "-49000" || base.RealizedPnlResult != "-48993" {
+		t.Fatalf("base PnL outcome = %+v, want SDK delta -49000 absolute -48993", base)
+	}
+}
+
+func TestOpenPitEngineBuilder_SeedsAccountPnlWithoutPnlBounds(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.EffectiveCurrency = testQuote
+	acct.Pnl = "7.25"
+	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{acct},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	eng.Stop()
+}
+
+func TestOpenPitEngineBuilder_PersistedPnlKeepsBoundsClear(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.Pnl = "5"
+	limits := []domain.LimitSpotFundsPnlBounds{{
+		Scope:      domain.ScopeAccount,
+		Account:    testAccount,
+		Currency:   testQuote,
+		LowerBound: "-3",
+	}}
+	built, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		Assets:                   testAssets(),
+		Accounts:                 []domain.Account{acct},
+		SpotFundsPnlBoundsLimits: limits,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	eng := built.(*openPitEngine)
+	t.Cleanup(eng.Stop)
+	if blocks := eng.SeedAccountBlocks(); len(blocks) != 0 {
+		t.Fatalf("seed blocks = %+v, want persisted +5 to stay clear of -3", blocks)
+	}
+	result, err := eng.ConfigurePolicy(
+		context.Background(),
+		domain.PolicySpotFundsPnlBoundsKillSwitch,
+		fwengine.LimitSet{SpotFundsPnlBoundsLimits: limits},
+	)
+	if err != nil {
+		t.Fatalf("ConfigurePolicy unchanged after restart: %v", err)
+	}
+	if len(result.AccountBlocks) != 0 {
+		t.Fatalf("unchanged restart config blocks = %+v, want none", result.AccountBlocks)
+	}
+}
+
+func TestSpotFundsAccountPnlSeeds_RestoresHaltedAccountPnl(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.EffectiveCurrency = testQuote
+	acct.Pnl = "not-a-number"
+	acct.PnlHaltReason = domain.PnlHaltReasonMissingFx
+	seeds, err := spotFundsAccountPnlSeeds(
+		[]domain.Account{acct, {Code: "no-override"}},
+		testResolver(testAccount, "no-override"),
+	)
+	if err != nil {
+		t.Fatalf("spotFundsAccountPnlSeeds: %v", err)
+	}
+	if len(seeds) != 1 {
+		t.Fatalf("seed count = %d, want 1 halted database state", len(seeds))
+	}
+	reason, halted := seeds[0].state.HaltReason()
+	if !halted || reason != model.PnlHaltReasonMissingFx {
+		t.Fatalf("seed state = (%v, %v), want restored missing-fx halt", reason, halted)
+	}
+	if seeds[0].account.Handle() != 1 {
+		t.Fatalf("seed account = %d, want %d", seeds[0].account.Handle(), 1)
+	}
+}
+
+func TestSpotFundsAccountPnlSeeds_RestoresPersistedNumericAccountPnl(t *testing.T) {
+	acct := account(testAccount)
+	acct.Pnl = "7.25"
+	seeds, err := spotFundsAccountPnlSeeds(
+		[]domain.Account{acct}, testResolver(testAccount),
+	)
+	if err != nil {
+		t.Fatalf("spotFundsAccountPnlSeeds: %v", err)
+	}
+	if len(seeds) != 1 {
+		t.Fatalf("seed count = %d, want one authoritative seed", len(seeds))
+	}
+	amount, ok := seeds[0].state.Value()
+	if !ok || amount.String() != "7.25" {
+		t.Fatalf("seed state = %+v, want persisted 7.25", seeds[0].state)
+	}
+}
+
+func TestApplyExecutionReport_NoTradeFinalReleasesStoredLeaves(t *testing.T) {
+	e := newTestEngine(t)
+
+	submitted, err := materializeOrderResult(e, testOrder())
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if !submitted.Accepted {
+		t.Fatalf("SubmitOrder rejected: %+v", submitted.Rejects)
+	}
+
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		LeavesQuantity: "0",
+		Lock:           submitted.Lock,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusCancelled,
+	}, testQty)
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(result.Blocks) != 0 {
+		t.Fatalf("cancel must not block the account, got blocks=%+v", result.Blocks)
+	}
+
+	outcomes := map[string]domain.AdjustmentOutcomeAccepted{}
+	for _, outcome := range result.Outcomes {
+		outcomes[outcome.Asset] = outcome.Outcome
+	}
+	base := outcomes[testBase]
+	if base.IncomingDelta != "" && base.IncomingDelta != "-"+testQty {
+		t.Fatalf("base incoming delta = %q, want empty or -%s", base.IncomingDelta, testQty)
+	}
+	quote := outcomes[testQuote]
+	if quote.BalanceDelta != "500" || quote.HeldDelta != "-500" {
+		t.Fatalf("quote outcome = %+v, want available +500 held -500", quote)
+	}
+}
+
+// Raw leaves presence remains an intake rule. Native mapping derives terminal
+// release leaves from the persisted reservation state supplied by the node.
+
+func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
+	t.Helper()
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.GroupCode = "desk-a"
+	acct.Pnl = "-5"
+	snap := fwengine.Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{acct},
+		Groups: []domain.AccountGroup{{
+			Code:          "desk-a",
+			EngineGroupID: 7,
+			Currency:      testQuote,
+		}},
+		Balances: []domain.Balance{
+			{
+				Account:   domain.AccountID(testAccount),
+				Asset:     testQuote,
+				Available: "2000",
+			},
+			{
+				Account:   domain.AccountID(testAccount),
+				Asset:     testBase,
+				Available: "10",
+			},
+		},
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+			{
+				Scope:      domain.ScopeGlobal,
+				Currency:   testQuote,
+				LowerBound: "-1000000",
+			},
+			{
+				Scope:        domain.ScopeAccountGroup,
+				AccountGroup: "desk-a",
+				Currency:     testQuote,
+				LowerBound:   "-1000000",
+			},
+			{
+				Scope:      domain.ScopeAccount,
+				Account:    domain.AccountID(testAccount),
+				Currency:   testQuote,
+				LowerBound: "-6",
+			},
+		},
+	}
+	engine, err := newTestOpenPitEngineBuildFunc(t)(snap)
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	adapter := engine.(*openPitEngine)
+	t.Cleanup(adapter.Stop)
+	return adapter
+}
+
+func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) {
+	e := newTestEngineWithSpotFundsPnlBounds(t)
+
+	if _, ok := e.registered[nameSpotFunds]; !ok || len(e.registered) != 1 {
+		t.Fatalf("registered policies = %+v, want only %s", e.registered, nameSpotFunds)
+	}
+	if err := e.sink.Push(marketdata.QuoteUpdate{
+		Base: testMarketDataAssetID(testBase), Quote: testMarketDataAssetID(testQuote), Mark: "100",
+	}); err != nil {
+		t.Fatalf("Push quote: %v", err)
+	}
+	market := testOrder()
+	market.Price = ""
+	market.AmountValue = "1"
+	if result, err := materializeOrderResult(e, market); err != nil || !result.Accepted {
+		t.Fatalf("market SubmitOrder: err=%v result=%+v", err, result)
+	}
+
+	feeOrder := testOrder()
+	feeOrder.AmountValue = "1"
+	submitted, err := materializeOrderResult(e, feeOrder)
+	if err != nil {
+		t.Fatalf("SubmitOrder fee order: %v", err)
+	}
+	if !submitted.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
+	}
+
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   "1",
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0")
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport fee order: %v", err)
+	}
+	if len(result.Blocks) == 0 {
+		t.Fatalf("fee fill did not block account; outcomes=%+v", result.Outcomes)
+	}
+	if result.Blocks[0].Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", result.Blocks[0].Account, testAccount)
+	}
+}
+
+func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T) {
+	e := newTestEngineWithSpotFundsPnlBounds(t)
+	ctx := context.Background()
+
+	asyncBefore := e.async
+	if _, err := e.ConfigurePolicy(
+		ctx,
+		domain.PolicySpotFundsPnlBoundsKillSwitch,
+		fwengine.LimitSet{},
+	); err != nil {
+		t.Fatalf("ConfigurePolicy clear spot funds pnl bounds: %v", err)
+	}
+	if e.async != asyncBefore {
+		t.Fatal("ConfigurePolicy replaced engine handle, want online reconfigure")
+	}
+
+	feeOrder := testOrder()
+	feeOrder.AmountValue = "1"
+	submitted, err := materializeOrderResult(e, feeOrder)
+	if err != nil {
+		t.Fatalf("SubmitOrder fee order: %v", err)
+	}
+	if !submitted.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
+	}
+
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   "1",
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0")
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(result.Blocks) != 0 {
+		t.Fatalf("cleared spot funds bound still blocked fill: %+v", result.Blocks)
+	}
+}
+
+// newTestEngineGlobalSpotFundsPnlBounds builds a real engine whose SpotFunds P&L
+// bounds carry only permissive global and account-group barriers - no
+// account-scope barrier. A global or group barrier is enough for the policy to
+// accumulate per-account P&L, so an account-scope barrier introduced later at
+// runtime observes whatever P&L has already accrued.
+func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
+	t.Helper()
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.GroupCode = "desk-a"
+	snap := fwengine.Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{acct},
+		Groups: []domain.AccountGroup{{
+			Code:          "desk-a",
+			EngineGroupID: 7,
+			Currency:      testQuote,
+		}},
+		Balances: []domain.Balance{
+			{
+				Account:   domain.AccountID(testAccount),
+				Asset:     testQuote,
+				Available: "2000",
+			},
+			{
+				Account:   domain.AccountID(testAccount),
+				Asset:     testBase,
+				Available: "10",
+			},
+		},
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+			{
+				Scope:      domain.ScopeGlobal,
+				Currency:   testQuote,
+				LowerBound: "-1000000",
+			},
+			{
+				Scope:        domain.ScopeAccountGroup,
+				AccountGroup: "desk-a",
+				Currency:     testQuote,
+				LowerBound:   "-1000000",
+			},
+		},
+	}
+	engine, err := newTestOpenPitEngineBuildFunc(t)(snap)
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	adapter := engine.(*openPitEngine)
+	t.Cleanup(adapter.Stop)
+	return adapter
+}
+
+// commitSpotFundsFeeFill runs one buy fill of the base asset carrying a 2 quote
+// commission, so the SpotFunds policy accrues -2 of realized account-currency
+// P&L. It returns the execution result so a caller can assert the kill-switch
+// block state.
+func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) fwengine.ExecutionReportResult {
+	t.Helper()
+	order := testOrder()
+	order.AmountValue = "1"
+	submitted, err := materializeOrderResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitOrder fee order: %v", err)
+	}
+	if !submitted.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
+	}
+	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   "1",
+		FillPrice:      submitted.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, "0")
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport fee order: %v", err)
+	}
+	return result
+}
+
+// TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierReportsLivePnlBlock
+// proves an account barrier added at runtime observes the account's accumulated
+// P&L and returns its newly inserted block rather than silently discarding it.
+func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierReportsLivePnlBlock(t *testing.T) {
+	e := newTestEngineGlobalSpotFundsPnlBounds(t)
+	ctx := context.Background()
+
+	// The first fill accrues -2 of account P&L under the permissive global/group
+	// barriers; nothing breaches yet.
+	if first := commitSpotFundsFeeFill(t, e); len(first.Blocks) != 0 {
+		t.Fatalf("first fill blocked unexpectedly: %+v", first.Blocks)
+	}
+
+	// Introduce an account-scope barrier. It must observe the -2 already
+	// accrued and return the newly inserted block with its account identity.
+	limits := fwengine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+		{
+			Scope:      domain.ScopeGlobal,
+			Currency:   testQuote,
+			LowerBound: "-1000000",
+		},
+		{
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			Currency:     testQuote,
+			LowerBound:   "-1000000",
+		},
+		{
+			Scope:      domain.ScopeAccount,
+			Account:    domain.AccountID(testAccount),
+			Currency:   testQuote,
+			LowerBound: "-1",
+		},
+	}}
+	result, err := e.ConfigurePolicy(
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
+	)
+	if err != nil {
+		t.Fatalf("ConfigurePolicy add account barrier: %v", err)
+	}
+	if len(result.AccountBlocks) != 1 {
+		t.Fatalf("configuration blocks = %+v, want one", result.AccountBlocks)
+	}
+	if result.AccountBlocks[0].Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", result.AccountBlocks[0].Account, testAccount)
+	}
+}
+
+// TestSubmitOrder_AcceptCapturesSettlement checks SubmitOrder returns the
+// durable lock and the canonical settlement inputs a later report needs.
+func TestSubmitOrder_AcceptCapturesSettlement(t *testing.T) {
+	e := newTestEngine(t)
+
+	res, err := materializeOrderResult(e, testOrder())
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("SubmitOrder rejected: %+v", res.Rejects)
+	}
+	if len(res.Lock) == 0 {
+		t.Fatal("SubmitOrder: empty serialized lock on accept")
+	}
+	prices, err := lockDisplayPrices(res.Lock)
+	if err != nil {
+		t.Fatalf("lockDisplayPrices: %v", err)
+	}
+	if len(prices) == 0 {
+		t.Fatal("serialized lock carries no prices")
+	}
+	if res.SettlementLockPrice == "" {
+		t.Fatal("SubmitOrder: empty settlement lock price")
+	}
+	gotSettlement, err := param.NewPriceFromString(res.SettlementLockPrice)
+	if err != nil {
+		t.Fatalf("parse settlement lock price: %v", err)
+	}
+	wantSettlement, err := param.NewPriceFromString(prices[len(prices)-1])
+	if err != nil {
+		t.Fatalf("parse serialized settlement lock price: %v", err)
+	}
+	if gotSettlement.Compare(wantSettlement) != 0 {
+		t.Fatalf(
+			"settlement lock price = %s, want serialized lock price %s",
+			gotSettlement.String(), wantSettlement.String(),
+		)
+	}
+}
+
+func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T) {
+	acct := blockedAccount(testAccount, "account block")
+	acct.Currency = testQuote
+	acct.GroupCode = "desk-a"
+	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{acct},
+		Groups: []domain.AccountGroup{{
+			Code: "desk-a", EngineGroupID: 7,
+			Blocked: true, BlockReason: "group block",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	e := eng.(*openPitEngine)
+	t.Cleanup(e.Stop)
+
+	order := testOrder()
+	order.DropCopy = true
+	result, err := materializeOrderResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitOrder(drop copy): %v", err)
+	}
+	if !result.Accepted || len(result.Rejects) != 0 {
+		t.Fatalf("drop-copy result = %+v, want accepted without rejects", result)
+	}
+	var quote *domain.AdjustmentOutcomeAccepted
+	for i := range result.Outcomes {
+		if result.Outcomes[i].Asset == testQuote {
+			quote = &result.Outcomes[i].Outcome
+			break
+		}
+	}
+	if quote == nil {
+		t.Fatalf("quote outcome missing: %+v", result.Outcomes)
+	}
+	if quote.BalanceResult != "-500" || quote.HeldResult != "500" {
+		t.Fatalf(
+			"quote outcome = %+v, want available -500 and held 500",
+			quote,
+		)
+	}
+
+	ordinary := testOrder()
+	ordinaryResult, err := materializeOrderResult(e, ordinary)
+	if err != nil {
+		t.Fatalf("SubmitOrder(ordinary): %v", err)
+	}
+	if ordinaryResult.Accepted || len(ordinaryResult.Rejects) == 0 {
+		t.Fatalf("ordinary blocked order = %+v, want reject", ordinaryResult)
+	}
+}
+
+// A drop-copy order never reports policy rejects, but an account block a
+// policy derives while it runs must still reach the caller so Officer can
+// mirror it. The halted PnL state already latches the block when it is set, so
+// this pins the surfacing, not the moment of latching.
+func TestSubmitOrder_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
+	// A PnL barrier must be configured for a halted PnL state to matter.
+	e := newTestEngineWithSpotFundsPnlBounds(t)
+	ctx := context.Background()
+	setupBlocks, err := setTestAccountPnlState(
+		ctx, e, "", domain.PnlHaltReasonMissingFx,
+	)
+	if err != nil {
+		t.Fatalf("SetAccountPnlState: %v", err)
+	}
+	// The precondition remains the live registry state. The historical
+	// drop-copy result below must instead expose the PnL policy's request-local
+	// block.
+	if len(setupBlocks) != 1 {
+		t.Fatalf("setup blocks = %+v, want exactly one", setupBlocks)
+	}
+
+	order := testOrder()
+	order.DropCopy = true
+	result, err := materializeOrderResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitOrder(drop copy): %v", err)
+	}
+	if !result.Accepted || len(result.Rejects) != 0 {
+		t.Fatalf("drop-copy result = %+v, want accepted without rejects", result)
+	}
+	if len(result.Blocks) != 1 {
+		t.Fatalf("drop-copy blocks = %+v, want exactly one", result.Blocks)
+	}
+	block := result.Blocks[0]
+	if block.Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", block.Account, testAccount)
+	}
+	if block.Code != "account_blocked" {
+		t.Fatalf("block code = %q, want account_blocked", block.Code)
+	}
+	if block.Policy == "" || block.Reason == "" {
+		t.Fatalf("block = %+v, want policy and reason", block)
+	}
+}
+
+// SubmitImmediate settles the drop-copy fill in the same call, so its pre-trade
+// account block has to survive the merge with the settlement blocks. The
+// drop-copy block comes first; the settlement of a halted account may add its
+// own kill-switch block behind it.
+func TestSubmitImmediate_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
+	// A PnL barrier must be configured for a halted PnL state to matter.
+	e := newTestEngineWithSpotFundsPnlBounds(t)
+	ctx := context.Background()
+	setupBlocks, err := setTestAccountPnlState(
+		ctx, e, "", domain.PnlHaltReasonMissingFx,
+	)
+	if err != nil {
+		t.Fatalf("SetAccountPnlState: %v", err)
+	}
+	if len(setupBlocks) != 1 {
+		t.Fatalf("setup blocks = %+v, want exactly one", setupBlocks)
+	}
+
+	order := testOrder()
+	order.DropCopy = true
+	result, err := materializeImmediateResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitImmediate(drop copy): %v", err)
+	}
+	if !result.Accepted || len(result.Rejects) != 0 {
+		t.Fatalf("drop-copy immediate result = %+v, want accepted without rejects", result)
+	}
+	if len(result.Blocks) == 0 {
+		t.Fatal("drop-copy immediate result carries no account block")
+	}
+	block := result.Blocks[0]
+	if block.Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", block.Account, testAccount)
+	}
+	if block.Code != "account_blocked" {
+		t.Fatalf("first block = %+v, want the drop-copy pre-trade block", block)
+	}
+	if block.Policy == "" || block.Reason == "" {
+		t.Fatalf("block = %+v, want policy and reason", block)
+	}
+}
+
+func TestSubmitOrder_DropCopyVolumeDoesNotDeriveQuantity(t *testing.T) {
+	e := newTestEngine(t)
+	order := testOrder()
+	order.DropCopy = true
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500.00"
+
+	res, err := materializeOrderResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("SubmitOrder rejected: %+v", res.Rejects)
+	}
+	if res.SettlementLockPrice == "" {
+		t.Fatal("SubmitOrder: empty settlement lock price")
+	}
+}
+
+func TestSubmitOrder_DropCopyVolumeAtZeroPriceLeavesBaseInflowEmpty(t *testing.T) {
+	e := newTestEngine(t)
+	order := testOrder()
+	order.DropCopy = true
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500"
+	order.Price = "0"
+
+	result, err := materializeOrderResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitOrder(drop-copy volume at zero price): %v", err)
+	}
+	if !result.Accepted {
+		t.Fatalf(
+			"SubmitOrder(drop-copy volume at zero price) rejected: %+v",
+			result.Rejects,
+		)
+	}
+	for _, outcome := range result.Outcomes {
+		if outcome.Asset == testBase && outcome.Outcome.IncomingDelta != "" {
+			t.Fatalf(
+				"drop-copy zero-price base inflow = %q, want empty",
+				outcome.Outcome.IncomingDelta,
+			)
+		}
+	}
+}
+
+func TestSubmitOrder_UnpricedVolumeDoesNotInventReject(t *testing.T) {
+	e := newUnpricedTestEngine(t)
+	order := testOrder()
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500"
+	order.Price = ""
+
+	res, err := materializeOrderResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if !res.Accepted || len(res.Rejects) != 0 {
+		t.Fatalf("SubmitOrder volume result = %+v, want accepted", res)
+	}
+}
+
+func TestSubmitImmediate_UnpricedVolumeWithoutLockIsInvalid(t *testing.T) {
+	e := newUnpricedTestEngine(t)
+	order := testOrder()
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500"
+	order.Price = ""
+
+	_, err := materializeImmediateResult(e, order)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitImmediate(volume without price) = %v, want ErrInvalid", err)
+	}
+}
+
+func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
+	t.Run("limit", func(t *testing.T) {
+		e := newTestEngine(t)
+		order := testOrder()
+		order.AmountKind = domain.OrderAmountKindVolume
+		order.AmountValue = "500"
+
+		result, err := materializeImmediateResult(e, order)
+		if err != nil {
+			t.Fatalf("SubmitImmediate(volume limit): %v", err)
+		}
+		if !result.Accepted {
+			t.Fatalf("SubmitImmediate(volume limit) rejected: %+v", result.Rejects)
+		}
+		if result.TradePrice != testLimit || result.FillQuantity != testQty {
+			t.Fatalf(
+				"volume limit fill = (%q, %q), want price %q and engine delta %q",
+				result.TradePrice,
+				result.FillQuantity,
+				testLimit,
+				testQty,
+			)
+		}
+	})
+
+	t.Run("zero limit price", func(t *testing.T) {
+		e := newTestEngine(t)
+		order := testOrder()
+		order.AmountKind = domain.OrderAmountKindVolume
+		order.AmountValue = "500"
+		order.Price = "0"
+
+		result, err := materializeImmediateResult(e, order)
+		if err != nil {
+			t.Fatalf("SubmitImmediate(volume at zero price): %v", err)
+		}
+		if result.Accepted || len(result.Rejects) != 1 ||
+			result.Rejects[0].Code != "order_value_calculation_failed" {
+			t.Fatalf(
+				"SubmitImmediate(volume at zero price) = %+v, want order_value_calculation_failed",
+				result,
+			)
+		}
+	})
+
+	t.Run("market lock", func(t *testing.T) {
+		e := newTestEngine(t)
+		if err := e.MarketDataSink().Push(marketdata.QuoteUpdate{
+			Base: testMarketDataAssetID(testBase), Quote: testMarketDataAssetID(testQuote), Mark: testLimit,
+		}); err != nil {
+			t.Fatalf("push market quote: %v", err)
+		}
+		order := testOrder()
+		order.AmountKind = domain.OrderAmountKindVolume
+		order.AmountValue = "500"
+		order.Price = ""
+
+		result, err := materializeImmediateResult(e, order)
+		if err != nil {
+			t.Fatalf("SubmitImmediate(volume market): %v", err)
+		}
+		if !result.Accepted {
+			t.Fatalf("SubmitImmediate(volume market) rejected: %+v", result.Rejects)
+		}
+		mark, err := param.NewPriceFromString(testLimit)
+		if err != nil {
+			t.Fatalf("parse market mark: %v", err)
+		}
+		lockPrice, err := mark.CheckedMulUint(
+			uint64(10_000 + defaultMarketOrderSlippageBps),
+		)
+		if err != nil {
+			t.Fatalf("apply market-order slippage: %v", err)
+		}
+		lockPrice, err = lockPrice.CheckedDivUint(10_000)
+		if err != nil {
+			t.Fatalf("scale market-order slippage: %v", err)
+		}
+		volume, err := param.NewVolumeFromString(order.AmountValue)
+		if err != nil {
+			t.Fatalf("parse market volume: %v", err)
+		}
+		fillQuantity, err := volume.CalculateQuantity(lockPrice)
+		if err != nil {
+			t.Fatalf("calculate market fill quantity: %v", err)
+		}
+		gotLockPrice, err := param.NewPriceFromString(result.TradePrice)
+		if err != nil {
+			t.Fatalf("parse market lock price: %v", err)
+		}
+		gotFillQuantity, err := param.NewQuantityFromString(result.FillQuantity)
+		if err != nil {
+			t.Fatalf("parse market fill quantity: %v", err)
+		}
+		if !gotLockPrice.Equal(lockPrice) || !gotFillQuantity.Equal(fillQuantity) {
+			t.Fatalf(
+				"volume market fill = (%q, %q), want lock price %s and engine delta %s",
+				result.TradePrice,
+				result.FillQuantity,
+				lockPrice,
+				fillQuantity,
+			)
+		}
+	})
+}
+
+func TestImmediateFillQuantity_UsesEngineDelta(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		order    domain.Order
+		outcomes []fwengine.BalanceOutcome
+		want     string
+		wantErr  bool
+	}{
+		{
+			name: "quantity remains unchanged",
+			order: domain.Order{
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "5.00",
+			},
+			outcomes: []fwengine.BalanceOutcome{{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					IncomingDelta: "999",
+				},
+			}},
+			want: "5.00",
+		},
+		{
+			name: "volume uses applied base delta instead of amount and price",
+			order: domain.Order{
+				BaseAsset:   "AAPL",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindVolume,
+				AmountValue: "500",
+				Price:       "100",
+			},
+			outcomes: []fwengine.BalanceOutcome{{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					IncomingDelta: "3.75",
+				},
+			}},
+			want: "3.75",
+		},
+		{
+			name: "volume without an applied base delta fails",
+			order: domain.Order{
+				BaseAsset:   "AAPL",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindVolume,
+				AmountValue: "500",
+			},
+			outcomes: []fwengine.BalanceOutcome{{
+				Asset: "USD",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					BalanceDelta: "-500",
+				},
+			}},
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := immediateFillQuantity(test.order, test.outcomes)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("immediateFillQuantity succeeded without an engine base delta")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("immediateFillQuantity: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("immediateFillQuantity = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSubmitImmediate_DropCopyVolumeUsesEngineDelta(t *testing.T) {
+	e := newTestEngine(t)
+	order := testOrder()
+	order.DropCopy = true
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500"
+
+	result, err := materializeImmediateResult(e, order)
+	if err != nil {
+		t.Fatalf("SubmitImmediate(drop-copy volume): %v", err)
+	}
+	if !result.Accepted {
+		t.Fatalf("SubmitImmediate(drop-copy volume) rejected: %+v", result.Rejects)
+	}
+	if result.FillQuantity != testQty {
+		t.Fatalf("drop-copy volume fill quantity = %q, want engine delta %q", result.FillQuantity, testQty)
+	}
+	if result.Persistence == nil || result.Persistence.Leaves != "0" {
+		t.Fatalf("drop-copy volume persistence = %+v, want zero leaves", result.Persistence)
+	}
+}
+
+func TestImmediateTradePrice_UsesRequestOrMarketLock(t *testing.T) {
+	limit, err := immediateTradePrice(domain.Order{Price: "99"}, "101")
+	if err != nil || limit != "99" {
+		t.Fatalf("limit trade price = (%q, %v), want request price 99", limit, err)
+	}
+
+	market, err := immediateTradePrice(domain.Order{}, "101")
+	if err != nil || market != "101" {
+		t.Fatalf("market trade price = (%q, %v), want lock price 101", market, err)
+	}
+
+	if _, err := immediateTradePrice(domain.Order{}, ""); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("market trade price without lock = %v, want ErrInvalid", err)
+	}
+}

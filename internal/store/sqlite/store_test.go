@@ -53,11 +53,11 @@ func (r *realmStore) rawDB() *sql.DB { return r.store.currentDB() }
 
 // newTestStore opens a fresh migrated SQLite store in a temp file and returns it
 // with its default realm handle.
-func newTestStore(t *testing.T, opts ...Option) (Store, RealmStore) {
+func newTestStore(t *testing.T, opts ...Option) (fwstore.Store, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	s, err := New(path, opts...)
+	s, err := New(path, domain.DefaultRealm, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -241,7 +241,7 @@ func domainEnumCodes(t *testing.T, typeName string) []string {
 func TestNewLoadsEnumDictionaries(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	s, err := New(path)
+	s, err := New(path, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestNewLoadsEnumDictionaries(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopened, err := New(path)
+	reopened, err := New(path, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("New(reopen): %v", err)
 	}
@@ -301,7 +301,7 @@ func TestMigrateRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
 func TestRealmDataOpAfterCloseReturnsClosedError(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	s, err := New(path)
+	s, err := New(path, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -346,9 +346,9 @@ func TestForRealmSingleRealmEnforcement(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 
-	// The empty realm id defaults to the served realm.
-	if _, err := s.ForRealm(ctx, ""); err != nil {
-		t.Fatalf("ForRealm(empty) = %v, want nil", err)
+	// The empty realm id is not served; it is never replaced by the bound realm.
+	if _, err := s.ForRealm(ctx, ""); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ForRealm(empty) error = %v, want ErrInvalid", err)
 	}
 
 	// A foreign realm id is rejected with ErrInvalid.
@@ -358,10 +358,20 @@ func TestForRealmSingleRealmEnforcement(t *testing.T) {
 	}
 }
 
+func TestNewRejectsEmptyRealm(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "officer.db"), "")
+	if s != nil {
+		_ = s.Close()
+	}
+	if !errors.Is(err, domain.ErrInvalid) || s != nil {
+		t.Fatalf("New(empty realm) returned store=%t err=%v, want ErrInvalid", s != nil, err)
+	}
+}
+
 func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	s, err := New(path, WithRealm(domain.RealmID("desk-a")))
+	s, err := New(path, domain.RealmID("desk-a"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -703,7 +713,7 @@ func TestAssetClassLinkIsForeignKey(t *testing.T) {
 	}
 
 	// The list row aggregates the asset count for the renamed class.
-	page, err := rs.ListAssetClassRows(ctx, AssetClassListFilter{})
+	page, err := rs.ListAssetClassRows(ctx, fwstore.AssetClassListFilter{})
 	if err != nil {
 		t.Fatalf("ListAssetClassRows: %v", err)
 	}
@@ -744,8 +754,8 @@ func TestAssetClassListFiltersAndCounts(t *testing.T) {
 	}
 
 	// Code/title search matches either column.
-	page, err := rs.ListAssetClassRows(ctx, AssetClassListFilter{
-		Code: ExactTextMatcher("fx"),
+	page, err := rs.ListAssetClassRows(ctx, fwstore.AssetClassListFilter{
+		Code: fwstore.ExactTextMatcher("fx"),
 	})
 	if err != nil {
 		t.Fatalf("ListAssetClassRows code: %v", err)
@@ -755,8 +765,8 @@ func TestAssetClassListFiltersAndCounts(t *testing.T) {
 	}
 
 	// Notes search narrows.
-	page, err = rs.ListAssetClassRows(ctx, AssetClassListFilter{
-		Notes: TextMatcher{Fragments: []string{"shares"}},
+	page, err = rs.ListAssetClassRows(ctx, fwstore.AssetClassListFilter{
+		Notes: fwstore.TextMatcher{Fragments: []string{"shares"}},
 	})
 	if err != nil {
 		t.Fatalf("ListAssetClassRows notes: %v", err)
@@ -766,7 +776,7 @@ func TestAssetClassListFiltersAndCounts(t *testing.T) {
 	}
 
 	// Unfiltered lists both, ordered by code, with per-class asset counts.
-	page, err = rs.ListAssetClassRows(ctx, AssetClassListFilter{})
+	page, err = rs.ListAssetClassRows(ctx, fwstore.AssetClassListFilter{})
 	if err != nil {
 		t.Fatalf("ListAssetClassRows all: %v", err)
 	}
@@ -798,8 +808,8 @@ func TestAssetListFilters(t *testing.T) {
 		t.Fatalf("CreateAsset BTC: %v", err)
 	}
 
-	page, err := rs.ListAssetRows(ctx, AssetListFilter{
-		Code: TextMatcher{Fragments: []string{"Apple"}},
+	page, err := rs.ListAssetRows(ctx, fwstore.AssetListFilter{
+		Code: fwstore.TextMatcher{Fragments: []string{"Apple"}},
 	})
 	if err != nil {
 		t.Fatalf("ListAssetRows code/title: %v", err)
@@ -808,8 +818,8 @@ func TestAssetListFilters(t *testing.T) {
 		t.Fatalf("code/title filtered page = %+v", page)
 	}
 
-	page, err = rs.ListAssetRows(ctx, AssetListFilter{
-		Class: ExactTextMatcher("crypto"),
+	page, err = rs.ListAssetRows(ctx, fwstore.AssetListFilter{
+		Class: fwstore.ExactTextMatcher("crypto"),
 	})
 	if err != nil {
 		t.Fatalf("ListAssetRows class: %v", err)
@@ -818,9 +828,9 @@ func TestAssetListFilters(t *testing.T) {
 		t.Fatalf("class filtered page = %+v", page)
 	}
 
-	page, err = rs.ListAssetRows(ctx, AssetListFilter{
-		Sort: SortSpec{Column: "code"},
-		Page: PageSpec{Limit: 1, Offset: 1},
+	page, err = rs.ListAssetRows(ctx, fwstore.AssetListFilter{
+		Sort: fwstore.SortSpec{Column: "code"},
+		Page: fwstore.PageSpec{Limit: 1, Offset: 1},
 	})
 	if err != nil {
 		t.Fatalf("ListAssetRows page: %v", err)
@@ -1133,8 +1143,8 @@ func TestListAccountRowsFiltersAndCounts(t *testing.T) {
 		}
 	}
 
-	rows, err := rs.ListAccountRows(ctx, AccountListFilter{
-		Code: TextMatcher{Fragments: []string{"acc_%"}},
+	rows, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+		Code: fwstore.TextMatcher{Fragments: []string{"acc_%"}},
 	})
 	if err != nil {
 		t.Fatalf("ListAccountRows code literal: %v", err)
@@ -1148,11 +1158,11 @@ func TestListAccountRowsFiltersAndCounts(t *testing.T) {
 
 	group := "desk-beta"
 	zero := 0
-	rows, err = rs.ListAccountRows(ctx, AccountListFilter{
+	rows, err = rs.ListAccountRows(ctx, fwstore.AccountListFilter{
 		GroupCode:   &group,
-		Status:      StatusFilterBlocked,
-		BlockReason: TextMatcher{Fragments: []string{"risk"}},
-		Position: CountRangeFilter{
+		Status:      fwstore.StatusFilterBlocked,
+		BlockReason: fwstore.TextMatcher{Fragments: []string{"risk"}},
+		Position: fwstore.CountRangeFilter{
 			Min:          &zero,
 			MinExclusive: true,
 		},
@@ -1165,9 +1175,9 @@ func TestListAccountRowsFiltersAndCounts(t *testing.T) {
 	}
 
 	ungrouped := ""
-	rows, err = rs.ListAccountRows(ctx, AccountListFilter{
+	rows, err = rs.ListAccountRows(ctx, fwstore.AccountListFilter{
 		GroupCode: &ungrouped,
-		Position: CountRangeFilter{
+		Position: fwstore.CountRangeFilter{
 			Min: &zero,
 			Max: &zero,
 		},
@@ -1180,8 +1190,8 @@ func TestListAccountRowsFiltersAndCounts(t *testing.T) {
 	}
 
 	two := 2
-	rows, err = rs.ListAccountRows(ctx, AccountListFilter{
-		Position: CountRangeFilter{
+	rows, err = rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+		Position: fwstore.CountRangeFilter{
 			Min: &two,
 			Max: &two,
 		},
@@ -1217,8 +1227,8 @@ func TestListAccountRowsStatusFilterIsEffective(t *testing.T) {
 		t.Fatalf("SetGroupBlocked: %v", err)
 	}
 
-	blocked, err := rs.ListAccountRows(ctx, AccountListFilter{
-		Status: StatusFilterBlocked,
+	blocked, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+		Status: fwstore.StatusFilterBlocked,
 	})
 	if err != nil {
 		t.Fatalf("ListAccountRows blocked: %v", err)
@@ -1232,8 +1242,8 @@ func TestListAccountRowsStatusFilterIsEffective(t *testing.T) {
 		t.Fatalf("blocked total = %d, want 2", blocked.Total)
 	}
 
-	active, err := rs.ListAccountRows(ctx, AccountListFilter{
-		Status: StatusFilterActive,
+	active, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+		Status: fwstore.StatusFilterActive,
 	})
 	if err != nil {
 		t.Fatalf("ListAccountRows active: %v", err)
@@ -1270,8 +1280,8 @@ func TestListAccountRowsBlockReasonFilterIsEffective(t *testing.T) {
 		t.Fatalf("SetGroupBlocked: %v", err)
 	}
 
-	page, err := rs.ListAccountRows(ctx, AccountListFilter{
-		BlockReason: ExactTextMatcher("desk halt"),
+	page, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+		BlockReason: fwstore.ExactTextMatcher("desk halt"),
 	})
 	if err != nil {
 		t.Fatalf("ListAccountRows group reason: %v", err)
@@ -1284,8 +1294,8 @@ func TestListAccountRowsBlockReasonFilterIsEffective(t *testing.T) {
 	}
 
 	// The account's own block still wins attribution, as in the domain.
-	page, err = rs.ListAccountRows(ctx, AccountListFilter{
-		BlockReason: ExactTextMatcher("risk halt"),
+	page, err = rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+		BlockReason: fwstore.ExactTextMatcher("risk halt"),
 	})
 	if err != nil {
 		t.Fatalf("ListAccountRows own reason: %v", err)
@@ -1317,8 +1327,8 @@ func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
 	}
 
 	// Account code search also matches the title.
-	rows, err := rs.ListAccountRows(ctx, AccountListFilter{
-		Code: TextMatcher{Fragments: []string{"Trader"}},
+	rows, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+		Code: fwstore.TextMatcher{Fragments: []string{"Trader"}},
 	})
 	if err != nil {
 		t.Fatalf("ListAccountRows title: %v", err)
@@ -1329,7 +1339,7 @@ func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
 
 	// Exact group code narrows accounts by their assigned group.
 	groupCode := "g-eq"
-	rows, err = rs.ListAccountRows(ctx, AccountListFilter{
+	rows, err = rs.ListAccountRows(ctx, fwstore.AccountListFilter{
 		GroupCode: &groupCode,
 	})
 	if err != nil {
@@ -1340,8 +1350,8 @@ func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
 	}
 
 	// Group list code search also matches the group title.
-	groupPage, err := rs.ListGroupRows(ctx, GroupListFilter{
-		Code: TextMatcher{Fragments: []string{"Equity"}},
+	groupPage, err := rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Code: fwstore.TextMatcher{Fragments: []string{"Equity"}},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows title: %v", err)
@@ -1353,8 +1363,8 @@ func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
 	// Group account-count range selects groups by their member count: g-eq has
 	// one account, so a two-account floor excludes it.
 	two := 2
-	groupPage, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Account: CountRangeFilter{Min: &two},
+	groupPage, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Account: fwstore.CountRangeFilter{Min: &two},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows account range: %v", err)
@@ -1363,9 +1373,9 @@ func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
 		t.Fatalf("account range rows = %v, want []", got)
 	}
 	one := 1
-	groupPage, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Code:    TextMatcher{Fragments: []string{"g-eq"}},
-		Account: CountRangeFilter{Min: &one},
+	groupPage, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Code:    fwstore.TextMatcher{Fragments: []string{"g-eq"}},
+		Account: fwstore.CountRangeFilter{Min: &one},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows account range floor: %v", err)
@@ -1421,7 +1431,7 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 		t.Fatalf("UpsertBalance default: %v", err)
 	}
 
-	page, err := rs.ListGroupRows(ctx, GroupListFilter{})
+	page, err := rs.ListGroupRows(ctx, fwstore.GroupListFilter{})
 	if err != nil {
 		t.Fatalf("ListGroupRows all: %v", err)
 	}
@@ -1444,10 +1454,10 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 		t.Fatalf("default group not pinned first: %v", groupRowCodes(page.Rows))
 	}
 
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Code:    TextMatcher{Fragments: []string{"desk", "alpha"}},
-		Account: CountRangeFilter{Min: &zero, MinExclusive: true},
-		Position: CountRangeFilter{
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Code:    fwstore.TextMatcher{Fragments: []string{"desk", "alpha"}},
+		Account: fwstore.CountRangeFilter{Min: &zero, MinExclusive: true},
+		Position: fwstore.CountRangeFilter{
 			Min:          &zero,
 			MinExclusive: true,
 		},
@@ -1468,10 +1478,10 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 		t.Fatalf("alpha total = %d, want 1", page.Total)
 	}
 
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Status:      StatusFilterBlocked,
-		BlockReason: TextMatcher{Fragments: []string{"risk"}},
-		Account:     CountRangeFilter{Min: &zero, MinExclusive: true},
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Status:      fwstore.StatusFilterBlocked,
+		BlockReason: fwstore.TextMatcher{Fragments: []string{"risk"}},
+		Account:     fwstore.CountRangeFilter{Min: &zero, MinExclusive: true},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows blocked notes: %v", err)
@@ -1480,8 +1490,8 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 		t.Fatalf("blocked rows = %v, want [desk-beta]", got)
 	}
 
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Account: CountRangeFilter{Min: &zero, Max: &zero},
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Account: fwstore.CountRangeFilter{Min: &zero, Max: &zero},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows no accounts: %v", err)
@@ -1490,8 +1500,8 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 		t.Fatalf("empty rows = %v, want [empty]", got)
 	}
 
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Code: TextMatcher{Fragments: []string{"desk"}},
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Code: fwstore.TextMatcher{Fragments: []string{"desk"}},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows code filter: %v", err)
@@ -1500,7 +1510,7 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 		t.Fatalf("default row bypassed code filter: %v", got)
 	}
 
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{Status: StatusFilterBlocked})
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{Status: fwstore.StatusFilterBlocked})
 	if err != nil {
 		t.Fatalf("ListGroupRows blocked filter: %v", err)
 	}
@@ -1508,8 +1518,8 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 		t.Fatalf("default row bypassed blocked filter: %v", got)
 	}
 
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{
-		BlockReason: TextMatcher{Fragments: []string{"risk"}},
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		BlockReason: fwstore.TextMatcher{Fragments: []string{"risk"}},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows notes filter: %v", err)
@@ -1547,8 +1557,8 @@ func TestListGroupRowsSortAndPage(t *testing.T) {
 
 	// Descending code sort: the default group still pins first; the real groups
 	// follow in descending code order.
-	page, err := rs.ListGroupRows(ctx, GroupListFilter{
-		Sort: SortSpec{Column: "code", Descending: true},
+	page, err := rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Sort: fwstore.SortSpec{Column: "code", Descending: true},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows sort desc: %v", err)
@@ -1563,8 +1573,8 @@ func TestListGroupRowsSortAndPage(t *testing.T) {
 	}
 
 	// accountCount ascending: charlie(0) < bravo(1) < alpha(2); default pinned.
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Sort: SortSpec{Column: "accountCount"},
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Sort: fwstore.SortSpec{Column: "accountCount"},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows sort accountCount: %v", err)
@@ -1576,8 +1586,8 @@ func TestListGroupRowsSortAndPage(t *testing.T) {
 	}
 
 	// First page: default group plus the first real group; Total still 3.
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Page: PageSpec{Limit: 1, Offset: 0},
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Page: fwstore.PageSpec{Limit: 1, Offset: 0},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows page 0: %v", err)
@@ -1591,8 +1601,8 @@ func TestListGroupRowsSortAndPage(t *testing.T) {
 
 	// Second page (offset 1): default group excluded, real groups continue from
 	// the offset window.
-	page, err = rs.ListGroupRows(ctx, GroupListFilter{
-		Page: PageSpec{Limit: 1, Offset: 1},
+	page, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Page: fwstore.PageSpec{Limit: 1, Offset: 1},
 	})
 	if err != nil {
 		t.Fatalf("ListGroupRows page 1: %v", err)
@@ -1605,7 +1615,7 @@ func TestListGroupRowsSortAndPage(t *testing.T) {
 	}
 }
 
-func accountRowCodes(rows []AccountListRow) []string {
+func accountRowCodes(rows []fwstore.AccountListRow) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, row.Account.Code.String())
@@ -1613,7 +1623,7 @@ func accountRowCodes(rows []AccountListRow) []string {
 	return out
 }
 
-func groupRowCodes(rows []GroupListRow) []string {
+func groupRowCodes(rows []fwstore.GroupListRow) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, row.Group.Code)
@@ -1621,11 +1631,11 @@ func groupRowCodes(rows []GroupListRow) []string {
 	return out
 }
 
-func findGroupRow(rows []GroupListRow, code string) (GroupListRow, bool) {
+func findGroupRow(rows []fwstore.GroupListRow, code string) (fwstore.GroupListRow, bool) {
 	for _, row := range rows {
 		if row.Group.Code == code {
 			return row, true
 		}
 	}
-	return GroupListRow{}, false
+	return fwstore.GroupListRow{}, false
 }

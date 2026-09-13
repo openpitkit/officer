@@ -599,7 +599,7 @@ func TestLocalNodeRestoreRollbackPreservesActiveSigningPrivateMaterial(t *testin
 	wrapped := newRealmWrapStore(real, func(inner store.RealmStore) store.RealmStore {
 		return &failRestoreAuditRealm{RealmStore: inner}
 	})
-	n := newTestNodeWithStore(t, wrapped, newFakeEngine())
+	n := newTestNodeWithStore(t, wrapped, newFakeEngine(), failOnFatal(t))
 	archive := backup.NewArchive(
 		time.Now(), "test", backup.RealmLabel{Code: string(domain.DefaultRealm)},
 		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
@@ -649,7 +649,7 @@ func TestLocalNodeRestoreRollbackRefusesAfterReplaceAllPrunesSigningKey(t *testi
 		return &failRestoreAuditRealm{RealmStore: inner}
 	})
 	engine := newFakeEngine()
-	n := newTestNodeWithStore(t, wrapped, engine)
+	n := newTestNodeWithStore(t, wrapped, engine, failOnFatal(t))
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 

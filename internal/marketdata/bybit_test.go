@@ -27,12 +27,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestNormalizeBybitSubscriptions(t *testing.T) {
 	t.Parallel()
 
-	subs, err := normalizeBybitSubscriptions([]Subscription{
+	subs, err := normalizeBybitSubscriptions([]fwmarketdata.Subscription{
 		{External: "btcusdt", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 		{External: "ethusd", Base: testMarketDataAssetID("Eth"), Quote: testMarketDataAssetID("Usd")},
 	})
@@ -53,7 +54,7 @@ func TestNormalizeBybitSubscriptions(t *testing.T) {
 func TestNormalizeBybitSubscriptionsEmptySymbol(t *testing.T) {
 	t.Parallel()
 
-	if _, err := normalizeBybitSubscriptions([]Subscription{{}}); err == nil {
+	if _, err := normalizeBybitSubscriptions([]fwmarketdata.Subscription{{}}); err == nil {
 		t.Fatal("normalizeBybitSubscriptions error = nil, want error")
 	}
 }
@@ -76,7 +77,7 @@ func TestBybitCredentialsCategory(t *testing.T) {
 func TestBybitSubscribePayload(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
+	subs := mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	payload, err := bybitSubscribePayload(subs)
@@ -96,7 +97,7 @@ func TestBybitSubscribePayload(t *testing.T) {
 func TestParseBybitQuoteUpdate(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
+	subs := mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	payload := []byte(`{"topic":"tickers.BTCUSDT","type":"snapshot","ts":1710000000123,"data":{"symbol":"BTCUSDT","lastPrice":"65000.10","bid1Price":"65000.01","ask1Price":"65000.02"}}`)
@@ -120,7 +121,7 @@ func TestParseBybitQuoteUpdate(t *testing.T) {
 func TestParseBybitDeltaMergesSnapshot(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
+	subs := mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	state := make(map[string]bybitTickerSnapshot)
@@ -142,7 +143,7 @@ func TestParseBybitDeltaMergesSnapshot(t *testing.T) {
 func TestBybitConnector_ReportsControlError(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
+	subs := mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeBybitConn{
@@ -165,7 +166,7 @@ func TestBybitConnector_ReportsControlError(t *testing.T) {
 		},
 	}
 
-	if _, err := connector.stream(context.Background(), subs, make(chan QuoteUpdate)); !errors.Is(err, context.Canceled) {
+	if _, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream err = %v, want context.Canceled", err)
 	}
 	if len(statuses) != 1 || statuses[0] != "bybit: subscribe: invalid symbol" {
@@ -176,7 +177,7 @@ func TestBybitConnector_ReportsControlError(t *testing.T) {
 func TestBybitConnector_ControlFramesDoNotReportUnparsable(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
+	subs := mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeBybitConn{
@@ -188,7 +189,7 @@ func TestBybitConnector_ControlFramesDoNotReportUnparsable(t *testing.T) {
 		},
 		err: context.Canceled,
 	}
-	var diagnostics []Diagnostic
+	var diagnostics []fwmarketdata.Diagnostic
 	connector := &bybitConnector{
 		dial: func(context.Context, string) (bybitConn, error) {
 			return conn, nil
@@ -197,12 +198,12 @@ func TestBybitConnector_ControlFramesDoNotReportUnparsable(t *testing.T) {
 		readTimeout:  time.Hour,
 		category:     "spot",
 		report:       func(bool, string) {},
-		diagReport: func(diag Diagnostic) {
+		diagReport: func(diag fwmarketdata.Diagnostic) {
 			diagnostics = append(diagnostics, diag)
 		},
 	}
 
-	out := make(chan QuoteUpdate, 1)
+	out := make(chan fwmarketdata.QuoteUpdate, 1)
 	delivered, err := connector.stream(context.Background(), subs, out)
 	if !errors.Is(err, context.Canceled) || !delivered {
 		t.Fatalf("stream = (%v, %v), want delivered context.Canceled", delivered, err)
@@ -231,9 +232,9 @@ func TestBybitConnector_CloseStopsSubscription(t *testing.T) {
 		readTimeout:  time.Hour,
 		category:     "spot",
 		report:       func(bool, string) {},
-		diagReport:   func(Diagnostic) {},
+		diagReport:   func(fwmarketdata.Diagnostic) {},
 	}
-	out, err := connector.Subscribe(context.Background(), []Subscription{
+	out, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	if err != nil {
@@ -328,7 +329,7 @@ func TestBybitDiagnoseUnknownSymbol(t *testing.T) {
 	connector.fetchSymbols = func(context.Context, string) (map[string]struct{}, error) {
 		return map[string]struct{}{"BTCUSDT": {}}, nil
 	}
-	connector.subs = mustNormalizeBybitSubscriptions(t, []Subscription{
+	connector.subs = mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 		{External: "BADUSDT", Base: testMarketDataAssetID("BAD"), Quote: testMarketDataAssetID("USDT")},
 	})
@@ -346,7 +347,7 @@ func TestBybitDiagnoseUnknownSymbol(t *testing.T) {
 func TestBybitConnector_PingsAndUsesCategoryURL(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
+	subs := mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeBybitConn{blockRead: make(chan struct{})}
@@ -369,7 +370,7 @@ func TestBybitConnector_PingsAndUsesCategoryURL(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		connector.run(ctx, subs, make(chan QuoteUpdate))
+		connector.run(ctx, subs, make(chan fwmarketdata.QuoteUpdate))
 	}()
 
 	if !conn.waitForPing(time.Second) {
@@ -389,7 +390,7 @@ func TestBybitConnector_PingsAndUsesCategoryURL(t *testing.T) {
 func TestBybitConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeBybitSubscriptions(t, []Subscription{
+	subs := mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	snapshot := []byte(`{"topic":"tickers.BTCUSDT","type":"snapshot","ts":1710000000000,"data":{"symbol":"BTCUSDT","lastPrice":"65000","bid1Price":"65000","ask1Price":"65001"}}`)
@@ -423,13 +424,13 @@ func TestBybitConnector_ResetsBackoffAfterRead(t *testing.T) {
 		category:     "spot",
 	}
 
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	go func() {
 		connector.run(context.Background(), subs, ch)
 		close(ch)
 	}()
 
-	var got []QuoteUpdate
+	var got []fwmarketdata.QuoteUpdate
 	for update := range ch {
 		got = append(got, update)
 	}
@@ -447,7 +448,7 @@ func TestBybitConnector_ResetsBackoffAfterRead(t *testing.T) {
 }
 
 func mustNormalizeBybitSubscriptions(
-	t *testing.T, subs []Subscription,
+	t *testing.T, subs []fwmarketdata.Subscription,
 ) []bybitSubscription {
 	t.Helper()
 	normalized, err := normalizeBybitSubscriptions(subs)

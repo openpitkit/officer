@@ -32,6 +32,7 @@ import (
 
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/domain"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -58,7 +59,7 @@ const (
 	// window (FreshnessTTL): a snapshot within it is a quote the engine would
 	// accept as current, so dropping it only starves the instrument of an opening
 	// price; an older one already reads as absent and is not worth publishing.
-	finnhubSnapshotMaxAge = FreshnessTTL
+	finnhubSnapshotMaxAge = fwmarketdata.FreshnessTTL
 )
 
 type finnhubConnector struct {
@@ -68,8 +69,8 @@ type finnhubConnector struct {
 	search        func(context.Context, string, string) ([]finnhubSearchResult, error)
 	cryptoSymbols func(context.Context, string, string) ([]finnhubCryptoSymbol, error)
 	now           func() time.Time
-	report        StatusReporter
-	diagReport    DiagnosticReporter
+	report        fwmarketdata.StatusReporter
+	diagReport    fwmarketdata.DiagnosticReporter
 	reconnectMin  time.Duration
 	reconnectMax  time.Duration
 	readTimeout   time.Duration
@@ -93,7 +94,7 @@ type liveFinnhubConn struct {
 }
 
 type finnhubSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	symbol string
 }
 
@@ -176,7 +177,7 @@ func (c liveFinnhubConn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *finnhubConnector) SetStatusReporter(report StatusReporter) {
+func (c *finnhubConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -187,19 +188,19 @@ func (c *finnhubConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *finnhubConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *finnhubConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *finnhubConnector) reportDiag(diag Diagnostic) {
+func (c *finnhubConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
 // References returns the Finnhub WebSocket docs and general API docs URLs.
-func (c *finnhubConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *finnhubConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL:    "https://finnhub.io/docs/api/websocket-trades",
 		SymbolsURL: "https://finnhub.io/docs/api",
 	}, true
@@ -210,14 +211,14 @@ func (c *finnhubConnector) References() (ProviderReferences, bool) {
 // uses symbol, so verification must compare that field.
 func (c *finnhubConnector) VerifySymbol(
 	ctx context.Context, external string,
-) (SymbolVerification, error) {
-	matches, err := c.SearchSymbols(ctx, SymbolSearchQuery{Query: external})
+) (fwmarketdata.SymbolVerification, error) {
+	matches, err := c.SearchSymbols(ctx, fwmarketdata.SymbolSearchQuery{Query: external})
 	if err != nil {
-		return SymbolVerification{}, err
+		return fwmarketdata.SymbolVerification{}, err
 	}
 	symbol := strings.TrimSpace(external)
 	if symbol == "" {
-		return SymbolVerification{}, nil
+		return fwmarketdata.SymbolVerification{}, nil
 	}
 	if match, ok := finnhubExactSymbolMatch(matches, symbol); ok {
 		details := finnhubSymbolDetails(match)
@@ -230,16 +231,16 @@ func (c *finnhubConnector) VerifySymbol(
 			// answers 403). That is a property of the symbol, not a failure of
 			// the check, so report it as recognized-but-unquotable rather than
 			// erroring out and leaving the operator with no verdict.
-			return SymbolVerification{
+			return fwmarketdata.SymbolVerification{
 				Details: finnhubSymbolUnavailableDetails(details),
 			}, nil
 		}
 		if !finnhubQuoteUsableForVerify(quote, c.nowUTC()) {
-			return SymbolVerification{
+			return fwmarketdata.SymbolVerification{
 				Details: finnhubSymbolUnavailableDetails(details),
 			}, nil
 		}
-		return SymbolVerification{
+		return fwmarketdata.SymbolVerification{
 			Exists:  true,
 			Details: details,
 		}, nil
@@ -248,25 +249,25 @@ func (c *finnhubConnector) VerifySymbol(
 	if folded != symbol {
 		for _, match := range matches {
 			if match.Symbol == folded {
-				return SymbolVerification{Suggestion: folded}, nil
+				return fwmarketdata.SymbolVerification{Suggestion: folded}, nil
 			}
 		}
 	}
-	return SymbolVerification{}, nil
+	return fwmarketdata.SymbolVerification{}, nil
 }
 
 func finnhubExactSymbolMatch(
-	matches []SymbolMatch, symbol string,
-) (SymbolMatch, bool) {
+	matches []fwmarketdata.SymbolMatch, symbol string,
+) (fwmarketdata.SymbolMatch, bool) {
 	for _, match := range matches {
 		if match.Symbol == symbol {
 			return match, true
 		}
 	}
-	return SymbolMatch{}, false
+	return fwmarketdata.SymbolMatch{}, false
 }
 
-func finnhubSymbolDetails(match SymbolMatch) string {
+func finnhubSymbolDetails(match fwmarketdata.SymbolMatch) string {
 	parts := make([]string, 0, 3)
 	if match.Name != "" {
 		parts = append(parts, match.Name)
@@ -373,8 +374,8 @@ func finnhubQuoteUsableForVerify(quote finnhubQuote, now time.Time) bool {
 // SearchSymbols searches Finnhub's symbol catalogue and maps the provider
 // response onto the generic symbol-match shape used by the operator panel.
 func (c *finnhubConnector) SearchSymbols(
-	ctx context.Context, query SymbolSearchQuery,
-) ([]SymbolMatch, error) {
+	ctx context.Context, query fwmarketdata.SymbolSearchQuery,
+) ([]fwmarketdata.SymbolMatch, error) {
 	q := strings.TrimSpace(query.Query)
 	if q == "" {
 		return nil, nil
@@ -386,13 +387,13 @@ func (c *finnhubConnector) SearchSymbols(
 	if err != nil {
 		return nil, err
 	}
-	equities := make([]SymbolMatch, 0, len(results))
+	equities := make([]fwmarketdata.SymbolMatch, 0, len(results))
 	for _, result := range results {
 		symbol := strings.TrimSpace(result.Symbol)
 		if symbol == "" {
 			continue
 		}
-		equities = append(equities, SymbolMatch{
+		equities = append(equities, fwmarketdata.SymbolMatch{
 			Symbol:   symbol,
 			Name:     strings.TrimSpace(result.Description),
 			SecType:  strings.TrimSpace(result.Type),
@@ -412,12 +413,12 @@ func (c *finnhubConnector) SearchSymbols(
 // result is ranked (exact base-asset hits first) and capped.
 func (c *finnhubConnector) searchFinnhubCrypto(
 	ctx context.Context, query string,
-) []SymbolMatch {
+) []fwmarketdata.SymbolMatch {
 	if c.cryptoSymbols == nil {
-		return []SymbolMatch{}
+		return []fwmarketdata.SymbolMatch{}
 	}
 	type ranked struct {
-		match SymbolMatch
+		match fwmarketdata.SymbolMatch
 		rank  int
 	}
 	var found []ranked
@@ -438,7 +439,7 @@ func (c *finnhubConnector) searchFinnhubCrypto(
 				continue
 			}
 			found = append(found, ranked{
-				match: SymbolMatch{
+				match: fwmarketdata.SymbolMatch{
 					Symbol:   symbol,
 					Name:     strings.TrimSpace(sym.Description),
 					SecType:  "Crypto",
@@ -452,7 +453,7 @@ func (c *finnhubConnector) searchFinnhubCrypto(
 	if len(found) > finnhubMaxCryptoMatches {
 		found = found[:finnhubMaxCryptoMatches]
 	}
-	out := make([]SymbolMatch, len(found))
+	out := make([]fwmarketdata.SymbolMatch, len(found))
 	for i, r := range found {
 		out[i] = r.match
 	}
@@ -468,14 +469,14 @@ func (c *finnhubConnector) ToleratesSilence() bool { return true }
 // Diagnose flags only configured symbols Finnhub does not recognize. A known
 // symbol that is merely silent (closed market, illiquid pair) is expected and
 // is left to the on-demand verify button, so it produces no recurring warning.
-func (c *finnhubConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
+func (c *finnhubConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
 	c.subsMu.Lock()
 	subs := append([]finnhubSubscription(nil), c.subs...)
 	c.subsMu.Unlock()
 
-	var findings []Diagnostic
+	var findings []fwmarketdata.Diagnostic
 	for _, sub := range subs {
-		matches, err := c.SearchSymbols(ctx, SymbolSearchQuery{Query: sub.symbol})
+		matches, err := c.SearchSymbols(ctx, fwmarketdata.SymbolSearchQuery{Query: sub.symbol})
 		if err != nil {
 			return nil, err
 		}
@@ -493,8 +494,8 @@ func (c *finnhubConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 }
 
 func (c *finnhubConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	normalized, err := normalizeFinnhubSubscriptions(subs)
 	if err != nil {
 		return nil, err
@@ -506,7 +507,7 @@ func (c *finnhubConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -518,7 +519,7 @@ func (c *finnhubConnector) Subscribe(
 }
 
 func (c *finnhubConnector) run(
-	ctx context.Context, subs []finnhubSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []finnhubSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	attempt := 0
 	for {
@@ -538,7 +539,7 @@ func (c *finnhubConnector) run(
 }
 
 func (c *finnhubConnector) stream(
-	ctx context.Context, subs []finnhubSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []finnhubSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (bool, error) {
 	conn, err := c.dial(ctx, finnhubStreamURL(c.token))
 	if err != nil {
@@ -599,7 +600,7 @@ func (c *finnhubConnector) Close() {
 }
 
 func (c *finnhubConnector) emitSnapshots(
-	ctx context.Context, subs []finnhubSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []finnhubSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	if c.quote == nil {
 		return
@@ -641,7 +642,7 @@ func (c *finnhubConnector) nowUTC() time.Time {
 }
 
 func normalizeFinnhubSubscriptions(
-	subs []Subscription,
+	subs []fwmarketdata.Subscription,
 ) ([]finnhubSubscription, error) {
 	if len(subs) > finnhubSymbolLimit {
 		return nil, fmt.Errorf("finnhub subscription limit exceeded: %d > %d", len(subs), finnhubSymbolLimit)
@@ -860,15 +861,15 @@ func fetchFinnhubSearchResults(
 
 func quoteUpdateFromFinnhubQuote(
 	quote finnhubQuote, sub finnhubSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	if quote.Time <= 0 {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	mark := rawDecimalString(quote.Current)
 	if mark == "" || mark == "0" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
-	return QuoteUpdate{
+	return fwmarketdata.QuoteUpdate{
 		AsOf:  time.Unix(quote.Time, 0).UTC(),
 		Base:  sub.Base,
 		Quote: sub.Quote,
@@ -903,12 +904,12 @@ func writeFinnhubSubscribe(
 
 func parseFinnhubQuoteUpdates(
 	payload []byte, subs []finnhubSubscription,
-) []QuoteUpdate {
+) []fwmarketdata.QuoteUpdate {
 	return parseFinnhubFrame(payload, subs).updates
 }
 
 type finnhubFrameResult struct {
-	updates        []QuoteUpdate
+	updates        []fwmarketdata.QuoteUpdate
 	statusError    string
 	unparsedReason string
 	ignored        bool
@@ -942,7 +943,7 @@ func parseFinnhubFrame(
 		return finnhubFrameResult{ignored: true}
 	}
 
-	updates := make([]QuoteUpdate, 0, len(message.Data))
+	updates := make([]fwmarketdata.QuoteUpdate, 0, len(message.Data))
 	for _, trade := range message.Data {
 		if update, ok := quoteUpdateFromFinnhubTrade(trade, subs); ok {
 			updates = append(updates, update)
@@ -958,29 +959,29 @@ func parseFinnhubFrame(
 
 func quoteUpdateFromFinnhubTrade(
 	trade finnhubTrade, subs []finnhubSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	if trade.Time <= 0 {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	symbol := strings.TrimSpace(trade.Symbol)
 	if symbol == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	price := rawDecimalString(trade.Price)
 	if price == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 
 	for _, sub := range subs {
 		if sub.symbol != symbol {
 			continue
 		}
-		return QuoteUpdate{
+		return fwmarketdata.QuoteUpdate{
 			AsOf:  time.UnixMilli(trade.Time).UTC(),
 			Base:  sub.Base,
 			Quote: sub.Quote,
 			Mark:  price,
 		}, true
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }

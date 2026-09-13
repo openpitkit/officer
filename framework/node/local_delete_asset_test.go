@@ -626,7 +626,7 @@ func TestLocalNode_DeleteAssetRemovesLiveResolver(t *testing.T) {
 	if err := n.DeleteAsset(ctx, asset, false, testCaller); err != nil {
 		t.Fatalf("DeleteAsset: %v", err)
 	}
-	_, err := n.CheckOrder(ctx, testKey(account), domain.OrderProbe{
+	_, err := n.CheckOrder(ctx, domain.OrderProbe{
 		Account: account, BaseAsset: asset, QuoteAsset: quote,
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: "1", Price: "1",
@@ -687,7 +687,7 @@ func TestLocalNode_CreateAssetResolverFailureReconciliationIsUnclassified(
 	}
 
 	eng := newFakeEngine()
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	eng.resolverMu.Lock()
 	eng.knownAssets["GOLD"] = struct{}{}
 	eng.resolverMu.Unlock()
@@ -789,7 +789,7 @@ func TestLocalNode_RenameAssetResolverFailureReconciliationIsUnclassified(
 		t.Fatalf("Migrate: %v", err)
 	}
 	eng := newFakeEngine()
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	if _, err := n.CreateAsset(
 		ctx,
 		domain.Asset{Code: "GOLD"},
@@ -1096,7 +1096,7 @@ func TestLocalNode_CommittedAssetDeleteResolverFailureAuditFailureReconcilesBefo
 
 	current := newFakeEngine()
 	current.enforceResolver = true
-	n := newTestNodeWithStore(t, st, current)
+	n := newTestNodeWithStore(t, st, current, failOnFatal(t))
 	deleted, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller)
 	if err != nil {
 		t.Fatalf("CreateAsset(GOLD): %v", err)
@@ -1216,7 +1216,7 @@ func TestLocalNode_CommittedAssetDeleteResolverFailureReconciledAuditFailureIsRe
 
 	current := newFakeEngine()
 	current.enforceResolver = true
-	n := newTestNodeWithStore(t, st, current)
+	n := newTestNodeWithStore(t, st, current, failOnFatal(t))
 	deleted, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller)
 	if err != nil {
 		t.Fatalf("CreateAsset(GOLD): %v", err)
@@ -1354,7 +1354,7 @@ func TestLocalNode_CommittedAssetDeleteResolverAndAuditRebuildFailureFatalsOnce(
 
 	current := newFakeEngine()
 	current.enforceResolver = true
-	n := newTestNodeWithStore(t, st, current)
+	n := newTestNodeWithStore(t, st, current, failOnFatal(t))
 	deleted, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller)
 	if err != nil {
 		t.Fatalf("CreateAsset: %v", err)
@@ -1423,7 +1423,7 @@ func TestLocalNode_DeleteAssetAuditSurvivesRequestCancellation(t *testing.T) {
 		probe = &deleteCancellationProbeRealm{RealmStore: realm}
 		return probe
 	})
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	asset, err := n.CreateAsset(context.Background(), domain.Asset{Code: "GOLD"}, testCaller)
 	if err != nil {
 		t.Fatalf("CreateAsset: %v", err)
@@ -1482,7 +1482,7 @@ func TestLocalNode_DeleteAssetAuditFailureFatals(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	n := newTestNodeWithStore(t, st, newFakeEngine())
+	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
 	asset, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller)
 	if err != nil {
 		t.Fatalf("CreateAsset: %v", err)
@@ -1546,7 +1546,8 @@ func TestLocalNode_DeleteAssetAllowsOrderAutoCreation(t *testing.T) {
 		t.Fatalf("DeleteAsset: %v", err)
 	}
 
-	order, err := n.SubmitOrder(ctx, testKey(account), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:   account,
 		BaseAsset: "GOLD", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "1",
 	}, domain.MissingAccountReject, testCaller)
@@ -1585,7 +1586,7 @@ func TestLocalNode_RefusedAssetDeleteDoesNotTouchLiveResolver(t *testing.T) {
 		}
 		return blocking
 	})
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	const (
 		account domain.AccountID = "asset-delete-refusal-account"
 		asset   string           = "EUR"
@@ -1688,7 +1689,7 @@ func TestLocalNode_RefusedAssetDeleteKeepsConcurrentQuoteConsistent(t *testing.T
 		}
 		return blocking
 	})
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 
 	const provider = "asset-delete-race"
 	instance, err := n.realm.CreateMarketDataInstance(ctx, domain.MarketDataInstance{

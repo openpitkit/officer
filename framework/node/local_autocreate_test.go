@@ -192,6 +192,7 @@ func TestAutoCreateInheritsDefaultCurrencyWithoutAccountOverride(t *testing.T) {
 	var builds int
 	nn, _, err := NewLocalNode(
 		ctx,
+		domain.DefaultRealm,
 		st,
 		func(snap engine.Snapshot) (engine.Engine, error) {
 			builds++
@@ -200,6 +201,7 @@ func TestAutoCreateInheritsDefaultCurrencyWithoutAccountOverride(t *testing.T) {
 			}
 			return eng, nil
 		},
+		failOnFatal(t),
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
@@ -220,7 +222,7 @@ func TestAutoCreateInheritsDefaultCurrencyWithoutAccountOverride(t *testing.T) {
 
 	if _, err := n.ApplyAdjustment(
 		ctx,
-		Key{Account: "fresh"},
+		"fresh",
 		"",
 		domain.AdjustmentRequest{
 			Asset: "USD",
@@ -286,7 +288,7 @@ func TestAutoCreatePublishesAccountWithoutRebuild(t *testing.T) {
 
 	if _, err := n.ApplyAdjustment(
 		ctx,
-		Key{Account: "fresh"},
+		"fresh",
 		"",
 		domain.AdjustmentRequest{
 			Asset: assetCode,
@@ -369,6 +371,7 @@ func TestAutoCreateResolverRollbackFailureReconcilesAndFailsStop(t *testing.T) {
 	var fatalErr error
 	nn, _, err := NewLocalNode(
 		ctx,
+		domain.DefaultRealm,
 		wrappedStore,
 		func(snap engine.Snapshot) (engine.Engine, error) {
 			builds++
@@ -377,7 +380,7 @@ func TestAutoCreateResolverRollbackFailureReconcilesAndFailsStop(t *testing.T) {
 			}
 			return wrapper, nil
 		},
-		WithFatalShutdownHook(func(err error) { fatalErr = err }),
+		func(err error) { fatalErr = err },
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
@@ -434,6 +437,7 @@ func TestAutoCreateResolverRollbackSuccessIsInternal(t *testing.T) {
 	inner := fakeBuild(base, &captured)
 	nn, _, err := NewLocalNode(
 		ctx,
+		domain.DefaultRealm,
 		baseStore,
 		func(snap engine.Snapshot) (engine.Engine, error) {
 			if _, buildErr := inner(snap); buildErr != nil {
@@ -441,6 +445,7 @@ func TestAutoCreateResolverRollbackSuccessIsInternal(t *testing.T) {
 			}
 			return wrapper, nil
 		},
+		failOnFatal(t),
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)

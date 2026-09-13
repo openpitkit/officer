@@ -39,33 +39,28 @@ import (
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // newRealmStore opens a fresh migrated store bound to realm and returns both the
 // store and its realm handle.
-func newRealmStore(t *testing.T, realm domain.RealmID) (Store, RealmStore) {
+func newRealmStore(t *testing.T, realm domain.RealmID) (fwstore.Store, fwstore.RealmStore) {
 	return newRealmStoreWithOptions(t, realm)
 }
 
 func newRealmStoreWithOptions(
 	t *testing.T, realm domain.RealmID, opts ...Option,
-) (Store, RealmStore) {
+) (fwstore.Store, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	if realm != "" && realm != domain.DefaultRealm {
-		opts = append(opts, WithRealm(realm))
-	}
-	s, err := New(path, opts...)
+	s, err := New(path, realm, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
-	}
-	if realm == "" {
-		realm = domain.DefaultRealm
 	}
 	rs, err := s.ForRealm(ctx, realm)
 	if err != nil {
@@ -78,7 +73,7 @@ func newRealmStoreWithOptions(
 // limit, an order with an event/trade/adjustment, an audit row, market data and
 // settings. It returns the created order's external id so callers can assert it
 // is preserved across a round-trip.
-func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.ExternalID {
+func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.ExternalID {
 	t.Helper()
 	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity", Title: "Equity"}); err != nil {
 		t.Fatalf("CreateAssetClass: %v", err)
@@ -156,7 +151,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 	}); err != nil {
 		t.Fatalf("AppendAdjustment: %v", err)
 	}
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action: domain.AuditActionCreateAccount, Account: "acc-1",
 		Actor: "operator", Source: domain.SourcePanel, Detail: "seed",
 	}); err != nil {
@@ -184,7 +179,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 }
 
 func snapshotBackupData(
-	t *testing.T, ctx context.Context, rs RealmStore,
+	t *testing.T, ctx context.Context, rs fwstore.RealmStore,
 ) backup.Data {
 	t.Helper()
 	archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
@@ -799,14 +794,14 @@ func TestBackupRestoreRejectsSigningKeyIdentityConflict(t *testing.T) {
 	}
 }
 
-func mustCreateAsset(t *testing.T, ctx context.Context, rs RealmStore, asset domain.Asset) {
+func mustCreateAsset(t *testing.T, ctx context.Context, rs fwstore.RealmStore, asset domain.Asset) {
 	t.Helper()
 	if _, err := rs.CreateAsset(ctx, asset); err != nil {
 		t.Fatalf("CreateAsset(%s): %v", asset.Code, err)
 	}
 }
 
-func seedGroupCurrencies(t *testing.T, ctx context.Context, rs RealmStore) {
+func seedGroupCurrencies(t *testing.T, ctx context.Context, rs fwstore.RealmStore) {
 	t.Helper()
 	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "USD", Title: "US Dollar"})
 	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "EUR", Title: "Euro"})
@@ -1254,7 +1249,7 @@ func TestBackupRoundTripIntoIsolatedRealm(t *testing.T) {
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	orderXID := seedRealm(t, ctx, src)
-	if err := src.AppendAudit(ctx, AuditEntry{
+	if err := src.AppendAudit(ctx, fwstore.AuditEntry{
 		Action: domain.AuditActionSubmitOrder, Account: "acc-1",
 		OrderID: orderXID.String(), Verdict: "reject", RejectCode: "order_qty_exceeds_limit",
 		Source: domain.SourceAPI,
@@ -2691,7 +2686,7 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 	// seedExtra adds rows the archive does NOT carry: an extra account (with a
 	// balance, a limit, an adjustment and an audit row), an extra group, an extra
 	// market-data instance, an extra MCP override and an extra user setting.
-	seedExtra := func(t *testing.T, rs RealmStore) {
+	seedExtra := func(t *testing.T, rs fwstore.RealmStore) {
 		t.Helper()
 		// Assets the extra rows reference; the archive also carries them, so a
 		// replace-all upsert keeps them (asset are shared support rows, not pruned).
@@ -2723,7 +2718,7 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("AppendAdjustment(extra): %v", err)
 		}
-		if err := rs.AppendAudit(ctx, AuditEntry{
+		if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 			Action: domain.AuditActionCreateAccount, Account: "extra-acc",
 			Actor: "operator", Source: domain.SourcePanel, Detail: "extra",
 		}); err != nil {
@@ -3800,7 +3795,7 @@ func mustExternalID(t *testing.T) domain.ExternalID {
 }
 
 // instanceXID returns the single market-data instance's external id in rs.
-func instanceXID(t *testing.T, ctx context.Context, rs RealmStore) domain.ExternalID {
+func instanceXID(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.ExternalID {
 	t.Helper()
 	instances, err := rs.ListMarketDataInstances(ctx)
 	if err != nil {
@@ -3836,7 +3831,7 @@ func assertNoIDLeak(t *testing.T, archive backup.Archive) {
 // between src and dst: dictionaries by code, machine records by external id, and
 // the money/quantity decimals through the domain value types.
 func assertRealmsEqualOnPublicIdentity(
-	t *testing.T, ctx context.Context, src, dst RealmStore, orderXID domain.ExternalID,
+	t *testing.T, ctx context.Context, src, dst fwstore.RealmStore, orderXID domain.ExternalID,
 ) {
 	t.Helper()
 

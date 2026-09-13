@@ -43,7 +43,7 @@ const (
 )
 
 const (
-	// PrincipalOperator is the placeholder actor for unauthenticated surfaces.
+	// PrincipalOperator is the open composition's explicit operator identity.
 	PrincipalOperator = "operator"
 )
 
@@ -57,8 +57,8 @@ func ValidateSource(s Source) error {
 	}
 }
 
-// Caller carries attribution for a recorded mutation. Later phases stamp it
-// from request middleware; today callers fill it at call sites.
+// Caller carries the server-owned surface and resolved request identity used
+// for authorization and mutation attribution.
 type Caller struct {
 	// Source is the channel that initiated the action.
 	Source Source

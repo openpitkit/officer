@@ -58,7 +58,7 @@ func TestLocalNode_ApplyAdjustmentHonorsSuppliedExternalID(t *testing.T) {
 			Mode: domain.AdjustmentModeDelta, Value: "100",
 		},
 	}
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), supplied, req, domain.MissingAccountCreate, testCaller)
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", supplied, req, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestLocalNode_ApplyAdjustmentHonorsSuppliedExternalID(t *testing.T) {
 	}
 
 	// A second adjustment reusing the supplied id conflicts.
-	_, err = n.ApplyAdjustment(ctx, testKey("acc-1"), supplied, req, domain.MissingAccountCreate, testCaller)
+	_, err = n.ApplyAdjustment(ctx, "acc-1", supplied, req, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
 	}
@@ -88,7 +88,7 @@ func TestLocalNode_ApplyAdjustmentNoChangeDoesNotPersist(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "USD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "0"},
@@ -126,7 +126,7 @@ func TestLocalNode_ApplyAdjustmentRejectsAverageOnlyForMissingBalance(t *testing
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{Asset: "USD", AverageEntryPrice: "1"}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, domain.ErrNoChange) {
 		t.Fatalf("ApplyAdjustment error = %v, want ErrNoChange", err)
@@ -154,7 +154,7 @@ func TestLocalNode_ApplyAdjustmentDoesNotInventRealizedPnl(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset: "BTC", AverageEntryPrice: "99",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "1"},
@@ -231,7 +231,7 @@ func TestLocalNode_AdjustedBalanceKeepsRealizedPnlState(t *testing.T) {
 				}
 			}
 
-			balance, err := n.adjustedBalance(ctx, testKey("acc-1"), "USD", test.outcome)
+			balance, err := n.adjustedBalance(ctx, "acc-1", "USD", test.outcome)
 			if err != nil {
 				t.Fatalf("adjustedBalance: %v", err)
 			}
@@ -283,7 +283,7 @@ func TestLocalNode_ApplyAdjustmentDoesNotReplayStoredRealizedPnl(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	seedTestAccount(t, n.realm, "acc-1")
 	if err := n.realm.UpsertBalance(ctx, domain.Balance{
 		Account: "acc-1", Asset: "USD", Available: "1",
@@ -293,7 +293,7 @@ func TestLocalNode_ApplyAdjustmentDoesNotReplayStoredRealizedPnl(t *testing.T) {
 	}
 
 	// Average entry price is present but realized P&L is deliberately absent.
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset: "USD", AverageEntryPrice: "101",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "1"},
@@ -351,7 +351,7 @@ func TestLocalNode_SetBalanceRealizedPnlPersistsAdjustmentRecord(t *testing.T) {
 
 	balance, err := n.SetBalanceRealizedPnl(
 		ctx,
-		testKey("acc-1"),
+		"acc-1",
 		"USD",
 		"-12.50",
 		domain.MissingAccountCreate, testCaller,
@@ -417,7 +417,7 @@ func TestLocalNode_SetBalanceRealizedPnlKeepsAccountCurrencyAfterDeletingFinalRo
 	}
 
 	balance, err := n.SetBalanceRealizedPnl(
-		ctx, testKey("acc-1"), "USD", "0", domain.MissingAccountCreate, testCaller,
+		ctx, "acc-1", "USD", "0", domain.MissingAccountCreate, testCaller,
 	)
 	if err != nil {
 		t.Fatalf("SetBalanceRealizedPnl: %v", err)
@@ -456,7 +456,7 @@ func TestLocalNode_SetBalanceRealizedPnlClearsOnlyPositionHalt(t *testing.T) {
 
 	balance, err := n.SetBalanceRealizedPnl(
 		ctx,
-		testKey("acc-1"),
+		"acc-1",
 		"USD",
 		"5",
 		domain.MissingAccountCreate, testCaller,
@@ -502,10 +502,10 @@ func TestLocalNode_RealizedPnlPersistenceUsesOneWriterPerRequest(t *testing.T) {
 		RealizedPnlResult: "99",
 		AverageEntryPrice: "88",
 	}
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	seedTestAccount(t, n.realm, "acc-1")
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:       "USD",
 			RealizedPnl: "-12.50",
@@ -540,7 +540,7 @@ func TestLocalNode_RealizedPnlPersistenceUsesOneWriterPerRequest(t *testing.T) {
 		RealizedPnlDelta:  "5.25",
 		RealizedPnlResult: "5.25",
 	}
-	balance, err := n.SetBalanceRealizedPnl(ctx, testKey("acc-1"), "JPY", "5.25", domain.MissingAccountCreate, testCaller)
+	balance, err := n.SetBalanceRealizedPnl(ctx, "acc-1", "JPY", "5.25", domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SetBalanceRealizedPnl(create): %v", err)
 	}
@@ -559,7 +559,7 @@ func TestLocalNode_RealizedPnlPersistenceUsesOneWriterPerRequest(t *testing.T) {
 		RealizedPnlDelta:  "-5.25",
 		RealizedPnlResult: "0",
 	}
-	balance, err = n.SetBalanceRealizedPnl(ctx, testKey("acc-1"), "JPY", "0", domain.MissingAccountCreate, testCaller)
+	balance, err = n.SetBalanceRealizedPnl(ctx, "acc-1", "JPY", "0", domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SetBalanceRealizedPnl(zero): %v", err)
 	}
@@ -650,10 +650,10 @@ func TestLocalNode_ApplyAdjustmentNoEngineChangePersistsNothing(t *testing.T) {
 
 	eng := newFakeEngine()
 	eng.adjustmentNoop = true
-	n := newTestNodeWithStore(t, st, eng)
+	n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 	seedTestAccount(t, n.realm, "acc-1")
 
-	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:       "USD",
 			RealizedPnl: "-12.50",
@@ -669,7 +669,7 @@ func TestLocalNode_ApplyAdjustmentNoEngineChangePersistsNothing(t *testing.T) {
 	// A pure no-op (engine nets no change, no realized P&L) still returns
 	// ErrNoChange and records nothing further.
 	before := len(probe.records)
-	_, err = n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err = n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "USD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "0"},
@@ -701,9 +701,9 @@ func TestLocalNode_ApplyAdjustmentStoreFailureFatalsWithoutCompensation(t *testi
 		BalanceResult: "15",
 	}
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	seedTestAccount(t, n.realm, "acc-1")
 	if err := n.realm.UpsertBalance(ctx, domain.Balance{
 		Account: "acc-1", Asset: "USD", Available: "10", AverageEntryPrice: "42",
@@ -711,7 +711,7 @@ func TestLocalNode_ApplyAdjustmentStoreFailureFatalsWithoutCompensation(t *testi
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:             "USD",
 			AverageEntryPrice: "99",
@@ -765,7 +765,7 @@ func TestLocalNode_ApplyAdjustmentRecoveredPersistencePanicFatals(t *testing.T) 
 		t,
 		st,
 		eng,
-		WithFatalShutdownHook(func(err error) { fatalErr = err }),
+		func(err error) { fatalErr = err },
 	)
 	seedTestAccount(t, n.realm, "acc-1")
 	if err := n.realm.UpsertBalance(ctx, domain.Balance{
@@ -776,7 +776,7 @@ func TestLocalNode_ApplyAdjustmentRecoveredPersistencePanicFatals(t *testing.T) 
 
 	_, err := n.ApplyAdjustment(
 		ctx,
-		testKey("acc-1"),
+		"acc-1",
 		domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset: "USD",
@@ -810,7 +810,7 @@ func TestLocalNode_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""), domain.AdjustmentRequest{
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""), domain.AdjustmentRequest{
 		Asset: "USD",
 		Balance: &domain.AdjustmentAmount{
 			Mode: domain.AdjustmentModeDelta, Value: "100",
@@ -839,7 +839,7 @@ func TestLocalNode_ApplyAdjustmentRejectedIsRecorded(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "USD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
@@ -889,7 +889,7 @@ func TestLocalNode_ApplyAdjustmentAutoCreatesUnknownAccount(t *testing.T) {
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("fresh"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "fresh", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "USD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "100"},
@@ -944,7 +944,7 @@ func TestLocalNode_ApplyAdjustmentAutoCreateThenReject(t *testing.T) {
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("fresh"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "fresh", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "USD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
@@ -988,7 +988,7 @@ func TestLocalNode_ApplyAdjustmentRejectsMalformedAccountID(t *testing.T) {
 	ctx := context.Background()
 
 	bad := domain.AccountID("bad-id ")
-	_, err := n.ApplyAdjustment(ctx, testKey(bad), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, bad, domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "GOLD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
@@ -1016,7 +1016,7 @@ func TestLocalNode_ApplyAdjustmentAutoCreatesUnknownAsset(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "GOLD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "100"},
@@ -1065,7 +1065,7 @@ func TestLocalNode_ApplyAdjustmentAutoCreateAssetThenReject(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "GOLD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
@@ -1114,7 +1114,7 @@ func TestLocalNode_ApplyAdjustmentRejectsMalformedAsset(t *testing.T) {
 	seedTestAccount(t, st, "acc-1")
 
 	bad := "US D"
-	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   bad,
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
@@ -1147,7 +1147,7 @@ func TestLocalNode_ApplyAdjustmentPersistsEngineRealizedPnl(t *testing.T) {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:             "USD",
 			AverageEntryPrice: "77",
@@ -1197,7 +1197,7 @@ func TestLocalNode_ApplyAdjustmentPersistsEngineRealizedPnlAbsolute(t *testing.T
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "USD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "10"},
@@ -1234,7 +1234,7 @@ func TestLocalNode_ApplyAdjustmentRejectsEmptyAssetOnRealizedPnlOnly(t *testing.
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{Asset: "", RealizedPnl: "10"}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ApplyAdjustment(empty asset) = %v, want ErrInvalid", err)
@@ -1278,7 +1278,7 @@ func TestLocalNode_ApplyAdjustmentMirrorsEngineAccountBlock(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	if _, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	if _, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{Asset: "USD", RealizedPnl: "-500"},
 		domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
@@ -1327,7 +1327,7 @@ func TestLocalNode_ApplyAdjustmentMirrorsBlockWithoutOutcome(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	_, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{Asset: "USD", RealizedPnl: "-500"}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, domain.ErrNoChange) {
 		t.Fatalf("ApplyAdjustment = %v, want ErrNoChange", err)
@@ -1351,7 +1351,7 @@ func TestLocalNode_ApplyAdjustmentWithoutBlocksLeavesBlockState(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	if _, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+	if _, err := n.ApplyAdjustment(ctx, "acc-1", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset:   "USD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},

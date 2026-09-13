@@ -27,12 +27,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestNormalizeCoinbaseSubscriptions(t *testing.T) {
 	t.Parallel()
 
-	subs, err := normalizeCoinbaseSubscriptions([]Subscription{
+	subs, err := normalizeCoinbaseSubscriptions([]fwmarketdata.Subscription{
 		{External: "btc-usd", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 		{External: "eth-usd", Base: testMarketDataAssetID("Eth"), Quote: testMarketDataAssetID("Usd")},
 	})
@@ -50,7 +51,7 @@ func TestNormalizeCoinbaseSubscriptions(t *testing.T) {
 func TestNormalizeCoinbaseSubscriptionsEmptySymbol(t *testing.T) {
 	t.Parallel()
 
-	if _, err := normalizeCoinbaseSubscriptions([]Subscription{{}}); err == nil {
+	if _, err := normalizeCoinbaseSubscriptions([]fwmarketdata.Subscription{{}}); err == nil {
 		t.Fatal("normalizeCoinbaseSubscriptions error = nil, want error")
 	}
 }
@@ -58,7 +59,7 @@ func TestNormalizeCoinbaseSubscriptionsEmptySymbol(t *testing.T) {
 func TestCoinbaseSubscribePayload(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeCoinbaseSubscriptions(t, []Subscription{
+	subs := mustNormalizeCoinbaseSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload, err := coinbaseSubscribePayload(subs)
@@ -80,7 +81,7 @@ func TestCoinbaseSubscribePayload(t *testing.T) {
 func TestParseCoinbaseQuoteUpdate(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeCoinbaseSubscriptions(t, []Subscription{
+	subs := mustNormalizeCoinbaseSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{"type":"ticker","product_id":"BTC-USD","price":"65000.10","best_bid":"65000.01","best_ask":"65000.02","time":"2024-03-09T16:00:00.123456Z"}`)
@@ -103,7 +104,7 @@ func TestParseCoinbaseQuoteUpdate(t *testing.T) {
 func TestParseCoinbaseQuoteUpdateBidAskOnly(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeCoinbaseSubscriptions(t, []Subscription{
+	subs := mustNormalizeCoinbaseSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{"type":"ticker","product_id":"BTC-USD","best_bid":"65000.01","best_ask":"65000.02","time":"2024-03-09T16:00:00Z"}`)
@@ -120,7 +121,7 @@ func TestParseCoinbaseQuoteUpdateBidAskOnly(t *testing.T) {
 func TestParseCoinbaseQuoteUpdateRejectsInvalidFrames(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeCoinbaseSubscriptions(t, []Subscription{
+	subs := mustNormalizeCoinbaseSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	tests := []struct {
@@ -161,7 +162,7 @@ func TestParseCoinbaseQuoteUpdateRejectsInvalidFrames(t *testing.T) {
 func TestCoinbaseConnector_ReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeCoinbaseSubscriptions(t, []Subscription{
+	subs := mustNormalizeCoinbaseSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := &fakeCoinbaseConn{
@@ -200,7 +201,7 @@ func TestCoinbaseConnector_ReconnectsAndResubscribes(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -208,7 +209,7 @@ func TestCoinbaseConnector_ReconnectsAndResubscribes(t *testing.T) {
 		close(ch)
 	}()
 
-	got := make([]QuoteUpdate, 0, 2)
+	got := make([]fwmarketdata.QuoteUpdate, 0, 2)
 	for update := range ch {
 		got = append(got, update)
 		if len(got) == 2 {
@@ -231,7 +232,7 @@ func TestCoinbaseConnector_ReconnectsAndResubscribes(t *testing.T) {
 func TestCoinbaseConnector_ReportsErrorFrame(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeCoinbaseSubscriptions(t, []Subscription{
+	subs := mustNormalizeCoinbaseSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BAD-USD", Base: testMarketDataAssetID("BAD"), Quote: testMarketDataAssetID("USD")},
 	})
 	conn := &fakeCoinbaseConn{
@@ -255,7 +256,7 @@ func TestCoinbaseConnector_ReportsErrorFrame(t *testing.T) {
 		},
 	}
 
-	if _, err := connector.stream(context.Background(), subs, make(chan QuoteUpdate)); !errors.Is(err, context.Canceled) {
+	if _, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream err = %v, want context.Canceled", err)
 	}
 	if len(statuses) != 1 || statuses[0] != "coinbase: Failed to subscribe: BAD-USD is invalid" {
@@ -294,7 +295,7 @@ func TestCoinbaseDiagnoseUnknownSymbol(t *testing.T) {
 	connector.fetchSymbols = func(context.Context) (map[string]struct{}, error) {
 		return map[string]struct{}{"BTC-USD": {}}, nil
 	}
-	connector.subs = mustNormalizeCoinbaseSubscriptions(t, []Subscription{
+	connector.subs = mustNormalizeCoinbaseSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 		{External: "BAD-USD", Base: testMarketDataAssetID("BAD"), Quote: testMarketDataAssetID("USD")},
 	})
@@ -312,7 +313,7 @@ func TestCoinbaseDiagnoseUnknownSymbol(t *testing.T) {
 func TestCoinbaseConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeCoinbaseSubscriptions(t, []Subscription{
+	subs := mustNormalizeCoinbaseSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	conns := []*fakeCoinbaseConn{
@@ -359,13 +360,13 @@ func TestCoinbaseConnector_ResetsBackoffAfterRead(t *testing.T) {
 		reconnectMax: 4 * time.Millisecond,
 	}
 
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	go func() {
 		connector.run(context.Background(), subs, ch)
 		close(ch)
 	}()
 
-	var got []QuoteUpdate
+	var got []fwmarketdata.QuoteUpdate
 	for update := range ch {
 		got = append(got, update)
 	}
@@ -395,9 +396,9 @@ func TestCoinbaseConnector_CloseStopsSubscription(t *testing.T) {
 		},
 		readTimeout: time.Hour,
 		report:      func(bool, string) {},
-		diagReport:  func(Diagnostic) {},
+		diagReport:  func(fwmarketdata.Diagnostic) {},
 	}
-	out, err := connector.Subscribe(context.Background(), []Subscription{
+	out, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -423,7 +424,7 @@ func TestCoinbaseConnector_CloseStopsSubscription(t *testing.T) {
 }
 
 func mustNormalizeCoinbaseSubscriptions(
-	t *testing.T, subs []Subscription,
+	t *testing.T, subs []fwmarketdata.Subscription,
 ) []coinbaseSubscription {
 	t.Helper()
 	normalized, err := normalizeCoinbaseSubscriptions(subs)

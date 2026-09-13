@@ -53,7 +53,7 @@ func TestUpsertMarketDataInstrumentKeepsEngineAndSink(t *testing.T) {
 			sink:   wantSink,
 		}, nil
 	}
-	nodeValue, _, err := NewLocalNode(ctx, st, build)
+	nodeValue, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, build, failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}

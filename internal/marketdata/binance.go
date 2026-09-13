@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -47,8 +48,8 @@ type binanceConnector struct {
 	dial         func(context.Context, string) (binanceConn, error)
 	sleep        func(context.Context, time.Duration) error
 	fetchSymbols func(ctx context.Context) (map[string]struct{}, error)
-	report       StatusReporter
-	diagReport   DiagnosticReporter
+	report       fwmarketdata.StatusReporter
+	diagReport   fwmarketdata.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	readTimeout  time.Duration
@@ -76,7 +77,7 @@ type liveBinanceConn struct {
 }
 
 type binanceSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	symbol string
 	stream string
 }
@@ -144,7 +145,7 @@ func (c liveBinanceConn) Close(code websocket.StatusCode, reason string) error {
 
 // SetStatusReporter installs the manager's runtime reporter. The manager calls
 // it before Subscribe, so the background goroutine reads a stable value.
-func (c *binanceConnector) SetStatusReporter(report StatusReporter) {
+func (c *binanceConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -158,13 +159,13 @@ func (c *binanceConnector) reportStatus(ok bool, errMsg string) {
 
 // SetDiagnosticReporter installs the manager's diagnostic reporter. The manager
 // calls it before Subscribe, so the background goroutine reads a stable value.
-func (c *binanceConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *binanceConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
 // reportDiag forwards a structured diagnostic to the reporter, no-op when none
 // is installed.
-func (c *binanceConnector) reportDiag(diag Diagnostic) {
+func (c *binanceConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
@@ -174,7 +175,7 @@ func (c *binanceConnector) reportDiag(diag Diagnostic) {
 // for each stored subscription whose uppercased symbol is not listed. An empty
 // slice means all symbols are valid. Returns an error on HTTP/decode failure so
 // the manager can record a self_diagnosis_failed diagnostic.
-func (c *binanceConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
+func (c *binanceConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
 	diagCtx, cancel := context.WithTimeout(ctx, binanceDiagnoseTimeout)
 	defer cancel()
 
@@ -183,7 +184,7 @@ func (c *binanceConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 		return nil, err
 	}
 
-	var findings []Diagnostic
+	var findings []fwmarketdata.Diagnostic
 	for _, sub := range c.subs {
 		if _, ok := known[sub.symbol]; !ok {
 			findings = append(findings, binanceUnknownSymbolDiag(sub, known))
@@ -193,8 +194,8 @@ func (c *binanceConnector) Diagnose(ctx context.Context) ([]Diagnostic, error) {
 }
 
 // References returns the Binance API documentation and symbol list URLs.
-func (c *binanceConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *binanceConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL:    "https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams",
 		SymbolsURL: binanceExchangeInfoURL,
 	}, true
@@ -208,35 +209,35 @@ func (c *binanceConnector) References() (ProviderReferences, bool) {
 // no suggestion. An error is returned only when the catalogue fetch fails.
 func (c *binanceConnector) VerifySymbol(
 	ctx context.Context, external string,
-) (SymbolVerification, error) {
+) (fwmarketdata.SymbolVerification, error) {
 	verifyCtx, cancel := context.WithTimeout(ctx, binanceDiagnoseTimeout)
 	defer cancel()
 
 	known, err := c.fetchSymbols(verifyCtx)
 	if err != nil {
-		return SymbolVerification{}, err
+		return fwmarketdata.SymbolVerification{}, err
 	}
 
 	symbol := strings.TrimSpace(external)
 	if symbol == "" {
-		return SymbolVerification{}, nil
+		return fwmarketdata.SymbolVerification{}, nil
 	}
 	if _, ok := known[symbol]; ok {
-		return SymbolVerification{Exists: true}, nil
+		return fwmarketdata.SymbolVerification{Exists: true}, nil
 	}
 	// Not present as typed; surface the canonical (uppercased) variant when the
 	// catalogue lists it, so the UI can offer "did you mean ETHUSDT?".
 	if folded := strings.ToUpper(symbol); folded != symbol {
 		if _, ok := known[folded]; ok {
-			return SymbolVerification{Suggestion: folded}, nil
+			return fwmarketdata.SymbolVerification{Suggestion: folded}, nil
 		}
 	}
-	return SymbolVerification{}, nil
+	return fwmarketdata.SymbolVerification{}, nil
 }
 
 func (c *binanceConnector) SearchSymbols(
-	ctx context.Context, query SymbolSearchQuery,
-) ([]SymbolMatch, error) {
+	ctx context.Context, query fwmarketdata.SymbolSearchQuery,
+) ([]fwmarketdata.SymbolMatch, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, binanceDiagnoseTimeout)
 	defer cancel()
 
@@ -248,8 +249,8 @@ func (c *binanceConnector) SearchSymbols(
 }
 
 func (c *binanceConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	normalized, err := normalizeBinanceSubscriptions(subs)
 	if err != nil {
 		return nil, err
@@ -262,7 +263,7 @@ func (c *binanceConnector) Subscribe(
 	c.closing = false
 	c.mu.Unlock()
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -273,7 +274,7 @@ func (c *binanceConnector) Subscribe(
 }
 
 func (c *binanceConnector) run(
-	ctx context.Context, subs []binanceSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []binanceSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	// Pre-flight: validate configured symbols once before dialing. This runs in
 	// the connector's goroutine, never under any manager lock. reportDiag locks
@@ -323,14 +324,14 @@ func (c *binanceConnector) validateSymbols(
 
 	known, err := c.fetchSymbols(validateCtx)
 	if err != nil {
-		c.reportDiag(Diagnostic{
+		c.reportDiag(fwmarketdata.Diagnostic{
 			Level:       DiagWarn,
 			Code:        CodeSelfDiagnosisFailed,
 			Kind:        DiagKindProvider,
 			Title:       "Self-diagnosis failed",
 			Detail:      "symbol validation unavailable: " + err.Error(),
 			Remediation: "Couldn't validate against the provider; try Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
 		})
 		return subs
 	}
@@ -352,14 +353,14 @@ func (c *binanceConnector) validateSymbols(
 // subscription that is not listed on Binance, with close external candidates.
 func binanceUnknownSymbolDiag(
 	sub binanceSubscription, known map[string]struct{},
-) Diagnostic {
+) fwmarketdata.Diagnostic {
 	remediation := "Remove this instrument and add one with a valid Binance symbol" +
 		" (e.g. ETHUSDT). See the valid symbols list."
 	suggestions := symbolPrefixSuggestionsFromSet(known, sub.External)
 	if len(suggestions) > 0 {
 		remediation += " Did you mean: " + strings.Join(suggestions, ", ") + "?"
 	}
-	return Diagnostic{
+	return fwmarketdata.Diagnostic{
 		Level:       DiagError,
 		Code:        CodeUnknownSymbol,
 		Kind:        DiagKindConfig,
@@ -367,7 +368,7 @@ func binanceUnknownSymbolDiag(
 		Title:       fmt.Sprintf("Symbol %q not found on Binance", sub.External),
 		Detail:      fmt.Sprintf("The configured external symbol %q is not a Binance trading symbol.", sub.External),
 		Remediation: remediation,
-		Actions: []DiagnosticAction{
+		Actions: []fwmarketdata.DiagnosticAction{
 			{Type: ActionRemoveInstrument, Target: sub.External},
 			{Type: ActionOpenSymbols},
 		},
@@ -377,7 +378,7 @@ func binanceUnknownSymbolDiag(
 // stream dials, reads messages, and forwards parsed quotes to out. It returns
 // true when at least one quote was parsed; run uses it to reset the backoff.
 func (c *binanceConnector) stream(
-	ctx context.Context, subs []binanceSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []binanceSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (bool, error) {
 	conn, err := c.dial(ctx, binanceStreamURL(subs))
 	if err != nil {
@@ -427,14 +428,14 @@ func (c *binanceConnector) stream(
 				unparsableSeen++
 				if unparsableSeen >= unparsableThreshold && framesParsed == 0 {
 					unparsableReported = true
-					c.reportDiag(Diagnostic{
+					c.reportDiag(fwmarketdata.Diagnostic{
 						Level:       DiagError,
 						Code:        CodeUnparsableData,
 						Kind:        DiagKindProvider,
 						Title:       "Receiving data but cannot parse it",
 						Detail:      "The source is sending data but Officer could not decode it (likely a format mismatch).",
 						Remediation: "This is an internal issue, not your configuration - please report it.",
-						Actions:     []DiagnosticAction{{Type: ActionRestart}},
+						Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}},
 					})
 				}
 			}
@@ -517,7 +518,7 @@ func fetchBinanceSymbols(ctx context.Context) (map[string]struct{}, error) {
 }
 
 func normalizeBinanceSubscriptions(
-	subs []Subscription,
+	subs []fwmarketdata.Subscription,
 ) ([]binanceSubscription, error) {
 	normalized := make([]binanceSubscription, 0, len(subs))
 	for _, sub := range subs {
@@ -590,12 +591,12 @@ func rawBool(raw json.RawMessage) (bool, bool) {
 
 func parseBinanceQuoteUpdate(
 	payload []byte, subs []binanceSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	// Decode the envelope; Data stays as raw JSON so we can re-decode it by
 	// exact key below, bypassing Go's case-insensitive struct matching.
 	var message binanceCombinedMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 
 	// Decode the ticker data object into a map so each key is matched exactly.
@@ -603,7 +604,7 @@ func parseBinanceQuoteUpdate(
 	// into the "c" (last price, a string) field and other case-twin collisions.
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(message.Data, &fields); err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 
 	event := binanceTickerEvent{
@@ -618,20 +619,20 @@ func parseBinanceQuoteUpdate(
 
 func quoteUpdateFromBinanceEvent(
 	event binanceTickerEvent, subs []binanceSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	if event.EventTime <= 0 {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	symbol := strings.ToUpper(strings.TrimSpace(event.Symbol))
 	if symbol == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 
 	for _, sub := range subs {
 		if sub.symbol != symbol {
 			continue
 		}
-		return QuoteUpdate{
+		return fwmarketdata.QuoteUpdate{
 			AsOf:  time.UnixMilli(event.EventTime).UTC(),
 			Base:  sub.Base,
 			Quote: sub.Quote,
@@ -640,7 +641,7 @@ func quoteUpdateFromBinanceEvent(
 			Ask:   event.Ask,
 		}, true
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }
 
 func backoff(attempt int, minDelay, maxDelay time.Duration) time.Duration {

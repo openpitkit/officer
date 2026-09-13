@@ -32,6 +32,7 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.openpit.dev/officer"
 	"go.openpit.dev/officer/framework/app"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -39,6 +40,7 @@ import (
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
@@ -51,25 +53,32 @@ import (
 
 func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
 	ctx := context.Background()
-	composition, err := newCustomHostComposition()
+	composition, err := newCustomHostComposition(
+		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	)
 	if err != nil {
 		t.Fatalf("newCustomHostComposition: %v", err)
 	}
-	composition.Builder.SetEngineBuildFactory(func(app.Config) engine.BuildFunc {
-		return func(engine.Snapshot) (engine.Engine, error) {
-			return &fakeEngine{running: true, sink: &fakeSink{}}, nil
-		}
+	composition.Builder.SetNodeBuilder(func(
+		buildCtx context.Context, st store.Store, fatalHook app.FatalShutdownHook,
+	) (node.Node, engine.Engine, error) {
+		return node.NewLocalNode(
+			buildCtx,
+			domain.DefaultRealm,
+			st,
+			func(engine.Snapshot) (engine.Engine, error) {
+				return &fakeEngine{running: true, sink: &fakeSink{}}, nil
+			},
+			fatalHook,
+		)
 	})
 	composition.Builder.SetSPAFactory(func() (fs.FS, error) {
 		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
 	})
 
-	built, err := composition.Builder.Build(
-		ctx,
-		app.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
-		slog.Default(),
-		nil,
-	)
+	built, err := composition.Builder.Build(ctx, slog.Default(), func(err error) {
+		t.Errorf("unexpected fatal shutdown: %v", err)
+	})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -615,3 +624,5 @@ func (*fakeEngine) ResolveGroup(string) (param.AccountGroupID, error) {
 func (e *fakeEngine) MarketDataSink() marketdata.Sink { return e.sink }
 
 func (e *fakeEngine) Stop() { e.running = false }
+
+func (*fakeEngine) CloseMarketDataService() {}

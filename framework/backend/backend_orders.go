@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -43,7 +42,7 @@ type OrderListPage struct {
 }
 
 func (s *Service) orderDisplayPrice(order domain.Order) (string, error) {
-	if len(order.Lock) == 0 || s.lockSettlement == nil {
+	if len(order.Lock) == 0 {
 		return "", nil
 	}
 	price, err := s.lockSettlement(order.Lock, order)
@@ -73,25 +72,20 @@ func (s *Service) enrichOrderListPage(page store.OrderListPage) (OrderListPage, 
 	return OrderListPage{Rows: rows, Total: page.Total}, nil
 }
 
-// CheckOrder validates the probe's account and assets, routes to the owning
-// node, and runs the engine pre-trade as a non-mutating dry-run. It mutates no
-// state and writes no audit row; an engine reject is a successful call carrying
-// the reasons, not an error.
+// CheckOrder validates the probe's account and assets and runs the engine
+// pre-trade as a non-mutating dry-run. It mutates no state and writes no audit
+// row; an engine reject is a successful call carrying the reasons, not an error.
 func (s *Service) CheckOrder(
 	ctx context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
 	// Officer applies no boundary id/asset format checks; the engine seam parses
 	// the account and assets and enforces the real trading rules. An asset missing
 	// from the live engine dictionary is invalid input and is never auto-created.
-	n, err := s.router.Route(keyFor(probe.Account))
-	if err != nil {
-		return domain.CheckResult{}, fmt.Errorf("backend: route check: %w", err)
-	}
-	return n.CheckOrder(ctx, keyFor(probe.Account), probe)
+	return s.node.CheckOrder(ctx, probe)
 }
 
-// ApplyExecutionReport validates the target status and routes the report to the
-// owning node for account-synchronized application. Ordinary order reports are
+// ApplyExecutionReport validates the target status and hands the report to the
+// node for account-synchronized application. Ordinary order reports are
 // signed and persisted fail-closed; drop-copy reports remain unattested.
 func (s *Service) ApplyExecutionReport(
 	ctx context.Context, in domain.ExecutionReportInput,
@@ -101,11 +95,7 @@ func (s *Service) ApplyExecutionReport(
 		return engine.ExecutionReportResult{}, Attestation{}, fmt.Errorf(
 			"backend: invalid execution report status %q: %w", targetStatus, domain.ErrInvalid)
 	}
-	key := keyFor("")
-	n, err := s.router.Route(key)
-	if err != nil {
-		return engine.ExecutionReportResult{}, Attestation{}, fmt.Errorf("backend: route report: %w", err)
-	}
+	n := s.node
 	stored, err := n.GetOrder(ctx, in.Order)
 	if err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
@@ -114,7 +104,7 @@ func (s *Service) ApplyExecutionReport(
 	if isDropCopyOrder(stored.Order) {
 		// Drop-copy never enforced a pre-trade verdict, so signing its lifecycle
 		// would falsely represent risk approval.
-		result, err := n.ApplyExecutionReport(ctx, key, in, caller)
+		result, err := n.ApplyExecutionReport(ctx, in, caller)
 		return result, Attestation{}, err
 	}
 	signer, err := s.signerOrErr()
@@ -207,7 +197,7 @@ func (s *Service) ApplyExecutionReport(
 		},
 	)
 	result, err := attesting.ApplyExecutionReportWithAttestation(
-		ctx, key, in, caller, attest)
+		ctx, in, caller, attest)
 	if err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
 	}
@@ -247,10 +237,7 @@ func (s *Service) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	n, err := s.router.Route(keyFor(""))
-	if err != nil {
-		return domain.OrderDetail{}, fmt.Errorf("backend: route order: %w", err)
-	}
+	n := s.node
 	detail, err := n.GetOrder(ctx, order)
 	if err != nil {
 		return domain.OrderDetail{}, err
@@ -263,7 +250,7 @@ func (s *Service) GetOrder(
 }
 
 // ListOrders returns the most recent n orders, optionally narrowed to a
-// non-empty account and/or source, newest first, aggregated across nodes.
+// non-empty account and/or source, newest first.
 func (s *Service) ListOrders(
 	ctx context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.Order, error) {
@@ -283,7 +270,7 @@ func (s *Service) ListOrders(
 	return orders, nil
 }
 
-// ListOrderRows returns order rows aggregated across all nodes.
+// ListOrderRows returns order rows matching filter.
 func (s *Service) ListOrderRows(
 	ctx context.Context, filter store.OrderListFilter,
 ) (OrderListPage, error) {
@@ -302,30 +289,31 @@ func (s *Service) listOrderRows(
 			return store.OrderListPage{}, err
 		}
 	}
-	nodes := s.router.All()
-	if len(nodes) == 1 {
-		return nodes[0].ListOrderRows(ctx, filter)
-	}
-	nodeFilter := filter
-	nodeFilter.Page = nodePageForMerge(filter.Page)
-	orders := make([]store.OrderListRow, 0)
-	total := 0
-	for i, target := range nodes {
-		part, err := target.ListOrderRows(ctx, nodeFilter)
-		if err != nil {
-			return store.OrderListPage{},
-				fmt.Errorf("backend: node %d list order rows: %w", i, err)
-		}
-		total += part.Total
-		orders = append(orders, part.Rows...)
-	}
-	sortOrderRows(orders, filter.Sort)
-	orders = pageOrderRows(orders, filter.Page)
-	return store.OrderListPage{Rows: orders, Total: total}, nil
+	return s.node.ListOrderRows(ctx, filter)
 }
 
-// sortOrdersNewestFirst orders order rows newest first by timestamp, breaking
-// ties on the opaque external id (descending) for a stable merge across nodes.
+// ListTrades returns the most recent n trades, optionally narrowed to a
+// non-empty account and/or source, newest first.
+func (s *Service) ListTrades(
+	ctx context.Context, account domain.AccountID, source domain.Source, n int,
+) ([]domain.Trade, error) {
+	if account != "" {
+		if err := domain.ValidateAccountID(account); err != nil {
+			return nil, err
+		}
+	}
+	trades, err := s.node.ListTrades(ctx, account, source, n)
+	if err != nil {
+		return nil, err
+	}
+	sortTradesNewestFirst(trades)
+	return trades, nil
+}
+
+// sortOrdersNewestFirst orders orders newest first by timestamp, breaking ties
+// on the opaque external id (descending). The store orders by the RFC3339Nano
+// text, which is not chronological within one second when the fractional
+// precision differs.
 func sortOrdersNewestFirst(orders []domain.Order) {
 	sort.Slice(orders, func(i, j int) bool {
 		if !orders[i].At.Equal(orders[j].At) {
@@ -335,72 +323,8 @@ func sortOrdersNewestFirst(orders []domain.Order) {
 	})
 }
 
-// ListTrades returns the most recent n trades, optionally narrowed to a
-// non-empty account and/or source, newest first, aggregated across nodes.
-func (s *Service) ListTrades(
-	ctx context.Context, account domain.AccountID, source domain.Source, n int,
-) ([]domain.Trade, error) {
-	if account != "" {
-		if err := domain.ValidateAccountID(account); err != nil {
-			return nil, err
-		}
-	}
-	trades := make([]domain.Trade, 0)
-	for i, target := range s.router.All() {
-		part, err := target.ListTrades(ctx, account, source, n)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list trades: %w", i, err)
-		}
-		trades = append(trades, part...)
-	}
-	sortTradesNewestFirst(trades)
-	if n > 0 && len(trades) > n {
-		trades = trades[:n]
-	}
-	return trades, nil
-}
-
-// ListTradeRows returns trades with DB-side filters/counts from each node.
-func (s *Service) ListTradeRows(
-	ctx context.Context, filter store.TradeListFilter,
-) (store.TradeListPage, error) {
-	nodes := s.router.All()
-	if len(nodes) == 1 {
-		target, ok := nodes[0].(tradeRowNode)
-		if !ok {
-			return store.TradeListPage{}, fmt.Errorf(
-				"backend: node list trade rows: %w", domain.ErrNotImplemented,
-			)
-		}
-		return target.ListTradeRows(ctx, filter)
-	}
-	rows := make([]domain.Trade, 0)
-	total := 0
-	nodeFilter := filter
-	nodeFilter.Page = nodePageForMerge(filter.Page)
-	for i, n := range nodes {
-		target, ok := n.(tradeRowNode)
-		if !ok {
-			return store.TradeListPage{}, fmt.Errorf(
-				"backend: node %d list trade rows: %w", i, domain.ErrNotImplemented,
-			)
-		}
-		part, err := target.ListTradeRows(ctx, nodeFilter)
-		if err != nil {
-			return store.TradeListPage{}, fmt.Errorf(
-				"backend: node %d list trade rows: %w", i, err,
-			)
-		}
-		total += part.Total
-		rows = append(rows, part.Rows...)
-	}
-	sortTradeRows(rows, filter.Sort)
-	rows = pageTradeRows(rows, filter.Page)
-	return store.TradeListPage{Rows: rows, Total: total}, nil
-}
-
-// sortTradesNewestFirst orders trade rows newest first by timestamp, breaking
-// ties on the opaque external id (descending) for a stable merge across nodes.
+// sortTradesNewestFirst orders trades newest first, as sortOrdersNewestFirst
+// orders orders.
 func sortTradesNewestFirst(trades []domain.Trade) {
 	sort.Slice(trades, func(i, j int) bool {
 		if !trades[i].At.Equal(trades[j].At) {
@@ -410,44 +334,15 @@ func sortTradesNewestFirst(trades []domain.Trade) {
 	})
 }
 
-func sortTradeRows(rows []domain.Trade, spec store.SortSpec) {
-	desc := spec.Descending
-	column := spec.Column
-	if column == "" {
-		column = "at"
-		desc = true
+// ListTradeRows returns trades with DB-side filters and counts.
+func (s *Service) ListTradeRows(
+	ctx context.Context, filter store.TradeListFilter,
+) (store.TradeListPage, error) {
+	target, ok := s.node.(tradeRowNode)
+	if !ok {
+		return store.TradeListPage{}, fmt.Errorf(
+			"backend: node list trade rows: %w", domain.ErrNotImplemented,
+		)
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		left, right := rows[i], rows[j]
-		cmp := 0
-		switch column {
-		case "account":
-			cmp = strings.Compare(left.Account.String(), right.Account.String())
-		case "baseAsset":
-			cmp = strings.Compare(left.BaseAsset, right.BaseAsset)
-		case "lockPrice":
-			cmp = decimalStringCompare(left.LockPrice, right.LockPrice)
-		case "price":
-			cmp = decimalStringCompare(left.Price, right.Price)
-		case "quantity":
-			cmp = decimalStringCompare(left.Quantity, right.Quantity)
-		case "quoteAsset":
-			cmp = strings.Compare(left.QuoteAsset, right.QuoteAsset)
-		case "side":
-			cmp = strings.Compare(string(left.Side), string(right.Side))
-		case "source":
-			cmp = strings.Compare(string(left.Source), string(right.Source))
-		case "at":
-			cmp = timeCompare(left.At, right.At)
-		default:
-			cmp = timeCompare(left.At, right.At)
-		}
-		if cmp == 0 {
-			cmp = strings.Compare(left.ExternalID.String(), right.ExternalID.String())
-		}
-		if desc {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
+	return target.ListTradeRows(ctx, filter)
 }

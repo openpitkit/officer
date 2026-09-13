@@ -33,10 +33,6 @@ type marketDataListTestNode struct {
 	instruments map[string][]domain.MarketDataInstrument
 }
 
-func (n *marketDataListTestNode) Owns(node.Key) bool {
-	return true
-}
-
 func (n *marketDataListTestNode) ListMarketDataInstances(
 	context.Context,
 ) ([]domain.MarketDataInstance, error) {
@@ -90,12 +86,8 @@ func listMarketDataTestInstrumentStatus(
 			instance.ExternalID.String(): {instrument},
 		},
 	}
-	router, err := node.NewLocalRouter(n)
-	if err != nil {
-		t.Fatalf("NewLocalRouter: %v", err)
-	}
 	service := &Service{
-		router: router,
+		node: n,
 		md: &marketDataListTestRuntime{
 			snapshots: snapshots,
 			appliedConfig: map[string]marketdata.AppliedInstanceConfig{

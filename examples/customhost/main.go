@@ -22,14 +22,13 @@ import (
 	"log"
 	"net/http"
 
+	"go.openpit.dev/officer"
 	frameworkapp "go.openpit.dev/officer/framework/app"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/marketdata"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
-	"go.openpit.dev/officer/officerapp"
+	"go.openpit.dev/officer/httpapi"
 )
-
-const hiddenRoutePermission = "customhost.hidden.route"
 
 type customHostComposition struct {
 	Builder    *frameworkapp.Builder
@@ -37,16 +36,18 @@ type customHostComposition struct {
 }
 
 func main() {
-	if _, err := newCustomHostComposition(); err != nil {
+	// main only assembles the composition and never builds it, so it opens no
+	// store and loads no runtime.
+	if _, err := newCustomHostComposition(officer.Config{}); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func newCustomHostComposition() (customHostComposition, error) {
-	authorizer := newDenyOneAuthorizer(hiddenRoutePermission, hiddenToolID)
+func newCustomHostComposition(cfg officer.Config) (customHostComposition, error) {
+	authorizer := newDenyOneAuthorizer(hiddenBaseRouteID, hiddenToolID)
 
 	builder := frameworkapp.NewBuilder()
-	if err := officerapp.Register(builder); err != nil {
+	if err := officer.Register(builder, cfg); err != nil {
 		return customHostComposition{}, err
 	}
 	builder.SetAuthorizer(authorizer)
@@ -55,22 +56,14 @@ func newCustomHostComposition() (customHostComposition, error) {
 			fmt.Errorf("register custom host market data provider: %w", err)
 	}
 	builder.AddToolRegistrar(registerCustomHostTools)
-	if err := builder.WrapRouteConfigBuilder(func(
-		base frameworkapp.RouteConfigBuilder,
-	) frameworkapp.RouteConfigBuilder {
-		return func(
-			svc backend.ControlPlane,
-			logs httpx.LogSource,
-		) frameworkapp.RouteConfig {
-			cfg := base(svc, logs)
-			composeCustomHostRoutes(cfg.Routes)
-			cfg.Authorizer = authorizer
-			return cfg
-		}
-	}); err != nil {
-		return customHostComposition{},
-			fmt.Errorf("wrap custom host route config builder: %w", err)
-	}
+	builder.SetRouteConfigBuilder(func(
+		svc backend.ControlPlane,
+		logs httpx.LogSource,
+	) frameworkapp.RouteConfig {
+		cfg := httpapi.RouteConfig(svc, logs)
+		composeCustomHostRoutes(cfg.Routes)
+		return cfg
+	})
 
 	return customHostComposition{
 		Builder:    builder,

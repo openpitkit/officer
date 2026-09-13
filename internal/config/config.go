@@ -74,8 +74,9 @@ const (
 	// EnvSQLitePath overrides Config.SQLitePath. The container points it at the
 	// persistent data volume.
 	EnvSQLitePath = "PIT_OFFICER_SQLITE_PATH"
-	// EnvRuntimeLibraryPath overrides Config.RuntimeLibraryPath. It pins the
-	// native OpenPit runtime library to a pre-extracted path.
+	// EnvRuntimeLibraryPath seeds Config.RuntimeLibraryPath. The OpenPit SDK
+	// reads it itself at process start to load the native runtime from a
+	// pre-extracted path.
 	EnvRuntimeLibraryPath = "OPENPIT_RUNTIME_LIBRARY_PATH"
 	// EnvOpenBrowser overrides Config.OpenBrowser. Set it to a falsey value
 	// ("false", "0", "no", "off") to keep serve from opening the dashboard.
@@ -103,9 +104,11 @@ type Config struct {
 	// SQLitePath is the on-disk path of the SQLite database. It defaults to
 	// DefaultSQLitePath.
 	SQLitePath string
-	// RuntimeLibraryPath is an explicit path to the native OpenPit runtime
-	// library. When empty, the binding's own discovery and the
-	// OPENPIT_RUNTIME_LIBRARY_PATH environment variable apply.
+	// RuntimeLibraryPath is the native OpenPit runtime library the operator
+	// expects. The SDK loads its runtime at process start from
+	// OPENPIT_RUNTIME_LIBRARY_PATH, or its embedded runtime when that is unset,
+	// so a non-empty value must name that same library; the binary refuses to
+	// start otherwise.
 	RuntimeLibraryPath string
 	// OpenBrowser, when true, has serve open the dashboard URL in the default
 	// browser on start. It defaults to true and is ignored in mcp mode.

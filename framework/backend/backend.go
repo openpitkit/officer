@@ -17,12 +17,13 @@
 
 // Package backend implements the Pit Officer control-plane service. The service
 // is the single entry point the MCP and HTTP surfaces call into. It depends
-// only on the node.NodeRouter seam, never on a concrete engine or store, so the
-// same control-plane logic runs over one in-process node or many remote shards.
+// only on the node.Node seam of the realm it serves, never on a concrete engine
+// or store, so the same control-plane logic runs over a local or a remote node.
 package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -63,12 +64,11 @@ type MarketDataRuntime interface {
 	UseSink(sink marketdata.Sink) error
 }
 
-// Status is the aggregate health of the whole deployment, assembled for the
-// operator dashboard from the health of every node behind the router.
+// Status is the deployment health reported to the operator dashboard.
 type Status struct {
-	// Nodes carries one health record per node, in router enumeration order.
+	// Nodes carries the health record of the service's node.
 	Nodes []node.Health
-	// Healthy reports whether every node reported a live engine and a reachable
+	// Healthy reports whether the node reported a live engine and a reachable
 	// store.
 	Healthy bool
 }
@@ -76,7 +76,7 @@ type Status struct {
 // Service is the Pit Officer control plane. It is constructed once per process
 // and is safe for concurrent use by the surface handlers.
 type Service struct {
-	router         node.NodeRouter
+	node           node.Node
 	md             MarketDataRuntime
 	registry       *marketdata.Registry
 	signer         fwsigning.Service
@@ -138,27 +138,27 @@ func WithMCPCatalogProvider(commands catalog.Provider) Option {
 	}
 }
 
-// WithLockSettlementPrice sets the engine-specific lock display seam.
-func WithLockSettlementPrice(estimator LockSettlementPrice) Option {
-	return func(s *Service) {
-		s.lockSettlement = estimator
-	}
-}
-
-// New constructs a Service over the given node router, market-data runtime, and
-// signing service. The router is the seam through which the service reaches
-// every execution target; md is the live connector-manager view used to surface
-// per-instance subscription state and to re-apply configuration; signer is the
-// framework signing seam backing the approval-token flow. md may be nil
+// New constructs a Service over n, the node of the realm the service serves.
+// md is the live connector-manager view used to surface per-instance
+// subscription state and to re-apply configuration; signer is the framework
+// signing seam backing the approval-token flow; lockSettlement derives the
+// display settlement price of an order from its engine lock. md may be nil
 // (market-data state resolves to empty and RestartMarketData is a no-op);
 // signer may be nil (the signing and approval-token methods then report the
-// feature unconfigured).
+// feature unconfigured). New returns an error when n or lockSettlement is nil.
 func New(
-	router node.NodeRouter,
+	n node.Node,
 	md MarketDataRuntime,
 	signer fwsigning.Service,
+	lockSettlement LockSettlementPrice,
 	opts ...Option,
-) *Service {
+) (*Service, error) {
+	if n == nil {
+		return nil, errors.New("backend: nil node")
+	}
+	if lockSettlement == nil {
+		return nil, errors.New("backend: nil lock settlement price decoder")
+	}
 	registry := marketdata.NewRegistry()
 	if md != nil {
 		if runtimeRegistry := md.Registry(); runtimeRegistry != nil {
@@ -166,43 +166,31 @@ func New(
 		}
 	}
 	s := &Service{
-		router:   router,
-		md:       md,
-		registry: registry,
-		signer:   fwsigning.ServiceOrUnavailable(signer),
-		commands: staticCatalogProvider{catalog: catalog.New(nil)},
+		node:           n,
+		md:             md,
+		registry:       registry,
+		signer:         fwsigning.ServiceOrUnavailable(signer),
+		commands:       staticCatalogProvider{catalog: catalog.New(nil)},
+		lockSettlement: lockSettlement,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
-	return s
+	return s, nil
 }
 
-// Status returns the aggregate health of every node behind the router, for the
-// dashboard. It queries each node's health and reports the deployment as
-// healthy only when all nodes are healthy.
+// Status returns the health of the service's node for the dashboard. The
+// deployment is healthy when the node reports a live engine and a reachable
+// store.
 func (s *Service) Status(ctx context.Context) (Status, error) {
-	nodes := s.router.All()
-	healths := make([]node.Health, 0, len(nodes))
-	healthy := true
-	for i, n := range nodes {
-		health, err := n.Health(ctx)
-		if err != nil {
-			return Status{}, fmt.Errorf("backend: node %d health: %w", i, err)
-		}
-		if !health.Engine.Running || !health.Store.Reachable {
-			healthy = false
-		}
-		healths = append(healths, health)
+	health, err := s.node.Health(ctx)
+	if err != nil {
+		return Status{}, fmt.Errorf("backend: node health: %w", err)
 	}
-	return Status{Nodes: healths, Healthy: healthy}, nil
-}
-
-// keyFor builds the routing key for an account. With the realm bound on the node
-// the account code alone resolves the owning node; the realm is never exposed on
-// a surface.
-func keyFor(id domain.AccountID) node.Key {
-	return node.Key{Realm: domain.DefaultRealm, Account: id}
+	return Status{
+		Nodes:   []node.Health{health},
+		Healthy: health.Engine.Running && health.Store.Reachable,
+	}, nil
 }
 
 // validateMissingAccountPolicy enforces the missing-account request contract:

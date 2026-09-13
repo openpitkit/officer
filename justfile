@@ -32,8 +32,8 @@ go_toolchain := "go" + env_var("CI_GO")
 go_version := env_var("CI_GO")
 go_cache := env_var_or_default("GOCACHE", justfile_directory() / ".tmp" / "go-build-cache")
 golangci_lint_cache := env_var_or_default("GOLANGCI_LINT_CACHE", justfile_directory() / ".tmp" / "golangci-lint-cache")
-go_packages := ". ./cmd/... ./internal/... ./examples/... ./app/... ./officerapp/..."
-go_dirs := "webdist.go cmd internal examples app officerapp"
+go_packages := ". ./web ./httpapi/... ./mcptools/... ./engine/... ./signing/... ./framework/... ./internal/... ./cmd/... ./examples/..."
+go_dirs := "register.go register_test.go web/dist.go httpapi mcptools engine signing framework internal cmd examples"
 export GOTOOLCHAIN := go_toolchain
 export GOCACHE := go_cache
 export GOLANGCI_LINT_CACHE := golangci_lint_cache
@@ -53,24 +53,22 @@ check-cgo-toolchain:
 
 # Build the pit-officer binary with debug compiler flags.
 build-debug: check-cgo-toolchain frontend-install build-js
-    {{ python }} {{ just_helper }} go . build "-gcflags=all=-N -l" -o {{ officer_binary }} ./cmd/pit-officer
+    {{ python }} {{ just_helper }} go build "-gcflags=all=-N -l" -o {{ officer_binary }} ./cmd/pit-officer
 
 # Build the optimized pit-officer binary.
 build-release: check-cgo-toolchain frontend-install build-js
-    {{ python }} {{ just_helper }} go . build -o {{ officer_binary }} ./cmd/pit-officer
+    {{ python }} {{ just_helper }} go build -o {{ officer_binary }} ./cmd/pit-officer
 
 # Build all Go packages (no frontend; uses the committed web/dist placeholder).
 build-go: build-go-release
 
 # Build all Go packages with debug compiler flags.
 build-go-debug:
-    {{ python }} {{ just_helper }} go . build "-gcflags=all=-N -l" {{ go_packages }}
-    {{ python }} {{ just_helper }} go framework build "-gcflags=all=-N -l" ./...
+    {{ python }} {{ just_helper }} go build "-gcflags=all=-N -l" {{ go_packages }}
 
 # Build all Go packages optimized.
 build-go-release:
-    {{ python }} {{ just_helper }} go . build {{ go_packages }}
-    {{ python }} {{ just_helper }} go framework build ./...
+    {{ python }} {{ just_helper }} go build {{ go_packages }}
 
 # Build the SPA using already-installed frontend dependencies.
 build-js:
@@ -165,14 +163,11 @@ check-js-dry: lint-js test-js
 
 # Run go vet across all packages.
 vet:
-    {{ python }} {{ just_helper }} go . vet -all {{ go_packages }}
+    {{ python }} {{ just_helper }} go vet -all {{ go_packages }}
 
-# Update Go module metadata. The root module depends on framework, so framework
-# is tidied first; the other order leaves the root go.sum computed against the
-# previous framework requirements whenever a dependency moves between them.
+# Update Go module metadata.
 tidy:
-    {{ python }} {{ just_helper }} go framework mod tidy -go={{ go_version }}
-    {{ python }} {{ just_helper }} go . mod tidy -go={{ go_version }}
+    {{ python }} {{ just_helper }} go mod tidy -go={{ go_version }}
 
 # Create the Semgrep venv only when it is not at the pinned version.
 install-semgrep:
@@ -198,13 +193,10 @@ lint-all-release-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout) l
 # Lint Go sources.
 lint-go:
     {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
-    {{ python }} {{ just_helper }} check-gofmt framework
-    {{ python }} {{ just_helper }} go framework mod tidy -go={{ go_version }} -diff
-    {{ python }} {{ just_helper }} go . mod tidy -go={{ go_version }} -diff
-    {{ python }} {{ just_helper }} go . vet -all {{ go_packages }}
-    {{ python }} {{ just_helper }} go framework vet -all ./...
-    {{ python }} {{ just_helper }} go-tool . golangci-lint run --timeout=5m {{ go_packages }}
-    {{ python }} {{ just_helper }} go-tool framework golangci-lint run --timeout=5m ./...
+    {{ python }} {{ just_helper }} check-public-packages
+    {{ python }} {{ just_helper }} go mod tidy -go={{ go_version }} -diff
+    {{ python }} {{ just_helper }} go vet -all {{ go_packages }}
+    {{ python }} {{ just_helper }} go-tool golangci-lint run --timeout=5m {{ go_packages }}
 
 # Lint Go sources against a local Pit checkout.
 lint-go-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout)
@@ -212,24 +204,18 @@ lint-go-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout)
 # Lint Go sources against a debug local Pit checkout.
 lint-go-debug-dev pit_checkout="../pit": (dylib-debug-dev pit_checkout)
     {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
-    {{ python }} {{ just_helper }} check-gofmt framework
-    cd framework && go mod tidy -go={{ go_version }} -diff
+    {{ python }} {{ just_helper }} check-public-packages
     go mod tidy -go={{ go_version }} -diff
-    just _go-dev-mode debug {{ quote(pit_checkout) }} "." "vet" "-all" {{ go_packages }}
-    just _go-dev-mode debug {{ quote(pit_checkout) }} "framework" "vet" "-all" "./..."
-    just _go-tool-dev-mode debug {{ quote(pit_checkout) }} "." "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
-    just _go-tool-dev-mode debug {{ quote(pit_checkout) }} "framework" "golangci-lint" "run" "--timeout=5m" "./..."
+    just _go-dev-mode debug {{ quote(pit_checkout) }} "vet" "-all" {{ go_packages }}
+    just _go-tool-dev-mode debug {{ quote(pit_checkout) }} "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
 
 # Lint Go sources against an optimized local Pit checkout.
 lint-go-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
     {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
-    {{ python }} {{ just_helper }} check-gofmt framework
-    cd framework && go mod tidy -go={{ go_version }} -diff
+    {{ python }} {{ just_helper }} check-public-packages
     go mod tidy -go={{ go_version }} -diff
-    just _go-dev-mode release {{ quote(pit_checkout) }} "." "vet" "-all" {{ go_packages }}
-    just _go-dev-mode release {{ quote(pit_checkout) }} "framework" "vet" "-all" "./..."
-    just _go-tool-dev-mode release {{ quote(pit_checkout) }} "." "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
-    just _go-tool-dev-mode release {{ quote(pit_checkout) }} "framework" "golangci-lint" "run" "--timeout=5m" "./..."
+    just _go-dev-mode release {{ quote(pit_checkout) }} "vet" "-all" {{ go_packages }}
+    just _go-tool-dev-mode release {{ quote(pit_checkout) }} "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
 
 # Check formatting, lint, and typecheck JS/TypeScript sources.
 lint-js:
@@ -263,32 +249,27 @@ test-go: test-go-release
 
 # Run all Go tests with debug compiler flags.
 test-go-debug:
-    {{ python }} {{ just_helper }} go . test "-gcflags=all=-N -l" -count=1 {{ go_packages }}
-    {{ python }} {{ just_helper }} go framework test "-gcflags=all=-N -l" -count=1 ./...
+    {{ python }} {{ just_helper }} go test "-gcflags=all=-N -l" -count=1 {{ go_packages }}
 
 # Run all optimized Go tests.
 test-go-release:
-    {{ python }} {{ just_helper }} go . test -count=1 {{ go_packages }}
-    {{ python }} {{ just_helper }} go framework test -count=1 ./...
+    {{ python }} {{ just_helper }} go test -count=1 {{ go_packages }}
 
 # Run all Go tests against a local Pit checkout.
 test-go-dev pit_checkout="../pit": (test-go-release-dev pit_checkout)
 
 # Run all Go tests against a debug local Pit checkout.
 test-go-debug-dev pit_checkout="../pit": (dylib-debug-dev pit_checkout)
-    just _go-dev-mode debug {{ quote(pit_checkout) }} "." "test" "-gcflags=all=-N -l" "-count=1" {{ go_packages }}
-    just _go-dev-mode debug {{ quote(pit_checkout) }} "framework" "test" "-gcflags=all=-N -l" "-count=1" "./..."
+    just _go-dev-mode debug {{ quote(pit_checkout) }} "test" "-gcflags=all=-N -l" "-count=1" {{ go_packages }}
 
 # Run all Go tests against an optimized local Pit checkout.
 test-go-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
-    just _go-dev-mode release {{ quote(pit_checkout) }} "." "test" "-count=1" {{ go_packages }}
-    just _go-dev-mode release {{ quote(pit_checkout) }} "framework" "test" "-count=1" "./..."
+    just _go-dev-mode release {{ quote(pit_checkout) }} "test" "-count=1" {{ go_packages }}
 
 # Run all Go tests with the race detector.
 [unix]
 test-go-race:
-    {{ python }} {{ just_helper }} go . test -race -count=1 {{ go_packages }}
-    {{ python }} {{ just_helper }} go framework test -race -count=1 ./...
+    {{ python }} {{ just_helper }} go test -race -count=1 {{ go_packages }}
 [windows]
 test-go-race:
     @echo Skipping Go race tests on Windows: Go ThreadSanitizer is not compatible with the CGo toolchain.
@@ -296,8 +277,7 @@ test-go-race:
 # Run all Go tests with the race detector against a local Pit checkout.
 [unix]
 test-go-race-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
-    just _go-dev-mode release {{ quote(pit_checkout) }} "." "test" "-race" "-count=1" {{ go_packages }}
-    just _go-dev-mode release {{ quote(pit_checkout) }} "framework" "test" "-race" "-count=1" "./..."
+    just _go-dev-mode release {{ quote(pit_checkout) }} "test" "-race" "-count=1" {{ go_packages }}
 [windows]
 test-go-race-dev pit_checkout="../pit":
     @echo Skipping Go race tests on Windows: Go ThreadSanitizer is not compatible with the CGo toolchain.
@@ -316,7 +296,6 @@ fmt-all: fmt-go fmt-js
 # Format Go.
 fmt-go:
     gofmt -w {{ go_dirs }}
-    cd framework && gofmt -w .
 
 # Format JS/TypeScript sources.
 fmt-js:
@@ -369,36 +348,32 @@ dylib-release-dev pit_checkout="../pit":
 build-dev pit_checkout="../pit": (build-release-dev pit_checkout)
 
 # Build the pit-officer binary against a debug local Pit checkout.
-build-debug-dev pit_checkout="../pit": frontend-install build-js (dylib-debug-dev pit_checkout) (_go-dev-mode "debug" pit_checkout "." "build" "-gcflags=all=-N -l" "-o" officer_binary "./cmd/pit-officer")
+build-debug-dev pit_checkout="../pit": frontend-install build-js (dylib-debug-dev pit_checkout) (_go-dev-mode "debug" pit_checkout "build" "-gcflags=all=-N -l" "-o" officer_binary "./cmd/pit-officer")
 
 # Build the pit-officer binary against an optimized local Pit checkout.
-build-release-dev pit_checkout="../pit": frontend-install build-js (dylib-release-dev pit_checkout) (_go-dev-mode "release" pit_checkout "." "build" "-o" officer_binary "./cmd/pit-officer")
+build-release-dev pit_checkout="../pit": frontend-install build-js (dylib-release-dev pit_checkout) (_go-dev-mode "release" pit_checkout "build" "-o" officer_binary "./cmd/pit-officer")
 
 # Build all Go packages against a local Pit checkout.
 build-go-dev pit_checkout="../pit": (build-go-release-dev pit_checkout)
 
 # Build all Go packages against a debug local Pit checkout.
 build-go-debug-dev pit_checkout="../pit": (dylib-debug-dev pit_checkout)
-    just _go-dev-mode debug {{ quote(pit_checkout) }} "." "build" "-gcflags=all=-N -l" {{ go_packages }}
-    just _go-dev-mode debug {{ quote(pit_checkout) }} "framework" "build" "-gcflags=all=-N -l" "./..."
+    just _go-dev-mode debug {{ quote(pit_checkout) }} "build" "-gcflags=all=-N -l" {{ go_packages }}
 
 # Build all Go packages against an optimized local Pit checkout.
 build-go-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
-    just _go-dev-mode release {{ quote(pit_checkout) }} "." "build" {{ go_packages }}
-    just _go-dev-mode release {{ quote(pit_checkout) }} "framework" "build" "./..."
+    just _go-dev-mode release {{ quote(pit_checkout) }} "build" {{ go_packages }}
 
 # Run go vet against a local Pit checkout.
 vet-dev pit_checkout="../pit": (vet-release-dev pit_checkout)
 
 # Run go vet against a debug local Pit checkout.
 vet-debug-dev pit_checkout="../pit": (dylib-debug-dev pit_checkout)
-    just _go-dev-mode debug {{ quote(pit_checkout) }} "." "vet" {{ go_packages }}
-    just _go-dev-mode debug {{ quote(pit_checkout) }} "framework" "vet" "./..."
+    just _go-dev-mode debug {{ quote(pit_checkout) }} "vet" {{ go_packages }}
 
 # Run go vet against an optimized local Pit checkout.
 vet-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
-    just _go-dev-mode release {{ quote(pit_checkout) }} "." "vet" {{ go_packages }}
-    just _go-dev-mode release {{ quote(pit_checkout) }} "framework" "vet" "./..."
+    just _go-dev-mode release {{ quote(pit_checkout) }} "vet" {{ go_packages }}
 
 # Run tests against a local Pit checkout.
 test-dev pit_checkout="../pit": (test-all-release-dev pit_checkout)
@@ -426,20 +401,20 @@ run-serve-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
     {{ python }} {{ just_helper }} run-officer-dev debug {{ quote(pit_checkout) }} serve
 
 # Run a Go command with a temporary workspace using the local OpenPit binding.
-_go-dev pit_checkout module_dir +go_args:
-    just _go-dev-mode release {{ quote(pit_checkout) }} {{ quote(module_dir) }} {{ go_args }}
+_go-dev pit_checkout +go_args:
+    just _go-dev-mode release {{ quote(pit_checkout) }} {{ go_args }}
 
 # Run a Go command with a temporary workspace using the local OpenPit binding.
-_go-dev-mode mode pit_checkout module_dir +go_args:
-    {{ python }} {{ just_helper }} go-dev {{ mode }} {{ quote(pit_checkout) }} {{ quote(module_dir) }} {{ go_args }}
+_go-dev-mode mode pit_checkout +go_args:
+    {{ python }} {{ just_helper }} go-dev {{ mode }} {{ quote(pit_checkout) }} {{ go_args }}
 
 # Run a Go-adjacent tool with a temporary workspace using the local OpenPit binding.
-_go-tool-dev pit_checkout module_dir +tool_args:
-    just _go-tool-dev-mode release {{ quote(pit_checkout) }} {{ quote(module_dir) }} {{ tool_args }}
+_go-tool-dev pit_checkout +tool_args:
+    just _go-tool-dev-mode release {{ quote(pit_checkout) }} {{ tool_args }}
 
 # Run a Go-adjacent tool with a temporary workspace using the local OpenPit binding.
-_go-tool-dev-mode mode pit_checkout module_dir +tool_args:
-    {{ python }} {{ just_helper }} go-tool-dev {{ mode }} {{ quote(pit_checkout) }} {{ quote(module_dir) }} {{ tool_args }}
+_go-tool-dev-mode mode pit_checkout +tool_args:
+    {{ python }} {{ just_helper }} go-tool-dev {{ mode }} {{ quote(pit_checkout) }} {{ tool_args }}
 
 # Seed a running Officer instance with demo accounts, balances, orders, and trades.
 seed:

@@ -33,6 +33,7 @@ import (
 	"github.com/scmhub/ibapi"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestParseIBConfigAndContractOverrides(t *testing.T) {
@@ -58,7 +59,7 @@ func TestParseIBConfigAndContractOverrides(t *testing.T) {
 		t.Fatalf("MarketDataType = %d, want delayed", cfg.MarketDataType)
 	}
 
-	subs, err := normalizeIBSubscriptions(cfg, []Subscription{
+	subs, err := normalizeIBSubscriptions(cfg, []fwmarketdata.Subscription{
 		{External: "EUR.USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
@@ -83,7 +84,7 @@ func TestNormalizeIBSubscriptions_PreservesAssetKeys(t *testing.T) {
 
 	subs, err := normalizeIBSubscriptions(ibConfig{ContractDefaults: ibContractConfig{
 		Currency: "provider.currency",
-	}}, []Subscription{{
+	}}, []fwmarketdata.Subscription{{
 		External: "provider.symbol",
 		Base:     testMarketDataAssetID("asset.base"),
 		Quote:    testMarketDataAssetID("asset.quote"),
@@ -116,7 +117,7 @@ func TestNormalizeIBSubscriptions_PerContractCurrencyOverrideWins(t *testing.T) 
 		Contracts: map[string]ibContractConfig{
 			"provider.symbol": {Currency: "contract.currency"},
 		},
-	}, []Subscription{{
+	}, []fwmarketdata.Subscription{{
 		External: "provider.symbol",
 		Base:     testMarketDataAssetID("asset.base"),
 		Quote:    testMarketDataAssetID("asset.quote"),
@@ -134,7 +135,7 @@ func TestNormalizeIBSubscriptions_PreservesSyntheticInverse(t *testing.T) {
 
 	subs, err := normalizeIBSubscriptions(ibConfig{
 		ContractDefaults: ibContractConfig{Currency: "USD"},
-	}, []Subscription{{
+	}, []fwmarketdata.Subscription{{
 		External:         "AAPL",
 		Base:             testMarketDataAssetID("asset.base"),
 		Quote:            testMarketDataAssetID("asset.quote"),
@@ -154,7 +155,7 @@ func TestNormalizeIBSubscriptions_PreservesSyntheticInverse(t *testing.T) {
 func TestNormalizeIBSubscriptions_RequiresContractCurrency(t *testing.T) {
 	t.Parallel()
 
-	_, err := normalizeIBSubscriptions(ibConfig{}, []Subscription{{
+	_, err := normalizeIBSubscriptions(ibConfig{}, []fwmarketdata.Subscription{{
 		External: "AAPL",
 		Base:     testMarketDataAssetID("opaque-base-key"),
 		Quote:    testMarketDataAssetID("opaque-quote-key"),
@@ -216,11 +217,11 @@ func TestIBWrapperTickPriceEmitsNormalizedUpdates(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	out := make(chan QuoteUpdate, 6)
+	out := make(chan fwmarketdata.QuoteUpdate, 6)
 	at := time.Unix(1710000000, 0).UTC()
 	sourceAt := time.Unix(1710000100, 0).UTC()
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(
@@ -265,14 +266,14 @@ func TestIBWrapperTickPriceClearsNoQuoteAndReportsNoData(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	out := make(chan QuoteUpdate, 4)
-	diags := make(chan Diagnostic, 2)
+	out := make(chan fwmarketdata.QuoteUpdate, 4)
+	diags := make(chan fwmarketdata.Diagnostic, 2)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(
-		ctx, subs, out, time.Now, nil, func(diag Diagnostic) { diags <- diag },
+		ctx, subs, out, time.Now, nil, func(diag fwmarketdata.Diagnostic) { diags <- diag },
 	)
 
 	wrapper.TickPrice(1, ibapi.BID, 181.11, ibapi.TickAttrib{})
@@ -313,9 +314,9 @@ func TestIBWrapperIgnoresInvalidTickPrice(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	out := make(chan QuoteUpdate, 1)
+	out := make(chan fwmarketdata.QuoteUpdate, 1)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(ctx, subs, out, time.Now, nil, nil)
@@ -337,10 +338,10 @@ func TestIBWrapperIgnoresInvalidTickStringTimestamp(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	out := make(chan QuoteUpdate, 1)
+	out := make(chan fwmarketdata.QuoteUpdate, 1)
 	at := time.Unix(1710000000, 0).UTC()
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(
@@ -377,7 +378,7 @@ func TestIBConnectorSubscribesThroughClient(t *testing.T) {
 		return client
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -420,7 +421,7 @@ func TestIBConnectorDiagnoseReportsActiveSubscriptions(t *testing.T) {
 		return newFakeIBClient(wrapper)
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -459,7 +460,7 @@ func TestIBConnectorReconnectsAndResubscribes(t *testing.T) {
 		return client
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -509,7 +510,7 @@ func TestIBConnectorResetsBackoffAfterDelivery(t *testing.T) {
 		return client
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -562,7 +563,7 @@ func TestIBConnectorCloseStopsSubscription(t *testing.T) {
 		return client
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -605,7 +606,7 @@ func TestIBConnectorConnectErrorDisconnectsAndRetries(t *testing.T) {
 		return client
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -642,14 +643,14 @@ func TestIBConnectorConnectTimeoutIsInterruptible(t *testing.T) {
 		client.disconnectNoop = true
 		return client
 	}
-	subs, err := normalizeIBSubscriptions(connector.cfg, []Subscription{
+	subs, err := normalizeIBSubscriptions(connector.cfg, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
 		t.Fatalf("normalizeIBSubscriptions: %v", err)
 	}
 
-	_, err = connector.stream(context.Background(), subs, make(chan QuoteUpdate))
+	_, err = connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("stream err = %v, want context deadline exceeded", err)
 	}
@@ -710,7 +711,7 @@ func TestIBConnectorInvalidCredentials(t *testing.T) {
 	t.Parallel()
 
 	connector := NewIBConnector("ib-test", `{"port":70000}`)
-	_, err := connector.Subscribe(context.Background(), []Subscription{
+	_, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err == nil {
@@ -723,12 +724,12 @@ func TestIBWrapperReportsContractErrorDiagnostic(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	diags := make(chan Diagnostic, 1)
+	diags := make(chan fwmarketdata.Diagnostic, 1)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
-	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag Diagnostic) {
+	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag fwmarketdata.Diagnostic) {
 		diags <- diag
 	})
 
@@ -750,12 +751,12 @@ func TestIBWrapperReportsMarketDataTypeFreshness(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	diags := make(chan Diagnostic, 2)
+	diags := make(chan fwmarketdata.Diagnostic, 2)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
-	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag Diagnostic) {
+	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag fwmarketdata.Diagnostic) {
 		diags <- diag
 	})
 
@@ -796,12 +797,12 @@ func TestIBWrapperClassifiesIBErrorDiagnostics(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	diags := make(chan Diagnostic, 4)
+	diags := make(chan fwmarketdata.Diagnostic, 4)
 	subs := []ibSubscription{{
-		Subscription: Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
-	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag Diagnostic) {
+	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag fwmarketdata.Diagnostic) {
 		diags <- diag
 	})
 
@@ -867,10 +868,7 @@ func TestIBWrapperSignalsLostOnce(t *testing.T) {
 func TestNewConnectorIBRegistered(t *testing.T) {
 	t.Parallel()
 
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatalf("DefaultRegistry: %v", err)
-	}
+	registry := firstPartyRegistry(t)
 	connector, err := registry.Build(domain.MarketDataInstance{
 		ExternalID: testProviderExternalID("ib-1"),
 		Provider:   domain.MarketDataProviderIB,
@@ -886,10 +884,7 @@ func TestNewConnectorIBRegistered(t *testing.T) {
 func TestProviderVerifiesSymbolsIBUnsupported(t *testing.T) {
 	t.Parallel()
 
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatalf("DefaultRegistry: %v", err)
-	}
+	registry := firstPartyRegistry(t)
 	if registry.VerifiesSymbols(domain.MarketDataProviderIB) {
 		t.Fatal("VerifiesSymbols(ib) = true, want false")
 	}
@@ -925,7 +920,7 @@ func TestIBConnectorSearchSymbolsTranslatesDetails(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "BTC", SecType: "CRYPTO"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "BTC", SecType: "CRYPTO"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -958,7 +953,7 @@ func TestIBConnectorSearchSymbolsTranslatesDerivativeDetails(t *testing.T) {
 
 	matches, err := connector.SearchSymbols(
 		context.Background(),
-		SymbolSearchQuery{Query: "ES", SecType: "FUT", Exchange: "CME"},
+		fwmarketdata.SymbolSearchQuery{Query: "ES", SecType: "FUT", Exchange: "CME"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -999,7 +994,7 @@ func TestIBConnectorSearchSymbolsBuildsRequestContract(t *testing.T) {
 		return client
 	}
 
-	if _, err := connector.SearchSymbols(context.Background(), SymbolSearchQuery{
+	if _, err := connector.SearchSymbols(context.Background(), fwmarketdata.SymbolSearchQuery{
 		Query:    "BTC",
 		SecType:  "CRYPTO",
 		Exchange: "PAXOS",
@@ -1029,7 +1024,7 @@ func TestIBConnectorSearchSymbolsParsesDecimalStringStrike(t *testing.T) {
 		return client
 	}
 
-	if _, err := connector.SearchSymbols(context.Background(), SymbolSearchQuery{
+	if _, err := connector.SearchSymbols(context.Background(), fwmarketdata.SymbolSearchQuery{
 		Query:    "ES",
 		SecType:  "FUT",
 		Exchange: "CME",
@@ -1058,7 +1053,7 @@ func TestIBConnectorSearchSymbolsInfersPairQuery(t *testing.T) {
 		return client
 	}
 
-	if _, err := connector.SearchSymbols(context.Background(), SymbolSearchQuery{
+	if _, err := connector.SearchSymbols(context.Background(), fwmarketdata.SymbolSearchQuery{
 		Query: "EUR/USD",
 	}); err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -1095,7 +1090,7 @@ func TestIBConnectorSearchSymbolsFallbacksToStock(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "AAPL"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "AAPL"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -1132,7 +1127,7 @@ func TestIBConnectorSearchSymbolsDefaultsToForex(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "EUR"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "EUR"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -1169,7 +1164,7 @@ func TestIBConnectorSearchSymbolsFallbacksToCrypto(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "BTC"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "BTC"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -1202,7 +1197,7 @@ func TestIBConnectorSearchSymbolsNoSecurityDefinitionReturnsEmpty(t *testing.T) 
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "NOPE", SecType: "STK"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "NOPE", SecType: "STK"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols err = %v, want nil", err)
@@ -1223,7 +1218,7 @@ func TestIBConnectorSearchSymbolsNoDetailsReturnsEmpty(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "AAPL", SecType: "STK"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "AAPL", SecType: "STK"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols err = %v, want nil", err)
@@ -1245,7 +1240,7 @@ func TestIBConnectorSearchSymbolsTimeoutReturnsEmpty(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "AAPL"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "AAPL"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols err = %v, want nil", err)
@@ -1266,7 +1261,7 @@ func TestIBConnectorSearchSymbolsConnectErrorReturnsError(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "AAPL"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "AAPL"},
 	)
 	if err == nil {
 		t.Fatal("SearchSymbols err = nil, want connect error")
@@ -1291,7 +1286,7 @@ func TestIBConnectorSearchSymbolsDisconnectFailurePreservesMatches(t *testing.T)
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "AAPL", SecType: "STK"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "AAPL", SecType: "STK"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols error = %v, want nil", err)
@@ -1315,7 +1310,7 @@ func TestIBConnectorSearchSymbolsFailureJoinsDisconnectFailure(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "AAPL", SecType: "STK"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "AAPL", SecType: "STK"},
 	)
 	if matches != nil {
 		t.Fatalf("matches = %+v, want nil", matches)
@@ -1340,7 +1335,7 @@ func TestIBConnectorSearchUsesDistinctClientID(t *testing.T) {
 	}
 
 	if _, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "AAPL"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "AAPL"},
 	); err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
 	}
@@ -1364,7 +1359,7 @@ func TestIBConnectorSearchSymbolsEmptyQuery(t *testing.T) {
 	}
 
 	matches, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "  "},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "  "},
 	)
 	if err != nil || matches != nil {
 		t.Fatalf("SearchSymbols(empty) = (%+v, %v), want (nil, nil)", matches, err)
@@ -1467,7 +1462,7 @@ func TestIBConnectorLiveConnect(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := connector.Subscribe(ctx, []Subscription{
+	if _, err := connector.Subscribe(ctx, []fwmarketdata.Subscription{
 		{
 			External: symbol,
 			Base:     testMarketDataAssetID(symbol),

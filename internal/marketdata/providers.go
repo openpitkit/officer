@@ -18,36 +18,9 @@
 package marketdata
 
 import (
-	"fmt"
-
 	"go.openpit.dev/officer/framework/domain"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
-
-// DefaultRegistry builds the registry of the first-party market-data providers
-// in the order the operator panel presents them. It returns an error when a
-// provider cannot be registered.
-func DefaultRegistry() (*fwmarketdata.Registry, error) {
-	registry := fwmarketdata.NewRegistry()
-	for _, provider := range []fwmarketdata.Provider{
-		IBProvider(),
-		BinanceProvider(),
-		KrakenProvider(),
-		CoinbaseProvider(),
-		AlpacaProvider(),
-		OKXProvider(),
-		BybitProvider(),
-		OANDAProvider(),
-		FinnhubProvider(),
-		BYOProvider(),
-		MockProvider(),
-	} {
-		if err := registry.Register(provider); err != nil {
-			return nil, fmt.Errorf("market data: register default provider: %w", err)
-		}
-	}
-	return registry, nil
-}
 
 // IBProvider describes the Interactive Brokers connector.
 func IBProvider() fwmarketdata.Provider {

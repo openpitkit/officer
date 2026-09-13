@@ -32,6 +32,7 @@ import (
 
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/domain"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestParseFinnhubCredentials(t *testing.T) {
@@ -61,9 +62,9 @@ func TestParseFinnhubCredentialsRejectsMissingToken(t *testing.T) {
 func TestNormalizeFinnhubSubscriptionsLimit(t *testing.T) {
 	t.Parallel()
 
-	subs := make([]Subscription, finnhubSymbolLimit+1)
+	subs := make([]fwmarketdata.Subscription, finnhubSymbolLimit+1)
 	for i := range subs {
-		subs[i] = Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}
+		subs[i] = fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}
 	}
 	if _, err := normalizeFinnhubSubscriptions(subs); err == nil {
 		t.Fatal("normalizeFinnhubSubscriptions err = nil, want limit error")
@@ -251,7 +252,7 @@ func TestFinnhubSearchSymbolsMapsProviderSymbol(t *testing.T) {
 	}
 
 	got, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: " AAPL "},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: " AAPL "},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -289,7 +290,7 @@ func TestFinnhubSearchSymbolsParsesExchangeFromQualifiedSymbol(t *testing.T) {
 	}
 
 	got, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "ETH"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "ETH"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -345,7 +346,7 @@ func TestFinnhubSearchSymbolsSurfacesCryptoCatalogue(t *testing.T) {
 	}
 
 	got, err := connector.SearchSymbols(
-		context.Background(), SymbolSearchQuery{Query: "ETH"},
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "ETH"},
 	)
 	if err != nil {
 		t.Fatalf("SearchSymbols: %v", err)
@@ -394,7 +395,7 @@ func TestFinnhubCryptoMatchRank(t *testing.T) {
 func TestQuoteUpdateFromFinnhubQuote(t *testing.T) {
 	t.Parallel()
 
-	sub := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	sub := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})[0]
 
@@ -416,7 +417,7 @@ func TestQuoteUpdateFromFinnhubQuote(t *testing.T) {
 func TestQuoteUpdateFromFinnhubQuoteRejectsMissingPrice(t *testing.T) {
 	t.Parallel()
 
-	sub := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	sub := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})[0]
 	if got, ok := quoteUpdateFromFinnhubQuote(finnhubQuote{
@@ -442,11 +443,11 @@ func TestFinnhubSnapshotStale(t *testing.T) {
 func TestFinnhubSnapshotMaxAgeTracksFreshnessTTL(t *testing.T) {
 	t.Parallel()
 
-	if finnhubSnapshotMaxAge != FreshnessTTL {
+	if finnhubSnapshotMaxAge != fwmarketdata.FreshnessTTL {
 		t.Fatalf(
 			"finnhubSnapshotMaxAge = %s, want %s",
 			finnhubSnapshotMaxAge,
-			FreshnessTTL,
+			fwmarketdata.FreshnessTTL,
 		)
 	}
 	if finnhubSnapshotMaxAge != 70*time.Second {
@@ -471,7 +472,7 @@ func TestFinnhubDiagnoseStaysSilentForKnownSymbol(t *testing.T) {
 
 	connector := &finnhubConnector{
 		token: "token",
-		subs: mustNormalizeFinnhubSubscriptions(t, []Subscription{
+		subs: mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 			{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		}),
 		search: func(_ context.Context, query, _ string) ([]finnhubSearchResult, error) {
@@ -498,7 +499,7 @@ func TestFinnhubDiagnoseReportsUnknownSymbol(t *testing.T) {
 
 	connector := &finnhubConnector{
 		token: "token",
-		subs: mustNormalizeFinnhubSubscriptions(t, []Subscription{
+		subs: mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 			{External: "BAD", Base: testMarketDataAssetID("BAD"), Quote: testMarketDataAssetID("USD")},
 		}),
 		search: func(context.Context, string, string) ([]finnhubSearchResult, error) {
@@ -544,7 +545,7 @@ func TestFinnhubSubscribeEmitsInitialQuoteSnapshot(t *testing.T) {
 		token:        "token",
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -588,7 +589,7 @@ func TestFinnhubSubscribeSkipsStaleInitialQuoteSnapshot(t *testing.T) {
 		token:        "token",
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -604,7 +605,7 @@ func TestFinnhubSubscribeSkipsStaleInitialQuoteSnapshot(t *testing.T) {
 func TestWriteFinnhubSubscribeShape(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		{External: "BINANCE:BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
@@ -632,7 +633,7 @@ func TestWriteFinnhubSubscribeShape(t *testing.T) {
 func TestParseFinnhubQuoteUpdates(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{"type":"trade","data":[{"s":"AAPL","p":12345678901234567890.123456789,"t":1710000000123}]}`)
@@ -662,7 +663,7 @@ func TestParseFinnhubFrameIgnoresPing(t *testing.T) {
 func TestParseFinnhubQuoteUpdatesRejectsInvalidFrames(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	tests := []struct {
@@ -703,7 +704,7 @@ func TestParseFinnhubQuoteUpdatesRejectsInvalidFrames(t *testing.T) {
 func TestFinnhubConnector_PingDoesNotReportUnparsable(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	conn := &fakeFinnhubConn{
@@ -714,7 +715,7 @@ func TestFinnhubConnector_PingDoesNotReportUnparsable(t *testing.T) {
 		},
 		err: context.Canceled,
 	}
-	var diagnostics []Diagnostic
+	var diagnostics []fwmarketdata.Diagnostic
 	connector := &finnhubConnector{
 		dial: func(context.Context, string) (finnhubConn, error) {
 			return conn, nil
@@ -723,12 +724,12 @@ func TestFinnhubConnector_PingDoesNotReportUnparsable(t *testing.T) {
 		reconnectMin: time.Millisecond,
 		reconnectMax: time.Millisecond,
 		token:        "token",
-		diagReport: func(diag Diagnostic) {
+		diagReport: func(diag fwmarketdata.Diagnostic) {
 			diagnostics = append(diagnostics, diag)
 		},
 	}
 
-	_, err := connector.stream(context.Background(), subs, make(chan QuoteUpdate))
+	_, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream err = %v, want context.Canceled", err)
 	}
@@ -740,7 +741,7 @@ func TestFinnhubConnector_PingDoesNotReportUnparsable(t *testing.T) {
 func TestFinnhubConnector_UnparsableDiagnosticOmitsDebugSample(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	conn := &fakeFinnhubConn{
@@ -751,7 +752,7 @@ func TestFinnhubConnector_UnparsableDiagnosticOmitsDebugSample(t *testing.T) {
 		},
 		err: context.Canceled,
 	}
-	var diagnostics []Diagnostic
+	var diagnostics []fwmarketdata.Diagnostic
 	connector := &finnhubConnector{
 		dial: func(context.Context, string) (finnhubConn, error) {
 			return conn, nil
@@ -760,12 +761,12 @@ func TestFinnhubConnector_UnparsableDiagnosticOmitsDebugSample(t *testing.T) {
 		reconnectMin: time.Millisecond,
 		reconnectMax: time.Millisecond,
 		token:        "token",
-		diagReport: func(diag Diagnostic) {
+		diagReport: func(diag fwmarketdata.Diagnostic) {
 			diagnostics = append(diagnostics, diag)
 		},
 	}
 
-	_, err := connector.stream(context.Background(), subs, make(chan QuoteUpdate))
+	_, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream err = %v, want context.Canceled", err)
 	}
@@ -784,7 +785,7 @@ func TestFinnhubConnector_UnparsableDiagnosticOmitsDebugSample(t *testing.T) {
 func TestFinnhubConnector_RedactsTokenInDialError(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	const token = "secret-token"
@@ -804,7 +805,7 @@ func TestFinnhubConnector_RedactsTokenInDialError(t *testing.T) {
 		},
 	}
 
-	connector.run(context.Background(), subs, make(chan QuoteUpdate))
+	connector.run(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate))
 	if len(statuses) != 1 {
 		t.Fatalf("statuses = %v, want one error", statuses)
 	}
@@ -819,7 +820,7 @@ func TestFinnhubConnector_RedactsTokenInDialError(t *testing.T) {
 func TestFinnhubConnector_ReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := &fakeFinnhubConn{
@@ -855,7 +856,7 @@ func TestFinnhubConnector_ReconnectsAndResubscribes(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -863,7 +864,7 @@ func TestFinnhubConnector_ReconnectsAndResubscribes(t *testing.T) {
 		close(ch)
 	}()
 
-	got := make([]QuoteUpdate, 0, 2)
+	got := make([]fwmarketdata.QuoteUpdate, 0, 2)
 	for update := range ch {
 		got = append(got, update)
 		if len(got) == 2 {
@@ -885,7 +886,7 @@ func TestFinnhubConnector_ReconnectsAndResubscribes(t *testing.T) {
 func TestFinnhubConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeFinnhubSubscriptions(t, []Subscription{
+	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	trade := []byte(`{"type":"trade","data":[{"s":"AAPL","p":191.23,"t":1710000000123}]}`)
@@ -919,13 +920,13 @@ func TestFinnhubConnector_ResetsBackoffAfterRead(t *testing.T) {
 		token:        "token",
 	}
 
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	go func() {
 		connector.run(context.Background(), subs, ch)
 		close(ch)
 	}()
 
-	var got []QuoteUpdate
+	var got []fwmarketdata.QuoteUpdate
 	for update := range ch {
 		got = append(got, update)
 	}
@@ -943,7 +944,7 @@ func TestFinnhubConnector_ResetsBackoffAfterRead(t *testing.T) {
 }
 
 func mustNormalizeFinnhubSubscriptions(
-	t *testing.T, subs []Subscription,
+	t *testing.T, subs []fwmarketdata.Subscription,
 ) []finnhubSubscription {
 	t.Helper()
 	normalized, err := normalizeFinnhubSubscriptions(subs)

@@ -39,10 +39,7 @@ func (s *Service) ListAssets(ctx context.Context) ([]domain.Asset, error) {
 func (s *Service) ListAssetRows(
 	ctx context.Context, filter store.AssetListFilter,
 ) (store.AssetListPage, error) {
-	n, err := s.groupNode()
-	if err != nil {
-		return store.AssetListPage{}, err
-	}
+	n := s.node
 	page, err := n.ListAssetRows(ctx, filter)
 	if err != nil {
 		return store.AssetListPage{}, fmt.Errorf("backend: list assets: %w", err)
@@ -63,11 +60,7 @@ func (s *Service) CreateAsset(
 	if err := domain.ValidateTitle(asset.AssetClass); err != nil {
 		return domain.Asset{}, err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return domain.Asset{}, err
-	}
-	return n.CreateAsset(ctx, asset, auth.CallerFromContext(ctx))
+	return s.node.CreateAsset(ctx, asset, auth.CallerFromContext(ctx))
 }
 
 // UpdateAsset validates the old and new asset metadata and updates the asset,
@@ -87,11 +80,7 @@ func (s *Service) UpdateAsset(
 	if err := domain.ValidateTitle(asset.AssetClass); err != nil {
 		return domain.Asset{}, err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return domain.Asset{}, err
-	}
-	return n.UpdateAsset(ctx, oldCode, asset, auth.CallerFromContext(ctx))
+	return s.node.UpdateAsset(ctx, oldCode, asset, auth.CallerFromContext(ctx))
 }
 
 // --- Asset classes ---------------------------------------------------------
@@ -113,10 +102,7 @@ func (s *Service) ListAssetClasses(ctx context.Context) ([]domain.AssetClass, er
 func (s *Service) ListAssetClassRows(
 	ctx context.Context, filter store.AssetClassListFilter,
 ) (store.AssetClassListPage, error) {
-	n, err := s.groupNode()
-	if err != nil {
-		return store.AssetClassListPage{}, err
-	}
+	n := s.node
 	page, err := n.ListAssetClassRows(ctx, filter)
 	if err != nil {
 		return store.AssetClassListPage{}, fmt.Errorf("backend: list asset class rows: %w", err)
@@ -137,11 +123,7 @@ func (s *Service) CreateAssetClass(
 	if err := domain.ValidateNotes(class.Notes); err != nil {
 		return domain.AssetClass{}, err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return domain.AssetClass{}, err
-	}
-	return n.CreateAssetClass(ctx, class, auth.CallerFromContext(ctx))
+	return s.node.CreateAssetClass(ctx, class, auth.CallerFromContext(ctx))
 }
 
 // UpdateAssetClass validates the old and new class metadata and updates the
@@ -161,11 +143,7 @@ func (s *Service) UpdateAssetClass(
 	if err := domain.ValidateNotes(class.Notes); err != nil {
 		return domain.AssetClass{}, err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return domain.AssetClass{}, err
-	}
-	return n.UpdateAssetClass(ctx, oldCode, class, auth.CallerFromContext(ctx))
+	return s.node.UpdateAssetClass(ctx, oldCode, class, auth.CallerFromContext(ctx))
 }
 
 // DeleteAssetClass validates the code and removes the class, clearing the asset
@@ -174,11 +152,7 @@ func (s *Service) DeleteAssetClass(ctx context.Context, code string, force bool)
 	if err := domain.ValidateAssetClassID(code); err != nil {
 		return err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.DeleteAssetClass(ctx, code, force, auth.CallerFromContext(ctx))
+	return s.node.DeleteAssetClass(ctx, code, force, auth.CallerFromContext(ctx))
 }
 
 // DeleteAsset validates the code and removes the asset, cascading dependents
@@ -190,10 +164,7 @@ func (s *Service) DeleteAsset(ctx context.Context, code string, force bool) erro
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
+	n := s.node
 	if err := n.DeleteAsset(ctx, code, force, auth.CallerFromContext(ctx)); err != nil {
 		return err
 	}

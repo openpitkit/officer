@@ -11,7 +11,7 @@ evaluates orders.
 ## Capabilities
 
 - **One local engine over one local store** - a single node built from SQLite at startup.
-- **A reusable framework**: [`framework/`](https://pkg.go.dev/go.openpit.dev/officer/framework) in Go and `web/src/framework/` in React, of which this application is one composition.
+- **A reusable framework**: the importable Go packages - [`go.openpit.dev/officer`](https://pkg.go.dev/go.openpit.dev/officer) with its `web`, `httpapi`, `mcptools`, `engine`, `signing`, and `framework/...` packages - and `web/src/framework/` in React. This application is one composition of them; a program can build its own.
 - **A REST API over the control plane** - see the [API notes](docs/api.md).
 - **An MCP server** over stdio or streamable HTTP, with mutating tools off until an operator enables them by name.
 - **An operator dashboard**, an embedded single-page app driven by the same API.
@@ -52,9 +52,9 @@ just build                # build the SPA, then the pit-officer binary
 just check                # format checks, linters, Semgrep, tests, frontend bundles
 ```
 
-Importing the framework module, building against a local Pit checkout, building
-without Just, and the debug variants are covered in the
-[development notes](docs/development.md).
+Composing your own Officer from the importable packages, building against a
+local Pit checkout, building without Just, and the debug variants are covered in
+the [development notes](docs/development.md).
 
 ## License
 

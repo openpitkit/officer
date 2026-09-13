@@ -108,7 +108,7 @@ func newColdStartTestNode(t *testing.T, eng *fakeEngine) (*localNode, store.Real
 	}
 
 	var seed engine.Snapshot
-	n, _, err := NewLocalNode(ctx, st, fakeBuild(eng, &seed))
+	n, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, fakeBuild(eng, &seed), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestLocalNode_AdjustmentUnderOperatorCallerOnColdStore(t *testing.T) {
 	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "USD"}, testCaller); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
-	rec, err := n.ApplyAdjustment(ctx, testKey("cold"), domain.ExternalID(""),
+	rec, err := n.ApplyAdjustment(ctx, "cold", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset: "USD",
 			Balance: &domain.AdjustmentAmount{
@@ -185,7 +185,7 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 			t.Fatalf("CreateAsset(%s): %v", asset, err)
 		}
 	}
-	if _, err := n.ApplyAdjustment(ctx, testKey("cold"), domain.ExternalID(""),
+	if _, err := n.ApplyAdjustment(ctx, "cold", domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset: "USD",
 			Balance: &domain.AdjustmentAmount{
@@ -195,7 +195,8 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 		}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
-	if _, err := n.SubmitOrder(ctx, testKey("cold"), domain.Order{
+	if _, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "cold",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -205,7 +206,8 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if order, err := n.SubmitOrder(ctx, testKey("cold"), domain.Order{
+	if order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "cold",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -232,7 +234,7 @@ func TestLocalNode_ColdStartCreateGroupThenAssign(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount("cold"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountGroup(ctx, testKey("cold"), "vips", domain.MissingAccountCreate, testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, "cold", "vips", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup: %v", err)
 	}
 }

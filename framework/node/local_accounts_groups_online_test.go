@@ -214,10 +214,12 @@ func TestLocalNode_GroupCurrencyChainUpdatesWithoutRebuild(t *testing.T) {
 	var captured engine.Snapshot
 	inner := fakeBuild(eng, &captured)
 	nodeRaw, _, err := NewLocalNode(
-		ctx, st, func(snap engine.Snapshot) (engine.Engine, error) {
+		ctx,
+		domain.DefaultRealm, st, func(snap engine.Snapshot) (engine.Engine, error) {
 			builds++
 			return inner(snap)
 		},
+		failOnFatal(t),
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
@@ -267,10 +269,12 @@ func TestLocalNode_GroupBlockChainUpdatesWithoutRebuild(t *testing.T) {
 	baseBuild := fakeBuild(fake, &seed)
 	nodeRaw, _, err := NewLocalNode(
 		ctx,
+		domain.DefaultRealm,
 		st,
 		func(snapshot engine.Snapshot) (engine.Engine, error) {
 			return baseBuild(snapshot)
 		},
+		failOnFatal(t),
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
@@ -311,7 +315,7 @@ func TestLocalNode_AccountRenameFailureCompensatesWithoutRebuild(t *testing.T) {
 
 	_, err := n.UpdateAccount(
 		ctx,
-		testKey("account-old"),
+		"account-old",
 		domain.Account{Code: "account-new"},
 		testCaller,
 	)
@@ -385,14 +389,14 @@ func TestLocalNode_AccountGroupCRUDRebuildsForCascadeDelete(t *testing.T) {
 	}
 	assertFakeEffectiveCurrency(t, eng, createdAccount.Code, "USD")
 	if err := n.SetAccountBlocked(
-		ctx, testKey(createdAccount.Code), true, "online", domain.MissingAccountCreate, testCaller,
+		ctx, createdAccount.Code, true, "online", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("new account lane: %v", err)
 	}
 
 	updatedAccount, err := n.UpdateAccount(
 		ctx,
-		testKey(createdAccount.Code),
+		createdAccount.Code,
 		domain.Account{Code: "account-new", Title: "renamed"},
 		testCaller,
 	)
@@ -505,7 +509,7 @@ func TestLocalNode_AccountRenameKeepsDependentsOnStableEngineIdentity(t *testing
 
 	updated, err := n.UpdateAccount(
 		ctx,
-		testKey(created.Code),
+		created.Code,
 		domain.Account{Code: "account-new", Title: "After"},
 		testCaller,
 	)
@@ -521,7 +525,7 @@ func TestLocalNode_AccountRenameKeepsDependentsOnStableEngineIdentity(t *testing
 	}
 	if err := n.SetAccountBlocked(
 		ctx,
-		testKey(updated.Code),
+		updated.Code,
 		true,
 		"renamed identity",
 		domain.MissingAccountReject,
@@ -571,7 +575,7 @@ func TestLocalNode_SetAccountGroupRegisterFailureRestoresPreviousGroup(
 
 	err := n.SetAccountGroup(
 		ctx,
-		testKey("account"),
+		"account",
 		"desk-new",
 		domain.MissingAccountReject,
 		testCaller,
@@ -637,7 +641,7 @@ func TestLocalNode_SetAccountGroupRegisterAndCompensationFailureRebuilds(
 
 	err := n.SetAccountGroup(
 		ctx,
-		testKey("account"),
+		"account",
 		"desk-new",
 		domain.MissingAccountReject,
 		testCaller,
@@ -693,21 +697,21 @@ func TestLocalNode_ClearAccountCurrencyRevealsCurrentGroupCurrency(t *testing.T)
 		t.Fatalf("SetGroupCurrency(EUR): %v", err)
 	}
 	if err := n.SetAccountCurrency(
-		ctx, testKey(account.Code), "GBP", testCaller,
+		ctx, account.Code, "GBP", testCaller,
 	); err != nil {
 		t.Fatalf("SetAccountCurrency(GBP): %v", err)
 	}
-	stored, _, err := n.GetAccountState(ctx, testKey(account.Code))
+	stored, _, err := n.GetAccountState(ctx, account.Code)
 	if err != nil || stored.EffectiveCurrency != "GBP" {
 		t.Fatalf("account with override = %+v err=%v, want effective GBP", stored, err)
 	}
 	assertFakeEffectiveCurrency(t, eng, account.Code, "GBP")
 	if err := n.SetAccountCurrency(
-		ctx, testKey(account.Code), "", testCaller,
+		ctx, account.Code, "", testCaller,
 	); err != nil {
 		t.Fatalf("ClearAccountCurrency: %v", err)
 	}
-	stored, _, err = n.GetAccountState(ctx, testKey(account.Code))
+	stored, _, err = n.GetAccountState(ctx, account.Code)
 	if err != nil || stored.Currency != "" || stored.EffectiveCurrency != "EUR" {
 		t.Fatalf("account after clear = %+v err=%v, want inherited EUR", stored, err)
 	}
@@ -882,7 +886,7 @@ func TestLocalNode_ImplicitGroupPublicationStaysOnline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountGroup(ctx, testKey(account.Code), "auto", domain.MissingAccountCreate, testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, account.Code, "auto", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup auto-create: %v", err)
 	}
 	if err := n.SetGroupNotes(ctx, "notes-auto", "online", testCaller); err != nil {
@@ -921,7 +925,7 @@ func TestLocalNode_DeleteAccountStillRebuilds(t *testing.T) {
 		probe.last = seed
 		return fakeBuild(next, &snapshot)(seed)
 	}
-	if err := n.DeleteAccount(ctx, testKey(account.Code), true, testCaller); err != nil {
+	if err := n.DeleteAccount(ctx, account.Code, true, testCaller); err != nil {
 		t.Fatalf("DeleteAccount: %v", err)
 	}
 	if probe.builds != 2 {

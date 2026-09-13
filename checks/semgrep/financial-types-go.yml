@@ -18,7 +18,7 @@
 # Domain type for financial values (Go).
 #
 # officer's money domain type is github.com/shopspring/decimal.Decimal, used
-# throughout framework/domain, internal/httpapi, internal/store/sqlite,
+# throughout framework/domain, httpapi, internal/store/sqlite,
 # framework/backend, framework/businesscsv, framework/marketdata and
 # framework/node. A raw float64 in one of these packages is the usual way the
 # domain model gets bypassed; deliberately not keyed on field names, since a
@@ -52,7 +52,7 @@ rules:
           func ($R $T) $FN(..., $A float64, ...) $RET { ... }
     paths:
       include:
-        - /internal/httpapi/**
+        - /httpapi/**
         - /internal/store/**
         - /framework/domain/**
         - /framework/backend/**

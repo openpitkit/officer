@@ -20,6 +20,7 @@ package marketdata
 import (
 	"context"
 	"errors"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"io"
 	"strings"
 	"sync"
@@ -54,7 +55,7 @@ func TestSearchSymbolsFromSetMatchesEncodedPairs(t *testing.T) {
 		"ETHUSDT":  {},
 	}
 	matches := searchSymbolsFromSet(
-		known, SymbolSearchQuery{Query: "BTC/USDT"}, "SPOT",
+		known, fwmarketdata.SymbolSearchQuery{Query: "BTC/USDT"}, "SPOT",
 	)
 	if len(matches) < 2 {
 		t.Fatalf("matches = %+v, want BTC variants", matches)
@@ -81,7 +82,7 @@ func TestSearchSymbolsFromSetMatchesBaseOrSubstring(t *testing.T) {
 		"AAPL":   {},
 	}
 	matches := searchSymbolsFromSet(
-		known, SymbolSearchQuery{Query: "EUR"}, "SPOT",
+		known, fwmarketdata.SymbolSearchQuery{Query: "EUR"}, "SPOT",
 	)
 	if len(matches) != 2 {
 		t.Fatalf("matches = %+v, want EURUSD and XBEUR", matches)
@@ -112,68 +113,68 @@ func TestSubscriptionNormalizersRequireExternalSymbol(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		normalize func(Subscription) error
+		normalize func(fwmarketdata.Subscription) error
 	}{
 		{
 			name: "alpaca",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeAlpacaSubscriptions([]Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeAlpacaSubscriptions([]fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
 		{
 			name: "binance",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeBinanceSubscriptions([]Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeBinanceSubscriptions([]fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
 		{
 			name: "bybit",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeBybitSubscriptions([]Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeBybitSubscriptions([]fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
 		{
 			name: "coinbase",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeCoinbaseSubscriptions([]Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeCoinbaseSubscriptions([]fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
 		{
 			name: "finnhub",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeFinnhubSubscriptions([]Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeFinnhubSubscriptions([]fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
 		{
 			name: "ib",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeIBSubscriptions(ibConfig{}, []Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeIBSubscriptions(ibConfig{}, []fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
 		{
 			name: "kraken",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeKrakenSubscriptions([]Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeKrakenSubscriptions([]fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
 		{
 			name: "oanda",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeOANDASubscriptions([]Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeOANDASubscriptions([]fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
 		{
 			name: "okx",
-			normalize: func(sub Subscription) error {
-				_, err := normalizeOKXSubscriptions([]Subscription{sub})
+			normalize: func(sub fwmarketdata.Subscription) error {
+				_, err := normalizeOKXSubscriptions([]fwmarketdata.Subscription{sub})
 				return err
 			},
 		},
@@ -182,7 +183,7 @@ func TestSubscriptionNormalizersRequireExternalSymbol(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := tt.normalize(Subscription{Base: 41, Quote: 42})
+			err := tt.normalize(fwmarketdata.Subscription{Base: 41, Quote: 42})
 			if err == nil {
 				t.Fatal("normalize error = nil, want missing external symbol")
 			}
@@ -343,8 +344,8 @@ func TestUnparsableTrackerReportsOnceAfterThreshold(t *testing.T) {
 	t.Parallel()
 
 	var tracker unparsableTracker
-	var diagnostics []Diagnostic
-	report := func(diag Diagnostic) { diagnostics = append(diagnostics, diag) }
+	var diagnostics []fwmarketdata.Diagnostic
+	report := func(diag fwmarketdata.Diagnostic) { diagnostics = append(diagnostics, diag) }
 
 	tracker.recordUnparsed(report)
 	tracker.recordUnparsed(report)
@@ -362,8 +363,8 @@ func TestUnparsableTrackerDoesNotReportAfterParsedFrame(t *testing.T) {
 	t.Parallel()
 
 	var tracker unparsableTracker
-	var diagnostics []Diagnostic
-	report := func(diag Diagnostic) { diagnostics = append(diagnostics, diag) }
+	var diagnostics []fwmarketdata.Diagnostic
+	report := func(diag fwmarketdata.Diagnostic) { diagnostics = append(diagnostics, diag) }
 
 	tracker.recordParsed()
 	for i := 0; i < unparsableThreshold+1; i++ {

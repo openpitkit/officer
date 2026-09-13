@@ -143,7 +143,7 @@ func newRotatingLifecycleQuoteNode(
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	builder := &rotatingLifecycleQuoteBuilder{}
-	nn, _, err := NewLocalNode(ctx, st, builder.build)
+	nn, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, builder.build, failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -579,13 +579,13 @@ func TestLocalNode_ResetDatabaseFailurePreservesQuotes(t *testing.T) {
 		service:    sink,
 	}
 	var seed engine.Snapshot
-	nn, _, err := NewLocalNode(ctx, st, func(snapshot engine.Snapshot) (engine.Engine, error) {
+	nn, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, func(snapshot engine.Snapshot) (engine.Engine, error) {
 		_, buildErr := fakeBuild(initial, &seed)(snapshot)
 		if buildErr != nil {
 			return nil, buildErr
 		}
 		return capable, nil
-	})
+	}, failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}

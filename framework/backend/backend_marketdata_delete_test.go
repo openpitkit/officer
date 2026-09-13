@@ -44,10 +44,6 @@ type marketDataDeleteTestNode struct {
 	instrument                domain.MarketDataInstrument
 }
 
-func (n *marketDataDeleteTestNode) Owns(node.Key) bool {
-	return true
-}
-
 func (n *marketDataDeleteTestNode) CurrentMarketDataSink() marketdata.Sink {
 	return n.sink
 }
@@ -152,11 +148,7 @@ func newMarketDataDeleteTestService(
 	md MarketDataRuntime,
 ) *Service {
 	t.Helper()
-	router, err := node.NewLocalRouter(n)
-	if err != nil {
-		t.Fatalf("NewLocalRouter: %v", err)
-	}
-	return &Service{router: router, md: md}
+	return &Service{node: n, md: md}
 }
 
 func TestServiceDeleteAssetForceRestartsMarketData(t *testing.T) {

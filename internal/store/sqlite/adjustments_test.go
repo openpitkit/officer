@@ -32,7 +32,7 @@ import (
 )
 
 // seedAdjustmentFixtures creates the dictionary rows adjustment tests need.
-func seedAdjustmentFixtures(t *testing.T) (context.Context, RealmStore) {
+func seedAdjustmentFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -151,7 +151,7 @@ func TestRecordAccountAdjustmentPersistsEngineBalanceInSameTx(t *testing.T) {
 				RealizedPnlResult: "-12.50",
 			},
 		},
-		Audit: AuditEntry{
+		Audit: fwstore.AuditEntry{
 			Action:  domain.AuditActionAdjustment,
 			Account: "acc-1",
 			Asset:   "AAPL",
@@ -209,7 +209,7 @@ func TestRecordAccountAdjustmentPreservesUnsetAndZeroRealizedPnl(t *testing.T) {
 						BalanceResult: "1", RealizedPnlResult: test.realizedPnl,
 					},
 				},
-				Audit: AuditEntry{
+				Audit: fwstore.AuditEntry{
 					Action: domain.AuditActionAdjustment, Account: "acc-1",
 					Asset: "AAPL", Source: domain.SourcePanel,
 					Detail: "adjust balance account acc-1 asset=AAPL",
@@ -268,7 +268,7 @@ func TestRecordAccountAdjustmentPersistsHaltedRealizedPnlWithoutValue(t *testing
 						RealizedPnlHaltReason: halt,
 					},
 				},
-				Audit: AuditEntry{
+				Audit: fwstore.AuditEntry{
 					Action: domain.AuditActionAdjustment, Account: "acc-1",
 					Asset: "AAPL", Source: domain.SourcePanel,
 					Detail: "halt balance realized_pnl account acc-1 asset=AAPL",
@@ -324,7 +324,7 @@ func TestRecordAccountAdjustmentDeletesEngineEmptyBalance(t *testing.T) {
 						RealizedPnlResult: realizedPnl,
 					},
 				},
-				Audit: AuditEntry{
+				Audit: fwstore.AuditEntry{
 					Action: domain.AuditActionAdjustment, Account: "acc-1",
 					Asset: "AAPL", Source: domain.SourcePanel,
 					Detail: "clear balance account acc-1 asset=AAPL",

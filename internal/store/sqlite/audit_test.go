@@ -34,7 +34,7 @@ import (
 )
 
 // seedAuditFixtures creates an account and an actor principal for the audit tests.
-func seedAuditFixtures(t *testing.T) (context.Context, RealmStore) {
+func seedAuditFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -50,7 +50,7 @@ func seedAuditFixtures(t *testing.T) (context.Context, RealmStore) {
 func TestAuditAppendListAndExternalID(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Actor:   "operator",
 		Action:  domain.AuditActionSubmitOrder,
 		Account: "acc-1",
@@ -61,7 +61,7 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 		t.Fatalf("AppendAudit: %v", err)
 	}
 	// A system-initiated row with no account/actor.
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action: domain.AuditActionHydrate,
 		Detail: "boot",
 	}); err != nil {
@@ -136,11 +136,11 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 	valid := []struct {
 		name  string
-		entry AuditEntry
+		entry fwstore.AuditEntry
 	}{
 		{
 			name: "accepted order",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:  domain.AuditActionSubmitOrder,
 				OrderID: "opaque-accepted-order",
 				Verdict: "accept",
@@ -148,7 +148,7 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 		},
 		{
 			name: "rejected drop copy with code",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:     domain.AuditActionSubmitDropCopy,
 				OrderID:    "opaque-rejected-drop-copy",
 				Verdict:    "reject",
@@ -157,7 +157,7 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 		},
 		{
 			name: "rejected order without code",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:  domain.AuditActionSubmitOrder,
 				OrderID: "opaque-rejected-order",
 				Verdict: "reject",
@@ -165,7 +165,7 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 		},
 		{
 			name: "unrelated action without decision metadata",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action: domain.AuditActionCreateAccount,
 			},
 		},
@@ -188,11 +188,11 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 
 	invalid := []struct {
 		name  string
-		entry AuditEntry
+		entry fwstore.AuditEntry
 	}{
 		{
 			name: "unknown verdict",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:  domain.AuditActionSubmitOrder,
 				OrderID: "opaque-order",
 				Verdict: "maybe",
@@ -200,21 +200,21 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 		},
 		{
 			name: "missing order id",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:  domain.AuditActionSubmitOrder,
 				Verdict: "accept",
 			},
 		},
 		{
 			name: "missing verdict",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:  domain.AuditActionSubmitDropCopy,
 				OrderID: "opaque-order",
 			},
 		},
 		{
 			name: "accept with reject code",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:  domain.AuditActionSubmitOrder,
 				OrderID: "opaque-order",
 				Verdict: "accept", RejectCode: "order_size",
@@ -222,21 +222,21 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 		},
 		{
 			name: "unrelated action with order id",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:  domain.AuditActionCreateAccount,
 				OrderID: "opaque-order",
 			},
 		},
 		{
 			name: "unrelated action with verdict",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:  domain.AuditActionCreateAccount,
 				Verdict: "accept",
 			},
 		},
 		{
 			name: "unrelated action with reject code",
-			entry: AuditEntry{
+			entry: fwstore.AuditEntry{
 				Action:     domain.AuditActionCreateAccount,
 				RejectCode: "order_size",
 			},
@@ -263,7 +263,7 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 func TestAppendAuditBatchIsAtomic(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 
-	err := rs.AppendAuditBatch(ctx, []AuditEntry{
+	err := rs.AppendAuditBatch(ctx, []fwstore.AuditEntry{
 		{
 			Action: domain.AuditActionCreateAccount,
 			Detail: "first row must roll back",
@@ -284,7 +284,7 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 		t.Fatalf("failed batch persisted partial rows: %+v", rows)
 	}
 
-	err = rs.AppendAuditBatch(ctx, []AuditEntry{
+	err = rs.AppendAuditBatch(ctx, []fwstore.AuditEntry{
 		{
 			Action: domain.AuditActionCreateAccount,
 			Detail: "first metadata row must roll back",
@@ -306,7 +306,7 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 		t.Fatalf("invalid metadata batch persisted partial rows: %+v", rows)
 	}
 
-	if err := rs.AppendAuditBatch(ctx, []AuditEntry{
+	if err := rs.AppendAuditBatch(ctx, []fwstore.AuditEntry{
 		{Action: domain.AuditActionCreateAccount, Detail: "first"},
 		{Action: domain.AuditActionUpdateAccount, Detail: "second"},
 	}); err != nil {
@@ -324,7 +324,7 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 func TestAuditAppendUnknownRefIsSnapshot(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action:  domain.AuditActionBlock,
 		Account: "ghost",
 		Actor:   "ghost",
@@ -346,7 +346,7 @@ func TestAuditAppendUnknownRefIsSnapshot(t *testing.T) {
 func TestAuditTitleSnapshotPersistedVerbatim(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Actor:        "operator",
 		ActorTitle:   "Snapshot Operator",
 		Action:       domain.AuditActionBlock,
@@ -389,7 +389,7 @@ func TestAuditTitleBackfilledFromLiveRows(t *testing.T) {
 		t.Fatalf("CreatePrincipal: %v", err)
 	}
 
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Actor:   "operator",
 		Action:  domain.AuditActionBlock,
 		Account: "acc-1",
@@ -419,16 +419,16 @@ func TestAuditFiltered(t *testing.T) {
 		t.Fatalf("CreateAccount(acc-2): %v", err)
 	}
 
-	mustAppend := func(e AuditEntry) {
+	mustAppend := func(e fwstore.AuditEntry) {
 		t.Helper()
 		if err := rs.AppendAudit(ctx, e); err != nil {
 			t.Fatalf("AppendAudit: %v", err)
 		}
 	}
-	mustAppend(AuditEntry{Action: domain.AuditActionBlock, Account: "acc-1", Source: domain.SourcePanel})
-	mustAppend(AuditEntry{Action: domain.AuditActionUnblock, Account: "acc-1", Source: domain.SourceAPI})
-	mustAppend(AuditEntry{Action: domain.AuditActionBlock, Account: "acc-2", Source: domain.SourcePanel})
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{Action: domain.AuditActionBlock, Account: "acc-1", Source: domain.SourcePanel})
+	mustAppend(fwstore.AuditEntry{Action: domain.AuditActionUnblock, Account: "acc-1", Source: domain.SourceAPI})
+	mustAppend(fwstore.AuditEntry{Action: domain.AuditActionBlock, Account: "acc-2", Source: domain.SourcePanel})
+	mustAppend(fwstore.AuditEntry{
 		Action:  domain.AuditActionSubmitOrder,
 		Account: "acc-2", Source: domain.SourceMCP,
 		OrderID: "opaque-filter-order", Verdict: "accept",
@@ -493,33 +493,33 @@ func TestAuditFiltered(t *testing.T) {
 // asset code they recorded, and rows with no asset are excluded.
 func TestAuditAssetFilter(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
-	mustAppend := func(entry AuditEntry) {
+	mustAppend := func(entry fwstore.AuditEntry) {
 		t.Helper()
 		if err := rs.AppendAudit(ctx, entry); err != nil {
 			t.Fatalf("AppendAudit(%s): %v", entry.Detail, err)
 		}
 	}
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionAdjustment, Account: "acc-1", Asset: "AAPL",
 		Detail: "adjust AAPL",
 	})
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionCreateAsset, Asset: "AAPL",
 		Detail: "create asset AAPL",
 	})
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionUpdateAsset, Asset: "AAPL",
 		Detail: "update asset AAPL",
 	})
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionDeleteAsset, Asset: "AAPL",
 		Detail: "delete asset AAPL",
 	})
 	// Rows with no asset, or a different asset, must be excluded.
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionBlock, Account: "acc-1", Detail: "block acc-1",
 	})
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionAdjustment, Account: "acc-1", Asset: "MSFT",
 		Detail: "adjust MSFT",
 	})
@@ -552,7 +552,7 @@ func TestAuditAssetFilter(t *testing.T) {
 
 func TestAuditAccountFilterUsesImmutableCodeSnapshot(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action:  domain.AuditActionBlock,
 		Account: "acc-1",
 		Detail:  "blocked before rename",
@@ -602,25 +602,25 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 	if err := rs.CreatePrincipal(ctx, domain.Principal{Code: "robot"}); err != nil {
 		t.Fatalf("CreatePrincipal(robot): %v", err)
 	}
-	mustAppend := func(entry AuditEntry) {
+	mustAppend := func(entry fwstore.AuditEntry) {
 		t.Helper()
 		if err := rs.AppendAudit(ctx, entry); err != nil {
 			t.Fatalf("AppendAudit(%s): %v", entry.Detail, err)
 		}
 	}
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Actor: "operator", Action: domain.AuditActionBlock,
 		Account: "acc-2", Source: domain.SourcePanel, Detail: "row-old",
 	})
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Actor: "operator", Action: domain.AuditActionUnblock,
 		Account: "acc-1", Source: domain.SourcePanel, Detail: "row-mid",
 	})
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Actor: "operator", Action: domain.AuditActionBlock,
 		Account: "acc-1", Source: domain.SourcePanel, Detail: "row-new",
 	})
-	mustAppend(AuditEntry{
+	mustAppend(fwstore.AuditEntry{
 		Actor: "robot", Action: domain.AuditActionSubmitOrder,
 		Account: "acc-1", Source: domain.SourceMCP, Detail: "row-other",
 		OrderID: "opaque-page-order", Verdict: "accept",
@@ -692,7 +692,7 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 	// Populate a few thousand rows so the query planner's index choice is not an
 	// artifact of a near-empty table.
 	for i := 0; i < 4000; i++ {
-		if err := rs.AppendAudit(ctx, AuditEntry{
+		if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 			Actor: "operator", Action: domain.AuditActionBlock,
 			Account: "acc-1", Source: domain.SourcePanel, Detail: "bulk",
 		}); err != nil {
@@ -764,7 +764,7 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 
-	if err := rs.AppendAudit(ctx, AuditEntry{
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Actor:        "operator",
 		ActorTitle:   "Snapshot Operator",
 		Action:       domain.AuditActionBlock,
@@ -845,7 +845,7 @@ func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 // connection so the test isolates audit snapshot behavior from store delete
 // policy.
 func deleteAccountRaw(
-	t *testing.T, ctx context.Context, rs RealmStore, code domain.AccountID,
+	t *testing.T, ctx context.Context, rs fwstore.RealmStore, code domain.AccountID,
 ) {
 	t.Helper()
 	r := rs.(*realmStore)

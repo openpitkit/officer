@@ -29,12 +29,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestNormalizeKrakenSubscriptionsPreservesAssetKeys(t *testing.T) {
 	t.Parallel()
 
-	subs, err := normalizeKrakenSubscriptions([]Subscription{
+	subs, err := normalizeKrakenSubscriptions([]fwmarketdata.Subscription{
 		{External: "xbt/usd", Base: testMarketDataAssetID("opaque-base"), Quote: testMarketDataAssetID("opaque-quote")},
 		{External: "XDG/USD", Base: testMarketDataAssetID("another-base"), Quote: testMarketDataAssetID("another-quote")},
 	})
@@ -61,7 +62,7 @@ func TestNormalizeKrakenSubscriptionsPreservesAssetKeys(t *testing.T) {
 func TestKrakenSubscribePayload(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
+	subs := mustNormalizeKrakenSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "ETH/USD", Base: testMarketDataAssetID("ETH"), Quote: testMarketDataAssetID("USD")},
 		{External: "XBT/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
@@ -108,7 +109,7 @@ func TestKrakenSymbolsFromAssetPairsUsesDisplayPairKeys(t *testing.T) {
 func TestParseKrakenQuoteUpdates(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
+	subs := mustNormalizeKrakenSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "XBT/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{"channel":"ticker","type":"snapshot","data":[` +
@@ -159,7 +160,7 @@ func TestParseKrakenQuoteUpdatesIgnoresRoutineFrames(t *testing.T) {
 func TestKrakenConnector_ReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
+	subs := mustNormalizeKrakenSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "XBT/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := &fakeKrakenConn{
@@ -207,7 +208,7 @@ func TestKrakenConnector_ReconnectsAndResubscribes(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -215,7 +216,7 @@ func TestKrakenConnector_ReconnectsAndResubscribes(t *testing.T) {
 		close(ch)
 	}()
 
-	got := make([]QuoteUpdate, 0, 2)
+	got := make([]fwmarketdata.QuoteUpdate, 0, 2)
 	for update := range ch {
 		got = append(got, update)
 	}
@@ -249,7 +250,7 @@ func TestKrakenConnector_CloseStopsSubscription(t *testing.T) {
 		reconnectMax: time.Millisecond,
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "XBT/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -347,16 +348,16 @@ func TestKrakenConnector_VerifySymbolFetchError(t *testing.T) {
 func TestKrakenConnector_ValidateSymbolsDropsUnknown(t *testing.T) {
 	t.Parallel()
 
-	var diags []Diagnostic
+	var diags []fwmarketdata.Diagnostic
 	connector := &krakenConnector{
 		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
 			return map[string]struct{}{"BTC/USD": {}, "DOGE/USD": {}}, nil
 		},
-		diagReport: func(diag Diagnostic) {
+		diagReport: func(diag fwmarketdata.Diagnostic) {
 			diags = append(diags, diag)
 		},
 	}
-	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
+	subs := mustNormalizeKrakenSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 		{
 			External: "DOGE/EUR",
@@ -385,7 +386,7 @@ func TestKrakenConnector_ValidateSymbolsDropsUnknown(t *testing.T) {
 func TestKrakenConnector_DiagnoseUnknownSymbol(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
+	subs := mustNormalizeKrakenSubscriptions(t, []fwmarketdata.Subscription{
 		{
 			External: "BTC/USDXX",
 			Base:     testMarketDataAssetID("opaque-base-key"),
@@ -419,7 +420,7 @@ func TestKrakenConnector_DiagnoseUnknownSymbol(t *testing.T) {
 func TestKrakenConnector_ReconnectBackoffResetsAfterData(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeKrakenSubscriptions(t, []Subscription{
+	subs := mustNormalizeKrakenSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC/USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},
 	})
 	conns := []*fakeKrakenConn{
@@ -461,7 +462,7 @@ func TestKrakenConnector_ReconnectBackoffResetsAfterData(t *testing.T) {
 		reconnectMax: 8 * time.Millisecond,
 	}
 
-	ch := make(chan QuoteUpdate, 1)
+	ch := make(chan fwmarketdata.QuoteUpdate, 1)
 	connector.run(context.Background(), subs, ch)
 
 	want := []time.Duration{
@@ -475,7 +476,7 @@ func TestKrakenConnector_ReconnectBackoffResetsAfterData(t *testing.T) {
 }
 
 func mustNormalizeKrakenSubscriptions(
-	t *testing.T, subs []Subscription,
+	t *testing.T, subs []fwmarketdata.Subscription,
 ) []krakenSubscription {
 	t.Helper()
 	normalized, err := normalizeKrakenSubscriptions(subs)

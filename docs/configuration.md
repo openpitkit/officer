@@ -1,7 +1,9 @@
 # Configuration reference
 
 Pit Officer is configured through environment variables and command-line flags.
-Precedence is flags, then the environment, then the built-in defaults. An empty
+Precedence is flags, then the environment, then the built-in defaults - except
+for the runtime library path, whose flag must match the environment (see
+below). An empty
 environment value is treated as unset for `PIT_OFFICER_HTTP_ADDR`,
 `PIT_OFFICER_SQLITE_PATH`, and `OPENPIT_RUNTIME_LIBRARY_PATH`, so it does not
 shadow the default; for the two master-key variables an empty value is
@@ -54,9 +56,16 @@ where the runtime-state file goes - see below.
 
 ## Runtime library path
 
-An explicit path to a pre-extracted native OpenPit runtime library. When set,
-the Go binding skips its own extraction step. The container image leaves it
-unset.
+The OpenPit SDK loads its native runtime once, at process start: the library
+`OPENPIT_RUNTIME_LIBRARY_PATH` names, or the runtime embedded in the SDK when the
+variable is unset. Nothing later in the process can change it, so set the
+variable in the environment that starts `pit-officer`.
+
+`-runtime-library-path` does not choose the runtime. When it is set, `mcp` and
+`serve` compare it with the variable the process started with - surrounding
+whitespace trimmed and the path cleaned, so `/a/b/` and `/a/b` match - and
+refuse to start, naming both values, when they differ. The container image
+leaves both unset.
 
 ## Browser launch
 

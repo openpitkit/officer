@@ -188,9 +188,9 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 		tieDirection = "DESC"
 	}
 	// The (kind, scope, account, asset) composite is unique across the union, so
-	// it is a deterministic tiebreak the cross-shard merge can reproduce without
-	// the per-table surrogate id. stable_id stays the final tiebreak for the
-	// degenerate case where the composite repeats across shards.
+	// it is a deterministic tiebreak that does not depend on the per-table
+	// surrogate id. stable_id stays the final tiebreak for the degenerate case
+	// where the composite repeats.
 	tie := "kind " + tieDirection + ", scope " + tieDirection +
 		", account_code " + tieDirection +
 		", account_group_code " + tieDirection +

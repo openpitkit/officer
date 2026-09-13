@@ -35,15 +35,6 @@ import (
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
-// FreshnessTTL is the officer-wide quote freshness window.
-const FreshnessTTL = fwmarketdata.FreshnessTTL
-
-// QuoteUpdate is one quote normalized to an instrument, ready for the sink.
-type QuoteUpdate = fwmarketdata.QuoteUpdate
-
-// Sink receives normalized quotes and forwards them to the engine.
-type Sink = fwmarketdata.Sink
-
 const (
 	DiagError = "error"
 	DiagWarn  = "warn"
@@ -73,37 +64,25 @@ const (
 	ActionRemoveInstrument = "remove_instrument"
 )
 
-type DiagnosticAction = fwmarketdata.DiagnosticAction
-type Diagnostic = fwmarketdata.Diagnostic
-type Subscription = fwmarketdata.Subscription
-type Connector = fwmarketdata.Connector
-type ProviderReferences = fwmarketdata.ProviderReferences
-type Referenceable = fwmarketdata.Referenceable
-type SymbolVerification = fwmarketdata.SymbolVerification
-type SymbolVerifier = fwmarketdata.SymbolVerifier
-type SymbolMatch = fwmarketdata.SymbolMatch
-type SymbolSearchQuery = fwmarketdata.SymbolSearchQuery
-type SymbolSearcher = fwmarketdata.SymbolSearcher
-
 const symbolSearchLimit = 50
 
 func verifySymbolFromSet(
 	known map[string]struct{}, external string,
-) SymbolVerification {
+) fwmarketdata.SymbolVerification {
 	symbol := strings.TrimSpace(external)
 	if symbol == "" {
-		return SymbolVerification{}
+		return fwmarketdata.SymbolVerification{}
 	}
 	if _, ok := known[symbol]; ok {
-		return SymbolVerification{Exists: true}
+		return fwmarketdata.SymbolVerification{Exists: true}
 	}
 	folded := strings.ToUpper(symbol)
 	if folded != symbol {
 		if _, ok := known[folded]; ok {
-			return SymbolVerification{Suggestion: folded}
+			return fwmarketdata.SymbolVerification{Suggestion: folded}
 		}
 	}
-	return SymbolVerification{}
+	return fwmarketdata.SymbolVerification{}
 }
 
 type setSymbolMatch struct {
@@ -174,15 +153,15 @@ func sharedSymbolPrefixLength(left, right string) int {
 }
 
 func searchSymbolsFromSet(
-	known map[string]struct{}, query SymbolSearchQuery, secType string,
-) []SymbolMatch {
+	known map[string]struct{}, query fwmarketdata.SymbolSearchQuery, secType string,
+) []fwmarketdata.SymbolMatch {
 	q := strings.TrimSpace(query.Query)
 	if q == "" {
-		return []SymbolMatch{}
+		return []fwmarketdata.SymbolMatch{}
 	}
 	normQuery := normalizedSymbolSearchKey(q)
 	if normQuery == "" {
-		return []SymbolMatch{}
+		return []fwmarketdata.SymbolMatch{}
 	}
 	base, quote, hasPair := splitSymbolPair(q)
 	scored := make([]setSymbolMatch, 0)
@@ -202,9 +181,9 @@ func searchSymbolsFromSet(
 	if len(scored) > symbolSearchLimit {
 		scored = scored[:symbolSearchLimit]
 	}
-	matches := make([]SymbolMatch, 0, len(scored))
+	matches := make([]fwmarketdata.SymbolMatch, 0, len(scored))
 	for _, item := range scored {
-		matches = append(matches, SymbolMatch{
+		matches = append(matches, fwmarketdata.SymbolMatch{
 			Symbol:  item.symbol,
 			SecType: secType,
 		})
@@ -282,8 +261,8 @@ func splitSymbolPair(value string) (base, quote string, ok bool) {
 	return base, quote, true
 }
 
-func providerUnknownSymbolDiag(provider, external string) Diagnostic {
-	return Diagnostic{
+func providerUnknownSymbolDiag(provider, external string) fwmarketdata.Diagnostic {
+	return fwmarketdata.Diagnostic{
 		Level:      DiagError,
 		Code:       CodeUnknownSymbol,
 		Kind:       DiagKindConfig,
@@ -295,14 +274,14 @@ func providerUnknownSymbolDiag(provider, external string) Diagnostic {
 			provider,
 		),
 		Remediation: "Remove this instrument and add one with a valid provider symbol. See the valid symbols list.",
-		Actions: []DiagnosticAction{
+		Actions: []fwmarketdata.DiagnosticAction{
 			{Type: ActionRemoveInstrument, Target: external},
 			{Type: ActionOpenSymbols},
 		},
 	}
 }
 
-func missingExternalSymbolError(provider string, sub Subscription) error {
+func missingExternalSymbolError(provider string, sub fwmarketdata.Subscription) error {
 	return fmt.Errorf(
 		"%s subscription for asset key %d/%d: external symbol is missing",
 		provider,
@@ -315,15 +294,12 @@ func invalidExternalSymbolError(provider, external string) error {
 	return fmt.Errorf("%s subscription external symbol %q is invalid", provider, external)
 }
 
-type DiagnosticReporter = fwmarketdata.DiagnosticReporter
-type DiagnosticReporting = fwmarketdata.DiagnosticReporting
-
 type websocketReadResult struct {
 	payload []byte
 	err     error
 }
 
-const defaultWebsocketReadTimeout = FreshnessTTL
+const defaultWebsocketReadTimeout = fwmarketdata.FreshnessTTL
 
 func websocketReadLoop(
 	ctx context.Context,
@@ -416,7 +392,7 @@ func (t *unparsableTracker) recordParsed() {
 	t.framesParsed++
 }
 
-func (t *unparsableTracker) recordUnparsed(report func(Diagnostic)) {
+func (t *unparsableTracker) recordUnparsed(report func(fwmarketdata.Diagnostic)) {
 	if t.reported {
 		return
 	}
@@ -425,19 +401,13 @@ func (t *unparsableTracker) recordUnparsed(report func(Diagnostic)) {
 		return
 	}
 	t.reported = true
-	report(Diagnostic{
+	report(fwmarketdata.Diagnostic{
 		Level:       DiagError,
 		Code:        CodeUnparsableData,
 		Kind:        DiagKindProvider,
 		Title:       "Receiving data but cannot parse it",
 		Detail:      "The source is sending data but Officer could not decode it (likely a format mismatch).",
 		Remediation: "This is an internal issue, not your configuration - please report it.",
-		Actions:     []DiagnosticAction{{Type: ActionRestart}},
+		Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}},
 	})
 }
-
-type Diagnosable = fwmarketdata.Diagnosable
-type SilenceTolerant = fwmarketdata.SilenceTolerant
-type StatusReporter = fwmarketdata.StatusReporter
-type StatusReporting = fwmarketdata.StatusReporting
-type Pushable = fwmarketdata.Pushable

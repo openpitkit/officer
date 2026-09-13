@@ -35,7 +35,7 @@ import (
 
 // seedBalanceFixtures seeds two asset and an account and returns the realm
 // handle ready for balance tests.
-func seedBalanceFixtures(t *testing.T) (context.Context, RealmStore) {
+func seedBalanceFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -427,7 +427,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		limit domain.LimitSpotFundsPnlBounds
-		seed  func(context.Context, RealmStore)
+		seed  func(context.Context, fwstore.RealmStore)
 	}{
 		{
 			name: "account PnL bounds",
@@ -442,7 +442,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 				Currency:   "USD",
 				UpperBound: "10",
 			},
-			seed: func(ctx context.Context, rs RealmStore) {
+			seed: func(ctx context.Context, rs fwstore.RealmStore) {
 				if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
 					t.Fatalf("CreateGroup: %v", err)
 				}

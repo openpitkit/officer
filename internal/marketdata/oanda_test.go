@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestParseOANDACredentials(t *testing.T) {
@@ -78,7 +79,7 @@ func TestParseOANDACredentialsRejectsInvalidEnvironment(t *testing.T) {
 func TestOANDAPricingStreamURL(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 		{External: "GBP_USD", Base: testMarketDataAssetID("GBP"), Quote: testMarketDataAssetID("USD")},
 	})
@@ -105,7 +106,7 @@ func TestOANDAPricingStreamURL(t *testing.T) {
 func TestParseOANDAQuoteUpdate(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{
@@ -131,7 +132,7 @@ func TestParseOANDAQuoteUpdate(t *testing.T) {
 func TestParseOANDAQuoteUpdateSkipsHeartbeat(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	if _, ok := parseOANDAQuoteUpdate([]byte(`{"type":"HEARTBEAT"}`), subs); ok {
@@ -142,7 +143,7 @@ func TestParseOANDAQuoteUpdateSkipsHeartbeat(t *testing.T) {
 func TestParseOANDAQuoteUpdateSkipsEmptyPrice(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`{
@@ -160,7 +161,7 @@ func TestParseOANDAQuoteUpdateSkipsEmptyPrice(t *testing.T) {
 func TestOANDAConnector_AllowsLongPriceLine(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	line := `{"type":"PRICE","instrument":"EUR_USD","time":"2026-06-20T10:11:12Z","bids":[{"price":"1"}],"asks":[{"price":"1.1"}],"extra":"` +
@@ -176,7 +177,7 @@ func TestOANDAConnector_AllowsLongPriceLine(t *testing.T) {
 		},
 	}
 
-	out := make(chan QuoteUpdate, 1)
+	out := make(chan fwmarketdata.QuoteUpdate, 1)
 	delivered, err := connector.streamQuotes(context.Background(), subs, out)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("streamQuotes err = %v, want EOF", err)
@@ -215,7 +216,7 @@ func TestOANDAConnector_SubscribeCloseLifecycle(t *testing.T) {
 		},
 	}
 
-	ch, err := connector.Subscribe(context.Background(), []Subscription{
+	ch, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	if err != nil {
@@ -226,7 +227,7 @@ func TestOANDAConnector_SubscribeCloseLifecycle(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stream did not start")
 	}
-	var update QuoteUpdate
+	var update fwmarketdata.QuoteUpdate
 	select {
 	case got, ok := <-ch:
 		if !ok {
@@ -315,7 +316,7 @@ func TestStreamOANDANonOKClosesBody(t *testing.T) {
 func TestOANDAConnector_ReconnectsWithBackoff(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := io.NopCloser(strings.NewReader(strings.Join([]string{
@@ -360,7 +361,7 @@ func TestOANDAConnector_ReconnectsWithBackoff(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -368,7 +369,7 @@ func TestOANDAConnector_ReconnectsWithBackoff(t *testing.T) {
 		close(ch)
 	}()
 
-	got := make([]QuoteUpdate, 0, 2)
+	got := make([]fwmarketdata.QuoteUpdate, 0, 2)
 	for update := range ch {
 		got = append(got, update)
 		if len(got) == 2 {
@@ -394,7 +395,7 @@ func TestOANDAConnector_ReconnectsWithBackoff(t *testing.T) {
 func TestOANDAConnector_RetriesStreamOpenError(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	wantErr := errors.New("temporary")
@@ -418,7 +419,7 @@ func TestOANDAConnector_RetriesStreamOpenError(t *testing.T) {
 		},
 	}
 
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	connector.run(context.Background(), subs, ch)
 	if attempts != 2 {
 		t.Fatalf("attempts = %d, want 2", attempts)
@@ -428,7 +429,7 @@ func TestOANDAConnector_RetriesStreamOpenError(t *testing.T) {
 func TestOANDAConnector_IdleTimeoutClosesStream(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	var body *blockingOANDABody
@@ -451,7 +452,7 @@ func TestOANDAConnector_IdleTimeoutClosesStream(t *testing.T) {
 		},
 	}
 
-	out := make(chan QuoteUpdate, 1)
+	out := make(chan fwmarketdata.QuoteUpdate, 1)
 	delivered, err := connector.streamQuotes(context.Background(), subs, out)
 	if err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("streamQuotes err = %v, want non-nil non-EOF idle error", err)
@@ -475,7 +476,7 @@ func TestOANDAConnector_IdleTimeoutClosesStream(t *testing.T) {
 func TestOANDAConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOANDASubscriptions(t, []Subscription{
+	subs := mustNormalizeOANDASubscriptions(t, []fwmarketdata.Subscription{
 		{External: "EUR_USD", Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := io.NopCloser(strings.NewReader(
@@ -519,13 +520,13 @@ func TestOANDAConnector_ResetsBackoffAfterRead(t *testing.T) {
 		},
 	}
 
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	go func() {
 		connector.run(context.Background(), subs, ch)
 		close(ch)
 	}()
 
-	var got []QuoteUpdate
+	var got []fwmarketdata.QuoteUpdate
 	for update := range ch {
 		got = append(got, update)
 	}
@@ -545,7 +546,7 @@ func TestOANDAConnector_ResetsBackoffAfterRead(t *testing.T) {
 }
 
 func mustNormalizeOANDASubscriptions(
-	t *testing.T, subs []Subscription,
+	t *testing.T, subs []fwmarketdata.Subscription,
 ) []oandaSubscription {
 	t.Helper()
 	normalized, err := normalizeOANDASubscriptions(subs)

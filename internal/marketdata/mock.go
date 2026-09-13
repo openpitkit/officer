@@ -19,6 +19,7 @@ package marketdata
 
 import (
 	"context"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"strconv"
 	"sync"
 	"time"
@@ -56,12 +57,12 @@ func NewMockConnector(interval time.Duration) *mockConnector {
 // per tick from a base of 100, with bid/ask one unit either side, so the output
 // is deterministic for a given tick count.
 func (c *mockConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -89,12 +90,12 @@ func (c *mockConnector) Subscribe(
 // emitTick sends one quote per subscription for tick. It returns false when the
 // context is cancelled mid-batch so the caller stops the loop.
 func (c *mockConnector) emitTick(
-	ctx context.Context, subs []Subscription, tick int, out chan<- QuoteUpdate,
+	ctx context.Context, subs []fwmarketdata.Subscription, tick int, out chan<- fwmarketdata.QuoteUpdate,
 ) bool {
 	asOf := c.now()
 	for _, sub := range subs {
 		mark := 100 + tick
-		update := QuoteUpdate{
+		update := fwmarketdata.QuoteUpdate{
 			AsOf:  asOf,
 			Base:  sub.Base,
 			Quote: sub.Quote,

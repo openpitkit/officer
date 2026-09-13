@@ -73,7 +73,6 @@ type signedEventCapture func(Attestation, domain.ApprovalPayload)
 type submitOrderAttestingNode interface {
 	SubmitOrderWithAttestation(
 		ctx context.Context,
-		key node.Key,
 		o domain.Order,
 		missing domain.MissingAccountPolicy,
 		caller domain.Caller,
@@ -84,7 +83,6 @@ type submitOrderAttestingNode interface {
 type submitImmediateAttestingNode interface {
 	SubmitImmediateWithAttestation(
 		ctx context.Context,
-		key node.Key,
 		o domain.Order,
 		missing domain.MissingAccountPolicy,
 		caller domain.Caller,
@@ -95,7 +93,6 @@ type submitImmediateAttestingNode interface {
 type executionReportAttestingNode interface {
 	ApplyExecutionReportWithAttestation(
 		ctx context.Context,
-		key node.Key,
 		in domain.ExecutionReportInput,
 		caller domain.Caller,
 		attest store.EventAttestor,
@@ -409,12 +406,8 @@ func (s *Service) submitOrderToken(
 	// the same order. Surface layers parse the wire string before this boundary;
 	// a duplicate id is rejected by the store with domain.ErrAlreadyExists.
 
-	n, err := s.router.Route(keyFor(o.Account))
-	if err != nil {
-		return ApprovalToken{}, fmt.Errorf("backend: route submit token: %w", err)
-	}
+	n := s.node
 	caller := auth.CallerFromContext(ctx)
-	key := keyFor(o.Account)
 	submitApprovalID, err := newNonce()
 	if err != nil {
 		return ApprovalToken{}, err
@@ -444,7 +437,7 @@ func (s *Service) submitOrderToken(
 			return eventAttestor(
 				signer, off, keyID, domain.AttestationRequestSubmit,
 				func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
-					eventOrder := orderForEvent(persisted, key, event, caller)
+					eventOrder := orderForEvent(persisted, o.Account, event, caller)
 					switch event.Type {
 					case domain.OrderEventSubmitted:
 						p, err := buildSubmittedPayload(
@@ -493,10 +486,10 @@ func (s *Service) submitOrderToken(
 			)
 		}
 		order, result, err = attesting.SubmitOrderWithAttestation(
-			ctx, key, o, missing, caller, attestFor)
+			ctx, o, missing, caller, attestFor)
 		if err != nil {
 			if auditErr := s.auditApproval(
-				ctx, n, key, domain.AuditActionApprovalFailed,
+				ctx, n, o.Account, domain.AuditActionApprovalFailed,
 				fmt.Sprintf("submit attestation failed: %v", err),
 			); auditErr != nil {
 				return ApprovalToken{}, errors.Join(err, auditErr)
@@ -520,7 +513,7 @@ func (s *Service) submitOrderToken(
 			return eventAttestor(
 				signer, off, keyID, domain.AttestationRequestSubmit,
 				func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
-					eventOrder := orderForEvent(persisted, key, event, caller)
+					eventOrder := orderForEvent(persisted, o.Account, event, caller)
 					switch event.Type {
 					case domain.OrderEventSubmitted:
 						p, err := buildSubmittedPayload(
@@ -583,10 +576,10 @@ func (s *Service) submitOrderToken(
 			)
 		}
 		order, result, err = attesting.SubmitImmediateWithAttestation(
-			ctx, key, o, missing, caller, attestFor)
+			ctx, o, missing, caller, attestFor)
 		if err != nil {
 			if auditErr := s.auditApproval(
-				ctx, n, key, domain.AuditActionApprovalFailed,
+				ctx, n, o.Account, domain.AuditActionApprovalFailed,
 				fmt.Sprintf("submit attestation failed: %v", err),
 			); auditErr != nil {
 				return ApprovalToken{}, errors.Join(err, auditErr)
@@ -607,7 +600,7 @@ func (s *Service) submitOrderToken(
 		verdict = "reject"
 	}
 	if err := s.auditApproval(
-		ctx, n, key, domain.AuditActionApprovalIssued,
+		ctx, n, o.Account, domain.AuditActionApprovalIssued,
 		fmt.Sprintf("issue attestation order %s event %s request=%s",
 			order.ExternalID.String(), issued.EventExternalID,
 			domain.AttestationRequestSubmit),
@@ -652,14 +645,11 @@ func (s *Service) SubmitDropCopyOrder(
 	o.DropCopy = true
 	caller := auth.CallerFromContext(ctx)
 
-	n, err := s.router.Route(keyFor(o.Account))
-	if err != nil {
-		return domain.Order{}, fmt.Errorf("backend: route drop-copy submit: %w", err)
-	}
+	n := s.node
 
 	// A drop-copy submit must never be signed. Its pre-trade decision was not
 	// enforced, so a submit attestation would falsely claim risk approval.
-	return n.SubmitOrder(ctx, keyFor(o.Account), o, missing, caller)
+	return n.SubmitOrder(ctx, o, missing, caller)
 }
 
 func isDropCopyOrder(order domain.Order) bool {
@@ -689,10 +679,7 @@ func (s *Service) ConfirmExecution(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
-	n, err := s.router.Route(keyFor(""))
-	if err != nil {
-		return domain.Order{}, Attestation{}, fmt.Errorf("backend: route confirm: %w", err)
-	}
+	n := s.node
 
 	stored, err := n.GetOrder(ctx, order)
 	if err != nil {
@@ -766,11 +753,10 @@ func (s *Service) ConfirmExecution(
 				domain.AttestationRequestConfirm)
 		}
 	}
-	key := keyFor(confirmed.Account)
 	detail := fmt.Sprintf(
 		"confirm approval %s order %s", result.Payload.ApprovalID, orderID)
 	if err := s.auditApproval(
-		ctx, n, key, domain.AuditActionApprovalConfirmed, detail,
+		ctx, n, confirmed.Account, domain.AuditActionApprovalConfirmed, detail,
 	); err != nil {
 		slog.Error(
 			"write post-commit approval audit",
@@ -801,10 +787,7 @@ func (s *Service) CancelOrder(
 	if err := domain.ValidateReason(reason); err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
-	n, err := s.router.Route(keyFor(""))
-	if err != nil {
-		return domain.Order{}, Attestation{}, fmt.Errorf("backend: route cancel: %w", err)
-	}
+	n := s.node
 
 	stored, err := n.GetOrder(ctx, order)
 	if err != nil {
@@ -896,12 +879,11 @@ func (s *Service) CancelOrder(
 		return domain.Order{}, Attestation{}, missingAttestationError(
 			domain.AttestationRequestCancel)
 	}
-	key := keyFor(cancelled.Account)
 	detail := fmt.Sprintf(
 		"cancel approval %s order %s reason=%s",
 		result.Payload.ApprovalID, orderID, reason)
 	if err := s.auditApproval(
-		ctx, n, key, domain.AuditActionApprovalCancelled, detail,
+		ctx, n, cancelled.Account, domain.AuditActionApprovalCancelled, detail,
 	); err != nil {
 		slog.Error(
 			"write post-commit approval audit",
@@ -1011,12 +993,12 @@ func orderExternalID(order domain.Order) string {
 
 func orderForEvent(
 	order domain.Order,
-	key node.Key,
+	account domain.AccountID,
 	event domain.OrderEvent,
 	caller domain.Caller,
 ) domain.Order {
 	order.ExternalID = event.Order
-	order.Account = key.Account
+	order.Account = account
 	order.Source = caller.Source
 	order.Principal = caller.Principal
 	return order
@@ -1325,10 +1307,7 @@ func rejectReasons(
 // auditSigning records a signing-key/config action via the group node, the same
 // AppendAudit path used by MCP-access writes.
 func (s *Service) auditSigning(ctx context.Context, action domain.AuditAction, detail string) error {
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
+	n := s.node
 	if err := n.AppendAudit(ctx, store.AuditEntry{Action: action, Detail: detail},
 		auth.CallerFromContext(ctx)); err != nil {
 		return fmt.Errorf("backend: audit %s: %w", action, err)
@@ -1339,11 +1318,15 @@ func (s *Service) auditSigning(ctx context.Context, action domain.AuditAction, d
 // auditApproval records an approval issue/confirm/cancel action on the given
 // node, stamped with the account the token authorises.
 func (s *Service) auditApproval(
-	ctx context.Context, n node.Node, key node.Key, action domain.AuditAction, detail string,
+	ctx context.Context,
+	n node.Node,
+	account domain.AccountID,
+	action domain.AuditAction,
+	detail string,
 ) error {
 	if err := n.AppendAudit(ctx, store.AuditEntry{
 		Action:  action,
-		Account: key.Account,
+		Account: account,
 		Detail:  detail,
 	}, auth.CallerFromContext(ctx)); err != nil {
 		return fmt.Errorf("backend: audit %s: %w", action, err)

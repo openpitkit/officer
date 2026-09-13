@@ -19,6 +19,7 @@ package marketdata
 
 import (
 	"context"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"testing"
 	"time"
 )
@@ -31,7 +32,7 @@ func TestMockConnector_EmitsDeterministicQuotes(t *testing.T) {
 	c := NewMockConnector(time.Millisecond)
 	defer c.Close()
 
-	subs := []Subscription{{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}}
+	subs := []fwmarketdata.Subscription{{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}}
 	ch, err := c.Subscribe(context.Background(), subs)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -57,7 +58,7 @@ func TestMockConnector_EmitsDeterministicQuotes(t *testing.T) {
 func TestMockConnector_CloseStopsAndClosesChannel(t *testing.T) {
 	t.Parallel()
 	c := NewMockConnector(time.Millisecond)
-	subs := []Subscription{{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}}
+	subs := []fwmarketdata.Subscription{{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}}
 	ch, err := c.Subscribe(context.Background(), subs)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)

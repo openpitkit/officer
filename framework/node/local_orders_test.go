@@ -109,11 +109,12 @@ func newPersistedAccountMismatchNode(
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	eng := newFakeEngine()
-	return newTestNodeWithStore(t, st, eng), eng
+	return newTestNodeWithStore(t, st, eng, failOnFatal(t)), eng
 }
 
 func persistedAccountMismatchOrder(dropCopy bool) domain.Order {
 	return domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -1510,7 +1511,7 @@ func TestOrderRejectedSettlementPreservesOrderedRejects(t *testing.T) {
 		{Code: "size", Scope: "order", Policy: "size", Details: "second"},
 	}
 	settlement := orderRejectedSettlement(
-		testKey("acc-1"), domain.Order{ExternalID: "order-1"}, rejects, testCaller,
+		"acc-1", domain.Order{ExternalID: "order-1"}, rejects, testCaller,
 	)
 	if len(settlement.Events) != 1 {
 		t.Fatalf("events = %+v, want one reject event", settlement.Events)
@@ -1538,7 +1539,8 @@ func TestLocalNode_SubmitOrderRejectedRecordsZeroLeaves(t *testing.T) {
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -1565,7 +1567,7 @@ func TestLocalNode_SubmitOrderRejectedRecordsZeroLeaves(t *testing.T) {
 
 	// The recorded zero preserves the engine's answer. A later forced terminal
 	// no-fill report sends that pre-report value back without caller leaves.
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+	if _, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		Order:       order.ExternalID,
 		Force:       true,
 		OrderStatus: domain.OrderStatusCancelled,
@@ -1588,7 +1590,6 @@ func TestLocalNode_SubmitOrderRejectsPersistedAccountMismatchBeforeEngine(
 
 	_, err := n.SubmitOrder(
 		context.Background(),
-		testKey("acc-1"),
 		persistedAccountMismatchOrder(false),
 		domain.MissingAccountCreate,
 		testCaller,
@@ -1609,7 +1610,6 @@ func TestLocalNode_SubmitImmediateReservationRejectsPersistedAccountMismatchBefo
 
 	_, _, err := n.SubmitImmediate(
 		context.Background(),
-		testKey("acc-1"),
 		persistedAccountMismatchOrder(false),
 		domain.MissingAccountCreate,
 		testCaller,
@@ -1630,7 +1630,6 @@ func TestLocalNode_SubmitImmediateDropCopyRejectsPersistedAccountMismatchBeforeE
 
 	_, _, err := n.SubmitImmediate(
 		context.Background(),
-		testKey("acc-1"),
 		persistedAccountMismatchOrder(true),
 		domain.MissingAccountCreate,
 		testCaller,
@@ -1678,7 +1677,8 @@ func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -1802,12 +1802,15 @@ func TestLocalNode_SubmitImmediateNilPersistenceIsInternal(t *testing.T) {
 	eng := newFakeEngine()
 	eng.emptyImmediatePersistence = true
 	n, _ := newTestNode(t, eng)
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
 	ctx := context.Background()
 	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	_, _, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -1823,6 +1826,9 @@ func TestLocalNode_SubmitImmediateNilPersistenceIsInternal(t *testing.T) {
 	}
 	if len(eng.submitCalls) != 1 {
 		t.Fatalf("submit calls = %+v, want one engine apply", eng.submitCalls)
+	}
+	if fatalErr == nil {
+		t.Fatal("fatal hook not invoked for incomplete immediate persistence")
 	}
 }
 
@@ -1842,7 +1848,8 @@ func TestLocalNode_VolumeOrderRecordsEngineOpeningLeaves(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:   "acc-1",
 		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindVolume, AmountValue: "500", Price: "100",
 	}, domain.MissingAccountCreate, testCaller)
@@ -1853,7 +1860,7 @@ func TestLocalNode_VolumeOrderRecordsEngineOpeningLeaves(t *testing.T) {
 		t.Fatalf("volume order leaves = %q, want engine delta 5", order.Leaves)
 	}
 
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"),
+	if _, err := n.ApplyExecutionReport(ctx,
 		domain.ExecutionReportInput{
 			Order: order.ExternalID, FillQuantity: "2", FillPrice: "100",
 			LeavesQuantity: "3", OrderStatus: domain.OrderStatusPartiallyFilled,
@@ -1883,7 +1890,8 @@ func TestLocalNode_CancelVolumeOrderUsesPreReportLeaves(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:   "acc-1",
 		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindVolume, AmountValue: "500", Price: "100",
 	}, domain.MissingAccountCreate, testCaller)
@@ -1954,7 +1962,8 @@ func TestLocalNode_SubmitImmediatePassesVolumeToEngine(t *testing.T) {
 	eng := newFakeEngine()
 	n, _ := newTestNode(t, eng)
 	_, result, err := n.SubmitImmediate(
-		context.Background(), testKey("acc-1"), domain.Order{
+		context.Background(), domain.Order{
+			Account:   "acc-1",
 			BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 			AmountKind: domain.OrderAmountKindVolume, AmountValue: "500", Price: "100",
 		}, domain.MissingAccountCreate, testCaller,
@@ -1989,7 +1998,8 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	order, result, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	order, result, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:   "acc-1",
 		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "2", Price: "99",
 	}, domain.MissingAccountCreate, testCaller)
@@ -2066,7 +2076,7 @@ func TestLocalNode_SubmitDropCopyPersistsBlockCallerAndAudit(t *testing.T) {
 		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
 	}
 	id := domain.ExternalID("drop-copy-order")
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
 		ExternalID: id, Account: "acc-1", DropCopy: true,
 		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",
@@ -2209,7 +2219,6 @@ func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
 				var result engine.ImmediateResult
 				order, result, err = n.SubmitImmediate(
 					ctx,
-					testKey("acc-1"),
 					input,
 					domain.MissingAccountCreate,
 					caller,
@@ -2227,7 +2236,6 @@ func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
 			} else {
 				order, err = n.SubmitOrder(
 					ctx,
-					testKey("acc-1"),
 					input,
 					domain.MissingAccountCreate,
 					caller,
@@ -2342,14 +2350,14 @@ func TestLocalNode_SubmitImmediateDecisionAuditFailureFatals(t *testing.T) {
 		t,
 		st,
 		eng,
-		WithFatalShutdownHook(func(err error) {
+		func(err error) {
 			fatalErr = err
-		}),
+		},
 	)
 	_, _, err := n.SubmitImmediate(
 		ctx,
-		testKey("acc-1"),
 		domain.Order{
+			Account:   "acc-1",
 			BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side:        domain.OrderSideBuy,
 			AmountKind:  domain.OrderAmountKindQuantity,
@@ -2387,8 +2395,8 @@ func TestLocalNode_SubmitImmediateRejectWithoutReasonFailsBeforePersistence(
 
 	_, _, err := n.SubmitImmediate(
 		ctx,
-		testKey("acc-1"),
 		domain.Order{
+			Account:    "acc-1",
 			ExternalID: externalID,
 			BaseAsset:  "AAPL", QuoteAsset: "USD",
 			Side:        domain.OrderSideBuy,
@@ -2453,11 +2461,12 @@ func TestLocalNode_SubmitOrderAcceptedPathRejectWithoutReasonFatals(
 	var fatalErr error
 	service, _, err := NewLocalNode(
 		ctx,
+		domain.DefaultRealm,
 		st,
 		build,
-		WithFatalShutdownHook(func(err error) {
+		func(err error) {
 			fatalErr = err
-		}),
+		},
 	)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
@@ -2469,8 +2478,8 @@ func TestLocalNode_SubmitOrderAcceptedPathRejectWithoutReasonFatals(
 	const externalID domain.ExternalID = "accepted-path-reject-without-reason"
 	_, err = n.SubmitOrder(
 		ctx,
-		testKey("acc-1"),
 		domain.Order{
+			Account:     "acc-1",
 			ExternalID:  externalID,
 			BaseAsset:   "AAPL",
 			QuoteAsset:  "USD",
@@ -2531,7 +2540,8 @@ func TestLocalNode_SubmitImmediatePanelDoesNotInferAccountPnl(t *testing.T) {
 	}
 	panelCaller := testCaller
 	panelCaller.Source = domain.SourcePanel
-	order, result, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	order, result, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -2575,7 +2585,8 @@ func TestLocalNode_SubmitImmediatePersistsAuthoritativeAccountPnl(t *testing.T) 
 	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	_, result, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	_, result, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -2609,7 +2620,8 @@ func TestLocalNode_SubmitImmediatePersistsAuthoritativeAccountPnlHalt(t *testing
 	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	_, result, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	_, result, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -2650,7 +2662,8 @@ func TestLocalNode_SubmitImmediateLeavesAccountPnlWithoutMatchingOutcome(t *test
 	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	_, _, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -2694,7 +2707,8 @@ func TestLocalNode_SubmitImmediateDoesNotSelectAccountPnlFromBalanceOutcomes(t *
 	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	_, _, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -2747,7 +2761,8 @@ func TestLocalNode_SubmitImmediateDoesNotUseEffectiveCurrencyToInferAccountPnl(t
 	}
 	n.engineMu.Unlock()
 
-	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	_, _, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -2795,13 +2810,14 @@ func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
 
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	_, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	_, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -2849,7 +2865,7 @@ func TestLocalNode_SubmitImmediateDoesNotReadAccountDuringSubmissionApply(
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	n := newTestNodeWithStore(t, st, newFakeEngine())
+	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
 	if _, err := n.CreateAccount(
 		ctx, testAccount("acc-1"), testCaller,
 	); err != nil {
@@ -2858,8 +2874,8 @@ func TestLocalNode_SubmitImmediateDoesNotReadAccountDuringSubmissionApply(
 
 	order, result, err := n.SubmitImmediate(
 		ctx,
-		testKey("acc-1"),
 		domain.Order{
+			Account:     "acc-1",
 			BaseAsset:   "AAPL",
 			QuoteAsset:  "USD",
 			Side:        domain.OrderSideBuy,
@@ -2901,13 +2917,14 @@ func TestLocalNode_SubmitImmediatePostEngineStoreFailureFatals(t *testing.T) {
 
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+	_, _, err := n.SubmitImmediate(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -2942,7 +2959,8 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAsset(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "GOLD",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -3012,12 +3030,12 @@ func TestLocalNode_SubmitOrderAutoCreateAssetRollbackSuccessIsInternal(t *testin
 	)
 	var captured engine.Snapshot
 	inner := fakeBuild(base, &captured)
-	nn, _, err := NewLocalNode(ctx, st, func(snap engine.Snapshot) (engine.Engine, error) {
+	nn, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, func(snap engine.Snapshot) (engine.Engine, error) {
 		if _, buildErr := inner(snap); buildErr != nil {
 			return nil, buildErr
 		}
 		return &failingAssetResolverEngine{fakeEngine: base, err: resolverErr}, nil
-	})
+	}, failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -3027,7 +3045,8 @@ func TestLocalNode_SubmitOrderAutoCreateAssetRollbackSuccessIsInternal(t *testin
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 
-	_, submitErr := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	_, submitErr := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "GOLD",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -3105,7 +3124,8 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAccount(t *testing.T) {
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
-	order, err := n.SubmitOrder(ctx, testKey("fresh"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "fresh",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -3147,7 +3167,8 @@ func TestLocalNode_SubmitOrderHonorsSuppliedExternalID(t *testing.T) {
 	seedTestAccount(t, st, "acc-1")
 
 	supplied := externalID(t, "supplied-order-id")
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		ExternalID:  supplied,
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
@@ -3180,7 +3201,8 @@ func TestLocalNode_SubmitOrderGeneratesExternalIDWhenAbsent(t *testing.T) {
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
 
-	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+	order, err := n.SubmitOrder(ctx, domain.Order{
+		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -3212,6 +3234,7 @@ func TestLocalNode_SubmitOrderDuplicateSuppliedIDConflicts(t *testing.T) {
 	supplied := externalID(t, "dup-order-id")
 	mk := func() domain.Order {
 		return domain.Order{
+			Account:     "acc-1",
 			ExternalID:  supplied,
 			BaseAsset:   "AAPL",
 			QuoteAsset:  "USD",
@@ -3221,10 +3244,10 @@ func TestLocalNode_SubmitOrderDuplicateSuppliedIDConflicts(t *testing.T) {
 			Price:       "100",
 		}
 	}
-	if _, err := n.SubmitOrder(ctx, testKey("acc-1"), mk(), domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.SubmitOrder(ctx, mk(), domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("first SubmitOrder: %v", err)
 	}
-	_, err := n.SubmitOrder(ctx, testKey("acc-1"), mk(), domain.MissingAccountCreate, testCaller)
+	_, err := n.SubmitOrder(ctx, mk(), domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
 	}
@@ -3243,7 +3266,8 @@ func TestLocalNode_SubmitOrderDifferentAccountsProceedConcurrently(t *testing.T)
 	seedTestAccount(t, st, "acc-2")
 
 	submit := func(account domain.AccountID, errs chan<- error) {
-		_, err := n.SubmitOrder(ctx, testKey(account), domain.Order{
+		_, err := n.SubmitOrder(ctx, domain.Order{
+			Account:   account,
 			BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 			AmountValue: "1", Price: "10",
@@ -3284,7 +3308,8 @@ func TestLocalNode_SubmitOrderSameAccountSerializes(t *testing.T) {
 	seedTestAccount(t, st, "acc-1")
 
 	submit := func(errs chan<- error) {
-		_, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+		_, err := n.SubmitOrder(ctx, domain.Order{
+			Account:   "acc-1",
 			BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 			AmountValue: "1", Price: "10",
@@ -3328,8 +3353,8 @@ func occupyOrderChainLane(
 	go func() {
 		_, err := n.SubmitOrder(
 			context.Background(),
-			testKey("acc-1"),
 			domain.Order{
+				Account:   "acc-1",
 				BaseAsset: "AAPL", QuoteAsset: "USD",
 				Side:        domain.OrderSideBuy,
 				AmountKind:  domain.OrderAmountKindQuantity,
@@ -3364,8 +3389,8 @@ func TestLocalNode_SubmitOrderCancellationWhileLaneOccupied(t *testing.T) {
 		close(started)
 		_, err := n.SubmitOrder(
 			ctx,
-			testKey("acc-1"),
 			domain.Order{
+				Account:   "acc-1",
 				BaseAsset: "AAPL", QuoteAsset: "USD",
 				Side:        domain.OrderSideBuy,
 				AmountKind:  domain.OrderAmountKindQuantity,
@@ -3403,8 +3428,8 @@ func TestLocalNode_SubmitImmediateCancellationWhileLaneOccupied(t *testing.T) {
 		close(started)
 		_, _, err := n.SubmitImmediate(
 			ctx,
-			testKey("acc-1"),
 			domain.Order{
+				Account:   "acc-1",
 				BaseAsset: "AAPL", QuoteAsset: "USD",
 				Side:        domain.OrderSideBuy,
 				AmountKind:  domain.OrderAmountKindQuantity,
@@ -3440,12 +3465,13 @@ func TestLocalNode_CheckOrderCancellationWhileLaneOccupied(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		close(started)
-		_, err := n.CheckOrder(ctx, testKey("acc-1"), domain.OrderProbe{
+		_, err := n.CheckOrder(ctx, domain.OrderProbe{
 			Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side:        domain.OrderSideBuy,
 			AmountKind:  domain.OrderAmountKindQuantity,
 			AmountValue: "1", Price: "10",
 		})
+
 		result <- err
 	}()
 	<-started

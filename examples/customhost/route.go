@@ -24,9 +24,8 @@ import (
 )
 
 const (
-	hostRouteID         = "customhost.private.get"
-	hostRoutePermission = "customhost.private.read"
-	hostRoutePattern    = "/example/private"
+	hostRouteID      = "customhost.private.get"
+	hostRoutePattern = "/example/private"
 
 	replacedBaseRouteID = "health.get"
 	hiddenBaseRouteID   = "status.get"
@@ -48,19 +47,7 @@ func composeCustomHostRoutes(registry *httpx.RouteRegistry) {
 			httpx.WriteJSON(w, http.StatusOK, map[string]string{"route": "replaced"})
 		}),
 	})
-	hideRoute(registry, hiddenBaseRouteID, hiddenRoutePermission)
 	registry.Unregister(removedBaseRouteID)
-}
-
-func hideRoute(registry *httpx.RouteRegistry, id string, permission string) {
-	for _, route := range registry.Routes() {
-		if route.ID != id {
-			continue
-		}
-		route.Permission = permission
-		registry.Register(route)
-		return
-	}
 }
 
 func hostRoute(w http.ResponseWriter, _ *http.Request) {

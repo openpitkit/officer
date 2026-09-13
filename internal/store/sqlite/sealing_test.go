@@ -979,7 +979,7 @@ func TestResetWithMasterKeyRecreatesSealedDatabase(t *testing.T) {
 
 func openSQLiteStoreForTest(t *testing.T, path string, opts ...Option) *sqliteStore {
 	t.Helper()
-	raw, err := New(path, opts...)
+	raw, err := New(path, domain.DefaultRealm, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

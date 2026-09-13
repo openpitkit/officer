@@ -28,10 +28,11 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // seedLimitFixtures creates an account and an asset for limit tests.
-func seedLimitFixtures(t *testing.T) (context.Context, RealmStore) {
+func seedLimitFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -395,7 +396,7 @@ func TestDeleteAccountForceCascadesSpotFundsPnlBoundsDependent(t *testing.T) {
 	}
 }
 
-func policyKeys(rows []PolicyListRow) []string {
+func policyKeys(rows []fwstore.PolicyListRow) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, string(row.Kind)+"|"+string(row.Account))
@@ -406,7 +407,7 @@ func policyKeys(rows []PolicyListRow) []string {
 // seedPolicyFixtures creates the accounts and asset plus one barrier of each
 // kind across two accounts, so a policy list test can exercise the UNION,
 // filters, and paging.
-func seedPolicyFixtures(t *testing.T) (context.Context, RealmStore) {
+func seedPolicyFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -445,7 +446,7 @@ func TestListPolicyRowsUnionOrderAndTotal(t *testing.T) {
 
 	// Unfiltered: all three barriers, ordered by the default key (kind, then the
 	// composite). Total counts every matching barrier before paging.
-	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{})
+	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{})
 	if err != nil {
 		t.Fatalf("ListPolicyRows all: %v", err)
 	}
@@ -477,8 +478,8 @@ func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
 	ctx, rs := seedPolicyFixtures(t)
 
 	// Exact account filter narrows to acc-1's two barriers.
-	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
-		Account: ExactTextMatcher("acc-1"),
+	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
+		Account: fwstore.ExactTextMatcher("acc-1"),
 	})
 	if err != nil {
 		t.Fatalf("ListPolicyRows account: %v", err)
@@ -488,8 +489,8 @@ func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
 	}
 
 	// Kind filter narrows to the two rate barriers.
-	rate := PolicyKindRate
-	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{Kind: &rate})
+	rate := fwstore.PolicyKindRate
+	page, err = rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{Kind: &rate})
 	if err != nil {
 		t.Fatalf("ListPolicyRows kind: %v", err)
 	}
@@ -500,8 +501,8 @@ func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
 	}
 
 	// Account and kind combine.
-	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
-		Account: ExactTextMatcher("acc-2"),
+	page, err = rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
+		Account: fwstore.ExactTextMatcher("acc-2"),
 		Kind:    &rate,
 	})
 	if err != nil {
@@ -515,7 +516,7 @@ func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
 func TestListPolicyRowsScopeFilter(t *testing.T) {
 	ctx, rs := seedPolicyFixtures(t)
 
-	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
+	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
 		Scope: domain.ScopeAccountUnderlyingAsset,
 	})
 	if err != nil {
@@ -534,7 +535,7 @@ func TestListPolicyRowsScopeFilter(t *testing.T) {
 func TestListPolicyRowsRejectsUnknownScope(t *testing.T) {
 	ctx, rs := seedPolicyFixtures(t)
 
-	_, err := rs.ListPolicyRows(ctx, PolicyListFilter{Scope: "unknown"})
+	_, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{Scope: "unknown"})
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ListPolicyRows unknown scope = %v, want ErrInvalid", err)
 	}
@@ -572,8 +573,8 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 		}
 	}
 
-	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
-		AccountGroup: ExactTextMatcher("desk-a"),
+	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
+		AccountGroup: fwstore.ExactTextMatcher("desk-a"),
 	})
 	if err != nil {
 		t.Fatalf("ListPolicyRows spot funds axes: %v", err)
@@ -585,8 +586,8 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 		t.Fatalf("spot funds rows len = %d, want 1: %+v", len(page.Rows), page.Rows)
 	}
 	row := page.Rows[0]
-	if row.Kind != PolicyKindSpotFundsPnlBounds {
-		t.Fatalf("spot funds kind = %q, want %q", row.Kind, PolicyKindSpotFundsPnlBounds)
+	if row.Kind != fwstore.PolicyKindSpotFundsPnlBounds {
+		t.Fatalf("spot funds kind = %q, want %q", row.Kind, fwstore.PolicyKindSpotFundsPnlBounds)
 	}
 	if row.SpotFundsPnlBounds == nil {
 		t.Fatalf("spot funds payload is nil: %+v", row)
@@ -634,9 +635,9 @@ func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
 		}
 	}
 
-	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
-		Asset: ExactTextMatcher("USD"),
-		Sort:  SortSpec{Column: "asset"},
+	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
+		Asset: fwstore.ExactTextMatcher("USD"),
+		Sort:  fwstore.SortSpec{Column: "asset"},
 	})
 	if err != nil {
 		t.Fatalf("ListPolicyRows(asset=USD): %v", err)
@@ -655,8 +656,8 @@ func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
 		t.Fatalf("asset=USD P&L barrier = %+v", page.Rows[1].SpotFundsPnlBounds)
 	}
 
-	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
-		Sort: SortSpec{Column: "asset"},
+	page, err = rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
+		Sort: fwstore.SortSpec{Column: "asset"},
 	})
 	if err != nil {
 		t.Fatalf("ListPolicyRows sort asset: %v", err)
@@ -794,8 +795,8 @@ func TestListPolicyRowsSortAndPage(t *testing.T) {
 
 	// Sort by account ascending: acc-1's two barriers (ordered by the kind
 	// tiebreak) then acc-2's rate barrier.
-	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
-		Sort: SortSpec{Column: "account"},
+	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
+		Sort: fwstore.SortSpec{Column: "account"},
 	})
 	if err != nil {
 		t.Fatalf("ListPolicyRows sort account: %v", err)
@@ -810,9 +811,9 @@ func TestListPolicyRowsSortAndPage(t *testing.T) {
 	}
 
 	// First page of two; Total still reports the full match count.
-	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
-		Sort: SortSpec{Column: "account"},
-		Page: PageSpec{Limit: 2, Offset: 0},
+	page, err = rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
+		Sort: fwstore.SortSpec{Column: "account"},
+		Page: fwstore.PageSpec{Limit: 2, Offset: 0},
 	})
 	if err != nil {
 		t.Fatalf("ListPolicyRows page 0: %v", err)
@@ -825,9 +826,9 @@ func TestListPolicyRowsSortAndPage(t *testing.T) {
 	}
 
 	// Second page continues from the offset window.
-	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
-		Sort: SortSpec{Column: "account"},
-		Page: PageSpec{Limit: 2, Offset: 2},
+	page, err = rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
+		Sort: fwstore.SortSpec{Column: "account"},
+		Page: fwstore.PageSpec{Limit: 2, Offset: 2},
 	})
 	if err != nil {
 		t.Fatalf("ListPolicyRows page 1: %v", err)

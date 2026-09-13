@@ -25,7 +25,7 @@
 #
 # A third autocreate shape, `$X.ensure$ANY(...)`, is deliberately not included
 # here: officer uses "ensureX" as its ordinary Go verb for idempotent setup in
-# general (e.g. res.ensureInitialized() in app/engine/native/openpit.go,
+# general (e.g. res.ensureInitialized() in engine/openpit.go,
 # nothing to do with entities), and framework/node/local_*.go's ensureAccount /
 # ensureLimitAccount / ensureGroupRegisteredLocked / ensureAutoCreatedAsset
 # family is the already-reviewed, intentional account-lane auto-provisioning

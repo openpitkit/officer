@@ -23,20 +23,8 @@ import (
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
-	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 )
-
-// groupNode resolves the node that owns the realm's groups. Groups are a
-// realm-level concern; in the single-node deployment one node owns them. It
-// routes via an empty account key, which the local router always owns.
-func (s *Service) groupNode() (node.Node, error) {
-	n, err := s.router.Route(keyFor(""))
-	if err != nil {
-		return nil, fmt.Errorf("backend: route group: %w", err)
-	}
-	return n, nil
-}
 
 // CreateGroup validates the group metadata and creates the group, returning the
 // stored group with its engine group id populated.
@@ -58,11 +46,7 @@ func (s *Service) CreateGroup(
 	if err := validateOptionalCurrency(group.Currency); err != nil {
 		return domain.AccountGroup{}, err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return domain.AccountGroup{}, err
-	}
-	return n.CreateGroup(ctx, group, auth.CallerFromContext(ctx))
+	return s.node.CreateGroup(ctx, group, auth.CallerFromContext(ctx))
 }
 
 // UpdateGroup validates the old and new group metadata and updates the group.
@@ -80,11 +64,7 @@ func (s *Service) UpdateGroup(
 	if err := domain.ValidateTitle(group.Title); err != nil {
 		return domain.AccountGroup{}, err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return domain.AccountGroup{}, err
-	}
-	return n.UpdateGroup(ctx, oldCode, group, auth.CallerFromContext(ctx))
+	return s.node.UpdateGroup(ctx, oldCode, group, auth.CallerFromContext(ctx))
 }
 
 // ListGroups returns every group in the realm.
@@ -100,16 +80,13 @@ func (s *Service) ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 	return groups, nil
 }
 
-// ListGroupRows returns groups in the realm with list-only counts. Groups are a
-// single-source dictionary, so the page passes through the owning node
-// unchanged; sort and paging are applied by the connector.
+// ListGroupRows returns groups in the realm with list-only counts. The page
+// passes through from the node unchanged; sort and paging are applied by the
+// connector.
 func (s *Service) ListGroupRows(
 	ctx context.Context, filter store.GroupListFilter,
 ) (store.GroupListPage, error) {
-	n, err := s.groupNode()
-	if err != nil {
-		return store.GroupListPage{}, err
-	}
+	n := s.node
 	page, err := n.ListGroupRows(ctx, filter)
 	if err != nil {
 		return store.GroupListPage{}, fmt.Errorf("backend: list group rows: %w", err)
@@ -125,10 +102,7 @@ func (s *Service) GetGroup(
 	if err := domain.ValidateGroupID(code); err != nil {
 		return domain.AccountGroup{}, nil, err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return domain.AccountGroup{}, nil, err
-	}
+	n := s.node
 	group, accounts, ok, err := n.GetGroup(ctx, code)
 	if err != nil {
 		return domain.AccountGroup{}, nil, fmt.Errorf("backend: get group: %w", err)
@@ -147,11 +121,7 @@ func (s *Service) SetGroupNotes(ctx context.Context, code, notes string) error {
 	if err := domain.ValidateNotes(notes); err != nil {
 		return err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.SetGroupNotes(ctx, code, notes, auth.CallerFromContext(ctx))
+	return s.node.SetGroupNotes(ctx, code, notes, auth.CallerFromContext(ctx))
 }
 
 // SetGroupCurrency validates and sets or clears a group-level currency.
@@ -162,11 +132,7 @@ func (s *Service) SetGroupCurrency(ctx context.Context, code, currency string) e
 	if err := validateOptionalCurrency(currency); err != nil {
 		return err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.SetGroupCurrency(ctx, code, currency, auth.CallerFromContext(ctx))
+	return s.node.SetGroupCurrency(ctx, code, currency, auth.CallerFromContext(ctx))
 }
 
 // SetDefaultGroupCurrency sets or clears the reserved default group currency.
@@ -174,11 +140,7 @@ func (s *Service) SetDefaultGroupCurrency(ctx context.Context, currency string) 
 	if err := validateOptionalCurrency(currency); err != nil {
 		return err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.SetDefaultGroupCurrency(ctx, currency, auth.CallerFromContext(ctx))
+	return s.node.SetDefaultGroupCurrency(ctx, currency, auth.CallerFromContext(ctx))
 }
 
 // SetGroupBlocked validates the code and blocks or unblocks the group with
@@ -192,11 +154,7 @@ func (s *Service) SetGroupBlocked(
 	if err := domain.ValidateBlockReason(reason); err != nil {
 		return err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.SetGroupBlocked(ctx, code, blocked, reason, auth.CallerFromContext(ctx))
+	return s.node.SetGroupBlocked(ctx, code, blocked, reason, auth.CallerFromContext(ctx))
 }
 
 // DeleteGroup validates the code and removes the group. Destructive
@@ -205,11 +163,7 @@ func (s *Service) DeleteGroup(ctx context.Context, code string, force bool) erro
 	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.DeleteGroup(ctx, code, force, auth.CallerFromContext(ctx))
+	return s.node.DeleteGroup(ctx, code, force, auth.CallerFromContext(ctx))
 }
 
 func validateOptionalCurrency(currency string) error {

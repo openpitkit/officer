@@ -20,7 +20,6 @@ package backend
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -29,59 +28,24 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// ListLimits returns the typed barriers that reference account, aggregated
-// across all nodes. An empty account returns all barriers.
+// ListLimits returns the typed barriers that reference account. An empty
+// account returns all barriers.
 func (s *Service) ListLimits(
 	ctx context.Context, account domain.AccountID,
 ) (node.AccountLimits, error) {
-	var out node.AccountLimits
-	for i, n := range s.router.All() {
-		part, err := n.ListLimits(ctx, account)
-		if err != nil {
-			return node.AccountLimits{}, fmt.Errorf("backend: node %d list limits: %w", i, err)
-		}
-		out.RateLimits = append(out.RateLimits, part.RateLimits...)
-		out.OrderSizeLimits = append(out.OrderSizeLimits, part.OrderSizeLimits...)
-		out.SpotFundsPnlBoundsLimits = append(
-			out.SpotFundsPnlBoundsLimits,
-			part.SpotFundsPnlBoundsLimits...,
-		)
-	}
-	return out, nil
+	return s.node.ListLimits(ctx, account)
 }
 
-// ListPolicyRows returns the typed barriers across all nodes flattened into one
-// sorted, paged policy list. Limits are sharded by account, so each node is
-// queried with the filter and an offset-inclusive page bound, the per-node
-// ordered slices are merge-sorted on the same SortSpec the connector applied,
-// the per-node totals are summed, and the global page window is taken last.
+// ListPolicyRows returns the typed barriers flattened into one sorted, paged
+// policy list, with the total matching count before paging.
 func (s *Service) ListPolicyRows(
 	ctx context.Context, filter store.PolicyListFilter,
 ) (store.PolicyListPage, error) {
-	nodes := s.router.All()
-	if len(nodes) == 1 {
-		return nodes[0].ListPolicyRows(ctx, filter)
-	}
-	nodeFilter := filter
-	nodeFilter.Page = nodePageForMerge(filter.Page)
-	rows := make([]store.PolicyListRow, 0)
-	total := 0
-	for i, n := range nodes {
-		part, err := n.ListPolicyRows(ctx, nodeFilter)
-		if err != nil {
-			return store.PolicyListPage{},
-				fmt.Errorf("backend: node %d list policy rows: %w", i, err)
-		}
-		total += part.Total
-		rows = append(rows, part.Rows...)
-	}
-	sortPolicyRows(rows, filter.Sort)
-	rows = pagePolicyRows(rows, filter.Page)
-	return store.PolicyListPage{Rows: rows, Total: total}, nil
+	return s.node.ListPolicyRows(ctx, filter)
 }
 
-// PutRateLimit validates the rate-limit barrier, routes to the owning node, and
-// upserts it. A barrier whose scope carries an account axis may name an account
+// PutRateLimit validates the rate-limit barrier and upserts it. A barrier whose
+// scope carries an account axis may name an account
 // that does not exist yet; missing is the caller's required choice between
 // registering that account and rejecting the request with
 // domain.ErrAccountMissing, and is ignored for a scope that names no account.
@@ -96,16 +60,13 @@ func (s *Service) PutRateLimit(
 	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
-	n, err := s.router.Route(keyFor(limit.Account))
-	if err != nil {
-		return fmt.Errorf("backend: route limit: %w", err)
-	}
+	n := s.node
 	sink, err := n.PutRateLimit(ctx, limit, missing, auth.CallerFromContext(ctx))
 	return s.finishLimitChangeLocked(sink, err)
 }
 
-// PutOrderSizeLimit validates the order-size barrier, routes to the owning node,
-// and upserts it. missing follows PutRateLimit.
+// PutOrderSizeLimit validates the order-size barrier and upserts it. missing
+// follows PutRateLimit.
 func (s *Service) PutOrderSizeLimit(
 	ctx context.Context,
 	limit domain.LimitOrderSize,
@@ -119,16 +80,13 @@ func (s *Service) PutOrderSizeLimit(
 	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
-	n, err := s.router.Route(keyFor(limit.Account))
-	if err != nil {
-		return fmt.Errorf("backend: route limit: %w", err)
-	}
+	n := s.node
 	sink, err := n.PutOrderSizeLimit(ctx, limit, missing, auth.CallerFromContext(ctx))
 	return s.finishLimitChangeLocked(sink, err)
 }
 
-// PutSpotFundsPnlBoundsLimit validates the SpotFunds P&L-bounds barrier, routes
-// to the owning node, and upserts it. missing follows PutRateLimit.
+// PutSpotFundsPnlBoundsLimit validates the SpotFunds P&L-bounds barrier and
+// upserts it. missing follows PutRateLimit.
 func (s *Service) PutSpotFundsPnlBoundsLimit(
 	ctx context.Context,
 	limit domain.LimitSpotFundsPnlBounds,
@@ -145,28 +103,22 @@ func (s *Service) PutSpotFundsPnlBoundsLimit(
 	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
-	n, err := s.router.Route(keyFor(limit.Account))
-	if err != nil {
-		return fmt.Errorf("backend: route limit: %w", err)
-	}
+	n := s.node
 	sink, err := n.PutSpotFundsPnlBoundsLimit(
 		ctx, limit, missing, auth.CallerFromContext(ctx),
 	)
 	return s.finishLimitChangeLocked(sink, err)
 }
 
-// DeleteLimit validates the target's scope/axes for its policy, routes to the
-// owning node, and removes the addressed barrier.
+// DeleteLimit validates the target's scope/axes for its policy and removes the
+// addressed barrier.
 func (s *Service) DeleteLimit(ctx context.Context, target node.LimitTarget) error {
 	if err := validateLimitTarget(target); err != nil {
 		return err
 	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
-	n, err := s.router.Route(keyFor(target.Account))
-	if err != nil {
-		return fmt.Errorf("backend: route limit: %w", err)
-	}
+	n := s.node
 	sink, err := n.DeleteLimit(ctx, target, auth.CallerFromContext(ctx))
 	return s.finishLimitChangeLocked(sink, err)
 }

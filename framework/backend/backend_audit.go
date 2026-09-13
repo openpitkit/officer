@@ -26,93 +26,37 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// ListAudit returns the most recent count audit rows aggregated across all
-// nodes, newest first. Per-node results are merged, sorted by id desc, then
-// bounded to count.
+// ListAudit returns the most recent count audit rows, newest first.
 func (s *Service) ListAudit(
 	ctx context.Context, count int,
 ) ([]domain.AuditRow, error) {
-	rows := make([]domain.AuditRow, 0)
-	for i, n := range s.router.All() {
-		part, err := n.ListAudit(ctx, count)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list audit: %w", i, err)
-		}
-		rows = append(rows, part...)
+	rows, err := s.node.ListAudit(ctx, count)
+	if err != nil {
+		return nil, err
 	}
 	sortAuditNewestFirst(rows)
-	if count > 0 && len(rows) > count {
-		rows = rows[:count]
-	}
 	return rows, nil
 }
 
 // ListAuditFiltered returns audit entries, newest first, narrowed by the
-// filter. The account, source, and action filters are applied in each node's
-// query so count bounds the already-filtered set; the per-node results are
-// merged, sorted by id desc, then bounded to count. A zero-value filter
-// matches all rows.
+// filter. The account, source, and action filters are applied in the node's
+// query so count bounds the already-filtered set. A zero-value filter matches
+// all rows.
 func (s *Service) ListAuditFiltered(
 	ctx context.Context, filter domain.AuditFilter, count int,
 ) ([]domain.AuditRow, error) {
-	rows := make([]domain.AuditRow, 0)
-	for i, n := range s.router.All() {
-		part, err := n.ListAuditFiltered(ctx, filter, count)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list audit filtered: %w", i, err)
-		}
-		rows = append(rows, part...)
+	rows, err := s.node.ListAuditFiltered(ctx, filter, count)
+	if err != nil {
+		return nil, err
 	}
 	sortAuditNewestFirst(rows)
-	if count > 0 && len(rows) > count {
-		rows = rows[:count]
-	}
 	return rows, nil
 }
 
-// ListAuditRows returns audit entries with DB-side filters/counts from each
-// node.
-func (s *Service) ListAuditRows(
-	ctx context.Context, filter store.AuditListFilter,
-) (store.AuditListPage, error) {
-	nodes := s.router.All()
-	if len(nodes) == 1 {
-		target, ok := nodes[0].(auditRowNode)
-		if !ok {
-			return store.AuditListPage{}, fmt.Errorf(
-				"backend: node list audit rows: %w", domain.ErrNotImplemented,
-			)
-		}
-		return target.ListAuditRows(ctx, filter)
-	}
-	rows := make([]domain.AuditRow, 0)
-	total := 0
-	nodeFilter := filter
-	nodeFilter.Page = nodePageForMerge(filter.Page)
-	for i, n := range nodes {
-		target, ok := n.(auditRowNode)
-		if !ok {
-			return store.AuditListPage{}, fmt.Errorf(
-				"backend: node %d list audit rows: %w", i, domain.ErrNotImplemented,
-			)
-		}
-		part, err := target.ListAuditRows(ctx, nodeFilter)
-		if err != nil {
-			return store.AuditListPage{}, fmt.Errorf(
-				"backend: node %d list audit rows: %w", i, err,
-			)
-		}
-		total += part.Total
-		rows = append(rows, part.Rows...)
-	}
-	sortAuditNewestFirst(rows)
-	rows = pageAuditRows(rows, filter.Page)
-	return store.AuditListPage{Rows: rows, Total: total}, nil
-}
-
 // sortAuditNewestFirst orders audit rows newest first by timestamp, breaking
-// ties on the opaque external id (descending) for a stable merge across nodes.
-// Machine records carry no integer id, so the external id is the tiebreaker.
+// ties on the opaque external id (descending). The store orders by the
+// RFC3339Nano text, which is not chronological within one second when the
+// fractional precision differs.
 func sortAuditNewestFirst(rows []domain.AuditRow) {
 	sort.Slice(rows, func(i, j int) bool {
 		if !rows[i].At.Equal(rows[j].At) {
@@ -120,4 +64,17 @@ func sortAuditNewestFirst(rows []domain.AuditRow) {
 		}
 		return rows[i].ExternalID.String() > rows[j].ExternalID.String()
 	})
+}
+
+// ListAuditRows returns audit entries with DB-side filters and counts.
+func (s *Service) ListAuditRows(
+	ctx context.Context, filter store.AuditListFilter,
+) (store.AuditListPage, error) {
+	target, ok := s.node.(auditRowNode)
+	if !ok {
+		return store.AuditListPage{}, fmt.Errorf(
+			"backend: node list audit rows: %w", domain.ErrNotImplemented,
+		)
+	}
+	return target.ListAuditRows(ctx, filter)
 }

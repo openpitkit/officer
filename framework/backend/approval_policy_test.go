@@ -37,18 +37,17 @@ func TestAttestationBlocksPreserveSDKPolicy(t *testing.T) {
 	}
 }
 
-// routeRecorder is a router that owns no node: it records that a cancel got as
-// far as routing, and fails with an error that is not ErrInvalid.
-type routeRecorder struct {
-	routed bool
+// reachRecorder is a node that holds no order: it records that a cancel got as
+// far as reading the order, and fails with an error that is not ErrInvalid.
+type reachRecorder struct {
+	node.Node
+	reached bool
 }
 
-func (r *routeRecorder) Route(node.Key) (node.Node, error) {
-	r.routed = true
-	return nil, errors.New("no node")
+func (r *reachRecorder) GetOrder(context.Context, domain.ExternalID) (domain.OrderDetail, error) {
+	r.reached = true
+	return domain.OrderDetail{}, errors.New("no order")
 }
-
-func (r *routeRecorder) All() []node.Node { return nil }
 
 // TestCancelOrderValidatesReason covers the free-form cancel reason: it is
 // rendered verbatim into the audit detail line, so a newline could forge a
@@ -57,8 +56,8 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 	t.Parallel()
 
 	const orderID = "ord-1"
-	router := &routeRecorder{}
-	svc := &Service{router: router}
+	recorder := &reachRecorder{}
+	svc := &Service{node: recorder}
 	ctx := context.Background()
 
 	_, _, err := svc.CancelOrder(ctx, orderID, "token", "",
@@ -66,7 +65,7 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CancelOrder with a newline reason = %v, want ErrInvalid", err)
 	}
-	if router.routed {
+	if recorder.reached {
 		t.Fatal("cancel reached the node with an unvalidated reason")
 	}
 
@@ -74,7 +73,7 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 	if errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CancelOrder with a plain reason = %v, want it accepted", err)
 	}
-	if !router.routed {
+	if !recorder.reached {
 		t.Fatal("cancel with a plain reason did not reach the node")
 	}
 }

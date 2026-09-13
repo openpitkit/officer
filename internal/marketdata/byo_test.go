@@ -20,6 +20,7 @@ package marketdata
 import (
 	"context"
 	"errors"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"testing"
 	"time"
 )
@@ -36,7 +37,7 @@ func TestBYOConnector_PushForwards(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	want := QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100"}
+	want := fwmarketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100"}
 	if err := c.Push(context.Background(), want); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestBYOConnector_PushAfterCloseIsNoop(t *testing.T) {
 	c.Close()
 	// Must not panic on a closed channel.
 	if err := c.Push(
-		context.Background(), QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "1"},
+		context.Background(), fwmarketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "1"},
 	); err != nil {
 		t.Fatalf("Push after Close: %v", err)
 	}
@@ -80,13 +81,13 @@ func TestBYOConnector_PushHonorsContextWhenQueueIsFull(t *testing.T) {
 	defer c.Close()
 
 	if err := c.Push(
-		context.Background(), QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "1"},
+		context.Background(), fwmarketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "1"},
 	); err != nil {
 		t.Fatalf("first Push: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	err := c.Push(ctx, QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "2"})
+	err := c.Push(ctx, fwmarketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "2"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("second Push error = %v, want context deadline exceeded", err)
 	}

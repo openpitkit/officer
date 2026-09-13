@@ -56,9 +56,8 @@ func (e *engineRebuildError) Unwrap() error {
 }
 
 // localNode is the in-process Node: one engine and one realm-scoped store
-// running together behind the control plane. In the single-binary deployment
-// there is exactly one localNode, bound to domain.DefaultRealm, and it owns
-// every account.
+// running together behind the control plane, bound to the realm it was built
+// with.
 //
 // The node keeps two store references. db is the connection-lifecycle handle
 // (migrate, ping, path, reset, schema, close, and ForRealm); realm is the
@@ -89,15 +88,9 @@ type localNode struct {
 	restarting atomic.Bool
 }
 
-type marketDataServiceCloser interface {
-	CloseMarketDataService()
-}
-
 func stopFinalEngine(eng engine.Engine) {
 	eng.Stop()
-	if closer, ok := eng.(marketDataServiceCloser); ok {
-		closer.CloseMarketDataService()
-	}
+	eng.CloseMarketDataService()
 }
 
 const (
@@ -107,54 +100,35 @@ const (
 		"operations that referenced unknown assets."
 )
 
-// LocalOption customizes a local node instance.
-type LocalOption func(*localNode)
-
-// WithRealm binds the node to an explicit dataset. Omitting this option keeps
-// the single-binary composition's domain.DefaultRealm. An explicit empty realm
-// is rejected by NewLocalNode.
-func WithRealm(realm domain.RealmID) LocalOption {
-	return func(n *localNode) { n.realmID = realm }
-}
-
-// WithFatalShutdownHook wires the process-level fail-stop hook for
-// unrecoverable post-engine persistence failures. A nil hook is ignored and
-// leaves the no-op default in place; see NewLocalNode for what that costs.
-func WithFatalShutdownHook(hook func(error)) LocalOption {
-	return func(n *localNode) {
-		if hook != nil {
-			n.fatal = hook
-		}
-	}
-}
-
-// NewLocalNode builds the single in-process Node: it binds the fixed realm via
-// store.ForRealm(domain.DefaultRealm), loads the seed snapshot from that realm
-// (accounts, the full typed barrier set, groups, and balances), builds the one
-// engine from it via build, bundles the engine and store, and appends one
-// startup audit row.
+// NewLocalNode builds the in-process Node of realm: it binds realm via
+// store.ForRealm, loads the seed snapshot from it (accounts, the full typed
+// barrier set, groups, and balances), builds the one engine from it via build,
+// bundles the engine and store, and appends one startup audit row.
 //
 // build is retained for administrative rebuilds after persisted snapshot
 // changes such as backup restore, database reset, or unsupported dynamic policy
 // changes.
 //
+// fatal is the required process-level fail-stop hook for unrecoverable
+// post-engine failures. The node still returns every such failure as an
+// explicit error, but some paths rely on the fail-stop rather than on the
+// caller: a reset that fails between closing the market-data service and
+// installing the rebuilt engine leaves the node's current sink backed by a
+// closed service, and only an exiting hook keeps that sink from being used.
+//
 // It returns the node and the engine handle. The node owns the engine and
 // store: Close stops the engine and closes the store. The returned handle is
 // the permanent handle, but live version/health should still be read through
 // the node (Health, EngineVersion) for a uniform access path, because restore
-// can swap the current engine. It returns an error if any dependency is nil, if
-// the realm cannot be bound, if the seed cannot be loaded, or if the engine
-// cannot be built.
-//
-// The fatal-shutdown hook is optional and defaults to a no-op, so a caller that
-// omits WithFatalShutdownHook still receives every unrecoverable post-engine
-// failure as an explicit error but gets no process-level fail-stop. Some paths
-// rely on that fail-stop rather than on the caller: a reset that fails between
-// closing the market-data service and installing the rebuilt engine leaves the
-// node's current sink backed by a closed service, and only an exiting hook
-// keeps that sink from being used. A production deployment must install one.
+// can swap the current engine. It returns an error if any dependency is nil,
+// the fatal hook included, if realm is empty or invalid or cannot be bound, if
+// the seed cannot be loaded, or if the engine cannot be built.
 func NewLocalNode(
-	ctx context.Context, st store.Store, build engine.BuildFunc, opts ...LocalOption,
+	ctx context.Context,
+	realm domain.RealmID,
+	st store.Store,
+	build engine.BuildFunc,
+	fatal func(error),
 ) (Node, engine.Engine, error) {
 	if st == nil {
 		return nil, nil, fmt.Errorf("nil store")
@@ -162,25 +136,25 @@ func NewLocalNode(
 	if build == nil {
 		return nil, nil, fmt.Errorf("nil engine build func")
 	}
+	if fatal == nil {
+		return nil, nil, fmt.Errorf("nil fatal shutdown hook")
+	}
+	if err := domain.ValidateRealmID(realm); err != nil {
+		return nil, nil, fmt.Errorf("bind realm: %w", err)
+	}
 
 	n := &localNode{
 		db:      st,
 		build:   build,
-		realmID: domain.DefaultRealm,
-		fatal:   func(error) {},
+		realmID: realm,
+		fatal:   fatal,
 	}
-	for _, opt := range opts {
-		opt(n)
-	}
-	if err := domain.ValidateRealmID(n.realmID); err != nil {
-		return nil, nil, fmt.Errorf("bind realm: %w", err)
-	}
-	realm, err := st.ForRealm(ctx, n.realmID)
+	realmStore, err := st.ForRealm(ctx, realm)
 	if err != nil {
 		return nil, nil, fmt.Errorf("bind realm: %w", err)
 	}
-	n.realm = realm
-	if err := n.ensureOperatorPrincipal(ctx, realm); err != nil {
+	n.realm = realmStore
+	if err := n.ensureOperatorPrincipal(ctx, realmStore); err != nil {
 		return nil, nil, err
 	}
 
@@ -202,7 +176,7 @@ func NewLocalNode(
 	// is empty for system origin; SourceSystem marks the channel). Stamping a
 	// literal "system" actor would reference a non-existent principal dictionary
 	// code and be rejected by the store.
-	if err := realm.AppendAudit(ctx, store.AuditEntry{
+	if err := realmStore.AppendAudit(ctx, store.AuditEntry{
 		Action: domain.AuditActionHydrate,
 		Detail: counts,
 		Source: domain.SourceSystem,
@@ -457,9 +431,8 @@ func (n *localNode) EngineVersion() string {
 	return n.engine.Version()
 }
 
-// Owns reports whether this node is responsible for the given routing key. The
-// single node owns every account, so it always returns true.
-func (n *localNode) Owns(Key) bool { return true }
+// Realm returns the realm the node was built with.
+func (n *localNode) Realm() domain.RealmID { return n.realmID }
 
 // ListAccounts returns every persisted account owned by this node.
 func (n *localNode) ListAccounts(ctx context.Context) ([]domain.Account, error) {
@@ -722,17 +695,7 @@ func (n *localNode) ResetDatabase(
 	// refcounted native-handle clones that remain valid when Service.Close runs
 	// concurrently. Rotating after Reset preserves its durable commit point: all
 	// later reconciliation failures remain fatal.
-	closer, ok := n.currentEngine().(marketDataServiceCloser)
-	if !ok {
-		return committedFailure(
-			"rotate market-data service after database reset",
-			errors.New(
-				"current engine does not support market-data service rotation "+
-					"(missing CloseMarketDataService)",
-			),
-		)
-	}
-	closer.CloseMarketDataService()
+	n.currentEngine().CloseMarketDataService()
 	realm, err := n.db.ForRealm(durableCtx, n.realmID)
 	if err != nil {
 		return committedFailure(
@@ -1044,36 +1007,4 @@ func (n *localNode) rollbackStore(
 	// state, but the commit itself makes this a post-commit failure rather
 	// than a caller fault.
 	return internalPostCommitNodeMutationError(err)
-}
-
-// localRouter is the single-node NodeRouter for the single-binary deployment.
-// It resolves every owned key to the one node and enumerates exactly that node.
-type localRouter struct {
-	node Node
-}
-
-// NewLocalRouter returns a NodeRouter over a single node. Route returns that
-// node for any key it owns and an error otherwise; All returns the one node. It
-// returns an error if n is nil.
-func NewLocalRouter(n Node) (NodeRouter, error) {
-	if n == nil {
-		return nil, fmt.Errorf("nil node for router")
-	}
-	return &localRouter{node: n}, nil
-}
-
-// ErrNoOwner is returned by Route when no node owns the requested key.
-var ErrNoOwner = errors.New("no node owns key")
-
-// Route returns the single node when it owns key, otherwise ErrNoOwner.
-func (r *localRouter) Route(key Key) (Node, error) {
-	if !r.node.Owns(key) {
-		return nil, fmt.Errorf("%w: account=%q", ErrNoOwner, key.Account)
-	}
-	return r.node, nil
-}
-
-// All returns a fresh one-element snapshot of the node set.
-func (r *localRouter) All() []Node {
-	return []Node{r.node}
 }

@@ -40,7 +40,7 @@ func newRuntimeRouteManifestHandler(routes []Route, authorizer Authorizer) http.
 		entries := make([]runtimeRouteManifestEntry, 0, len(routes)+1)
 		for _, route := range routes {
 			if err := authorizer.Authorize(
-				r.Context(), caller, route.Permission,
+				r.Context(), caller, route.ID,
 			); err != nil {
 				continue
 			}

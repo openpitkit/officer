@@ -36,10 +36,10 @@ import (
 // currency changes are rejected when the account has non-zero positions or
 // P&L, a halted P&L, active orders, or active limits.
 func (n *localNode) SetAccountCurrency(
-	ctx context.Context, key Key, currency string, caller domain.Caller,
+	ctx context.Context, account domain.AccountID, currency string, caller domain.Caller,
 ) error {
 	if err := n.ensureAccountCurrencyAssetRegisteredExclusive(
-		ctx, key.Account, currency, caller,
+		ctx, account, currency, caller,
 	); err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func (n *localNode) SetAccountCurrency(
 			endLane()
 		}
 	}()
-	source, err := eng.AccountID(key.Account)
+	source, err := eng.AccountID(account)
 	if err != nil {
 		return err
 	}
@@ -70,14 +70,14 @@ func (n *localNode) SetAccountCurrency(
 			state.err = ctxErr
 			return nil, state.err
 		}
-		previous, ok, readErr := n.realm.GetAccount(state.ctx, key.Account)
+		previous, ok, readErr := n.realm.GetAccount(state.ctx, account)
 		if readErr != nil {
 			state.err = fmt.Errorf("read account for currency: %w", readErr)
 			return nil, state.err
 		}
 		if !ok {
 			state.err = fmt.Errorf(
-				"account %q: %w", key.Account, domain.ErrNotFound,
+				"account %q: %w", account, domain.ErrNotFound,
 			)
 			return nil, state.err
 		}
@@ -94,7 +94,7 @@ func (n *localNode) SetAccountCurrency(
 		)
 		if guardErr := n.guardEffectiveCurrencyChange(
 			state.ctx,
-			[]domain.AccountID{key.Account},
+			[]domain.AccountID{account},
 			previous.EffectiveCurrency,
 			nextEffective,
 		); guardErr != nil {
@@ -104,10 +104,10 @@ func (n *localNode) SetAccountCurrency(
 			}
 			state.err = n.auditCurrencyChangeRefusal(state.ctx, caller, store.AuditEntry{
 				Action:  domain.AuditActionSetAccountCurrency,
-				Account: key.Account, AccountTitle: previous.Title,
-				Detail: currencyDetail("set account currency", key.Account.String(), previous.Currency, currency),
+				Account: account, AccountTitle: previous.Title,
+				Detail: currencyDetail("set account currency", account.String(), previous.Currency, currency),
 			}, domain.NewCurrencyChangeBlockedError(
-				domain.ScopeAccount, key.Account.String(), guardErr,
+				domain.ScopeAccount, account.String(), guardErr,
 			))
 			return nil, state.err
 		}
@@ -124,7 +124,7 @@ func (n *localNode) SetAccountCurrency(
 		mutationCtx := context.WithoutCancel(state.ctx)
 		state.failureOperation = "set account currency"
 		if err := n.realm.SetAccountCurrency(
-			mutationCtx, key.Account, currency,
+			mutationCtx, account, currency,
 		); err != nil {
 			state.err = fmt.Errorf("set account currency: %w", err)
 			return state.err
@@ -133,11 +133,11 @@ func (n *localNode) SetAccountCurrency(
 		state.failureOperation = "audit account currency"
 		if err := n.audit(mutationCtx, caller, store.AuditEntry{
 			Action:       domain.AuditActionSetAccountCurrency,
-			Account:      key.Account,
+			Account:      account,
 			AccountTitle: state.previous.Title,
 			Detail: currencyDetail(
 				"set account currency",
-				key.Account.String(),
+				account.String(),
 				state.previous.Currency,
 				currency,
 			),
@@ -184,7 +184,7 @@ func (n *localNode) SetAccountCurrency(
 		state.err = n.administrativeChainTerminalError(
 			"account currency",
 			"account",
-			key.Account.String(),
+			account.String(),
 			&state.administrativeChainState,
 			outcome,
 		)

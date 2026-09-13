@@ -29,6 +29,7 @@ import (
 
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/domain"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -43,8 +44,8 @@ const (
 type alpacaConnector struct {
 	dial         func(context.Context, string) (alpacaConn, error)
 	sleep        func(context.Context, time.Duration) error
-	report       StatusReporter
-	diagReport   DiagnosticReporter
+	report       fwmarketdata.StatusReporter
+	diagReport   fwmarketdata.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	readTimeout  time.Duration
@@ -71,7 +72,7 @@ type alpacaCredentials struct {
 }
 
 type alpacaSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	symbol string
 }
 
@@ -168,7 +169,7 @@ func (c liveAlpacaConn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *alpacaConnector) SetStatusReporter(report StatusReporter) {
+func (c *alpacaConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -179,27 +180,27 @@ func (c *alpacaConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *alpacaConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *alpacaConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *alpacaConnector) reportDiag(diag Diagnostic) {
+func (c *alpacaConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
 // References returns the Alpaca API documentation and asset-list URLs.
-func (c *alpacaConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *alpacaConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL:    "https://docs.alpaca.markets/docs/real-time-stock-pricing-data",
 		SymbolsURL: "https://docs.alpaca.markets/docs/assets-1",
 	}, true
 }
 
 func (c *alpacaConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	normalized, err := normalizeAlpacaSubscriptions(subs)
 	if err != nil {
 		return nil, err
@@ -208,7 +209,7 @@ func (c *alpacaConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -219,7 +220,7 @@ func (c *alpacaConnector) Subscribe(
 }
 
 func (c *alpacaConnector) run(
-	ctx context.Context, subs []alpacaSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []alpacaSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	attempt := 0
 	for {
@@ -239,7 +240,7 @@ func (c *alpacaConnector) run(
 }
 
 func (c *alpacaConnector) stream(
-	ctx context.Context, subs []alpacaSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []alpacaSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (bool, error) {
 	conn, err := c.dial(ctx, alpacaIEXStreamURL)
 	if err != nil {
@@ -336,7 +337,7 @@ func (c *alpacaConnector) waitForAuth(
 }
 
 func normalizeAlpacaSubscriptions(
-	subs []Subscription,
+	subs []fwmarketdata.Subscription,
 ) ([]alpacaSubscription, error) {
 	if len(subs) > alpacaSymbolLimit {
 		return nil, fmt.Errorf("alpaca subscription limit exceeded: %d > %d", len(subs), alpacaSymbolLimit)
@@ -398,13 +399,13 @@ func alpacaSymbols(subs []alpacaSubscription) []string {
 
 func parseAlpacaQuoteUpdates(
 	payload []byte, subs []alpacaSubscription,
-) []QuoteUpdate {
+) []fwmarketdata.QuoteUpdate {
 	var rawEvents []map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &rawEvents); err != nil {
 		return nil
 	}
 
-	updates := make([]QuoteUpdate, 0, len(rawEvents))
+	updates := make([]fwmarketdata.QuoteUpdate, 0, len(rawEvents))
 	for _, rawEvent := range rawEvents {
 		event := alpacaEvent{
 			Type:      rawString(rawEvent["T"]),
@@ -479,13 +480,13 @@ func alpacaControlMessage(frame alpacaControlEvent) string {
 
 func quoteUpdateFromAlpacaEvent(
 	event alpacaEvent, subs []alpacaSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	if event.Timestamp.IsZero() {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	symbol := strings.ToUpper(strings.TrimSpace(event.Symbol))
 	if symbol == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 
 	for _, sub := range subs {
@@ -494,7 +495,7 @@ func quoteUpdateFromAlpacaEvent(
 		}
 		switch event.Type {
 		case "q":
-			return QuoteUpdate{
+			return fwmarketdata.QuoteUpdate{
 				AsOf:  event.Timestamp.UTC(),
 				Base:  sub.Base,
 				Quote: sub.Quote,
@@ -502,17 +503,17 @@ func quoteUpdateFromAlpacaEvent(
 				Ask:   event.Ask,
 			}, true
 		case "t":
-			return QuoteUpdate{
+			return fwmarketdata.QuoteUpdate{
 				AsOf:  event.Timestamp.UTC(),
 				Base:  sub.Base,
 				Quote: sub.Quote,
 				Mark:  event.Last,
 			}, true
 		default:
-			return QuoteUpdate{}, false
+			return fwmarketdata.QuoteUpdate{}, false
 		}
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }
 
 func rawTime(raw json.RawMessage) time.Time {

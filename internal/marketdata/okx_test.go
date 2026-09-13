@@ -27,12 +27,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestNormalizeOKXSubscriptions(t *testing.T) {
 	t.Parallel()
 
-	subs, err := normalizeOKXSubscriptions([]Subscription{
+	subs, err := normalizeOKXSubscriptions([]fwmarketdata.Subscription{
 		{External: "btc-usdt", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 		{External: "eth-usd", Base: testMarketDataAssetID("Eth"), Quote: testMarketDataAssetID("Usd")},
 	})
@@ -50,7 +51,7 @@ func TestNormalizeOKXSubscriptions(t *testing.T) {
 func TestNormalizeOKXSubscriptionsEmptySymbol(t *testing.T) {
 	t.Parallel()
 
-	if _, err := normalizeOKXSubscriptions([]Subscription{{}}); err == nil {
+	if _, err := normalizeOKXSubscriptions([]fwmarketdata.Subscription{{}}); err == nil {
 		t.Fatal("normalizeOKXSubscriptions error = nil, want error")
 	}
 }
@@ -58,7 +59,7 @@ func TestNormalizeOKXSubscriptionsEmptySymbol(t *testing.T) {
 func TestOKXSubscribePayload(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOKXSubscriptions(t, []Subscription{
+	subs := mustNormalizeOKXSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	payload, err := okxSubscribePayload(subs)
@@ -79,7 +80,7 @@ func TestOKXSubscribePayload(t *testing.T) {
 func TestParseOKXQuoteUpdate(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOKXSubscriptions(t, []Subscription{
+	subs := mustNormalizeOKXSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	payload := []byte(`{"arg":{"channel":"tickers","instId":"BTC-USDT"},"data":[{"instId":"BTC-USDT","last":"65000.10","bidPx":"65000.01","askPx":"65000.02","ts":"1710000000123"}]}`)
@@ -102,7 +103,7 @@ func TestParseOKXQuoteUpdate(t *testing.T) {
 func TestParseOKXQuoteUpdateRejectsInvalidFrames(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOKXSubscriptions(t, []Subscription{
+	subs := mustNormalizeOKXSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	tests := []struct {
@@ -143,7 +144,7 @@ func TestParseOKXQuoteUpdateRejectsInvalidFrames(t *testing.T) {
 func TestOKXConnector_PingsAndUsesPublicURL(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOKXSubscriptions(t, []Subscription{
+	subs := mustNormalizeOKXSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeOKXConn{blockRead: make(chan struct{})}
@@ -165,7 +166,7 @@ func TestOKXConnector_PingsAndUsesPublicURL(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		connector.run(ctx, subs, make(chan QuoteUpdate))
+		connector.run(ctx, subs, make(chan fwmarketdata.QuoteUpdate))
 	}()
 
 	if !conn.waitForWrite("ping", time.Second) {
@@ -185,7 +186,7 @@ func TestOKXConnector_PingsAndUsesPublicURL(t *testing.T) {
 func TestOKXConnector_ReportsErrorEvent(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOKXSubscriptions(t, []Subscription{
+	subs := mustNormalizeOKXSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BAD-USDT", Base: testMarketDataAssetID("BAD"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeOKXConn{
@@ -209,7 +210,7 @@ func TestOKXConnector_ReportsErrorEvent(t *testing.T) {
 		},
 	}
 
-	if _, err := connector.stream(context.Background(), subs, make(chan QuoteUpdate)); !errors.Is(err, context.Canceled) {
+	if _, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream err = %v, want context.Canceled", err)
 	}
 	if len(statuses) != 1 || statuses[0] != "okx: 60018: Invalid request" {
@@ -220,7 +221,7 @@ func TestOKXConnector_ReportsErrorEvent(t *testing.T) {
 func TestOKXConnector_SubscribeAckDoesNotReportUnparsable(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOKXSubscriptions(t, []Subscription{
+	subs := mustNormalizeOKXSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conn := &fakeOKXConn{
@@ -231,7 +232,7 @@ func TestOKXConnector_SubscribeAckDoesNotReportUnparsable(t *testing.T) {
 		},
 		err: context.Canceled,
 	}
-	var diagnostics []Diagnostic
+	var diagnostics []fwmarketdata.Diagnostic
 	connector := &okxConnector{
 		dial: func(context.Context, string) (okxConn, error) {
 			return conn, nil
@@ -239,12 +240,12 @@ func TestOKXConnector_SubscribeAckDoesNotReportUnparsable(t *testing.T) {
 		sleep:        func(context.Context, time.Duration) error { return nil },
 		reconnectMin: time.Millisecond,
 		reconnectMax: time.Millisecond,
-		diagReport: func(diag Diagnostic) {
+		diagReport: func(diag fwmarketdata.Diagnostic) {
 			diagnostics = append(diagnostics, diag)
 		},
 	}
 
-	if _, err := connector.stream(context.Background(), subs, make(chan QuoteUpdate)); !errors.Is(err, context.Canceled) {
+	if _, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream err = %v, want context.Canceled", err)
 	}
 	if len(diagnostics) != 0 {
@@ -283,7 +284,7 @@ func TestOKXDiagnoseUnknownSymbol(t *testing.T) {
 	connector.fetchSymbols = func(context.Context) (map[string]struct{}, error) {
 		return map[string]struct{}{"BTC-USDT": {}}, nil
 	}
-	connector.subs = mustNormalizeOKXSubscriptions(t, []Subscription{
+	connector.subs = mustNormalizeOKXSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 		{External: "BAD-USDT", Base: testMarketDataAssetID("BAD"), Quote: testMarketDataAssetID("USDT")},
 	})
@@ -301,7 +302,7 @@ func TestOKXDiagnoseUnknownSymbol(t *testing.T) {
 func TestOKXConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeOKXSubscriptions(t, []Subscription{
+	subs := mustNormalizeOKXSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	conns := []*fakeOKXConn{
@@ -351,13 +352,13 @@ func TestOKXConnector_ResetsBackoffAfterRead(t *testing.T) {
 		reconnectMax: 4 * time.Millisecond,
 	}
 
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	go func() {
 		connector.run(context.Background(), subs, ch)
 		close(ch)
 	}()
 
-	var got []QuoteUpdate
+	var got []fwmarketdata.QuoteUpdate
 	for update := range ch {
 		got = append(got, update)
 	}
@@ -375,7 +376,7 @@ func TestOKXConnector_ResetsBackoffAfterRead(t *testing.T) {
 }
 
 func mustNormalizeOKXSubscriptions(
-	t *testing.T, subs []Subscription,
+	t *testing.T, subs []fwmarketdata.Subscription,
 ) []okxSubscription {
 	t.Helper()
 	normalized, err := normalizeOKXSubscriptions(subs)
@@ -495,9 +496,9 @@ func TestOKXConnector_CloseStopsSubscription(t *testing.T) {
 		pingInterval: time.Hour,
 		readTimeout:  time.Hour,
 		report:       func(bool, string) {},
-		diagReport:   func(Diagnostic) {},
+		diagReport:   func(fwmarketdata.Diagnostic) {},
 	}
-	out, err := connector.Subscribe(context.Background(), []Subscription{
+	out, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
 	})
 	if err != nil {

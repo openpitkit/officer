@@ -146,7 +146,7 @@ func (r *realmStore) backupSnapshot(
 		)
 	}
 
-	raw, err := New(path, WithRealm(r.store.realm))
+	raw, err := New(path, r.store.realm)
 	if err != nil {
 		return nil, nil, errors.Join(
 			fmt.Errorf("store: open backup snapshot: %w", err),

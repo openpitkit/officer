@@ -25,9 +25,11 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
-// Authorizer decides whether caller may use permission.
+// Authorizer decides whether caller may use a stable surface identifier.
+// Caller.Source identifies the identifier namespace: SourceMCP uses MCP tool
+// names, while SourcePanel and SourceAPI use REST route IDs.
 type Authorizer interface {
-	Authorize(ctx context.Context, caller domain.Caller, permission string) error
+	Authorize(ctx context.Context, caller domain.Caller, identifier string) error
 }
 
 // AllowAll authorizes every request.
@@ -37,7 +39,7 @@ type AllowAll struct{}
 func (AllowAll) Authorize(context.Context, domain.Caller, string) error { return nil }
 
 // AuthorizeMiddleware gates a route through the configured Authorizer.
-func AuthorizeMiddleware(a Authorizer, permission string) Middleware {
+func AuthorizeMiddleware(a Authorizer, identifier string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if a == nil {
@@ -45,7 +47,7 @@ func AuthorizeMiddleware(a Authorizer, permission string) Middleware {
 				return
 			}
 			caller := auth.CallerFromContext(r.Context())
-			if err := a.Authorize(r.Context(), caller, permission); err != nil {
+			if err := a.Authorize(r.Context(), caller, identifier); err != nil {
 				WriteErr(w, err)
 				return
 			}
@@ -54,11 +56,16 @@ func AuthorizeMiddleware(a Authorizer, permission string) Middleware {
 	}
 }
 
-// StampSource stamps the request caller with the surface source.
-func StampSource(source domain.Source) Middleware {
+// ResolveCaller resolves the request identity and stamps the server-owned source.
+func ResolveCaller(resolver auth.CallerResolver, source domain.Source) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			caller := domain.Caller{Source: source, Principal: domain.PrincipalOperator}
+			caller, err := resolver(r)
+			if err != nil {
+				WriteErr(w, err)
+				return
+			}
+			caller.Source = source
 			ctx := auth.ContextWithCaller(r.Context(), caller)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

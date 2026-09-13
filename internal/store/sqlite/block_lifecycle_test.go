@@ -159,7 +159,7 @@ func (s *blockLifecycleStore) open(
 	t *testing.T, ctx context.Context, migrate bool,
 ) {
 	t.Helper()
-	opened, err := New(s.path)
+	opened, err := New(s.path, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("New(%s): %v", s.path, err)
 	}

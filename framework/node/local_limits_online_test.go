@@ -274,9 +274,9 @@ func TestLocalNode_RateLimitAuditFailureFatalsAfterConfigure(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	if err := n.realm.PutRateLimit(
 		ctx, rateLimit(domain.ScopeBroker, "", "", 50, time.Second),
 	); err != nil {
@@ -354,7 +354,7 @@ func TestLocalNode_FirstRateLimitStoreCommitFailureIsAtomic(t *testing.T) {
 		}
 	})
 	old := newFakeEngine()
-	n := newTestNodeWithStore(t, st, old)
+	n := newTestNodeWithStore(t, st, old, failOnFatal(t))
 	next := newFakeEngine()
 	n.build = fakeBuild(next, new(engine.Snapshot))
 
@@ -393,7 +393,7 @@ func TestLocalNode_LastRateLimitStoreCommitFailureIsAtomic(t *testing.T) {
 		return wrapped
 	})
 	old := newFakeEngine()
-	n := newTestNodeWithStore(t, st, old)
+	n := newTestNodeWithStore(t, st, old, failOnFatal(t))
 	current := newFakeEngine()
 	n.build = fakeBuild(current, new(engine.Snapshot))
 	limit := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)

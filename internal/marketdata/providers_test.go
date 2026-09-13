@@ -25,13 +25,10 @@ import (
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
-func TestDefaultRegistryOrderTitlesAndCapabilities(t *testing.T) {
+func TestFirstPartyRegistryOrderTitlesAndCapabilities(t *testing.T) {
 	t.Parallel()
 
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatalf("DefaultRegistry: %v", err)
-	}
+	registry := firstPartyRegistry(t)
 	want := []struct {
 		typ      string
 		title    string
@@ -85,7 +82,7 @@ func TestDefaultRegistryOrderTitlesAndCapabilities(t *testing.T) {
 	}
 }
 
-func TestDefaultRegistryBuildsFirstPartyConnectors(t *testing.T) {
+func TestFirstPartyRegistryBuildsFirstPartyConnectors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -125,10 +122,7 @@ func TestDefaultRegistryBuildsFirstPartyConnectors(t *testing.T) {
 		{name: "byo", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBYO}, wantType: (*byoConnector)(nil)},
 		{name: "mock", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderMock}, wantType: (*mockConnector)(nil)},
 	}
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatalf("DefaultRegistry: %v", err)
-	}
+	registry := firstPartyRegistry(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -145,7 +139,7 @@ func TestDefaultRegistryBuildsFirstPartyConnectors(t *testing.T) {
 	}
 }
 
-func TestDefaultRegistryCapabilitiesMatchConnectors(t *testing.T) {
+func TestFirstPartyRegistryCapabilitiesMatchConnectors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -164,10 +158,7 @@ func TestDefaultRegistryCapabilitiesMatchConnectors(t *testing.T) {
 		{name: "byo", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBYO}},
 		{name: "mock", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderMock}},
 	}
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatalf("DefaultRegistry: %v", err)
-	}
+	registry := firstPartyRegistry(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -198,4 +189,29 @@ func TestDefaultRegistryCapabilitiesMatchConnectors(t *testing.T) {
 
 func testProviderExternalID(label string) domain.ExternalID {
 	return domain.ExternalID(label)
+}
+
+// firstPartyRegistry registers the first-party providers explicitly, in the
+// order the Officer composition registers them.
+func firstPartyRegistry(t *testing.T) *fwmarketdata.Registry {
+	t.Helper()
+	registry := fwmarketdata.NewRegistry()
+	for _, provider := range []fwmarketdata.Provider{
+		IBProvider(),
+		BinanceProvider(),
+		KrakenProvider(),
+		CoinbaseProvider(),
+		AlpacaProvider(),
+		OKXProvider(),
+		BybitProvider(),
+		OANDAProvider(),
+		FinnhubProvider(),
+		BYOProvider(),
+		MockProvider(),
+	} {
+		if err := registry.Register(provider); err != nil {
+			t.Fatalf("register provider %s: %v", provider.Type, err)
+		}
+	}
+	return registry
 }

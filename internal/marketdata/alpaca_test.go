@@ -30,6 +30,7 @@ import (
 
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/domain"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestParseAlpacaCredentials(t *testing.T) {
@@ -79,9 +80,9 @@ func TestParseAlpacaCredentialsRejectsMissingSecret(t *testing.T) {
 func TestNormalizeAlpacaSubscriptionsLimit(t *testing.T) {
 	t.Parallel()
 
-	subs := make([]Subscription, alpacaSymbolLimit+1)
+	subs := make([]fwmarketdata.Subscription, alpacaSymbolLimit+1)
 	for i := range subs {
-		subs[i] = Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}
+		subs[i] = fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")}
 	}
 	if _, err := normalizeAlpacaSubscriptions(subs); err == nil {
 		t.Fatal("normalizeAlpacaSubscriptions err = nil, want limit error")
@@ -91,7 +92,7 @@ func TestNormalizeAlpacaSubscriptionsLimit(t *testing.T) {
 func TestWriteAlpacaSubscriptionShape(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "aapl", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		{External: "msft", Base: testMarketDataAssetID("MSFT"), Quote: testMarketDataAssetID("USD")},
 	})
@@ -118,7 +119,7 @@ func TestWriteAlpacaSubscriptionShape(t *testing.T) {
 func TestParseAlpacaQuoteUpdates(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`[
@@ -145,7 +146,7 @@ func TestParseAlpacaQuoteUpdates(t *testing.T) {
 func TestParseAlpacaQuoteUpdatesStringPrices(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	payload := []byte(`[
@@ -168,7 +169,7 @@ func TestParseAlpacaQuoteUpdatesStringPrices(t *testing.T) {
 func TestAlpacaConnector_ReconnectsAndResubscribes(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	first := &fakeAlpacaConn{
@@ -211,7 +212,7 @@ func TestAlpacaConnector_ReconnectsAndResubscribes(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -219,7 +220,7 @@ func TestAlpacaConnector_ReconnectsAndResubscribes(t *testing.T) {
 		close(ch)
 	}()
 
-	got := make([]QuoteUpdate, 0, 2)
+	got := make([]fwmarketdata.QuoteUpdate, 0, 2)
 	for update := range ch {
 		got = append(got, update)
 		if len(got) == 2 {
@@ -238,7 +239,7 @@ func TestAlpacaConnector_ReconnectsAndResubscribes(t *testing.T) {
 func TestAlpacaConnector_AuthFailureDoesNotReportConnected(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	conn := &fakeAlpacaConn{
@@ -260,7 +261,7 @@ func TestAlpacaConnector_AuthFailureDoesNotReportConnected(t *testing.T) {
 		},
 	}
 
-	_, err := connector.stream(context.Background(), subs, make(chan QuoteUpdate))
+	_, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate))
 	if err == nil || !strings.Contains(err.Error(), "401: auth failed") {
 		t.Fatalf("stream err = %v, want auth failure", err)
 	}
@@ -272,7 +273,7 @@ func TestAlpacaConnector_AuthFailureDoesNotReportConnected(t *testing.T) {
 func TestAlpacaConnector_ReportsErrorFrame(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	conn := &fakeAlpacaConn{
@@ -298,7 +299,7 @@ func TestAlpacaConnector_ReportsErrorFrame(t *testing.T) {
 		},
 	}
 
-	if _, err := connector.stream(context.Background(), subs, make(chan QuoteUpdate)); !errors.Is(err, context.Canceled) {
+	if _, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream err = %v, want context.Canceled", err)
 	}
 	if len(statuses) != 1 || statuses[0] != "alpaca: 400: invalid symbol" {
@@ -309,7 +310,7 @@ func TestAlpacaConnector_ReportsErrorFrame(t *testing.T) {
 func TestAlpacaConnector_ResetsBackoffAfterRead(t *testing.T) {
 	t.Parallel()
 
-	subs := mustNormalizeAlpacaSubscriptions(t, []Subscription{
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 	})
 	conns := []*fakeAlpacaConn{
@@ -363,13 +364,13 @@ func TestAlpacaConnector_ResetsBackoffAfterRead(t *testing.T) {
 		},
 	}
 
-	ch := make(chan QuoteUpdate)
+	ch := make(chan fwmarketdata.QuoteUpdate)
 	go func() {
 		connector.run(context.Background(), subs, ch)
 		close(ch)
 	}()
 
-	var got []QuoteUpdate
+	var got []fwmarketdata.QuoteUpdate
 	for update := range ch {
 		got = append(got, update)
 	}
@@ -387,7 +388,7 @@ func TestAlpacaConnector_ResetsBackoffAfterRead(t *testing.T) {
 }
 
 func mustNormalizeAlpacaSubscriptions(
-	t *testing.T, subs []Subscription,
+	t *testing.T, subs []fwmarketdata.Subscription,
 ) []alpacaSubscription {
 	t.Helper()
 	normalized, err := normalizeAlpacaSubscriptions(subs)

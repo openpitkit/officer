@@ -43,20 +43,20 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"go.openpit.dev/officer"
 	frameworkapp "go.openpit.dev/officer/framework/app"
-	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	officerhttp "go.openpit.dev/officer/httpapi"
 	"go.openpit.dev/officer/internal/config"
-	officerhttp "go.openpit.dev/officer/internal/httpapi"
 	"go.openpit.dev/officer/internal/logtail"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
-	"go.openpit.dev/officer/officerapp"
 )
 
 // mcpPath is the route the streamable-HTTP MCP handler is mounted under in
@@ -138,20 +138,55 @@ func setup(
 	logger *slog.Logger,
 	fatalHook func(error),
 ) (*frameworkapp.App, error) {
+	if err := checkRuntimeLibraryPath(
+		cfg.RuntimeLibraryPath, os.Getenv(config.EnvRuntimeLibraryPath),
+	); err != nil {
+		return nil, err
+	}
 	masterKey, err := config.ResolveMasterKey(cfg, os.LookupEnv)
 	if err != nil {
 		return nil, err
 	}
 
 	builder := frameworkapp.NewBuilder()
-	if err := officerapp.Register(builder); err != nil {
+	if err := officer.Register(builder, officer.Config{
+		SQLitePath: cfg.SQLitePath,
+		MasterKey:  masterKey,
+	}); err != nil {
 		return nil, err
 	}
-	return builder.Build(ctx, frameworkapp.Config{
-		SQLitePath:         cfg.SQLitePath,
-		RuntimeLibraryPath: cfg.RuntimeLibraryPath,
-		MasterKey:          masterKey,
-	}, logger, fatalHook)
+	return builder.Build(ctx, logger, fatalHook)
+}
+
+// checkRuntimeLibraryPath fails when the configured runtime library path names
+// a library other than the one the OpenPit SDK loaded at process start from
+// processPath, the OPENPIT_RUNTIME_LIBRARY_PATH value this process started
+// with. Nothing after process start can change that library.
+func checkRuntimeLibraryPath(configured, processPath string) error {
+	if configured == "" {
+		return nil
+	}
+	if sdkRuntimeLibraryPath(configured) == sdkRuntimeLibraryPath(processPath) {
+		return nil
+	}
+	return fmt.Errorf(
+		"runtime library path %q does not match %s=%q the process started with: "+
+			"the OpenPit runtime is loaded at process start, so set %s to that "+
+			"path before starting pit-officer",
+		configured, config.EnvRuntimeLibraryPath, processPath,
+		config.EnvRuntimeLibraryPath,
+	)
+}
+
+// sdkRuntimeLibraryPath normalizes path the way the OpenPit SDK resolves
+// OPENPIT_RUNTIME_LIBRARY_PATH: surrounding whitespace is trimmed, an empty
+// result means unset, and anything else is cleaned.
+func sdkRuntimeLibraryPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
 }
 
 // runMCP loads the mcp-mode configuration, assembles the app, and serves the
@@ -187,7 +222,9 @@ func runMCP(args []string, logger *slog.Logger) error {
 	}()
 
 	logger.Info("serving mcp over stdio")
-	if err := app.RunMCPStdio(ctx); err != nil {
+	if err := app.RunMCPStdio(ctx, domain.Caller{
+		Principal: domain.PrincipalOperator,
+	}); err != nil {
 		return fmt.Errorf("run mcp stdio: %w", err)
 	}
 	logger.Info("mcp server stopped")
@@ -360,13 +397,9 @@ func buildServeHandler(
 	buf *logtail.Buffer,
 	lifecycleRequests chan<- lifecycleAction,
 ) (http.Handler, error) {
-	recordLifecycle := func(
-		ctx context.Context,
-		action lifecycleAction,
-		source domain.Source,
-	) error {
+	recordLifecycle := func(ctx context.Context, action lifecycleAction) error {
 		auditAction, detail := lifecycleAudit(action)
-		return app.RecordServiceLifecycle(ctx, auditAction, detail, source)
+		return app.RecordServiceLifecycle(ctx, auditAction, detail)
 	}
 	controller := &serviceLifecycleController{
 		requests: lifecycleRequests,
@@ -382,7 +415,7 @@ func buildServeHandler(
 	)
 }
 
-type lifecycleRecorder func(context.Context, lifecycleAction, domain.Source) error
+type lifecycleRecorder func(context.Context, lifecycleAction) error
 
 type serviceLifecycleController struct {
 	requests chan<- lifecycleAction
@@ -400,8 +433,7 @@ func (c *serviceLifecycleController) handler(action lifecycleAction) http.Handle
 			return
 		}
 		if c.record != nil {
-			source := auth.CallerFromContext(r.Context()).Source
-			if err := c.record(r.Context(), action, source); err != nil {
+			if err := c.record(r.Context(), action); err != nil {
 				http.Error(w, "audit lifecycle request", http.StatusInternalServerError)
 				return
 			}

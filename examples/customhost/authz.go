@@ -24,20 +24,20 @@ import (
 )
 
 type denyOneAuthorizer struct {
-	routePermission string
-	toolName        string
+	routeID  string
+	toolName string
 }
 
-func newDenyOneAuthorizer(routePermission, toolName string) denyOneAuthorizer {
-	return denyOneAuthorizer{routePermission: routePermission, toolName: toolName}
+func newDenyOneAuthorizer(routeID, toolName string) denyOneAuthorizer {
+	return denyOneAuthorizer{routeID: routeID, toolName: toolName}
 }
 
 func (a denyOneAuthorizer) Authorize(
 	_ context.Context,
 	_ domain.Caller,
-	permission string,
+	identifier string,
 ) error {
-	if permission == a.routePermission || permission == a.toolName {
+	if identifier == a.routeID || identifier == a.toolName {
 		return domain.ErrForbidden
 	}
 	return nil

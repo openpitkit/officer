@@ -30,10 +30,11 @@ import (
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // seedMDFixtures creates the dictionary rows market-data tests need.
-func seedMDFixtures(t *testing.T) (context.Context, RealmStore) {
+func seedMDFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	_, rs := newTestStore(t)

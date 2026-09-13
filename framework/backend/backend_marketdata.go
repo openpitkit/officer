@@ -85,10 +85,7 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 
-	n, err := s.groupNode()
-	if err != nil {
-		return MarketDataStatus{}, err
-	}
+	n := s.node
 	instances, err := n.ListMarketDataInstances(ctx)
 	if err != nil {
 		return MarketDataStatus{}, fmt.Errorf("backend: list market-data instances: %w", err)
@@ -220,10 +217,7 @@ func (s *Service) restartMarketDataLocked() error {
 	if s.md == nil {
 		return nil
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
+	n := s.node
 	s.md.Stop()
 	return s.restoreMarketDataAfterBackup(n.CurrentMarketDataSink())
 }
@@ -264,10 +258,7 @@ func (s *Service) VerifyMarketDataSymbol(
 	if err != nil {
 		return MarketDataSymbolVerification{}, fmt.Errorf("market-data instance id: %w", err)
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return MarketDataSymbolVerification{}, err
-	}
+	n := s.node
 	instance, ok, err := n.GetMarketDataInstance(ctx, instanceID)
 	if err != nil {
 		return MarketDataSymbolVerification{}, fmt.Errorf("backend: get market-data instance: %w", err)
@@ -345,10 +336,7 @@ func (s *Service) SearchMarketDataSymbols(
 	if err != nil {
 		return MarketDataSymbolSearch{}, fmt.Errorf("market-data instance id: %w", err)
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return MarketDataSymbolSearch{}, err
-	}
+	n := s.node
 	instance, ok, err := n.GetMarketDataInstance(ctx, instanceID)
 	if err != nil {
 		return MarketDataSymbolSearch{}, fmt.Errorf("backend: get market-data instance: %w", err)
@@ -599,10 +587,7 @@ func (s *Service) CreateMarketDataInstance(
 	if instance.Label == "" {
 		instance.Label = title
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return domain.MarketDataInstance{}, err
-	}
+	n := s.node
 	instances, err := n.ListMarketDataInstances(ctx)
 	if err != nil {
 		return domain.MarketDataInstance{}, fmt.Errorf("backend: list market-data instances: %w", err)
@@ -628,11 +613,7 @@ func (s *Service) SetMarketDataInstanceEnabled(
 	if err != nil {
 		return fmt.Errorf("market-data instance id: %w", err)
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.SetMarketDataInstanceEnabled(
+	return s.node.SetMarketDataInstanceEnabled(
 		ctx, instanceID, enabled, auth.CallerFromContext(ctx),
 	)
 }
@@ -652,10 +633,7 @@ func (s *Service) UpdateMarketDataInstanceSettings(
 	if err != nil {
 		return fmt.Errorf("market-data instance id: %w", err)
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
+	n := s.node
 	instance, ok, err := n.GetMarketDataInstance(ctx, instanceID)
 	if err != nil {
 		return fmt.Errorf("backend: get market-data instance: %w", err)
@@ -699,11 +677,7 @@ func (s *Service) DeleteMarketDataInstance(
 	if err != nil {
 		return fmt.Errorf("market-data instance id: %w", err)
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.DeleteMarketDataInstance(ctx, instanceID, auth.CallerFromContext(ctx))
+	return s.node.DeleteMarketDataInstance(ctx, instanceID, auth.CallerFromContext(ctx))
 }
 
 // UpsertMarketDataInstrument validates and persists one instrument mapping,
@@ -724,10 +698,7 @@ func (s *Service) UpsertMarketDataInstrument(
 	if err := domain.ValidateMarketDataInstrument(instrument); err != nil {
 		return err
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
+	n := s.node
 	if err := n.UpsertMarketDataInstrument(ctx, instrument, auth.CallerFromContext(ctx)); err != nil {
 		return err
 	}
@@ -775,11 +746,7 @@ func (s *Service) SetMarketDataInstrumentEnabled(
 	if externalSymbol == "" {
 		return fmt.Errorf("market-data instrument: %w", domain.ErrInvalid)
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.SetMarketDataInstrumentEnabled(
+	return s.node.SetMarketDataInstrumentEnabled(
 		ctx, instance, externalSymbol, enabled, auth.CallerFromContext(ctx),
 	)
 }
@@ -799,11 +766,7 @@ func (s *Service) DeleteMarketDataInstrument(
 	if externalSymbol == "" {
 		return fmt.Errorf("market-data instrument: %w", domain.ErrInvalid)
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.DeleteMarketDataInstrument(
+	return s.node.DeleteMarketDataInstrument(
 		ctx, instance, externalSymbol, auth.CallerFromContext(ctx),
 	)
 }

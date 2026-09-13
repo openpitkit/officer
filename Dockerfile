@@ -43,7 +43,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # go.mod/go.sum first for a cacheable download layer.
 COPY go.mod go.sum* /workspace/officer/
-COPY framework/go.mod framework/go.sum* /workspace/officer/framework/
 
 WORKDIR /workspace/officer
 

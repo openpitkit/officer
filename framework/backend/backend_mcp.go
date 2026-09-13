@@ -55,10 +55,7 @@ const MarketDataFreshnessTTL = marketdata.FreshnessTTL
 // account-scoped) and merged over the catalogue defaults so every command
 // resolves to a bool.
 func (s *Service) ListMcpAccess(ctx context.Context) ([]McpCommand, error) {
-	n, err := s.groupNode()
-	if err != nil {
-		return nil, err
-	}
+	n := s.node
 	stored, err := n.ListMcpAccess(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("backend: list mcp access: %w", err)
@@ -79,10 +76,7 @@ func (s *Service) ListMcpAccess(ctx context.Context) ([]McpCommand, error) {
 // command resolves to false. It is the read the MCP surface consults to gate a
 // tool call.
 func (s *Service) CommandEnabled(ctx context.Context, command string) (bool, error) {
-	n, err := s.groupNode()
-	if err != nil {
-		return false, err
-	}
+	n := s.node
 	stored, err := n.ListMcpAccess(ctx)
 	if err != nil {
 		return false, fmt.Errorf("backend: read mcp access: %w", err)
@@ -99,11 +93,7 @@ func (s *Service) SetMcpAccess(
 	if !s.hasCommand(command) {
 		return fmt.Errorf("mcp command %q: %w", command, domain.ErrNotFound)
 	}
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
-	return n.SetMcpAccess(ctx, command, enabled, auth.CallerFromContext(ctx))
+	return s.node.SetMcpAccess(ctx, command, enabled, auth.CallerFromContext(ctx))
 }
 
 func (s *Service) hasCommand(command string) bool {
@@ -131,10 +121,7 @@ func (p staticCatalogProvider) Catalog() catalog.Catalog {
 // WelcomeSeen reports whether the operator has dismissed the first-run welcome
 // dialog with "don't show again". Until then the dialog is shown on every load.
 func (s *Service) WelcomeSeen(ctx context.Context) (bool, error) {
-	n, err := s.groupNode()
-	if err != nil {
-		return false, err
-	}
+	n := s.node
 	value, ok, err := n.GetUserSetting(
 		ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen,
 	)
@@ -147,10 +134,7 @@ func (s *Service) WelcomeSeen(ctx context.Context) (bool, error) {
 // SetWelcomeSeen records (or clears) the operator's "don't show again" choice
 // for the first-run welcome dialog.
 func (s *Service) SetWelcomeSeen(ctx context.Context, seen bool) error {
-	n, err := s.groupNode()
-	if err != nil {
-		return err
-	}
+	n := s.node
 	value := ""
 	if seen {
 		value = "1"

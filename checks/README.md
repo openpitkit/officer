@@ -1,7 +1,8 @@
 # Checks
 
 Project-specific invariant checks that generic linters (`golangci-lint`,
-`eslint`, `tsc`) do not cover. Currently one gate: Semgrep.
+`eslint`, `tsc`) do not cover. Two gates: Semgrep, and the public package
+allowlist.
 
 ## Semgrep invariant gate
 
@@ -26,14 +27,14 @@ It is also a dependency of `lint-all`, so `just check` / `just check-debug` /
 ```text
 checks/
   README.md            this file
+  public-packages.txt  the public package allowlist
   semgrep/
     requirements.txt    Semgrep dependency include
     *.yml               every active rule
 ```
 
-All rules are active. The initial 375 findings from 2026-08-28 have been
-remediated, so `just check-semgrep` (and therefore `just check` /
-`check-debug` / `check-release` / CI) now blocks only new violations.
+All rules are active, and `just check-semgrep` (and therefore `just check` /
+`check-debug` / `check-release` / CI) blocks any violation.
 
 Fix a finding by changing the code, or by narrowing the rule if the finding
 turns out to be a rule bug - never by loosening what the rule means.
@@ -60,3 +61,30 @@ Record agreement on the line above:
 
 Never use the marker to silence a false positive - a false positive means the
 rule needs narrowing, not a marker.
+
+## Public package gate
+
+`checks/public-packages.txt` lists, one import path per line and sorted,
+exactly the set the gate compares it with: the paths `go list ./...` reports
+from the module root with cgo enabled for the host platform, except those under
+`web/node_modules/` or with an `internal` path element. It is meant to hold the
+importable packages and the commands. The gate runs `go list ./...` from the
+module root, so it sees every package `./...` matches there, not only what the
+justfile builds. For what `./...` excludes, see `go help packages`; `./...` also
+skips a directory whose Go files are all excluded by build constraints, which
+that page does not name. A package the pattern does not match is neither listed
+nor checked, and listing one fails the gate.
+The gate skips `web/node_modules`, which is npm
+install output rather than part of the module, keeps every package that is not
+under an `internal` path element, `main` packages included, and fails on a
+difference in either direction: such a package that is not listed, or a listed
+path that is not such a package. It prints every such path.
+
+It runs right after the gofmt check in `lint-go`, `lint-go-debug-dev`, and
+`lint-go-release-dev`, so every gate that lints Go runs it, CI included. Run it
+with `just lint-go`.
+
+Adding a package or a command to the allowlist is a deliberate decision, made
+together with the change that adds the package or the command - never a way to
+make the gate pass. A library package that is not meant to be imported goes
+under `internal/`.

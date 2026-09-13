@@ -561,7 +561,7 @@ func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if err := n.SetAccountBlocked(
-		ctx, testKey("acc-1"), true, "operator hold", domain.MissingAccountCreate, testCaller,
+		ctx, "acc-1", true, "operator hold", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("SetAccountBlocked: %v", err)
 	}
@@ -608,9 +608,9 @@ func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterConfigure(t *testing.T) 
 	t.Cleanup(func() { _ = st.Close() })
 	eng := newFakeEngine()
 	var fatalErr error
-	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+	n := newTestNodeWithStore(t, st, eng, func(err error) {
 		fatalErr = err
-	}))
+	})
 	seedTestAccount(t, n.realm, "acc-1")
 
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
@@ -645,11 +645,11 @@ func newRebuildProbeNode(t *testing.T, eng *fakeEngine) (*localNode, *rebuildPro
 	probe := &rebuildProbe{}
 	var seed engine.Snapshot
 	inner := fakeBuild(eng, &seed)
-	n, _, err := NewLocalNode(ctx, st, func(snap engine.Snapshot) (engine.Engine, error) {
+	n, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, func(snap engine.Snapshot) (engine.Engine, error) {
 		probe.builds++
 		probe.last = snap
 		return inner(snap)
-	})
+	}, failOnFatal(t))
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}

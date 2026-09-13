@@ -16,18 +16,14 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Package node defines the seam between the Pit Officer control plane and an
-// execution target. An execution target bundles one engine and its backing
-// store, bound to a single realm. In the single-binary deployment there is
-// exactly one node, a LocalNode running the engine and the realm-scoped store
-// in-process. In a future distributed deployment a routing node fans requests
-// out to shards; the control plane reaches all of them only through a
-// NodeRouter, so backend code never assumes a single node.
+// execution target. A node bundles one engine and its backing store and is
+// bound to exactly one realm at construction; the control plane serves a realm
+// through its one node. Scaling out means more realms, each with its own node,
+// and a remote node is just another Node implementation.
 //
 // Identity at this seam follows the store: accounts and groups are addressed by
 // their public code, machine records (orders, order events) by their opaque
-// external id. Each node is bound to one realm at construction. Router keys
-// carry the realm and shard used to select that node; the single-binary
-// deployment binds domain.DefaultRealm.
+// external id.
 package node
 
 import (
@@ -40,19 +36,6 @@ import (
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/store"
 )
-
-// ShardID identifies one partition within a realm.
-type ShardID string
-
-// Key identifies an account within a realm and shard.
-type Key struct {
-	// Realm identifies the dataset that owns the account.
-	Realm domain.RealmID
-	// Shard identifies the partition within the realm.
-	Shard ShardID
-	// Account is the public code of the account being routed.
-	Account domain.AccountID
-}
 
 // Health reports the observable condition of a node: the status of its engine
 // and of its store, aggregated for the dashboard and health checks.
@@ -94,12 +77,12 @@ type LimitTarget struct {
 	Asset string
 }
 
-// Node is one execution target: an engine plus its realm-scoped store, behind a
-// stable address the control plane can route to.
+// Node is the execution target of one realm: an engine plus that realm's
+// store.
 //
-// The command methods below are the operations a future shard serves over RPC.
-// In the single-binary deployment they all run in-process against the local
-// engine and the bound realm store. Every mutation follows one protocol (see
+// The command methods below are the operations a remote node serves over RPC;
+// the local node runs them in-process against its engine and the bound realm
+// store. Every mutation follows one protocol (see
 // localNode): the store is the source of truth and is written first, the engine
 // is applied from persisted state, the store is reverted on engine failure, and
 // an audit row is appended last. Administrative resets/restores and transitions
@@ -114,8 +97,9 @@ type Node interface {
 	// version is the source for the MCP server version stamp.
 	EngineVersion() string
 
-	// Owns reports whether this node is responsible for the given routing key.
-	Owns(key Key) bool
+	// Realm returns the realm the node is bound to. The control plane binds its
+	// realm-scoped services to the same realm.
+	Realm() domain.RealmID
 
 	// ListAccounts returns every persisted account owned by this node.
 	ListAccounts(ctx context.Context) ([]domain.Account, error)
@@ -214,7 +198,7 @@ type Node interface {
 	// and audits the action. missing decides whether an account that does not
 	// exist yet is registered first or reported as domain.ErrAccountMissing.
 	SetAccountBlocked(
-		ctx context.Context, key Key, blocked bool, reason string,
+		ctx context.Context, account domain.AccountID, blocked bool, reason string,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) error
 
@@ -223,33 +207,43 @@ type Node interface {
 	// then audits the action. An empty groupCode clears membership. missing
 	// follows SetAccountBlocked.
 	SetAccountGroup(
-		ctx context.Context, key Key, groupCode string,
+		ctx context.Context, account domain.AccountID, groupCode string,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) error
 
 	// SetAccountCurrency sets or clears the account-level realized P&L currency.
-	SetAccountCurrency(ctx context.Context, key Key, currency string, caller domain.Caller) error
+	SetAccountCurrency(
+		ctx context.Context, account domain.AccountID, currency string,
+		caller domain.Caller,
+	) error
 
 	// SetAccountNotes replaces the account's free-form notes in the store and
 	// audits the action. Notes never reach the engine.
-	SetAccountNotes(ctx context.Context, key Key, notes string, caller domain.Caller) error
+	SetAccountNotes(
+		ctx context.Context, account domain.AccountID, notes string,
+		caller domain.Caller,
+	) error
 
 	// UpdateAccount replaces the account's public code and display title in the
 	// store, publishes the alias change to the live resolver, and audits the action.
 	UpdateAccount(
 		ctx context.Context,
-		key Key,
+		oldCode domain.AccountID,
 		account domain.Account,
 		caller domain.Caller,
 	) (domain.Account, error)
 
 	// DeleteAccount removes the account and audits the action. Destructive
 	// cascades require force.
-	DeleteAccount(ctx context.Context, key Key, force bool, caller domain.Caller) error
+	DeleteAccount(
+		ctx context.Context, code domain.AccountID, force bool, caller domain.Caller,
+	) error
 
 	// GetAccountState returns the account row and the barriers whose scope has
 	// the account axis and matches the account.
-	GetAccountState(ctx context.Context, key Key) (domain.Account, AccountLimits, error)
+	GetAccountState(
+		ctx context.Context, code domain.AccountID,
+	) (domain.Account, AccountLimits, error)
 
 	// ListLimits returns the barriers that reference the account, or all
 	// barriers when account is empty.
@@ -360,7 +354,7 @@ type Node interface {
 	// one. missing decides whether an account that does not exist yet is
 	// registered first or reported as domain.ErrAccountMissing.
 	ApplyAdjustment(
-		ctx context.Context, key Key, externalID domain.ExternalID,
+		ctx context.Context, account domain.AccountID, externalID domain.ExternalID,
 		req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
 		caller domain.Caller,
 	) (domain.AccountAdjustmentRecord, error)
@@ -369,7 +363,7 @@ type Node interface {
 	// for one per-(account, asset) balance row through the adjustment history
 	// path. missing follows ApplyAdjustment.
 	SetBalanceRealizedPnl(
-		ctx context.Context, key Key, asset string, realizedPnl string,
+		ctx context.Context, account domain.AccountID, asset string, realizedPnl string,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (domain.Balance, error)
 
@@ -399,10 +393,10 @@ type Node interface {
 
 	// SubmitOrder records the order, runs the engine pre-trade, persists the
 	// lifecycle events and final status, and audits the action. missing decides
-	// whether an account that does not exist yet is registered first or reported
-	// as domain.ErrAccountMissing.
+	// whether the order's account, when it does not exist yet, is registered
+	// first or reported as domain.ErrAccountMissing.
 	SubmitOrder(
-		ctx context.Context, key Key, o domain.Order,
+		ctx context.Context, o domain.Order,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (domain.Order, error)
 
@@ -412,7 +406,7 @@ type Node interface {
 	// returns the recorded order with the engine immediate result. missing follows
 	// SubmitOrder. It does not audit; the backend audits approval_issued.
 	SubmitImmediate(
-		ctx context.Context, key Key, o domain.Order,
+		ctx context.Context, o domain.Order,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (domain.Order, engine.ImmediateResult, error)
 
@@ -438,7 +432,7 @@ type Node interface {
 	// ApplyExecutionReport serializes reports on the account pipeline, records the
 	// resulting order state, and audits the action.
 	ApplyExecutionReport(
-		ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
+		ctx context.Context, in domain.ExecutionReportInput, caller domain.Caller,
 	) (engine.ExecutionReportResult, error)
 
 	// PersistEventAttestation stamps the signed attestation envelope onto the
@@ -447,7 +441,7 @@ type Node interface {
 	// clobbers the issued envelope. Signing is additive and runs after the event
 	// is already durable, so this never mutates money or status.
 	PersistEventAttestation(
-		ctx context.Context, key Key, eventID domain.ExternalID, att domain.EventAttestation,
+		ctx context.Context, eventID domain.ExternalID, att domain.EventAttestation,
 	) error
 
 	// GetOrder returns the order with its events (each carrying its 1:1 signed
@@ -594,23 +588,10 @@ type Node interface {
 	// engine, returning whether the order would pass plus the would-be lock or
 	// block. It mutates nothing and writes no audit row.
 	CheckOrder(
-		ctx context.Context, key Key, probe domain.OrderProbe,
+		ctx context.Context, probe domain.OrderProbe,
 	) (domain.CheckResult, error)
 
 	// Close shuts the node down: it stops the engine and closes the store.
 	// After Close the node is no longer usable. Close is idempotent.
 	Close() error
-}
-
-// NodeRouter resolves routing keys to nodes and enumerates the full node set.
-// It is the only way the backend reaches a node, so the same control-plane code
-// works whether there is one LocalNode or many shards.
-type NodeRouter interface {
-	// Route returns the node that owns the given routing key. It returns an
-	// error when no node owns the key.
-	Route(key Key) (Node, error)
-
-	// All returns every node known to the router. The returned slice is a
-	// snapshot; mutating it does not affect the router.
-	All() []Node
 }

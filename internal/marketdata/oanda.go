@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -70,8 +71,8 @@ var oandaHTTPClient = &http.Client{
 type oandaConnector struct {
 	stream       func(context.Context, string, string) (io.ReadCloser, error)
 	sleep        func(context.Context, time.Duration) error
-	report       StatusReporter
-	diagReport   DiagnosticReporter
+	report       fwmarketdata.StatusReporter
+	diagReport   fwmarketdata.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	idleTimeout  time.Duration
@@ -89,7 +90,7 @@ type oandaCredentials struct {
 }
 
 type oandaSubscription struct {
-	Subscription
+	fwmarketdata.Subscription
 	instrument string
 }
 
@@ -175,7 +176,7 @@ func streamOANDA(
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *oandaConnector) SetStatusReporter(report StatusReporter) {
+func (c *oandaConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
 	c.report = report
 }
 
@@ -186,27 +187,27 @@ func (c *oandaConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *oandaConnector) SetDiagnosticReporter(report DiagnosticReporter) {
+func (c *oandaConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *oandaConnector) reportDiag(diag Diagnostic) {
+func (c *oandaConnector) reportDiag(diag fwmarketdata.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
 // References returns the OANDA API documentation and instrument-list URLs.
-func (c *oandaConnector) References() (ProviderReferences, bool) {
-	return ProviderReferences{
+func (c *oandaConnector) References() (fwmarketdata.ProviderReferences, bool) {
+	return fwmarketdata.ProviderReferences{
 		DocsURL:    "https://developer.oanda.com/rest-live-v20/pricing-ep/",
 		SymbolsURL: "https://developer.oanda.com/rest-live-v20/instrument-df/",
 	}, true
 }
 
 func (c *oandaConnector) Subscribe(
-	ctx context.Context, subs []Subscription,
-) (<-chan QuoteUpdate, error) {
+	ctx context.Context, subs []fwmarketdata.Subscription,
+) (<-chan fwmarketdata.QuoteUpdate, error) {
 	normalized, err := normalizeOANDASubscriptions(subs)
 	if err != nil {
 		return nil, err
@@ -215,7 +216,7 @@ func (c *oandaConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	out := make(chan QuoteUpdate)
+	out := make(chan fwmarketdata.QuoteUpdate)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -226,7 +227,7 @@ func (c *oandaConnector) Subscribe(
 }
 
 func (c *oandaConnector) run(
-	ctx context.Context, subs []oandaSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []oandaSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) {
 	attempt := 0
 	for {
@@ -249,7 +250,7 @@ func (c *oandaConnector) run(
 // whether at least one QuoteUpdate was delivered this attempt, so run can reset
 // reconnect backoff after a healthy connection.
 func (c *oandaConnector) streamQuotes(
-	ctx context.Context, subs []oandaSubscription, out chan<- QuoteUpdate,
+	ctx context.Context, subs []oandaSubscription, out chan<- fwmarketdata.QuoteUpdate,
 ) (bool, error) {
 	delivered := false
 	streamURL := oandaPricingStreamURL(c.credentials, subs)
@@ -323,7 +324,7 @@ func (c *oandaConnector) Close() {
 }
 
 func normalizeOANDASubscriptions(
-	subs []Subscription,
+	subs []fwmarketdata.Subscription,
 ) ([]oandaSubscription, error) {
 	normalized := make([]oandaSubscription, 0, len(subs))
 	for _, sub := range subs {
@@ -366,13 +367,13 @@ func oandaPricingStreamURL(
 
 func parseOANDAQuoteUpdate(
 	payload []byte, subs []oandaSubscription,
-) (QuoteUpdate, bool) {
+) (fwmarketdata.QuoteUpdate, bool) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	if rawString(fields["type"]) != "PRICE" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	event := oandaPriceEvent{
 		Time:       rawString(fields["time"]),
@@ -381,22 +382,22 @@ func parseOANDAQuoteUpdate(
 		Ask:        firstOANDAPrice(fields["asks"]),
 	}
 	if event.Bid == "" && event.Ask == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	asOf, err := time.Parse(time.RFC3339Nano, event.Time)
 	if err != nil {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 	instrument := strings.ToUpper(strings.TrimSpace(event.Instrument))
 	if instrument == "" {
-		return QuoteUpdate{}, false
+		return fwmarketdata.QuoteUpdate{}, false
 	}
 
 	for _, sub := range subs {
 		if sub.instrument != instrument {
 			continue
 		}
-		return QuoteUpdate{
+		return fwmarketdata.QuoteUpdate{
 			AsOf:  asOf.UTC(),
 			Base:  sub.Base,
 			Quote: sub.Quote,
@@ -404,7 +405,7 @@ func parseOANDAQuoteUpdate(
 			Ask:   event.Ask,
 		}, true
 	}
-	return QuoteUpdate{}, false
+	return fwmarketdata.QuoteUpdate{}, false
 }
 
 func firstOANDAPrice(raw json.RawMessage) string {

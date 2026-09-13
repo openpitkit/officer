@@ -40,7 +40,7 @@ func TestLocalNode_UpdateAccountAuditFilesRenameUnderBothCodes(t *testing.T) {
 	}
 	updated, err := n.UpdateAccount(
 		ctx,
-		testKey(created.Code),
+		created.Code,
 		domain.Account{Code: "account-new", Title: "After"},
 		testCaller,
 	)
@@ -96,7 +96,7 @@ func TestLocalNode_UpdateAccountTitleOnlyAuditsOnce(t *testing.T) {
 	}
 	if _, err := n.UpdateAccount(
 		ctx,
-		testKey(created.Code),
+		created.Code,
 		domain.Account{Code: created.Code, Title: "After"},
 		testCaller,
 	); err != nil {

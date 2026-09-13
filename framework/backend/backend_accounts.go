@@ -19,7 +19,6 @@ package backend
 
 import (
 	"context"
-	"fmt"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -27,7 +26,7 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// ListAccounts returns every account aggregated across all nodes.
+// ListAccounts returns every account.
 func (s *Service) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	page, err := s.ListAccountRows(ctx, store.AccountListFilter{})
 	if err != nil {
@@ -40,43 +39,14 @@ func (s *Service) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	return accounts, nil
 }
 
-// ListAccountRows returns accounts aggregated across all nodes with list-only
-// counts.
+// ListAccountRows returns accounts with list-only counts.
 func (s *Service) ListAccountRows(
 	ctx context.Context, filter store.AccountListFilter,
 ) (store.AccountListPage, error) {
-	nodes := s.router.All()
-	if len(nodes) == 1 {
-		return nodes[0].ListAccountRows(ctx, filter)
-	}
-	nodeFilter := filter
-	nodeFilter.Page = nodePageForMerge(filter.Page)
-	accounts := make([]store.AccountListRow, 0)
-	total := 0
-	for i, n := range nodes {
-		part, err := n.ListAccountRows(ctx, nodeFilter)
-		if err != nil {
-			return store.AccountListPage{},
-				fmt.Errorf("backend: node %d list account rows: %w", i, err)
-		}
-		total += part.Total
-		accounts = append(accounts, part.Rows...)
-	}
-	// Every node ordered its own page by the effective kill-switch state, so the
-	// merge needs the group tier too; a single node returns its page unmerged and
-	// pays nothing for this.
-	groups, err := s.ListGroups(ctx)
-	if err != nil {
-		return store.AccountListPage{},
-			fmt.Errorf("backend: list groups for account merge: %w", err)
-	}
-	sortAccountRows(accounts, filter.Sort, domain.NewGroupBlockIndex(groups))
-	accounts = pageAccountRows(accounts, filter.Page)
-	return store.AccountListPage{Rows: accounts, Total: total}, nil
+	return s.node.ListAccountRows(ctx, filter)
 }
 
-// CreateAccount validates the account metadata, routes to the owning node, and
-// creates the account.
+// CreateAccount validates the account metadata and creates the account.
 func (s *Service) CreateAccount(
 	ctx context.Context, account domain.Account,
 ) (domain.Account, error) {
@@ -95,15 +65,11 @@ func (s *Service) CreateAccount(
 	if err := validateOptionalCurrency(account.Currency); err != nil {
 		return domain.Account{}, err
 	}
-	n, err := s.router.Route(keyFor(id))
-	if err != nil {
-		return domain.Account{}, fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.CreateAccount(ctx, account, auth.CallerFromContext(ctx))
+	return s.node.CreateAccount(ctx, account, auth.CallerFromContext(ctx))
 }
 
-// UpdateAccount validates the old and new account metadata, routes through the
-// account's current owner, and updates the account dictionary row.
+// UpdateAccount validates the old and new account metadata and updates the
+// account dictionary row.
 func (s *Service) UpdateAccount(
 	ctx context.Context,
 	oldID domain.AccountID,
@@ -120,13 +86,9 @@ func (s *Service) UpdateAccount(
 	if err := domain.ValidateTitle(account.Title); err != nil {
 		return domain.Account{}, err
 	}
-	n, err := s.router.Route(keyFor(oldID))
-	if err != nil {
-		return domain.Account{}, fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.UpdateAccount(
+	return s.node.UpdateAccount(
 		ctx,
-		keyFor(oldID),
+		oldID,
 		account,
 		auth.CallerFromContext(ctx),
 	)
@@ -159,11 +121,7 @@ func (s *Service) DeleteAccount(
 	if err := domain.ValidateAccountID(id); err != nil {
 		return err
 	}
-	n, err := s.router.Route(keyFor(id))
-	if err != nil {
-		return fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.DeleteAccount(ctx, keyFor(id), force, auth.CallerFromContext(ctx))
+	return s.node.DeleteAccount(ctx, id, force, auth.CallerFromContext(ctx))
 }
 
 func (s *Service) setAccountBlocked(
@@ -179,12 +137,8 @@ func (s *Service) setAccountBlocked(
 	if err := validateMissingAccountPolicy(id, missing); err != nil {
 		return err
 	}
-	n, err := s.router.Route(keyFor(id))
-	if err != nil {
-		return fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.SetAccountBlocked(
-		ctx, keyFor(id), blocked, reason, missing, auth.CallerFromContext(ctx),
+	return s.node.SetAccountBlocked(
+		ctx, id, blocked, reason, missing, auth.CallerFromContext(ctx),
 	)
 }
 
@@ -196,16 +150,11 @@ func (s *Service) GetAccountState(
 	if err := domain.ValidateAccountID(id); err != nil {
 		return domain.Account{}, node.AccountLimits{}, err
 	}
-	n, err := s.router.Route(keyFor(id))
-	if err != nil {
-		return domain.Account{}, node.AccountLimits{},
-			fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.GetAccountState(ctx, keyFor(id))
+	return s.node.GetAccountState(ctx, id)
 }
 
-// SetAccountGroup validates the account id, routes to the owning node, and sets
-// or clears (empty groupCode) the account's group membership by the group's code.
+// SetAccountGroup validates the account id and sets or clears (empty
+// groupCode) the account's group membership by the group's code.
 // missing is the caller's required choice for an account that does not exist yet.
 func (s *Service) SetAccountGroup(
 	ctx context.Context,
@@ -226,12 +175,8 @@ func (s *Service) SetAccountGroup(
 			return err
 		}
 	}
-	n, err := s.router.Route(keyFor(id))
-	if err != nil {
-		return fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.SetAccountGroup(
-		ctx, keyFor(id), groupCode, missing, auth.CallerFromContext(ctx),
+	return s.node.SetAccountGroup(
+		ctx, id, groupCode, missing, auth.CallerFromContext(ctx),
 	)
 }
 
@@ -245,15 +190,11 @@ func (s *Service) SetAccountCurrency(
 	if err := validateOptionalCurrency(currency); err != nil {
 		return err
 	}
-	n, err := s.router.Route(keyFor(id))
-	if err != nil {
-		return fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.SetAccountCurrency(ctx, keyFor(id), currency, auth.CallerFromContext(ctx))
+	return s.node.SetAccountCurrency(ctx, id, currency, auth.CallerFromContext(ctx))
 }
 
-// SetAccountNotes validates the account id and notes, routes to the owning
-// node, and replaces the account's free-form notes.
+// SetAccountNotes validates the account id and notes and replaces the
+// account's free-form notes.
 func (s *Service) SetAccountNotes(
 	ctx context.Context, id domain.AccountID, notes string,
 ) error {
@@ -263,9 +204,5 @@ func (s *Service) SetAccountNotes(
 	if err := domain.ValidateNotes(notes); err != nil {
 		return err
 	}
-	n, err := s.router.Route(keyFor(id))
-	if err != nil {
-		return fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.SetAccountNotes(ctx, keyFor(id), notes, auth.CallerFromContext(ctx))
+	return s.node.SetAccountNotes(ctx, id, notes, auth.CallerFromContext(ctx))
 }
