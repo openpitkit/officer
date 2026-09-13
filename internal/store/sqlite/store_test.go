@@ -389,6 +389,47 @@ func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 	}
 }
 
+// TestForRealmRejectsDatabaseBoundToAnotherRealm proves a database created for
+// one realm is not served under another: the realm row written on the first
+// ForRealm is compared with the bound realm on every later open, so opening the
+// same file bound to a different realm fails with ErrInvalid naming both codes,
+// while reopening it under the original realm still works.
+func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	// open migrates and binds the database as realm; migrateErr reports what
+	// Migrate said, so a foreign database must be refused before Migrate writes
+	// anything (it reseals secrets under the bound realm), not only at ForRealm.
+	open := func(realm domain.RealmID) (migrateErr, bindErr error) {
+		t.Helper()
+		s, err := New(path, realm)
+		if err != nil {
+			t.Fatalf("New(%s): %v", realm, err)
+		}
+		defer func() { _ = s.Close() }()
+		if err := s.Migrate(ctx); err != nil {
+			return err, nil
+		}
+		_, err = s.ForRealm(ctx, realm)
+		return nil, err
+	}
+
+	if migrateErr, bindErr := open("a"); migrateErr != nil || bindErr != nil {
+		t.Fatalf("open(a) on a fresh database = %v, %v, want nil", migrateErr, bindErr)
+	}
+	migrateErr, _ := open("b")
+	if !errors.Is(migrateErr, domain.ErrInvalid) {
+		t.Fatalf("Migrate(b) on a database bound to a = %v, want ErrInvalid", migrateErr)
+	}
+	if !strings.Contains(migrateErr.Error(), `"a"`) ||
+		!strings.Contains(migrateErr.Error(), `"b"`) {
+		t.Fatalf("Migrate(b) error = %q, want both realm codes named", migrateErr)
+	}
+	if migrateErr, bindErr := open("a"); migrateErr != nil || bindErr != nil {
+		t.Fatalf("open(a) after the rejected open = %v, %v, want nil", migrateErr, bindErr)
+	}
+}
+
 func TestResetDoesNotExposeNilOrUnmigratedDBToReaders(t *testing.T) {
 	ctx := context.Background()
 	s, rs := newTestStore(t)
