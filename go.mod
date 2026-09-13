@@ -9,7 +9,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v0.2.0
 	github.com/scmhub/ibapi v0.10.44
 	github.com/shopspring/decimal v1.4.0
-	go.openpit.dev/openpit v0.8.0
+	go.openpit.dev/openpit v0.8.1
 	golang.org/x/crypto v0.55.0
 	modernc.org/sqlite v1.53.0
 )

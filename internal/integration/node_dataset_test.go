@@ -19,7 +19,6 @@ package integration_test
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -30,9 +29,6 @@ import (
 )
 
 func TestNodeHydratesAndResetsItsConfiguredDataset(t *testing.T) {
-	if os.Getenv("OPENPIT_RUNTIME_LIBRARY_PATH") == "" {
-		t.Fatal("OPENPIT_RUNTIME_LIBRARY_PATH is required; use the local SDK development gate")
-	}
 	ctx := context.Background()
 	const realm domain.RealmID = "development-tenant"
 	databasePath := filepath.Join(t.TempDir(), "node.sqlite")

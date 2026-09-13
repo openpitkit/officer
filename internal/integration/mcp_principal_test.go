@@ -19,7 +19,6 @@ package integration_test
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -54,9 +53,6 @@ func (s *principalStoreSource) SubmitDropCopyOrder(
 func TestMCPGuardPersistsOperatorPrincipal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	if os.Getenv("OPENPIT_RUNTIME_LIBRARY_PATH") == "" {
-		t.Fatal("OPENPIT_RUNTIME_LIBRARY_PATH is required; use the local SDK development gate")
-	}
 	st, err := sqlite.New(
 		filepath.Join(t.TempDir(), "mcp-principal.db"),
 		domain.DefaultRealm,
