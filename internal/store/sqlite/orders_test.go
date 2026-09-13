@@ -895,8 +895,9 @@ func TestOrderCommissionSubtotals(t *testing.T) {
 		OrderStatus: domain.OrderStatusAccepted,
 	}
 	if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
-		Order: created.ExternalID,
-		Type:  domain.OrderEventPreTradeAccepted,
+		Order:  created.ExternalID,
+		Type:   domain.OrderEventPreTradeAccepted,
+		Source: domain.SourcePanel,
 		Payload: domain.OrderEventPayload{
 			Commission:      feeOnlyReport.Commission,
 			ExecutionReport: feeOnlyReport,
@@ -920,8 +921,9 @@ func TestOrderCommissionSubtotals(t *testing.T) {
 		domain.OrderEventCancelled,
 	} {
 		if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
-			Order: created.ExternalID,
-			Type:  eventType,
+			Order:  created.ExternalID,
+			Type:   eventType,
+			Source: domain.SourcePanel,
 			Payload: domain.OrderEventPayload{
 				FillQuantity:    fillReport.FillQuantity,
 				FillPrice:       fillReport.FillPrice,
@@ -995,8 +997,9 @@ func TestOrderCommissionSubtotalsChunksOrderIDs(t *testing.T) {
 		OrderStatus: domain.OrderStatusAccepted,
 	}
 	if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
-		Order: lastOrder,
-		Type:  domain.OrderEventPreTradeAccepted,
+		Order:  lastOrder,
+		Type:   domain.OrderEventPreTradeAccepted,
+		Source: domain.SourcePanel,
 		Payload: domain.OrderEventPayload{
 			Commission:      feeOnlyReport.Commission,
 			ExecutionReport: feeOnlyReport,
@@ -1066,8 +1069,9 @@ func TestOrderCommissionSubtotalsFeeOnlyReportAgreesAcrossReads(t *testing.T) {
 	) {
 		t.Helper()
 		if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
-			Order: order,
-			Type:  eventType,
+			Order:  order,
+			Type:   eventType,
+			Source: domain.SourcePanel,
 			Payload: domain.OrderEventPayload{
 				Commission:      report.Commission,
 				OrderStatus:     string(report.OrderStatus),
@@ -1560,7 +1564,7 @@ func TestRecordOrderSubmissionPersistsExecutionReportIdentityAndEventLink(
 	created, err := rs.(*realmStore).RecordOrderSubmission(
 		ctx,
 		sampleOrder(),
-		domain.OrderEvent{Type: domain.OrderEventSubmitted},
+		domain.OrderEvent{Type: domain.OrderEventSubmitted, Source: domain.SourcePanel},
 		func(order domain.Order) (domain.OrderSettlement, error) {
 			request.Order = order.ExternalID
 			return domain.OrderSettlement{
@@ -1570,8 +1574,9 @@ func TestRecordOrderSubmissionPersistsExecutionReportIdentityAndEventLink(
 				OrderStatus: domain.OrderStatusFilled,
 				Leaves:      "0",
 				Events: []domain.OrderEvent{{
-					Order: order.ExternalID,
-					Type:  domain.OrderEventFill,
+					Order:  order.ExternalID,
+					Type:   domain.OrderEventFill,
+					Source: domain.SourcePanel,
 					Payload: domain.OrderEventPayload{
 						FillQuantity:    "1",
 						FillPrice:       "100",
@@ -1833,8 +1838,9 @@ func TestRecordOrderSettlementSpotFillPersistsEngineRealizedPnlAsset(t *testing.
 			Quantity: "1", Price: "90", LockPrice: "100",
 		},
 		Events: []domain.OrderEvent{{
-			Order: created.ExternalID,
-			Type:  domain.OrderEventFill,
+			Order:  created.ExternalID,
+			Type:   domain.OrderEventFill,
+			Source: domain.SourcePanel,
 			Payload: domain.OrderEventPayload{
 				FillQuantity: "1",
 				FillPrice:    "90",
@@ -1934,8 +1940,9 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 				},
 			}},
 			Events: []domain.OrderEvent{{
-				Order: created.ExternalID,
-				Type:  domain.OrderEventFill,
+				Order:  created.ExternalID,
+				Type:   domain.OrderEventFill,
+				Source: domain.SourcePanel,
 				Payload: domain.OrderEventPayload{
 					FillQuantity: "1",
 					FillPrice:    "2",
@@ -2025,15 +2032,16 @@ func TestRecordOrderSubmissionAttestationFailureRollsBack(t *testing.T) {
 	_, err := rs.(*realmStore).RecordOrderSubmissionWithAttestation(
 		ctx,
 		order,
-		domain.OrderEvent{Type: domain.OrderEventSubmitted},
+		domain.OrderEvent{Type: domain.OrderEventSubmitted, Source: domain.SourcePanel},
 		func(persisted domain.Order) (domain.OrderSettlement, error) {
 			return domain.OrderSettlement{
 				Account:     persisted.Account,
 				Order:       persisted.ExternalID,
 				OrderStatus: domain.OrderStatusCommitted,
 				Events: []domain.OrderEvent{{
-					Order: persisted.ExternalID,
-					Type:  domain.OrderEventPreTradeAccepted,
+					Order:  persisted.ExternalID,
+					Type:   domain.OrderEventPreTradeAccepted,
+					Source: domain.SourcePanel,
 				}},
 			}, nil
 		},
@@ -2086,7 +2094,7 @@ func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
 			},
 		}},
 		Events: []domain.OrderEvent{
-			{Order: created.ExternalID, Type: domain.OrderEventPreTradeRejected},
+			{Order: created.ExternalID, Type: domain.OrderEventPreTradeRejected, Source: domain.SourcePanel},
 		},
 	}); err != nil {
 		t.Fatalf("RecordOrderSettlement: %v", err)
@@ -2174,7 +2182,7 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 		AllowedFrom: []domain.OrderStatus{domain.OrderStatusSubmitted},
 		Leaves:      "99",
 		Trade: &domain.Trade{
-			Order: created.ExternalID, Account: "acc-1",
+			Order: created.ExternalID, Account: "acc-1", Source: domain.SourcePanel,
 			BaseAsset: order.BaseAsset, QuoteAsset: order.QuoteAsset,
 			Side: order.Side, Quantity: "1", Price: "10",
 		},

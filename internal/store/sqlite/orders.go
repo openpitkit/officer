@@ -108,6 +108,9 @@ func createOrderTx(
 	q sqlReadWriter,
 	o domain.Order,
 ) (domain.Order, error) {
+	if err := requireSource("order", o.Source); err != nil {
+		return o, err
+	}
 	accountID, err := resolveAccountID(ctx, q, o.Account)
 	if err != nil {
 		return o, err
@@ -124,7 +127,6 @@ func createOrderTx(
 	if err != nil {
 		return o, err
 	}
-	o.Source = storedSource(o.Source)
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(o.Source))
 	if err != nil {
 		return o, err
@@ -822,7 +824,9 @@ LEFT JOIN signing_key sk ON sk.id = ea.signing_key_id`
 func (r *realmStore) AppendOrderEvent(
 	ctx context.Context, ev domain.OrderEvent,
 ) (domain.OrderEvent, error) {
-	ev.Source = storedSource(ev.Source)
+	if err := requireSource("order event", ev.Source); err != nil {
+		return ev, err
+	}
 	db, err := r.db()
 	if err != nil {
 		return domain.OrderEvent{}, err
@@ -1016,7 +1020,6 @@ LEFT JOIN principal p ON p.id = t.principal_id`
 func (r *realmStore) CreateTrade(
 	ctx context.Context, t domain.Trade,
 ) (domain.Trade, error) {
-	t.Source = storedSource(t.Source)
 	db, err := r.db()
 	if err != nil {
 		return domain.Trade{}, err
@@ -1040,6 +1043,9 @@ func (r *realmStore) insertTrade(
 		sqlExecer
 	}, t domain.Trade,
 ) (domain.ExternalID, string, error) {
+	if err := requireSource("trade", t.Source); err != nil {
+		return domain.ExternalID(""), "", err
+	}
 	if err := validateCommission(t.Commission); err != nil {
 		return domain.ExternalID(""), "", err
 	}
@@ -1067,7 +1073,7 @@ func (r *realmStore) insertTrade(
 	if err != nil {
 		return domain.ExternalID(""), "", err
 	}
-	sourceID, err := dictionaries.id(sourceKindTable, "source", string(storedSource(t.Source)))
+	sourceID, err := dictionaries.id(sourceKindTable, "source", string(t.Source))
 	if err != nil {
 		return domain.ExternalID(""), "", err
 	}
@@ -2108,7 +2114,9 @@ func appendOrderEventReturningTx(
 	orderID int64,
 	ev domain.OrderEvent,
 ) (domain.OrderEvent, int64, error) {
-	ev.Source = storedSource(ev.Source)
+	if err := requireSource("order event", ev.Source); err != nil {
+		return domain.OrderEvent{}, 0, err
+	}
 	principalID, err := resolveOptionalPrincipalID(ctx, tx, ev.Principal)
 	if err != nil {
 		return domain.OrderEvent{}, 0, err

@@ -389,6 +389,81 @@ func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 	}
 }
 
+// TestWritesRejectEmptySource proves every store write that records a source
+// refuses an empty one with ErrInvalid naming the record kind and writes
+// nothing: the target table's row count is unchanged after the call. The store
+// never attributes a record to the system on the caller's behalf.
+func TestWritesRejectEmptySource(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	realm := rs.(*realmStore)
+	order, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	cases := []struct {
+		name, table, kind string
+		write             func() error
+	}{
+		{"CreateOrder", "order_record", "order", func() error {
+			o := sampleOrder()
+			o.Source = ""
+			_, err := rs.CreateOrder(ctx, o)
+			return err
+		}},
+		{"AppendOrderEvent", "order_event", "order event", func() error {
+			_, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+				Order: order.ExternalID, Type: domain.OrderEventFill,
+			})
+			return err
+		}},
+		{"RecordOrderSettlement", "order_event", "order event", func() error {
+			_, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+				Order:       order.ExternalID,
+				Account:     order.Account,
+				OrderStatus: domain.OrderStatusAccepted,
+				Events: []domain.OrderEvent{{
+					Order: order.ExternalID, Type: domain.OrderEventPreTradeAccepted,
+				}},
+			})
+			return err
+		}},
+		{"CreateTrade", "trade", "trade", func() error {
+			_, err := rs.CreateTrade(ctx, domain.Trade{
+				Order: order.ExternalID, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+				Side: domain.OrderSideBuy, Quantity: "1", Price: "1",
+			})
+			return err
+		}},
+		{"AppendAdjustment", "adjustment", "adjustment", func() error {
+			rec := sampleAdjustment()
+			rec.Source = ""
+			_, err := rs.AppendAdjustment(ctx, rec)
+			return err
+		}},
+		{"AppendAudit", "audit", "audit", func() error {
+			return rs.AppendAudit(ctx, fwstore.AuditEntry{
+				Action: domain.AuditActionCreateAccount, Account: "acc-1",
+			})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := countRows(t, ctx, realm, tc.table)
+			err := tc.write()
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("%s(empty source) = %v, want ErrInvalid", tc.name, err)
+			}
+			if want := tc.kind + " source is required"; !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s(empty source) = %q, want it to contain %q", tc.name, err, want)
+			}
+			if after := countRows(t, ctx, realm, tc.table); after != before {
+				t.Fatalf("%s(empty source) wrote %d %s rows", tc.name, after-before, tc.table)
+			}
+		})
+	}
+}
+
 // TestTimeStrTextOrderIsChronological proves the stored timestamp form is fixed
 // width: two times within one second whose fractional parts differ in precision
 // format to strings of one length whose text order is their chronological

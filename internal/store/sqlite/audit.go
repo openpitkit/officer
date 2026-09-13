@@ -107,6 +107,9 @@ func appendAudit(
 	dictionaries *enumDictionaries,
 	entry fwstore.AuditEntry,
 ) error {
+	if err := requireSource("audit", entry.Source); err != nil {
+		return err
+	}
 	if err := validateAuditDecision(
 		entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
 	); err != nil {
@@ -124,15 +127,11 @@ func appendAudit(
 	if actorTitle == "" && entry.Actor != "" {
 		actorTitle = lookupTitle(ctx, q, "principal", entry.Actor)
 	}
-	source := entry.Source
-	if source == "" {
-		source = domain.SourceSystem
-	}
 	actionID, err := dictionaries.id(auditActionTable, "audit action", string(entry.Action))
 	if err != nil {
 		return err
 	}
-	sourceID, err := dictionaries.id(sourceKindTable, "source", string(source))
+	sourceID, err := dictionaries.id(sourceKindTable, "source", string(entry.Source))
 	if err != nil {
 		return err
 	}

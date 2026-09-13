@@ -2122,6 +2122,37 @@ func TestRestoreValidatesDictionaryCodes(t *testing.T) {
 	}
 }
 
+// TestBackupRestoreRejectsRowWithoutSource proves an archive row without a
+// source is rejected like any other write: the restore fails with ErrInvalid
+// naming the record kind and rolls back, leaving the audit log empty.
+func TestBackupRestoreRejectsRowWithoutSource(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		backup.Scope{All: true},
+		backup.Data{Audit: []domain.AuditRow{{
+			ExternalID: mustExternalID(t), At: time.Now().UTC(),
+			Action: domain.AuditActionCreateAccount,
+		}}},
+		backup.CredentialFormPlaintext,
+	)
+	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup(audit row without source) = %v, want ErrInvalid", err)
+	}
+	if want := "audit source is required"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("RestoreBackup error = %q, want it to contain %q", err, want)
+	}
+	if n := countRows(t, ctx, rs.(*realmStore), "audit"); n != 0 {
+		t.Fatalf("audit rows after rejected restore = %d, want 0", n)
+	}
+}
+
 // TestListAuditOrdersSameSecondRowsOfDifferentPrecisionNewestFirst proves the
 // store's own ORDER BY at DESC is chronological straight from SQL. Restore is
 // the one write path where the caller supplies the row time: two audit rows in

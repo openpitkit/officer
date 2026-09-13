@@ -1040,7 +1040,15 @@ func (rt *restoreTx) restoreAdjustment(
 	if err != nil {
 		return err
 	}
-	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(rec.Source)))
+	if err := requireSource("adjustment", rec.Source); err != nil {
+		return fmt.Errorf(
+			"store: restore %s adjustment %q: %w",
+			backup.SectionActivityHistory,
+			rec.ExternalID,
+			err,
+		)
+	}
+	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(rec.Source))
 	if err != nil {
 		return fmt.Errorf(
 			"store: restore %s adjustment %q source: %w",
@@ -1116,7 +1124,15 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 	if rt.skipMachine(backup.SectionActivityHistory, exists) {
 		return nil
 	}
-	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(o.Source)))
+	if err := requireSource("order", o.Source); err != nil {
+		return fmt.Errorf(
+			"store: restore %s order %q: %w",
+			backup.SectionActivityHistory,
+			o.ExternalID,
+			err,
+		)
+	}
+	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(o.Source))
 	if err != nil {
 		return fmt.Errorf(
 			"store: restore %s order %q source: %w",
@@ -1219,7 +1235,15 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 			err,
 		)
 	}
-	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(ev.Source)))
+	if err := requireSource("order event", ev.Source); err != nil {
+		return fmt.Errorf(
+			"store: restore %s order event %q: %w",
+			backup.SectionActivityHistory,
+			ev.ExternalID,
+			err,
+		)
+	}
+	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(ev.Source))
 	if err != nil {
 		return fmt.Errorf(
 			"store: restore %s order event %q source: %w",
@@ -1496,7 +1520,15 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 	if err := restoreValidationError(validateCommission(t.Commission)); err != nil {
 		return fmt.Errorf("store: restore trade %q: %w", t.ExternalID, err)
 	}
-	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(storedSource(t.Source)))
+	if err := requireSource("trade", t.Source); err != nil {
+		return fmt.Errorf(
+			"store: restore %s trade %q: %w",
+			backup.SectionActivityHistory,
+			t.ExternalID,
+			err,
+		)
+	}
+	sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(t.Source))
 	if err != nil {
 		return fmt.Errorf(
 			"store: restore %s trade %q source: %w",
@@ -1554,9 +1586,13 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 		if rt.skipMachine(backup.SectionAuditLog, exists) {
 			continue
 		}
-		source := row.Source
-		if source == "" {
-			source = domain.SourceSystem
+		if err := requireSource("audit", row.Source); err != nil {
+			return fmt.Errorf(
+				"store: restore %s audit %q: %w",
+				backup.SectionAuditLog,
+				row.ExternalID,
+				err,
+			)
 		}
 		actionID, err := rt.dictionaries.id(auditActionTable, "audit action", string(row.Action))
 		if err != nil {
@@ -1567,7 +1603,7 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 				err,
 			)
 		}
-		sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(source))
+		sourceID, err := rt.dictionaries.id(sourceKindTable, "source", string(row.Source))
 		if err != nil {
 			return fmt.Errorf(
 				"store: restore %s audit %q source: %w",

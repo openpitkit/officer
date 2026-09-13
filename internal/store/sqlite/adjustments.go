@@ -75,7 +75,9 @@ func appendAdjustment(
 	q sqlQueryer,
 	rec domain.AccountAdjustmentRecord,
 ) (domain.AccountAdjustmentRecord, error) {
-	rec.Source = storedSource(rec.Source)
+	if err := requireSource("adjustment", rec.Source); err != nil {
+		return rec, err
+	}
 	exec, ok := q.(sqlExecer)
 	if !ok {
 		return rec, fmt.Errorf("store: append adjustment: queryer cannot execute")

@@ -62,6 +62,7 @@ func TestUpdateAccountRenamesIdentityWithDependentsAndImmutableAudit(t *testing.
 	if err := realm.AppendAudit(ctx, store.AuditEntry{
 		Action:  domain.AuditActionBlock,
 		Account: created.Code,
+		Source:  domain.SourcePanel,
 		Detail:  "unrelated pre-rename audit row",
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)

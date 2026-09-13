@@ -662,11 +662,15 @@ func (d *enumDictionaries) code(table, label string, id int64) (string, error) {
 	return code, nil
 }
 
-func storedSource(source domain.Source) domain.Source {
+// requireSource rejects an empty source with an error wrapping domain.ErrInvalid
+// that names the record kind. Every stored record names the channel it came
+// from; the store never attributes a record to the system on the caller's
+// behalf.
+func requireSource(kind string, source domain.Source) error {
 	if source == "" {
-		return domain.SourceSystem
+		return fmt.Errorf("%s source is required: %w", kind, domain.ErrInvalid)
 	}
-	return source
+	return nil
 }
 
 func isSQLiteMissingTable(err error) bool {

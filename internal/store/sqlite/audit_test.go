@@ -64,6 +64,7 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action: domain.AuditActionHydrate,
 		Detail: "boot",
+		Source: domain.SourceSystem,
 	}); err != nil {
 		t.Fatalf("AppendAudit(system): %v", err)
 	}
@@ -173,7 +174,9 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 	for _, tc := range valid {
 		t.Run("valid "+tc.name, func(t *testing.T) {
 			ctx, rs := seedAuditFixtures(t)
-			if err := rs.AppendAudit(ctx, tc.entry); err != nil {
+			entry := tc.entry
+			entry.Source = domain.SourcePanel
+			if err := rs.AppendAudit(ctx, entry); err != nil {
 				t.Fatalf("AppendAudit: %v", err)
 			}
 			rows, err := rs.ListAudit(ctx, 10)
@@ -245,7 +248,10 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 	for _, tc := range invalid {
 		t.Run("invalid "+tc.name, func(t *testing.T) {
 			ctx, rs := seedAuditFixtures(t)
-			err := rs.AppendAudit(ctx, tc.entry)
+			// The source is valid so the rejection is the decision rule's.
+			entry := tc.entry
+			entry.Source = domain.SourcePanel
+			err := rs.AppendAudit(ctx, entry)
 			if !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("AppendAudit error = %v, want ErrInvalid", err)
 			}
@@ -267,10 +273,12 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 		{
 			Action: domain.AuditActionCreateAccount,
 			Detail: "first row must roll back",
+			Source: domain.SourcePanel,
 		},
 		{
 			Action: domain.AuditAction("unknown_action"),
 			Detail: "invalid second row",
+			Source: domain.SourcePanel,
 		},
 	})
 	if err == nil {
@@ -288,11 +296,13 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 		{
 			Action: domain.AuditActionCreateAccount,
 			Detail: "first metadata row must roll back",
+			Source: domain.SourcePanel,
 		},
 		{
 			Action:  domain.AuditActionCreateAccount,
 			OrderID: "decision-on-unrelated-action",
 			Detail:  "invalid decision metadata",
+			Source:  domain.SourcePanel,
 		},
 	})
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -307,8 +317,8 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 	}
 
 	if err := rs.AppendAuditBatch(ctx, []fwstore.AuditEntry{
-		{Action: domain.AuditActionCreateAccount, Detail: "first"},
-		{Action: domain.AuditActionUpdateAccount, Detail: "second"},
+		{Action: domain.AuditActionCreateAccount, Detail: "first", Source: domain.SourcePanel},
+		{Action: domain.AuditActionUpdateAccount, Detail: "second", Source: domain.SourcePanel},
 	}); err != nil {
 		t.Fatalf("AppendAuditBatch: %v", err)
 	}
@@ -328,6 +338,7 @@ func TestAuditAppendUnknownRefIsSnapshot(t *testing.T) {
 		Action:  domain.AuditActionBlock,
 		Account: "ghost",
 		Actor:   "ghost",
+		Source:  domain.SourcePanel,
 	}); err != nil {
 		t.Fatalf("AppendAudit(unknown refs): %v", err)
 	}
@@ -495,6 +506,7 @@ func TestAuditAssetFilter(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 	mustAppend := func(entry fwstore.AuditEntry) {
 		t.Helper()
+		entry.Source = domain.SourcePanel
 		if err := rs.AppendAudit(ctx, entry); err != nil {
 			t.Fatalf("AppendAudit(%s): %v", entry.Detail, err)
 		}
