@@ -54,9 +54,9 @@ func (s *Service) ListAuditFiltered(
 }
 
 // sortAuditNewestFirst orders audit rows newest first by timestamp, breaking
-// ties on the opaque external id (descending). The store orders by the
-// RFC3339Nano text, which is not chronological within one second when the
-// fractional precision differs.
+// ties on the opaque external id (descending). The order is fixed here rather
+// than left to the node, so it does not depend on the node's own ordering and
+// same-instant rows come back in one deterministic order.
 func sortAuditNewestFirst(rows []domain.AuditRow) {
 	sort.Slice(rows, func(i, j int) bool {
 		if !rows[i].At.Equal(rows[j].At) {

@@ -662,7 +662,7 @@ func (r *realmStore) CountActiveOrders(ctx context.Context) (int, error) {
 }
 
 // CountOrdersSince returns the number of orders whose at timestamp is at or
-// after since. The at column is RFC3339Nano UTC text, so the boundary is
+// after since. The at column is fixed-width UTC text, so the boundary is
 // formatted the same way for a lexicographic comparison.
 func (r *realmStore) CountOrdersSince(ctx context.Context, since time.Time) (int, error) {
 	db, err := r.db()
@@ -673,7 +673,7 @@ func (r *realmStore) CountOrdersSince(ctx context.Context, since time.Time) (int
 	if err := db.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM order_record WHERE at >= ?`,
-		since.UTC().Format(time.RFC3339Nano),
+		timeStr(since),
 	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count orders since: %w", err)
 	}
@@ -2352,8 +2352,8 @@ func nullableBlob(b []byte) any {
 	return b
 }
 
-// mustParseTime parses an RFC3339Nano string the store itself just formatted via
-// nowStr; the format is guaranteed, so a parse error is impossible and the zero
+// mustParseTime parses a timestamp the store itself just formatted via nowStr;
+// the format is guaranteed, so a parse error is impossible and the zero
 // time is returned defensively rather than panicking on the write path.
 func mustParseTime(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339Nano, s)

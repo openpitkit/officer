@@ -2122,6 +2122,52 @@ func TestRestoreValidatesDictionaryCodes(t *testing.T) {
 	}
 }
 
+// TestListAuditOrdersSameSecondRowsOfDifferentPrecisionNewestFirst proves the
+// store's own ORDER BY at DESC is chronological straight from SQL. Restore is
+// the one write path where the caller supplies the row time: two audit rows in
+// the same second, the earlier one with fewer significant fractional digits
+// (the case a trimmed-zeros text form misorders), list newest first.
+func TestListAuditOrdersSameSecondRowsOfDifferentPrecisionNewestFirst(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	base := time.Date(2026, time.September, 15, 10, 0, 0, 0, time.UTC)
+	earlier := domain.AuditRow{
+		ExternalID: mustExternalID(t), At: base.Add(123450 * time.Microsecond),
+		Action: domain.AuditActionCreateAccount, Source: domain.SourceSystem,
+	}
+	later := domain.AuditRow{
+		ExternalID: mustExternalID(t), At: base.Add(123456 * time.Microsecond),
+		Action: domain.AuditActionCreateAccount, Source: domain.SourceSystem,
+	}
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		backup.Scope{All: true},
+		backup.Data{Audit: []domain.AuditRow{earlier, later}},
+		backup.CredentialFormPlaintext,
+	)
+	if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+
+	rows, err := rs.ListAudit(ctx, 2)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("ListAudit len = %d, want 2", len(rows))
+	}
+	if rows[0].ExternalID != later.ExternalID || rows[1].ExternalID != earlier.ExternalID {
+		t.Fatalf(
+			"ListAudit order = [%v %v], want the later row (%v) first",
+			rows[0].At, rows[1].At, later.At,
+		)
+	}
+}
+
 func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 	scope := backup.Scope{Sections: []backup.Section{backup.SectionRiskLimits}}
 	cases := []struct {

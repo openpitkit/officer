@@ -19,7 +19,6 @@ package sqlite
 
 import (
 	"strings"
-	"time"
 
 	fwstore "go.openpit.dev/officer/framework/store"
 )
@@ -126,7 +125,7 @@ func appendTimeRangeFilter(
 			op = " > ?"
 		}
 		*clauses = append(*clauses, column+op)
-		*args = append(*args, filter.Min.UTC().Format(time.RFC3339Nano))
+		*args = append(*args, timeStr(*filter.Min))
 	}
 	if filter.Max != nil {
 		op := " <= ?"
@@ -134,6 +133,6 @@ func appendTimeRangeFilter(
 			op = " < ?"
 		}
 		*clauses = append(*clauses, column+op)
-		*args = append(*args, filter.Max.UTC().Format(time.RFC3339Nano))
+		*args = append(*args, timeStr(*filter.Max))
 	}
 }

@@ -103,7 +103,7 @@ func (r *realmStore) UpsertBalance(ctx context.Context, balance domain.Balance) 
 		nullablePnl(balance.RealizedPnl, balance.RealizedPnlHaltReason),
 		balance.RealizedPnlHaltReason,
 		balance.AverageEntryPrice,
-		updatedAt.UTC().Format(time.RFC3339Nano),
+		timeStr(updatedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("store: upsert balance: %w", err)
@@ -413,7 +413,7 @@ func scanBalanceRow(row *sql.Row) (domain.Balance, error) {
 }
 
 // scanBalanceInto scans one balance projection into b. Amounts are exact text
-// decimals; updated_at is RFC3339Nano UTC text. The three currency tiers are
+// decimals; updated_at is fixed-width UTC text. The three currency tiers are
 // resolved into the single effective account currency that denominates the
 // row's realized P&L and average entry price.
 func scanBalanceInto(scan func(...any) error, b *domain.Balance) error {

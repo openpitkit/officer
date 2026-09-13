@@ -311,9 +311,9 @@ func (s *Service) ListTrades(
 }
 
 // sortOrdersNewestFirst orders orders newest first by timestamp, breaking ties
-// on the opaque external id (descending). The store orders by the RFC3339Nano
-// text, which is not chronological within one second when the fractional
-// precision differs.
+// on the opaque external id (descending). The order is fixed here rather than
+// left to the node, so it does not depend on the node's own ordering and
+// same-instant orders come back in one deterministic order.
 func sortOrdersNewestFirst(orders []domain.Order) {
 	sort.Slice(orders, func(i, j int) bool {
 		if !orders[i].At.Equal(orders[j].At) {

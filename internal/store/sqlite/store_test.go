@@ -389,6 +389,35 @@ func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 	}
 }
 
+// TestTimeStrTextOrderIsChronological proves the stored timestamp form is fixed
+// width: two times within one second whose fractional parts differ in precision
+// format to strings of one length whose text order is their chronological
+// order, and the parse sites, which keep time.RFC3339Nano, recover the instant.
+func TestTimeStrTextOrderIsChronological(t *testing.T) {
+	base := time.Date(2026, time.September, 15, 10, 0, 0, 0, time.UTC)
+	earlier := base.Add(123450 * time.Microsecond)
+	later := base.Add(123456 * time.Microsecond)
+	earlierText, laterText := timeStr(earlier), timeStr(later)
+	if len(earlierText) != len(laterText) || len(earlierText) != len(timeStr(base)) {
+		t.Fatalf(
+			"timeStr widths differ: %q %q %q", earlierText, laterText, timeStr(base),
+		)
+	}
+	if earlierText >= laterText {
+		t.Fatalf("text order %q >= %q, want chronological", earlierText, laterText)
+	}
+	if got := timeStr(later.In(time.FixedZone("plus-one", 3600))); got != laterText {
+		t.Fatalf("timeStr of a non-UTC time = %q, want %q", got, laterText)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, earlierText)
+	if err != nil {
+		t.Fatalf("time.Parse(RFC3339Nano, %q): %v", earlierText, err)
+	}
+	if !parsed.Equal(earlier) {
+		t.Fatalf("parsed %q = %v, want %v", earlierText, parsed, earlier)
+	}
+}
+
 // TestForRealmRejectsDatabaseBoundToAnotherRealm proves a database created for
 // one realm is not served under another: the realm row written on the first
 // ForRealm is compared with the bound realm on every later open, so opening the

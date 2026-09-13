@@ -414,7 +414,7 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []backup.Bala
 			accountID, assetID,
 			available, held, incoming, realizedPnl, b.RealizedPnlHaltReason,
 			b.AverageEntryPrice,
-			updatedAt.UTC().Format(time.RFC3339Nano),
+			timeStr(updatedAt),
 		); err != nil {
 			return fmt.Errorf("store: restore balance %q/%q: %w", b.Account, b.Asset, err)
 		}
@@ -884,7 +884,7 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 				 SET alg = ?, public_key = ?, created_at = ?
 				 WHERE key_id = ?`,
 				key.Alg, key.PublicKey,
-				createdAt.UTC().Format(time.RFC3339Nano), key.KeyID,
+				timeStr(createdAt), key.KeyID,
 			); err != nil {
 				return fmt.Errorf("store: restore signing key %q: %w", key.KeyID, err)
 			}
@@ -901,7 +901,7 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 				 (key_id, alg, private_key, public_key, created_at, active)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
 				key.KeyID, key.Alg, privateKey, key.PublicKey,
-				createdAt.UTC().Format(time.RFC3339Nano), false,
+				timeStr(createdAt), false,
 			); err != nil {
 				return fmt.Errorf("store: restore signing key %q: %w", key.KeyID, err)
 			}

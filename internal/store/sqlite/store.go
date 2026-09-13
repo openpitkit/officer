@@ -413,9 +413,21 @@ func (r *realmStore) dictionaries() (*enumDictionaries, error) {
 
 // --- Shared helpers reused by every table group -----------------------------
 
-// nowStr returns the current UTC time as RFC3339Nano.
+// storedTimeLayout is the fixed-width form of every stored timestamp: UTC with
+// nine fractional digits, so the text order of a timestamp column is
+// chronological. time.RFC3339Nano trims trailing zeros, which puts
+// 10:00:00.12345Z after 10:00:00.123456Z in text. The parse sites keep
+// time.RFC3339Nano, which accepts this width.
+const storedTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// timeStr formats t for a stored timestamp column or a comparison against one.
+func timeStr(t time.Time) string {
+	return t.UTC().Format(storedTimeLayout)
+}
+
+// nowStr returns the current time formatted for a stored timestamp column.
 func nowStr() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
+	return timeStr(time.Now())
 }
 
 // newExternalID draws 16 crypto/rand bytes and encodes them as a domain external

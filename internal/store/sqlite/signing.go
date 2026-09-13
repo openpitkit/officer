@@ -176,13 +176,13 @@ func (r *realmStore) DeactivateAllSigningKeys(ctx context.Context) error {
 	return nil
 }
 
-// signingKeyCreatedAt formats the key's creation time as RFC3339Nano UTC text,
+// signingKeyCreatedAt formats the key's creation time as fixed-width UTC text,
 // falling back to now when the caller left it zero so the column is never empty.
 func signingKeyCreatedAt(t time.Time) string {
 	if t.IsZero() {
 		return nowStr()
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return timeStr(t)
 }
 
 // scanSigningKeyRow scans one private-material-bearing key projection from a

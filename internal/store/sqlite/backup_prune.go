@@ -1018,11 +1018,11 @@ func rowExists(ctx context.Context, q sqlQueryer, query string, args ...any) (bo
 	return true, nil
 }
 
-// atOrNow formats t as RFC3339Nano UTC text, substituting the current time when t
-// is the zero value so a NOT NULL at/issued_at column is never written empty.
+// atOrNow formats t as fixed-width UTC text, substituting the current time when
+// t is the zero value so a NOT NULL at/issued_at column is never written empty.
 func atOrNow(t time.Time) string {
 	if t.IsZero() {
 		return nowStr()
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return timeStr(t)
 }

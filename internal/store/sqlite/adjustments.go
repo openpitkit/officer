@@ -243,7 +243,7 @@ func upsertBalancesTx(
 		}
 		updatedAt := nowStr()
 		if !b.UpdatedAt.IsZero() {
-			updatedAt = b.UpdatedAt.UTC().Format(time.RFC3339Nano)
+			updatedAt = timeStr(b.UpdatedAt)
 		}
 		if _, err := tx.ExecContext(
 			ctx,

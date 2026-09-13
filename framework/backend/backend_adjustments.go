@@ -152,7 +152,8 @@ func (s *Service) ListAllAdjustments(
 	if err != nil {
 		return nil, err
 	}
-	// Newest first, as sortOrdersNewestFirst orders orders.
+	// Newest first, as sortOrdersNewestFirst orders orders: fixed here rather
+	// than left to the node, with ties broken on the external id.
 	sort.Slice(recs, func(i, j int) bool {
 		if !recs[i].At.Equal(recs[j].At) {
 			return recs[i].At.After(recs[j].At)
