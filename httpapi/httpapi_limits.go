@@ -62,7 +62,7 @@ func handlePutRateLimit(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		limit := domain.LimitRate{
-			Scope:     req.Scope,
+			Scope:     domain.LimitScope(req.Scope),
 			Account:   domain.AccountID(req.Account),
 			Asset:     req.Asset,
 			Window:    time.Duration(req.WindowMs) * time.Millisecond,
@@ -97,7 +97,7 @@ func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		limit := domain.LimitOrderSize{
-			Scope:       req.Scope,
+			Scope:       domain.LimitScope(req.Scope),
 			Account:     domain.AccountID(req.Account),
 			Asset:       req.Asset,
 			MaxQuantity: req.MaxQuantity,
@@ -133,7 +133,7 @@ func handlePutSpotFundsPnlBoundsLimit(svc backend.ControlPlane) http.HandlerFunc
 			return
 		}
 		limit := domain.LimitSpotFundsPnlBounds{
-			Scope:        req.Scope,
+			Scope:        domain.LimitScope(req.Scope),
 			Account:      domain.AccountID(req.Account),
 			AccountGroup: req.AccountGroup,
 			Currency:     req.Currency,
@@ -212,8 +212,8 @@ func persistedSpotFundsPnlBoundsLimit(
 }
 
 func sameLimitAddress(
-	leftScope string, leftAccount domain.AccountID, leftAsset string,
-	rightScope string, rightAccount domain.AccountID, rightAsset string,
+	leftScope domain.LimitScope, leftAccount domain.AccountID, leftAsset string,
+	rightScope domain.LimitScope, rightAccount domain.AccountID, rightAsset string,
 ) bool {
 	return leftScope == rightScope && leftAccount == rightAccount && leftAsset == rightAsset
 }
@@ -235,7 +235,7 @@ func handleDeleteLimit(svc backend.ControlPlane) http.HandlerFunc {
 		q := r.URL.Query()
 		target := node.LimitTarget{
 			Policy:       q.Get("policy"),
-			Scope:        q.Get("scope"),
+			Scope:        domain.LimitScope(q.Get("scope")),
 			Account:      domain.AccountID(q.Get("account")),
 			AccountGroup: q.Get("accountGroup"),
 			Asset:        q.Get("asset"),

@@ -160,7 +160,7 @@ func TestService_CheckOrderReturnsRejectAndBlock(t *testing.T) {
 		Rejects: []domain.OrderReject{
 			{Code: "rate_limit_exceeded", Scope: "account", Policy: "rate_limit"},
 		},
-		WouldBlock: &domain.ExecutionAccountBlock{
+		WouldBlock: &domain.AccountBlock{
 			Account: "acc-1", Code: "account_blocked", Reason: "kill switch",
 		},
 	}

@@ -1398,10 +1398,6 @@ type AccountBlock struct {
 	Details string
 }
 
-// ExecutionAccountBlock is an AccountBlock produced while processing an
-// execution report. Kept as an alias to preserve the execution-facing API.
-type ExecutionAccountBlock = AccountBlock
-
 // BalanceSettlement is one per-asset balance outcome of a fill, expressed as a
 // plain data carrier so the store can persist it without importing the engine.
 // The settlement tx persists engine-returned absolute result fields when
@@ -1464,7 +1460,7 @@ type OrderSettlement struct {
 	Events []OrderEvent
 	// Blocks are engine-already-applied account blocks to mirror in the same tx
 	// (the block UPDATE only; the observational audit row stays outside).
-	Blocks []ExecutionAccountBlock
+	Blocks []AccountBlock
 	// SetLock distinguishes a nil Lock ("leave unchanged") from an empty slice
 	// ("clear"); only when true is the lock column rewritten.
 	SetLock bool
@@ -1526,7 +1522,7 @@ type AttestationResult struct {
 }
 
 // AttestationBlock is one engine-recorded account block bound in an attestation
-// result. It mirrors ExecutionAccountBlock in the signed form.
+// result. It mirrors AccountBlock in the signed form.
 type AttestationBlock struct {
 	Account string `json:"account"`
 	Policy  string `json:"policy"`

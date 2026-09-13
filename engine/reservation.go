@@ -119,7 +119,7 @@ func (e *openPitEngine) prepareImmediate(
 	if err != nil {
 		return fwengine.ImmediatePreparation{}, err
 	}
-	var blocks []domain.ExecutionAccountBlock
+	var blocks []domain.AccountBlock
 	if block != nil {
 		blocks = executionBlocksFrom([]reject.AccountBlock{*block}, o.Account)
 	}
@@ -174,7 +174,7 @@ func (e *openPitEngine) SettleImmediate(
 		)
 	}
 	blocks := append(
-		[]domain.ExecutionAccountBlock(nil), prepared.Blocks...,
+		[]domain.AccountBlock(nil), prepared.Blocks...,
 	)
 	blocks = append(
 		blocks,

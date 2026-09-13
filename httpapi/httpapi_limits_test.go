@@ -62,7 +62,7 @@ func TestListLimits(t *testing.T) {
 		t.Fatalf("total = %v, want 1", m["total"])
 	}
 	policy := policies[0].(map[string]any)
-	if policy["kind"] != domain.PolicyOrderSizeLimit || policy["scope"] != domain.ScopeBroker {
+	if policy["kind"] != domain.PolicyOrderSizeLimit || policy["scope"] != string(domain.ScopeBroker) {
 		t.Fatalf("unexpected policy: %v", policy)
 	}
 	values, ok := policy["values"].(map[string]any)

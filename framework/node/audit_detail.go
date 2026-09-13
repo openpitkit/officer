@@ -230,7 +230,7 @@ func blockReasonDetail(operation, code, reason string) string {
 // engineBlockDetail renders one engine-initiated (kill-switch) account block,
 // naming the triggering order by its external id and the engine's stable reject
 // code and reason so an operator can see why the account was blocked.
-func engineBlockDetail(order domain.ExternalID, block domain.ExecutionAccountBlock) string {
+func engineBlockDetail(order domain.ExternalID, block domain.AccountBlock) string {
 	detail := fmt.Sprintf("engine blocked account %s order %s code=%s: %s",
 		block.Account, order, block.Code, block.Reason)
 	if block.Details != "" {
@@ -259,7 +259,7 @@ func axesDetail(target LimitTarget) string {
 	var b strings.Builder
 	b.WriteString(target.Policy)
 	b.WriteByte(' ')
-	b.WriteString(target.Scope)
+	b.WriteString(string(target.Scope))
 	if target.Account != "" {
 		b.WriteString(" account=")
 		b.WriteString(target.Account.String())

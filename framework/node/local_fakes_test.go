@@ -79,12 +79,12 @@ type fakeEngine struct {
 	submitSettlementLockPrice  string
 	submitTradePrice           string
 	submitOutcomes             []engine.BalanceOutcome
-	submitBlocks               []domain.ExecutionAccountBlock
+	submitBlocks               []domain.AccountBlock
 	submitAccountPnl           string
 	submitAccountPnlHaltReason domain.PnlHaltReason
 	submitReject               *domain.OrderReject
 	emptyImmediatePersistence  bool
-	execReportBlocks           []domain.ExecutionAccountBlock
+	execReportBlocks           []domain.AccountBlock
 	execReportOutcomes         []engine.BalanceOutcome
 	emptyExecReportPersistence bool
 	execReportAccountMismatch  bool
@@ -893,7 +893,7 @@ func (e *fakeEngine) ConfigurePolicy(
 func (e *fakeEngine) materializeFakeAccountAdjustmentBatch(
 	account domain.AccountID,
 	reqs []domain.AdjustmentRequest,
-) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+) ([]engine.AdjustmentResult, *domain.AdjustmentOutcomeRejected, error) {
 	copied := append([]domain.AdjustmentRequest(nil), reqs...)
 	e.stateMu.Lock()
 	e.adjustmentBatchCalls = append(e.adjustmentBatchCalls,

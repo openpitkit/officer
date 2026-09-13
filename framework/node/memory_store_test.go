@@ -172,7 +172,7 @@ func instrumentKey(instance domain.ExternalID, externalSymbol string) string {
 func settingKey(userID, key string) string { return userID + "\x00" + key }
 
 func policyRowKey(row store.PolicyListRow) string {
-	return string(row.Kind) + "\x00" + row.Scope + "\x00" +
+	return string(row.Kind) + "\x00" + string(row.Scope) + "\x00" +
 		string(row.Account) + "\x00" + row.AccountGroup + "\x00" + row.Asset
 }
 

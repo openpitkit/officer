@@ -284,7 +284,7 @@ func TestGetAccount(t *testing.T) {
 		t.Fatalf("want 1 rate limit, got %v", limits["rateLimits"])
 	}
 	rate := rates[0].(map[string]any)
-	if rate["scope"] != domain.ScopeAccount || rate["account"] != "acc-1" ||
+	if rate["scope"] != string(domain.ScopeAccount) || rate["account"] != "acc-1" ||
 		rate["maxOrders"] != float64(100) || rate["windowMs"] != float64(1000) {
 		t.Fatalf("unexpected rate limit: %v", rate)
 	}

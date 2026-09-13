@@ -122,10 +122,6 @@ type AdjustmentResult struct {
 	AccountBlocks []domain.AccountBlock
 }
 
-// AdjustmentBatchReject is an atomic account-adjustment batch reject from the
-// engine. No per-request outcome is committed when this is returned.
-type AdjustmentBatchReject = domain.AdjustmentOutcomeRejected
-
 // OrderResult is the outcome of one SubmitOrder pre-trade call. On accept the
 // reservation is committed inside the adapter and Lock holds the SDK-serialized
 // reservation lock captured before commit; on reject Rejects holds the engine
@@ -138,7 +134,7 @@ type OrderResult struct {
 	// Blocks are account blocks the engine recorded while creating the
 	// reservation. They are non-empty only for a non-enforcing drop-copy path and
 	// must be mirrored durably with the accepted order.
-	Blocks []domain.ExecutionAccountBlock
+	Blocks []domain.AccountBlock
 	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
 	Rejects []domain.OrderReject
 	// Outcomes are the per-asset balance effects the reservation produced (held
@@ -184,7 +180,7 @@ type ImmediateResult struct {
 	Lock []byte
 	// Blocks are the account blocks the engine recorded while settling the
 	// immediate fill.
-	Blocks []domain.ExecutionAccountBlock
+	Blocks []domain.AccountBlock
 	// Outcomes are the per-asset adjustment outcomes produced by the immediate
 	// fill settlement, each tagged with its asset (both the base and the quote
 	// leg of a spot fill settle).
@@ -223,7 +219,7 @@ type ImmediatePreparation struct {
 	// outcomes after the report settles.
 	Outcomes []BalanceOutcome
 	// Blocks are drop-copy account blocks captured before commit.
-	Blocks []domain.ExecutionAccountBlock
+	Blocks []domain.AccountBlock
 	// ReconciliationState describes the engine mutation finalized before the
 	// execution report is applied.
 	ReconciliationState string
@@ -285,7 +281,7 @@ type AccountChainAdapter interface {
 		domain.AccountID,
 		[]domain.AdjustmentRequest,
 		accountadjustment.BatchResult,
-	) ([]AdjustmentResult, *AdjustmentBatchReject, error)
+	) ([]AdjustmentResult, *domain.AdjustmentOutcomeRejected, error)
 	SpotFundsAccountPnlAssignment(
 		string, domain.PnlHaltReason,
 	) (asyncengine.SpotFundsAccountPnlAssignment, error)
@@ -390,7 +386,7 @@ type ExecutionReportPersistence struct {
 	// Events are the order lifecycle events to append.
 	Events []domain.OrderEvent
 	// Blocks are account blocks returned by the engine.
-	Blocks []domain.ExecutionAccountBlock
+	Blocks []domain.AccountBlock
 }
 
 // ExecutionReportResult is the outcome of one ApplyExecutionReport call: the
@@ -404,7 +400,7 @@ type ExecutionReportResult struct {
 	// The node fills it after the settlement transaction commits.
 	ReportID domain.ExternalID
 	// Blocks are the account blocks the engine recorded for this report.
-	Blocks []domain.ExecutionAccountBlock
+	Blocks []domain.AccountBlock
 	// Outcomes are the per-asset adjustment outcomes policies produced, each
 	// tagged with its asset (both the base and the quote leg of a spot fill
 	// settle).

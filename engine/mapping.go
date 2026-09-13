@@ -1719,7 +1719,7 @@ func executionReportHasFill(in domain.ExecutionReportInput) (bool, error) {
 
 func executionReportPersistenceFrom(
 	in domain.ExecutionReportInput,
-	blocks []domain.ExecutionAccountBlock,
+	blocks []domain.AccountBlock,
 	outcomes []fwengine.BalanceOutcome,
 	accountPnl string,
 	accountPnlHaltReason domain.PnlHaltReason,
@@ -1900,10 +1900,10 @@ func executionReportLockBytes(in domain.ExecutionReportInput) ([]byte, error) {
 // record does not name the account).
 func executionBlocksFrom(
 	blocks []reject.AccountBlock, account domain.AccountID,
-) []domain.ExecutionAccountBlock {
-	out := make([]domain.ExecutionAccountBlock, 0, len(blocks))
+) []domain.AccountBlock {
+	out := make([]domain.AccountBlock, 0, len(blocks))
 	for _, b := range blocks {
-		out = append(out, domain.ExecutionAccountBlock{
+		out = append(out, domain.AccountBlock{
 			Account: account,
 			Policy:  sanitizeText(b.Policy),
 			Code:    rejectCodeName(b.Code),
@@ -1967,11 +1967,11 @@ func policyConfigurationBlockOutcomesFrom(
 // caller through the report's reject list, so there is nothing here to derive.
 func accountBlockFrom(
 	block *reject.AccountBlock, account domain.AccountID,
-) *domain.ExecutionAccountBlock {
+) *domain.AccountBlock {
 	if block == nil {
 		return nil
 	}
-	return &domain.ExecutionAccountBlock{
+	return &domain.AccountBlock{
 		Account: account,
 		Policy:  sanitizeText(block.Policy),
 		Code:    rejectCodeName(block.Code),

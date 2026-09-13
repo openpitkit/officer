@@ -27,7 +27,7 @@ import (
 // LimitScope identifies the axis combination a single barrier applies to. It is
 // a closed, hardcoded enum stored as plain text; the per-policy allowed sets
 // live in allowedScopes.
-type LimitScope = string
+type LimitScope string
 
 // LimitRate is the typed rate-limit barrier: at most MaxOrders new orders per
 // rolling Window for the addressed scope. It maps to the engine's rate-limit

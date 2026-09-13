@@ -840,7 +840,7 @@ func (s *Service) CancelOrder(
 				Leaves:      event.Payload.LeavesQuantity,
 			}
 			if event.Payload.RejectCode != "" || event.Payload.RejectReason != "" {
-				persistence.Blocks = []domain.ExecutionAccountBlock{{
+				persistence.Blocks = []domain.AccountBlock{{
 					Account: stored.Order.Account,
 					Policy:  event.Payload.RejectPolicy,
 					Code:    event.Payload.RejectCode,
@@ -1218,7 +1218,7 @@ func (s *Service) buildLifecyclePayload(
 // attestationBlocks maps engine execution blocks onto the signed-payload block
 // shape. It returns a non-nil (possibly empty) slice so the canonical bytes stay
 // deterministic (the Result.Blocks field is always present when Result is).
-func attestationBlocks(blocks []domain.ExecutionAccountBlock) []domain.AttestationBlock {
+func attestationBlocks(blocks []domain.AccountBlock) []domain.AttestationBlock {
 	out := make([]domain.AttestationBlock, 0, len(blocks))
 	for _, b := range blocks {
 		out = append(out, domain.AttestationBlock{

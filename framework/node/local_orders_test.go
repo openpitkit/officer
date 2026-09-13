@@ -1202,7 +1202,7 @@ func (e *fakeEngine) AppliedAccountAdjustmentBatch(
 	account domain.AccountID,
 	reqs []domain.AdjustmentRequest,
 	_ accountadjustment.BatchResult,
-) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+) ([]engine.AdjustmentResult, *domain.AdjustmentOutcomeRejected, error) {
 	return e.materializeFakeAccountAdjustmentBatch(account, reqs)
 }
 
@@ -1318,7 +1318,7 @@ func (e *fakeEngine) ReservedOrder(
 	return engine.OrderResult{
 		Accepted:            true,
 		Lock:                append([]byte(nil), e.submitLock...),
-		Blocks:              append([]domain.ExecutionAccountBlock(nil), e.submitBlocks...),
+		Blocks:              append([]domain.AccountBlock(nil), e.submitBlocks...),
 		Outcomes:            append([]engine.BalanceOutcome(nil), e.submitOutcomes...),
 		SettlementLockPrice: o.Price,
 	}, nil
@@ -1355,7 +1355,7 @@ func (e *fakeEngine) PrepareImmediateDropCopy(
 }
 
 func (e *fakeEngine) prepareFakeImmediate(
-	o domain.Order, blocks []domain.ExecutionAccountBlock,
+	o domain.Order, blocks []domain.AccountBlock,
 ) (engine.ImmediatePreparation, error) {
 	if err := e.recordChainSubmit(o); err != nil {
 		return engine.ImmediatePreparation{}, err
@@ -1396,7 +1396,7 @@ func (e *fakeEngine) prepareFakeImmediate(
 		ExecutionReport:     report,
 		ReportInput:         reportInput,
 		Outcomes:            append([]engine.BalanceOutcome(nil), e.submitOutcomes...),
-		Blocks:              append([]domain.ExecutionAccountBlock(nil), blocks...),
+		Blocks:              append([]domain.AccountBlock(nil), blocks...),
 		ReconciliationState: state,
 	}, nil
 }
@@ -1487,7 +1487,7 @@ func (e *fakeEngine) SettleImmediate(
 		Persistence:          persistenceResult,
 		ExecutionReport:      request,
 		Lock:                 append([]byte(nil), e.submitLock...),
-		Blocks:               append([]domain.ExecutionAccountBlock(nil), prepared.Blocks...),
+		Blocks:               append([]domain.AccountBlock(nil), prepared.Blocks...),
 		Outcomes:             append([]engine.BalanceOutcome(nil), e.submitOutcomes...),
 		AccountPnl:           e.submitAccountPnl,
 		AccountPnlHaltReason: e.submitAccountPnlHaltReason,
@@ -1918,7 +1918,7 @@ func TestLocalNode_CancelVolumeOrderUsesPreReportLeaves(t *testing.T) {
 func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.execReportBlocks = []domain.ExecutionAccountBlock{
+	eng.execReportBlocks = []domain.AccountBlock{
 		{
 			Account: "acc-1", Policy: "SpotFundsPolicy",
 			Code: domain.RejectCodePnlKillSwitchTriggered, Reason: "account block triggered",
@@ -2063,7 +2063,7 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 func TestLocalNode_SubmitDropCopyPersistsBlockCallerAndAudit(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.submitBlocks = []domain.ExecutionAccountBlock{{
+	eng.submitBlocks = []domain.AccountBlock{{
 		Account: "acc-1", Policy: "pnl_bounds", Code: "account_blocked",
 		Reason: "kill-switch tripped", Details: "daily loss",
 	}}
@@ -2189,7 +2189,7 @@ func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			eng := newFakeEngine()
-			eng.submitBlocks = []domain.ExecutionAccountBlock{{
+			eng.submitBlocks = []domain.AccountBlock{{
 				Account: "acc-1", Policy: "pnl_bounds",
 				Code: "account_blocked", Reason: "kill-switch tripped",
 			}}

@@ -59,14 +59,14 @@ func TestBuildExecutionReportPayloadSignsWriteSetLeaves(t *testing.T) {
 
 func TestBuildExecutionReportPayloadCarriesTypedBlockCause(t *testing.T) {
 	t.Parallel()
-	block := domain.ExecutionAccountBlock{
+	block := domain.AccountBlock{
 		Account: "acc-1", Policy: "SpotFundsPolicy",
 		Code: domain.RejectCodePnlKillSwitchTriggered, Reason: "lower bound breached",
 		Details: "account pnl below lower bound",
 	}
 	payload, err := (&Service{}).buildExecutionReportPayload(
 		domain.Order{Account: block.Account},
-		engine.ExecutionReportPersistence{Blocks: []domain.ExecutionAccountBlock{block}},
+		engine.ExecutionReportPersistence{Blocks: []domain.AccountBlock{block}},
 	)
 	if err != nil {
 		t.Fatalf("buildExecutionReportPayload: %v", err)

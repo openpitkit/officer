@@ -111,7 +111,7 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 		case "maxQuantity":
 			cmp = compareDecimalText(policyMaxQuantity(left), policyMaxQuantity(right))
 		case "scope":
-			cmp = compareStrings(left.Scope, right.Scope)
+			cmp = compareStrings(string(left.Scope), string(right.Scope))
 		case "upperBound":
 			cmp = compareDecimalText(policyUpperBound(left), policyUpperBound(right))
 		default:

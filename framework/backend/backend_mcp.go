@@ -27,16 +27,13 @@ import (
 	"go.openpit.dev/officer/framework/mcp/catalog"
 )
 
-// Command describes one MCP command in the catalogue.
-type Command = catalog.CatalogCommand
-
 // McpCommand is one MCP command's catalogue metadata paired with its resolved
 // effective enabled state, for the operator panel. It is the surface-facing
 // view the HTTP layer maps onto its wire DTO.
 type McpCommand struct {
 	// Command is the catalogue entry (identity, agent description, risk flags,
 	// implemented flag, default enabled state).
-	Command Command
+	Command catalog.CatalogCommand
 	// Enabled is the resolved effective state: the stored override when present,
 	// otherwise the catalogue default.
 	Enabled bool

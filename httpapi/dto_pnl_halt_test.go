@@ -108,7 +108,7 @@ func TestExecutionBlockDTOsPreserveSDKPolicy(t *testing.T) {
 	t.Parallel()
 	const policy = domain.PolicySpotFundsPnlBoundsKillSwitch
 	execution := marshalDTOMap(t, toExecutionResultDTO(engine.ExecutionReportResult{
-		Blocks: []domain.ExecutionAccountBlock{{
+		Blocks: []domain.AccountBlock{{
 			Account: "acc-1", Policy: policy,
 			Code: "pnl_bound_breached", Reason: "lower bound breached",
 		}},
@@ -122,7 +122,7 @@ func TestExecutionBlockDTOsPreserveSDKPolicy(t *testing.T) {
 	}
 
 	check := marshalDTOMap(t, toCheckResultDTO(domain.CheckResult{
-		WouldBlock: &domain.ExecutionAccountBlock{
+		WouldBlock: &domain.AccountBlock{
 			Account: "acc-1", Policy: policy, Code: "pnl_bound_breached",
 		},
 	}))

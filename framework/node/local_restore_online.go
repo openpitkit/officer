@@ -41,7 +41,7 @@ type restoreBalanceChainState struct {
 	reqs          []domain.AdjustmentRequest
 	adjustments   []model.AccountAdjustment
 	results       []engine.AdjustmentResult
-	reject        *engine.AdjustmentBatchReject
+	reject        *domain.AdjustmentOutcomeRejected
 	err           error
 	engineApplied bool
 }
@@ -317,7 +317,7 @@ func balanceRuntimeMap(balances []backup.Balance) map[string]domain.Balance {
 func rateLimitMap(limits []domain.LimitRate) map[string]domain.LimitRate {
 	out := make(map[string]domain.LimitRate, len(limits))
 	for _, limit := range limits {
-		out[limit.Scope+"\x00"+limit.Account.String()+"\x00"+limit.Asset] = limit
+		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.Asset] = limit
 	}
 	return out
 }
@@ -325,7 +325,7 @@ func rateLimitMap(limits []domain.LimitRate) map[string]domain.LimitRate {
 func orderSizeLimitMap(limits []domain.LimitOrderSize) map[string]domain.LimitOrderSize {
 	out := make(map[string]domain.LimitOrderSize, len(limits))
 	for _, limit := range limits {
-		out[limit.Scope+"\x00"+limit.Account.String()+"\x00"+limit.Asset] = limit
+		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.Asset] = limit
 	}
 	return out
 }
@@ -335,7 +335,7 @@ func spotFundsLimitMap(
 ) map[string]domain.LimitSpotFundsPnlBounds {
 	out := make(map[string]domain.LimitSpotFundsPnlBounds, len(limits))
 	for _, limit := range limits {
-		out[limit.Scope+"\x00"+limit.Account.String()+"\x00"+limit.AccountGroup] = limit
+		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.AccountGroup] = limit
 	}
 	return out
 }

@@ -247,14 +247,14 @@ func (rt *restoreTx) pruneLimits(
 ) error {
 	rateKeep := make(map[string]bool, len(data.RateLimits))
 	for _, l := range data.RateLimits {
-		rateKeep[limitKey(l.Scope, l.Account, l.Asset)] = true
+		rateKeep[limitKey(string(l.Scope), l.Account, l.Asset)] = true
 	}
 	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_rate", rateKeep); err != nil {
 		return err
 	}
 	sizeKeep := make(map[string]bool, len(data.OrderSizeLimits))
 	for _, l := range data.OrderSizeLimits {
-		sizeKeep[limitKey(l.Scope, l.Account, l.Asset)] = true
+		sizeKeep[limitKey(string(l.Scope), l.Account, l.Asset)] = true
 	}
 	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_order_size", sizeKeep); err != nil {
 		return err
@@ -262,7 +262,7 @@ func (rt *restoreTx) pruneLimits(
 	spotFundsKeep := make(map[string]bool, len(data.SpotFundsPnlBoundsLimits))
 	for _, l := range data.SpotFundsPnlBoundsLimits {
 		spotFundsKeep[spotFundsPnlBoundsLimitKey(
-			l.Scope,
+			string(l.Scope),
 			l.Account,
 			l.AccountGroup,
 		)] = true

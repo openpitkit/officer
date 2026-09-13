@@ -870,7 +870,7 @@ func policyKindFromQuery(q url.Values) (*store.PolicyKind, error) {
 }
 
 func policyScopeFromQuery(q url.Values) (domain.LimitScope, error) {
-	scope := q.Get("scope")
+	scope := domain.LimitScope(q.Get("scope"))
 	switch scope {
 	case "", domain.ScopeBroker, domain.ScopeGlobal, domain.ScopeAccount,
 		domain.ScopeAsset, domain.ScopeAccountGroup, domain.ScopeAccountAsset,

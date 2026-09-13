@@ -528,7 +528,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 // the number of rows applied (0 when skipped).
 func (rt *restoreTx) putLimit(
 	ctx context.Context,
-	table, scope string,
+	table string, scope domain.LimitScope,
 	accountID, assetID sql.NullInt64,
 	insertSQL string,
 	insertArgs []any,
@@ -559,7 +559,7 @@ func (rt *restoreTx) putLimit(
 
 func (rt *restoreTx) putSpotFundsPnlBoundsLimit(
 	ctx context.Context,
-	scope string,
+	scope domain.LimitScope,
 	accountID, groupID sql.NullInt64,
 	insertSQL string,
 	insertArgs []any,

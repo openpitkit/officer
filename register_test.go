@@ -483,7 +483,7 @@ func (*fakeEngine) AppliedAccountAdjustmentBatch(
 	domain.AccountID,
 	[]domain.AdjustmentRequest,
 	accountadjustment.BatchResult,
-) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+) ([]engine.AdjustmentResult, *domain.AdjustmentOutcomeRejected, error) {
 	return nil, nil, errUnexpectedOrderChain
 }
 

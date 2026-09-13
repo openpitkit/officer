@@ -309,7 +309,7 @@ func toAssetClassRowDTO(row store.AssetClassListRow) assetClassDTO {
 // toRateLimitDTO maps a domain.LimitRate onto the wire DTO.
 func toRateLimitDTO(l domain.LimitRate) rateLimitDTO {
 	return rateLimitDTO{
-		Scope:     l.Scope,
+		Scope:     string(l.Scope),
 		Account:   string(l.Account),
 		Asset:     l.Asset,
 		WindowMs:  l.Window.Milliseconds(),
@@ -320,7 +320,7 @@ func toRateLimitDTO(l domain.LimitRate) rateLimitDTO {
 // toOrderSizeLimitDTO maps a domain.LimitOrderSize onto the wire DTO.
 func toOrderSizeLimitDTO(l domain.LimitOrderSize) orderSizeLimitDTO {
 	return orderSizeLimitDTO{
-		Scope:       l.Scope,
+		Scope:       string(l.Scope),
 		Account:     string(l.Account),
 		Asset:       l.Asset,
 		MaxQuantity: l.MaxQuantity,
@@ -334,7 +334,7 @@ func toSpotFundsPnlBoundsLimitDTO(
 	l domain.LimitSpotFundsPnlBounds,
 ) spotFundsPnlBoundsLimitDTO {
 	return spotFundsPnlBoundsLimitDTO{
-		Scope:        l.Scope,
+		Scope:        string(l.Scope),
 		Account:      string(l.Account),
 		AccountGroup: l.AccountGroup,
 		Currency:     l.Currency,
@@ -375,7 +375,7 @@ func toAccountLimitsDTO(limits node.AccountLimits) accountLimitsDTO {
 func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 	dto := policyDTO{
 		Kind:         string(row.Kind),
-		Scope:        row.Scope,
+		Scope:        string(row.Scope),
 		Account:      string(row.Account),
 		AccountGroup: row.AccountGroup,
 		Asset:        row.Asset,

@@ -680,7 +680,7 @@ func TestLocalNode_ApplyExecutionReportUsesOrderAccountOverRouteKey(t *testing.T
 func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.execReportBlocks = []domain.ExecutionAccountBlock{
+	eng.execReportBlocks = []domain.AccountBlock{
 		{
 			Account: "acc-1", Policy: "SpotFundsPolicy",
 			Code: domain.RejectCodePnlKillSwitchTriggered, Reason: "account block triggered",

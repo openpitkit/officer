@@ -545,7 +545,7 @@ func stampExecutionReportPersistence(
 	return persistence
 }
 
-func accountBlockPayload(blocks []domain.ExecutionAccountBlock) domain.OrderEventPayload {
+func accountBlockPayload(blocks []domain.AccountBlock) domain.OrderEventPayload {
 	if len(blocks) == 0 {
 		return domain.OrderEventPayload{}
 	}

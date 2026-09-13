@@ -648,7 +648,7 @@ func (e *openPitEngine) AppliedAccountAdjustmentBatch(
 	account domain.AccountID,
 	reqs []domain.AdjustmentRequest,
 	batch accountadjustment.BatchResult,
-) ([]fwengine.AdjustmentResult, *fwengine.AdjustmentBatchReject, error) {
+) ([]fwengine.AdjustmentResult, *domain.AdjustmentOutcomeRejected, error) {
 	if rej, ok := batch.BatchError.Get(); ok {
 		rejected, err := outcomeRejectedFrom(rej)
 		if err != nil {

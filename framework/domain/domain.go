@@ -142,7 +142,7 @@ type HasDependentsError struct {
 // CurrencyChangeBlockedError carries the target whose currency cannot change
 // while its current economic state is non-empty.
 type CurrencyChangeBlockedError struct {
-	Scope    string
+	Scope    LimitScope
 	TargetID string
 	Cause    error
 }
@@ -154,7 +154,9 @@ func (e CurrencyChangeBlockedError) Error() string { return e.Cause.Error() }
 func (e CurrencyChangeBlockedError) Unwrap() error { return e.Cause }
 
 // NewCurrencyChangeBlockedError creates a structured currency guard error.
-func NewCurrencyChangeBlockedError(scope, targetID string, cause error) error {
+func NewCurrencyChangeBlockedError(
+	scope LimitScope, targetID string, cause error,
+) error {
 	return CurrencyChangeBlockedError{
 		Scope:    scope,
 		TargetID: targetID,
@@ -266,16 +268,16 @@ const (
 
 // Scope identifiers.
 const (
-	ScopeBroker                 = "broker"
-	ScopeGlobal                 = "global"
-	ScopeAsset                  = "asset"
-	ScopeAccount                = "account"
-	ScopeAccountGroup           = "account_group"
-	ScopeAccountAsset           = "account_asset"
-	ScopeUnderlyingAsset        = "underlying_asset"
-	ScopeSettlementAsset        = "settlement_asset"
-	ScopeAccountUnderlyingAsset = "account_underlying_asset"
-	ScopeAccountSettlementAsset = "account_settlement_asset"
+	ScopeBroker                 LimitScope = "broker"
+	ScopeGlobal                 LimitScope = "global"
+	ScopeAsset                  LimitScope = "asset"
+	ScopeAccount                LimitScope = "account"
+	ScopeAccountGroup           LimitScope = "account_group"
+	ScopeAccountAsset           LimitScope = "account_asset"
+	ScopeUnderlyingAsset        LimitScope = "underlying_asset"
+	ScopeSettlementAsset        LimitScope = "settlement_asset"
+	ScopeAccountUnderlyingAsset LimitScope = "account_underlying_asset"
+	ScopeAccountSettlementAsset LimitScope = "account_settlement_asset"
 )
 
 // Kind identifiers.
@@ -665,7 +667,7 @@ type OrderProbe struct {
 // when non-nil, is the account block the engine would record.
 type CheckResult struct {
 	// WouldBlock is the account block the engine would record; nil when none.
-	WouldBlock *ExecutionAccountBlock
+	WouldBlock *AccountBlock
 	// Rejects are the engine pre-trade rejects; empty when the check passed.
 	Rejects []OrderReject
 	// WouldLockPrice is the settlement lock price (exact decimal string); empty

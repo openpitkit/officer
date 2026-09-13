@@ -666,7 +666,7 @@ func (n *localNode) ensureLimitAccount(
 
 func (n *localNode) ensureLimitAsset(
 	ctx context.Context,
-	scope string,
+	scope domain.LimitScope,
 	asset string,
 	operation string,
 	caller domain.Caller,

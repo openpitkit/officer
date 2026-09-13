@@ -2227,7 +2227,7 @@ func TestRecordOrderSettlementTerminalEmptyLeavesKeepsQuantity(t *testing.T) {
 		Account:     "acc-1",
 		OrderStatus: domain.OrderStatusCancelled,
 		AllowedFrom: []domain.OrderStatus{domain.OrderStatusSubmitted},
-		Blocks: []domain.ExecutionAccountBlock{{
+		Blocks: []domain.AccountBlock{{
 			Account: "acc-1",
 			Code:    domain.RejectCodePnlKillSwitchTriggered,
 			Reason:  "kill switch [code=pnl_bound_breached]",
@@ -2301,7 +2301,7 @@ func TestRecordOrderSettlementNormalizesMirroredBlockText(t *testing.T) {
 		Account:     "acc-1",
 		OrderStatus: domain.OrderStatusCommitted,
 		AllowedFrom: domain.OrderStatusesEligibleForFill(),
-		Blocks: []domain.ExecutionAccountBlock{{
+		Blocks: []domain.AccountBlock{{
 			Account: "acc-1",
 			Policy:  "Spot\u200bFundsPolicy",
 			Code:    "code_45",

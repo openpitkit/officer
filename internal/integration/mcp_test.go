@@ -656,7 +656,7 @@ func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
 		)
 	}
 	got := limits.SpotFundsPnlBoundsLimits[0]
-	if got.Scope != domain.ScopeAccount ||
+	if got.Scope != string(domain.ScopeAccount) ||
 		got.Account != "acc-spot" ||
 		got.Currency != "USD" ||
 		got.LowerBound != "-10.25" ||
@@ -1088,7 +1088,7 @@ func TestCheckOrderReject(t *testing.T) {
 		Rejects: []domain.OrderReject{
 			{Code: "insufficient_funds", Scope: "account", Policy: "spot_funds"},
 		},
-		WouldBlock: &domain.ExecutionAccountBlock{Account: "acc-1", Code: "account_blocked"},
+		WouldBlock: &domain.AccountBlock{Account: "acc-1", Code: "account_blocked"},
 	}}
 	res := callCheckOrder(t, src, checkOrderInput{
 		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",

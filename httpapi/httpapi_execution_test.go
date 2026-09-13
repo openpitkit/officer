@@ -67,7 +67,7 @@ func TestCheckOrder_Reject(t *testing.T) {
 		Rejects: []domain.OrderReject{
 			{Code: "insufficient_funds", Scope: "account", Policy: "spot_funds", Reason: "no funds"},
 		},
-		WouldBlock: &domain.ExecutionAccountBlock{Account: "acc-1", Code: "account_blocked"},
+		WouldBlock: &domain.AccountBlock{Account: "acc-1", Code: "account_blocked"},
 	}}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -539,7 +539,7 @@ func TestApplyExecutionReport_CommissionOnlyForwardsCallerFieldsAndEngineResult(
 ) {
 	svc := &fakeService{execReportResult: engine.ExecutionReportResult{
 		ReportID: extID("commission-report"),
-		Blocks: []domain.ExecutionAccountBlock{
+		Blocks: []domain.AccountBlock{
 			{Account: "acc-1", Code: "first"},
 			{Account: "acc-1", Code: "second"},
 		},

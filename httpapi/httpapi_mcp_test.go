@@ -26,16 +26,17 @@ import (
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/mcp/catalog"
 )
 
 func TestListMcpAccess(t *testing.T) {
 	svc := &fakeService{
 		mcpCommands: []backend.McpCommand{
-			{Command: backend.Command{
+			{Command: catalog.CatalogCommand{
 				Name: "health", Title: "Health", AgentDescription: "desc",
 				Implemented: true, DefaultEnabled: true,
 			}, Enabled: false},
-			{Command: backend.Command{
+			{Command: catalog.CatalogCommand{
 				Name: "set_limit", Title: "Set limit", AgentDescription: "desc",
 				Mutating: true, Protective: true,
 			}, Enabled: true},
@@ -64,7 +65,7 @@ func TestListMcpAccess(t *testing.T) {
 func TestSetMcpAccess_Persists(t *testing.T) {
 	svc := &fakeService{
 		mcpCommands: []backend.McpCommand{
-			{Command: backend.Command{Name: "health", Title: "Health", AgentDescription: "d"}, Enabled: false},
+			{Command: catalog.CatalogCommand{Name: "health", Title: "Health", AgentDescription: "d"}, Enabled: false},
 		},
 	}
 	r, err := newRouter(svc)

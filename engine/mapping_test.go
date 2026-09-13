@@ -340,7 +340,9 @@ func testResolver(codes ...string) idResolver {
 	return res
 }
 
-func rateLimit(scope, acct, asset string, maxOrders uint64, window time.Duration) domain.LimitRate {
+func rateLimit(
+	scope domain.LimitScope, acct, asset string, maxOrders uint64, window time.Duration,
+) domain.LimitRate {
 	return domain.LimitRate{
 		Scope:     scope,
 		Account:   domain.AccountID(acct),
@@ -350,7 +352,9 @@ func rateLimit(scope, acct, asset string, maxOrders uint64, window time.Duration
 	}
 }
 
-func orderSize(scope, acct, asset, maxQty, maxNotional string) domain.LimitOrderSize {
+func orderSize(
+	scope domain.LimitScope, acct, asset, maxQty, maxNotional string,
+) domain.LimitOrderSize {
 	return domain.LimitOrderSize{
 		Scope:       scope,
 		Account:     domain.AccountID(acct),
@@ -3721,7 +3725,7 @@ func TestExecutionReportPersistenceFrom_TerminalPreservesCallerLeaves(t *testing
 		LeavesQuantity: "2",
 		OrderStatus:    domain.OrderStatusCancelled,
 	}
-	blocks := []domain.ExecutionAccountBlock{{
+	blocks := []domain.AccountBlock{{
 		Account: domain.AccountID(testAccount),
 		Policy:  "spot_funds",
 		Code:    "pnl_kill_switch_triggered",
@@ -3813,7 +3817,7 @@ func TestExecutionReportPersistenceFrom_KeepsEveryBlockOffTheEventPayload(t *tes
 		LeavesQuantity: "0",
 		OrderStatus:    domain.OrderStatusFilled,
 	}
-	blocks := []domain.ExecutionAccountBlock{
+	blocks := []domain.AccountBlock{
 		{
 			Account: domain.AccountID(testAccount),
 			Policy:  "spot_funds",

@@ -596,7 +596,7 @@ func toLimitsDTO(l node.AccountLimits) limitsDTO {
 	rate := make([]rateLimitDTO, 0, len(l.RateLimits))
 	for _, r := range l.RateLimits {
 		rate = append(rate, rateLimitDTO{
-			Scope:     r.Scope,
+			Scope:     string(r.Scope),
 			Account:   string(r.Account),
 			Asset:     r.Asset,
 			Window:    r.Window.String(),
@@ -606,7 +606,7 @@ func toLimitsDTO(l node.AccountLimits) limitsDTO {
 	size := make([]orderSizeLimitDTO, 0, len(l.OrderSizeLimits))
 	for _, o := range l.OrderSizeLimits {
 		size = append(size, orderSizeLimitDTO{
-			Scope:       o.Scope,
+			Scope:       string(o.Scope),
 			Account:     string(o.Account),
 			Asset:       o.Asset,
 			MaxQuantity: o.MaxQuantity,
@@ -620,7 +620,7 @@ func toLimitsDTO(l node.AccountLimits) limitsDTO {
 	)
 	for _, p := range l.SpotFundsPnlBoundsLimits {
 		spotFundsPnl = append(spotFundsPnl, spotFundsPnlBoundsLimitDTO{
-			Scope:        p.Scope,
+			Scope:        string(p.Scope),
 			Account:      string(p.Account),
 			AccountGroup: p.AccountGroup,
 			Currency:     p.Currency,

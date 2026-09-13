@@ -576,7 +576,7 @@ func (*realGateEngine) AppliedAccountAdjustmentBatch(
 	_ domain.AccountID,
 	reqs []domain.AdjustmentRequest,
 	_ accountadjustment.BatchResult,
-) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+) ([]engine.AdjustmentResult, *domain.AdjustmentOutcomeRejected, error) {
 	results := make([]engine.AdjustmentResult, 0, len(reqs))
 	for range reqs {
 		results = append(results, engine.AdjustmentResult{

@@ -170,7 +170,7 @@ func (e *autoCreateOrderingEngine) AppliedAccountAdjustmentBatch(
 	account domain.AccountID,
 	reqs []domain.AdjustmentRequest,
 	batch accountadjustment.BatchResult,
-) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+) ([]engine.AdjustmentResult, *domain.AdjustmentOutcomeRejected, error) {
 	e.record("adjustment:" + account.String())
 	return e.fakeEngine.AppliedAccountAdjustmentBatch(account, reqs, batch)
 }

@@ -29,7 +29,7 @@ import (
 func TestAttestationBlocksPreserveSDKPolicy(t *testing.T) {
 	t.Parallel()
 	const policy = domain.PolicySpotFundsPnlBoundsKillSwitch
-	got := attestationBlocks([]domain.ExecutionAccountBlock{{
+	got := attestationBlocks([]domain.AccountBlock{{
 		Account: "acc-1", Policy: policy, Code: "pnl_bound_breached",
 	}})
 	if len(got) != 1 || got[0].Policy != policy {

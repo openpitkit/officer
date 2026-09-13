@@ -202,7 +202,7 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 	var (
 		kind                          string
-		scope                         string
+		scope                         domain.LimitScope
 		accountCode, accountGroupCode sql.NullString
 		assetCode, currencyCode       sql.NullString
 		maxOrders                     sql.NullInt64
@@ -371,12 +371,12 @@ func (r *realmStore) DeleteRateLimit(
 	if err != nil {
 		return fmt.Errorf("store: delete rate limit: %w", err)
 	}
-	return notFoundIfNoRows(res, "rate limit", scope)
+	return notFoundIfNoRows(res, "rate limit", string(scope))
 }
 
 func scanRateLimit(rows *sql.Rows) (domain.LimitRate, error) {
 	var (
-		scope                  string
+		scope                  domain.LimitScope
 		accountCode, assetCode sql.NullString
 		maxOrders              int64
 		windowStr              string
@@ -496,12 +496,12 @@ func (r *realmStore) DeleteOrderSizeLimit(
 	if err != nil {
 		return fmt.Errorf("store: delete order size limit: %w", err)
 	}
-	return notFoundIfNoRows(res, "order size limit", scope)
+	return notFoundIfNoRows(res, "order size limit", string(scope))
 }
 
 func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 	var (
-		scope                    string
+		scope                    domain.LimitScope
 		accountCode, assetCode   sql.NullString
 		maxQuantity, maxNotional sql.NullString
 	)
@@ -633,14 +633,14 @@ func (r *realmStore) DeleteSpotFundsPnlBoundsLimit(
 	if err != nil {
 		return fmt.Errorf("store: delete spot funds pnl bounds limit: %w", err)
 	}
-	return notFoundIfNoRows(res, "spot funds pnl bounds limit", scope)
+	return notFoundIfNoRows(res, "spot funds pnl bounds limit", string(scope))
 }
 
 func scanSpotFundsPnlBoundsLimit(
 	rows *sql.Rows,
 ) (domain.LimitSpotFundsPnlBounds, error) {
 	var (
-		scope                         string
+		scope                         domain.LimitScope
 		accountCode, accountGroupCode sql.NullString
 		currencyCode                  string
 		lowerBound, upperBound        sql.NullString
@@ -678,7 +678,7 @@ func putLimitRow(
 	ctx context.Context,
 	db *sql.DB,
 	table string,
-	scope string,
+	scope domain.LimitScope,
 	accountID, assetID sql.NullInt64,
 	insertFn func(context.Context, sqlExecer) error,
 ) (err error) {
@@ -733,7 +733,7 @@ func resolveLimitAxes(
 func putSpotFundsPnlBoundsRow(
 	ctx context.Context,
 	db *sql.DB,
-	scope string,
+	scope domain.LimitScope,
 	accountID, groupID sql.NullInt64,
 	insertFn func(context.Context, sqlExecer) error,
 ) (err error) {

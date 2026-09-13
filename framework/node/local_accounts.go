@@ -531,7 +531,7 @@ func blockOperation(blocked bool) string {
 // part of the financial invariant.
 func (n *localNode) mirrorEngineBlocksAudit(
 	ctx context.Context, order domain.ExternalID,
-	blocks []domain.ExecutionAccountBlock,
+	blocks []domain.AccountBlock,
 ) error {
 	for _, block := range blocks {
 		// A kill-switch block is engine-initiated: it carries no actor principal
