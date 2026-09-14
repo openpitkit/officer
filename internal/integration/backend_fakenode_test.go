@@ -726,6 +726,12 @@ func (n *fakeNode) ListAdjustments(
 	return nil, nil
 }
 
+func (n *fakeNode) ListAdjustmentRows(
+	context.Context, store.AdjustmentListFilter,
+) (store.AdjustmentListPage, error) {
+	return store.AdjustmentListPage{}, nil
+}
+
 // recordedOrderExternalID models the store's supplied-or-generated contract: a
 // caller-supplied (non-zero) order external id is used verbatim, else a fresh id
 // is minted. This keeps the fake faithful to the node submission contract, so a
@@ -1264,8 +1270,20 @@ func (n *fakeNode) ListAllTrades(
 	return nil, nil
 }
 
+func (n *fakeNode) ListTradeRows(
+	context.Context, store.TradeListFilter,
+) (store.TradeListPage, error) {
+	return store.TradeListPage{}, nil
+}
+
 func (n *fakeNode) ListAudit(context.Context, int) ([]domain.AuditRow, error) {
 	return n.audit, nil
+}
+
+func (n *fakeNode) ListAuditRows(
+	context.Context, store.AuditListFilter,
+) (store.AuditListPage, error) {
+	return store.AuditListPage{}, nil
 }
 
 func (n *fakeNode) ListAuditFiltered(

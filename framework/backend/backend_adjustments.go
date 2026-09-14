@@ -19,7 +19,6 @@ package backend
 
 import (
 	"context"
-	"fmt"
 	"sort"
 
 	"go.openpit.dev/officer/framework/auth"
@@ -167,11 +166,5 @@ func (s *Service) ListAllAdjustments(
 func (s *Service) ListAdjustmentRows(
 	ctx context.Context, filter store.AdjustmentListFilter,
 ) (store.AdjustmentListPage, error) {
-	target, ok := s.node.(adjustmentRowNode)
-	if !ok {
-		return store.AdjustmentListPage{}, fmt.Errorf(
-			"backend: node list adjustment rows: %w", domain.ErrNotImplemented,
-		)
-	}
-	return target.ListAdjustmentRows(ctx, filter)
+	return s.node.ListAdjustmentRows(ctx, filter)
 }

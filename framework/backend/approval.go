@@ -70,54 +70,6 @@ type eventPayloadBuilder func(domain.OrderEvent) (domain.ApprovalPayload, bool, 
 
 type signedEventCapture func(Attestation, domain.ApprovalPayload)
 
-type submitOrderAttestingNode interface {
-	SubmitOrderWithAttestation(
-		ctx context.Context,
-		o domain.Order,
-		missing domain.MissingAccountPolicy,
-		caller domain.Caller,
-		attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
-	) (domain.Order, engine.OrderResult, error)
-}
-
-type submitImmediateAttestingNode interface {
-	SubmitImmediateWithAttestation(
-		ctx context.Context,
-		o domain.Order,
-		missing domain.MissingAccountPolicy,
-		caller domain.Caller,
-		attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
-	) (domain.Order, engine.ImmediateResult, error)
-}
-
-type executionReportAttestingNode interface {
-	ApplyExecutionReportWithAttestation(
-		ctx context.Context,
-		in domain.ExecutionReportInput,
-		caller domain.Caller,
-		attest store.EventAttestor,
-	) (engine.ExecutionReportResult, error)
-}
-
-type confirmOrderAttestingNode interface {
-	ConfirmOrderWithAttestation(
-		ctx context.Context,
-		order domain.ExternalID,
-		caller domain.Caller,
-		attest store.EventAttestor,
-	) (domain.Order, error)
-}
-
-type cancelOrderAttestingNode interface {
-	CancelOrderWithAttestation(
-		ctx context.Context,
-		order domain.ExternalID,
-		leavesQuantity string,
-		caller domain.Caller,
-		attest store.EventAttestor,
-	) (domain.Order, engine.ExecutionReportResult, error)
-}
-
 // signerOrErr returns the configured signer or an unconfigured error. The
 // signing and approval surfaces require a signer; nil or unavailable signing
 // means the feature was not wired.
@@ -423,13 +375,6 @@ func (s *Service) submitOrderToken(
 	)
 	switch mode {
 	case SubmitModeHold:
-		attesting, ok := n.(submitOrderAttestingNode)
-		if !ok {
-			return ApprovalToken{}, fmt.Errorf(
-				"backend: workflow submit attestation unsupported: %w",
-				domain.ErrNotImplemented,
-			)
-		}
 		var result engine.OrderResult
 		attestFor := func(
 			persisted domain.Order, submitted engine.OrderResult,
@@ -485,7 +430,7 @@ func (s *Service) submitOrderToken(
 				},
 			)
 		}
-		order, result, err = attesting.SubmitOrderWithAttestation(
+		order, result, err = n.SubmitOrderWithAttestation(
 			ctx, o, missing, caller, attestFor)
 		if err != nil {
 			if auditErr := s.auditApproval(
@@ -499,13 +444,6 @@ func (s *Service) submitOrderToken(
 		accepted = result.Accepted
 		rejects = result.Rejects
 	default:
-		attesting, ok := n.(submitImmediateAttestingNode)
-		if !ok {
-			return ApprovalToken{}, fmt.Errorf(
-				"backend: submit immediate attestation unsupported: %w",
-				domain.ErrNotImplemented,
-			)
-		}
 		var result engine.ImmediateResult
 		attestFor := func(
 			persisted domain.Order, immediate engine.ImmediateResult,
@@ -575,7 +513,7 @@ func (s *Service) submitOrderToken(
 				},
 			)
 		}
-		order, result, err = attesting.SubmitImmediateWithAttestation(
+		order, result, err = n.SubmitImmediateWithAttestation(
 			ctx, o, missing, caller, attestFor)
 		if err != nil {
 			if auditErr := s.auditApproval(
@@ -708,13 +646,6 @@ func (s *Service) ConfirmExecution(
 		return domain.Order{}, Attestation{}, err
 	}
 	var att Attestation
-	attesting, ok := n.(confirmOrderAttestingNode)
-	if !ok {
-		return domain.Order{}, Attestation{}, fmt.Errorf(
-			"backend: confirm attestation unsupported: %w",
-			domain.ErrNotImplemented,
-		)
-	}
 	attest := eventAttestor(
 		signer, off, keyID, domain.AttestationRequestConfirm,
 		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
@@ -736,7 +667,7 @@ func (s *Service) ConfirmExecution(
 			att = got
 		},
 	)
-	confirmed, err := attesting.ConfirmOrderWithAttestation(
+	confirmed, err := n.ConfirmOrderWithAttestation(
 		ctx, order, caller, attest)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
@@ -816,13 +747,6 @@ func (s *Service) CancelOrder(
 		return domain.Order{}, Attestation{}, err
 	}
 	var att Attestation
-	attesting, ok := n.(cancelOrderAttestingNode)
-	if !ok {
-		return domain.Order{}, Attestation{}, fmt.Errorf(
-			"backend: cancel attestation unsupported: %w",
-			domain.ErrNotImplemented,
-		)
-	}
 	attest := eventAttestor(
 		signer, off, keyID, domain.AttestationRequestCancel,
 		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
@@ -870,7 +794,7 @@ func (s *Service) CancelOrder(
 			}
 		},
 	)
-	cancelled, _, err := attesting.CancelOrderWithAttestation(
+	cancelled, _, err := n.CancelOrderWithAttestation(
 		ctx, order, leavesQuantity, caller, attest)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err

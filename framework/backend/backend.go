@@ -33,7 +33,6 @@ import (
 	"go.openpit.dev/officer/framework/mcp/catalog"
 	"go.openpit.dev/officer/framework/node"
 	fwsigning "go.openpit.dev/officer/framework/signing"
-	"go.openpit.dev/officer/framework/store"
 )
 
 // MarketDataRuntime is the live view of the connector manager the backend
@@ -83,18 +82,6 @@ type Service struct {
 	commands       catalog.Provider
 	lockSettlement LockSettlementPrice
 	marketDataMu   sync.Mutex
-}
-
-type adjustmentRowNode interface {
-	ListAdjustmentRows(context.Context, store.AdjustmentListFilter) (store.AdjustmentListPage, error)
-}
-
-type tradeRowNode interface {
-	ListTradeRows(context.Context, store.TradeListFilter) (store.TradeListPage, error)
-}
-
-type auditRowNode interface {
-	ListAuditRows(context.Context, store.AuditListFilter) (store.AuditListPage, error)
 }
 
 // LockSettlementPrice derives a display settlement price from an opaque engine

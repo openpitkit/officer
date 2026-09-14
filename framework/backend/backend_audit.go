@@ -19,7 +19,6 @@ package backend
 
 import (
 	"context"
-	"fmt"
 	"sort"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -70,11 +69,5 @@ func sortAuditNewestFirst(rows []domain.AuditRow) {
 func (s *Service) ListAuditRows(
 	ctx context.Context, filter store.AuditListFilter,
 ) (store.AuditListPage, error) {
-	target, ok := s.node.(auditRowNode)
-	if !ok {
-		return store.AuditListPage{}, fmt.Errorf(
-			"backend: node list audit rows: %w", domain.ErrNotImplemented,
-		)
-	}
-	return target.ListAuditRows(ctx, filter)
+	return s.node.ListAuditRows(ctx, filter)
 }

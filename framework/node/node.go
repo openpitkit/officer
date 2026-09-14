@@ -391,6 +391,12 @@ type Node interface {
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.AccountAdjustmentRecord, error)
 
+	// ListAdjustmentRows returns adjustments matching filter, with total count
+	// before paging.
+	ListAdjustmentRows(
+		ctx context.Context, filter store.AdjustmentListFilter,
+	) (store.AdjustmentListPage, error)
+
 	// SubmitOrder records the order, runs the engine pre-trade, persists the
 	// lifecycle events and final status, and audits the action. missing decides
 	// whether the order's account, when it does not exist yet, is registered
@@ -400,14 +406,43 @@ type Node interface {
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (domain.Order, error)
 
+	// SubmitOrderWithAttestation runs SubmitOrder and, in the same store
+	// transaction, stamps an attestation onto each lifecycle event it records:
+	// attestFor receives the persisted order and the engine pre-trade result and
+	// returns the attestor applied to every event, so a verdict and its
+	// attestation are durable together or not at all. It returns the recorded
+	// order with the engine result. missing follows SubmitOrder.
+	SubmitOrderWithAttestation(
+		ctx context.Context,
+		o domain.Order,
+		missing domain.MissingAccountPolicy,
+		caller domain.Caller,
+		attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
+	) (domain.Order, engine.OrderResult, error)
+
 	// SubmitImmediate records the order, runs the engine pre-trade and, on accept,
 	// commits and settles the fill in the same engine call at the captured lock
 	// price, persists the lifecycle (filled on accept, rejected on reject), and
 	// returns the recorded order with the engine immediate result. missing follows
-	// SubmitOrder. It does not audit; the backend audits approval_issued.
+	// SubmitOrder. It does not audit the submission itself - the backend audits
+	// approval_issued - but it audits the settled execution report and any
+	// engine block the fill raised.
 	SubmitImmediate(
 		ctx context.Context, o domain.Order,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
+	) (domain.Order, engine.ImmediateResult, error)
+
+	// SubmitImmediateWithAttestation runs SubmitImmediate and, in the same store
+	// transaction, stamps an attestation onto each lifecycle and settling event
+	// it records: attestFor receives the persisted order and the engine immediate
+	// result and returns the attestor applied to every event. missing follows
+	// SubmitOrder; auditing is as for SubmitImmediate.
+	SubmitImmediateWithAttestation(
+		ctx context.Context,
+		o domain.Order,
+		missing domain.MissingAccountPolicy,
+		caller domain.Caller,
+		attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 	) (domain.Order, engine.ImmediateResult, error)
 
 	// ConfirmOrder adds one idempotent history event for an untouched workflow
@@ -416,6 +451,15 @@ type Node interface {
 	// domain.ErrExecutionReportRequired.
 	ConfirmOrder(
 		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+	) (domain.Order, error)
+
+	// ConfirmOrderWithAttestation runs ConfirmOrder and stamps the attestation
+	// attest returns onto the confirmation event in the same store transaction.
+	ConfirmOrderWithAttestation(
+		ctx context.Context,
+		order domain.ExternalID,
+		caller domain.Caller,
+		attest store.EventAttestor,
 	) (domain.Order, error)
 
 	// CancelOrder synthesizes a cancellation report for an untouched workflow
@@ -429,10 +473,30 @@ type Node interface {
 		caller domain.Caller,
 	) (domain.Order, engine.ExecutionReportResult, error)
 
+	// CancelOrderWithAttestation runs CancelOrder and stamps the attestation
+	// attest returns onto the cancellation event in the same store transaction.
+	CancelOrderWithAttestation(
+		ctx context.Context,
+		order domain.ExternalID,
+		leavesQuantity string,
+		caller domain.Caller,
+		attest store.EventAttestor,
+	) (domain.Order, engine.ExecutionReportResult, error)
+
 	// ApplyExecutionReport serializes reports on the account pipeline, records the
 	// resulting order state, and audits the action.
 	ApplyExecutionReport(
 		ctx context.Context, in domain.ExecutionReportInput, caller domain.Caller,
+	) (engine.ExecutionReportResult, error)
+
+	// ApplyExecutionReportWithAttestation runs ApplyExecutionReport and stamps
+	// the attestation attest returns onto each report event it records, in the
+	// same store transaction as the event.
+	ApplyExecutionReportWithAttestation(
+		ctx context.Context,
+		in domain.ExecutionReportInput,
+		caller domain.Caller,
+		attest store.EventAttestor,
 	) (engine.ExecutionReportResult, error)
 
 	// PersistEventAttestation stamps the signed attestation envelope onto the
@@ -491,6 +555,12 @@ type Node interface {
 		ctx context.Context, account domain.AccountID, source domain.Source,
 	) ([]domain.Trade, error)
 
+	// ListTradeRows returns trades matching filter, with total count before
+	// paging.
+	ListTradeRows(
+		ctx context.Context, filter store.TradeListFilter,
+	) (store.TradeListPage, error)
+
 	// ListAudit returns the most recent n audit rows, newest first.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
 
@@ -499,6 +569,12 @@ type Node interface {
 	ListAuditFiltered(
 		ctx context.Context, filter domain.AuditFilter, n int,
 	) ([]domain.AuditRow, error)
+
+	// ListAuditRows returns audit rows matching filter, with total count before
+	// paging.
+	ListAuditRows(
+		ctx context.Context, filter store.AuditListFilter,
+	) (store.AuditListPage, error)
 
 	// AppendAudit persists one audit row stamped with the caller. It is the seam
 	// the backend uses to record control-plane actions that have no node-mutating

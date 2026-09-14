@@ -115,13 +115,6 @@ func (s *Service) ApplyExecutionReport(
 	if err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
 	}
-	attesting, ok := n.(executionReportAttestingNode)
-	if !ok {
-		return engine.ExecutionReportResult{}, Attestation{}, fmt.Errorf(
-			"backend: execution-report attestation unsupported: %w",
-			domain.ErrNotImplemented,
-		)
-	}
 	var att Attestation
 	attPriority := 0
 	attest := eventAttestor(
@@ -196,7 +189,7 @@ func (s *Service) ApplyExecutionReport(
 			}
 		},
 	)
-	result, err := attesting.ApplyExecutionReportWithAttestation(
+	result, err := n.ApplyExecutionReportWithAttestation(
 		ctx, in, caller, attest)
 	if err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
@@ -338,11 +331,5 @@ func sortTradesNewestFirst(trades []domain.Trade) {
 func (s *Service) ListTradeRows(
 	ctx context.Context, filter store.TradeListFilter,
 ) (store.TradeListPage, error) {
-	target, ok := s.node.(tradeRowNode)
-	if !ok {
-		return store.TradeListPage{}, fmt.Errorf(
-			"backend: node list trade rows: %w", domain.ErrNotImplemented,
-		)
-	}
-	return target.ListTradeRows(ctx, filter)
+	return s.node.ListTradeRows(ctx, filter)
 }
