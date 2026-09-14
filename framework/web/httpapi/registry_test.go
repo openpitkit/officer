@@ -19,8 +19,11 @@ package httpapi
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -348,6 +351,110 @@ func TestNewRouterCustomMCPPath(t *testing.T) {
 	)
 	if rec.Code != http.StatusOK || rec.Body.String() != "mcp" {
 		t.Fatalf("custom MCP = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// mcpBodyRead is what the MCP test handler observed of one request body: the
+// bytes it managed to read and the read error, in the shape the MCP SDK sees
+// when it drains the body with io.ReadAll.
+type mcpBodyRead struct {
+	body []byte
+	err  error
+}
+
+// newMCPBodyLimitRouter builds a router whose MCP handler drains the request
+// body like the MCP SDK does and reports each read on reads.
+func newMCPBodyLimitRouter(
+	t *testing.T, limit int64, reads chan<- mcpBodyRead,
+) http.Handler {
+	t.Helper()
+	var registry RouteRegistry
+	router, err := NewRouter(RouterConfig{
+		Routes:         &registry,
+		Authorizer:     AllowAll{},
+		CallerResolver: testCallerResolver,
+		SPA: fstest.MapFS{
+			"index.html": {Data: []byte("<html></html>")},
+		},
+		MCP: http.StripPrefix(
+			"/mcp",
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				reads <- mcpBodyRead{body: body, err: err}
+				if err != nil {
+					http.Error(w, "failed to read body", http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}),
+		),
+		MCPPath:   "/mcp",
+		BodyLimit: BodyLimitPolicy(limit, nil),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	return router
+}
+
+// TestNewRouterMCPOversizeBodyIsCutAtLimit checks that the MCP mount sits
+// behind the same body limit as every route: the handler never reads past the
+// limit, whether the client declares the length or streams it, and the read
+// error answers 400 like an ordinary route's decode error.
+func TestNewRouterMCPOversizeBodyIsCutAtLimit(t *testing.T) {
+	t.Parallel()
+
+	const limit = 64
+	oversize := strings.Repeat("x", limit+1)
+	tests := []struct {
+		name string
+		body func() io.Reader
+		want int64
+	}{
+		{
+			name: "declared length",
+			body: func() io.Reader { return strings.NewReader(oversize) },
+			want: limit + 1,
+		},
+		{
+			// A non-bytes reader leaves Content-Length undeclared, as a
+			// chunked transfer does, so only the read itself can stop the body.
+			name: "undeclared length",
+			body: func() io.Reader {
+				return io.LimitReader(strings.NewReader(oversize), limit+1)
+			},
+			want: -1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			reads := make(chan mcpBodyRead, 1)
+			router := newMCPBodyLimitRouter(t, limit, reads)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/mcp", tt.body())
+			if req.ContentLength != tt.want {
+				t.Fatalf("Content-Length = %d, want %d", req.ContentLength, tt.want)
+			}
+			router.ServeHTTP(rec, req)
+			var read mcpBodyRead
+			select {
+			case read = <-reads:
+			default:
+				t.Fatalf("MCP handler did not run; status = %d", rec.Code)
+			}
+			var tooLarge *http.MaxBytesError
+			if !errors.As(read.err, &tooLarge) {
+				t.Fatalf("MCP handler read error = %v, want *http.MaxBytesError", read.err)
+			}
+			if len(read.body) > limit {
+				t.Fatalf("MCP handler read %d bytes, want at most %d", len(read.body), limit)
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+		})
 	}
 }
 

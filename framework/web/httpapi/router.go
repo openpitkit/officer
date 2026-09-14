@@ -103,7 +103,7 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 		if mcpPath == "" {
 			mcpPath = "/mcp"
 		}
-		router.Mount(mcpPath, cfg.MCP)
+		router.Mount(mcpPath, LimitBody(cfg.BodyLimit)(cfg.MCP))
 	}
 	for _, mount := range cfg.ExtraMounts {
 		register(router, mount.Method, mount.Pattern, mount.Handler)
