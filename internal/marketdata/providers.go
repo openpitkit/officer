@@ -22,6 +22,24 @@ import (
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
+// FirstPartyProviders returns the providers the default composition registers,
+// in registration order.
+func FirstPartyProviders() []fwmarketdata.Provider {
+	return []fwmarketdata.Provider{
+		IBProvider(),
+		BinanceProvider(),
+		KrakenProvider(),
+		CoinbaseProvider(),
+		AlpacaProvider(),
+		OKXProvider(),
+		BybitProvider(),
+		OANDAProvider(),
+		FinnhubProvider(),
+		BYOProvider(),
+		MockProvider(),
+	}
+}
+
 // IBProvider describes the Interactive Brokers connector.
 func IBProvider() fwmarketdata.Provider {
 	return fwmarketdata.Provider{

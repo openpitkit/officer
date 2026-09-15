@@ -86,19 +86,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	b.SetCallerResolver(func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{Principal: domain.PrincipalOperator}, nil
 	})
-	for _, provider := range []fwmarketdata.Provider{
-		appmarketdata.IBProvider(),
-		appmarketdata.BinanceProvider(),
-		appmarketdata.KrakenProvider(),
-		appmarketdata.CoinbaseProvider(),
-		appmarketdata.AlpacaProvider(),
-		appmarketdata.OKXProvider(),
-		appmarketdata.BybitProvider(),
-		appmarketdata.OANDAProvider(),
-		appmarketdata.FinnhubProvider(),
-		appmarketdata.BYOProvider(),
-		appmarketdata.MockProvider(),
-	} {
+	for _, provider := range appmarketdata.FirstPartyProviders() {
 		if err := b.RegisterMarketDataProvider(provider); err != nil {
 			return fmt.Errorf("officer: register market data provider: %w", err)
 		}

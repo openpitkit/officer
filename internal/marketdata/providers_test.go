@@ -191,24 +191,12 @@ func testProviderExternalID(label string) domain.ExternalID {
 	return domain.ExternalID(label)
 }
 
-// firstPartyRegistry registers the first-party providers explicitly, in the
-// order the Officer composition registers them.
+// firstPartyRegistry registers the first-party providers in the order the
+// default composition registers them.
 func firstPartyRegistry(t *testing.T) *fwmarketdata.Registry {
 	t.Helper()
 	registry := fwmarketdata.NewRegistry()
-	for _, provider := range []fwmarketdata.Provider{
-		IBProvider(),
-		BinanceProvider(),
-		KrakenProvider(),
-		CoinbaseProvider(),
-		AlpacaProvider(),
-		OKXProvider(),
-		BybitProvider(),
-		OANDAProvider(),
-		FinnhubProvider(),
-		BYOProvider(),
-		MockProvider(),
-	} {
+	for _, provider := range FirstPartyProviders() {
 		if err := registry.Register(provider); err != nil {
 			t.Fatalf("register provider %s: %v", provider.Type, err)
 		}

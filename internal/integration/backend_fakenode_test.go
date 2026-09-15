@@ -1616,23 +1616,11 @@ func newOfficerService(
 }
 
 // firstPartyMarketDataRegistry registers the first-party market-data providers
-// explicitly, in the order the Officer composition registers them.
+// in the order the default composition registers them.
 func firstPartyMarketDataRegistry(t *testing.T) *marketdata.Registry {
 	t.Helper()
 	registry := marketdata.NewRegistry()
-	for _, provider := range []marketdata.Provider{
-		appmarketdata.IBProvider(),
-		appmarketdata.BinanceProvider(),
-		appmarketdata.KrakenProvider(),
-		appmarketdata.CoinbaseProvider(),
-		appmarketdata.AlpacaProvider(),
-		appmarketdata.OKXProvider(),
-		appmarketdata.BybitProvider(),
-		appmarketdata.OANDAProvider(),
-		appmarketdata.FinnhubProvider(),
-		appmarketdata.BYOProvider(),
-		appmarketdata.MockProvider(),
-	} {
+	for _, provider := range appmarketdata.FirstPartyProviders() {
 		if err := registry.Register(provider); err != nil {
 			t.Fatalf("register market data provider %s: %v", provider.Type, err)
 		}
