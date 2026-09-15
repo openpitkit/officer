@@ -46,7 +46,11 @@ func AuthorizeMiddleware(a Authorizer, identifier string) Middleware {
 				WriteErr(w, domain.ErrForbidden)
 				return
 			}
-			caller := auth.CallerFromContext(r.Context())
+			caller, err := auth.CallerFromContext(r.Context())
+			if err != nil {
+				WriteErr(w, err)
+				return
+			}
 			if err := a.Authorize(r.Context(), caller, identifier); err != nil {
 				WriteErr(w, err)
 				return

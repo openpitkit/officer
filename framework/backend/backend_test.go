@@ -227,7 +227,7 @@ func TestListsOrderNewestFirst(t *testing.T) {
 							At: r.At, ExternalID: r.ExternalID,
 						})
 					}
-					got, err := method.list(context.Background(), &Service{node: n})
+					got, err := method.list(systemCtx(), &Service{node: n})
 					if err != nil {
 						t.Fatalf("%s: %v", method.name, err)
 					}

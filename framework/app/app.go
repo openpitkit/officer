@@ -314,8 +314,8 @@ func (a *App) Service() backend.ControlPlane {
 
 // RecordServiceLifecycle appends an audit row for a process-level lifecycle
 // request accepted by the serve wrapper, attributed to the caller stamped into
-// ctx (auth.LookupCaller) as it is, an explicit system caller included. A ctx
-// with no stamped caller is rejected before anything is written.
+// ctx as it is, an explicit system caller included. A ctx with no stamped
+// caller is rejected before anything is written.
 func (a *App) RecordServiceLifecycle(
 	ctx context.Context,
 	action domain.AuditAction,
@@ -324,9 +324,9 @@ func (a *App) RecordServiceLifecycle(
 	if a == nil || a.node == nil {
 		return errors.New("app: nil node")
 	}
-	caller, ok := auth.LookupCaller(ctx)
-	if !ok {
-		return errors.New("app: service lifecycle request has no resolved caller")
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return fmt.Errorf("app: service lifecycle request: %w", err)
 	}
 	return a.node.AppendAudit(ctx, store.AuditEntry{
 		Action: action,

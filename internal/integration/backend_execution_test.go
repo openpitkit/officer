@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"errors"
 	"slices"
 	"testing"
@@ -50,7 +49,7 @@ func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
 		OrderStatus:  domain.OrderStatusFilled,
 	}
 
-	_, _, err := svc.ApplyExecutionReport(context.Background(), report)
+	_, _, err := svc.ApplyExecutionReport(systemCtx(), report)
 	if !errors.Is(err, domain.ErrTerminalOrder) {
 		t.Fatalf("ApplyExecutionReport terminal = %v, want terminal order", err)
 	}
@@ -83,7 +82,7 @@ func TestService_ApplyExecutionReportForceBypassesTerminalGuard(t *testing.T) {
 		OrderStatus:  domain.OrderStatusFilled,
 	}
 
-	if _, _, err := svc.ApplyExecutionReport(context.Background(), report); err != nil {
+	if _, _, err := svc.ApplyExecutionReport(systemCtx(), report); err != nil {
 		t.Fatalf("ApplyExecutionReport force: %v", err)
 	}
 	if len(fn.execReports) != 1 || fn.execReports[0].Order != orderID {
@@ -119,7 +118,7 @@ func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
 		OrderStatus:  domain.OrderStatusFilled,
 	}
 
-	_, att, err := svc.ApplyExecutionReport(context.Background(), report)
+	_, att, err := svc.ApplyExecutionReport(systemCtx(), report)
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -130,7 +129,7 @@ func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
 		t.Fatalf("report must persist one attestation, calls=%+v", fn.persistAttestationCalls)
 	}
 	// The attestation binds the fill event: GetOrder surfaces it on that event.
-	detail, err := svc.GetOrder(context.Background(), orderID.String())
+	detail, err := svc.GetOrder(systemCtx(), orderID.String())
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
@@ -172,7 +171,7 @@ func TestService_ApplyExecutionReportAttestsNoTradeCommission(t *testing.T) {
 		OrderStatus: domain.OrderStatusCancelled,
 	}
 
-	result, _, err := svc.ApplyExecutionReport(context.Background(), report)
+	result, _, err := svc.ApplyExecutionReport(systemCtx(), report)
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -213,7 +212,7 @@ func TestService_ApplyExecutionReportSigningFailureFailsClosed(t *testing.T) {
 		OrderStatus:  domain.OrderStatusFilled,
 	}
 
-	_, _, err := svc.ApplyExecutionReport(context.Background(), report)
+	_, _, err := svc.ApplyExecutionReport(systemCtx(), report)
 	if !errors.Is(err, signer.signErr) {
 		t.Fatalf("ApplyExecutionReport error = %v, want signing failure", err)
 	}
@@ -252,7 +251,7 @@ func TestService_ApplyExecutionReportSignsAllEventsAndReturnsFill(t *testing.T) 
 		OrderStatus:    domain.OrderStatusCancelled,
 	}
 
-	_, att, err := svc.ApplyExecutionReport(context.Background(), report)
+	_, att, err := svc.ApplyExecutionReport(systemCtx(), report)
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -295,7 +294,7 @@ func TestService_ApplyExecutionReportMissingAttestationFailsClosed(t *testing.T)
 		Status:     domain.OrderStatusAccepted,
 	}
 
-	_, _, err := svc.ApplyExecutionReport(context.Background(), domain.ExecutionReportInput{
+	_, _, err := svc.ApplyExecutionReport(systemCtx(), domain.ExecutionReportInput{
 		Order:          orderID,
 		Account:        "acc-1",
 		BaseAsset:      "AAPL",
@@ -332,7 +331,7 @@ func TestService_ApplyExecutionReportStatusLifecycleReachesNode(t *testing.T) {
 		OrderStatus: domain.OrderStatusCommitted,
 	}
 
-	if _, _, err := svc.ApplyExecutionReport(context.Background(), report); err != nil {
+	if _, _, err := svc.ApplyExecutionReport(systemCtx(), report); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
 	if len(fn.execReports) != 1 ||
@@ -354,7 +353,7 @@ func TestService_ApplyExecutionReportRejectsInvalidStatusBeforeNode(t *testing.T
 		Status:     domain.OrderStatusSubmitted,
 	}
 
-	_, _, err := svc.ApplyExecutionReport(context.Background(), domain.ExecutionReportInput{
+	_, _, err := svc.ApplyExecutionReport(systemCtx(), domain.ExecutionReportInput{
 		Order:        orderID,
 		Account:      "acc-1",
 		BaseAsset:    "AAPL",

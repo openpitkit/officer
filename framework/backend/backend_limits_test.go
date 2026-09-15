@@ -215,7 +215,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 
 	n := &limitTestNode{}
 	svc := newLimitTestService(t, n)
-	ctx := context.Background()
+	ctx := systemCtx()
 	for _, tc := range targets {
 		t.Run(tc.name, func(t *testing.T) {
 			callsBefore := n.deleteCalls
@@ -262,7 +262,7 @@ func TestServicePutSpotFundsPnlBoundsLimitValidatesCurrencyBeforeNode(t *testing
 
 	n := &limitTestNode{}
 	svc := newLimitTestService(t, n)
-	ctx := context.Background()
+	ctx := systemCtx()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			callsBefore := n.putCalls

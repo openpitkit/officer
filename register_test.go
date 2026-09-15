@@ -52,7 +52,7 @@ import (
 )
 
 func TestRegisterBuildUsesPopulatedMCPCatalog(t *testing.T) {
-	ctx := context.Background()
+	ctx := auth.ContextWithCaller(context.Background(), auth.SystemCaller())
 	builder := frameworkapp.NewBuilder()
 	if err := Register(
 		builder, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
@@ -300,7 +300,7 @@ func TestRecordServiceLifecycleRejectsUnresolvedCaller(t *testing.T) {
 	err = app.RecordServiceLifecycle(
 		ctx, domain.AuditActionRestartService, "restart service requested",
 	)
-	if err == nil || !strings.Contains(err.Error(), "no resolved caller") {
+	if err == nil || !strings.Contains(err.Error(), "no caller in context") {
 		t.Errorf("RecordServiceLifecycle without a caller = %v, want the missing caller named", err)
 	}
 	after, err := realm.ListAudit(ctx, 1000)

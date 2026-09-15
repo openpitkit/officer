@@ -52,7 +52,7 @@ func (s *principalStoreSource) SubmitDropCopyOrder(
 
 func TestMCPGuardPersistsOperatorPrincipal(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := systemCtx()
 	st, err := sqlite.New(
 		filepath.Join(t.TempDir(), "mcp-principal.db"),
 		domain.DefaultRealm,

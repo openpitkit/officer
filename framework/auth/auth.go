@@ -26,6 +26,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -38,14 +39,14 @@ type CallerResolver func(*http.Request) (domain.Caller, error)
 // package-private type keeps the key from colliding with other context values.
 type callerContextKey struct{}
 
-// systemCaller is the attribution used when no caller was stamped: a startup or
-// internal system action. Surfaces stamp their own caller (see
-// ContextWithCaller); an unstamped context is therefore system-initiated. It
-// carries SourceSystem and NO principal: a system action has no actor, so its
-// audit/record rows store a NULL actor reference (Source=system marks the
-// channel). A literal "system" principal would reference a non-existent
-// dictionary row and be rejected by the strict actor resolution.
-var systemCaller = domain.Caller{Source: domain.SourceSystem}
+// SystemCaller is the attribution of an action the service takes on its own
+// behalf: SourceSystem and no principal, so its audit and record rows store a
+// NULL actor reference while the source marks the channel. Every internal entry
+// point stamps it explicitly with ContextWithCaller; nothing infers it from an
+// unstamped context.
+func SystemCaller() domain.Caller {
+	return domain.Caller{Source: domain.SourceSystem}
+}
 
 // ContextWithCaller returns a copy of ctx carrying caller. Each surface
 // resolves the caller server-side and stamps it here; the source is never read
@@ -55,19 +56,14 @@ func ContextWithCaller(ctx context.Context, caller domain.Caller) context.Contex
 	return context.WithValue(ctx, callerContextKey{}, caller)
 }
 
-// LookupCaller returns the caller stamped into ctx and whether one was stamped.
-// Unlike CallerFromContext it does not default an unstamped ctx to the system.
-func LookupCaller(ctx context.Context) (domain.Caller, bool) {
+// CallerFromContext returns the caller stamped into ctx. An unstamped context
+// is an error: control-plane mutations attribute their audit and record rows to
+// the caller, and a surface that forgot to stamp one must fail rather than
+// write rows under a guessed identity.
+func CallerFromContext(ctx context.Context) (domain.Caller, error) {
 	c, ok := ctx.Value(callerContextKey{}).(domain.Caller)
-	return c, ok
-}
-
-// CallerFromContext returns the caller stamped into ctx, or the system caller
-// when none was set. Control-plane mutations attribute their audit/record rows
-// to this caller, so an unstamped context is safely attributed to the system.
-func CallerFromContext(ctx context.Context) domain.Caller {
-	if c, ok := ctx.Value(callerContextKey{}).(domain.Caller); ok {
-		return c
+	if !ok {
+		return domain.Caller{}, fmt.Errorf("auth: no caller in context: %w", domain.ErrInvalid)
 	}
-	return systemCaller
+	return c, nil
 }

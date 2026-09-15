@@ -19,7 +19,6 @@ package integration_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/csv"
 	"errors"
 	"slices"
@@ -67,7 +66,7 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				reset()
 				if _, err := svc.SubmitOrderToken(
-					context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate,
+					systemCtx(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate,
 				); err != nil {
 					t.Fatalf("SubmitOrderToken workflow: %v", err)
 				}
@@ -81,7 +80,7 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				reset()
 				if _, err := svc.SubmitOrderToken(
-					context.Background(), sampleOrder(), backend.SubmitModeImmediate, domain.MissingAccountCreate,
+					systemCtx(), sampleOrder(), backend.SubmitModeImmediate, domain.MissingAccountCreate,
 				); err != nil {
 					t.Fatalf("SubmitOrderToken immediate: %v", err)
 				}
@@ -96,7 +95,7 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				tok := mustWorkflow(t, svc)
 				reset()
 				if _, _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token,
+					systemCtx(), tok.OrderExternalID, tok.Token,
 				); err != nil {
 					t.Fatalf("ConfirmExecution: %v", err)
 				}
@@ -111,13 +110,13 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token,
+					systemCtx(), tok.OrderExternalID, tok.Token,
 				); err != nil {
 					t.Fatalf("first confirm: %v", err)
 				}
 				reset()
 				order, att, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token,
+					systemCtx(), tok.OrderExternalID, tok.Token,
 				)
 				if err != nil {
 					t.Fatalf("idempotent confirm: %v", err)
@@ -137,13 +136,13 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "10", "operator",
+					systemCtx(), tok.OrderExternalID, tok.Token, "10", "operator",
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				if _, _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token,
+					systemCtx(), tok.OrderExternalID, tok.Token,
 				); !errors.Is(err, domain.ErrExecutionReportRequired) {
 					t.Fatalf("confirm after cancel = %v, want explicit report", err)
 				}
@@ -159,7 +158,7 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				tok := mustWorkflow(t, svc)
 				reset()
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "10", "stale price",
+					systemCtx(), tok.OrderExternalID, tok.Token, "10", "stale price",
 				); err != nil {
 					t.Fatalf("CancelOrder: %v", err)
 				}
@@ -174,13 +173,13 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "10", "setup",
+					systemCtx(), tok.OrderExternalID, tok.Token, "10", "setup",
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "10", "too late",
+					systemCtx(), tok.OrderExternalID, tok.Token, "10", "too late",
 				); !errors.Is(err, domain.ErrExecutionReportRequired) {
 					t.Fatalf("second cancel = %v, want explicit report", err)
 				}
@@ -217,7 +216,7 @@ func TestService_BusinessCSVExportAuditsAndDoesNotReuseBackupAction(t *testing.T
 		GroupCode: "desk-a",
 	}}
 
-	file, err := svc.ExportBusinessCSV(context.Background(),
+	file, err := svc.ExportBusinessCSV(systemCtx(),
 		backend.BusinessCSVExportRequest{
 			Entity:    businesscsv.EntityAccounts,
 			Delimiter: businesscsv.DelimiterPipe,
@@ -276,7 +275,7 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fn.auditCalls = nil
-			file, err := svc.ExportBusinessCSV(context.Background(),
+			file, err := svc.ExportBusinessCSV(systemCtx(),
 				backend.BusinessCSVExportRequest{
 					Entity:    businesscsv.EntityAccounts,
 					Delimiter: businesscsv.DelimiterComma,
@@ -326,7 +325,7 @@ func TestService_BusinessCSVOrderExportKeepsUnreadableLockRow(t *testing.T) {
 		Lock:        []byte{0x01, 0x02, 0x03},
 	}}
 
-	file, err := svc.ExportBusinessCSV(context.Background(),
+	file, err := svc.ExportBusinessCSV(systemCtx(),
 		backend.BusinessCSVExportRequest{
 			Entity:    businesscsv.EntityOrders,
 			Delimiter: businesscsv.DelimiterComma,

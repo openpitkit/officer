@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -53,14 +52,14 @@ func TestService_OrderPresentationUsesConfiguredSeam(t *testing.T) {
 		t.Fatalf("backend.New: %v", err)
 	}
 
-	detail, err := svc.GetOrder(context.Background(), id.String())
+	detail, err := svc.GetOrder(systemCtx(), id.String())
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
 	if detail.DisplayPrice != "101.25" {
 		t.Fatalf("detail display price = %q, want 101.25", detail.DisplayPrice)
 	}
-	page, err := svc.ListOrderRows(context.Background(), store.OrderListFilter{})
+	page, err := svc.ListOrderRows(systemCtx(), store.OrderListFilter{})
 	if err != nil {
 		t.Fatalf("ListOrderRows: %v", err)
 	}
@@ -94,17 +93,17 @@ func TestService_OrderPresentationSurfacesDecodeError(t *testing.T) {
 		t.Fatalf("backend.New: %v", err)
 	}
 
-	if _, err := svc.GetOrder(context.Background(), id.String()); !errors.Is(err, decodeErr) {
+	if _, err := svc.GetOrder(systemCtx(), id.String()); !errors.Is(err, decodeErr) {
 		t.Fatalf("GetOrder error = %v, want corrupt lock", err)
 	}
-	if _, err := svc.ListOrderRows(context.Background(), store.OrderListFilter{}); !errors.Is(err, decodeErr) {
+	if _, err := svc.ListOrderRows(systemCtx(), store.OrderListFilter{}); !errors.Is(err, decodeErr) {
 		t.Fatalf("ListOrderRows error = %v, want corrupt lock", err)
 	}
 }
 
 func TestService_CheckOrderForwardsWithoutFormatValidation(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	// Officer no longer pre-validates the probe account/asset format; the engine
 	// seam parses and rejects bad values downstream. Every probe now reaches the
@@ -129,7 +128,7 @@ func TestService_CheckOrderRoutesAndReturnsPass(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
 	fn.checkResult = domain.CheckResult{Passed: true, WouldLockPrice: "100"}
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	probe := domain.OrderProbe{
 		Account:     "acc-1",
@@ -164,7 +163,7 @@ func TestService_CheckOrderReturnsRejectAndBlock(t *testing.T) {
 			Account: "acc-1", Code: "account_blocked", Reason: "kill switch",
 		},
 	}
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	out, err := svc.CheckOrder(ctx, domain.OrderProbe{
 		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",

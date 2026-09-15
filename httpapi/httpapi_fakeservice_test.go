@@ -842,7 +842,10 @@ func (f *fakeService) SubmitOrderToken(
 func (f *fakeService) SubmitDropCopyOrder(
 	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 ) (domain.Order, error) {
-	caller := auth.CallerFromContext(ctx)
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Order{}, err
+	}
 	f.missingAccount = missing
 	o.DropCopy = true
 	o.Source = caller.Source

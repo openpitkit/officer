@@ -185,8 +185,12 @@ func TestServiceLifecycleHandlerAuditsBeforeAccepting(t *testing.T) {
 	controller := &serviceLifecycleController{
 		requests: requests,
 		record: func(ctx context.Context, action lifecycleAction) error {
+			caller, err := auth.CallerFromContext(ctx)
+			if err != nil {
+				return err
+			}
 			recordedAction = action
-			recordedCaller = auth.CallerFromContext(ctx)
+			recordedCaller = caller
 			return nil
 		},
 	}

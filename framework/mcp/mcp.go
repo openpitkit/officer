@@ -452,7 +452,13 @@ func Handler(
 	}
 	handler.sdk = sdkmcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *sdkmcp.Server {
-			caller := auth.CallerFromContext(r.Context())
+			caller, err := auth.CallerFromContext(r.Context())
+			if err != nil {
+				// serveHTTP stamps the resolved caller before the SDK sees the
+				// request, so this is a wiring defect; the session opens with
+				// every tool refused rather than under a guessed identity.
+				return buildServer(reg, src, version, nil, domain.Caller{})
+			}
 			return buildServer(reg, src, version, authorizer, caller)
 		},
 		nil,

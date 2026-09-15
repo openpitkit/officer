@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -29,7 +28,7 @@ import (
 func TestService_CreateAccountValidates(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	if _, err := svc.CreateAccount(ctx, domain.Account{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for empty id, got %v", err)
@@ -55,7 +54,7 @@ func TestService_CreateAccountValidates(t *testing.T) {
 func TestService_CreateAssetValidatesAndRoutes(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	if _, err := svc.CreateAsset(ctx, domain.Asset{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for empty asset code, got %v", err)
@@ -84,7 +83,7 @@ func TestService_CreateAssetValidatesAndRoutes(t *testing.T) {
 func TestService_CreateAssetClassValidatesAndRoutes(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	if _, err := svc.CreateAssetClass(ctx, domain.AssetClass{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for empty class code, got %v", err)
@@ -112,7 +111,7 @@ func TestService_CreateAssetClassValidatesAndRoutes(t *testing.T) {
 func TestService_UpdateAssetClassValidatesAndRoutes(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 	fn.assetClasses = []domain.AssetClass{{Code: "equity"}}
 
 	if _, err := svc.UpdateAssetClass(ctx, "equity", domain.AssetClass{Code: ""}); !errors.Is(err, domain.ErrInvalid) {
@@ -130,7 +129,7 @@ func TestService_UpdateAssetClassValidatesAndRoutes(t *testing.T) {
 func TestService_UpdateAssetRenames(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 	fn.assets = []domain.Asset{{Code: "AAPL", Title: "Apple"}}
 
 	if _, err := svc.UpdateAsset(ctx, "AAPL", domain.Asset{Code: ""}); !errors.Is(err, domain.ErrInvalid) {
@@ -151,7 +150,7 @@ func TestService_UpdateAssetRenames(t *testing.T) {
 func TestService_BlockAccountValidates(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	if err := svc.BlockAccount(ctx, "", "risk", domain.MissingAccountCreate); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for empty id, got %v", err)
@@ -173,7 +172,7 @@ func TestListBalanceRowsRejectsDenominatedRangeWithoutCurrency(t *testing.T) {
 	fn := &fakeNode{}
 	svc := newOfficerService(t, fn, nil, nil)
 	min := "50"
-	_, err := svc.ListBalanceRows(context.Background(), store.BalanceListFilter{
+	_, err := svc.ListBalanceRows(systemCtx(), store.BalanceListFilter{
 		RealizedPnl: store.DenominatedDecimalRangeFilter{
 			Range: store.DecimalRangeFilter{Min: &min},
 		},

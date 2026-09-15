@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -47,7 +46,7 @@ func dropCopyOrder(id domain.ExternalID) domain.Order {
 func TestService_SubmitDropCopyOrderRejectsRefusingMissingAccount(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+	ctx := auth.ContextWithCaller(systemCtx(), domain.Caller{
 		Source: domain.SourcePanel, Principal: "operator",
 	})
 
@@ -71,7 +70,7 @@ func TestService_SubmitDropCopyOrderRejectsRefusingMissingAccount(t *testing.T) 
 func TestService_SubmitDropCopyOrderRequiresMissingAccountChoice(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+	ctx := auth.ContextWithCaller(systemCtx(), domain.Caller{
 		Source: domain.SourcePanel, Principal: "operator",
 	})
 
@@ -92,7 +91,7 @@ func TestService_SubmitOrderTokenRequiresMissingAccountChoice(t *testing.T) {
 	svc, fn := newTestService(t)
 
 	if _, err := svc.SubmitOrderToken(
-		context.Background(), sampleOrder(), backend.SubmitModeHold, "",
+		systemCtx(), sampleOrder(), backend.SubmitModeHold, "",
 	); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("SubmitOrderToken(empty) = %v, want ErrInvalid", err)
 	}
@@ -104,7 +103,7 @@ func TestService_SubmitOrderTokenRequiresMissingAccountChoice(t *testing.T) {
 func TestService_SubmitDropCopyOrderGeneratesExternalIDWhenAbsent(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+	ctx := auth.ContextWithCaller(systemCtx(), domain.Caller{
 		Source: domain.SourcePanel, Principal: "operator",
 	})
 
@@ -138,7 +137,7 @@ func TestService_SubmitOrderTokenRefusesDropCopy(t *testing.T) {
 	order.DropCopy = true
 
 	if _, err := svc.SubmitOrderToken(
-		context.Background(), order, "hold", domain.MissingAccountCreate,
+		systemCtx(), order, "hold", domain.MissingAccountCreate,
 	); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("SubmitOrderToken error = %v, want ErrInvalid", err)
 	}
@@ -154,7 +153,7 @@ func TestService_SubmitDropCopyOrderPreservesSuppliedIDAndConflictsOnDuplicate(
 	svc, fn := newTestService(t)
 	id := mdID("drop-copy-order")
 	o := dropCopyOrder(id)
-	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+	ctx := auth.ContextWithCaller(systemCtx(), domain.Caller{
 		Source: domain.SourcePanel, Principal: "operator",
 	})
 
@@ -195,7 +194,7 @@ func TestService_DropCopyExecutionReportRemainsUnsignedAndKeepsCaller(t *testing
 	order.Principal = "submitter"
 	order.Status = domain.OrderStatusCommitted
 	fn.orders[id] = order
-	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+	ctx := auth.ContextWithCaller(systemCtx(), domain.Caller{
 		Source: domain.SourcePanel, Principal: "operator",
 	})
 
@@ -243,12 +242,12 @@ func TestService_DropCopySigningShortcutsAreRefused(t *testing.T) {
 
 	for name, call := range map[string]func() error{
 		"confirm": func() error {
-			_, _, err := svc.ConfirmExecution(context.Background(), id.String(), "token")
+			_, _, err := svc.ConfirmExecution(systemCtx(), id.String(), "token")
 			return err
 		},
 		"cancel": func() error {
 			_, _, err := svc.CancelOrder(
-				context.Background(), id.String(), "token", "", "",
+				systemCtx(), id.String(), "token", "", "",
 			)
 			return err
 		},

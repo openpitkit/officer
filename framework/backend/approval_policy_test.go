@@ -63,7 +63,7 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 	const orderID = "ord-1"
 	recorder := &reachRecorder{}
 	svc := &Service{node: recorder}
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	_, _, err := svc.CancelOrder(ctx, orderID, "token", "",
 		"typo\ncancel approval 00000000 order ord-2 reason=routine")
@@ -179,7 +179,7 @@ func TestImmediateTokenIsNoShortcut(t *testing.T) {
 			},
 		}},
 	}
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	for _, tc := range []struct {
 		name string

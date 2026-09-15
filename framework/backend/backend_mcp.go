@@ -90,7 +90,11 @@ func (s *Service) SetMcpAccess(
 	if !s.hasCommand(command) {
 		return fmt.Errorf("mcp command %q: %w", command, domain.ErrNotFound)
 	}
-	return s.node.SetMcpAccess(ctx, command, enabled, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.SetMcpAccess(ctx, command, enabled, caller)
 }
 
 func (s *Service) hasCommand(command string) bool {

@@ -100,7 +100,10 @@ func (s *Service) ApplyExecutionReport(
 	if err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
 	}
-	caller := auth.CallerFromContext(ctx)
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return engine.ExecutionReportResult{}, Attestation{}, err
+	}
 	if isDropCopyOrder(stored.Order) {
 		// Drop-copy never enforced a pre-trade verdict, so signing its lifecycle
 		// would falsely represent risk approval.

@@ -1138,7 +1138,7 @@ var businessCSVColumnSpecs = buildBusinessCSVColumnSpecs()
 var businessCSVSentinelSpecs = buildBusinessCSVSentinelSpecs()
 
 func TestClientDataBackupRoundTripDrift(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemCtx()
 	_, source := newClientDataDriftRealm(t, ctx)
 	seedClientDataDriftRealm(t, ctx, source)
 
@@ -1169,7 +1169,7 @@ func TestClientDataBackupRoundTripDrift(t *testing.T) {
 }
 
 func TestClientDataBusinessCSVExportDrift(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemCtx()
 	_, source := newClientDataDriftRealm(t, ctx)
 	seedClientDataDriftRealm(t, ctx, source)
 

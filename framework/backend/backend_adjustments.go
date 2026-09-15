@@ -57,8 +57,12 @@ func (s *Service) ApplyAdjustment(
 		}
 		req.RealizedPnl = normalized
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
 	return s.node.ApplyAdjustment(
-		ctx, account, externalID, req, missing, auth.CallerFromContext(ctx),
+		ctx, account, externalID, req, missing, caller,
 	)
 }
 
@@ -86,13 +90,17 @@ func (s *Service) SetBalanceRealizedPnl(
 	if err != nil {
 		return domain.Balance{}, err
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Balance{}, err
+	}
 	return s.node.SetBalanceRealizedPnl(
 		ctx,
 		account,
 		asset,
 		normalized,
 		missing,
-		auth.CallerFromContext(ctx),
+		caller,
 	)
 }
 

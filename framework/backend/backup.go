@@ -36,7 +36,11 @@ func (s *Service) ExportBackup(
 	scope backup.Scope,
 ) (backup.Archive, string, error) {
 	n := s.node
-	archive, err := n.ExportBackup(ctx, scope, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return backup.Archive{}, "", err
+	}
+	archive, err := n.ExportBackup(ctx, scope, caller)
 	if err != nil {
 		return backup.Archive{}, "", fmt.Errorf("backend: export backup: %w", err)
 	}
@@ -108,8 +112,12 @@ func (s *Service) RestoreBackup(
 	restoreOpts.ValidateMarketDataInstance = func(instance domain.MarketDataInstance) error {
 		return validateMarketDataProvider(s.registry, instance)
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return backup.RestoreSummary{}, err
+	}
 	summary, sink, err := n.RestoreBackup(
-		ctx, archive, restoreOpts, auth.CallerFromContext(ctx),
+		ctx, archive, restoreOpts, caller,
 	)
 	var reloadErr error
 	if reloadErr = s.signer.Reload(context.WithoutCancel(ctx)); reloadErr != nil {
@@ -454,7 +462,11 @@ func (s *Service) ResetDatabase(ctx context.Context) error {
 		s.md.Stop()
 		mdStopped = true
 	}
-	sink, err := n.ResetDatabase(ctx, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	sink, err := n.ResetDatabase(ctx, caller)
 	if err != nil {
 		if mdStopped {
 			err = errors.Join(err, s.restoreMarketDataAfterBackup(sink))

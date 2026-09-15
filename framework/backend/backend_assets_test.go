@@ -88,7 +88,7 @@ func TestServiceUpdateAssetRenameDoesNotRestartMarketData(t *testing.T) {
 	svc := newAssetUpdateTestService(t, n, md)
 
 	updated, err := svc.UpdateAsset(
-		context.Background(), "USD", assetUpdateTestAsset("USDX"),
+		systemCtx(), "USD", assetUpdateTestAsset("USDX"),
 	)
 	if err != nil {
 		t.Fatalf("UpdateAsset: %v", err)
@@ -112,7 +112,7 @@ func TestServiceUpdateAssetSameCodeDoesNotRestartMarketData(t *testing.T) {
 	svc := newAssetUpdateTestService(t, n, md)
 
 	updated, err := svc.UpdateAsset(
-		context.Background(), "USD", assetUpdateTestAsset("USD"),
+		systemCtx(), "USD", assetUpdateTestAsset("USD"),
 	)
 	if err != nil {
 		t.Fatalf("UpdateAsset: %v", err)

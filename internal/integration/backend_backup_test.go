@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -50,7 +49,7 @@ func TestService_ExportBackupRoutesScopeCallerAndFilename(t *testing.T) {
 	}
 
 	archive, filename, err := svc.ExportBackup(
-		auth.ContextWithCaller(context.Background(), caller),
+		auth.ContextWithCaller(systemCtx(), caller),
 		scope,
 	)
 	if err != nil {
@@ -77,7 +76,7 @@ func TestService_ExportBackupNodeError(t *testing.T) {
 	fn.backupErr = exportErr
 
 	if _, _, err := svc.ExportBackup(
-		context.Background(),
+		systemCtx(),
 		backup.Scope{All: true},
 	); !errors.Is(err, exportErr) {
 		t.Fatalf("ExportBackup error = %v, want export error", err)
@@ -96,7 +95,7 @@ func TestService_ResetDatabaseRoutesCallerAndRestartsMarketData(t *testing.T) {
 	}
 
 	if err := svc.ResetDatabase(
-		auth.ContextWithCaller(context.Background(), caller),
+		auth.ContextWithCaller(systemCtx(), caller),
 	); err != nil {
 		t.Fatalf("ResetDatabase: %v", err)
 	}
@@ -118,7 +117,7 @@ func TestService_ResetDatabaseNodeError(t *testing.T) {
 	resetErr := errors.New("reset failed")
 	fn.resetErr = resetErr
 
-	if err := svc.ResetDatabase(context.Background()); !errors.Is(err, resetErr) {
+	if err := svc.ResetDatabase(systemCtx()); !errors.Is(err, resetErr) {
 		t.Fatalf("ResetDatabase error = %v, want reset error", err)
 	}
 }
@@ -135,7 +134,7 @@ func TestService_RestartMarketDataReadoptsCurrentSink(t *testing.T) {
 	current := &backendTestSink{}
 	fn.currentSink = current
 
-	if err := svc.RestartMarketData(context.Background()); err != nil {
+	if err := svc.RestartMarketData(systemCtx()); err != nil {
 		t.Fatalf("RestartMarketData: %v", err)
 	}
 	if md.stops != 1 || md.restarts != 1 {
@@ -153,7 +152,7 @@ func TestService_RestartMarketDataReadoptsCurrentSink(t *testing.T) {
 func TestService_RestartMarketDataNoRuntimeIsNoop(t *testing.T) {
 	t.Parallel()
 	svc, _ := newTestService(t)
-	if err := svc.RestartMarketData(context.Background()); err != nil {
+	if err := svc.RestartMarketData(systemCtx()); err != nil {
 		t.Fatalf("RestartMarketData with no runtime: %v", err)
 	}
 }
@@ -162,7 +161,7 @@ func TestService_RestoreBackupGeneralSettingsDoesNotStopMarketData(t *testing.T)
 	t.Parallel()
 	md := &fakeMarketDataRuntime{}
 	svc, _ := newTestServiceWithMarketDataRuntime(t, md)
-	_, err := svc.RestoreBackup(context.Background(), restoreArchive(
+	_, err := svc.RestoreBackup(systemCtx(), restoreArchive(
 		backup.SectionGeneralSettings,
 	), backup.RestoreOptions{
 		Scope: backup.Scope{All: true},
@@ -181,7 +180,7 @@ func TestService_RestoreBackupAccountOnlyKeepsMarketDataRunning(t *testing.T) {
 	originalSink := &backendTestSink{}
 	md := &fakeMarketDataRuntime{sink: originalSink}
 	svc, _ := newTestServiceWithMarketDataRuntime(t, md)
-	_, err := svc.RestoreBackup(context.Background(), restoreArchive(
+	_, err := svc.RestoreBackup(systemCtx(), restoreArchive(
 		backup.SectionAccountsGroups,
 	), backup.RestoreOptions{
 		Scope: backup.Scope{Sections: []backup.Section{backup.SectionAccountsGroups}},
@@ -207,7 +206,7 @@ func TestService_RestoreBackupResidualRebuildKeepsMarketDataRunning(t *testing.T
 		Skipped:         map[backup.Section]int{},
 		RestartRequired: true,
 	}
-	_, err := svc.RestoreBackup(context.Background(), restoreArchive(
+	_, err := svc.RestoreBackup(systemCtx(), restoreArchive(
 		backup.SectionPositions,
 	), backup.RestoreOptions{
 		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
@@ -228,7 +227,7 @@ func TestService_RestoreBackupMarketDataTopologyRestartsOnce(t *testing.T) {
 	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	sink := &backendTestSink{}
 	fn.restoreSink = sink
-	_, err := svc.RestoreBackup(context.Background(), marketDataTopologyArchive(),
+	_, err := svc.RestoreBackup(systemCtx(), marketDataTopologyArchive(),
 		backup.RestoreOptions{
 			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 			Mode:  backup.RestoreModeOverwrite,
@@ -272,7 +271,7 @@ func TestService_RestoreBackupManualPriceReconcilesOnline(t *testing.T) {
 			},
 		},
 	}
-	_, err := svc.RestoreBackup(context.Background(), archive, backup.RestoreOptions{
+	_, err := svc.RestoreBackup(systemCtx(), archive, backup.RestoreOptions{
 		Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 		Mode:  backup.RestoreModeOverwrite,
 	})
@@ -307,7 +306,7 @@ func TestService_RestoreBackupMarketDataTopologyErrorRestartsReturnedSink(t *tes
 	sink := &backendTestSink{}
 	fn.restoreSink = sink
 	fn.restoreErr = errors.New("restore failed")
-	_, err := svc.RestoreBackup(context.Background(), marketDataTopologyArchive(),
+	_, err := svc.RestoreBackup(systemCtx(), marketDataTopologyArchive(),
 		backup.RestoreOptions{
 			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 			Mode:  backup.RestoreModeOverwrite,
@@ -326,7 +325,7 @@ func TestService_RestoreBackupMarketDataUseSinkErrorStillRestarts(t *testing.T) 
 	md := &fakeMarketDataRuntime{useSinkErr: errors.New("use sink failed")}
 	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.restoreSink = &backendTestSink{}
-	_, err := svc.RestoreBackup(context.Background(), marketDataTopologyArchive(),
+	_, err := svc.RestoreBackup(systemCtx(), marketDataTopologyArchive(),
 		backup.RestoreOptions{
 			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 			Mode:  backup.RestoreModeOverwrite,
@@ -351,7 +350,7 @@ func TestService_RestoreBackupMarketDataRestartErrorIsReturned(t *testing.T) {
 		Skipped:         map[backup.Section]int{},
 		RestartRequired: true,
 	}
-	summary, err := svc.RestoreBackup(context.Background(), marketDataTopologyArchive(),
+	summary, err := svc.RestoreBackup(systemCtx(), marketDataTopologyArchive(),
 		backup.RestoreOptions{
 			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 			Mode:  backup.RestoreModeOverwrite,
@@ -405,7 +404,7 @@ func TestService_RestoreBackupManualReconciliationErrorReturnsSummary(t *testing
 			},
 		},
 	}
-	summary, err := svc.RestoreBackup(context.Background(), archive, backup.RestoreOptions{
+	summary, err := svc.RestoreBackup(systemCtx(), archive, backup.RestoreOptions{
 		Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 		Mode:  backup.RestoreModeOverwrite,
 	})

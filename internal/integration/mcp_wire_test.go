@@ -218,7 +218,7 @@ type submitOrderInput struct {
 	AmountKind     string `json:"amountKind"`
 	AmountValue    string `json:"amountValue"`
 	Price          string `json:"price,omitempty"`
-	Mode           string `json:"mode,omitempty"`
+	Mode           string `json:"mode"`
 	ExternalID     string `json:"id,omitempty"`
 	MissingAccount string `json:"missingAccount"`
 }
@@ -294,7 +294,7 @@ func callTool[Out any](
 	t *testing.T, src frameworkmcp.Source, name string, in any,
 ) *toolResult[Out] {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
 	defer cancel()
 
 	server, err := frameworkmcp.Build(

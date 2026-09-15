@@ -159,10 +159,14 @@ func (s *Service) businessCSVAccounts(
 func (s *Service) auditBusinessCSV(
 	ctx context.Context, action domain.AuditAction, detail string,
 ) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	return s.node.AppendAudit(ctx, store.AuditEntry{
 		Action: action,
 		Detail: detail,
-	}, auth.CallerFromContext(ctx))
+	}, caller)
 }
 
 func businessCSVExportDetail(req BusinessCSVExportRequest) string {

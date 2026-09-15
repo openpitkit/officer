@@ -158,7 +158,7 @@ func TestServiceDeleteAssetForceRestartsMarketData(t *testing.T) {
 	md := &marketDataDeleteTestRuntime{}
 	svc := newMarketDataDeleteTestService(t, n, md)
 
-	if err := svc.DeleteAsset(context.Background(), "USD", true); err != nil {
+	if err := svc.DeleteAsset(systemCtx(), "USD", true); err != nil {
 		t.Fatalf("DeleteAsset: %v", err)
 	}
 	if n.deleteAssetCalls != 1 {
@@ -180,7 +180,7 @@ func TestServiceDeleteAssetWithoutForceRestartsMarketData(t *testing.T) {
 	md := &marketDataDeleteTestRuntime{}
 	svc := newMarketDataDeleteTestService(t, n, md)
 
-	if err := svc.DeleteAsset(context.Background(), "USD", false); err != nil {
+	if err := svc.DeleteAsset(systemCtx(), "USD", false); err != nil {
 		t.Fatalf("DeleteAsset: %v", err)
 	}
 	if n.deleteAssetCalls != 1 {
@@ -208,7 +208,7 @@ func TestServiceMarketDataConfigurationMutationsReachNodeWithoutRestartingMarket
 			name: "set instance enabled",
 			mutate: func(s *Service) error {
 				return s.SetMarketDataInstanceEnabled(
-					context.Background(), "instance-1", true,
+					systemCtx(), "instance-1", true,
 				)
 			},
 			calls: func(n *marketDataDeleteTestNode) int {
@@ -218,7 +218,7 @@ func TestServiceMarketDataConfigurationMutationsReachNodeWithoutRestartingMarket
 		{
 			name: "delete instance",
 			mutate: func(s *Service) error {
-				return s.DeleteMarketDataInstance(context.Background(), "instance-1")
+				return s.DeleteMarketDataInstance(systemCtx(), "instance-1")
 			},
 			calls: func(n *marketDataDeleteTestNode) int {
 				return n.deleteInstanceCalls
@@ -228,7 +228,7 @@ func TestServiceMarketDataConfigurationMutationsReachNodeWithoutRestartingMarket
 			name: "set instrument enabled",
 			mutate: func(s *Service) error {
 				return s.SetMarketDataInstrumentEnabled(
-					context.Background(), "instance-1", "AAPL/USD", true,
+					systemCtx(), "instance-1", "AAPL/USD", true,
 				)
 			},
 			calls: func(n *marketDataDeleteTestNode) int {
@@ -239,7 +239,7 @@ func TestServiceMarketDataConfigurationMutationsReachNodeWithoutRestartingMarket
 			name: "delete instrument",
 			mutate: func(s *Service) error {
 				return s.DeleteMarketDataInstrument(
-					context.Background(), "instance-1", "AAPL/USD",
+					systemCtx(), "instance-1", "AAPL/USD",
 				)
 			},
 			calls: func(n *marketDataDeleteTestNode) int {
@@ -286,7 +286,7 @@ func TestServiceUpsertMarketDataInstrumentDoesNotRestartMarketData(t *testing.T)
 	md := &marketDataDeleteTestRuntime{}
 	svc := newMarketDataDeleteTestService(t, n, md)
 
-	err := svc.UpsertMarketDataInstrument(context.Background(), domain.MarketDataInstrument{
+	err := svc.UpsertMarketDataInstrument(systemCtx(), domain.MarketDataInstrument{
 		Instance:       "instance-1",
 		ExternalSymbol: "AAPL/USD",
 		BaseAsset:      "AAPL",
@@ -315,7 +315,7 @@ func TestServiceDeleteMarketDataRestartFailureReportsDurableDeletion(t *testing.
 	md := &marketDataDeleteTestRuntime{restartErr: restartErr}
 	svc := newMarketDataDeleteTestService(t, n, md)
 
-	err := svc.DeleteAsset(context.Background(), "USD", true)
+	err := svc.DeleteAsset(systemCtx(), "USD", true)
 	if !errors.Is(err, restartErr) {
 		t.Fatalf("DeleteAsset error = %v, want restart error", err)
 	}
@@ -337,7 +337,7 @@ func TestServiceDeleteMarketDataRestartWithNoRuntimeIsNoOp(t *testing.T) {
 	n := &marketDataDeleteTestNode{}
 	svc := newMarketDataDeleteTestService(t, n, nil)
 
-	if err := svc.DeleteAsset(context.Background(), "USD", true); err != nil {
+	if err := svc.DeleteAsset(systemCtx(), "USD", true); err != nil {
 		t.Fatalf("DeleteAsset: %v", err)
 	}
 	if n.deleteAssetCalls != 1 {

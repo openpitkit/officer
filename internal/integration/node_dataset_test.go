@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -29,7 +28,7 @@ import (
 )
 
 func TestNodeHydratesAndResetsItsConfiguredDataset(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemCtx()
 	const realm domain.RealmID = "development-tenant"
 	databasePath := filepath.Join(t.TempDir(), "node.sqlite")
 	newNode := func() node.Node {

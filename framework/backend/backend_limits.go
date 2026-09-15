@@ -61,7 +61,11 @@ func (s *Service) PutRateLimit(
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
-	sink, err := n.PutRateLimit(ctx, limit, missing, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	sink, err := n.PutRateLimit(ctx, limit, missing, caller)
 	return s.finishLimitChangeLocked(sink, err)
 }
 
@@ -81,7 +85,11 @@ func (s *Service) PutOrderSizeLimit(
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
-	sink, err := n.PutOrderSizeLimit(ctx, limit, missing, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	sink, err := n.PutOrderSizeLimit(ctx, limit, missing, caller)
 	return s.finishLimitChangeLocked(sink, err)
 }
 
@@ -104,8 +112,12 @@ func (s *Service) PutSpotFundsPnlBoundsLimit(
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	sink, err := n.PutSpotFundsPnlBoundsLimit(
-		ctx, limit, missing, auth.CallerFromContext(ctx),
+		ctx, limit, missing, caller,
 	)
 	return s.finishLimitChangeLocked(sink, err)
 }
@@ -119,7 +131,11 @@ func (s *Service) DeleteLimit(ctx context.Context, target node.LimitTarget) erro
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
-	sink, err := n.DeleteLimit(ctx, target, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	sink, err := n.DeleteLimit(ctx, target, caller)
 	return s.finishLimitChangeLocked(sink, err)
 }
 

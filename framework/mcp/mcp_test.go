@@ -417,8 +417,12 @@ type callerSource struct {
 }
 
 func (s *callerSource) CommandEnabled(ctx context.Context, _ string) (bool, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return false, err
+	}
 	s.mu.Lock()
-	s.callers = append(s.callers, auth.CallerFromContext(ctx))
+	s.callers = append(s.callers, caller)
 	s.mu.Unlock()
 	return true, nil
 }

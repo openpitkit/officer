@@ -34,6 +34,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer"
 	"go.openpit.dev/officer/framework/app"
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -89,6 +90,7 @@ func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
 	service := built.Service()
+	ctx = auth.ContextWithCaller(ctx, auth.SystemCaller())
 
 	assertHostRouteAdded(t, router)
 	assertHostToolCatalogued(t, service)

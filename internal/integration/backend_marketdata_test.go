@@ -163,7 +163,7 @@ func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 			},
 		},
 	}
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestService_ListMarketDataKeepsManagerSnapshotAfterEngineRebuild(t *testing
 	}
 	liveSink := marketdata.Sink(managerSnapshotSink{})
 	manager.UseSinkProvider(func() marketdata.Sink { return liveSink })
-	if err := manager.Start(context.Background()); err != nil {
+	if err := manager.Start(systemCtx()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer manager.Stop()
@@ -268,7 +268,7 @@ func TestService_ListMarketDataKeepsManagerSnapshotAfterEngineRebuild(t *testing
 
 	liveSink = managerSnapshotSink{}
 	svc := newOfficerService(t, fn, manager, nil)
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestService_ListMarketDataKeepsManagerSnapshotWhileManagerStopped(t *testin
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	if err := manager.Start(context.Background()); err != nil {
+	if err := manager.Start(systemCtx()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(manager.Stop)
@@ -343,7 +343,7 @@ func TestService_ListMarketDataKeepsManagerSnapshotWhileManagerStopped(t *testin
 	}
 
 	svc := newOfficerService(t, fn, manager, nil)
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestService_ListMarketDataSerializesManagerLifecycle(t *testing.T) {
 	svc, _ := newTestServiceWithMarketDataRuntime(t, md)
 	listDone := make(chan error, 1)
 	go func() {
-		_, err := svc.ListMarketData(context.Background())
+		_, err := svc.ListMarketData(systemCtx())
 		listDone <- err
 	}()
 	select {
@@ -380,7 +380,7 @@ func TestService_ListMarketDataSerializesManagerLifecycle(t *testing.T) {
 
 	restartDone := make(chan error, 1)
 	go func() {
-		restartDone <- svc.RestartMarketData(context.Background())
+		restartDone <- svc.RestartMarketData(systemCtx())
 	}()
 	select {
 	case <-md.stopCalled:
@@ -454,7 +454,7 @@ func TestService_ListMarketDataSurfacesAppliedSyntheticInverse(t *testing.T) {
 		QuoteAssetID: testMarketDataAssetID("USD"),
 	}}
 
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -512,7 +512,7 @@ func TestService_ListMarketDataSuppressesInverseForConfiguredDisabledReverse(t *
 		QuoteAssetID: testMarketDataAssetID("USD"),
 	}}
 
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -556,7 +556,7 @@ func TestService_ListMarketDataFlagsStaleQuote(t *testing.T) {
 			},
 		},
 	}
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestService_ListMarketDataDetectsRestartRequired(t *testing.T) {
 		},
 	}
 
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -656,7 +656,7 @@ func TestService_ListMarketDataSurfacesUpdateInterval(t *testing.T) {
 		},
 	}
 
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -679,7 +679,7 @@ func TestService_CreateMarketDataInstanceGeneratesExternalIDAndDefaultLabel(t *t
 	svc, fn := newTestService(t)
 
 	// With no supplied id the store mints one and returns it.
-	created, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+	created, err := svc.CreateMarketDataInstance(systemCtx(), domain.MarketDataInstance{
 		Provider: domain.MarketDataProviderBinance,
 		Enabled:  true,
 	})
@@ -706,7 +706,7 @@ func TestService_CreateMarketDataInstanceHonorsSuppliedExternalID(t *testing.T) 
 	svc, fn := newTestService(t)
 
 	supplied := mdID("operator-supplied")
-	created, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+	created, err := svc.CreateMarketDataInstance(systemCtx(), domain.MarketDataInstance{
 		ExternalID: supplied,
 		Provider:   domain.MarketDataProviderBinance,
 		Enabled:    true,
@@ -729,7 +729,7 @@ func TestService_CreateMarketDataInstancePassesCredentials(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
 
-	_, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+	_, err := svc.CreateMarketDataInstance(systemCtx(), domain.MarketDataInstance{
 		Provider: domain.MarketDataProviderAlpaca,
 		Credentials: `{
 			"apiKey": "key",
@@ -751,7 +751,7 @@ func TestService_CreateMarketDataInstanceRejectsInvalidCredentials(t *testing.T)
 	t.Parallel()
 	svc, fn := newTestService(t)
 
-	_, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+	_, err := svc.CreateMarketDataInstance(systemCtx(), domain.MarketDataInstance{
 		Provider: domain.MarketDataProviderAlpaca,
 		Credentials: `{
 			"apiKey": "key"
@@ -772,7 +772,7 @@ func TestService_CreateMarketDataInstanceRejectsDuplicateLabel(t *testing.T) {
 		{ExternalID: mdID("bn-1"), Provider: domain.MarketDataProviderBinance, Label: "Binance"},
 	}
 
-	_, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+	_, err := svc.CreateMarketDataInstance(systemCtx(), domain.MarketDataInstance{
 		Provider: domain.MarketDataProviderMock,
 		Label:    " binance ",
 	})
@@ -797,7 +797,7 @@ func TestService_UpdateMarketDataInstanceSettingsMergesBlankSecret(t *testing.T)
 	}
 
 	err := svc.UpdateMarketDataInstanceSettings(
-		context.Background(),
+		systemCtx(),
 		mdID("alpaca-1").String(),
 		"Alpaca live",
 		`{"apiKey":"new-key","apiSecret":""}`,
@@ -827,7 +827,7 @@ func TestService_UpdateMarketDataInstanceSettingsRejectsDuplicateLabel(t *testin
 	}
 
 	err := svc.UpdateMarketDataInstanceSettings(
-		context.Background(), mdID("b").String(), "primary", "",
+		systemCtx(), mdID("b").String(), "primary", "",
 	)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("UpdateMarketDataInstanceSettings error = %v, want ErrAlreadyExists", err)
@@ -872,7 +872,7 @@ func TestService_ListMarketDataManualPriceDoesNotRequireRestart(t *testing.T) {
 		},
 	}
 
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -910,7 +910,7 @@ func TestService_ListMarketDataClearedManualHasNoSnapshot(t *testing.T) {
 			BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "", Enabled: true,
 		}},
 	}
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -936,7 +936,7 @@ func TestService_ListMarketDataSurfacesVerifyCapability(t *testing.T) {
 		{ExternalID: mdID("bybit-1"), Provider: domain.MarketDataProviderBybit, Enabled: false},
 	}
 
-	status, err := svc.ListMarketData(context.Background())
+	status, err := svc.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
@@ -969,7 +969,7 @@ func TestService_VerifyMarketDataSymbolUnsupported(t *testing.T) {
 		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
 
-	got, err := svc.VerifyMarketDataSymbol(context.Background(), mdID("mock-1").String(), "AAPL")
+	got, err := svc.VerifyMarketDataSymbol(systemCtx(), mdID("mock-1").String(), "AAPL")
 	if err != nil {
 		t.Fatalf("VerifyMarketDataSymbol: %v", err)
 	}
@@ -982,7 +982,7 @@ func TestService_VerifyMarketDataSymbolUnknownInstance(t *testing.T) {
 	t.Parallel()
 	svc, _ := newTestService(t)
 
-	_, err := svc.VerifyMarketDataSymbol(context.Background(), mdID("missing").String(), "AAPL")
+	_, err := svc.VerifyMarketDataSymbol(systemCtx(), mdID("missing").String(), "AAPL")
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("VerifyMarketDataSymbol(missing) err = %v, want ErrNotFound", err)
 	}
@@ -996,7 +996,7 @@ func TestService_SearchMarketDataSymbolsUnsupported(t *testing.T) {
 	}
 
 	got, err := svc.SearchMarketDataSymbols(
-		context.Background(), mdID("mock-1").String(),
+		systemCtx(), mdID("mock-1").String(),
 		backend.MarketDataSymbolSearchInput{Query: "AAPL"},
 	)
 	if err != nil {
@@ -1012,7 +1012,7 @@ func TestService_SearchMarketDataSymbolsNotFound(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	_, err := svc.SearchMarketDataSymbols(
-		context.Background(), mdID("missing").String(),
+		systemCtx(), mdID("missing").String(),
 		backend.MarketDataSymbolSearchInput{Query: "AAPL"},
 	)
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -1038,7 +1038,7 @@ func TestService_ApplyAdjustmentHonorsSuppliedExternalID(t *testing.T) {
 
 	supplied := mdID("supplied-adj-id")
 	rec, err := svc.ApplyAdjustment(
-		context.Background(), "acc-1", supplied, sampleAdjustmentRequest(), domain.MissingAccountCreate)
+		systemCtx(), "acc-1", supplied, sampleAdjustmentRequest(), domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
@@ -1057,7 +1057,7 @@ func TestService_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 	svc, fn := newTestService(t)
 
 	rec, err := svc.ApplyAdjustment(
-		context.Background(), "acc-1", domain.ExternalID(""), sampleAdjustmentRequest(), domain.MissingAccountCreate)
+		systemCtx(), "acc-1", domain.ExternalID(""), sampleAdjustmentRequest(), domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
@@ -1078,7 +1078,7 @@ func TestService_ApplyAdjustmentDuplicateSuppliedIDConflicts(t *testing.T) {
 	fn.adjustmentErr = fmt.Errorf("append adjustment: %w", domain.ErrAlreadyExists)
 
 	_, err := svc.ApplyAdjustment(
-		context.Background(), "acc-1", mdID("dup-adj-id"), sampleAdjustmentRequest(), domain.MissingAccountCreate)
+		systemCtx(), "acc-1", mdID("dup-adj-id"), sampleAdjustmentRequest(), domain.MissingAccountCreate)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
 	}

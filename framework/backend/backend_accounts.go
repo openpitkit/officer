@@ -65,7 +65,11 @@ func (s *Service) CreateAccount(
 	if err := validateOptionalCurrency(account.Currency); err != nil {
 		return domain.Account{}, err
 	}
-	return s.node.CreateAccount(ctx, account, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Account{}, err
+	}
+	return s.node.CreateAccount(ctx, account, caller)
 }
 
 // UpdateAccount validates the old and new account metadata and updates the
@@ -86,11 +90,15 @@ func (s *Service) UpdateAccount(
 	if err := domain.ValidateTitle(account.Title); err != nil {
 		return domain.Account{}, err
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Account{}, err
+	}
 	return s.node.UpdateAccount(
 		ctx,
 		oldID,
 		account,
-		auth.CallerFromContext(ctx),
+		caller,
 	)
 }
 
@@ -121,7 +129,11 @@ func (s *Service) DeleteAccount(
 	if err := domain.ValidateAccountID(id); err != nil {
 		return err
 	}
-	return s.node.DeleteAccount(ctx, id, force, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.DeleteAccount(ctx, id, force, caller)
 }
 
 func (s *Service) setAccountBlocked(
@@ -137,8 +149,12 @@ func (s *Service) setAccountBlocked(
 	if err := validateMissingAccountPolicy(id, missing); err != nil {
 		return err
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	return s.node.SetAccountBlocked(
-		ctx, id, blocked, reason, missing, auth.CallerFromContext(ctx),
+		ctx, id, blocked, reason, missing, caller,
 	)
 }
 
@@ -175,8 +191,12 @@ func (s *Service) SetAccountGroup(
 			return err
 		}
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	return s.node.SetAccountGroup(
-		ctx, id, groupCode, missing, auth.CallerFromContext(ctx),
+		ctx, id, groupCode, missing, caller,
 	)
 }
 
@@ -190,7 +210,11 @@ func (s *Service) SetAccountCurrency(
 	if err := validateOptionalCurrency(currency); err != nil {
 		return err
 	}
-	return s.node.SetAccountCurrency(ctx, id, currency, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.SetAccountCurrency(ctx, id, currency, caller)
 }
 
 // SetAccountNotes validates the account id and notes and replaces the
@@ -204,5 +228,9 @@ func (s *Service) SetAccountNotes(
 	if err := domain.ValidateNotes(notes); err != nil {
 		return err
 	}
-	return s.node.SetAccountNotes(ctx, id, notes, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.SetAccountNotes(ctx, id, notes, caller)
 }

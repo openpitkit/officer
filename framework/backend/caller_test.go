@@ -15,31 +15,16 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-package auth_test
+package backend
 
 import (
 	"context"
-	"errors"
-	"testing"
 
 	"go.openpit.dev/officer/framework/auth"
-	"go.openpit.dev/officer/framework/domain"
 )
 
-func TestCallerFromContextRejectsUnstampedContext(t *testing.T) {
-	caller, err := auth.CallerFromContext(context.Background())
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("CallerFromContext on a bare context = (%+v, %v), want ErrInvalid", caller, err)
-	}
-}
-
-func TestCallerFromContextReturnsStampedSystemCaller(t *testing.T) {
-	system := auth.SystemCaller()
-	caller, err := auth.CallerFromContext(
-		auth.ContextWithCaller(context.Background(), system),
-	)
-	if err != nil || caller != system {
-		t.Fatalf("CallerFromContext on a system-stamped context = (%+v, %v), want (%+v, nil)",
-			caller, err, system)
-	}
+// systemCtx returns a context stamped with the system caller, the identity
+// every test reaches the service with unless it stamps its own.
+func systemCtx() context.Context {
+	return auth.ContextWithCaller(context.Background(), auth.SystemCaller())
 }

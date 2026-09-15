@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -50,7 +49,7 @@ func (r *blockingStopMarketDataRuntime) Stop() {
 func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	// account scope on order_size_limit is not allowed - validation must reject
 	// before the node is touched.
@@ -70,7 +69,7 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	// Account "acc-new" does not exist in the fake node (getAccountErr is not set,
 	// but no account record exists either). PutRateLimit must succeed regardless: a
@@ -93,7 +92,7 @@ func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	limit := domain.LimitRate{
 		Scope:     domain.ScopeBroker,
@@ -118,7 +117,7 @@ func TestService_PutLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	sink := &backendTestSink{}
 	fn.restoreSink = sink
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	limit := domain.LimitRate{
 		Scope:     domain.ScopeBroker,
@@ -153,7 +152,7 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 	}
 	putDone := make(chan error, 1)
 	go func() {
-		putDone <- svc.PutRateLimit(context.Background(), limit, domain.MissingAccountCreate)
+		putDone <- svc.PutRateLimit(systemCtx(), limit, domain.MissingAccountCreate)
 	}()
 	select {
 	case <-md.stopEntered:
@@ -163,7 +162,7 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 
 	restartDone := make(chan error, 1)
 	go func() {
-		restartDone <- svc.RestartMarketData(context.Background())
+		restartDone <- svc.RestartMarketData(systemCtx())
 	}()
 	select {
 	case <-md.stopEntered:
@@ -208,7 +207,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 
 	rateDone := make(chan error, 1)
 	go func() {
-		rateDone <- svc.PutRateLimit(context.Background(), domain.LimitRate{
+		rateDone <- svc.PutRateLimit(systemCtx(), domain.LimitRate{
 			Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
 		}, domain.MissingAccountCreate)
 	}()
@@ -220,7 +219,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 
 	orderDone := make(chan error, 1)
 	go func() {
-		orderDone <- svc.PutOrderSizeLimit(context.Background(), domain.LimitOrderSize{
+		orderDone <- svc.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
 			Scope:       domain.ScopeAccountUnderlyingAsset,
 			Account:     "acc-1",
 			Asset:       "AAPL",
@@ -251,7 +250,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	// broker scope is not allowed for SpotFunds P&L bounds; target validation must reject.
 	bad := node.LimitTarget{
@@ -286,7 +285,7 @@ func TestService_DeleteLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	sink := &backendTestSink{}
 	fn.restoreSink = sink
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	target := node.LimitTarget{
 		Policy: domain.PolicyRateLimit,

@@ -96,7 +96,7 @@ func listMarketDataTestInstrumentStatus(
 		},
 		registry: marketdata.NewRegistry(),
 	}
-	status, err := service.ListMarketData(context.Background())
+	status, err := service.ListMarketData(systemCtx())
 	if err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}

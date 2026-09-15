@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -34,7 +33,7 @@ func TestService_AggregatesReads(t *testing.T) {
 		RateLimits: []domain.LimitRate{{Scope: domain.ScopeBroker}},
 	}
 	fn.audit = []domain.AuditRow{{ExternalID: domain.ExternalID("audit-1")}}
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	accounts, err := svc.ListAccounts(ctx)
 	if err != nil || len(accounts) != 2 {
@@ -55,7 +54,7 @@ func TestService_ListMcpAccessMergesDefaults(t *testing.T) {
 	svc, fn := newTestService(t)
 	// Override one default-on command off and one default-off command on.
 	fn.mcpAccess = map[string]bool{"health": false, "set_limit": true}
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	commands, err := svc.ListMcpAccess(ctx)
 	if err != nil {
@@ -79,7 +78,7 @@ func TestService_ListMcpAccessMergesDefaults(t *testing.T) {
 func TestService_SetMcpAccessValidatesCommand(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	if err := svc.SetMcpAccess(ctx, "not_a_command", true); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("want ErrNotFound for unknown command, got %v", err)
@@ -101,7 +100,7 @@ func TestService_CommandEnabledResolves(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
 	fn.mcpAccess = map[string]bool{"check_order": false}
-	ctx := context.Background()
+	ctx := systemCtx()
 
 	if enabled, err := svc.CommandEnabled(ctx, "check_order"); err != nil || enabled {
 		t.Fatalf("check_order override should disable: enabled=%v err=%v", enabled, err)

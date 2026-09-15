@@ -85,8 +85,12 @@ func (f *approvalFakeSource) SubmitOrderToken(
 func (f *approvalFakeSource) SubmitDropCopyOrder(
 	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 ) (frameworkmcp.SubmitDropCopyOrderResult, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return frameworkmcp.SubmitDropCopyOrderResult{}, err
+	}
 	f.dropCopyCalls++
-	f.dropCopyCaller = auth.CallerFromContext(ctx)
+	f.dropCopyCaller = caller
 	f.submitCalls = append(f.submitCalls, submitCall{order: o, missing: missing})
 	return f.dropCopyResult, f.submitErr
 }

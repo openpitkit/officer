@@ -358,7 +358,10 @@ func (s *Service) submitOrderToken(
 	// a duplicate id is rejected by the store with domain.ErrAlreadyExists.
 
 	n := s.node
-	caller := auth.CallerFromContext(ctx)
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return ApprovalToken{}, err
+	}
 	submitApprovalID, err := newNonce()
 	if err != nil {
 		return ApprovalToken{}, err
@@ -580,7 +583,10 @@ func (s *Service) SubmitDropCopyOrder(
 		return domain.Order{}, fmt.Errorf("backend: %w", err)
 	}
 	o.DropCopy = true
-	caller := auth.CallerFromContext(ctx)
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Order{}, err
+	}
 
 	n := s.node
 
@@ -639,7 +645,10 @@ func (s *Service) ConfirmExecution(
 		return domain.Order{}, Attestation{}, err
 	}
 
-	caller := auth.CallerFromContext(ctx)
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
 	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
@@ -740,7 +749,10 @@ func (s *Service) CancelOrder(
 		return domain.Order{}, Attestation{}, err
 	}
 
-	caller := auth.CallerFromContext(ctx)
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
 	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
@@ -1230,9 +1242,13 @@ func rejectReasons(
 // auditSigning records a signing-key/config action via the group node, the same
 // AppendAudit path used by MCP-access writes.
 func (s *Service) auditSigning(ctx context.Context, action domain.AuditAction, detail string) error {
-	n := s.node
-	if err := n.AppendAudit(ctx, store.AuditEntry{Action: action, Detail: detail},
-		auth.CallerFromContext(ctx)); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.node.AppendAudit(
+		ctx, store.AuditEntry{Action: action, Detail: detail}, caller,
+	); err != nil {
 		return fmt.Errorf("backend: audit %s: %w", action, err)
 	}
 	return nil
@@ -1247,11 +1263,15 @@ func (s *Service) auditApproval(
 	action domain.AuditAction,
 	detail string,
 ) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	if err := n.AppendAudit(ctx, store.AuditEntry{
 		Action:  action,
 		Account: account,
 		Detail:  detail,
-	}, auth.CallerFromContext(ctx)); err != nil {
+	}, caller); err != nil {
 		return fmt.Errorf("backend: audit %s: %w", action, err)
 	}
 	return nil

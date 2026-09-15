@@ -46,7 +46,11 @@ func (s *Service) CreateGroup(
 	if err := validateOptionalCurrency(group.Currency); err != nil {
 		return domain.AccountGroup{}, err
 	}
-	return s.node.CreateGroup(ctx, group, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	return s.node.CreateGroup(ctx, group, caller)
 }
 
 // UpdateGroup validates the old and new group metadata and updates the group.
@@ -64,7 +68,11 @@ func (s *Service) UpdateGroup(
 	if err := domain.ValidateTitle(group.Title); err != nil {
 		return domain.AccountGroup{}, err
 	}
-	return s.node.UpdateGroup(ctx, oldCode, group, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	return s.node.UpdateGroup(ctx, oldCode, group, caller)
 }
 
 // ListGroups returns every group in the realm.
@@ -121,7 +129,11 @@ func (s *Service) SetGroupNotes(ctx context.Context, code, notes string) error {
 	if err := domain.ValidateNotes(notes); err != nil {
 		return err
 	}
-	return s.node.SetGroupNotes(ctx, code, notes, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.SetGroupNotes(ctx, code, notes, caller)
 }
 
 // SetGroupCurrency validates and sets or clears a group-level currency.
@@ -132,7 +144,11 @@ func (s *Service) SetGroupCurrency(ctx context.Context, code, currency string) e
 	if err := validateOptionalCurrency(currency); err != nil {
 		return err
 	}
-	return s.node.SetGroupCurrency(ctx, code, currency, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.SetGroupCurrency(ctx, code, currency, caller)
 }
 
 // SetDefaultGroupCurrency sets or clears the reserved default group currency.
@@ -140,7 +156,11 @@ func (s *Service) SetDefaultGroupCurrency(ctx context.Context, currency string) 
 	if err := validateOptionalCurrency(currency); err != nil {
 		return err
 	}
-	return s.node.SetDefaultGroupCurrency(ctx, currency, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.SetDefaultGroupCurrency(ctx, currency, caller)
 }
 
 // SetGroupBlocked validates the code and blocks or unblocks the group with
@@ -154,7 +174,11 @@ func (s *Service) SetGroupBlocked(
 	if err := domain.ValidateBlockReason(reason); err != nil {
 		return err
 	}
-	return s.node.SetGroupBlocked(ctx, code, blocked, reason, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.SetGroupBlocked(ctx, code, blocked, reason, caller)
 }
 
 // DeleteGroup validates the code and removes the group. Destructive
@@ -163,7 +187,11 @@ func (s *Service) DeleteGroup(ctx context.Context, code string, force bool) erro
 	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
-	return s.node.DeleteGroup(ctx, code, force, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.DeleteGroup(ctx, code, force, caller)
 }
 
 func validateOptionalCurrency(currency string) error {

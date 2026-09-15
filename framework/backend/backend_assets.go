@@ -60,7 +60,11 @@ func (s *Service) CreateAsset(
 	if err := domain.ValidateTitle(asset.AssetClass); err != nil {
 		return domain.Asset{}, err
 	}
-	return s.node.CreateAsset(ctx, asset, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	return s.node.CreateAsset(ctx, asset, caller)
 }
 
 // UpdateAsset validates the old and new asset metadata and updates the asset,
@@ -80,7 +84,11 @@ func (s *Service) UpdateAsset(
 	if err := domain.ValidateTitle(asset.AssetClass); err != nil {
 		return domain.Asset{}, err
 	}
-	return s.node.UpdateAsset(ctx, oldCode, asset, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	return s.node.UpdateAsset(ctx, oldCode, asset, caller)
 }
 
 // --- Asset classes ---------------------------------------------------------
@@ -123,7 +131,11 @@ func (s *Service) CreateAssetClass(
 	if err := domain.ValidateNotes(class.Notes); err != nil {
 		return domain.AssetClass{}, err
 	}
-	return s.node.CreateAssetClass(ctx, class, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.AssetClass{}, err
+	}
+	return s.node.CreateAssetClass(ctx, class, caller)
 }
 
 // UpdateAssetClass validates the old and new class metadata and updates the
@@ -143,7 +155,11 @@ func (s *Service) UpdateAssetClass(
 	if err := domain.ValidateNotes(class.Notes); err != nil {
 		return domain.AssetClass{}, err
 	}
-	return s.node.UpdateAssetClass(ctx, oldCode, class, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.AssetClass{}, err
+	}
+	return s.node.UpdateAssetClass(ctx, oldCode, class, caller)
 }
 
 // DeleteAssetClass validates the code and removes the class, clearing the asset
@@ -152,7 +168,11 @@ func (s *Service) DeleteAssetClass(ctx context.Context, code string, force bool)
 	if err := domain.ValidateAssetClassID(code); err != nil {
 		return err
 	}
-	return s.node.DeleteAssetClass(ctx, code, force, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.DeleteAssetClass(ctx, code, force, caller)
 }
 
 // DeleteAsset validates the code and removes the asset, cascading dependents
@@ -165,7 +185,11 @@ func (s *Service) DeleteAsset(ctx context.Context, code string, force bool) erro
 	defer s.marketDataMu.Unlock()
 
 	n := s.node
-	if err := n.DeleteAsset(ctx, code, force, auth.CallerFromContext(ctx)); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := n.DeleteAsset(ctx, code, force, caller); err != nil {
 		return err
 	}
 	// Both delete modes re-apply the market-data configuration. A forced delete

@@ -599,7 +599,11 @@ func (s *Service) CreateMarketDataInstance(
 	if err := validateMarketDataInstance(s.registry, instance); err != nil {
 		return domain.MarketDataInstance{}, err
 	}
-	return n.CreateMarketDataInstance(ctx, instance, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.MarketDataInstance{}, err
+	}
+	return n.CreateMarketDataInstance(ctx, instance, caller)
 }
 
 // SetMarketDataInstanceEnabled toggles one source instance.
@@ -613,8 +617,12 @@ func (s *Service) SetMarketDataInstanceEnabled(
 	if err != nil {
 		return fmt.Errorf("market-data instance id: %w", err)
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	return s.node.SetMarketDataInstanceEnabled(
-		ctx, instanceID, enabled, auth.CallerFromContext(ctx),
+		ctx, instanceID, enabled, caller,
 	)
 }
 
@@ -660,8 +668,12 @@ func (s *Service) UpdateMarketDataInstanceSettings(
 	if err := validateMarketDataInstance(s.registry, instance); err != nil {
 		return err
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	return n.UpdateMarketDataInstanceSettings(
-		ctx, instanceID, instance.Label, instance.Credentials, auth.CallerFromContext(ctx),
+		ctx, instanceID, instance.Label, instance.Credentials, caller,
 	)
 }
 
@@ -677,7 +689,11 @@ func (s *Service) DeleteMarketDataInstance(
 	if err != nil {
 		return fmt.Errorf("market-data instance id: %w", err)
 	}
-	return s.node.DeleteMarketDataInstance(ctx, instanceID, auth.CallerFromContext(ctx))
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.DeleteMarketDataInstance(ctx, instanceID, caller)
 }
 
 // UpsertMarketDataInstrument validates and persists one instrument mapping,
@@ -699,7 +715,11 @@ func (s *Service) UpsertMarketDataInstrument(
 		return err
 	}
 	n := s.node
-	if err := n.UpsertMarketDataInstrument(ctx, instrument, auth.CallerFromContext(ctx)); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := n.UpsertMarketDataInstrument(ctx, instrument, caller); err != nil {
 		return err
 	}
 	if s.md != nil {
@@ -746,8 +766,12 @@ func (s *Service) SetMarketDataInstrumentEnabled(
 	if externalSymbol == "" {
 		return fmt.Errorf("market-data instrument: %w", domain.ErrInvalid)
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	return s.node.SetMarketDataInstrumentEnabled(
-		ctx, instance, externalSymbol, enabled, auth.CallerFromContext(ctx),
+		ctx, instance, externalSymbol, enabled, caller,
 	)
 }
 
@@ -766,8 +790,12 @@ func (s *Service) DeleteMarketDataInstrument(
 	if externalSymbol == "" {
 		return fmt.Errorf("market-data instrument: %w", domain.ErrInvalid)
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 	return s.node.DeleteMarketDataInstrument(
-		ctx, instance, externalSymbol, auth.CallerFromContext(ctx),
+		ctx, instance, externalSymbol, caller,
 	)
 }
 

@@ -250,7 +250,7 @@ func TestRestoreBackupInstallsRegistryBackedMarketDataValidator(t *testing.T) {
 	archive, opts := backupRestoreTestArchive("100")
 	archive.Data.MarketDataInstances[0].Provider = "unknown"
 
-	_, err := svc.RestoreBackup(context.Background(), archive, opts)
+	_, err := svc.RestoreBackup(systemCtx(), archive, opts)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("RestoreBackup error = %v, want ErrInvalid", err)
 	}
@@ -278,7 +278,7 @@ func TestRestoreBackupRegistryRejectedInstanceFailsRestore(t *testing.T) {
 	archive, opts := backupRestoreTestArchive("100")
 	archive.Data.MarketDataInstances[0].Credentials = []byte(`{"token":"reject"}`)
 
-	_, err := svc.RestoreBackup(context.Background(), archive, opts)
+	_, err := svc.RestoreBackup(systemCtx(), archive, opts)
 	if !errors.Is(err, domain.ErrInvalid) ||
 		!strings.Contains(err.Error(), "rejected provider credentials") {
 		t.Fatalf("RestoreBackup error = %v, want provider credential rejection", err)
@@ -300,7 +300,7 @@ func TestRestoreBackupRejectsMissingOrUnknownCredentialFormBeforeNode(t *testing
 			svc, n, _ := newBackupRestoreTestService(t, false)
 			archive, opts := backupRestoreTestArchive("100")
 			archive.CredentialForm = test.form
-			if _, err := svc.RestoreBackup(context.Background(), archive, opts); !errors.Is(err, domain.ErrInvalid) {
+			if _, err := svc.RestoreBackup(systemCtx(), archive, opts); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("RestoreBackup credential form %q = %v, want ErrInvalid", test.form, err)
 			}
 			if n.restoreCalls != 0 {
@@ -317,7 +317,7 @@ func TestRestoreBackupReloadsSignerFromCommittedStore(t *testing.T) {
 	signer := &backupRestoreTestSigner{}
 	svc.signer = signer
 	archive, opts := backupRestoreTestArchive("100")
-	if _, err := svc.RestoreBackup(context.Background(), archive, opts); err != nil {
+	if _, err := svc.RestoreBackup(systemCtx(), archive, opts); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 	if signer.reloads != 1 {
@@ -330,7 +330,7 @@ func TestRestoreBackupManualPricePushesCommittedInstrument(t *testing.T) {
 
 	svc, _, md := newBackupRestoreTestService(t, false)
 	archive, opts := backupRestoreTestArchive("125.5")
-	if _, err := svc.RestoreBackup(context.Background(), archive, opts); err != nil {
+	if _, err := svc.RestoreBackup(systemCtx(), archive, opts); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 	assertBackupRestoreManualPush(t, md, "125.5")
@@ -341,7 +341,7 @@ func TestRestoreBackupManualPriceClearPushesCommittedInstrument(t *testing.T) {
 
 	svc, _, md := newBackupRestoreTestService(t, false)
 	archive, opts := backupRestoreTestArchive("")
-	if _, err := svc.RestoreBackup(context.Background(), archive, opts); err != nil {
+	if _, err := svc.RestoreBackup(systemCtx(), archive, opts); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 	assertBackupRestoreManualPush(t, md, "")
@@ -352,7 +352,7 @@ func TestRestoreBackupMissingCommittedManualInstrumentFails(t *testing.T) {
 
 	svc, _, md := newBackupRestoreTestService(t, true)
 	archive, opts := backupRestoreTestArchive("125.5")
-	_, err := svc.RestoreBackup(context.Background(), archive, opts)
+	_, err := svc.RestoreBackup(systemCtx(), archive, opts)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("RestoreBackup error = %v, want not found", err)
 	}
@@ -373,7 +373,7 @@ func TestRestoreBackupTopologyChangeRestartsWithoutManualPush(t *testing.T) {
 	svc, _, md := newBackupRestoreTestService(t, false)
 	archive, opts := backupRestoreTestArchive("125.5")
 	archive.Data.MarketDataInstruments[0].BaseAsset = "MSFT"
-	if _, err := svc.RestoreBackup(context.Background(), archive, opts); err != nil {
+	if _, err := svc.RestoreBackup(systemCtx(), archive, opts); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 	if md.stops != 1 || md.restarts != 1 {
@@ -393,7 +393,7 @@ func TestRestoreBackupReloadFailureStillRestartsMarketData(t *testing.T) {
 	archive, opts := backupRestoreTestArchive("125.5")
 	archive.Data.MarketDataInstruments[0].BaseAsset = "MSFT"
 
-	_, err := svc.RestoreBackup(context.Background(), archive, opts)
+	_, err := svc.RestoreBackup(systemCtx(), archive, opts)
 	if !errors.Is(err, reloadErr) {
 		t.Fatalf("RestoreBackup error = %v, want signer reload failure", err)
 	}
@@ -464,7 +464,7 @@ func TestRestoreBackupRejectsUnmeaningfulManifestSource(t *testing.T) {
 
 			svc, n, _ := newBackupRestoreTestService(t, false)
 			archive := backupRestoreSourceArchive(tt.source)
-			_, err := svc.RestoreBackup(context.Background(), archive,
+			_, err := svc.RestoreBackup(systemCtx(), archive,
 				backup.RestoreOptions{Mode: backup.RestoreModeOverwrite})
 			if !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("RestoreBackup error = %v, want ErrInvalid", err)
@@ -489,7 +489,7 @@ func TestRestoreBackupPassesManifestSourceThroughUnchanged(t *testing.T) {
 	const source = "  raw test source  "
 	svc, n, _ := newBackupRestoreTestService(t, false)
 	archive := backupRestoreSourceArchive(source)
-	if _, err := svc.RestoreBackup(context.Background(), archive,
+	if _, err := svc.RestoreBackup(systemCtx(), archive,
 		backup.RestoreOptions{Mode: backup.RestoreModeOverwrite}); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
