@@ -1019,6 +1019,18 @@ type RealmStore interface {
 		ctx context.Context, st domain.OrderSettlement,
 	) (domain.ExternalID, error)
 
+	// RecordOrderSettlementWithAttestation records st exactly as
+	// RecordOrderSettlement does and, before the transaction commits, offers
+	// every appended event to attest, stamping the returned attestation onto
+	// that event as PutEventAttestation would. An attestor error rolls the whole
+	// settlement back; an event the attestor skips and a settlement carrying no
+	// event at all yield domain.ErrInvalid with nothing written.
+	RecordOrderSettlementWithAttestation(
+		ctx context.Context,
+		st domain.OrderSettlement,
+		attest EventAttestor,
+	) (domain.ExternalID, error)
+
 	// RecordOrderSubmission persists the submitted order and submitted event,
 	// invokes apply with the persisted order while the same SQL transaction is
 	// open, and then persists the returned settlement in that transaction.
@@ -1028,6 +1040,21 @@ type RealmStore interface {
 		order domain.Order,
 		submitted domain.OrderEvent,
 		apply func(domain.Order) (domain.OrderSettlement, error),
+	) (domain.Order, error)
+
+	// RecordOrderSubmissionWithAttestation records the submission exactly as
+	// RecordOrderSubmission does and, once apply has returned, offers the
+	// submitted event and then every settlement event to attest inside the same
+	// transaction, stamping each returned attestation onto its event. An
+	// attestor error rolls the whole submission back; an event the attestor
+	// skips, or a settlement apply returned without events, yields
+	// domain.ErrInvalid with nothing written.
+	RecordOrderSubmissionWithAttestation(
+		ctx context.Context,
+		o domain.Order,
+		submitted domain.OrderEvent,
+		apply func(domain.Order) (domain.OrderSettlement, error),
+		attest EventAttestor,
 	) (domain.Order, error)
 
 	// --- Order events (machine record, addressed by external id) ---

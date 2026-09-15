@@ -35,24 +35,6 @@ import (
 
 // --- trading ----------------------------------------------------------------
 
-type orderSubmissionAttestingRealm interface {
-	RecordOrderSubmissionWithAttestation(
-		ctx context.Context,
-		o domain.Order,
-		submitted domain.OrderEvent,
-		apply func(domain.Order) (domain.OrderSettlement, error),
-		attest store.EventAttestor,
-	) (domain.Order, error)
-}
-
-type orderSettlementAttestingRealm interface {
-	RecordOrderSettlementWithAttestation(
-		ctx context.Context,
-		st domain.OrderSettlement,
-		attest store.EventAttestor,
-	) (domain.ExternalID, error)
-}
-
 func recordOrderSubmissionWithAttestation(
 	ctx context.Context,
 	realm store.RealmStore,
@@ -64,15 +46,9 @@ func recordOrderSubmissionWithAttestation(
 	if attest == nil {
 		return realm.RecordOrderSubmission(ctx, o, submitted, apply)
 	}
-	attesting, ok := realm.(orderSubmissionAttestingRealm)
-	if !ok {
-		return domain.Order{}, fmt.Errorf(
-			"store: order submission attestation unsupported: %w",
-			domain.ErrNotImplemented,
-		)
-	}
-	return attesting.RecordOrderSubmissionWithAttestation(
-		ctx, o, submitted, apply, attest)
+	return realm.RecordOrderSubmissionWithAttestation(
+		ctx, o, submitted, apply, attest,
+	)
 }
 
 func recordOrderSettlementWithAttestation(
@@ -84,14 +60,7 @@ func recordOrderSettlementWithAttestation(
 	if attest == nil {
 		return realm.RecordOrderSettlement(ctx, st)
 	}
-	attesting, ok := realm.(orderSettlementAttestingRealm)
-	if !ok {
-		return "", fmt.Errorf(
-			"store: order settlement attestation unsupported: %w",
-			domain.ErrNotImplemented,
-		)
-	}
-	return attesting.RecordOrderSettlementWithAttestation(ctx, st, attest)
+	return realm.RecordOrderSettlementWithAttestation(ctx, st, attest)
 }
 
 var errOrderSubmissionChainAborted = errors.New(

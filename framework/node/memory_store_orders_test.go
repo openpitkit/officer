@@ -19,8 +19,11 @@ package node
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"sort"
+	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
@@ -227,10 +230,32 @@ func (r *memoryRealm) ExecutionReportExists(
 }
 
 func (r *memoryRealm) RecordOrderSettlement(
-	_ context.Context, st domain.OrderSettlement,
+	ctx context.Context, st domain.OrderSettlement,
+) (domain.ExternalID, error) {
+	return r.recordOrderSettlement(ctx, st, nil)
+}
+
+func (r *memoryRealm) RecordOrderSettlementWithAttestation(
+	ctx context.Context, st domain.OrderSettlement, attest store.EventAttestor,
+) (domain.ExternalID, error) {
+	snapshot := r.exportData(ctx)
+	reportID, err := r.recordOrderSettlement(ctx, st, attest)
+	if err != nil {
+		r.restoreData(snapshot, backup.RestoreModeOverwrite)
+	}
+	return reportID, err
+}
+
+func (r *memoryRealm) recordOrderSettlement(
+	ctx context.Context, st domain.OrderSettlement, attest store.EventAttestor,
 ) (domain.ExternalID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if attest != nil && len(st.Events) == 0 {
+		return "", fmt.Errorf(
+			"store: settlement has no event to attest: %w", domain.ErrInvalid,
+		)
+	}
 	var reportID domain.ExternalID
 	if st.ReportID != nil {
 		reportID = *st.ReportID
@@ -349,6 +374,9 @@ func (r *memoryRealm) RecordOrderSettlement(
 		if event.At.IsZero() {
 			event.At = time.Now().UTC()
 		}
+		if err := r.attestEventLocked(ctx, event, attest); err != nil {
+			return "", err
+		}
 		r.events = append(r.events, event)
 	}
 	if st.Trade != nil {
@@ -374,6 +402,26 @@ func (r *memoryRealm) RecordOrderSubmission(
 	submitted domain.OrderEvent,
 	apply func(domain.Order) (domain.OrderSettlement, error),
 ) (domain.Order, error) {
+	return r.recordOrderSubmission(ctx, o, submitted, apply, nil)
+}
+
+func (r *memoryRealm) RecordOrderSubmissionWithAttestation(
+	ctx context.Context,
+	o domain.Order,
+	submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+	attest store.EventAttestor,
+) (domain.Order, error) {
+	return r.recordOrderSubmission(ctx, o, submitted, apply, attest)
+}
+
+func (r *memoryRealm) recordOrderSubmission(
+	ctx context.Context,
+	o domain.Order,
+	submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+	attest store.EventAttestor,
+) (domain.Order, error) {
 	snapshot := r.exportData(ctx)
 	order, err := r.CreateOrder(ctx, o)
 	if err != nil {
@@ -382,12 +430,22 @@ func (r *memoryRealm) RecordOrderSubmission(
 	if submitted.Order.IsZero() {
 		submitted.Order = order.ExternalID
 	}
-	if _, err := r.AppendOrderEvent(ctx, submitted); err != nil {
+	recordedSubmitted, err := r.AppendOrderEvent(ctx, submitted)
+	if err != nil {
 		r.restoreData(snapshot, backup.RestoreModeOverwrite)
 		return domain.Order{}, err
 	}
 
 	settlement, err := apply(order)
+	if err != nil {
+		r.restoreData(snapshot, backup.RestoreModeOverwrite)
+		return domain.Order{}, err
+	}
+	// The submitted event is offered to attest only after apply has returned,
+	// as the SQLite store does: the attestor is chosen while apply runs.
+	r.mu.Lock()
+	err = r.attestEventLocked(ctx, recordedSubmitted, attest)
+	r.mu.Unlock()
 	if err != nil {
 		r.restoreData(snapshot, backup.RestoreModeOverwrite)
 		return domain.Order{}, err
@@ -398,7 +456,7 @@ func (r *memoryRealm) RecordOrderSubmission(
 	if settlement.Account == "" {
 		settlement.Account = order.Account
 	}
-	if _, err := r.RecordOrderSettlement(ctx, settlement); err != nil {
+	if _, err := r.recordOrderSettlement(ctx, settlement, attest); err != nil {
 		r.restoreData(snapshot, backup.RestoreModeOverwrite)
 		return domain.Order{}, err
 	}
@@ -414,6 +472,29 @@ func (r *memoryRealm) RecordOrderSubmission(
 		order.ReservedQuantity = settlement.ReservedQuantity
 	}
 	return order, nil
+}
+
+// attestEventLocked offers one recorded event to attest and stamps the returned
+// attestation onto it, as the SQLite store does inside its transaction. The
+// caller holds r.mu.
+func (r *memoryRealm) attestEventLocked(
+	ctx context.Context, event domain.OrderEvent, attest store.EventAttestor,
+) error {
+	if attest == nil {
+		return nil
+	}
+	att, ok, err := attest(ctx, event)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf(
+			"store: event %s has no attestation payload: %w",
+			event.Type, domain.ErrInvalid,
+		)
+	}
+	r.attestations[event.ExternalID] = att
+	return nil
 }
 
 func (r *memoryRealm) AppendOrderEvent(
@@ -539,4 +620,109 @@ func (r *memoryRealm) ListTradeRows(
 		out = out[start:end]
 	}
 	return store.TradeListPage{Rows: out, Total: total}, nil
+}
+
+func TestMemoryRealmRecordOrderSubmissionWithAttestationStampsEveryEvent(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	realm := newMemoryStore("node.db").realm
+	if _, err := realm.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	var offered []domain.OrderEventType
+	attest := func(
+		_ context.Context, event domain.OrderEvent,
+	) (domain.EventAttestation, bool, error) {
+		if event.ExternalID.IsZero() {
+			t.Fatalf("attestor offered %s without an external id", event.Type)
+		}
+		offered = append(offered, event.Type)
+		return domain.EventAttestation{
+			Token: "token-" + string(event.Type),
+		}, true, nil
+	}
+
+	order, err := realm.RecordOrderSubmissionWithAttestation(
+		ctx,
+		domain.Order{Account: "acc-1", Status: domain.OrderStatusSubmitted},
+		domain.OrderEvent{Type: domain.OrderEventSubmitted},
+		func(persisted domain.Order) (domain.OrderSettlement, error) {
+			return domain.OrderSettlement{
+				Account:     "acc-1",
+				Order:       persisted.ExternalID,
+				OrderStatus: domain.OrderStatusCommitted,
+				Events: []domain.OrderEvent{
+					{Type: domain.OrderEventCommitted},
+				},
+			}, nil
+		},
+		attest,
+	)
+	if err != nil {
+		t.Fatalf("RecordOrderSubmissionWithAttestation: %v", err)
+	}
+	if !slices.Equal(offered, []domain.OrderEventType{
+		domain.OrderEventSubmitted, domain.OrderEventCommitted,
+	}) {
+		t.Fatalf("offered events = %v, want submitted then committed", offered)
+	}
+	detail, err := realm.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if len(detail.Events) != 2 {
+		t.Fatalf("events = %+v, want submitted and committed", detail.Events)
+	}
+	for _, event := range detail.Events {
+		if event.Attestation == nil ||
+			event.Attestation.Token != "token-"+string(event.Type) {
+			t.Fatalf(
+				"event %s attestation = %+v, want its stamped token",
+				event.Type, event.Attestation,
+			)
+		}
+	}
+}
+
+func TestMemoryRealmRecordOrderSettlementWithAttestationRollsBackOnAttestorError(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	realm := newMemoryStore("node.db").realm
+	if _, err := realm.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	order, err := realm.CreateOrder(ctx, domain.Order{
+		Account: "acc-1", Status: domain.OrderStatusCommitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	attestErr := errors.New("attestation failed")
+
+	_, err = realm.RecordOrderSettlementWithAttestation(
+		ctx,
+		domain.OrderSettlement{
+			Account:     "acc-1",
+			Order:       order.ExternalID,
+			OrderStatus: domain.OrderStatusCancelled,
+			Events:      []domain.OrderEvent{{Type: domain.OrderEventCancelled}},
+		},
+		func(context.Context, domain.OrderEvent) (domain.EventAttestation, bool, error) {
+			return domain.EventAttestation{}, false, attestErr
+		},
+	)
+	if !errors.Is(err, attestErr) {
+		t.Fatalf("RecordOrderSettlementWithAttestation = %v, want attestor error", err)
+	}
+	after, err := realm.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if after.Order.Status != domain.OrderStatusCommitted || len(after.Events) != 0 {
+		t.Fatalf("failed settlement mutated store: %+v", after)
+	}
 }
