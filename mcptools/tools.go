@@ -287,8 +287,8 @@ func registerTool[In, Out any](
 type healthInput struct{}
 
 type healthOutput struct {
-	Nodes   []healthNode `json:"nodes"`
-	Healthy bool         `json:"healthy"`
+	Node    healthNode `json:"node"`
+	Healthy bool       `json:"healthy"`
 }
 
 type healthNode struct {
@@ -1203,9 +1203,9 @@ func cancelHandler(
 }
 
 func toHealthOutput(status frameworkmcp.Status) healthOutput {
-	nodes := make([]healthNode, 0, len(status.Nodes))
-	for _, n := range status.Nodes {
-		nodes = append(nodes, healthNode{
+	n := status.Node
+	return healthOutput{
+		Node: healthNode{
 			Engine: healthEngine{
 				Version:      n.Engine.Version,
 				BuildProfile: n.Engine.BuildProfile,
@@ -1216,17 +1216,16 @@ func toHealthOutput(status frameworkmcp.Status) healthOutput {
 				SchemaVersion: n.Store.SchemaVersion,
 				Reachable:     n.Store.Reachable,
 			},
-		})
+		},
+		Healthy: status.Healthy,
 	}
-	return healthOutput{Nodes: nodes, Healthy: status.Healthy}
 }
 
 func summarizeHealth(out healthOutput) string {
-	state := "degraded"
 	if out.Healthy {
-		state = "healthy"
+		return "officer healthy"
 	}
-	return fmt.Sprintf("officer %s: %d node(s)", state, len(out.Nodes))
+	return "officer degraded"
 }
 
 func isNotFound(err error) bool {

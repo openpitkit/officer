@@ -90,10 +90,10 @@ func TestDisabledCommandReturnsNonErrorNotice(t *testing.T) {
 // gate does not short-circuit when the source reports the command enabled.
 func TestEnabledCommandRuns(t *testing.T) {
 	src := &fakeSource{
-		status: frameworkmcp.Status{Healthy: true, Nodes: []frameworkmcp.NodeHealth{{
+		status: frameworkmcp.Status{Healthy: true, Node: frameworkmcp.NodeHealth{
 			Engine: frameworkmcp.EngineHealth{Version: "v1", Running: true},
 			Store:  frameworkmcp.StoreHealth{Reachable: true},
-		}}},
+		}},
 	}
 	res := callHealth(t, src)
 	requireNotToolError(t, res.IsError)
@@ -107,10 +107,10 @@ func TestEnabledCommandRuns(t *testing.T) {
 func TestCommandEnabledErrorFailsOpen(t *testing.T) {
 	src := &fakeSource{
 		cmdEnabledErr: errors.New("access store down"),
-		status: frameworkmcp.Status{Healthy: true, Nodes: []frameworkmcp.NodeHealth{{
+		status: frameworkmcp.Status{Healthy: true, Node: frameworkmcp.NodeHealth{
 			Engine: frameworkmcp.EngineHealth{Version: "v1", Running: true},
 			Store:  frameworkmcp.StoreHealth{Reachable: true},
-		}}},
+		}},
 	}
 	res := callHealth(t, src)
 	requireNotToolError(t, res.IsError)

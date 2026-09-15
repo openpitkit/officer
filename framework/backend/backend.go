@@ -63,10 +63,10 @@ type MarketDataRuntime interface {
 	UseSink(sink marketdata.Sink) error
 }
 
-// Status is the deployment health reported to the operator dashboard.
+// Status is the service health reported to the operator dashboard.
 type Status struct {
-	// Nodes carries the health record of the service's node.
-	Nodes []node.Health
+	// Node is the health of the service's node.
+	Node node.Health
 	// Healthy reports whether the node reported a live engine and a reachable
 	// store.
 	Healthy bool
@@ -161,7 +161,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 		return Status{}, fmt.Errorf("backend: node health: %w", err)
 	}
 	return Status{
-		Nodes:   []node.Health{health},
+		Node:    health,
 		Healthy: health.Engine.Running && health.Store.Reachable,
 	}, nil
 }

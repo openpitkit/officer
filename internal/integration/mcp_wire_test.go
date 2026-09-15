@@ -58,8 +58,8 @@ const (
 type healthInput struct{}
 
 type healthOutput struct {
-	Nodes   []healthNode `json:"nodes"`
-	Healthy bool         `json:"healthy"`
+	Node    healthNode `json:"node"`
+	Healthy bool       `json:"healthy"`
 }
 
 type healthNode struct {

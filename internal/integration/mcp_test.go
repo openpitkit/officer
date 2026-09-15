@@ -288,10 +288,10 @@ func TestHealthHappyPath(t *testing.T) {
 	src := &fakeSource{
 		status: frameworkmcp.Status{
 			Healthy: true,
-			Nodes: []frameworkmcp.NodeHealth{{
+			Node: frameworkmcp.NodeHealth{
 				Engine: frameworkmcp.EngineHealth{Version: "v1.2.3", Running: true},
 				Store:  frameworkmcp.StoreHealth{Path: "/tmp/db", Reachable: true},
-			}},
+			},
 		},
 	}
 	res := callHealth(t, src)
@@ -299,27 +299,24 @@ func TestHealthHappyPath(t *testing.T) {
 	if !res.StructuredContent.Healthy {
 		t.Error("want healthy:true")
 	}
-	if len(res.StructuredContent.Nodes) != 1 {
-		t.Fatalf("want 1 node, got %d", len(res.StructuredContent.Nodes))
-	}
-	if res.StructuredContent.Nodes[0].Engine.Version != "v1.2.3" {
+	if res.StructuredContent.Node.Engine.Version != "v1.2.3" {
 		t.Error("wrong engine version")
 	}
-	if got := textContent(res.Content); got != "officer healthy: 1 node(s)" {
+	if got := textContent(res.Content); got != "officer healthy" {
 		t.Errorf("unexpected text: %q", got)
 	}
 }
 
 func TestHealthDegraded(t *testing.T) {
 	src := &fakeSource{
-		status: frameworkmcp.Status{Healthy: false, Nodes: []frameworkmcp.NodeHealth{{}}},
+		status: frameworkmcp.Status{Healthy: false},
 	}
 	res := callHealth(t, src)
 	requireNotToolError(t, res.IsError)
 	if res.StructuredContent.Healthy {
 		t.Error("want healthy:false")
 	}
-	if got := textContent(res.Content); got != "officer degraded: 1 node(s)" {
+	if got := textContent(res.Content); got != "officer degraded" {
 		t.Errorf("unexpected text: %q", got)
 	}
 }

@@ -250,15 +250,12 @@ func handleV1Health(w http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, healthDTO{OK: true})
 }
 
-// handleV1Status returns the deployment status.
+// handleV1Status returns the service status.
 func handleV1Status(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status, err := svc.Status(r.Context())
 		if err != nil {
-			httpx.WriteJSON(w, http.StatusServiceUnavailable, statusDTO{
-				Nodes:   []nodeHealthDTO{},
-				Healthy: false,
-			})
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, statusDTO{Healthy: false})
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, toStatusDTO(status))

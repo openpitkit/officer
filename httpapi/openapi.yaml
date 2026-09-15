@@ -94,7 +94,7 @@ paths:
   /status:
     get:
       operationId: getStatus
-      summary: Engine and store health across all nodes
+      summary: Engine and store health
       tags: [health]
       responses:
         "200":
@@ -4812,14 +4812,12 @@ components:
 
     Status:
       type: object
-      required: [healthy, nodes]
+      required: [healthy, node]
       properties:
         healthy:
           type: boolean
-        nodes:
-          type: array
-          items:
-            $ref: "#/components/schemas/NodeHealth"
+        node:
+          $ref: "#/components/schemas/NodeHealth"
 
     NodeHealth:
       type: object
@@ -6580,9 +6578,9 @@ components:
 
     SubmitOrderRequest:
       allOf:
-          required: [mode]
         - $ref: "#/components/schemas/OrderSubmissionRequest"
         - type: object
+          required: [mode]
           properties:
             id:
               $ref: "#/components/schemas/Id"

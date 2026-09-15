@@ -35,15 +35,15 @@ export interface StoreHealth {
   reachable: boolean;
 }
 
-/** Aggregate health of one node (mirrors node.Health in Go). */
+/** Health of the service's node (mirrors node.Health in Go). */
 export interface NodeHealth {
   engine: EngineHealth;
   store: StoreHealth;
 }
 
-/** Deployment-wide status (mirrors backend.Status in Go). */
+/** Service status (mirrors backend.Status in Go). */
 export interface Status {
-  nodes: NodeHealth[];
+  node: NodeHealth;
   healthy: boolean;
 }
 

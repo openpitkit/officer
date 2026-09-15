@@ -1160,7 +1160,7 @@ func TestOverview_ServiceError(t *testing.T) {
 
 // TestV1Status_ServiceUnavailable checks the special-cased /status path: on a
 // Status error the handler does NOT go through writeErr. It returns 503 with a
-// degraded statusDTO (healthy:false, empty nodes, no "error" object).
+// degraded statusDTO (healthy:false, a zero node, no "error" object).
 func TestV1Status_ServiceUnavailable(t *testing.T) {
 	r, err := newRouter(&fakeService{statusErr: fmt.Errorf("store unreachable")})
 	if err != nil {
@@ -1175,9 +1175,12 @@ func TestV1Status_ServiceUnavailable(t *testing.T) {
 	if m["healthy"] != false {
 		t.Fatalf("want healthy:false, got %v", m["healthy"])
 	}
-	nodes, ok := m["nodes"].([]any)
-	if !ok || len(nodes) != 0 {
-		t.Fatalf("want empty nodes array, got %v", m["nodes"])
+	node, ok := m["node"].(map[string]any)
+	if !ok {
+		t.Fatalf("want a node object, got %v", m["node"])
+	}
+	if engine, ok := node["engine"].(map[string]any); !ok || engine["running"] != false {
+		t.Fatalf("want a degraded node with engine.running:false, got %v", node)
 	}
 	// The degraded body must not carry the writeErr "error" envelope.
 	if _, present := m["error"]; present {

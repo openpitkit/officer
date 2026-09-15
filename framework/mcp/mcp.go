@@ -141,11 +141,12 @@ type VersionSource interface {
 	Version() string
 }
 
-// Status is the aggregate health of the whole deployment.
+// Status is the health of the node the service serves.
 type Status struct {
-	// Nodes carries one health record per node.
-	Nodes []NodeHealth
-	// Healthy reports whether every node is live and reachable.
+	// Node is the node's engine and store health.
+	Node NodeHealth
+	// Healthy reports whether the node's engine is running and its store is
+	// reachable.
 	Healthy bool
 }
 
@@ -571,9 +572,9 @@ func (s controlPlaneSource) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 
-	nodes := make([]NodeHealth, 0, len(status.Nodes))
-	for _, n := range status.Nodes {
-		nodes = append(nodes, NodeHealth{
+	n := status.Node
+	return Status{
+		Node: NodeHealth{
 			Engine: EngineHealth{
 				Version:      n.Engine.Version,
 				BuildProfile: n.Engine.BuildProfile,
@@ -584,9 +585,9 @@ func (s controlPlaneSource) Status(ctx context.Context) (Status, error) {
 				SchemaVersion: n.Store.SchemaVersion,
 				Reachable:     n.Store.Reachable,
 			},
-		})
-	}
-	return Status{Nodes: nodes, Healthy: status.Healthy}, nil
+		},
+		Healthy: status.Healthy,
+	}, nil
 }
 
 func (s controlPlaneSource) GetAccountState(

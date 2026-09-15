@@ -250,10 +250,8 @@ function normalizeNode(v: unknown): NodeHealth {
 
 function normalizeStatus(v: unknown): Status {
   const o = isObject(v) ? v : {};
-  const rawNodes = pick(o, "nodes", "Nodes");
-  const nodes = Array.isArray(rawNodes) ? rawNodes.map(normalizeNode) : [];
   return {
-    nodes,
+    node: normalizeNode(pick(o, "node", "Node")),
     healthy: asBool(pick(o, "healthy", "Healthy")),
   };
 }

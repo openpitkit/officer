@@ -42,8 +42,8 @@ type healthDTO struct {
 
 // statusDTO is the body of GET /api/v1/status.
 type statusDTO struct {
-	Nodes   []nodeHealthDTO `json:"nodes"`
-	Healthy bool            `json:"healthy"`
+	Node    nodeHealthDTO `json:"node"`
+	Healthy bool          `json:"healthy"`
 }
 
 // nodeHealthDTO is one node's health within statusDTO.
@@ -224,9 +224,9 @@ type auditDTO struct {
 
 // toStatusDTO maps a backend.Status onto the wire DTO.
 func toStatusDTO(status backend.Status) statusDTO {
-	nodes := make([]nodeHealthDTO, 0, len(status.Nodes))
-	for _, n := range status.Nodes {
-		nodes = append(nodes, nodeHealthDTO{
+	n := status.Node
+	return statusDTO{
+		Node: nodeHealthDTO{
 			Engine: engineHealthDTO{
 				Version:      n.Engine.Version,
 				BuildProfile: n.Engine.BuildProfile,
@@ -237,9 +237,9 @@ func toStatusDTO(status backend.Status) statusDTO {
 				SchemaVersion: n.Store.SchemaVersion,
 				Reachable:     n.Store.Reachable,
 			},
-		})
+		},
+		Healthy: status.Healthy,
 	}
-	return statusDTO{Nodes: nodes, Healthy: status.Healthy}
 }
 
 // toAccountDTO maps a domain.Account onto the wire DTO. The account's public

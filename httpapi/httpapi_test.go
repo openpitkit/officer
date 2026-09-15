@@ -254,10 +254,10 @@ func TestV1Health(t *testing.T) {
 func TestV1Status(t *testing.T) {
 	svc := &fakeService{
 		status: backend.Status{
-			Nodes: []node.Health{{
+			Node: node.Health{
 				Engine: engine.Health{Version: "v1", Running: true},
 				Store:  store.StoreHealth{Reachable: true},
-			}},
+			},
 			Healthy: true,
 		},
 	}

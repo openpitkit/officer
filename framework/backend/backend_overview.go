@@ -247,16 +247,15 @@ func (s *Service) ServiceInfo(ctx context.Context) (ServiceInfo, error) {
 	if err != nil {
 		return ServiceInfo{}, err
 	}
-	info := ServiceInfo{Name: "Pit Officer"}
-	if len(status.Nodes) > 0 {
-		h := status.Nodes[0]
-		info.EngineVersion = h.Engine.Version
-		info.EngineBuildProfile = h.Engine.BuildProfile
-		info.Release = h.Engine.BuildProfile == "release"
-		info.Database = ServiceDatabase{
+	h := status.Node
+	return ServiceInfo{
+		Name:               "Pit Officer",
+		EngineVersion:      h.Engine.Version,
+		EngineBuildProfile: h.Engine.BuildProfile,
+		Release:            h.Engine.BuildProfile == "release",
+		Database: ServiceDatabase{
 			Path:      h.Store.Path,
 			Reachable: h.Store.Reachable,
-		}
-	}
-	return info, nil
+		},
+	}, nil
 }
