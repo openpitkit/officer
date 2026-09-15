@@ -101,20 +101,6 @@ func WithMarketDataRegistry(registry *marketdata.Registry) Option {
 	}
 }
 
-// WithMCPCommands sets the command catalogue used by the MCP-access surface.
-func WithMCPCommands(commands []catalog.CatalogCommand) Option {
-	return func(s *Service) {
-		s.commands = staticCatalogProvider{catalog: catalog.New(commands)}
-	}
-}
-
-// WithMCPCatalog sets the command catalogue used by the MCP-access surface.
-func WithMCPCatalog(commands catalog.Catalog) Option {
-	return func(s *Service) {
-		s.commands = staticCatalogProvider{catalog: commands}
-	}
-}
-
 // WithMCPCatalogProvider sets the live command catalogue provider used by the
 // MCP-access surface.
 func WithMCPCatalogProvider(commands catalog.Provider) Option {

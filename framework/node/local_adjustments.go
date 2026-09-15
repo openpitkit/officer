@@ -545,23 +545,6 @@ func stampExecutionReportPersistence(
 	return persistence
 }
 
-func accountBlockPayload(blocks []domain.AccountBlock) domain.OrderEventPayload {
-	if len(blocks) == 0 {
-		return domain.OrderEventPayload{}
-	}
-	// The engine currently emits at most one account block per fill. Keep the
-	// event payload singular and raw: it preserves the engine block contract, the
-	// same fields the account row stores verbatim.
-	block := blocks[0]
-	return domain.OrderEventPayload{
-		RejectCode:    block.Code,
-		RejectScope:   "account",
-		RejectPolicy:  block.Policy,
-		RejectReason:  block.Reason,
-		RejectDetails: block.Details,
-	}
-}
-
 // pick returns next when it is non-empty, otherwise prev. It carries an
 // unchanged balance field forward when the outcome reported no value for it.
 func pick(next, prev string) string {

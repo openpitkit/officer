@@ -1448,3 +1448,19 @@ func seedTestAccount(t *testing.T, realm store.RealmStore, id domain.AccountID) 
 func testAccount(id domain.AccountID) domain.Account {
 	return domain.Account{Code: id}
 }
+
+// accountBlockPayload folds the first engine block of a fake execution report
+// into the event payload, mirroring the singular block the engine emits per fill.
+func accountBlockPayload(blocks []domain.AccountBlock) domain.OrderEventPayload {
+	if len(blocks) == 0 {
+		return domain.OrderEventPayload{}
+	}
+	block := blocks[0]
+	return domain.OrderEventPayload{
+		RejectCode:    block.Code,
+		RejectScope:   "account",
+		RejectPolicy:  block.Policy,
+		RejectReason:  block.Reason,
+		RejectDetails: block.Details,
+	}
+}

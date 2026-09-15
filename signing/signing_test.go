@@ -672,11 +672,12 @@ func TestFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	fp := Fingerprint(pub)
+	var svc Service
+	fp := svc.Fingerprint(pub)
 	if len(fp) != 16 { // 8 bytes hex
 		t.Fatalf("fingerprint len = %d, want 16", len(fp))
 	}
-	if fp != Fingerprint(pub) {
+	if fp != svc.Fingerprint(pub) {
 		t.Fatalf("fingerprint not deterministic")
 	}
 }

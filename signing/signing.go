@@ -217,15 +217,9 @@ func (s *Service) PublicKeyByID(ctx context.Context, keyID, format string) (stri
 
 // Fingerprint returns a short hex SHA-256 prefix of the public key. Display
 // only; never stored or used as an identity.
-func Fingerprint(pub []byte) string {
+func (s *Service) Fingerprint(pub []byte) string {
 	sum := sha256.Sum256(pub)
 	return hex.EncodeToString(sum[:8])
-}
-
-// Fingerprint is the method form of the package Fingerprint, so the service
-// satisfies the backend's signer seam without exposing the package function.
-func (s *Service) Fingerprint(pub []byte) string {
-	return Fingerprint(pub)
 }
 
 // Sign builds the signed envelope token for payload, using the active key. It

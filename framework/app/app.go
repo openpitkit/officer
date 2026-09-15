@@ -159,14 +159,6 @@ func (b *Builder) RegisterMarketDataProvider(provider marketdata.Provider) error
 	return b.mdRegistry.Register(provider)
 }
 
-// UnregisterMarketDataProvider removes a market-data provider.
-func (b *Builder) UnregisterMarketDataProvider(providerType string) bool {
-	if b.mdRegistry == nil {
-		return false
-	}
-	return b.mdRegistry.Unregister(providerType)
-}
-
 // Build assembles the configured app and starts runtime services. The signer
 // and the market-data manager are bound to the realm of the node that the node
 // hook builds. fatalHook is handed to the node hook; a nil one is rejected
