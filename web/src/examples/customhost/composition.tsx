@@ -36,21 +36,21 @@ import {
 } from "@openpit/officer-web";
 
 import {
-  PrivateReferencePage,
-  PrivateReferenceWidget,
-  ReplacementPrivateReferencePage,
-  ReplacementPrivateReferenceWidget,
+  HostReferencePage,
+  HostReferenceWidget,
+  ReplacementHostReferencePage,
+  ReplacementHostReferenceWidget,
 } from "./components";
 import {
   hiddenActionID,
   hiddenPermission,
-  privateActionID,
-  privateNavID,
-  privatePageID,
-  privatePermission,
-  privatePolicyID,
-  privateScopeID,
-  privateWidgetID,
+  hostActionID,
+  hostNavID,
+  hostPageID,
+  hostPermission,
+  hostPolicyID,
+  hostScopeID,
+  hostWidgetID,
   removedRouteID,
 } from "./ids";
 
@@ -58,67 +58,67 @@ export function registerCustomHostComposition(): void {
   unregisterCustomHostComposition();
   registerLocaleResources("en", "customhost", {
     page: {
-      title: "Private reference page",
-      replacementTitle: "Replacement private reference page",
+      title: "Host reference page",
+      replacementTitle: "Replacement host reference page",
     },
-    nav: { private: "Private reference" },
+    nav: { host: "Host reference" },
     widget: {
-      title: "Private reference widget",
-      replacementTitle: "Replacement private reference widget",
+      title: "Host reference widget",
+      replacementTitle: "Replacement host reference widget",
     },
   });
-  registerScope(privateScopeID);
+  registerScope(hostScopeID);
   registerPolicy({
-    id: privatePolicyID,
-    allowedScopes: [privateScopeID],
+    id: hostPolicyID,
+    allowedScopes: [hostScopeID],
     kinds: [{ kind: "threshold" }],
     catalog: {
-      wikiUrl: "https://openpit.dev/docs/examples/private-policy",
+      wikiUrl: "https://openpit.dev/docs/examples/host-policy",
       fields: [{ key: "limit" }],
     },
   });
 
   registerRoute({
-    id: privatePageID,
-    path: "/private-reference",
+    id: hostPageID,
+    path: "/host-reference",
     order: 1000,
-    Component: PrivateReferencePage,
-    permission: privatePermission,
+    Component: HostReferencePage,
+    permission: hostPermission,
   });
   registerPage({
-    id: privatePageID,
+    id: hostPageID,
     titleKey: "customhost:page.title",
-    Component: PrivateReferencePage,
+    Component: HostReferencePage,
   });
   registerPage({
-    id: privatePageID,
+    id: hostPageID,
     titleKey: "customhost:page.title",
-    Component: ReplacementPrivateReferencePage,
+    Component: ReplacementHostReferencePage,
   });
   registerNav({
-    id: privateNavID,
-    to: "/private-reference",
-    labelKey: "customhost:nav.private",
+    id: hostNavID,
+    to: "/host-reference",
+    labelKey: "customhost:nav.host",
     icon: KeyRound,
     section: "primary",
     order: 1000,
-    permission: privatePermission,
+    permission: hostPermission,
   });
   registerWidget({
-    id: privateWidgetID,
+    id: hostWidgetID,
     order: 1000,
-    Component: PrivateReferenceWidget,
+    Component: HostReferenceWidget,
   });
   registerWidget({
-    id: privateWidgetID,
+    id: hostWidgetID,
     order: 1000,
-    Component: ReplacementPrivateReferenceWidget,
+    Component: ReplacementHostReferenceWidget,
   });
   registerRowAction<object, object>({
-    id: privateActionID,
+    id: hostActionID,
     kind: "customhost",
     order: 1000,
-    permission: privatePermission,
+    permission: hostPermission,
     render: () => <button type="button" aria-label="customhost-action" />,
   });
   registerRowAction<object, object>({
@@ -130,21 +130,21 @@ export function registerCustomHostComposition(): void {
   });
   registerRoute({
     id: removedRouteID,
-    path: "/removed-private-reference",
+    path: "/removed-host-reference",
     order: 1010,
-    Component: PrivateReferencePage,
+    Component: HostReferencePage,
   });
   unregisterRoute(removedRouteID);
 }
 
 export function unregisterCustomHostComposition(): void {
-  unregisterRoute(privatePageID);
+  unregisterRoute(hostPageID);
   unregisterRoute(removedRouteID);
-  unregisterNav(privateNavID);
-  unregisterPage(privatePageID);
-  unregisterWidget(privateWidgetID);
-  unregisterRowAction(privateActionID);
+  unregisterNav(hostNavID);
+  unregisterPage(hostPageID);
+  unregisterWidget(hostWidgetID);
+  unregisterRowAction(hostActionID);
   unregisterRowAction(hiddenActionID);
-  unregisterPolicy(privatePolicyID);
-  unregisterScope(privateScopeID);
+  unregisterPolicy(hostPolicyID);
+  unregisterScope(hostScopeID);
 }

@@ -26,7 +26,7 @@ import (
 	"go.openpit.dev/officer/framework/marketdata"
 )
 
-const hostProviderID = "example-private"
+const hostProviderID = "example-host"
 
 func hostProvider() marketdata.Provider {
 	return marketdata.Provider{

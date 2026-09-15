@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	hostRouteID      = "customhost.private.get"
-	hostRoutePattern = "/example/private"
+	hostRouteID      = "customhost.host.get"
+	hostRoutePattern = "/example/host"
 
 	replacedBaseRouteID = "health.get"
 	hiddenBaseRouteID   = "status.get"

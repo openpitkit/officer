@@ -33,12 +33,12 @@ import {
 import { CustomHostAuthProvider } from "./components";
 import {
   hiddenActionID,
-  privateActionID,
-  privateNavID,
-  privatePageID,
-  privatePolicyID,
-  privateScopeID,
-  privateWidgetID,
+  hostActionID,
+  hostNavID,
+  hostPageID,
+  hostPolicyID,
+  hostScopeID,
+  hostWidgetID,
   removedRouteID,
 } from "./ids";
 import {
@@ -51,27 +51,25 @@ describe("custom host web composition", () => {
     unregisterCustomHostComposition();
   });
 
-  it("adds private route, nav, action, widget, and vocabulary entries", () => {
+  it("adds host route, nav, action, widget, and vocabulary entries", () => {
     registerCustomHostComposition();
 
-    expect(getRoutes().some((entry) => entry.id === privatePageID)).toBe(true);
-    expect(getNav("primary").some((entry) => entry.id === privateNavID)).toBe(
+    expect(getRoutes().some((entry) => entry.id === hostPageID)).toBe(true);
+    expect(getNav("primary").some((entry) => entry.id === hostNavID)).toBe(
       true,
     );
-    expect(getWidgets().some((entry) => entry.id === privateWidgetID)).toBe(
-      true,
-    );
-    expect(getScopes()).toContain(privateScopeID);
-    expect(getPolicies()).toContain(privatePolicyID);
-    expect(i18n.t("customhost:page.title")).toBe("Private reference page");
+    expect(getWidgets().some((entry) => entry.id === hostWidgetID)).toBe(true);
+    expect(getScopes()).toContain(hostScopeID);
+    expect(getPolicies()).toContain(hostPolicyID);
+    expect(i18n.t("customhost:page.title")).toBe("Host reference page");
   });
 
   it("replaces entries by re-registering the same stable id", () => {
     registerCustomHostComposition();
 
-    const Page = getPage(privatePageID)?.Component;
+    const Page = getPage(hostPageID)?.Component;
     const Widget = getWidgets().find(
-      (entry) => entry.id === privateWidgetID,
+      (entry) => entry.id === hostWidgetID,
     )?.Component;
 
     expect(Page).toBeDefined();
@@ -85,10 +83,10 @@ describe("custom host web composition", () => {
 
     expect(
       screen.getByLabelText("customhost-replacement-page"),
-    ).toHaveTextContent("Replacement private reference page");
+    ).toHaveTextContent("Replacement host reference page");
     expect(
       screen.getByLabelText("customhost-replacement-widget"),
-    ).toHaveTextContent("Replacement private reference widget");
+    ).toHaveTextContent("Replacement host reference widget");
   });
 
   it("hides entries through the auth predicate without removing them", () => {
@@ -103,7 +101,7 @@ describe("custom host web composition", () => {
     expect(screen.getByLabelText("customhost-action")).not.toBeNull();
     expect(screen.queryByLabelText("customhost-hidden")).toBeNull();
     expect(
-      getRoutes().some((entry) => entry.permission === "customhost.private"),
+      getRoutes().some((entry) => entry.permission === "customhost.host"),
     ).toBe(true);
   });
 
@@ -114,17 +112,15 @@ describe("custom host web composition", () => {
       false,
     );
     unregisterCustomHostComposition();
-    expect(getRoutes().some((entry) => entry.id === privatePageID)).toBe(false);
-    expect(getNav("primary").some((entry) => entry.id === privateNavID)).toBe(
+    expect(getRoutes().some((entry) => entry.id === hostPageID)).toBe(false);
+    expect(getNav("primary").some((entry) => entry.id === hostNavID)).toBe(
       false,
     );
-    expect(getPage(privatePageID)).toBeUndefined();
-    expect(getWidgets().some((entry) => entry.id === privateWidgetID)).toBe(
-      false,
-    );
+    expect(getPage(hostPageID)).toBeUndefined();
+    expect(getWidgets().some((entry) => entry.id === hostWidgetID)).toBe(false);
   });
 
-  it("keeps hidden and private actions structurally registered", () => {
+  it("keeps hidden and host actions structurally registered", () => {
     registerCustomHostComposition();
 
     render(
@@ -136,7 +132,7 @@ describe("custom host web composition", () => {
     expect(screen.queryByLabelText("customhost-hidden")).toBeNull();
     expect(screen.getByLabelText("customhost-action")).not.toBeNull();
     expect(getRowActions("customhost").map((entry) => entry.id)).toEqual([
-      privateActionID,
+      hostActionID,
       hiddenActionID,
     ]);
   });

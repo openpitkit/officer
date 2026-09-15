@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	hostToolID     = "customhost_private"
+	hostToolID     = "customhost_host"
 	replacedToolID = "health"
 	hiddenToolID   = "get_limits"
 	removedToolID  = "cancel"

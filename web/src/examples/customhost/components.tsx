@@ -32,14 +32,14 @@ export function CustomHostAuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function PrivateReferencePage() {
+export function HostReferencePage() {
   const { t } = useTranslation();
   return (
     <section aria-label="customhost-page">{t("customhost:page.title")}</section>
   );
 }
 
-export function ReplacementPrivateReferencePage() {
+export function ReplacementHostReferencePage() {
   const { t } = useTranslation();
   return (
     <section aria-label="customhost-replacement-page">
@@ -48,14 +48,14 @@ export function ReplacementPrivateReferencePage() {
   );
 }
 
-export function PrivateReferenceWidget() {
+export function HostReferenceWidget() {
   const { t } = useTranslation();
   return (
     <aside aria-label="customhost-widget">{t("customhost:widget.title")}</aside>
   );
 }
 
-export function ReplacementPrivateReferenceWidget() {
+export function ReplacementHostReferenceWidget() {
   const { t } = useTranslation();
   return (
     <aside aria-label="customhost-replacement-widget">

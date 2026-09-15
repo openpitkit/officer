@@ -17,13 +17,13 @@
 
 import { type Permission } from "@openpit/officer-web";
 
-export const privatePageID = "customhost.private.page";
-export const privateNavID = "customhost.private.nav";
-export const privateWidgetID = "customhost.private.widget";
-export const privateActionID = "customhost.private.action";
+export const hostPageID = "customhost.host.page";
+export const hostNavID = "customhost.host.nav";
+export const hostWidgetID = "customhost.host.widget";
+export const hostActionID = "customhost.host.action";
 export const hiddenActionID = "customhost.hidden.action";
 export const removedRouteID = "customhost.removed.route";
-export const privateScopeID = "customhost_scope";
-export const privatePolicyID = "customhost_policy";
-export const privatePermission: Permission = "customhost.private";
+export const hostScopeID = "customhost_scope";
+export const hostPolicyID = "customhost_policy";
+export const hostPermission: Permission = "customhost.host";
 export const hiddenPermission: Permission = "customhost.hidden";
