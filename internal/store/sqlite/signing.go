@@ -61,6 +61,9 @@ func (r *realmStore) UpsertSigningKey(
 	if err != nil {
 		return err
 	}
+	if err := requireAt("signing key", key.CreatedAt); err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -77,7 +80,7 @@ func (r *realmStore) UpsertSigningKey(
 		   created_at  = excluded.created_at,
 		   active      = excluded.active`,
 		key.KeyID, key.Alg, privateKey, key.PublicKey,
-		signingKeyCreatedAt(key.CreatedAt), key.Active,
+		timeStr(key.CreatedAt), key.Active,
 	); err != nil {
 		return fmt.Errorf("store: upsert signing key: %w", err)
 	}
@@ -174,15 +177,6 @@ func (r *realmStore) DeactivateAllSigningKeys(ctx context.Context) error {
 		return fmt.Errorf("store: deactivate signing keys: %w", err)
 	}
 	return nil
-}
-
-// signingKeyCreatedAt formats the key's creation time as fixed-width UTC text,
-// falling back to now when the caller left it zero so the column is never empty.
-func signingKeyCreatedAt(t time.Time) string {
-	if t.IsZero() {
-		return nowStr()
-	}
-	return timeStr(t)
 }
 
 // scanSigningKeyRow scans one private-material-bearing key projection from a

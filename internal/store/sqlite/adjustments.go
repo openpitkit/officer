@@ -120,7 +120,7 @@ func appendAdjustment(
 	if err != nil {
 		return rec, err
 	}
-	at := nowStr()
+	now, at := nowStored()
 
 	if _, err := exec.ExecContext(
 		ctx,
@@ -141,7 +141,7 @@ func appendAdjustment(
 	}
 
 	rec.ExternalID = xid
-	rec.At = mustParseTime(at)
+	rec.At = now
 	return rec, nil
 }
 

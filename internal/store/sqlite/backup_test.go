@@ -203,6 +203,7 @@ func signingKeyForBackup(
 		t.Fatal("Ed25519 private key returned a non-Ed25519 public key")
 	}
 	return backup.SigningKey{
+		CreatedAt: time.Now().UTC(),
 		KeyID:     keyID,
 		Alg:       fwsigning.AlgEd25519,
 		PublicKey: append([]byte(nil), publicKey...),
@@ -230,6 +231,7 @@ func TestBackupExportPreservesCredentialFormAndExcludesSigningPrivateKey(t *test
 			privateKey := ed25519.NewKeyFromSeed(seed)
 			publicKey := privateKey.Public().(ed25519.PublicKey)
 			if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+				CreatedAt:  time.Now().UTC(),
 				KeyID:      "archive-key",
 				Alg:        fwsigning.AlgEd25519,
 				PrivateKey: seed,
@@ -630,6 +632,7 @@ func TestBackupRestoreSigningKeyIsVerifyOnlyAndInactive(t *testing.T) {
 	privateKey := ed25519.NewKeyFromSeed(seed)
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	if err := src.UpsertSigningKey(ctx, domain.SigningKey{
+		CreatedAt:  time.Now().UTC(),
 		KeyID:      "verify-only-key",
 		Alg:        fwsigning.AlgEd25519,
 		PrivateKey: seed,
@@ -688,7 +691,8 @@ func TestBackupRestoreSelfPreservesActiveSigningKey(t *testing.T) {
 			privateKey := ed25519.NewKeyFromSeed(seed)
 			publicKey := privateKey.Public().(ed25519.PublicKey)
 			if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
-				KeyID: "self-key", Alg: fwsigning.AlgEd25519,
+				CreatedAt: time.Now().UTC(),
+				KeyID:     "self-key", Alg: fwsigning.AlgEd25519,
 				PrivateKey: seed, PublicKey: publicKey, Active: true,
 			}); err != nil {
 				t.Fatalf("UpsertSigningKey: %v", err)
@@ -770,7 +774,8 @@ func TestBackupRestoreRejectsSigningKeyIdentityConflict(t *testing.T) {
 	target := signingKeyForBackup(t, "shared-id", 0x41, true)
 	seed := bytes.Repeat([]byte{0x41}, ed25519.SeedSize)
 	if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
-		KeyID: target.KeyID, Alg: target.Alg, PrivateKey: seed,
+		CreatedAt: time.Now().UTC(),
+		KeyID:     target.KeyID, Alg: target.Alg, PrivateKey: seed,
 		PublicKey: target.PublicKey, Active: true,
 	}); err != nil {
 		t.Fatalf("UpsertSigningKey: %v", err)
@@ -2153,6 +2158,38 @@ func TestBackupRestoreRejectsRowWithoutSource(t *testing.T) {
 	}
 }
 
+// TestBackupRestoreRejectsRowWithoutAt pins the other half of a restored row's
+// provenance: a zero record time is rejected with ErrInvalid naming the record
+// kind, never replaced by the restore's own clock.
+func TestBackupRestoreRejectsRowWithoutAt(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	archive := backup.NewArchive(
+		time.Now().UTC(),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		backup.Scope{All: true},
+		backup.Data{Audit: []domain.AuditRow{{
+			ExternalID: mustExternalID(t),
+			Action:     domain.AuditActionCreateAccount,
+			Source:     domain.SourceSystem,
+		}}},
+		backup.CredentialFormPlaintext,
+	)
+	_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup(audit row without at) = %v, want ErrInvalid", err)
+	}
+	if want := "audit time is required"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("RestoreBackup error = %q, want it to contain %q", err, want)
+	}
+	if n := countRows(t, ctx, rs.(*realmStore), "audit"); n != 0 {
+		t.Fatalf("audit rows after rejected restore = %d, want 0", n)
+	}
+}
+
 // TestListAuditOrdersSameSecondRowsOfDifferentPrecisionNewestFirst proves the
 // store's own ORDER BY at DESC is chronological straight from SQL. Restore is
 // the one write path where the caller supplies the row time: two audit rows in
@@ -2295,8 +2332,8 @@ func TestBackupRestoreRejectsInvalidBalanceAndRollsBack(t *testing.T) {
 		backup.RealmLabel{Code: string(domain.DefaultRealm)},
 		scope,
 		backup.Data{Balances: []backup.Balance{
-			{Account: "acc-1", Asset: "USD", Available: "20"},
-			{Account: "acc-1", Asset: "AAPL", Available: "not-a-decimal"},
+			{UpdatedAt: time.Now().UTC(), Account: "acc-1", Asset: "USD", Available: "20"},
+			{UpdatedAt: time.Now().UTC(), Account: "acc-1", Asset: "AAPL", Available: "not-a-decimal"},
 		}},
 		backup.CredentialFormPlaintext,
 	)
@@ -2505,6 +2542,7 @@ func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
 				AmountValue: "10", Leaves: "10", Price: "150",
 				Status:           domain.OrderStatusSubmitted,
 				ReservedQuantity: "0",
+				At:               time.Now().UTC(),
 			}},
 			{Order: domain.Order{
 				ExternalID: badID, Account: "acc-1", BaseAsset: "AAPL",
@@ -2513,6 +2551,7 @@ func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
 				AmountValue: "10", Leaves: "1e5", Price: "150",
 				Status:           domain.OrderStatusSubmitted,
 				ReservedQuantity: "0",
+				At:               time.Now().UTC(),
 			}},
 		}},
 		backup.CredentialFormPlaintext,
@@ -2602,6 +2641,15 @@ func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
 			keys: func(t *testing.T) []backup.SigningKey {
 				key := signingKeyForBackup(t, "bad-public", 3, true)
 				key.PublicKey = []byte("bad")
+				return []backup.SigningKey{key}
+			},
+		},
+		{
+			name: "created-at",
+			want: "created at",
+			keys: func(t *testing.T) []backup.SigningKey {
+				key := signingKeyForBackup(t, "no-created-at", 4, true)
+				key.CreatedAt = time.Time{}
 				return []backup.SigningKey{key}
 			},
 		},
@@ -3382,6 +3430,7 @@ func TestBackupRestoreRejectsUnknownOrderStatusAndRollsBack(t *testing.T) {
 				ReservedQuantity: "0",
 				Price:            "150",
 				Status:           domain.OrderStatusSubmitted,
+				At:               time.Now().UTC(),
 			}},
 			{Order: domain.Order{
 				ExternalID:       badID,
@@ -3396,6 +3445,7 @@ func TestBackupRestoreRejectsUnknownOrderStatusAndRollsBack(t *testing.T) {
 				ReservedQuantity: "0",
 				Price:            "150",
 				Status:           domain.OrderStatus("unknown"),
+				At:               time.Now().UTC(),
 			}},
 		}},
 		backup.CredentialFormPlaintext,
@@ -3435,11 +3485,13 @@ func TestBackupRestoreRejectsInvalidAuditActionAndRollsBack(t *testing.T) {
 		backup.Data{Audit: []domain.AuditRow{
 			{
 				ExternalID: firstID,
+				At:         time.Now().UTC(),
 				Action:     domain.AuditActionCreateAccount,
 				Source:     domain.SourcePanel,
 			},
 			{
 				ExternalID: badID,
+				At:         time.Now().UTC(),
 				Action:     domain.AuditAction("unknown"),
 				Source:     domain.SourcePanel,
 			},
@@ -3528,11 +3580,13 @@ func TestBackupRestoreRejectsInvalidAuditDecisionAndRollsBack(t *testing.T) {
 				backup.Data{Audit: []domain.AuditRow{
 					{
 						ExternalID: firstID,
+						At:         time.Now().UTC(),
 						Action:     domain.AuditActionCreateAccount,
 						Source:     domain.SourcePanel,
 					},
 					{
 						ExternalID: badID,
+						At:         time.Now().UTC(),
 						Action:     tc.action,
 						Source:     domain.SourcePanel,
 						OrderID:    tc.orderID,
@@ -3614,6 +3668,7 @@ func TestBackupRestoreAcceptsValidAuditDecisionMetadata(t *testing.T) {
 			_, rs := newTestStore(t)
 			entry := tc.entry
 			entry.ExternalID = mustExternalID(t)
+			entry.At = time.Now().UTC()
 			entry.Source = domain.SourcePanel
 			scope := backup.Scope{
 				Sections: []backup.Section{backup.SectionAuditLog},

@@ -42,6 +42,7 @@ func TestSecretColumnsSealedRoundTrip(t *testing.T) {
 
 	privateKey := []byte("signing-private-plaintext")
 	signingKey := domain.SigningKey{
+		CreatedAt:  time.Now().UTC(),
 		KeyID:      "sealed-key",
 		Alg:        "ed25519",
 		PrivateKey: privateKey,
@@ -135,6 +136,7 @@ func TestSecretColumnsPlaintextRoundTripWithoutSealer(t *testing.T) {
 
 	privateKey := []byte("plaintext-signing-key")
 	if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+		CreatedAt:  time.Now().UTC(),
 		KeyID:      "plaintext-key",
 		Alg:        "ed25519",
 		PrivateKey: privateKey,
@@ -193,6 +195,7 @@ func TestSecretColumnRejectsDifferentMasterKey(t *testing.T) {
 	store, rs := newTestStore(t, WithMasterKey(firstKey))
 	privateKey := []byte("private-key-must-not-be-returned")
 	if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+		CreatedAt:  time.Now().UTC(),
 		KeyID:      "wrong-key-test",
 		Alg:        "ed25519",
 		PrivateKey: privateKey,
@@ -269,14 +272,16 @@ func TestSigningKeyRejectsRowMove(t *testing.T) {
 	_, rs := newTestStore(t, WithMasterKey(key))
 
 	first := domain.SigningKey{
-		KeyID: "first-signing-key", Alg: "ed25519",
+		CreatedAt: time.Now().UTC(),
+		KeyID:     "first-signing-key", Alg: "ed25519",
 		PrivateKey: []byte("first-private-key"), PublicKey: []byte("first-public-key"),
 	}
 	if err := rs.UpsertSigningKey(ctx, first); err != nil {
 		t.Fatalf("UpsertSigningKey(first): %v", err)
 	}
 	second := domain.SigningKey{
-		KeyID: "second-signing-key", Alg: "ed25519",
+		CreatedAt: time.Now().UTC(),
+		KeyID:     "second-signing-key", Alg: "ed25519",
 		PrivateKey: []byte("second-private-key"), PublicKey: []byte("second-public-key"),
 	}
 	if err := rs.UpsertSigningKey(ctx, second); err != nil {
@@ -424,11 +429,13 @@ func TestMigrateWithMasterKeySealsAllExistingSecrets(t *testing.T) {
 
 	signingKeys := []domain.SigningKey{
 		{
-			KeyID: "migration-signing-key-one", Alg: "ed25519",
+			CreatedAt: time.Now().UTC(),
+			KeyID:     "migration-signing-key-one", Alg: "ed25519",
 			PrivateKey: []byte("migration-private-secret-one"), PublicKey: []byte("public-one"),
 		},
 		{
-			KeyID: "migration-signing-key-two", Alg: "ed25519",
+			CreatedAt: time.Now().UTC(),
+			KeyID:     "migration-signing-key-two", Alg: "ed25519",
 			PrivateKey: []byte("migration-private-secret-two"), PublicKey: []byte("public-two"),
 		},
 	}
@@ -438,7 +445,8 @@ func TestMigrateWithMasterKeySealsAllExistingSecrets(t *testing.T) {
 		}
 	}
 	verifyOnlyKey := domain.SigningKey{
-		KeyID: "migration-verify-only-key", Alg: "ed25519", PublicKey: []byte("verify-public"),
+		CreatedAt: time.Now().UTC(),
+		KeyID:     "migration-verify-only-key", Alg: "ed25519", PublicKey: []byte("verify-public"),
 	}
 	if err := rawRealm.UpsertSigningKey(ctx, verifyOnlyKey); err != nil {
 		t.Fatalf("UpsertSigningKey(%s): %v", verifyOnlyKey.KeyID, err)
@@ -895,13 +903,15 @@ func TestMigrateSealingFailureRollsBackEverySecretAndVerifier(t *testing.T) {
 	}
 	privateKey := []byte("rollback-private-secret")
 	if err := rawRealm.UpsertSigningKey(ctx, domain.SigningKey{
-		KeyID: "rollback-signing-key", Alg: "ed25519",
+		CreatedAt: time.Now().UTC(),
+		KeyID:     "rollback-signing-key", Alg: "ed25519",
 		PrivateKey: privateKey, PublicKey: []byte("public"),
 	}); err != nil {
 		t.Fatalf("UpsertSigningKey: %v", err)
 	}
 	if err := rawRealm.UpsertSigningKey(ctx, domain.SigningKey{
-		KeyID: "", Alg: "ed25519",
+		CreatedAt: time.Now().UTC(),
+		KeyID:     "", Alg: "ed25519",
 		PrivateKey: []byte("invalid-row-private-secret"), PublicKey: []byte("public"),
 	}); err != nil {
 		t.Fatalf("UpsertSigningKey with empty row id: %v", err)

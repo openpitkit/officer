@@ -26,7 +26,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
@@ -1016,13 +1015,4 @@ func rowExists(ctx context.Context, q sqlQueryer, query string, args ...any) (bo
 		return false, fmt.Errorf("store: restore existence check: %w", err)
 	}
 	return true, nil
-}
-
-// atOrNow formats t as fixed-width UTC text, substituting the current time when
-// t is the zero value so a NOT NULL at/issued_at column is never written empty.
-func atOrNow(t time.Time) string {
-	if t.IsZero() {
-		return nowStr()
-	}
-	return timeStr(t)
 }

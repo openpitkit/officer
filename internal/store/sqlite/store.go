@@ -430,6 +430,14 @@ func nowStr() string {
 	return timeStr(time.Now())
 }
 
+// nowStored returns the current time and its stored text. The time is UTC at
+// nanosecond precision without a monotonic reading, so it equals what a read of
+// the column parses back.
+func nowStored() (time.Time, string) {
+	now := time.Now().UTC().Round(0)
+	return now, timeStr(now)
+}
+
 // newExternalID draws 16 crypto/rand bytes and encodes them as a domain external
 // id. This is the single place machine-record external ids are generated; there
 // is no per-insert existence check because 128 bits of randomness make a
@@ -671,6 +679,24 @@ func requireSource(kind string, source domain.Source) error {
 		return fmt.Errorf("%s source is required: %w", kind, domain.ErrInvalid)
 	}
 	return nil
+}
+
+// requireAt rejects a zero record time with an error that names the record
+// kind. Restore is the write path where the caller supplies the row time; the
+// store never substitutes its own clock for a missing one.
+func requireAt(kind string, at time.Time) error {
+	if at.IsZero() {
+		return fmt.Errorf("%s time is required: %w", kind, domain.ErrInvalid)
+	}
+	return nil
+}
+
+// requireProvenance is requireSource and requireAt for a restored row.
+func requireProvenance(kind string, source domain.Source, at time.Time) error {
+	if err := requireSource(kind, source); err != nil {
+		return err
+	}
+	return requireAt(kind, at)
 }
 
 func isSQLiteMissingTable(err error) bool {

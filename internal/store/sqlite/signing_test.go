@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,7 +105,8 @@ func TestSigningKeyActiveSwitchingAndDeactivateAll(t *testing.T) {
 
 	// First key is active.
 	k1 := domain.SigningKey{
-		KeyID: "k1", Alg: "ed25519", PublicKey: []byte{1}, PrivateKey: []byte{1}, Active: true,
+		CreatedAt: time.Now().UTC(),
+		KeyID:     "k1", Alg: "ed25519", PublicKey: []byte{1}, PrivateKey: []byte{1}, Active: true,
 	}
 	if err := rs.UpsertSigningKey(ctx, k1); err != nil {
 		t.Fatalf("UpsertSigningKey(k1): %v", err)
@@ -116,7 +118,8 @@ func TestSigningKeyActiveSwitchingAndDeactivateAll(t *testing.T) {
 		t.Fatalf("DeactivateAllSigningKeys: %v", err)
 	}
 	k2 := domain.SigningKey{
-		KeyID: "k2", Alg: "ed25519", PublicKey: []byte{2}, PrivateKey: []byte{2}, Active: true,
+		CreatedAt: time.Now().UTC(),
+		KeyID:     "k2", Alg: "ed25519", PublicKey: []byte{2}, PrivateKey: []byte{2}, Active: true,
 	}
 	if err := rs.UpsertSigningKey(ctx, k2); err != nil {
 		t.Fatalf("UpsertSigningKey(k2): %v", err)
@@ -201,5 +204,19 @@ func TestSigningConfigRoundTrip(t *testing.T) {
 	v, ok, _ = rs.GetSigningConfig(ctx, "unset_key")
 	if !ok || v != "x" {
 		t.Fatalf("unset_key after set = %q ok=%v, want x true", v, ok)
+	}
+}
+
+func TestUpsertSigningKeyRejectsZeroCreatedAt(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+		KeyID: "k1", Alg: "ed25519", PublicKey: []byte{1}, PrivateKey: []byte{1}, Active: true,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("UpsertSigningKey(zero CreatedAt) = %v, want ErrInvalid", err)
+	}
+	if want := "signing key time is required"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("UpsertSigningKey error = %q, want it to contain %q", err, want)
 	}
 }

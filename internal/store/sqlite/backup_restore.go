@@ -29,7 +29,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
@@ -397,9 +396,11 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []backup.Bala
 		if rt.skip(backup.SectionPositions, exists) {
 			continue
 		}
-		updatedAt := b.UpdatedAt
-		if updatedAt.IsZero() {
-			updatedAt = time.Now().UTC()
+		if err := requireAt("balance", b.UpdatedAt); err != nil {
+			return fmt.Errorf(
+				"store: restore %s balance %q/%q: %w",
+				backup.SectionPositions, b.Account, b.Asset, err,
+			)
 		}
 		available := settleOrZero(b.Available)
 		held := settleOrZero(b.Held)
@@ -414,7 +415,7 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []backup.Bala
 			accountID, assetID,
 			available, held, incoming, realizedPnl, b.RealizedPnlHaltReason,
 			b.AverageEntryPrice,
-			timeStr(updatedAt),
+			timeStr(b.UpdatedAt),
 		); err != nil {
 			return fmt.Errorf("store: restore balance %q/%q: %w", b.Account, b.Asset, err)
 		}
@@ -873,10 +874,6 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 		if rt.skip(backup.SectionGeneralSettings, exists) {
 			continue
 		}
-		createdAt := key.CreatedAt
-		if createdAt.IsZero() {
-			createdAt = time.Now().UTC()
-		}
 		if exists {
 			if _, err := rt.tx.ExecContext(
 				ctx,
@@ -884,7 +881,7 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 				 SET alg = ?, public_key = ?, created_at = ?
 				 WHERE key_id = ?`,
 				key.Alg, key.PublicKey,
-				timeStr(createdAt), key.KeyID,
+				timeStr(key.CreatedAt), key.KeyID,
 			); err != nil {
 				return fmt.Errorf("store: restore signing key %q: %w", key.KeyID, err)
 			}
@@ -901,7 +898,7 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 				 (key_id, alg, private_key, public_key, created_at, active)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
 				key.KeyID, key.Alg, privateKey, key.PublicKey,
-				timeStr(createdAt), false,
+				timeStr(key.CreatedAt), false,
 			); err != nil {
 				return fmt.Errorf("store: restore signing key %q: %w", key.KeyID, err)
 			}
@@ -926,6 +923,9 @@ func validateRestoredSigningKeys(keys []backup.SigningKey) error {
 }
 
 func validateRestoredSigningKey(key backup.SigningKey) error {
+	if key.CreatedAt.IsZero() {
+		return fmt.Errorf("created at is required: %w", domain.ErrInvalid)
+	}
 	if key.Alg != fwsigning.AlgEd25519 {
 		return fmt.Errorf("algorithm %q: %w", key.Alg, domain.ErrInvalid)
 	}
@@ -1040,7 +1040,7 @@ func (rt *restoreTx) restoreAdjustment(
 	if err != nil {
 		return err
 	}
-	if err := requireSource("adjustment", rec.Source); err != nil {
+	if err := requireProvenance("adjustment", rec.Source, rec.At); err != nil {
 		return fmt.Errorf(
 			"store: restore %s adjustment %q: %w",
 			backup.SectionActivityHistory,
@@ -1074,7 +1074,7 @@ func (rt *restoreTx) restoreAdjustment(
 		 (external_id, account_id, asset_id, principal_id, at, source_id, status_id, request, outcome)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ExternalID.Bytes(), accountID, assetID, principalID,
-		atOrNow(rec.At), sourceID, statusID,
+		timeStr(rec.At), sourceID, statusID,
 		string(reqJSON), string(outcomeJSON),
 	); err != nil {
 		return fmt.Errorf("store: restore adjustment %q: %w", rec.ExternalID, err)
@@ -1124,7 +1124,7 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 	if rt.skipMachine(backup.SectionActivityHistory, exists) {
 		return nil
 	}
-	if err := requireSource("order", o.Source); err != nil {
+	if err := requireProvenance("order", o.Source, o.At); err != nil {
 		return fmt.Errorf(
 			"store: restore %s order %q: %w",
 			backup.SectionActivityHistory,
@@ -1179,7 +1179,7 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 			     leaves_quantity = ?, reserved_quantity = ?, price = ?,
 			     status_id = ?, drop_copy = ?, lock = ?
 			 WHERE external_id = ?`,
-			accountID, baseID, quoteID, principalID, atOrNow(o.At), sourceID,
+			accountID, baseID, quoteID, principalID, timeStr(o.At), sourceID,
 			sideID, amountKindID, o.AmountValue,
 			o.Leaves, o.ReservedQuantity, o.Price,
 			statusID, o.DropCopy, nullableBlob(o.Lock), o.ExternalID.Bytes(),
@@ -1194,7 +1194,7 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 		  leaves_quantity, reserved_quantity, price, status_id, drop_copy, lock)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		o.ExternalID.Bytes(), accountID, baseID, quoteID, principalID,
-		atOrNow(o.At), sourceID, sideID, amountKindID,
+		timeStr(o.At), sourceID, sideID, amountKindID,
 		o.AmountValue, o.Leaves, o.ReservedQuantity, o.Price,
 		statusID, o.DropCopy, nullableBlob(o.Lock),
 	); err != nil {
@@ -1235,7 +1235,7 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 			err,
 		)
 	}
-	if err := requireSource("order event", ev.Source); err != nil {
+	if err := requireProvenance("order event", ev.Source, ev.At); err != nil {
 		return fmt.Errorf(
 			"store: restore %s order event %q: %w",
 			backup.SectionActivityHistory,
@@ -1258,7 +1258,7 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 			`UPDATE order_event
 			 SET order_id = ?, principal_id = ?, at = ?, type_id = ?, source_id = ?, payload = ?
 			 WHERE external_id = ?`,
-			orderID, principalID, atOrNow(ev.At), typeID, sourceID,
+			orderID, principalID, timeStr(ev.At), typeID, sourceID,
 			string(payloadJSON), ev.ExternalID.Bytes(),
 		); err != nil {
 			return fmt.Errorf("store: restore order event %q: %w", ev.ExternalID, err)
@@ -1268,7 +1268,7 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 		`INSERT OR REPLACE INTO order_event
 		 (external_id, order_id, principal_id, at, type_id, source_id, payload)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		ev.ExternalID.Bytes(), orderID, principalID, atOrNow(ev.At),
+		ev.ExternalID.Bytes(), orderID, principalID, timeStr(ev.At),
 		typeID, sourceID, string(payloadJSON),
 	); err != nil {
 		return fmt.Errorf("store: restore order event %q: %w", ev.ExternalID, err)
@@ -1300,12 +1300,20 @@ func (rt *restoreTx) restoreExecutionReport(
 	if rt.skipMachine(backup.SectionActivityHistory, exists) {
 		return nil
 	}
+	if err := requireAt("execution report", report.At); err != nil {
+		return fmt.Errorf(
+			"store: restore %s execution report %q: %w",
+			backup.SectionActivityHistory,
+			report.ExternalID,
+			err,
+		)
+	}
 	if exists && rt.mode == backup.RestoreModeOverwrite {
 		if _, err := rt.tx.ExecContext(
 			ctx,
 			`UPDATE execution_report SET order_id = ?, at = ? WHERE external_id = ?`,
 			orderID,
-			atOrNow(report.At),
+			timeStr(report.At),
 			report.ExternalID.Bytes(),
 		); err != nil {
 			return fmt.Errorf(
@@ -1338,7 +1346,7 @@ func (rt *restoreTx) restoreExecutionReport(
 		`INSERT OR REPLACE INTO execution_report (external_id, order_id, at) VALUES (?, ?, ?)`,
 		report.ExternalID.Bytes(),
 		orderID,
-		atOrNow(report.At),
+		timeStr(report.At),
 	); err != nil {
 		return fmt.Errorf(
 			"store: restore execution report %q: %w", report.ExternalID, err,
@@ -1520,7 +1528,7 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 	if err := restoreValidationError(validateCommission(t.Commission)); err != nil {
 		return fmt.Errorf("store: restore trade %q: %w", t.ExternalID, err)
 	}
-	if err := requireSource("trade", t.Source); err != nil {
+	if err := requireProvenance("trade", t.Source, t.At); err != nil {
 		return fmt.Errorf(
 			"store: restore %s trade %q: %w",
 			backup.SectionActivityHistory,
@@ -1554,7 +1562,7 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 		  commission_amount, commission_currency)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ExternalID.Bytes(), orderID, accountID, baseID, quoteID, principalID,
-		atOrNow(t.At), sourceID, sideID, t.Quantity, t.Price, t.LockPrice,
+		timeStr(t.At), sourceID, sideID, t.Quantity, t.Price, t.LockPrice,
 		commissionAmount(t.Commission), commissionCurrency(t.Commission),
 	); err != nil {
 		return fmt.Errorf("store: restore trade %q: %w", t.ExternalID, err)
@@ -1586,7 +1594,7 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 		if rt.skipMachine(backup.SectionAuditLog, exists) {
 			continue
 		}
-		if err := requireSource("audit", row.Source); err != nil {
+		if err := requireProvenance("audit", row.Source, row.At); err != nil {
 			return fmt.Errorf(
 				"store: restore %s audit %q: %w",
 				backup.SectionAuditLog,
@@ -1621,7 +1629,7 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			row.ExternalID.Bytes(), row.Account.String(),
 			row.AccountTitle, row.Asset, row.Group, row.Actor, row.ActorTitle,
-			atOrNow(row.At), actionID, sourceID, row.Detail,
+			timeStr(row.At), actionID, sourceID, row.Detail,
 			row.OrderID, row.Verdict, row.RejectCode,
 		); err != nil {
 			return fmt.Errorf("store: restore audit %q: %w", row.ExternalID, err)

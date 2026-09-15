@@ -149,7 +149,7 @@ func createOrderTx(
 	if err != nil {
 		return o, err
 	}
-	at := nowStr()
+	now, at := nowStored()
 	if _, err := q.ExecContext(
 		ctx,
 		`INSERT INTO order_record
@@ -170,7 +170,7 @@ func createOrderTx(
 		return o, fmt.Errorf("store: create order: %w", err)
 	}
 	o.ExternalID = xid
-	o.At = mustParseTime(at)
+	o.At = now
 	return o, nil
 }
 
@@ -859,7 +859,7 @@ func (r *realmStore) AppendOrderEvent(
 	if err != nil {
 		return ev, fmt.Errorf("store: marshal event payload: %w", err)
 	}
-	at := nowStr()
+	now, at := nowStored()
 	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO order_event
@@ -871,7 +871,7 @@ func (r *realmStore) AppendOrderEvent(
 		return ev, fmt.Errorf("store: append order event: %w", err)
 	}
 	ev.ExternalID = xid
-	ev.At = mustParseTime(at)
+	ev.At = now
 	return ev, nil
 }
 
@@ -1024,17 +1024,17 @@ func (r *realmStore) CreateTrade(
 	if err != nil {
 		return domain.Trade{}, err
 	}
-	xid, at, err := r.insertTrade(ctx, db, t)
+	xid, now, err := r.insertTrade(ctx, db, t)
 	if err != nil {
 		return t, err
 	}
 	t.ExternalID = xid
-	t.At = mustParseTime(at)
+	t.At = now
 	return t, nil
 }
 
 // insertTrade resolves a trade's foreign keys and inserts the row through exec
-// (a *sql.DB or *sql.Tx), returning the assigned external id and timestamp text.
+// (a *sql.DB or *sql.Tx), returning the assigned external id and record time.
 // It is shared by CreateTrade and the settlement transaction so both write an
 // identical row.
 func (r *realmStore) insertTrade(
@@ -1042,50 +1042,50 @@ func (r *realmStore) insertTrade(
 		sqlQueryer
 		sqlExecer
 	}, t domain.Trade,
-) (domain.ExternalID, string, error) {
+) (domain.ExternalID, time.Time, error) {
 	if err := requireSource("trade", t.Source); err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	if err := validateCommission(t.Commission); err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	orderID, err := lookupOrderID(ctx, exec, t.Order)
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	accountID, err := resolveAccountID(ctx, exec, t.Account)
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	baseID, err := resolveAssetID(ctx, exec, t.BaseAsset)
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	quoteID, err := resolveAssetID(ctx, exec, t.QuoteAsset)
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	principalID, err := resolveOptionalPrincipalID(ctx, exec, t.Principal)
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	dictionaries, err := r.dictionaries()
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(t.Source))
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	sideID, err := dictionaries.id(orderSideTable, "order side", string(t.Side))
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
 	xid, err := newExternalID()
 	if err != nil {
-		return domain.ExternalID(""), "", err
+		return domain.ExternalID(""), time.Time{}, err
 	}
-	at := nowStr()
+	now, at := nowStored()
 	if _, err := exec.ExecContext(
 		ctx,
 		`INSERT INTO trade
@@ -1097,9 +1097,9 @@ func (r *realmStore) insertTrade(
 		at, sourceID, sideID, t.Quantity, t.Price, t.LockPrice,
 		commissionAmount(t.Commission), commissionCurrency(t.Commission),
 	); err != nil {
-		return domain.ExternalID(""), "", fmt.Errorf("store: create trade: %w", err)
+		return domain.ExternalID(""), time.Time{}, fmt.Errorf("store: create trade: %w", err)
 	}
-	return xid, at, nil
+	return xid, now, nil
 }
 
 // ListTrades returns the most recent n trade for an account, newest first. An
@@ -2133,7 +2133,7 @@ func appendOrderEventReturningTx(
 	if err != nil {
 		return domain.OrderEvent{}, 0, err
 	}
-	at := nowStr()
+	now, at := nowStored()
 	payloadJSON, err := json.Marshal(ev.Payload)
 	if err != nil {
 		return domain.OrderEvent{}, 0, fmt.Errorf("store: marshal event payload: %w", err)
@@ -2154,7 +2154,7 @@ func appendOrderEventReturningTx(
 		return domain.OrderEvent{}, 0, fmt.Errorf("store: order event row id: %w", err)
 	}
 	ev.ExternalID = xid
-	ev.At = mustParseTime(at)
+	ev.At = now
 	return ev, eventRowID, nil
 }
 
@@ -2358,14 +2358,6 @@ func nullableBlob(b []byte) any {
 		return nil
 	}
 	return b
-}
-
-// mustParseTime parses a timestamp the store itself just formatted via nowStr;
-// the format is guaranteed, so a parse error is impossible and the zero
-// time is returned defensively rather than panicking on the write path.
-func mustParseTime(s string) time.Time {
-	t, _ := time.Parse(time.RFC3339Nano, s)
-	return t
 }
 
 // settleOrZero maps an empty amount string to "0" so a balance column is never
