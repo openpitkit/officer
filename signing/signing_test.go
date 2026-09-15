@@ -26,7 +26,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -98,20 +97,6 @@ func (f *fakeStore) SetSigningConfig(_ context.Context, key, value string) error
 	return nil
 }
 
-type recordingReplayGuard struct {
-	ctx        context.Context
-	approvalID string
-	nonce      string
-	err        error
-}
-
-func (g *recordingReplayGuard) Record(ctx context.Context, approvalID, nonce string) error {
-	g.ctx = ctx
-	g.approvalID = approvalID
-	g.nonce = nonce
-	return g.err
-}
-
 // samplePayload builds a representative accepted approval payload.
 func samplePayload() domain.ApprovalPayload {
 	now := time.Now().UTC()
@@ -158,7 +143,7 @@ func expectFor(p domain.ApprovalPayload) fwsigning.VerifyParams {
 func newServiceWithKey(t *testing.T) (*Service, *fakeStore) {
 	t.Helper()
 	st := newFakeStore()
-	svc, err := New(st, NewMemoryReplayGuard())
+	svc, err := New(st)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -168,74 +153,9 @@ func newServiceWithKey(t *testing.T) (*Service, *fakeStore) {
 	return svc, st
 }
 
-func TestNewRejectsNilReplayGuard(t *testing.T) {
-	if _, err := New(newFakeStore(), nil); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("New with nil replay guard = %v, want ErrInvalid", err)
-	}
-}
-
-func TestMemoryReplayGuardRejectsReplay(t *testing.T) {
-	guard := NewMemoryReplayGuard()
-	ctx := context.Background()
-	if err := guard.Record(ctx, "approval-1", "nonce-1"); err != nil {
-		t.Fatalf("first Record: %v", err)
-	}
-	err := guard.Record(ctx, "approval-1", "nonce-1")
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("second Record = %v, want ErrConflict", err)
-	}
-	want := `signing: nonce replay for approval "approval-1": conflict`
-	if err.Error() != want {
-		t.Fatalf("replay error = %q, want %q", err, want)
-	}
-}
-
-func TestMemoryReplayGuardEvictsOldest(t *testing.T) {
-	guard := NewMemoryReplayGuard()
-	ctx := context.Background()
-	for i := range maxUsedNonces {
-		if err := guard.Record(ctx, "approval", strconv.Itoa(i)); err != nil {
-			t.Fatalf("Record %d: %v", i, err)
-		}
-	}
-	if err := guard.Record(ctx, "approval", "overflow"); err != nil {
-		t.Fatalf("Record overflow: %v", err)
-	}
-	if err := guard.Record(ctx, "approval", "1"); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("second-oldest Record = %v, want ErrConflict", err)
-	}
-	if err := guard.Record(ctx, "approval", "0"); err != nil {
-		t.Fatalf("evicted oldest Record: %v", err)
-	}
-}
-
-func TestVerifyImmediateUsesInjectedReplayGuard(t *testing.T) {
-	guardErr := errors.New("guard unavailable")
-	guard := &recordingReplayGuard{err: guardErr}
-	st := newFakeStore()
-	svc, err := New(st, guard)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if _, err := svc.GenerateKey(context.Background()); err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	p := samplePayload()
-	p.Mode = "immediate"
-	token, err := svc.Sign(p)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
-	type contextKey struct{}
-	ctx := context.WithValue(context.Background(), contextKey{}, "verify")
-	if _, err := svc.Verify(ctx, token, expectFor(p)); !errors.Is(err, guardErr) {
-		t.Errorf("Verify = %v, want guard error", err)
-	}
-	if guard.ctx == nil || guard.ctx.Value(contextKey{}) != "verify" {
-		t.Errorf("guard did not receive Verify context")
-	}
-	if guard.approvalID != p.ApprovalID || guard.nonce != p.Nonce {
-		t.Errorf("guard pair = (%q, %q), want (%q, %q)", guard.approvalID, guard.nonce, p.ApprovalID, p.Nonce)
+func TestNewRejectsNilStore(t *testing.T) {
+	if _, err := New(nil); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("New with nil store = %v, want ErrInvalid", err)
 	}
 }
 
@@ -372,7 +292,7 @@ func TestVerifyWrongKeyFails(t *testing.T) {
 func TestPublicKeyByID_ResolvesRotatedKey(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeStore()
-	svc, err := New(st, NewMemoryReplayGuard())
+	svc, err := New(st)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -638,22 +558,6 @@ func TestVerifyRejectsUnsupportedPayloadVersion(t *testing.T) {
 	}
 }
 
-func TestVerifyImmediateNonceReplayRejected(t *testing.T) {
-	svc, _ := newServiceWithKey(t)
-	p := samplePayload()
-	p.Mode = "immediate"
-	token, err := svc.Sign(p)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
-	if _, err := svc.Verify(context.Background(), token, expectFor(p)); err != nil {
-		t.Fatalf("first Verify: %v", err)
-	}
-	if _, err := svc.Verify(context.Background(), token, expectFor(p)); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("second Verify = %v, want ErrConflict", err)
-	}
-}
-
 func TestESignOffNoneAlg(t *testing.T) {
 	svc, st := newServiceWithKey(t)
 	ctx := context.Background()
@@ -810,7 +714,7 @@ func TestImportOpenSSH(t *testing.T) {
 func assertImportSignsVerifies(t *testing.T, material, format string, priv ed25519.PrivateKey) {
 	t.Helper()
 	st := newFakeStore()
-	svc, err := New(st, NewMemoryReplayGuard())
+	svc, err := New(st)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -837,7 +741,7 @@ func assertImportSignsVerifies(t *testing.T, material, format string, priv ed255
 
 func TestImportUnsupportedFormat(t *testing.T) {
 	st := newFakeStore()
-	svc, _ := New(st, NewMemoryReplayGuard())
+	svc, _ := New(st)
 	if _, err := svc.ImportKey(context.Background(), "x", "bogus"); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("expected ErrInvalid for unsupported format, got %v", err)
 	}
@@ -845,7 +749,7 @@ func TestImportUnsupportedFormat(t *testing.T) {
 
 func TestImportRawBase64BadLength(t *testing.T) {
 	st := newFakeStore()
-	svc, _ := New(st, NewMemoryReplayGuard())
+	svc, _ := New(st)
 	short := base64.StdEncoding.EncodeToString([]byte("too short"))
 	if _, err := svc.ImportKey(context.Background(), short, FormatRawBase64); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("expected ErrInvalid for bad seed length, got %v", err)
@@ -907,7 +811,7 @@ func TestActivePublicKeyExportRoundTrips(t *testing.T) {
 
 func TestActivePublicKeyNoKey(t *testing.T) {
 	st := newFakeStore()
-	svc, _ := New(st, NewMemoryReplayGuard())
+	svc, _ := New(st)
 	if _, err := svc.ActivePublicKey(FormatPEMPKCS8); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound with no active key, got %v", err)
 	}
@@ -915,7 +819,7 @@ func TestActivePublicKeyNoKey(t *testing.T) {
 
 func TestSignNoActiveKey(t *testing.T) {
 	st := newFakeStore()
-	svc, _ := New(st, NewMemoryReplayGuard())
+	svc, _ := New(st)
 	if _, err := svc.Sign(samplePayload()); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound signing without a key, got %v", err)
 	}
@@ -923,7 +827,7 @@ func TestSignNoActiveKey(t *testing.T) {
 
 func TestReloadDropsActiveKeyRemovedOutsideService(t *testing.T) {
 	st := newFakeStore()
-	svc, err := New(st, NewMemoryReplayGuard())
+	svc, err := New(st)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -945,7 +849,7 @@ func TestVerifyOnlyActiveKeyFailsToLoad(t *testing.T) {
 	}
 	st := newFakeStore()
 	st.keys[key.KeyID] = key
-	if _, err := New(st, NewMemoryReplayGuard()); !errors.Is(err, ErrNoPrivateMaterial) {
+	if _, err := New(st); !errors.Is(err, ErrNoPrivateMaterial) {
 		t.Fatalf("New with active verify-only key = %v, want ErrNoPrivateMaterial", err)
 	}
 }

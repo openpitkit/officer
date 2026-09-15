@@ -1577,9 +1577,10 @@ type ApprovalPayload struct {
 	PolicySummary string `json:"policySummary"`
 	EstimatePrice string `json:"estimatePrice"` // decimal string = engine lock price
 
-	// Lifecycle / anti-replay.
+	// Lifecycle. Nonce is fresh per issuance so no two issued payloads are
+	// byte-identical; nothing consumes it on verification.
 	IssuedAt string `json:"issuedAt"` // RFC3339Nano UTC
-	Nonce    string `json:"nonce"`    // single-use, 128-bit base64url
+	Nonce    string `json:"nonce"`    // 128-bit base64url
 
 	// Key binding.
 	KeyID string `json:"keyId"`

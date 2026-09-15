@@ -74,56 +74,12 @@ type Store interface {
 	SetSigningConfig(ctx context.Context, key, value string) error
 }
 
-// ReplayGuard records single-use approval-token bindings. Record must return an
-// error wrapping domain.ErrConflict when the pair was already recorded.
-type ReplayGuard interface {
-	Record(ctx context.Context, approvalID, nonce string) error
-}
-
-// maxUsedNonces bounds the single-use replay set for immediate tokens. The cap
-// keeps recent nonces for replay detection while bounding memory over an
-// unbounded run. Eviction is FIFO (oldest inserted first) once the cap is
-// exceeded.
-const maxUsedNonces = 1 << 16
-
-// MemoryReplayGuard is a bounded in-memory ReplayGuard. Once full, it evicts
-// the oldest recorded pair first.
-type MemoryReplayGuard struct {
-	mu    sync.Mutex
-	used  map[string]struct{}
-	order []string
-}
-
-// NewMemoryReplayGuard constructs an empty in-memory replay guard.
-func NewMemoryReplayGuard() *MemoryReplayGuard {
-	return &MemoryReplayGuard{used: make(map[string]struct{})}
-}
-
-// Record records an approval ID and nonce pair unless it is still present.
-func (g *MemoryReplayGuard) Record(_ context.Context, approvalID, nonce string) error {
-	key := approvalID + ":" + nonce
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if _, ok := g.used[key]; ok {
-		return fmt.Errorf("signing: nonce replay for approval %q: %w", approvalID, domain.ErrConflict)
-	}
-	if len(g.order) >= maxUsedNonces {
-		oldest := g.order[0]
-		g.order = g.order[1:]
-		delete(g.used, oldest)
-	}
-	g.used[key] = struct{}{}
-	g.order = append(g.order, key)
-	return nil
-}
-
 // Service signs and verifies approval tokens against the persisted key set. The
 // active keypair is cached in memory; key generation and import refresh it, and
 // callers that change keys through another path must call Reload after commit.
 // A nil active key means no key is configured yet.
 type Service struct {
-	store       Store
-	replayGuard ReplayGuard
+	store Store
 
 	mu      sync.RWMutex
 	active  *domain.SigningKey // PrivateKey populated; nil when none
@@ -132,13 +88,13 @@ type Service struct {
 
 var _ fwsigning.Service = (*Service)(nil)
 
-// New constructs a Service backed by st and guard and loads the active key (if
-// any) into the in-memory cache.
-func New(st Store, guard ReplayGuard) (*Service, error) {
-	if guard == nil {
-		return nil, fmt.Errorf("signing: nil replay guard: %w", domain.ErrInvalid)
+// New constructs a Service backed by st and loads the active key (if any) into
+// the in-memory cache.
+func New(st Store) (*Service, error) {
+	if st == nil {
+		return nil, fmt.Errorf("signing: nil store: %w", domain.ErrInvalid)
 	}
-	s := &Service{store: st, replayGuard: guard}
+	s := &Service{store: st}
 	if err := s.reloadActive(context.Background()); err != nil {
 		return nil, err
 	}
@@ -372,22 +328,7 @@ func (s *Service) Verify(
 	if err := rebind(env.Approval, expect); err != nil {
 		return fwsigning.VerifyResult{}, err
 	}
-	if err := s.consumeImmediateNonce(ctx, env.Approval); err != nil {
-		return fwsigning.VerifyResult{}, err
-	}
 	return fwsigning.VerifyResult{Payload: env.Approval, Signed: signed}, nil
-}
-
-// consumeImmediateNonce enforces single-use replay protection for an immediate
-// token: the (approvalID, nonce) pair may be verified at most once.
-func (s *Service) consumeImmediateNonce(ctx context.Context, payload domain.ApprovalPayload) error {
-	if payload.Mode != "immediate" {
-		return nil
-	}
-	if payload.ApprovalID == "" || payload.Nonce == "" {
-		return fmt.Errorf("signing: immediate token missing replay binding: %w", domain.ErrInvalid)
-	}
-	return s.replayGuard.Record(ctx, payload.ApprovalID, payload.Nonce)
 }
 
 // publicKeyFor resolves the public key bound to keyID, preferring the cached

@@ -45,7 +45,7 @@
   "eSign": {
     "sectionTitle": "Electronic Signature",
     "label": "Require signature on approval tokens",
-    "description": "When enabled, every approval token is signed with the active Ed25519 key. Connectors verify the signature before executing. When disabled, tokens carry the full payload and binding but no cryptographic signature - replay and expiry checks still apply.",
+    "description": "When enabled, every approval token is signed with the active Ed25519 key. Connectors verify the signature before executing. When disabled, tokens carry the full payload and binding but no cryptographic signature; the binding is still checked.",
     "missingKeyError": "Generate or import a signing key before enabling electronic signatures.",
     "busy": "Saving…"
   }

@@ -191,7 +191,7 @@ func reproURL(id domain.ExternalID) string {
 func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 	ctx := context.Background()
 	st := newReproSigningStore()
-	signer, err := appsigning.New(st, appsigning.NewMemoryReplayGuard())
+	signer, err := appsigning.New(st)
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestOrderReproduction_PreservesOrderedRejectsAndDetails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := newReproSigningStore()
-	signer, err := appsigning.New(st, appsigning.NewMemoryReplayGuard())
+	signer, err := appsigning.New(st)
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}
@@ -437,7 +437,7 @@ func assertReproducedRejects(
 func TestOrderReproduction_RotatedKeyResolvesNonActive(t *testing.T) {
 	ctx := context.Background()
 	st := newReproSigningStore()
-	signer, err := appsigning.New(st, appsigning.NewMemoryReplayGuard())
+	signer, err := appsigning.New(st)
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}
@@ -566,7 +566,7 @@ func TestOrderReproduction_ESignOff(t *testing.T) {
 func TestOrderReproduction_SignedResultFields(t *testing.T) {
 	ctx := context.Background()
 	st := newReproSigningStore()
-	signer, err := appsigning.New(st, appsigning.NewMemoryReplayGuard())
+	signer, err := appsigning.New(st)
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}
@@ -666,7 +666,7 @@ func TestOrderReproduction_SignedResultFields(t *testing.T) {
 func TestOrderReproduction_ConfirmCommissionSubtotalsArray(t *testing.T) {
 	ctx := context.Background()
 	st := newReproSigningStore()
-	signer, err := appsigning.New(st, appsigning.NewMemoryReplayGuard())
+	signer, err := appsigning.New(st)
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}

@@ -23,7 +23,7 @@ is a command or under `internal/`, and cannot be imported:
 - `httpapi` - the REST routes (`RouteConfig`) and the service lifecycle routes.
 - `mcptools` - the MCP tool set (`RegisterTools`).
 - `engine` - the OpenPit engine adapter (`NewOpenPitEngineBuildFunc`).
-- `signing` - the Ed25519 approval signer and its replay guard.
+- `signing` - the Ed25519 approval signer.
 - `framework/app` - the `Builder` of a composition and the `App` it builds.
 - `framework/auth` - the request caller in the context, and `CallerResolver`.
 - `framework/backend` - the control-plane service behind REST and MCP.

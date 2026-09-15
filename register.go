@@ -80,7 +80,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		)
 	})
 	b.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) {
-		return signing.New(st, signing.NewMemoryReplayGuard())
+		return signing.New(st)
 	})
 	b.SetAuthorizer(httpx.AllowAll{})
 	b.SetCallerResolver(func(*http.Request) (domain.Caller, error) {

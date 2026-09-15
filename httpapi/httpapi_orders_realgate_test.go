@@ -446,7 +446,7 @@ func newRealServiceRouterWithEngine(t *testing.T) (
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	t.Cleanup(func() { _ = n.Close() })
-	signer, err := appsigning.New(realm, appsigning.NewMemoryReplayGuard())
+	signer, err := appsigning.New(realm)
 	if err != nil {
 		t.Fatalf("signing.New: %v", err)
 	}

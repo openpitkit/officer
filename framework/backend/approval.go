@@ -1177,7 +1177,7 @@ func verifyParamsFor(order domain.Order) fwsigning.VerifyParams {
 	}
 }
 
-// newNonce returns a single-use 128-bit base64url nonce.
+// newNonce returns a fresh random 128-bit base64url identifier.
 func newNonce() (string, error) {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
