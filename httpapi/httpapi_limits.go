@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"time"
 
-	backend "go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"

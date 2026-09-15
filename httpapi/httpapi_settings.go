@@ -20,7 +20,7 @@ package httpapi
 import (
 	"net/http"
 
-	backend "go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backend"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 

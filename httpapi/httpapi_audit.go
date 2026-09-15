@@ -23,7 +23,7 @@ import (
 	"net/url"
 	"strings"
 
-	backend "go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )

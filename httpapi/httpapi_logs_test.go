@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	backend "go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backend"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 

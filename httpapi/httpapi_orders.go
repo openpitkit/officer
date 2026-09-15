@@ -22,7 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	backend "go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
