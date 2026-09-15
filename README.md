@@ -1,6 +1,6 @@
 # Pit Officer
 
-[![CI](https://github.com/openpitkit/officer/actions/workflows/ci.yml/badge.svg)](https://github.com/openpitkit/officer/actions/workflows/ci.yml) [![Go version](https://img.shields.io/badge/go-1.25.11%2B-00ADD8)](https://pkg.go.dev/go.openpit.dev/officer) [![Module](https://img.shields.io/badge/module-go.openpit.dev%2Fofficer-00ADD8)](https://pkg.go.dev/go.openpit.dev/officer) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/openpitkit/officer/blob/main/LICENSE)
+[![CI](https://github.com/openpitkit/officer/actions/workflows/ci.yml/badge.svg)](https://github.com/openpitkit/officer/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/officer)](https://github.com/openpitkit/officer/releases) [![Go version](https://img.shields.io/badge/go-1.25.11%2B-00ADD8)](https://pkg.go.dev/go.openpit.dev/officer) [![Module](https://img.shields.io/badge/module-go.openpit.dev%2Fofficer-00ADD8)](https://pkg.go.dev/go.openpit.dev/officer) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/openpitkit/officer/blob/main/LICENSE)
 
 Pit Officer is a control plane for the embeddable [OpenPit](https://openpit.dev)
 pre-trade risk engine. It runs one engine in a local process over a local SQLite
