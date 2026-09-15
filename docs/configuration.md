@@ -62,9 +62,9 @@ variable is unset. Nothing later in the process can change it, so set the
 variable in the environment that starts `pit-officer`.
 
 `-runtime-library-path` does not choose the runtime. When it is set, `mcp` and
-`serve` compare it with the variable the process started with - surrounding
-whitespace trimmed and the path cleaned, so `/a/b/` and `/a/b` match - and
-refuse to start, naming both values, when they differ. The container image
+`serve` compare it with the library the SDK reports it loaded - the flag's
+surrounding whitespace trimmed and its path cleaned, so `/a/b/` and `/a/b`
+match - and refuse to start, naming both, when they differ. The container image
 leaves both unset.
 
 ## Browser launch

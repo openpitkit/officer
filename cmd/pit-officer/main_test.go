@@ -35,6 +35,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/internal/config"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
+	"go.openpit.dev/openpit"
 )
 
 func TestSetupResolvesMasterKey(t *testing.T) {
@@ -78,10 +79,9 @@ func TestSetupRejectsARuntimeLibraryPathTheProcessDidNotStartWith(t *testing.T) 
 		_ = app.Close()
 		t.Fatal("setup accepted a runtime library path the process did not start with")
 	}
-	processPath := os.Getenv(config.EnvRuntimeLibraryPath)
 	for _, want := range []string{
 		fmt.Sprintf("%q", configured),
-		fmt.Sprintf("%s=%q", config.EnvRuntimeLibraryPath, processPath),
+		fmt.Sprintf("%q", openpit.RuntimeLibraryPath()),
 		"loaded at process start",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -96,39 +96,36 @@ func TestSetupRejectsARuntimeLibraryPathTheProcessDidNotStartWith(t *testing.T) 
 func TestCheckRuntimeLibraryPath(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name        string
-		configured  string
-		processPath string
-		wantErr     bool
+		name       string
+		configured string
+		loaded     string
+		wantErr    bool
 	}{
-		{name: "not configured", configured: "", processPath: "/a/b"},
-		{name: "neither set", configured: "", processPath: ""},
-		{name: "same path", configured: "/a/b", processPath: "/a/b"},
-		{name: "trailing slash", configured: "/a/b/", processPath: "/a/b"},
-		{name: "unclean process path", configured: "/a/b", processPath: " /a/./b/ "},
-		{name: "different path", configured: "/a/c", processPath: "/a/b", wantErr: true},
-		{name: "variable unset", configured: "/a/b", processPath: "", wantErr: true},
-		{name: "blank against set", configured: " ", processPath: "/a/b", wantErr: true},
-		{name: "blank against unset", configured: " ", processPath: ""},
+		{name: "not configured", configured: "", loaded: "/a/b"},
+		{name: "same path", configured: "/a/b", loaded: "/a/b"},
+		{name: "trailing slash", configured: "/a/b/", loaded: "/a/b"},
+		{name: "padded", configured: " /a/./b ", loaded: "/a/b"},
+		{name: "different path", configured: "/a/c", loaded: "/a/b", wantErr: true},
+		{name: "blank", configured: " ", loaded: "/a/b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := checkRuntimeLibraryPath(tt.configured, tt.processPath)
+			err := checkRuntimeLibraryPath(tt.configured, tt.loaded)
 			if !tt.wantErr {
 				if err != nil {
 					t.Fatalf("checkRuntimeLibraryPath(%q, %q) = %v, want nil",
-						tt.configured, tt.processPath, err)
+						tt.configured, tt.loaded, err)
 				}
 				return
 			}
 			if err == nil {
 				t.Fatalf("checkRuntimeLibraryPath(%q, %q) = nil, want a mismatch",
-					tt.configured, tt.processPath)
+					tt.configured, tt.loaded)
 			}
 			for _, want := range []string{
-				fmt.Sprintf("%q", tt.configured),
-				fmt.Sprintf("%s=%q", config.EnvRuntimeLibraryPath, tt.processPath),
+				fmt.Sprintf("%q", strings.TrimSpace(tt.configured)),
+				fmt.Sprintf("%q", tt.loaded),
 				"loaded at process start",
 			} {
 				if !strings.Contains(err.Error(), want) {

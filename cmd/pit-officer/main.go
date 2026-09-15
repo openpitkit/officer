@@ -57,6 +57,7 @@ import (
 	"go.openpit.dev/officer/internal/config"
 	"go.openpit.dev/officer/internal/logtail"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
+	"go.openpit.dev/openpit"
 )
 
 // mcpPath is the route the streamable-HTTP MCP handler is mounted under in
@@ -139,7 +140,7 @@ func setup(
 	fatalHook func(error),
 ) (*frameworkapp.App, error) {
 	if err := checkRuntimeLibraryPath(
-		cfg.RuntimeLibraryPath, os.Getenv(config.EnvRuntimeLibraryPath),
+		cfg.RuntimeLibraryPath, openpit.RuntimeLibraryPath(),
 	); err != nil {
 		return nil, err
 	}
@@ -159,34 +160,24 @@ func setup(
 }
 
 // checkRuntimeLibraryPath fails when the configured runtime library path names
-// a library other than the one the OpenPit SDK loaded at process start from
-// processPath, the OPENPIT_RUNTIME_LIBRARY_PATH value this process started
-// with. Nothing after process start can change that library.
-func checkRuntimeLibraryPath(configured, processPath string) error {
+// a library other than loaded, the one the OpenPit SDK reports it loaded at
+// process start. Nothing after process start can change that library. The
+// configured path is an operator input: surrounding whitespace is trimmed, an
+// empty result means not configured, and the rest is cleaned before comparing.
+func checkRuntimeLibraryPath(configured, loaded string) error {
+	configured = strings.TrimSpace(configured)
 	if configured == "" {
 		return nil
 	}
-	if sdkRuntimeLibraryPath(configured) == sdkRuntimeLibraryPath(processPath) {
+	if filepath.Clean(configured) == loaded {
 		return nil
 	}
 	return fmt.Errorf(
-		"runtime library path %q does not match %s=%q the process started with: "+
-			"the OpenPit runtime is loaded at process start, so set %s to that "+
-			"path before starting pit-officer",
-		configured, config.EnvRuntimeLibraryPath, processPath,
-		config.EnvRuntimeLibraryPath,
+		"runtime library path %q does not match the library the OpenPit SDK "+
+			"loaded at process start, %q: set %s to that path before starting "+
+			"pit-officer",
+		configured, loaded, config.EnvRuntimeLibraryPath,
 	)
-}
-
-// sdkRuntimeLibraryPath normalizes path the way the OpenPit SDK resolves
-// OPENPIT_RUNTIME_LIBRARY_PATH: surrounding whitespace is trimmed, an empty
-// result means unset, and anything else is cleaned.
-func sdkRuntimeLibraryPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	return filepath.Clean(path)
 }
 
 // runMCP loads the mcp-mode configuration, assembles the app, and serves the
