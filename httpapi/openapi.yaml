@@ -6580,6 +6580,7 @@ components:
 
     SubmitOrderRequest:
       allOf:
+          required: [mode]
         - $ref: "#/components/schemas/OrderSubmissionRequest"
         - type: object
           properties:
@@ -6591,8 +6592,8 @@ components:
             mode:
               type: string
               description: >
-                Submit mode. Defaults to `immediate`. The compatibility wire
-                value `hold` waits for execution reports.
+                Submit mode. `immediate` commits and settles at the lock
+                price; `hold` waits for execution reports.
               enum: [immediate, hold]
       unevaluatedProperties: false
 

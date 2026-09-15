@@ -185,7 +185,7 @@ func TestSubmitOrderToken_Created(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"immediate"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
@@ -322,7 +322,7 @@ func TestSubmitOrderToken_ForwardsCallerSuppliedID(t *testing.T) {
 	}
 	body := bytes.NewBufferString(
 		`{"id":"` + supplied.String() + `","account":"acc-1","baseAsset":"AAPL",` +
-			`"quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1"}`)
+			`"quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","mode":"immediate"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
@@ -369,7 +369,7 @@ func TestSubmitOrderToken_RiskRejectResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"100","price":"100"}`)
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"100","price":"100","mode":"immediate"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
@@ -402,7 +402,7 @@ func TestSubmitOrderToken_ValidationError(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"base","amountValue":"1"}`)
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"base","amountValue":"1","mode":"immediate"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusUnprocessableEntity {

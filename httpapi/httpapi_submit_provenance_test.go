@@ -38,7 +38,7 @@ func TestSubmitOrderTokenSignsSurfacePrincipalAndOmitsAcceptReasons(t *testing.T
 		"/api/v1/orders/submit?missingAccount=reject",
 		bytes.NewBufferString(
 			`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD",`+
-				`"side":"buy","amountKind":"quantity","amountValue":"1",`+
+				`"side":"buy","amountKind":"quantity","amountValue":"1","mode":"immediate",`+
 				`"price":"10","mode":"hold"}`,
 		),
 	))

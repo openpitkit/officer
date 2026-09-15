@@ -152,6 +152,7 @@ func TestSubmitOrderGateMutating(t *testing.T) {
 	src.disabledCommands = map[string]bool{submitOrderToolName: true}
 
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:    "immediate",
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 		MissingAccount: "create",
@@ -172,6 +173,7 @@ func TestSubmitOrderGateMutatingAccessError(t *testing.T) {
 	src.cmdEnabledErr = errors.New("store flake")
 
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:    "immediate",
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 		MissingAccount: "create",
@@ -438,6 +440,7 @@ func TestSubmitOrderMissingAccount(t *testing.T) {
 	src := &approvalFakeSource{}
 
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:      "immediate",
 		BaseAsset: "BTC", QuoteAsset: "USD", Side: "buy",
 		AmountKind: "quantity", AmountValue: "1",
 	})
@@ -459,6 +462,7 @@ func TestSubmitOrderValidatesMissingAccountPolicy(t *testing.T) {
 			}
 			src := &approvalFakeSource{}
 			res := callSubmitOrder(t, src, submitOrderInput{
+				Mode:    "immediate",
 				Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 				Side: "buy", AmountKind: "quantity", AmountValue: "1",
 				MissingAccount: policy,
@@ -480,6 +484,7 @@ func TestSubmitOrderForwardsRejectMissingAccountPolicy(t *testing.T) {
 		submitResult: frameworkmcp.SubmitOrderTokenResult{OrderExternalID: testOrderEID},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:    "immediate",
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 		MissingAccount: "reject",
@@ -529,6 +534,7 @@ func TestSubmitOrderBackendError(t *testing.T) {
 	}
 
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:    "immediate",
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 		MissingAccount: "create",
@@ -546,6 +552,7 @@ func TestSubmitOrderSuppliedExternalID(t *testing.T) {
 		submitResult: frameworkmcp.SubmitOrderTokenResult{Token: "tok", OrderExternalID: testOrderEID},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:    "immediate",
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 		MissingAccount: "create",
@@ -576,6 +583,7 @@ func TestSubmitOrderGeneratesWhenAbsent(t *testing.T) {
 		submitResult: frameworkmcp.SubmitOrderTokenResult{Token: "tok", OrderExternalID: testOrderEID},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:    "immediate",
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 		MissingAccount: "create",
@@ -599,6 +607,7 @@ func TestSubmitOrderOpaqueExternalID(t *testing.T) {
 	src := &approvalFakeSource{}
 	supplied := "not-a-valid-id"
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:    "immediate",
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 		MissingAccount: "create",
@@ -617,6 +626,7 @@ func TestSubmitOrderOpaqueExternalID(t *testing.T) {
 func TestSubmitOrderDuplicateConflict(t *testing.T) {
 	src := &approvalFakeSource{submitErr: domain.ErrAlreadyExists}
 	res := callSubmitOrder(t, src, submitOrderInput{
+		Mode:    "immediate",
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 		MissingAccount: "create",

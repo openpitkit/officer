@@ -317,18 +317,20 @@ func TestService_SubmitOrderTokenImmediateSettles(t *testing.T) {
 	}
 }
 
-func TestService_SubmitOrderTokenDefaultsImmediate(t *testing.T) {
+func TestService_SubmitOrderTokenRequiresMode(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(t, signer)
 
-	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), "", domain.MissingAccountCreate)
-	if err != nil {
-		t.Fatalf("SubmitOrderToken default: %v", err)
+	_, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), "", domain.MissingAccountCreate)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitOrderToken with empty mode = %v, want ErrInvalid", err)
 	}
-	if orderByToken(t, fn, tok).Status != domain.OrderStatusFilled {
-		t.Fatalf("empty mode must default to immediate (filled), got %q",
-			orderByToken(t, fn, tok).Status)
+	if want := "submit mode is required"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("SubmitOrderToken error = %q, want it to contain %q", err, want)
+	}
+	if got := len(fn.missingAccountCalls); got != 0 {
+		t.Fatalf("engine submits after rejected mode = %d, want 0", got)
 	}
 }
 

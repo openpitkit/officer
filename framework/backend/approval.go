@@ -342,7 +342,7 @@ func (s *Service) submitOrderToken(
 		return ApprovalToken{}, err
 	}
 	if mode == "" {
-		mode = SubmitModeImmediate
+		return ApprovalToken{}, fmt.Errorf("backend: submit mode is required: %w", domain.ErrInvalid)
 	}
 	if mode != SubmitModeHold && mode != SubmitModeImmediate {
 		return ApprovalToken{}, fmt.Errorf("backend: submit mode %q: %w", mode, domain.ErrInvalid)

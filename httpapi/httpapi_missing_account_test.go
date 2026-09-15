@@ -88,7 +88,7 @@ func missingAccountRoutes() []missingAccountRoute {
 			method: http.MethodPost,
 			path:   "/api/v1/orders/submit",
 			body: `{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD",` +
-				`"side":"buy","amountKind":"quantity","amountValue":"1",` +
+				`"side":"buy","amountKind":"quantity","amountValue":"1","mode":"immediate",` +
 				`"price":"100"}`,
 			ok: http.StatusCreated,
 		},

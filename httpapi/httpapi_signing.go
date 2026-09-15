@@ -209,7 +209,8 @@ func handleSubmitOrderToken(svc backend.ControlPlane) http.HandlerFunc {
 		}
 		mode := req.Mode
 		if mode == "" {
-			mode = "immediate"
+			httpx.WriteValidationProblem(w, "mode is required", "/mode", "required")
+			return
 		}
 		if mode != "hold" && mode != "immediate" {
 			httpx.WriteValidationProblem(
