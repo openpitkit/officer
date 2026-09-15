@@ -185,14 +185,11 @@ type Envelope struct {
 }
 
 // CanonicalBytes returns the canonical wire bytes of payload: json.Marshal of
-// the concrete struct (Go emits fields in declaration order, deterministic). It
-// asserts byte-stability by marshalling twice and comparing.
+// the concrete struct, whose fields Go emits in declaration order. It marshals
+// twice and compares to assert byte stability.
 //
-// The struct field DECLARATION ORDER in domain.ApprovalPayload is load-bearing:
-// it defines the canonical/signed form, so reordering its fields silently
-// changes these bytes and invalidates every previously issued token (their
-// signatures no longer verify against the re-ordered canonical form). Never
-// reorder ApprovalPayload's fields to "tidy" them.
+// The field order of domain.ApprovalPayload defines the signed form: reordering
+// its fields changes these bytes and invalidates every issued token.
 func CanonicalBytes(payload domain.ApprovalPayload) ([]byte, error) {
 	b1, err := json.Marshal(payload)
 	if err != nil {

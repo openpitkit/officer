@@ -43,7 +43,7 @@ const (
 )
 
 const (
-	// PrincipalOperator is the open composition's explicit operator identity.
+	// PrincipalOperator is the default composition's explicit operator identity.
 	PrincipalOperator = "operator"
 )
 

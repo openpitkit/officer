@@ -38,7 +38,7 @@ const serverName = "pit-officer"
 
 // Source is the Pit Officer-facing seam the MCP surface reads from.
 type Source interface {
-	// Status returns the aggregate health of every node in the deployment.
+	// Status returns the node's engine and store health.
 	Status(ctx context.Context) (Status, error)
 	// GetAccountState returns the account row and its account-scoped barriers.
 	GetAccountState(ctx context.Context, id domain.AccountID) (

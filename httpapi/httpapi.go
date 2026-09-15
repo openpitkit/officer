@@ -16,9 +16,9 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Package httpapi is Pit Officer's HTTP surface for the `serve` run mode. It
-// serves three things behind one chi router: a liveness probe (/healthz), the
-// REST control-plane API (/api/v1/*), the streamable-HTTP MCP handler (/mcp),
-// and the embedded single-page operator dashboard with an SPA fallback for
+// serves, behind one chi router, a liveness probe (/healthz), the REST
+// control-plane API (/api/v1/*), the streamable-HTTP MCP handler (/mcp), and
+// the embedded single-page operator dashboard with an SPA fallback for
 // client-side routes.
 //
 // The wire shape of /api/v1 is the dashboard's contract. Domain types carry no

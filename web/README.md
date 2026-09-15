@@ -7,7 +7,7 @@ This package has two surfaces:
 - The Pit Officer single-page app is the reference consumer under `src/`.
 
 The app is built with Vite and embedded into the Go binary via
-`go:embed web/dist`, then served from `/` by the Pit Officer HTTP layer in
+`//go:embed dist` in `web/dist.go`, then served from `/` by the Pit Officer HTTP layer in
 `serve` mode. The SPA consumes the `/app/api/v1` control-plane surface in the
 embedded build. It carries no risk logic; all validation is mirrored from the
 backend contract only to give fast form feedback.
@@ -153,7 +153,7 @@ npm run build:lib # emits the framework package into lib/
 
 The build writes generated assets into `dist/`. The generated bundle is ignored,
 but a stable `dist/embed-placeholder.txt` file is kept in version control so
-the Go `go:embed web/dist` compiles on a fresh clone before the SPA is built.
+the Go `//go:embed dist` in `web/dist.go` compiles on a fresh clone before the SPA is built.
 The library build writes only to `lib/` and never clobbers the embedded app
 bundle in `dist/`.
 

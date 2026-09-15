@@ -456,7 +456,7 @@ func TestCanonicalBytesNoSurrogateAndCarriesHandle(t *testing.T) {
 	}
 }
 
-func TestCanonicalBytesLegacyPayloadWithoutPrincipalRemainStable(t *testing.T) {
+func TestCanonicalBytesPayloadWithoutPrincipalStaysStable(t *testing.T) {
 	payload := domain.ApprovalPayload{
 		Version:       1,
 		ApprovalID:    "legacy-approval",
@@ -487,11 +487,11 @@ func TestCanonicalBytesLegacyPayloadWithoutPrincipalRemainStable(t *testing.T) {
 		`"estimatePrice":"10","issuedAt":"2026-01-02T03:04:05Z",` +
 		`"nonce":"legacy-nonce","keyId":"","alg":""}`
 	if string(got) != want {
-		t.Fatalf("legacy canonical bytes changed:\n got %s\nwant %s", got, want)
+		t.Fatalf("canonical bytes changed:\n got %s\nwant %s", got, want)
 	}
 }
 
-func TestCanonicalBytesLegacyRejectWithoutRejectListRemainStable(t *testing.T) {
+func TestCanonicalBytesRejectWithoutRejectListStaysStable(t *testing.T) {
 	payload := domain.ApprovalPayload{
 		Version:       1,
 		ApprovalID:    "legacy-reject",
@@ -529,7 +529,7 @@ func TestCanonicalBytesLegacyRejectWithoutRejectListRemainStable(t *testing.T) {
 		`"rejectReason":"available funds below required amount",` +
 		`"rejectDetails":"available=5,required=10"}`
 	if string(got) != want {
-		t.Fatalf("legacy reject canonical bytes changed:\n got %s\nwant %s", got, want)
+		t.Fatalf("reject canonical bytes changed:\n got %s\nwant %s", got, want)
 	}
 }
 

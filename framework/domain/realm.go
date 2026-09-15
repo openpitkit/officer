@@ -36,9 +36,7 @@ type RealmID string
 // String returns the raw realm identifier.
 func (id RealmID) String() string { return string(id) }
 
-// DefaultRealm is the implicit realm served by a single-realm store. It is the
-// successor of the former implicit isolation boundary used in single-process
-// deployments.
+// DefaultRealm is the realm the default composition serves.
 const DefaultRealm RealmID = "default"
 
 // Realm is the single-row identity of the dataset a store schema holds. It is

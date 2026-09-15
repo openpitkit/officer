@@ -18,7 +18,7 @@ that.
 These are the packages, by path under `go.openpit.dev/officer`; everything else
 is a command or under `internal/`, and cannot be imported:
 
-- the root - `Register` and `Config`, the open composition `pit-officer` runs.
+- the root - `Register` and `Config`, the default composition `pit-officer` runs.
 - `web` - the embedded dashboard build (`Dist`).
 - `httpapi` - the REST routes (`RouteConfig`) and the service lifecycle routes.
 - `mcptools` - the MCP tool set (`RegisterTools`).
@@ -49,7 +49,7 @@ an `internal` path element drift from the list.
 
 ### Composing your own Officer
 
-`Register` fills a builder with the open composition: the SQLite store, one
+`Register` fills a builder with the default composition: the SQLite store, one
 local node over the default realm running the OpenPit engine, the signer, the
 control-plane service, the built-in market-data providers, the REST routes, the
 MCP tools, the dashboard, allow-all authorization, and an operator caller for
@@ -84,7 +84,7 @@ and MCP over HTTP; `cmd/pit-officer` runs both.
 
 `examples/customhost` is the worked example: it replaces the authorizer, adds a
 market-data provider, and adds, replaces, and removes MCP tools and REST routes
-on top of the open composition.
+on top of the default composition.
 
 ## Two build modes
 

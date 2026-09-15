@@ -165,7 +165,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	sqlitePath := fs.String("sqlite-path", sqlitePathDefault,
 		"on-disk SQLite database path")
 	runtimeLibraryPath := fs.String("runtime-library-path", runtimeLibraryDefault,
-		"explicit native OpenPit runtime library path")
+		"native OpenPit runtime library path; must match OPENPIT_RUNTIME_LIBRARY_PATH")
 	masterKeyFile := fs.String("master-key-file", masterKeyFileDefault,
 		"file containing the operator master key")
 	openBrowser := fs.Bool("open-browser", openBrowserDefault,

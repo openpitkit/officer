@@ -64,27 +64,19 @@ rule needs narrowing, not a marker.
 
 ## Public package gate
 
-`checks/public-packages.txt` lists, one import path per line and sorted,
-exactly the set the gate compares it with: the paths `go list ./...` reports
-from the module root with cgo enabled for the host platform, except those under
-`web/node_modules/` or with an `internal` path element. It is meant to hold the
-importable packages and the commands. The gate runs `go list ./...` from the
-module root, so it sees every package `./...` matches there, not only what the
-justfile builds. For what `./...` excludes, see `go help packages`; `./...` also
-skips a directory whose Go files are all excluded by build constraints, which
-that page does not name. A package the pattern does not match is neither listed
-nor checked, and listing one fails the gate.
-The gate skips `web/node_modules`, which is npm
-install output rather than part of the module, keeps every package that is not
-under an `internal` path element, `main` packages included, and fails on a
-difference in either direction: such a package that is not listed, or a listed
-path that is not such a package. It prints every such path.
+`checks/public-packages.txt` is the sorted allowlist of importable packages
+and commands, one import path per line. The gate lists the module with
+`go list ./...` from the module root, drops `web/node_modules/` (npm install
+output, never committed) and every path with an `internal` element, and fails
+on any difference in either direction, printing each offending path. A path
+`./...` does not match - see `go help packages`; a directory whose Go files are
+all excluded by build constraints is skipped too - is neither listed nor
+checked.
 
 It runs right after the gofmt check in `lint-go`, `lint-go-debug-dev`, and
-`lint-go-release-dev`, so every gate that lints Go runs it, CI included. Run it
-with `just lint-go`.
+`lint-go-release-dev`, so every gate that lints Go runs it, CI included.
 
-Adding a package or a command to the allowlist is a deliberate decision, made
-together with the change that adds the package or the command - never a way to
-make the gate pass. A library package that is not meant to be imported goes
-under `internal/`.
+Adding a path to the allowlist is a deliberate decision, made together with
+the change that adds the package or the command - never a way to make the gate
+pass. A library package that is not meant to be imported goes under
+`internal/`.

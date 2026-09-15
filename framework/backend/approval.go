@@ -34,10 +34,9 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// Submit modes for an approval token. SubmitModeImmediate is the default and
-// commits and settles at the lock price. SubmitModeHold is the wire-compatible
-// name for the normal workflow submit, whose later state changes arrive as
-// execution reports.
+// Submit modes for an approval token. SubmitModeImmediate commits and settles
+// at the lock price; SubmitModeHold is the workflow submit, whose later state
+// changes arrive as execution reports.
 const (
 	SubmitModeImmediate = "immediate"
 	SubmitModeHold      = "hold"

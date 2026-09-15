@@ -33,10 +33,8 @@ func serveOpenAPISpec(w http.ResponseWriter, _ *http.Request) {
 }
 
 // serveSwaggerUI serves a minimal Swagger UI page that loads swagger-ui-dist@5
-// from jsDelivr CDN and points at /api/openapi.yaml.
-//
-// TODO(follow-up): appliance/offline builds should vendor swagger-ui-dist assets
-// instead of relying on the CDN. Serve them from a local /docs/assets/ route.
+// from jsDelivr CDN and points at /api/openapi.yaml. An offline build would
+// have to vendor the swagger-ui-dist assets and serve them from a local route.
 func serveSwaggerUI(w http.ResponseWriter, _ *http.Request) {
 	const html = `<!DOCTYPE html>
 <html lang="en">

@@ -66,12 +66,10 @@ func unmarshalLock(payload []byte) (pretrade.Lock, error) {
 }
 
 // lockDisplayPrices deserializes a stored lock BLOB and returns its prices as
-// exact decimal strings, in the lock's iteration order (default-group records
-// first, then each non-default group in insertion order). It is the seam the
-// presentation layer calls before enforcing the single-price contract, without
-// itself depending on the SDK or decoding the opaque BLOB. A nil/empty BLOB
-// means no lock was captured, as on a rejected or legacy order, and yields an
-// empty slice with no error; settlementPrice owns the cardinality check.
+// exact decimal strings, in the lock's iteration order: default-group records
+// first, then each non-default group in insertion order. An empty BLOB means
+// no lock was captured, as on a rejected order, and yields an empty slice;
+// settlementPrice owns the cardinality check.
 func lockDisplayPrices(lock []byte) ([]string, error) {
 	if len(lock) == 0 {
 		return []string{}, nil

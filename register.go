@@ -44,7 +44,7 @@ import (
 	"go.openpit.dev/officer/web"
 )
 
-// Config carries the open composition's runtime inputs: the SQLite database
+// Config carries the default composition's runtime inputs: the SQLite database
 // path and the master key that seals stored secrets (nil when none is
 // configured). The native OpenPit runtime is not one of them: the SDK loads it
 // at process start (see engine.NewOpenPitEngineBuildFunc).

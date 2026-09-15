@@ -1280,11 +1280,8 @@ func seedSpotFundsAccountPnls(
 
 // balanceSeedAdjustment builds the absolute adjustment that seeds one stored
 // balance: available/held/incoming set absolutely when the persisted value is
-// non-empty, left nil (not set) when empty. A nil field is the correct "absent"
-// signal to the adjustment-values mapper (adjustmentAmountValues treats a nil
-// pointer as not set, so the binding never sees an empty string). This guards
-// against legacy rows where INSERT OR REPLACE wrote "" before the orZero write
-// chokepoint was added.
+// non-empty, left nil when empty. adjustmentAmountValues treats a nil pointer
+// as not set, so the binding never sees an empty string.
 func balanceSeedAdjustment(
 	balance domain.Balance,
 	res idResolver,
