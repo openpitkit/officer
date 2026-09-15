@@ -432,11 +432,9 @@ func (c *serviceLifecycleController) handler(action lifecycleAction) http.Handle
 			http.Error(w, "lifecycle request already pending", http.StatusConflict)
 			return
 		}
-		if c.record != nil {
-			if err := c.record(r.Context(), action); err != nil {
-				http.Error(w, "audit lifecycle request", http.StatusInternalServerError)
-				return
-			}
+		if err := c.record(r.Context(), action); err != nil {
+			http.Error(w, "audit lifecycle request", http.StatusInternalServerError)
+			return
 		}
 		c.pending = true
 		w.Header().Set("Content-Type", "application/json")

@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/mcp"
@@ -32,7 +33,7 @@ const (
 )
 
 type hostToolInput struct {
-	Name string `json:"name,omitempty" jsonschema:"Optional subject name"`
+	Name string `json:"name" jsonschema:"Required: subject name"`
 }
 
 type hostToolOutput struct {
@@ -90,11 +91,10 @@ func hostToolHandler(
 	_ *sdkmcp.ServerSession,
 	in hostToolInput,
 ) (string, hostToolOutput, error) {
-	name := in.Name
-	if name == "" {
-		name = "operator"
+	if in.Name == "" {
+		return "", hostToolOutput{}, errors.New("customhost: name is required")
 	}
-	msg := "custom host response for " + name
+	msg := "custom host response for " + in.Name
 	return msg, hostToolOutput{Message: msg}, nil
 }
 
