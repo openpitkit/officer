@@ -17,6 +17,10 @@
 
 # Build context is the officer module root.
 
+# Before the first FROM so the FROM instructions themselves can expand it; a
+# stage that uses the value in its own body redeclares it.
+ARG GO_VERSION
+
 # Stage 1: build the dashboard SPA.
 FROM node:20-alpine AS frontend
 
@@ -30,7 +34,6 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: build the pit-officer binary (cgo required by the openpit binding).
-ARG GO_VERSION
 FROM golang:${GO_VERSION}-bookworm AS gobuild
 
 ARG GO_VERSION
