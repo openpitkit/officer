@@ -20,6 +20,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -338,7 +339,7 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	supplied := extID("order-1").String()
 	svc := &fakeService{
 		approvalToken: backend.ApprovalToken{
-			Token:  "eyJhbHQ...",
+			Token:  "signed-envelope-test-value",
 			KeyID:  "key-1",
 			Signed: true,
 		},
@@ -364,8 +365,8 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
-	if m["token"] != "eyJhbHQ..." {
-		t.Errorf("want token in body, got %v", m["token"])
+	if m["signedApproval"] != "signed-envelope-test-value" {
+		t.Errorf("want signedApproval in body, got %v", m["signedApproval"])
 	}
 	// The supplied external id is used as-is on the created order.
 	if svc.submitOrderIn.ExternalID.String() != supplied {
@@ -380,11 +381,10 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	}
 	// The returned id must be the one subsequently confirmable: confirm resolves
 	// the SAME order, proving submit created exactly one and no second order.
-	confirmBody, _ := json.Marshal(map[string]any{"token": "mytoken"})
 	confRec := httptest.NewRecorder()
 	r.ServeHTTP(confRec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+supplied+"/confirm",
-			bytes.NewReader(confirmBody)))
+			nil))
 	if confRec.Code != http.StatusOK {
 		t.Fatalf("confirm: want 200, got %d: %s", confRec.Code, confRec.Body.String())
 	}
@@ -433,7 +433,7 @@ func TestSubmitOrderToken_RiskRejectReturnsSignedDecision(t *testing.T) {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
-	if m["token"] != "reject-envelope" || m["verdict"] != "reject" {
+	if m["signedApproval"] != "reject-envelope" || m["verdict"] != "reject" {
 		t.Fatalf("reject response = %v", m)
 	}
 	reasons, ok := m["reasons"].([]any)
@@ -450,7 +450,7 @@ func TestSubmitOrderToken_RiskRejectReturnsSignedDecision(t *testing.T) {
 // the server generate and return a 22-char id.
 func TestSubmitOrderToken_GeneratesWhenAbsent(t *testing.T) {
 	svc := &fakeService{
-		approvalToken: backend.ApprovalToken{Token: "tok", KeyID: "key-1"},
+		approvalToken: backend.ApprovalToken{Token: "env", KeyID: "key-1"},
 	}
 	body, _ := json.Marshal(map[string]any{
 		"account":     "acc-1",
@@ -572,7 +572,6 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 			ExternalID: extID("order-1"), Status: domain.OrderStatusCommitted,
 		},
 	}
-	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -580,7 +579,7 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
-			bytes.NewReader(body)))
+			nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -592,23 +591,6 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 	assertNoSurrogateID(t, ord)
 }
 
-// TestConfirmExecution_MissingToken verifies that a missing token yields 400.
-func TestConfirmExecution_MissingToken(t *testing.T) {
-	svc := &fakeService{}
-	body, _ := json.Marshal(map[string]any{})
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
-			bytes.NewReader(body)))
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d", rec.Code)
-	}
-}
-
 // TestCancelOrder_HappyPath verifies POST /orders/{id}/cancel returns
 // the updated order.
 func TestCancelOrder_HappyPath(t *testing.T) {
@@ -618,7 +600,7 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "leavesQuantity": "3.5", "reason": "user request",
+		"leavesQuantity": "3.5", "reason": "user request",
 	})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -642,10 +624,11 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 	assertNoSurrogateID(t, ord)
 }
 
-// TestCancelOrder_MissingToken verifies that a missing token yields 400.
-func TestCancelOrder_MissingToken(t *testing.T) {
+// TestCancelOrder_RejectsTokenField verifies the removed input is rejected by
+// strict body decoding as an unknown field.
+func TestCancelOrder_RejectsTokenField(t *testing.T) {
 	svc := &fakeService{}
-	body, _ := json.Marshal(map[string]any{"reason": "x"})
+	body, _ := json.Marshal(map[string]any{"token": "obsolete", "reason": "x"})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -655,7 +638,18 @@ func TestCancelOrder_MissingToken(t *testing.T) {
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
 			bytes.NewReader(body)))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 400, got %d", rec.Code)
+		t.Fatalf("want 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" ||
+		errObj["message"] != "unknown field in request body" {
+		t.Fatalf("want unknown /token validation problem, got %+v", errObj)
+	}
+	errorsExt, _ := m["errors"].([]any)
+	item, _ := errorsExt[0].(map[string]any)
+	if item["pointer"] != "/token" || item["constraint"] != "unknown_field" {
+		t.Fatalf("want unknown /token validation detail, got %+v", item)
 	}
 }
 
@@ -665,7 +659,7 @@ func TestCancelOrder_OmittedLeavesQuantity(t *testing.T) {
 	svc := &fakeService{submitOrder: domain.Order{
 		ExternalID: extID("order-1"), Status: domain.OrderStatusRejected,
 	}}
-	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
+	body, _ := json.Marshal(map[string]any{})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -695,7 +689,7 @@ func TestCancelOrder_PreservesLeavesQuantity(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "leavesQuantity": "  3.5  ",
+		"leavesQuantity": "  3.5  ",
 	})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -720,7 +714,7 @@ func TestCancelOrder_BlankLeavesQuantity(t *testing.T) {
 		ExternalID: extID("order-1"), Status: domain.OrderStatusRejected,
 	}}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "leavesQuantity": "   ",
+		"leavesQuantity": "   ",
 	})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -746,7 +740,6 @@ func TestCancelOrder_BlankLeavesQuantity(t *testing.T) {
 // surfaces the node's ErrTerminalOrder as 409 terminal_order.
 func TestConfirmExecution_TerminalOrderConflict(t *testing.T) {
 	svc := &fakeService{confirmErr: domain.ErrTerminalOrder}
-	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -754,7 +747,7 @@ func TestConfirmExecution_TerminalOrderConflict(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
-			bytes.NewReader(body)))
+			nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -770,7 +763,6 @@ func TestConfirmExecution_TerminalOrderConflict(t *testing.T) {
 // the order already has report activity.
 func TestConfirmExecution_ExecutionReportRequired(t *testing.T) {
 	svc := &fakeService{confirmErr: domain.ErrExecutionReportRequired}
-	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -778,7 +770,7 @@ func TestConfirmExecution_ExecutionReportRequired(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
-			bytes.NewReader(body)))
+			nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -793,12 +785,33 @@ func TestConfirmExecution_ExecutionReportRequired(t *testing.T) {
 	}
 }
 
+func TestConfirmExecution_ApprovalRequired(t *testing.T) {
+	svc := &fakeService{confirmErr: fmt.Errorf(
+		"recorded approval cannot be verified: %w", domain.ErrApprovalRequired,
+	)}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "approval_required" {
+		t.Fatalf("want code=approval_required, got %v", errObj["code"])
+	}
+}
+
 // TestCancelOrder_TerminalOrderConflict verifies POST /orders/{id}/cancel on a
 // terminal-status order surfaces ErrTerminalOrder as 409 terminal_order.
 func TestCancelOrder_TerminalOrderConflict(t *testing.T) {
 	svc := &fakeService{cancelErr: domain.ErrTerminalOrder}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "leavesQuantity": "10", "reason": "user request",
+		"leavesQuantity": "10", "reason": "user request",
 	})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -823,7 +836,7 @@ func TestCancelOrder_TerminalOrderConflict(t *testing.T) {
 func TestCancelOrder_ExecutionReportRequired(t *testing.T) {
 	svc := &fakeService{cancelErr: domain.ErrExecutionReportRequired}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "leavesQuantity": "10", "reason": "user request",
+		"leavesQuantity": "10", "reason": "user request",
 	})
 	r, err := newRouter(svc)
 	if err != nil {

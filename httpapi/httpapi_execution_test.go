@@ -175,7 +175,7 @@ func TestCheckOrder_ValidationError(t *testing.T) {
 
 func TestSubmitOrderToken_Created(t *testing.T) {
 	svc := &fakeService{approvalToken: backend.ApprovalToken{
-		Token:   "submit-token",
+		Token:   "submit-envelope",
 		KeyID:   "key-1",
 		Verdict: "accept",
 		Signed:  true,
@@ -192,7 +192,7 @@ func TestSubmitOrderToken_Created(t *testing.T) {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	if m["token"] != "submit-token" ||
+	if m["signedApproval"] != "submit-envelope" ||
 		m["keyId"] != "key-1" ||
 		m["id"] != extID("generated-order").String() ||
 		m["verdict"] != "accept" {
@@ -242,8 +242,8 @@ func TestSubmitDropCopyOrder_UsesDistinctUnsignedOperation(t *testing.T) {
 			if m["id"] != "drop-copy-1" || m["status"] != "committed" {
 				t.Fatalf("unexpected response: %v", m)
 			}
-			if _, present := m["token"]; present {
-				t.Fatalf("drop-copy response contains token: %v", m)
+			if _, present := m["signedApproval"]; present {
+				t.Fatalf("drop-copy response contains envelope: %v", m)
 			}
 		})
 	}
@@ -314,7 +314,7 @@ func TestSubmitDropCopyOrder_ValidationErrorPreservesEngineMessage(t *testing.T)
 func TestSubmitOrderToken_ForwardsCallerSuppliedID(t *testing.T) {
 	supplied := extID("client-order-1")
 	svc := &fakeService{approvalToken: backend.ApprovalToken{
-		Token: "submit-token", Verdict: "accept",
+		Token: "submit-envelope", Verdict: "accept",
 	}}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -350,7 +350,7 @@ func TestSubmitOrderToken_RiskRejectResponse(t *testing.T) {
 	}
 	svc := &fakeService{
 		approvalToken: backend.ApprovalToken{
-			Token:           "reject-token",
+			Token:           "reject-envelope",
 			KeyID:           "key-1",
 			OrderExternalID: extID("order-1").String(),
 			Verdict:         "reject",
@@ -376,7 +376,7 @@ func TestSubmitOrderToken_RiskRejectResponse(t *testing.T) {
 		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
-	if m["token"] != "reject-token" ||
+	if m["signedApproval"] != "reject-envelope" ||
 		m["keyId"] != "key-1" ||
 		m["id"] != extID("generated-order").String() ||
 		m["verdict"] != "reject" {

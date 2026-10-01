@@ -5,6 +5,7 @@
     "has_dependents": "The resource has dependent rows.",
     "conflict": "The request conflicts with the current state.",
     "terminal_order": "The order is in a terminal status.",
+    "approval_required": "This order has no verifiable pre-trade approval recorded by Officer at submit, so the confirm/cancel shortcut is unavailable. Submit a complete execution report through the order workflow.",
     "execution_report_required": "This order already has execution-report activity. Submit a complete execution report through the order workflow.",
     "precondition": "A precondition for the request was not met.",
     "too_large": "The request body exceeds the allowed size limit.",

@@ -81,20 +81,22 @@ type Source interface {
 	SubmitDropCopyOrder(
 		ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 	) (SubmitDropCopyOrderResult, error)
-	// ConfirmExecution verifies the token and records confirmation history for an
-	// order that has no execution-report activity. It also returns the resulting
-	// attestation, so an MCP caller receives the same proof an HTTP caller does.
+	// ConfirmExecution authorizes the shortcut from Officer's recorded signed
+	// hold-mode accept approval and records confirmation history for an order that
+	// has no execution-report activity. It also returns the resulting attestation,
+	// so an MCP caller receives the same proof an HTTP caller does.
 	ConfirmExecution(
-		ctx context.Context, orderExternalID, token string,
+		ctx context.Context, orderExternalID string,
 	) (domain.Order, Attestation, error)
-	// CancelOrder verifies the token and synthesizes a cancellation report for an
-	// order that has no execution-report activity. Optional caller leaves is
-	// recorded verbatim when supplied, while the SDK receives the order's
-	// own recorded reservation remainder. It also returns the resulting
-	// attestation, so an MCP caller receives the same proof an HTTP caller does.
+	// CancelOrder authorizes the shortcut from Officer's recorded signed
+	// hold-mode accept approval and synthesizes a cancellation report for an order
+	// that has no execution-report activity. Optional caller leaves is recorded
+	// verbatim when supplied, while the SDK receives the order's own recorded
+	// reservation remainder. It also returns the resulting attestation, so an MCP
+	// caller receives the same proof an HTTP caller does.
 	CancelOrder(
 		ctx context.Context,
-		orderExternalID, token, leavesQuantity, reason string,
+		orderExternalID, leavesQuantity, reason string,
 	) (domain.Order, Attestation, error)
 }
 
@@ -679,9 +681,9 @@ func (s controlPlaneSource) SubmitDropCopyOrder(
 }
 
 func (s controlPlaneSource) ConfirmExecution(
-	ctx context.Context, orderExternalID, token string,
+	ctx context.Context, orderExternalID string,
 ) (domain.Order, Attestation, error) {
-	order, att, err := s.cp.ConfirmExecution(ctx, orderExternalID, token)
+	order, att, err := s.cp.ConfirmExecution(ctx, orderExternalID)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
@@ -689,10 +691,10 @@ func (s controlPlaneSource) ConfirmExecution(
 }
 
 func (s controlPlaneSource) CancelOrder(
-	ctx context.Context, orderExternalID, token, leavesQuantity, reason string,
+	ctx context.Context, orderExternalID, leavesQuantity, reason string,
 ) (domain.Order, Attestation, error) {
 	order, att, err := s.cp.CancelOrder(
-		ctx, orderExternalID, token, leavesQuantity, reason,
+		ctx, orderExternalID, leavesQuantity, reason,
 	)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err

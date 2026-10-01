@@ -62,8 +62,8 @@ func handleImportSigningKey(svc backend.ControlPlane) http.HandlerFunc {
 }
 
 // handleListSigningKeys handles GET /api/v1/signing/keys. It returns all keys
-// including inactive ones (connectors need public keys to verify in-flight
-// tokens). Private material is never returned.
+// including inactive ones (connectors need public keys to verify signatures on
+// in-flight envelopes). Private material is never returned.
 func handleListSigningKeys(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		keys, err := svc.ListSigningKeys(r.Context())
@@ -103,7 +103,7 @@ func handleGetActivePublicKey(svc backend.ControlPlane) http.HandlerFunc {
 // handleGetSigningKeyPublic handles GET /api/v1/signing/keys/{keyId}/public. It
 // resolves the public key by id (rotation-safe: not the active key), so the
 // reproduction panel's paste-to-verify can resolve the keyId embedded in any
-// pasted token, including one signed under a since-rotated key. The optional
+// pasted envelope, including one signed under a since-rotated key. The optional
 // ?format= parameter selects the export format (pem-pkcs8 | openssh |
 // raw-base64); the default is pem-pkcs8. Only public material is ever returned;
 // an unknown id is a 404.
@@ -189,7 +189,7 @@ func handleSetSigningConfig(svc backend.ControlPlane) http.HandlerFunc {
 	}
 }
 
-// --- approval token ---------------------------------------------------------
+// --- order approval ---------------------------------------------------------
 
 // handleSubmitOrderToken handles
 // POST /api/v1/orders/submit?missingAccount=create|reject. The body carries
@@ -197,10 +197,9 @@ func handleSetSigningConfig(svc backend.ControlPlane) http.HandlerFunc {
 // (hold | immediate). The hold wire value is retained for compatibility and
 // selects the workflow path that waits for execution reports. Submit CREATES
 // the order exactly once: it runs pre-trade in the given mode and records the
-// order, then issues a signed
-// approval token on accept. The returned id is the one actually used
-// (the supplied one when valid, else a generated one), so confirm/cancel resolve
-// the same order. There is no separate persisting create before submit.
+// order, then issues an approval envelope on accept. The returned id is the one
+// actually used (the supplied one when valid, else a generated one), so
+// confirm/cancel resolve the same order. There is no separate persisting create before submit.
 func handleSubmitOrderToken(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req submitOrderTokenRequestDTO
@@ -233,8 +232,8 @@ func handleSubmitOrderToken(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusCreated, approvalTokenDTO{
-			Token:           tok.Token,
+		httpx.WriteJSON(w, http.StatusCreated, signedApprovalDTO{
+			SignedApproval:  tok.Token,
 			KeyID:           tok.KeyID,
 			OrderExternalID: tok.OrderExternalID,
 			Verdict:         tok.Verdict,
@@ -246,7 +245,7 @@ func handleSubmitOrderToken(svc backend.ControlPlane) http.HandlerFunc {
 // handleSubmitDropCopyOrder handles the distinct unsigned drop-copy submit at
 // POST /api/v1/orders/drop-copy/submit?missingAccount=create. Its external id is
 // optional; when omitted, the store assigns one. Duplicate ids follow the
-// ordinary unique-store conflict path; no approval token is produced. Only
+// ordinary unique-store conflict path; no approval envelope is produced. Only
 // missingAccount=create is accepted here (see the backend).
 func handleSubmitDropCopyOrder(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -303,8 +302,8 @@ func submitOrderFromDTO(req submitOrderFieldsDTO) (domain.Order, error) {
 	return order, nil
 }
 
-// handleConfirmExecution handles POST /api/v1/orders/{id}/confirm. The body
-// carries the approval token used to record the order confirmation shortcut.
+// handleConfirmExecution handles POST /api/v1/orders/{id}/confirm. Officer
+// authorizes the shortcut from the signed hold-mode approval recorded at submit.
 func handleConfirmExecution(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
@@ -312,15 +311,7 @@ func handleConfirmExecution(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
-		var req confirmExecutionRequestDTO
-		if !httpx.DecodeBody(w, r, &req) {
-			return
-		}
-		if req.Token == "" {
-			httpx.WriteValidationProblem(w, "token is required", "/token", "required")
-			return
-		}
-		order, att, err := svc.ConfirmExecution(r.Context(), orderID, req.Token)
+		order, att, err := svc.ConfirmExecution(r.Context(), orderID)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -332,15 +323,16 @@ func handleConfirmExecution(svc backend.ControlPlane) http.HandlerFunc {
 			Order: toOrderDTO(
 				order, presentation.displayPrice, presentation.signed,
 			),
-			AttestationToken: att.Token,
-			AttestationKeyID: att.KeyID,
-			Signed:           att.Signed,
+			SignedAttestation: att.Token,
+			AttestationKeyID:  att.KeyID,
+			Signed:            att.Signed,
 		})
 	}
 }
 
 // handleCancelOrder handles POST /api/v1/orders/{id}/cancel. The body carries
-// the approval token, optional caller-reported leaves, and an optional reason.
+// optional caller-reported leaves and an optional reason. Officer authorizes the
+// shortcut from the signed hold-mode approval recorded at submit.
 func handleCancelOrder(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
@@ -352,12 +344,8 @@ func handleCancelOrder(svc backend.ControlPlane) http.HandlerFunc {
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if req.Token == "" {
-			httpx.WriteValidationProblem(w, "token is required", "/token", "required")
-			return
-		}
 		order, att, err := svc.CancelOrder(
-			r.Context(), orderID, req.Token, req.LeavesQuantity, req.Reason)
+			r.Context(), orderID, req.LeavesQuantity, req.Reason)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -369,9 +357,9 @@ func handleCancelOrder(svc backend.ControlPlane) http.HandlerFunc {
 			Order: toOrderDTO(
 				order, presentation.displayPrice, presentation.signed,
 			),
-			AttestationToken: att.Token,
-			AttestationKeyID: att.KeyID,
-			Signed:           att.Signed,
+			SignedAttestation: att.Token,
+			AttestationKeyID:  att.KeyID,
+			Signed:            att.Signed,
 		})
 	}
 }

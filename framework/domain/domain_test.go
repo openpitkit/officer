@@ -1643,6 +1643,7 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 
 	sentinels := map[string]error{
 		"ErrAccountMissing":          domain.ErrAccountMissing,
+		"ErrApprovalRequired":        domain.ErrApprovalRequired,
 		"ErrAlreadyExists":           domain.ErrAlreadyExists,
 		"ErrConflict":                domain.ErrConflict,
 		"ErrCurrencyValuedLimit":     domain.ErrCurrencyValuedLimit,

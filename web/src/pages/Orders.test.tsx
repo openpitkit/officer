@@ -229,7 +229,7 @@ beforeEach(async () => {
   createOrderMock.mockResolvedValue({
     order: sampleOrder,
     approval: {
-      token: "hold-token",
+      signedApproval: "hold-envelope",
       keyId: "key-1",
       id: sampleOrder.id,
       verdict: "accept",
@@ -244,19 +244,19 @@ beforeEach(async () => {
     id: "report-alpha-1",
     blocks: [],
     outcomes: [],
-    attestationToken: "",
+    signedAttestation: "",
     attestationKeyId: "",
     signed: false,
   });
   confirmOrderMock.mockResolvedValue({
     order: { ...sampleOrder, status: "committed" },
-    attestationToken: "",
+    signedAttestation: "",
     attestationKeyId: "",
     signed: false,
   });
   cancelOrderMock.mockResolvedValue({
     order: { ...sampleOrder, status: "rolled_back" },
-    attestationToken: "",
+    signedAttestation: "",
     attestationKeyId: "",
     signed: false,
   });
@@ -1087,8 +1087,27 @@ describe("Orders submit mode", () => {
 });
 
 describe("Orders workflow confirm/cancel shortcuts", () => {
-  // Fill the add-order dialog with a valid workflow order and submit it. The page
-  // retains the returned approval token and opens the detail view.
+  const acceptedEvent: OrderEvent = {
+    id: "evt-pre-trade-accepted",
+    order: sampleOrder.id,
+    at: "2026-06-24T11:08:00Z",
+    type: "pre_trade_accepted",
+    source: "panel",
+    principal: "",
+    signed: true,
+    alg: "ed25519",
+  };
+
+  beforeEach(() => {
+    fetchOrderDetailMock.mockResolvedValue({
+      order: sampleOrder,
+      events: [acceptedEvent],
+      trades: [],
+    });
+  });
+
+  // Fill the add-order dialog with a valid workflow order and submit it. The
+  // resulting detail carries the recorded pre-trade accept attestation.
   async function submitWorkflowOrder(user: ReturnType<typeof userEvent.setup>) {
     const dialog = await openDialog(user);
     await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
@@ -1105,7 +1124,7 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     );
   }
 
-  it("confirms a workflow order with its retained approval token", async () => {
+  it("confirms and cancels from the recorded approval", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
 
@@ -1120,9 +1139,7 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     await user.click(confirm);
 
     await waitFor(() =>
-      expect(confirmOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
-        token: "hold-token",
-      }),
+      expect(confirmOrderMock).toHaveBeenCalledWith("ord-alpha-1"),
     );
     const cancel = await within(detail).findByRole("button", {
       name: "Cancel order",
@@ -1134,7 +1151,6 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     );
     await waitFor(() =>
       expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
-        token: "hold-token",
         leavesQuantity: "100",
       }),
     );
@@ -1179,7 +1195,6 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
 
     await waitFor(() =>
       expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
-        token: "hold-token",
         leavesQuantity: "+1.500",
       }),
     );
@@ -1204,19 +1219,17 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     await user.click(cancel);
 
     await waitFor(() =>
-      expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
-        token: "hold-token",
-      }),
+      expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {}),
     );
   });
 
-  it("does not retain shortcuts for a rejected workflow submit", async () => {
+  it("does not offer shortcuts for a rejected workflow submit", async () => {
     const user = userEvent.setup();
     const rejectedOrder: Order = { ...sampleOrder, status: "rejected" };
     createOrderMock.mockResolvedValueOnce({
       order: rejectedOrder,
       approval: {
-        token: "rejected-hold-token",
+        signedApproval: "rejected-hold-envelope",
         keyId: "key-1",
         id: rejectedOrder.id,
         verdict: "reject",
@@ -1243,46 +1256,6 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     const detail = await screen.findByRole("dialog", {
       name: "Order ord-alpha-1",
     });
-    expect(
-      within(detail).queryByRole("button", { name: "Confirm" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(detail).queryByRole("button", { name: "Cancel order" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("forgets workflow shortcuts after a successful explicit report", async () => {
-    const user = userEvent.setup();
-    renderOrders("/orders");
-
-    await submitWorkflowOrder(user);
-    const detail = await screen.findByRole("dialog", {
-      name: "Order ord-alpha-1",
-    });
-    expect(
-      await within(detail).findByRole("button", { name: "Confirm" }),
-    ).toBeInTheDocument();
-
-    await user.click(
-      within(detail).getByRole("button", { name: "Submit execution report" }),
-    );
-    const focusSpy = vi
-      .spyOn(HTMLElement.prototype, "focus")
-      .mockImplementation(() => {});
-    await user.click(await screen.findByLabelText("Target status"));
-    await user.click(screen.getByRole("option", { name: "Accepted" }));
-    focusSpy.mockRestore();
-    await user.click(screen.getByRole("button", { name: "Submit" }));
-
-    await waitFor(() =>
-      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-1", {
-        status: "accepted",
-      }),
-    );
-    expect(await screen.findByText("Report ID")).toBeInTheDocument();
-    expect(screen.getByText("report-alpha-1")).toBeInTheDocument();
-    await user.click(await screen.findByRole("button", { name: "Done" }));
-
     expect(
       within(detail).queryByRole("button", { name: "Confirm" }),
     ).not.toBeInTheDocument();
@@ -1318,13 +1291,13 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     ).toBeInTheDocument();
   });
 
-  it("lets the backend reject a terminal workflow order when a token is retained", async () => {
+  it("hides shortcuts for a terminal order even with a recorded approval", async () => {
     const user = userEvent.setup();
     const terminalOrder: Order = { ...sampleOrder, status: "filled" };
     createOrderMock.mockResolvedValueOnce({
       order: terminalOrder,
       approval: {
-        token: "hold-token",
+        signedApproval: "hold-envelope",
         keyId: "key-1",
         id: terminalOrder.id,
         verdict: "accept",
@@ -1333,16 +1306,9 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     });
     fetchOrderDetailMock.mockResolvedValue({
       order: terminalOrder,
-      events: [],
+      events: [{ ...acceptedEvent, order: terminalOrder.id }],
       trades: [],
     });
-    confirmOrderMock.mockRejectedValueOnce(
-      new ApiError(
-        "Submit an explicit execution report for this order.",
-        "execution_report_required",
-        409,
-      ),
-    );
     renderOrders("/orders");
 
     await submitWorkflowOrder(user);
@@ -1350,27 +1316,51 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     const detail = await screen.findByRole("dialog", {
       name: "Order ord-alpha-1",
     });
-    await user.click(
-      await within(detail).findByRole("button", { name: "Confirm" }),
-    );
-
-    await waitFor(() =>
-      expect(confirmOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
-        token: "hold-token",
-      }),
-    );
     expect(
-      await within(detail).findByText(
-        "Submit an explicit execution report for this order.",
-      ),
+      within(detail).queryByRole("button", { name: "Confirm" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(detail).queryByRole("button", { name: "Cancel order" }),
+    ).not.toBeInTheDocument();
+    expect(confirmOrderMock).not.toHaveBeenCalled();
+  });
+
+  it("offers shortcuts for an attested hold order not submitted in this session", async () => {
+    const user = userEvent.setup();
+    useOrdersMock.mockReturnValue(readyPage<Order>([sampleOrder]));
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-1"));
+    const detail = await screen.findByRole("dialog", {
+      name: "Order ord-alpha-1",
+    });
+
+    expect(
+      await within(detail).findByRole("button", { name: "Confirm" }),
+    ).toBeInTheDocument();
+    expect(
+      within(detail).getByRole("button", { name: "Cancel order" }),
     ).toBeInTheDocument();
   });
 
-  it("hides confirm/cancel when no token is retained for the order", async () => {
+  it("hides shortcuts without a recorded pre-trade accept attestation", async () => {
     const user = userEvent.setup();
-    // A workflow order that exists in the table but whose token this session never
-    // saw (e.g. created via API or lost on reload) offers no confirm/cancel.
     useOrdersMock.mockReturnValue(readyPage<Order>([sampleOrder]));
+    fetchOrderDetailMock.mockResolvedValue({
+      order: sampleOrder,
+      events: [
+        {
+          id: "evt-pre-trade-accepted-unattested",
+          order: sampleOrder.id,
+          at: "2026-06-24T11:08:00Z",
+          type: "pre_trade_accepted",
+          source: "panel",
+          principal: "",
+          signed: false,
+        },
+      ],
+      trades: [],
+    });
     renderOrders("/orders");
 
     await user.click(screen.getByText("ord-alpha-1"));
@@ -1679,7 +1669,7 @@ describe("Order detail per-event verification", () => {
       requestType: "execution_report",
       event: events[1],
       attestation: {
-        token: "tok-evt-verbatim",
+        signedEnvelope: "env-evt-verbatim",
         keyId: "key-e",
         alg: "ed25519",
         requestType: "execution_report",
@@ -1692,7 +1682,7 @@ describe("Order detail per-event verification", () => {
         submitResponse: null,
         executionReport: {
           blocks: [],
-          attestationToken: "tok-evt-verbatim",
+          signedAttestation: "env-evt-verbatim",
           attestationKeyId: "key-e",
           signed: true,
         },
@@ -1740,13 +1730,13 @@ describe("Order detail per-event verification", () => {
     expect(orderId).toBe("ord-signed-evt");
     expect(eventId).toBe("evt-signed");
 
-    // The verbatim token renders inside the opened panel.
+    // The verbatim envelope renders inside the opened panel.
     await waitFor(() =>
       expect(
         screen
           .getAllByRole("textbox")
           .some(
-            (el) => (el as HTMLTextAreaElement).value === "tok-evt-verbatim",
+            (el) => (el as HTMLTextAreaElement).value === "env-evt-verbatim",
           ),
       ).toBe(true),
     );
@@ -2850,16 +2840,16 @@ describe("Orders filter, debounce, sort and pagination", () => {
   });
 });
 
-describe("Orders verify token toolbar", () => {
-  it("opens the standalone verify-token panel from the toolbar", async () => {
+describe("Orders verify envelope toolbar", () => {
+  it("opens the standalone verify-envelope panel from the toolbar", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
 
-    await user.click(screen.getByRole("button", { name: "Verify token" }));
+    await user.click(screen.getByRole("button", { name: "Verify envelope" }));
 
     // The panel opens in verify mode with only the verify tab and its paste box.
     expect(
-      await screen.findByPlaceholderText("Paste a base64url token…"),
+      await screen.findByPlaceholderText("Paste a base64url envelope…"),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("tab", { name: "Reproduction" }),

@@ -62,12 +62,10 @@ type submitCall struct {
 
 type confirmCall struct {
 	orderExternalID string
-	token           string
 }
 
 type cancelCallRecord struct {
 	orderExternalID string
-	token           string
 	leavesQuantity  string
 	reason          string
 }
@@ -96,21 +94,19 @@ func (f *approvalFakeSource) SubmitDropCopyOrder(
 }
 
 func (f *approvalFakeSource) ConfirmExecution(
-	_ context.Context, orderExternalID string, token string,
+	_ context.Context, orderExternalID string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
 	f.confirmCalls = append(f.confirmCalls, confirmCall{
 		orderExternalID: orderExternalID,
-		token:           token,
 	})
 	return f.confirmOrder, f.confirmAtt, f.confirmErr
 }
 
 func (f *approvalFakeSource) CancelOrder(
-	_ context.Context, orderExternalID string, token, leavesQuantity, reason string,
+	_ context.Context, orderExternalID, leavesQuantity, reason string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
 	f.cancelCalls = append(f.cancelCalls, cancelCallRecord{
 		orderExternalID: orderExternalID,
-		token:           token,
 		leavesQuantity:  leavesQuantity,
 		reason:          reason,
 	})
@@ -197,7 +193,7 @@ func TestConfirmExecutionGateMutating(t *testing.T) {
 	src := &approvalFakeSource{}
 	src.disabledCommands = map[string]bool{confirmExecutionToolName: true}
 
-	res := callConfirmExecution(t, src, confirmExecutionInput{OrderExternalID: testOrderEID, Token: "tok"})
+	res := callConfirmExecution(t, src, confirmExecutionInput{OrderExternalID: testOrderEID})
 
 	if res.IsError {
 		t.Fatalf("disabled gate must not be an error result")
@@ -213,7 +209,7 @@ func TestConfirmExecutionGateMutatingAccessError(t *testing.T) {
 	src := &approvalFakeSource{}
 	src.cmdEnabledErr = errors.New("store flake")
 
-	res := callConfirmExecution(t, src, confirmExecutionInput{OrderExternalID: testOrderEID, Token: "tok"})
+	res := callConfirmExecution(t, src, confirmExecutionInput{OrderExternalID: testOrderEID})
 
 	if !res.IsError {
 		t.Fatalf("access-check error must produce IsError=true for mutating tool")
@@ -225,7 +221,7 @@ func TestCancelGateMutating(t *testing.T) {
 	src := &approvalFakeSource{}
 	src.disabledCommands = map[string]bool{cancelToolName: true}
 
-	res := callCancel(t, src, cancelInput{OrderExternalID: testOrderEID, Token: "tok"})
+	res := callCancel(t, src, cancelInput{OrderExternalID: testOrderEID})
 
 	if res.IsError {
 		t.Fatalf("disabled gate must not be an error result")
@@ -240,7 +236,7 @@ func TestCancelGateMutatingAccessError(t *testing.T) {
 	src := &approvalFakeSource{}
 	src.cmdEnabledErr = errors.New("store flake")
 
-	res := callCancel(t, src, cancelInput{OrderExternalID: testOrderEID, Token: "tok"})
+	res := callCancel(t, src, cancelInput{OrderExternalID: testOrderEID})
 
 	if !res.IsError {
 		t.Fatalf("access-check error must produce IsError=true for mutating tool")
@@ -276,8 +272,8 @@ func TestSubmitOrderHappyPath(t *testing.T) {
 		t.Fatalf("unexpected error: %v", res.Content)
 	}
 	out := res.StructuredContent
-	if out.Token != "eyFAKETOKEN" {
-		t.Errorf("token: want %q got %q", "eyFAKETOKEN", out.Token)
+	if out.SignedApproval != "eyFAKETOKEN" {
+		t.Errorf("signedApproval: want %q got %q", "eyFAKETOKEN", out.SignedApproval)
 	}
 	if out.KeyID != "key-1" {
 		t.Errorf("keyId: want key-1 got %q", out.KeyID)
@@ -428,7 +424,7 @@ func TestSubmitOrderRiskRejectReturnsDecision(t *testing.T) {
 		t.Fatalf("unexpected error: %v", res.Content)
 	}
 	out := res.StructuredContent
-	if out.Verdict != "reject" || out.Token != "eyREJECT" || len(out.Reasons) != 1 {
+	if out.Verdict != "reject" || out.SignedApproval != "eyREJECT" || len(out.Reasons) != 1 {
 		t.Fatalf("reject output = %+v", out)
 	}
 	if out.Reasons[0].Code != "insufficient_funds" {
@@ -641,7 +637,7 @@ func TestSubmitOrderDuplicateConflict(t *testing.T) {
 	}
 }
 
-// TestConfirmExecutionHappyPath: confirm_execution forwards orderId+token and
+// TestConfirmExecutionHappyPath: confirm_execution forwards the order id and
 // returns order status.
 func TestConfirmExecutionHappyPath(t *testing.T) {
 	orderEID := mustExternalID(t, testOrderEID)
@@ -650,7 +646,7 @@ func TestConfirmExecutionHappyPath(t *testing.T) {
 	}
 
 	res := callConfirmExecution(t, src, confirmExecutionInput{
-		OrderExternalID: testOrderEID, Token: " tok-abc ",
+		OrderExternalID: testOrderEID,
 	})
 
 	if res.IsError {
@@ -672,21 +668,6 @@ func TestConfirmExecutionHappyPath(t *testing.T) {
 		t.Errorf("orderExternalId forwarded: want %q got %q",
 			testOrderEID, src.confirmCalls[0].orderExternalID)
 	}
-	if src.confirmCalls[0].token != "tok-abc" {
-		t.Errorf("token: want tok-abc got %q", src.confirmCalls[0].token)
-	}
-}
-
-// TestConfirmExecutionMissingToken: confirm_execution returns error when token
-// is empty.
-func TestConfirmExecutionMissingToken(t *testing.T) {
-	src := &approvalFakeSource{}
-
-	res := callConfirmExecution(t, src, confirmExecutionInput{OrderExternalID: testOrderEID})
-
-	if !res.IsError {
-		t.Fatalf("want IsError=true for missing token")
-	}
 }
 
 // TestConfirmExecutionMissingOrderID: confirm_execution returns error when the
@@ -694,7 +675,7 @@ func TestConfirmExecutionMissingToken(t *testing.T) {
 func TestConfirmExecutionMissingOrderID(t *testing.T) {
 	src := &approvalFakeSource{}
 
-	res := callConfirmExecution(t, src, confirmExecutionInput{Token: "tok"})
+	res := callConfirmExecution(t, src, confirmExecutionInput{})
 
 	if !res.IsError {
 		t.Fatalf("want IsError=true for missing orderExternalId")
@@ -712,8 +693,8 @@ func TestCancelHappyPath(t *testing.T) {
 	}
 
 	res := callCancel(t, src, cancelInput{
-		OrderExternalID: testOrderEID, Token: " tok-xyz ",
-		LeavesQuantity: "+17.500", Reason: "operator",
+		OrderExternalID: testOrderEID,
+		LeavesQuantity:  "+17.500", Reason: "operator",
 	})
 
 	if res.IsError {
@@ -741,27 +722,13 @@ func TestCancelHappyPath(t *testing.T) {
 	if c.leavesQuantity != "+17.500" {
 		t.Errorf("leavesQuantity: want +17.500 got %q", c.leavesQuantity)
 	}
-	if c.token != "tok-xyz" {
-		t.Errorf("token: want tok-xyz got %q", c.token)
-	}
-}
-
-// TestCancelMissingToken: cancel returns error when token is empty.
-func TestCancelMissingToken(t *testing.T) {
-	src := &approvalFakeSource{}
-
-	res := callCancel(t, src, cancelInput{OrderExternalID: testOrderEID})
-
-	if !res.IsError {
-		t.Fatalf("want IsError=true for missing token")
-	}
 }
 
 // TestCancelMissingOrderID: cancel returns error when orderExternalId is empty.
 func TestCancelMissingOrderID(t *testing.T) {
 	src := &approvalFakeSource{}
 
-	res := callCancel(t, src, cancelInput{Token: "tok"})
+	res := callCancel(t, src, cancelInput{})
 
 	if !res.IsError {
 		t.Fatalf("want IsError=true for missing orderExternalId")
@@ -789,7 +756,6 @@ func TestCancelOptionalLeavesQuantity(t *testing.T) {
 
 			res := callCancel(t, src, cancelInput{
 				OrderExternalID: testOrderEID,
-				Token:           "tok",
 				LeavesQuantity:  tc.leaves,
 			})
 
@@ -811,7 +777,7 @@ func TestCancelBackendError(t *testing.T) {
 	}
 
 	res := callCancel(t, src, cancelInput{
-		OrderExternalID: testOrderEID, Token: "tok", LeavesQuantity: "1",
+		OrderExternalID: testOrderEID, LeavesQuantity: "1",
 	})
 
 	if !res.IsError {

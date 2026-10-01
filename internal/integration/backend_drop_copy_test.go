@@ -242,19 +242,19 @@ func TestService_DropCopySigningShortcutsAreRefused(t *testing.T) {
 
 	for name, call := range map[string]func() error{
 		"confirm": func() error {
-			_, _, err := svc.ConfirmExecution(systemCtx(), id.String(), "token")
+			_, _, err := svc.ConfirmExecution(systemCtx(), id.String())
 			return err
 		},
 		"cancel": func() error {
 			_, _, err := svc.CancelOrder(
-				systemCtx(), id.String(), "token", "", "",
+				systemCtx(), id.String(), "", "",
 			)
 			return err
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := call(); !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("error = %v, want ErrInvalid", err)
+			if err := call(); !errors.Is(err, domain.ErrApprovalRequired) {
+				t.Fatalf("error = %v, want ErrApprovalRequired", err)
 			}
 		})
 	}

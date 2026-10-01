@@ -43,7 +43,6 @@ export {
   normalizeSigningKeysStatus,
   serviceLogsDownloadUrl,
   type CancelOrderBody,
-  type ConfirmOrderBody,
   type CreateOrderBody,
   type CreateOrderResult,
   type SubmittedOrder,

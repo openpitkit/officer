@@ -1181,17 +1181,17 @@ func toOrderDTO(o domain.Order, displayPrice string, signed bool) orderDTO {
 }
 
 // eventAttestationDTO is the wire shape of an event's persisted signed
-// attestation envelope. Token is the exact base64url envelope bytes; the rest is
-// the envelope metadata. Signed reports whether the envelope carries an Ed25519
+// attestation envelope. SignedEnvelope is the exact base64url envelope bytes;
+// the rest is the envelope metadata. Signed reports whether the envelope carries an Ed25519
 // signature (alg "ed25519") versus an eSign-off envelope (alg "none").
 type eventAttestationDTO struct {
-	Token       string `json:"token"`
-	KeyID       string `json:"keyId"`
-	Alg         string `json:"alg"`
-	RequestType string `json:"requestType"`
-	Mode        string `json:"mode"`
-	IssuedAt    string `json:"issuedAt"`
-	Signed      bool   `json:"signed"`
+	SignedEnvelope string `json:"signedEnvelope"`
+	KeyID          string `json:"keyId"`
+	Alg            string `json:"alg"`
+	RequestType    string `json:"requestType"`
+	Mode           string `json:"mode"`
+	IssuedAt       string `json:"issuedAt"`
+	Signed         bool   `json:"signed"`
 }
 
 // toEventAttestationDTO maps an event's 1:1 persisted attestation envelope onto
@@ -1203,13 +1203,13 @@ func toEventAttestationDTO(a *domain.EventAttestation) *eventAttestationDTO {
 		return nil
 	}
 	return &eventAttestationDTO{
-		Token:       a.Token,
-		KeyID:       a.KeyID,
-		Alg:         a.Alg,
-		RequestType: string(a.RequestType),
-		Mode:        a.Mode,
-		IssuedAt:    a.IssuedAt,
-		Signed:      eventAttestationSigned(a),
+		SignedEnvelope: a.Token,
+		KeyID:          a.KeyID,
+		Alg:            a.Alg,
+		RequestType:    string(a.RequestType),
+		Mode:           a.Mode,
+		IssuedAt:       a.IssuedAt,
+		Signed:         eventAttestationSigned(a),
 	}
 }
 
@@ -1233,9 +1233,9 @@ type eventReproductionESignDTO struct {
 }
 
 // eventReproductionRequestDTO is the request bound in the attestation payload,
-// reconstructed for reproduction from the decoded token. It surfaces the request
-// type and its material params so a verifier sees which request produced the
-// recorded result. It carries no private material.
+// reconstructed for reproduction from the decoded envelope. It surfaces the
+// request type and its material params so a verifier sees which request
+// produced the recorded result. It carries no private material.
 type eventReproductionRequestDTO struct {
 	RequestType     string                     `json:"requestType"`
 	OrderExternalID string                     `json:"orderId,omitempty"`
@@ -1295,20 +1295,20 @@ type eventReproductionDTO struct {
 	RequestType string `json:"requestType"`
 	// Event is byte-identical to the GET /orders/{id} event body (same serializer).
 	Event orderEventDTO `json:"event"`
-	// Attestation is the persisted envelope metadata (token verbatim), or null
+	// Attestation is the persisted envelope metadata (envelope verbatim), or null
 	// when the event has no attestation.
 	Attestation *eventAttestationDTO `json:"attestation"`
 	// Request is the request bound in the attestation payload, reconstructed from
-	// the decoded token; null when the event has no attestation or the token
-	// cannot be decoded.
+	// the decoded envelope; null when the event has no attestation or the
+	// envelope cannot be decoded.
 	Request *eventReproductionRequestDTO `json:"request"`
 	// Response is the exact type-specific API response the robot received for this
 	// request, reconstructed from persisted state through the SAME serializer
-	// (token verbatim); null when the event has no attestation.
+	// (envelope verbatim); null when the event has no attestation.
 	Response *eventReproductionResponseDTO `json:"response"`
 	// CanonicalApproval is the exact signed bytes as a string: the attestation
 	// payload in its canonical signed form, byte-identical to what was signed.
-	// Null when the event has no attestation or the token cannot be decoded.
+	// Null when the event has no attestation or the envelope cannot be decoded.
 	CanonicalApproval *string `json:"canonicalApproval"`
 	// PublicKey is the public key matching this attestation's keyId, resolved
 	// rotation-safe by id. Null under alg "none" / no signature.
@@ -1324,11 +1324,11 @@ type eventReproductionDTO struct {
 
 // eventReproductionResponseDTO is the exact type-specific API response the robot
 // received for the attested request, reconstructed through the same serializers.
-// Exactly one facet is populated, matching the request type. The token facet
-// carries the attestation token verbatim.
+// Exactly one facet is populated, matching the request type. The populated
+// facet carries the persisted envelope verbatim.
 type eventReproductionResponseDTO struct {
 	// SubmitResponse reproduces the POST /orders/submit response (submit).
-	SubmitResponse *approvalTokenDTO `json:"submitResponse,omitempty"`
+	SubmitResponse *signedApprovalDTO `json:"submitResponse,omitempty"`
 	// ExecutionReport reproduces the POST .../execution-reports response.
 	ExecutionReport *executionReportResponseDTO `json:"executionReport,omitempty"`
 	// Confirm reproduces the POST .../confirm response.
@@ -1602,26 +1602,26 @@ type executionBlockDTO struct {
 
 // executionReportResponseDTO is the response of POST
 // /orders/{id}/execution-reports: the recorded result plus the
-// attestation token proving what Officer recorded. AttestationToken is present
+// attestation envelope proving what Officer recorded. SignedAttestation is present
 // on success; signing or attestation persistence failures fail the request
 // before the report is committed.
 type executionReportResponseDTO struct {
-	ID               string             `json:"id"`
-	Result           executionResultDTO `json:"result"`
-	AttestationToken string             `json:"attestationToken,omitempty"`
-	AttestationKeyID string             `json:"attestationKeyId,omitempty"`
-	Signed           bool               `json:"signed"`
+	ID                string             `json:"id"`
+	Result            executionResultDTO `json:"result"`
+	SignedAttestation string             `json:"signedAttestation,omitempty"`
+	AttestationKeyID  string             `json:"attestationKeyId,omitempty"`
+	Signed            bool               `json:"signed"`
 }
 
 // orderMutationResponseDTO is the response of POST /orders/{id}/confirm
-// and .../cancel: the updated order plus the attestation token proving which
-// workflow shortcut Officer recorded. AttestationToken is present on success;
+// and .../cancel: the updated order plus the attestation envelope proving which
+// workflow shortcut Officer recorded. SignedAttestation is present on success;
 // signing or attestation persistence failures fail the request.
 type orderMutationResponseDTO struct {
-	Order            orderDTO `json:"order"`
-	AttestationToken string   `json:"attestationToken,omitempty"`
-	AttestationKeyID string   `json:"attestationKeyId,omitempty"`
-	Signed           bool     `json:"signed"`
+	Order             orderDTO `json:"order"`
+	SignedAttestation string   `json:"signedAttestation,omitempty"`
+	AttestationKeyID  string   `json:"attestationKeyId,omitempty"`
+	Signed            bool     `json:"signed"`
 }
 
 // toExecutionResultDTO maps an engine.ExecutionReportResult onto the wire DTO.
@@ -1691,7 +1691,7 @@ type publicKeyDTO struct {
 // publicKeyMaterialDTO is the identified public-key shape used by the
 // reproduction bundle and the per-key public endpoint. It carries the public key
 // paired with the id it was resolved by and its export format, so a caller can
-// resolve a token's embedded keyId to the exact public material. Private
+// resolve an envelope's embedded keyId to the exact public material. Private
 // material is NEVER present.
 type publicKeyMaterialDTO struct {
 	KeyID  string `json:"keyId"`
@@ -1752,10 +1752,10 @@ type submitOrderFieldsDTO struct {
 	Price       string
 }
 
-// approvalTokenDTO is the response of POST /orders/submit. The authorised order
+// signedApprovalDTO is the response of POST /orders/submit. The authorised order
 // is referenced by its opaque external id, never a surrogate id.
-type approvalTokenDTO struct {
-	Token           string           `json:"token"`
+type signedApprovalDTO struct {
+	SignedApproval  string           `json:"signedApproval"`
 	KeyID           string           `json:"keyId"`
 	OrderExternalID string           `json:"id"`
 	Verdict         string           `json:"verdict"`
@@ -1767,14 +1767,8 @@ type dropCopyOrderResponseDTO struct {
 	Status          string `json:"status"`
 }
 
-// confirmExecutionRequestDTO is the body of POST /orders/{id}/confirm.
-type confirmExecutionRequestDTO struct {
-	Token string `json:"token"`
-}
-
 // cancelOrderRequestDTO is the body of POST /orders/{id}/cancel.
 type cancelOrderRequestDTO struct {
-	Token          string `json:"token"`
 	LeavesQuantity string `json:"leavesQuantity"`
 	Reason         string `json:"reason"`
 }

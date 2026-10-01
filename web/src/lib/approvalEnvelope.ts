@@ -307,11 +307,11 @@ export function parseApprovalFields(
   };
 }
 
-/** Parse the approval fields from a persisted approval token. Returns null when
- *  the token cannot be decoded as a signed approval envelope. */
-export function parseTokenApproval(token: string): ParsedApproval | null {
+/** Parse the approval fields from a persisted base64url envelope. Returns null
+ *  when the envelope cannot be decoded as an approval envelope. */
+export function parseEnvelopeApproval(envelope: string): ParsedApproval | null {
   try {
-    const envJson = new TextDecoder().decode(base64urlToBytes(token));
+    const envJson = new TextDecoder().decode(base64urlToBytes(envelope));
     const env = JSON.parse(envJson) as { approval?: Record<string, unknown> };
     if (!env.approval || typeof env.approval !== "object") {
       return null;

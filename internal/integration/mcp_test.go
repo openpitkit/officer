@@ -146,7 +146,7 @@ func (f *fakeSource) SetMarketDataInstrumentEnabled(
 	return nil
 }
 
-// fakeSource stubs for the approval-token methods. They are never called in
+// fakeSource stubs for the order-approval methods. They are never called in
 // the existing tests; approval_test.go overrides them via approvalFakeSource.
 func (f *fakeSource) SubmitOrderToken(
 	_ context.Context, _ domain.Order, _ string, _ domain.MissingAccountPolicy,
@@ -161,13 +161,13 @@ func (f *fakeSource) SubmitDropCopyOrder(
 }
 
 func (f *fakeSource) ConfirmExecution(
-	_ context.Context, _ string, _ string,
+	_ context.Context, _ string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
 	return domain.Order{}, frameworkmcp.Attestation{}, nil
 }
 
 func (f *fakeSource) CancelOrder(
-	_ context.Context, _ string, _, _, _ string,
+	_ context.Context, _, _, _ string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
 	return domain.Order{}, frameworkmcp.Attestation{}, nil
 }
@@ -843,12 +843,12 @@ func (c *captureNSource) SubmitDropCopyOrder(
 	return frameworkmcp.SubmitDropCopyOrderResult{}, nil
 }
 func (c *captureNSource) ConfirmExecution(
-	context.Context, string, string,
+	context.Context, string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
 	return domain.Order{}, frameworkmcp.Attestation{}, nil
 }
 func (c *captureNSource) CancelOrder(
-	context.Context, string, string, string, string,
+	context.Context, string, string, string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
 	return domain.Order{}, frameworkmcp.Attestation{}, nil
 }
@@ -923,8 +923,8 @@ func TestGetOrderHappyPath(t *testing.T) {
 	if out.Approval == nil {
 		t.Fatal("approval read-back: want non-nil approval")
 	}
-	if out.Approval.Token != "eyAPPROVAL" {
-		t.Errorf("approval token: want eyAPPROVAL got %q", out.Approval.Token)
+	if out.Approval.SignedEnvelope != "eyAPPROVAL" {
+		t.Errorf("approval signed envelope: want eyAPPROVAL got %q", out.Approval.SignedEnvelope)
 	}
 	if !out.Approval.Signed {
 		t.Error("approval signed: want true for alg ed25519")

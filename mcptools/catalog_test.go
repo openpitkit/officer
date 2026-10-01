@@ -109,7 +109,7 @@ func TestCatalogParity(t *testing.T) {
 		{
 			Name:             "submit_order",
 			Title:            "Submit order",
-			AgentDescription: "Submit an order intent through pre-trade and obtain a signed approval token.",
+			AgentDescription: "Submit an order intent through pre-trade and obtain an approval envelope.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,
@@ -136,19 +136,10 @@ func TestCatalogParity(t *testing.T) {
 		{
 			Name:             "cancel",
 			Title:            "Cancel",
-			AgentDescription: "Cancel an untouched workflow order with its approval token.",
+			AgentDescription: "Cancel an untouched workflow order from Officer's recorded approval.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,
-			DefaultEnabled:   false,
-		},
-		{
-			Name:             "get_next_token",
-			Title:            "Get next token",
-			AgentDescription: "Fetch the next approval token for a trade from the registry.",
-			Mutating:         true,
-			Protective:       true,
-			Implemented:      false,
 			DefaultEnabled:   false,
 		},
 		{

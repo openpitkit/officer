@@ -43,7 +43,7 @@ tags:
   - name: limits
     description: Risk limit barriers
   - name: signing
-    description: Signing keys and the order approval-token flow
+    description: Signing keys and the order approval flow
   - name: audit
     description: Append-only audit trail
   - name: mcp-access
@@ -2359,7 +2359,7 @@ paths:
             lock, or block an account; non-terminal reports without a fill or
             commission record the lifecycle transition and the reported open
             quantity, and move no balance. For ordinary orders,
-            `attestationToken` proves which result Officer recorded, and signing
+            `signedAttestation` proves which result Officer recorded, and signing
             or attestation persistence failures fail before the report is recorded.
           content:
             application/json:
@@ -3035,7 +3035,7 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   # ---------------------------------------------------------------------------
-  # Signing keys and approval token flow
+  # Signing keys and order approval flow
   # ---------------------------------------------------------------------------
 
   /signing/keys/generate:
@@ -3105,7 +3105,8 @@ paths:
       summary: List all signing keys, including inactive ones
       description: >
         Returns every signing key, including inactive ones, so connectors can
-        verify in-flight tokens. Private material is never returned.
+        verify signatures on in-flight envelopes. Private material is never
+        returned.
       tags: [signing]
       responses:
         "200":
@@ -3157,7 +3158,7 @@ paths:
       summary: Export any signing key's public key by id
       description: >
         Resolves the public key by id (rotation-safe: not the active key), so a
-        pasted token's embedded `keyId` can be resolved even when it was signed
+        pasted envelope's embedded `keyId` can be resolved even when it was signed
         under a since-rotated key. Only public material is returned.
       tags: [signing]
       parameters:
@@ -3231,12 +3232,12 @@ paths:
 
   /orders/submit:
     post:
-      operationId: submitOrderToken
-      summary: Create and submit an order for approval, issuing a signed token
+      operationId: submitOrder
+      summary: Create and submit an order for approval, issuing an approval envelope
       description: >
         Submit CREATES the order exactly once from the request body: there is no
         separate persisting create beforehand. It runs the engine pre-trade in
-        the given mode and records the order, then issues a signed approval token
+        the given mode and records the order, then issues an approval envelope
         on accept. `id` is optional: when supplied it is used as-is and a
         duplicate is rejected with 409; when omitted the server generates one. The
         returned `id` is the id actually used, so confirm/cancel
@@ -3259,7 +3260,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ApprovalToken"
+                $ref: "#/components/schemas/SignedApproval"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -3318,24 +3319,14 @@ paths:
       - $ref: "#/components/parameters/OrderId"
     post:
       operationId: confirmExecution
-      summary: Record order confirmation with its approval token
+      summary: Record confirmation from Officer's stored signed approval
       description: >
-        Verifies the approval token and records confirmation history for an
-        order with no execution-report activity. If activity already exists,
-        the caller must submit an explicit execution report instead.
+        Authorizes the shortcut from the signed hold-mode accept approval
+        Officer recorded at submit, then records confirmation history for an
+        order with no execution-report activity. If no such approval is
+        recorded, or activity already exists, the caller must submit a complete
+        execution report through the order workflow instead.
       tags: [signing]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [token]
-              properties:
-                token:
-                  type: string
-                  description: Approval token issued by submit.
       responses:
         "200":
           description: >
@@ -3362,15 +3353,17 @@ paths:
       - $ref: "#/components/parameters/OrderId"
     post:
       operationId: cancelOrder
-      summary: Cancel an untouched order with its approval token
+      summary: Cancel an untouched order from Officer's stored signed approval
       description: >
-        Verifies the approval token and records a terminal cancellation report
+        Authorizes the shortcut from the signed hold-mode accept approval
+        Officer recorded at submit, then records a terminal cancellation report
         for an order with no prior execution-report activity. Optional
         caller-reported `leavesQuantity` is recorded verbatim in the order,
         report event, and attestation when supplied. Cancellation releases the
         actual reservation; omitted or empty `leavesQuantity` remains absent.
-        If activity already exists, the caller must submit an explicit execution
-        report instead.
+        If no such approval is recorded, or activity already exists, the caller
+        must submit a complete execution report through the order workflow
+        instead.
       tags: [signing]
       requestBody:
         required: true
@@ -3379,11 +3372,7 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [token]
               properties:
-                token:
-                  type: string
-                  description: Approval token issued by submit.
                 leavesQuantity:
                   allOf:
                     - $ref: "#/components/schemas/OpenQuantity"
@@ -4169,11 +4158,13 @@ components:
 
     OrderShortcutConflictError:
       description: >
-        The shortcut conflicts with the order or approval state. When the order
-        already has execution-report activity, Officer cannot safely infer the
-        mutation and returns `execution_report_required`; submit a complete
-        execution report through the normal order workflow instead. Other
-        approval-state conflicts return `conflict`.
+        The shortcut is unavailable for the order. When Officer has no
+        verifiable signed hold-mode accept approval recorded for it, the code is
+        `approval_required`. When the order already has execution-report
+        activity, Officer cannot safely infer the mutation and the code is
+        `execution_report_required`. Submit a complete execution report through
+        the normal order workflow instead. A terminal order returns
+        `terminal_order`.
       content:
         application/json:
           schema:
@@ -4357,8 +4348,9 @@ components:
               description: >
                 Machine-readable code: `validation`, `not_found`,
                 `account_missing`, `conflict`, `currency_change_blocked`, `has_dependents`,
-                `terminal_order`, `execution_report_required`, `precondition`,
-                `too_large`, `forbidden`, `reserved_group`,
+                `terminal_order`, `approval_required`,
+                `execution_report_required`, `precondition`, `too_large`,
+                `forbidden`, `reserved_group`,
                 `engine_restarting`, `signing`, `upstream`, `not_implemented`,
                 or `internal`.
               example: not_found
@@ -5356,15 +5348,15 @@ components:
 
     EventAttestation:
       type: object
-      required: [token, keyId, alg, requestType, mode, issuedAt, signed]
+      required: [signedEnvelope, keyId, alg, requestType, mode, issuedAt, signed]
       description: >
         An order-history event's persisted signed attestation envelope over
         the trading request and its recorded result. No surrogate or engine id
         is present.
       properties:
-        token:
+        signedEnvelope:
           type: string
-          description: The exact base64url attestation envelope bytes.
+          description: Signed attestation envelope, base64url, verbatim.
         keyId:
           type: string
           description: Identifier of the signing key that produced the envelope.
@@ -5632,7 +5624,7 @@ components:
       required: [id, result, signed]
       description: >
         The recorded result. Ordinary orders also return the signed attestation
-        over the report and result. Drop-copy orders return no attestation token
+        over the report and result. Drop-copy orders return no attestation envelope
         because their lifecycle is deliberately unsigned.
       properties:
         id:
@@ -5640,10 +5632,10 @@ components:
           $ref: "#/components/schemas/Id"
         result:
           $ref: "#/components/schemas/ExecutionResult"
-        attestationToken:
+        signedAttestation:
           type: string
           description: >
-            The base64url attestation envelope for an ordinary order. Empty for
+            Signed attestation envelope, base64url, verbatim. Empty for
             a drop-copy order.
         attestationKeyId:
           type: string
@@ -5663,10 +5655,10 @@ components:
       properties:
         order:
           $ref: "#/components/schemas/Order"
-        attestationToken:
+        signedAttestation:
           type: string
           description: >
-            The base64url attestation envelope returned on success.
+            Signed attestation envelope, base64url, verbatim.
         attestationKeyId:
           type: string
           description: The signing key id; empty under eSign-off or when absent.
@@ -6510,7 +6502,7 @@ components:
             Effective enabled state: the stored override when present, otherwise
             the catalogue default.
 
-    # Signing keys and approval token
+    # Signing keys and order approval
 
     SigningKey:
       type: object
@@ -6620,9 +6612,9 @@ components:
           type: string
           description: Persisted order status.
 
-    ApprovalToken:
+    SignedApproval:
       type: object
-      required: [token, keyId, id, verdict]
+      required: [signedApproval, keyId, id, verdict]
       description: >
         The signed submit decision issued for an order submit. The authorised
         order is referenced by its public id, never a surrogate id.
@@ -6630,12 +6622,12 @@ components:
         Event reproduction may return an empty verdict when the reproduced event
         has no pre-trade verdict, including submitted lifecycle events.
       properties:
-        token:
+        signedApproval:
           type: string
-          description: The base64url signed decision envelope.
+          description: Signed approval envelope, base64url, verbatim.
         keyId:
           type: string
-          description: Identifier of the signing key that produced the token.
+          description: Identifier of the signing key that produced the envelope.
         id:
           description: The authorised order's opaque public handle.
           $ref: "#/components/schemas/Id"
@@ -6733,7 +6725,7 @@ components:
       required: [requestType, instrument, side, quantity, amountKind, orderType, limitPrice, priceCurrency, accountId, verdict, result]
       description: >
         The request bound in the attestation payload, reconstructed from the
-        decoded token for reproduction.
+        decoded envelope for reproduction.
       properties:
         requestType:
           type: string
@@ -6780,11 +6772,11 @@ components:
       description: >
         The exact type-specific live API response the robot received for the
         attested request. Exactly one facet is populated, matching the request
-        type; the token is carried verbatim in the response's attestation-token
-        field.
+        type; the envelope is carried verbatim in the response's
+        `signedApproval` or `signedAttestation` field.
       properties:
         submitResponse:
-          $ref: "#/components/schemas/ApprovalToken"
+          $ref: "#/components/schemas/SignedApproval"
         executionReport:
           $ref: "#/components/schemas/ExecutionReportResponse"
         confirm:
@@ -6818,7 +6810,7 @@ components:
           $ref: "#/components/schemas/OrderEvent"
         attestation:
           description: >
-            The persisted attestation envelope metadata (token verbatim), or
+            The persisted attestation envelope metadata (envelope verbatim), or
             `null` when the event has no attestation.
           oneOf:
             - $ref: "#/components/schemas/EventAttestation"
@@ -6826,14 +6818,14 @@ components:
         request:
           description: >
             The request bound in the attestation payload, or `null` when the event
-            has no attestation or the token cannot be decoded.
+            has no attestation or the envelope cannot be decoded.
           oneOf:
             - $ref: "#/components/schemas/EventReproductionRequest"
             - type: "null"
         response:
           description: >
             The exact type-specific API response the robot received for this
-            request (token verbatim), or `null` when the event has no attestation.
+            request (envelope verbatim), or `null` when the event has no attestation.
           oneOf:
             - $ref: "#/components/schemas/EventReproductionResponse"
             - type: "null"
@@ -6842,7 +6834,7 @@ components:
           description: >
             The exact signed bytes as a string: the attestation payload in its
             canonical signed form, byte-identical to what was signed. `null` when
-            the event has no attestation or the persisted token cannot be decoded.
+            the event has no attestation or the persisted envelope cannot be decoded.
         publicKey:
           description: >
             The public key matching this attestation's `keyId`, resolved

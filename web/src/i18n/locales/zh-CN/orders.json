@@ -286,7 +286,7 @@
       "fieldCommission": "佣金",
       "workflow": {
         "title": "工作流快捷操作",
-        "description": "此审批令牌可用于记录确认或取消尚无执行报告的订单。如已有报告，请改为提交明确的执行报告。",
+        "description": "Officer 在提交此订单时记录了交易前批准，因此只有在尚无执行报告活动时，才能使用快捷操作确认或取消订单。出现任何报告后，必须改为提交明确的执行报告。",
         "confirm": "确认",
         "confirmBusy": "确认中…",
         "cancel": "取消订单",
@@ -316,10 +316,10 @@
 
   "panel": {
     "title": "复现与验证",
-    "description": "机器人或智能体就此请求收到的确切工件，按字节原样显示，您可复制、验证签名，或验证任意粘贴的令牌。",
-    "verifyTokenButton": "验证令牌",
+    "description": "机器人或智能体就此请求收到的确切工件，按字节原样显示，您可复制、验证签名，或验证任意粘贴的信封。",
+    "verifyTokenButton": "验证信封",
     "tabReproduction": "复现",
-    "tabVerify": "验证令牌"
+    "tabVerify": "验证信封"
   },
 
   "requestType": {
@@ -334,12 +334,12 @@
     "loadError": "无法加载复现数据包。{{message}}",
     "noAttestation": "此事件没有持久化的认证，因此无可复现内容。",
     "requestTypeLabel": "请求类型",
-    "tokenLabel": "令牌",
-    "tokenNote": "机器人收到的确切 base64url 令牌。主要复制项。",
+    "tokenLabel": "信封",
+    "tokenNote": "机器人收到的确切 base64url 信封。主要复制项。",
     "requestLabel": "已签名请求与记录结果",
     "requestNote": "认证中绑定的请求，以及 Officer 为其记录的结果。",
     "responseNote": "确切的 API 响应，由同一服务端序列化器重建。",
-    "responseTokenLabel": "认证令牌（原样）",
+    "responseTokenLabel": "认证信封（原样）",
     "responseSubmit": "提交响应",
     "responseExecutionReport": "执行报告响应",
     "responseConfirm": "确认响应",
@@ -366,23 +366,23 @@
     "badgeUnsigned": "UNSIGNED",
     "badgeError": "ERROR",
     "validNote": "已通过此认证密钥 ID 对应的公钥验证签名。",
-    "invalidNote": "签名不匹配。令牌可能已被更改。",
+    "invalidNote": "签名不匹配。信封可能已被更改。",
     "unsignedNote": "无加密签名 - 此事件在 eSign-off 模式下认证。",
     "errorNote": "无法执行验证。{{message}}",
     "missingArtifacts": "数据包中缺少规范字节或签名。",
     "jsSnippetLabel": "使用 WebCrypto 验证（JavaScript）",
     "goSnippetLabel": "使用 crypto/ed25519 验证（Go）",
     "snippetKeyNote": "公钥为 raw-base64 形式，按此认证密钥 ID 解析。",
-    "pasteEmpty": "请粘贴要验证的令牌。",
-    "pasteMalformed": "无法将该令牌解码为已签名的认证信封。",
-    "pasteNoKeyId": "该令牌不含密钥 ID，无法解析其公钥。",
+    "pasteEmpty": "请粘贴要验证的信封。",
+    "pasteMalformed": "无法将粘贴的内容解码为认证信封。",
+    "pasteNoKeyId": "该信封不含密钥 ID，无法解析其公钥。",
     "pasteUnknownKey": "未知密钥 ID {{keyId}} 的公钥。"
   },
 
   "paste": {
-    "label": "令牌",
-    "note": "粘贴任意 base64url 信封令牌。它将在您的浏览器中解码；其密钥 ID 用于解析待验证的公钥。",
-    "placeholder": "粘贴 base64url 令牌…"
+    "label": "信封",
+    "note": "粘贴任意 base64url 信封。它将在您的浏览器中解码；其密钥 ID 用于解析待验证的公钥。",
+    "placeholder": "粘贴 base64url 信封…"
   },
 
   "breakdown": {

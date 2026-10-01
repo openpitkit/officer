@@ -812,7 +812,7 @@ func (f *fakeService) SetNoESign(_ context.Context, off bool) error {
 // SubmitOrderToken mirrors the real backend: submit CREATES the order exactly
 // once. It uses the caller-supplied external id when set, otherwise generates a
 // deterministic one, records the created order keyed by that id, and returns an
-// approval token whose OrderExternalID is the id actually used - so a later
+// approval envelope whose OrderExternalID is the id actually used - so a later
 // confirm/cancel resolves the same order. When signingErr is set it surfaces
 // before any create, so duplicate/malformed-id rejection can be exercised.
 func (f *fakeService) SubmitOrderToken(
@@ -867,7 +867,7 @@ func (f *fakeService) SubmitDropCopyOrder(
 	return o, nil
 }
 func (f *fakeService) ConfirmExecution(
-	_ context.Context, orderID string, _ string,
+	_ context.Context, orderID string,
 ) (domain.Order, backend.Attestation, error) {
 	if f.confirmErr != nil {
 		return domain.Order{}, backend.Attestation{}, f.confirmErr
@@ -882,7 +882,7 @@ func (f *fakeService) ConfirmExecution(
 	return f.submitOrder, f.attestation, nil
 }
 func (f *fakeService) CancelOrder(
-	_ context.Context, orderID string, _, leavesQuantity, _ string,
+	_ context.Context, orderID, leavesQuantity, _ string,
 ) (domain.Order, backend.Attestation, error) {
 	f.cancelCalls++
 	f.cancelLeavesQuantity = leavesQuantity

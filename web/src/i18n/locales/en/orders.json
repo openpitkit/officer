@@ -286,7 +286,7 @@
       "fieldCommission": "Commission",
       "workflow": {
         "title": "Workflow shortcuts",
-        "description": "This approval token can record confirmation or cancel an order with no execution-report activity. After any report, submit an explicit execution report instead.",
+        "description": "Officer recorded a pre-trade approval when this order was submitted, so the shortcuts can confirm or cancel it only while it has no execution-report activity. After any report, submit an explicit execution report instead.",
         "confirm": "Confirm",
         "confirmBusy": "Confirming…",
         "cancel": "Cancel order",
@@ -316,10 +316,10 @@
 
   "panel": {
     "title": "Reproduce and verify",
-    "description": "The exact artifacts a robot or agent received for this request, shown verbatim so you can copy them, verify the signature, or verify any pasted token.",
-    "verifyTokenButton": "Verify token",
+    "description": "The exact artifacts a robot or agent received for this request, shown verbatim so you can copy them, verify the signature, or verify any pasted envelope.",
+    "verifyTokenButton": "Verify envelope",
     "tabReproduction": "Reproduction",
-    "tabVerify": "Verify token"
+    "tabVerify": "Verify envelope"
   },
 
   "requestType": {
@@ -334,12 +334,12 @@
     "loadError": "The reproduction bundle could not be loaded. {{message}}",
     "noAttestation": "This event carries no persisted attestation, so there is nothing to reproduce.",
     "requestTypeLabel": "Request type",
-    "tokenLabel": "Token",
-    "tokenNote": "The exact base64url token the robot received. Primary copy.",
+    "tokenLabel": "Envelope",
+    "tokenNote": "The exact base64url envelope the robot received. Primary copy.",
     "requestLabel": "Signed request and recorded result",
     "requestNote": "The request bound in the attestation and the result Officer recorded for it.",
     "responseNote": "The exact API response, reconstructed by the same server serializer.",
-    "responseTokenLabel": "Attestation token (verbatim)",
+    "responseTokenLabel": "Attestation envelope (verbatim)",
     "responseSubmit": "Submit response",
     "responseExecutionReport": "Execution-report response",
     "responseConfirm": "Confirm response",
@@ -366,23 +366,23 @@
     "badgeUnsigned": "UNSIGNED",
     "badgeError": "ERROR",
     "validNote": "Signature verified against the public key for this attestation's key id.",
-    "invalidNote": "Signature does not match. The token may have been altered.",
+    "invalidNote": "Signature does not match. The envelope may have been altered.",
     "unsignedNote": "No cryptographic signature - this event was attested under eSign-off.",
     "errorNote": "Verification could not run. {{message}}",
     "missingArtifacts": "The canonical bytes or signature are missing from the bundle.",
     "jsSnippetLabel": "Verify with WebCrypto (JavaScript)",
     "goSnippetLabel": "Verify with crypto/ed25519 (Go)",
     "snippetKeyNote": "The public key is in raw-base64 form, resolved by this attestation's key id.",
-    "pasteEmpty": "Paste a token to verify.",
-    "pasteMalformed": "The token could not be decoded as a signed attestation envelope.",
-    "pasteNoKeyId": "The token carries no key id, so its public key cannot be resolved.",
+    "pasteEmpty": "Paste an envelope to verify.",
+    "pasteMalformed": "The pasted value could not be decoded as an attestation envelope.",
+    "pasteNoKeyId": "The envelope carries no key id, so its public key cannot be resolved.",
     "pasteUnknownKey": "No public key is known for key id {{keyId}}."
   },
 
   "paste": {
-    "label": "Token",
-    "note": "Paste any base64url envelope token. It is decoded in your browser; its key id resolves the public key to verify against.",
-    "placeholder": "Paste a base64url token…"
+    "label": "Envelope",
+    "note": "Paste any base64url envelope. It is decoded in your browser; its key id resolves the public key to verify against.",
+    "placeholder": "Paste a base64url envelope…"
   },
 
   "breakdown": {

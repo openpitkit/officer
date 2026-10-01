@@ -58,22 +58,22 @@ function bytesToBase64Url(bytes: Uint8Array): string {
     .replace(/=+$/, "");
 }
 
-// A signed envelope with the exact bytes recoverable from the token, plus the
+// A signed envelope with the exact bytes recoverable from its base64url form, plus the
 // raw-base64 public key and canonical bytes the panel receives from the server.
 interface SignedFixture {
-  token: string;
+  envelope: string;
   canonical: string;
   signature: string;
   rawPublicKey: string;
   keyId: string;
 }
 
-// buildSignedToken produces a real Ed25519-signed envelope. The canonical bytes
+// buildSignedEnvelope produces a real Ed25519-signed envelope. The canonical bytes
 // are JSON.stringify(approval) (the wire form the Go server marshals), the
 // envelope embeds those exact bytes as its "approval" value, and the signature
 // covers them - so the panel's substring extractor recovers the signed bytes
 // byte-for-byte, exactly as production does.
-async function buildSignedToken(
+async function buildSignedEnvelope(
   keyId: string,
   overrides: Record<string, unknown> = {},
 ): Promise<SignedFixture> {
@@ -120,9 +120,9 @@ async function buildSignedToken(
   const envJson = `{"approval":${canonical},"signature":${JSON.stringify(
     signature,
   )},"keyId":${JSON.stringify(keyId)},"alg":"ed25519"}`;
-  const token = bytesToBase64Url(new TextEncoder().encode(envJson));
+  const envelope = bytesToBase64Url(new TextEncoder().encode(envJson));
   return {
-    token,
+    envelope,
     canonical,
     signature,
     rawPublicKey: bytesToBase64Std(rawPub),
@@ -136,7 +136,7 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
     requestType: "submit",
     event: sampleEvent,
     attestation: {
-      token: fixture.token,
+      signedEnvelope: fixture.envelope,
       keyId: fixture.keyId,
       alg: "ed25519",
       requestType: "submit",
@@ -161,7 +161,7 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
     },
     response: {
       submitResponse: {
-        token: fixture.token,
+        signedApproval: fixture.envelope,
         keyId: fixture.keyId,
         id: "ord-repro-1",
         verdict: "accept",
@@ -185,7 +185,7 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
 }
 
 // An execution-report reproduction bundle for a fill event: exercises a
-// non-submit request type end-to-end (its own facet, token, and result).
+// non-submit request type end-to-end (its own facet, envelope, and result).
 function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
   const fillEvent: OrderEvent = {
     id: "evt-fill-1",
@@ -200,7 +200,7 @@ function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
     requestType: "execution_report",
     event: fillEvent,
     attestation: {
-      token: fixture.token,
+      signedEnvelope: fixture.envelope,
       keyId: fixture.keyId,
       alg: "ed25519",
       requestType: "execution_report",
@@ -237,7 +237,7 @@ function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
         id: "evt-fill-1",
         blocks: [],
         outcomes: [],
-        attestationToken: fixture.token,
+        signedAttestation: fixture.envelope,
         attestationKeyId: fixture.keyId,
         signed: true,
       },
@@ -304,8 +304,8 @@ function textareaByValue(value: string): HTMLTextAreaElement | undefined {
 }
 
 describe("OrderVerificationPanel - reproduction mode", () => {
-  it("renders the token and canonical bytes verbatim for a submit event", async () => {
-    const fixture = await buildSignedToken("key-1");
+  it("renders the envelope and canonical bytes verbatim for a submit event", async () => {
+    const fixture = await buildSignedEnvelope("key-1");
     const bundle = submitBundleFrom(fixture);
     fetchEventReproductionMock.mockResolvedValue(bundle);
     fetchPublicKeyByIdMock.mockResolvedValue({
@@ -323,9 +323,9 @@ describe("OrderVerificationPanel - reproduction mode", () => {
     expect(orderId).toBe("ord-repro-1");
     expect(eventId).toBe("evt-repro-1");
 
-    // The token textarea holds the exact server token, byte-for-byte.
-    await screen.findByText("Token");
-    expect(textareaByValue(fixture.token)).toBeDefined();
+    // The envelope textarea holds the exact server envelope, byte-for-byte.
+    await screen.findByText("Envelope");
+    expect(textareaByValue(fixture.envelope)).toBeDefined();
 
     // The canonical block holds the exact signed bytes.
     expect(
@@ -341,8 +341,8 @@ describe("OrderVerificationPanel - reproduction mode", () => {
     expect(screen.getAllByText("Submit").length).toBeGreaterThan(0);
   });
 
-  it("renders an execution-report event's facet, verbatim token, and result", async () => {
-    const fixture = await buildSignedToken("key-er", {
+  it("renders an execution-report event's facet, verbatim envelope, and result", async () => {
+    const fixture = await buildSignedEnvelope("key-er", {
       requestType: "execution_report",
     });
     const bundle = execReportBundleFrom(fixture);
@@ -356,15 +356,15 @@ describe("OrderVerificationPanel - reproduction mode", () => {
 
     renderPanel("ord-repro-1", "evt-fill-1");
 
-    // The execution-report response facet is shown, with its verbatim token.
+    // The execution-report response facet is shown, with its verbatim envelope.
     await screen.findByText("Execution-report response");
     expect(screen.getAllByText("Execution report").length).toBeGreaterThan(0);
-    expect(textareaByValue(fixture.token)).toBeDefined();
+    expect(textareaByValue(fixture.envelope)).toBeDefined();
     expect(textareaByValue(fixture.canonical)).toBeDefined();
   });
 
   it("verifies a valid signature against the attestation key id", async () => {
-    const fixture = await buildSignedToken("key-1");
+    const fixture = await buildSignedEnvelope("key-1");
     fetchEventReproductionMock.mockResolvedValue(submitBundleFrom(fixture));
     fetchPublicKeyByIdMock.mockResolvedValue({
       keyId: "key-1",
@@ -376,7 +376,7 @@ describe("OrderVerificationPanel - reproduction mode", () => {
     const user = userEvent.setup();
     renderPanel("ord-repro-1", "evt-repro-1");
 
-    await screen.findByText("Token");
+    await screen.findByText("Envelope");
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
     await waitFor(() => expect(screen.getByText("VALID")).toBeInTheDocument());
@@ -389,7 +389,7 @@ describe("OrderVerificationPanel - reproduction mode", () => {
   });
 
   it("reports an invalid signature when the bytes do not match", async () => {
-    const fixture = await buildSignedToken("key-1");
+    const fixture = await buildSignedEnvelope("key-1");
     const bundle = submitBundleFrom(fixture);
     // Corrupt the signature so verification fails.
     bundle.signature = bytesToBase64Std(new Uint8Array(64));
@@ -404,7 +404,7 @@ describe("OrderVerificationPanel - reproduction mode", () => {
     const user = userEvent.setup();
     renderPanel("ord-repro-1", "evt-repro-1");
 
-    await screen.findByText("Token");
+    await screen.findByText("Envelope");
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
     await waitFor(() =>
@@ -413,7 +413,7 @@ describe("OrderVerificationPanel - reproduction mode", () => {
   });
 
   it("shows an unsigned state under eSign-off with no verify button", async () => {
-    const fixture = await buildSignedToken("key-none", { alg: "none" });
+    const fixture = await buildSignedEnvelope("key-none", { alg: "none" });
     const bundle = submitBundleFrom(fixture);
     bundle.attestation = { ...bundle.attestation!, alg: "none", signed: false };
     bundle.eSign = { alg: "none", noESign: true, signed: false };
@@ -423,8 +423,8 @@ describe("OrderVerificationPanel - reproduction mode", () => {
 
     renderPanel("ord-repro-1", "evt-repro-1");
 
-    // Token is still shown; no signature/public-key block, no verify button.
-    await screen.findByText("Token");
+    // The envelope is still shown; no signature/public-key block, no verify button.
+    await screen.findByText("Envelope");
     expect(screen.getAllByText("UNSIGNED").length).toBeGreaterThan(0);
     expect(
       screen.queryByRole("button", { name: "Verify" }),
@@ -455,9 +455,9 @@ describe("OrderVerificationPanel - reproduction mode", () => {
   });
 });
 
-describe("OrderVerificationPanel - verify token mode", () => {
-  it("verifies a valid pasted token (happy path)", async () => {
-    const fixture = await buildSignedToken("key-paste");
+describe("OrderVerificationPanel - verify envelope mode", () => {
+  it("verifies a valid pasted envelope (happy path)", async () => {
+    const fixture = await buildSignedEnvelope("key-paste");
     fetchPublicKeyByIdMock.mockResolvedValue({
       keyId: "key-paste",
       alg: "ed25519",
@@ -468,11 +468,11 @@ describe("OrderVerificationPanel - verify token mode", () => {
     const user = userEvent.setup();
     renderPanel(null, null, "verify");
 
-    const area = await screen.findByLabelText("Token", {
+    const area = await screen.findByLabelText("Envelope", {
       selector: "textarea",
     });
     await user.click(area);
-    await user.paste(fixture.token);
+    await user.paste(fixture.envelope);
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
     await waitFor(() => expect(screen.getByText("VALID")).toBeInTheDocument());
@@ -485,7 +485,7 @@ describe("OrderVerificationPanel - verify token mode", () => {
   });
 
   it("parses a generalized execution-report payload with its result section", async () => {
-    const fixture = await buildSignedToken("key-gen", {
+    const fixture = await buildSignedEnvelope("key-gen", {
       approvalId: "approval-exec-1",
       approvalRef: "approval-submit-1",
       requestType: "execution_report",
@@ -544,11 +544,11 @@ describe("OrderVerificationPanel - verify token mode", () => {
     const user = userEvent.setup();
     renderPanel(null, null, "verify");
 
-    const area = await screen.findByLabelText("Token", {
+    const area = await screen.findByLabelText("Envelope", {
       selector: "textarea",
     });
     await user.click(area);
-    await user.paste(fixture.token);
+    await user.paste(fixture.envelope);
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
     await waitFor(() => expect(screen.getByText("VALID")).toBeInTheDocument());
@@ -572,7 +572,7 @@ describe("OrderVerificationPanel - verify token mode", () => {
       screen.getAllByText("Daily loss threshold reached").length,
     ).toBeGreaterThan(0);
     expect(screen.getByText("operator@example.test")).toBeInTheDocument();
-    // Even a legacy or hostile token carrying a lock field must not surface it.
+    // Even a legacy or hostile envelope carrying a lock field must not surface it.
     expect(screen.queryByText("opaque-lock")).not.toBeInTheDocument();
     expect(screen.getByText("-0.25 USD")).toBeInTheDocument();
     expect(screen.getByText("Recorded result")).toBeInTheDocument();
@@ -587,7 +587,7 @@ describe("OrderVerificationPanel - verify token mode", () => {
   });
 
   it("surfaces an unknown key id (404) as an inline error", async () => {
-    const fixture = await buildSignedToken("key-gone");
+    const fixture = await buildSignedEnvelope("key-gone");
     fetchPublicKeyByIdMock.mockRejectedValue(
       new ApiError("not found", "not_found", 404),
     );
@@ -595,11 +595,11 @@ describe("OrderVerificationPanel - verify token mode", () => {
     const user = userEvent.setup();
     renderPanel(null, null, "verify");
 
-    const area = await screen.findByLabelText("Token", {
+    const area = await screen.findByLabelText("Envelope", {
       selector: "textarea",
     });
     await user.click(area);
-    await user.paste(fixture.token);
+    await user.paste(fixture.envelope);
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
     await waitFor(() =>
@@ -609,31 +609,31 @@ describe("OrderVerificationPanel - verify token mode", () => {
     );
   });
 
-  it("rejects a malformed token with an inline error", async () => {
+  it("rejects a malformed envelope with an inline error", async () => {
     const user = userEvent.setup();
     renderPanel(null, null, "verify");
 
-    const area = await screen.findByLabelText("Token", {
+    const area = await screen.findByLabelText("Envelope", {
       selector: "textarea",
     });
     await user.click(area);
-    await user.paste("not-a-real-token");
+    await user.paste("not-a-real-envelope");
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
     await waitFor(() => expect(screen.getByText("ERROR")).toBeInTheDocument());
     expect(fetchPublicKeyByIdMock).not.toHaveBeenCalled();
   });
 
-  it("treats an alg-none token as unsigned without fetching a key", async () => {
-    const fixture = await buildSignedToken("", { alg: "none", keyId: "" });
+  it("treats an alg-none envelope as unsigned without fetching a key", async () => {
+    const fixture = await buildSignedEnvelope("", { alg: "none", keyId: "" });
     const user = userEvent.setup();
     renderPanel(null, null, "verify");
 
-    const area = await screen.findByLabelText("Token", {
+    const area = await screen.findByLabelText("Envelope", {
       selector: "textarea",
     });
     await user.click(area);
-    await user.paste(fixture.token);
+    await user.paste(fixture.envelope);
     await user.click(screen.getByRole("button", { name: "Verify" }));
 
     await waitFor(() =>
@@ -648,25 +648,25 @@ describe("OrderVerificationPanel - verify token mode", () => {
       screen.queryByRole("tab", { name: "Reproduction" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("tab", { name: "Verify token" }),
+      screen.getByRole("tab", { name: "Verify envelope" }),
     ).toBeInTheDocument();
   });
 });
 
 describe("OrderVerificationPanel - mode switching", () => {
-  it("switches from reproduction to verify token", async () => {
-    const fixture = await buildSignedToken("key-1");
+  it("switches from reproduction to verify envelope", async () => {
+    const fixture = await buildSignedEnvelope("key-1");
     fetchEventReproductionMock.mockResolvedValue(submitBundleFrom(fixture));
 
     const user = userEvent.setup();
     renderPanel("ord-repro-1", "evt-repro-1");
 
-    await screen.findByText("Token");
-    await user.click(screen.getByRole("tab", { name: "Verify token" }));
+    await screen.findByText("Envelope");
+    await user.click(screen.getByRole("tab", { name: "Verify envelope" }));
 
-    // The paste textarea placeholder confirms the verify-token pane is active.
+    // The paste textarea placeholder confirms the verify-envelope pane is active.
     expect(
-      screen.getByPlaceholderText("Paste a base64url token…"),
+      screen.getByPlaceholderText("Paste a base64url envelope…"),
     ).toBeInTheDocument();
   });
 });

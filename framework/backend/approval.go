@@ -601,22 +601,23 @@ func isDropCopyOrder(order domain.Order) bool {
 
 func dropCopySigningError() error {
 	// A drop-copy pre-trade decision was not enforced. Signing that decision or
-	// a token shortcut would falsely claim that risk approved the order.
+	// a lifecycle shortcut would falsely claim that risk approved the order.
 	return fmt.Errorf(
-		"backend: drop-copy submit has no signing token; submit an explicit execution report: %w",
+		"backend: drop-copy submit is unsigned; submit an explicit execution report: %w",
 		domain.ErrInvalid,
 	)
 }
 
-// ConfirmExecution verifies the submit token against the stored order and
-// records an idempotent confirmation event. It never calls the engine and never
-// changes the order status or balances. The node re-checks execution-report
-// activity inside the account lane; after any such activity the shortcut is no
-// longer allowed because Officer cannot safely infer the venue state. The
-// post-commit approval_confirmed audit write is best-effort: because the
-// operation is already committed, a failure is logged rather than returned.
+// ConfirmExecution authorizes the shortcut from the signed hold-mode accept
+// approval Officer recorded at submit, then records an idempotent confirmation
+// event. It never calls the engine and never changes the order status or
+// balances. The node re-checks execution-report activity inside the account
+// lane; after any such activity the shortcut is no longer allowed because
+// Officer cannot safely infer the venue state. The post-commit
+// approval_confirmed audit write is best-effort: because the operation is
+// already committed, a failure is logged rather than returned.
 func (s *Service) ConfirmExecution(
-	ctx context.Context, orderID string, token string,
+	ctx context.Context, orderID string,
 ) (domain.Order, Attestation, error) {
 	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
@@ -628,20 +629,10 @@ func (s *Service) ConfirmExecution(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
-	if isDropCopyOrder(stored.Order) {
-		return domain.Order{}, Attestation{}, dropCopySigningError()
-	}
-	signer, err := s.signerOrErr()
+	payload, signer, err := s.authorizeShortcutSubmitVerdict(
+		ctx, stored, "confirmed",
+	)
 	if err != nil {
-		return domain.Order{}, Attestation{}, err
-	}
-	result, err := signer.Verify(ctx, token, verifyParamsFor(stored.Order))
-	if err != nil {
-		return domain.Order{}, Attestation{}, err
-	}
-	if err := requireShortcutSubmitVerdict(
-		stored, token, result.Payload, "confirmed",
-	); err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
 
@@ -665,7 +656,7 @@ func (s *Service) ConfirmExecution(
 			confirmedOrder.Principal = caller.Principal
 			p, err := s.buildLifecyclePayload(
 				confirmedOrder, domain.AttestationRequestConfirm,
-				"confirmed", "", result.Payload.ApprovalID)
+				"confirmed", "", payload.ApprovalID)
 			if err != nil {
 				return domain.ApprovalPayload{}, false, err
 			}
@@ -693,7 +684,7 @@ func (s *Service) ConfirmExecution(
 		}
 	}
 	detail := fmt.Sprintf(
-		"confirm approval %s order %s", result.Payload.ApprovalID, orderID)
+		"confirm approval %s order %s", payload.ApprovalID, orderID)
 	if err := s.auditApproval(
 		ctx, n, confirmed.Account, domain.AuditActionApprovalConfirmed, detail,
 	); err != nil {
@@ -707,15 +698,16 @@ func (s *Service) ConfirmExecution(
 	return confirmed, att, nil
 }
 
-// CancelOrder verifies the submit token, then forwards a caller-supplied
-// terminal cancellation report for the untouched stored order. Officer stores
-// and signs caller leaves verbatim, while forwarding that value to the engine.
-// If any execution report was already recorded, the shortcut fails and the
-// caller must provide an explicit report instead. The post-commit
-// approval_cancelled audit write is best-effort: because the operation is
-// already committed, a failure is logged rather than returned.
+// CancelOrder authorizes the shortcut from the signed hold-mode accept approval
+// Officer recorded at submit, then forwards a caller-supplied terminal
+// cancellation report for the untouched stored order. Officer stores and signs
+// caller leaves verbatim, while forwarding that value to the engine. If any
+// execution report was already recorded, the shortcut fails and the caller must
+// provide an explicit report instead. The post-commit approval_cancelled audit
+// write is best-effort: because the operation is already committed, a failure
+// is logged rather than returned.
 func (s *Service) CancelOrder(
-	ctx context.Context, orderID string, token, leavesQuantity, reason string,
+	ctx context.Context, orderID, leavesQuantity, reason string,
 ) (domain.Order, Attestation, error) {
 	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
@@ -732,20 +724,10 @@ func (s *Service) CancelOrder(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
-	if isDropCopyOrder(stored.Order) {
-		return domain.Order{}, Attestation{}, dropCopySigningError()
-	}
-	signer, err := s.signerOrErr()
+	payload, signer, err := s.authorizeShortcutSubmitVerdict(
+		ctx, stored, "cancelled",
+	)
 	if err != nil {
-		return domain.Order{}, Attestation{}, err
-	}
-	result, err := signer.Verify(ctx, token, verifyParamsFor(stored.Order))
-	if err != nil {
-		return domain.Order{}, Attestation{}, err
-	}
-	if err := requireShortcutSubmitVerdict(
-		stored, token, result.Payload, "cancelled",
-	); err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
 
@@ -792,7 +774,7 @@ func (s *Service) CancelOrder(
 				return domain.ApprovalPayload{}, false, err
 			}
 			p.Mode = SubmitModeHold
-			p.ApprovalRef = result.Payload.ApprovalID
+			p.ApprovalRef = payload.ApprovalID
 			p.PolicySummary = "order cancelled by shortcut"
 			p.ExecutionReport = event.Payload.ExecutionReport
 			p.Result.Outcome = "cancelled"
@@ -816,7 +798,7 @@ func (s *Service) CancelOrder(
 	}
 	detail := fmt.Sprintf(
 		"cancel approval %s order %s reason=%s",
-		result.Payload.ApprovalID, orderID, reason)
+		payload.ApprovalID, orderID, reason)
 	if err := s.auditApproval(
 		ctx, n, cancelled.Account, domain.AuditActionApprovalCancelled, detail,
 	); err != nil {
@@ -832,55 +814,85 @@ func (s *Service) CancelOrder(
 
 // --- helpers ----------------------------------------------------------------
 
-func requireShortcutSubmitVerdict(
+func (s *Service) authorizeShortcutSubmitVerdict(
+	ctx context.Context,
 	stored domain.OrderDetail,
-	token string,
-	payload domain.ApprovalPayload,
 	action string,
-) error {
+) (domain.ApprovalPayload, fwsigning.Service, error) {
+	if isDropCopyOrder(stored.Order) {
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: drop-copy order has no signed hold approval recorded by Officer and cannot be %s: %w",
+			action, domain.ErrApprovalRequired,
+		)
+	}
+	var recorded *domain.OrderEvent
+	for i := range stored.Events {
+		event := &stored.Events[i]
+		if event.Type == domain.OrderEventPreTradeAccepted &&
+			event.Attestation != nil && event.Attestation.Token != "" {
+			recorded = event
+			break
+		}
+	}
+	if recorded == nil {
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: order has no signed pre-trade accept approval recorded by Officer and cannot be %s: %w",
+			action, domain.ErrApprovalRequired,
+		)
+	}
+	signer, err := s.signerOrErr()
+	if err != nil {
+		return domain.ApprovalPayload{}, nil, err
+	}
+	result, err := signer.Verify(
+		ctx, recorded.Attestation.Token, verifyParamsFor(stored.Order),
+	)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalid) ||
+			errors.Is(err, domain.ErrNotFound) {
+			return domain.ApprovalPayload{}, nil, fmt.Errorf(
+				"backend: recorded pre-trade accept approval cannot be verified for %s: %v: %w",
+				action, err, domain.ErrApprovalRequired,
+			)
+		}
+		return domain.ApprovalPayload{}, nil, err
+	}
+	payload := result.Payload
 	if payload.Mode != SubmitModeHold {
-		return fmt.Errorf(
-			"backend: approval %s mode %q cannot be %s: %w",
-			payload.ApprovalID, payload.Mode, action, domain.ErrConflict,
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: recorded approval %s mode %q cannot be %s: %w",
+			payload.ApprovalID, payload.Mode, action, domain.ErrApprovalRequired,
 		)
 	}
 	if payload.Verdict != "accept" {
-		return fmt.Errorf(
-			"backend: approval %s verdict %q cannot be %s: %w",
-			payload.ApprovalID, payload.Verdict, action, domain.ErrConflict,
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: recorded approval %s verdict %q cannot be %s: %w",
+			payload.ApprovalID, payload.Verdict, action, domain.ErrApprovalRequired,
 		)
 	}
 	if payload.RequestType != string(domain.AttestationRequestSubmit) ||
 		payload.Result != nil ||
 		payload.ExecutionReport != nil ||
 		payload.ApprovalRef != "" {
-		return fmt.Errorf(
-			"backend: approval %s is not an original submit verdict and cannot be %s: %w",
-			payload.ApprovalID, action, domain.ErrConflict,
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: recorded approval %s is not an original submit verdict and cannot be %s: %w",
+			payload.ApprovalID, action, domain.ErrApprovalRequired,
 		)
 	}
 	eventID, err := domain.ParseExternalID(payload.EventExternalID)
 	if err != nil {
-		return fmt.Errorf(
-			"backend: approval %s is not bound to a recorded pre-trade verdict and cannot be %s: %w",
-			payload.ApprovalID, action, domain.ErrConflict,
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: recorded approval %s has an invalid pre-trade event binding and cannot be %s: %v: %w",
+			payload.ApprovalID, action, err, domain.ErrApprovalRequired,
 		)
 	}
-	for _, event := range stored.Events {
-		if event.ExternalID != eventID {
-			continue
-		}
-		if event.Type == domain.OrderEventPreTradeAccepted &&
-			event.Attestation != nil &&
-			event.Attestation.Token == token {
-			return nil
-		}
-		break
+	if eventID != recorded.ExternalID {
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: recorded approval %s does not identify its pre-trade accept event and cannot be %s: %w",
+			payload.ApprovalID, action, domain.ErrApprovalRequired,
+		)
 	}
-	return fmt.Errorf(
-		"backend: approval %s does not identify the recorded pre-trade accept verdict and cannot be %s: %w",
-		payload.ApprovalID, action, domain.ErrConflict,
-	)
+	return payload, signer, nil
 }
 
 // buildApprovalPayload assembles the canonical approval payload from the

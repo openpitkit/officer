@@ -73,7 +73,7 @@ const setMarketDataInstrumentToolDescription = "Enable or disable one " +
 
 const submitOrderToolName = "submit_order"
 const submitOrderToolDescription = "Submit an order intent through pre-trade " +
-	"and obtain a signed approval token. Mutates engine state and records the " +
+	"and obtain an approval envelope. Mutates engine state and records the " +
 	"pre-trade lock; protected and disabled by default."
 
 const submitDropCopyOrderToolName = "submit_drop_copy_order"
@@ -85,16 +85,16 @@ const submitDropCopyOrderToolDescription = "Submit a drop-copy order through " +
 
 const confirmExecutionToolName = "confirm_execution"
 const confirmExecutionToolDescription = "Record confirmation history for a " +
-	"previously approved workflow order by presenting its approval token. The " +
-	"shortcut is rejected after execution-report activity; protected and disabled " +
-	"by default."
+	"workflow order from the signed hold approval Officer recorded at submit. " +
+	"The shortcut is rejected after execution-report activity; protected and " +
+	"disabled by default."
 
 const cancelToolName = "cancel"
-const cancelToolDescription = "Cancel an untouched workflow order by presenting " +
-	"its approval token. Optional caller-reported leavesQuantity is recorded " +
-	"verbatim when supplied; the SDK receives the order's own recorded " +
-	"reservation remainder. After execution-report activity, submit an explicit " +
-	"report. " +
+const cancelToolDescription = "Cancel an untouched workflow order from the " +
+	"signed hold approval Officer recorded at submit. Optional caller-reported " +
+	"leavesQuantity is recorded verbatim when supplied; the SDK receives the " +
+	"order's own recorded reservation remainder. After execution-report activity, " +
+	"submit an explicit report. " +
 	"Protected and disabled by default."
 
 // RegisterTools registers the Pit Officer MCP tools and catalog entries.
@@ -187,7 +187,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		submitOrderToolName,
 		"Submit order",
 		submitOrderToolDescription,
-		"Submit an order intent through pre-trade and obtain a signed approval token.",
+		"Submit an order intent through pre-trade and obtain an approval envelope.",
 		true,
 		true,
 		true,
@@ -220,22 +220,12 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		cancelToolName,
 		"Cancel",
 		cancelToolDescription,
-		"Cancel an untouched workflow order with its approval token.",
+		"Cancel an untouched workflow order from Officer's recorded approval.",
 		true,
 		true,
 		true,
 		false,
 	), cancelHandler)
-	reg.Register(descriptor(
-		"get_next_token",
-		"Get next token",
-		"",
-		"Fetch the next approval token for a trade from the registry.",
-		true,
-		true,
-		false,
-		false,
-	))
 	reg.Register(descriptor(
 		"report_fill",
 		"Report fill",
@@ -402,7 +392,7 @@ type submitDropCopyOrderInput struct {
 }
 
 type submitOrderOutput struct {
-	Token           string                `json:"token"`
+	SignedApproval  string                `json:"signedApproval"`
 	KeyID           string                `json:"keyId"`
 	OrderExternalID string                `json:"id"`
 	Verdict         string                `json:"verdict"`
@@ -416,28 +406,26 @@ type submitDropCopyOrderOutput struct {
 
 type confirmExecutionInput struct {
 	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
-	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
 }
 
 type confirmExecutionOutput struct {
-	OrderExternalID  string `json:"id"`
-	Status           string `json:"status"`
-	AttestationToken string `json:"attestationToken,omitempty"`
-	KeyID            string `json:"keyId,omitempty"`
+	OrderExternalID   string `json:"id"`
+	Status            string `json:"status"`
+	SignedAttestation string `json:"signedAttestation,omitempty"`
+	KeyID             string `json:"keyId,omitempty"`
 }
 
 type cancelInput struct {
 	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
-	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
 	LeavesQuantity  string `json:"leavesQuantity,omitempty" jsonschema:"Optional caller-reported open base quantity recorded verbatim when supplied; the SDK receives the order's own recorded reservation remainder; whitespace is supplied data and is validated by the report contract"`
 	Reason          string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
 }
 
 type cancelOutput struct {
-	OrderExternalID  string `json:"id"`
-	Status           string `json:"status"`
-	AttestationToken string `json:"attestationToken,omitempty"`
-	KeyID            string `json:"keyId,omitempty"`
+	OrderExternalID   string `json:"id"`
+	Status            string `json:"status"`
+	SignedAttestation string `json:"signedAttestation,omitempty"`
+	KeyID             string `json:"keyId,omitempty"`
 }
 
 // accountDTO mirrors the HTTP account shape for the block state: blocked,
@@ -529,12 +517,12 @@ type commissionDTO struct {
 }
 
 type orderApprovalDTO struct {
-	Token    string `json:"token"`
-	KeyID    string `json:"keyId"`
-	Alg      string `json:"alg"`
-	Mode     string `json:"mode"`
-	IssuedAt string `json:"issuedAt"`
-	Signed   bool   `json:"signed"`
+	SignedEnvelope string `json:"signedEnvelope"`
+	KeyID          string `json:"keyId"`
+	Alg            string `json:"alg"`
+	Mode           string `json:"mode"`
+	IssuedAt       string `json:"issuedAt"`
+	Signed         bool   `json:"signed"`
 }
 
 type tradeDTO struct {
@@ -703,12 +691,12 @@ func toOrderApprovalDTO(detail domain.OrderDetail) *orderApprovalDTO {
 		return nil
 	}
 	return &orderApprovalDTO{
-		Token:    att.Token,
-		KeyID:    att.KeyID,
-		Alg:      att.Alg,
-		Mode:     att.Mode,
-		IssuedAt: att.IssuedAt,
-		Signed:   att.Alg == "ed25519",
+		SignedEnvelope: att.Token,
+		KeyID:          att.KeyID,
+		Alg:            att.Alg,
+		Mode:           att.Mode,
+		IssuedAt:       att.IssuedAt,
+		Signed:         att.Alg == "ed25519",
 	}
 }
 
@@ -1059,7 +1047,7 @@ func submitOrderHandler(
 			return "", submitOrderOutput{}, fmt.Errorf("submit order failed: %s", err)
 		}
 		out := submitOrderOutput{
-			Token:           res.Token,
+			SignedApproval:  res.Token,
 			KeyID:           res.KeyID,
 			OrderExternalID: res.OrderExternalID,
 			Verdict:         res.Verdict,
@@ -1073,7 +1061,7 @@ func submitOrderHandler(
 			), out, nil
 		}
 		return fmt.Sprintf(
-			"order %s approved token issued",
+			"order %s approved - approval envelope issued",
 			res.OrderExternalID,
 		), out, nil
 	}
@@ -1122,7 +1110,7 @@ func submitDropCopyOrderHandler(
 			Status:          string(res.Status),
 		}
 		return fmt.Sprintf(
-			"drop-copy order %s recorded without approval token",
+			"drop-copy order %s recorded without approval envelope",
 			res.OrderExternalID,
 		), out, nil
 	}
@@ -1140,19 +1128,15 @@ func confirmExecutionHandler(
 		if orderExternalID == "" {
 			return "", confirmExecutionOutput{}, fmt.Errorf("id is required")
 		}
-		token := strings.TrimSpace(in.Token)
-		if token == "" {
-			return "", confirmExecutionOutput{}, fmt.Errorf("token is required")
-		}
-		order, att, err := src.ConfirmExecution(ctx, orderExternalID, token)
+		order, att, err := src.ConfirmExecution(ctx, orderExternalID)
 		if err != nil {
 			return "", confirmExecutionOutput{}, fmt.Errorf("confirm execution failed: %s", err)
 		}
 		out := confirmExecutionOutput{
-			OrderExternalID:  order.ExternalID.String(),
-			Status:           string(order.Status),
-			AttestationToken: att.Token,
-			KeyID:            att.KeyID,
+			OrderExternalID:   order.ExternalID.String(),
+			Status:            string(order.Status),
+			SignedAttestation: att.Token,
+			KeyID:             att.KeyID,
 		}
 		return fmt.Sprintf(
 			"order %s confirmed: %s",
@@ -1174,14 +1158,9 @@ func cancelHandler(
 		if orderExternalID == "" {
 			return "", cancelOutput{}, fmt.Errorf("id is required")
 		}
-		token := strings.TrimSpace(in.Token)
-		if token == "" {
-			return "", cancelOutput{}, fmt.Errorf("token is required")
-		}
 		order, att, err := src.CancelOrder(
 			ctx,
 			orderExternalID,
-			token,
 			in.LeavesQuantity,
 			strings.TrimSpace(in.Reason),
 		)
@@ -1189,10 +1168,10 @@ func cancelHandler(
 			return "", cancelOutput{}, fmt.Errorf("cancel failed: %s", err)
 		}
 		out := cancelOutput{
-			OrderExternalID:  order.ExternalID.String(),
-			Status:           string(order.Status),
-			AttestationToken: att.Token,
-			KeyID:            att.KeyID,
+			OrderExternalID:   order.ExternalID.String(),
+			Status:            string(order.Status),
+			SignedAttestation: att.Token,
+			KeyID:             att.KeyID,
 		}
 		return fmt.Sprintf(
 			"order %s cancelled: %s",

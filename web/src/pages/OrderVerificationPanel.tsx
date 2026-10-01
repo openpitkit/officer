@@ -31,7 +31,7 @@ import {
   base64urlToBytes,
   extractApprovalJsonSubstring,
   parseApprovalFields,
-  parseTokenApproval,
+  parseEnvelopeApproval,
   verifyEd25519,
   type ParsedApproval,
   type ParsedApprovalCommission,
@@ -481,39 +481,41 @@ type ReproState =
   | { phase: "error"; message: string }
   | { phase: "ready"; bundle: EventReproduction };
 
-/** The single response facet present for a request type, plus its verbatim token
- *  and the localized label describing the facet. */
-function presentResponseFacet(
-  response: EventReproductionResponse | null,
-): { labelKey: string; token: string; body: Record<string, unknown> } | null {
+/** The single response facet present for a request type, plus its verbatim
+ *  envelope and the localized label describing the facet. */
+function presentResponseFacet(response: EventReproductionResponse | null): {
+  labelKey: string;
+  signedEnvelope: string;
+  body: Record<string, unknown>;
+} | null {
   if (!response) {
     return null;
   }
   if (response.submitResponse) {
     return {
       labelKey: "repro.responseSubmit",
-      token: response.submitResponse.token,
+      signedEnvelope: response.submitResponse.signedApproval,
       body: { submitResponse: response.submitResponse },
     };
   }
   if (response.executionReport) {
     return {
       labelKey: "repro.responseExecutionReport",
-      token: response.executionReport.attestationToken,
+      signedEnvelope: response.executionReport.signedAttestation,
       body: { executionReport: response.executionReport },
     };
   }
   if (response.confirm) {
     return {
       labelKey: "repro.responseConfirm",
-      token: response.confirm.attestationToken,
+      signedEnvelope: response.confirm.signedAttestation,
       body: { confirm: response.confirm },
     };
   }
   if (response.cancel) {
     return {
       labelKey: "repro.responseCancel",
-      token: response.cancel.attestationToken,
+      signedEnvelope: response.cancel.signedAttestation,
       body: { cancel: response.cancel },
     };
   }
@@ -650,7 +652,7 @@ function ReproductionMode({
   }
 
   const unsigned = bundle.eSign.alg === "none";
-  const parsed = parseTokenApproval(attestation.token);
+  const parsed = parseEnvelopeApproval(attestation.signedEnvelope);
   const facet = presentResponseFacet(bundle.response);
 
   return (
@@ -663,7 +665,7 @@ function ReproductionMode({
       />
 
       <LedgerBlock label={t("repro.tokenLabel")} note={t("repro.tokenNote")}>
-        <CopyableSnippet text={attestation.token} rows={3} />
+        <CopyableSnippet text={attestation.signedEnvelope} rows={3} />
       </LedgerBlock>
 
       {bundle.request ? (
@@ -677,11 +679,11 @@ function ReproductionMode({
 
       {facet ? (
         <LedgerBlock label={t(facet.labelKey)} note={t("repro.responseNote")}>
-          {facet.token ? (
+          {facet.signedEnvelope ? (
             <div className="mb-2">
               <CopyableSnippet
                 label={t("repro.responseTokenLabel")}
-                text={facet.token}
+                text={facet.signedEnvelope}
                 rows={3}
               />
             </div>
@@ -790,7 +792,7 @@ function ReproductionMode({
 }
 
 // ---------------------------------------------------------------------------
-// Mode B - paste any token and verify it
+// Mode B - paste any envelope and verify it
 // ---------------------------------------------------------------------------
 
 interface PasteResult {
@@ -799,11 +801,11 @@ interface PasteResult {
   keyId: string;
 }
 
-function VerifyTokenMode(): ReactElement {
+function VerifyEnvelopeMode(): ReactElement {
   const { t } = useTranslation("orders");
   const { fetchPublicKeyById } = useOfficerApi();
 
-  const [token, setToken] = useState("");
+  const [envelope, setEnvelope] = useState("");
   const [verifyState, setVerifyState] = useState<VerifyState>({
     phase: "idle",
   });
@@ -811,7 +813,7 @@ function VerifyTokenMode(): ReactElement {
 
   async function runVerify() {
     setResult(null);
-    const trimmed = token.trim();
+    const trimmed = envelope.trim();
     if (!trimmed) {
       setVerifyState({ phase: "error", message: t("verify.pasteEmpty") });
       return;
@@ -874,10 +876,10 @@ function VerifyTokenMode(): ReactElement {
     <div className="space-y-3">
       <LedgerBlock label={t("paste.label")} note={t("paste.note")}>
         <Textarea
-          value={token}
+          value={envelope}
           spellCheck={false}
           rows={4}
-          onChange={(e) => setToken(e.target.value)}
+          onChange={(e) => setEnvelope(e.target.value)}
           placeholder={t("paste.placeholder")}
           aria-label={t("paste.label")}
           className="resize-none font-mono text-[0.6875rem]"
@@ -1002,9 +1004,9 @@ function errMessage(err: unknown): string {
 export type PanelMode = "reproduction" | "verify";
 
 /** Two-mode controller panel: reproduce one order EVENT's exact API artifacts
- *  and verify them, or paste any token and verify it standalone. Reproduction
- *  keys on the (order, event) pair since Officer signs every engine-processed
- *  request 1:1 with the event it produced. */
+ *  and verify them, or paste any envelope and verify it standalone.
+ *  Reproduction keys on the (order, event) pair since Officer signs every
+ *  engine-processed request 1:1 with the event it produced. */
 export function OrderVerificationPanel({
   orderExternalId,
   eventId = null,
@@ -1071,7 +1073,7 @@ export function OrderVerificationPanel({
               eventId={eventId}
             />
           ) : (
-            <VerifyTokenMode />
+            <VerifyEnvelopeMode />
           )}
         </div>
       </DialogContent>

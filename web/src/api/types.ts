@@ -648,13 +648,13 @@ export interface ExecutionReportResult {
   id: string;
   blocks: ExecutionBlock[];
   outcomes: ExecutionOutcome[];
-  attestationToken: string;
+  signedAttestation: string;
   attestationKeyId: string;
   signed: boolean;
 }
 
-export interface ApprovalToken {
-  token: string;
+export interface SignedApproval {
+  signedApproval: string;
   keyId: string;
   id: string;
   verdict: "accept" | "reject" | "";
@@ -999,11 +999,11 @@ export interface PublicKeyMaterial {
 }
 
 /** The persisted signed-attestation envelope metadata for one order event: the
- *  exact base64url token plus the envelope's own fields. Bound 1:1 to the event
+ *  exact base64url envelope plus its own fields. Bound 1:1 to the event
  *  it attested. */
 export interface EventAttestation {
-  /** Base64url-encoded envelope JSON: { approval, signature, keyId, alg }. */
-  token: string;
+  /** Base64url-encoded signed envelope JSON: { approval, signature, keyId, alg }. */
+  signedEnvelope: string;
   /** UUID of the signing key, or empty string when alg is "none". */
   keyId: string;
   alg: ApprovalAlg;
@@ -1018,9 +1018,9 @@ export interface EventAttestation {
 }
 
 /** The exact POST /orders/submit response a robot / agent received (submit). */
-export interface ApprovalTokenResponse {
-  /** Base64url envelope token, verbatim. */
-  token: string;
+export interface SignedApprovalResponse {
+  /** Signed approval envelope, base64url, verbatim. */
+  signedApproval: string;
   /** Signing key UUID, or empty string under eSign-off. */
   keyId: string;
   /** The order's opaque public handle. */
@@ -1054,7 +1054,7 @@ export interface AttestationResult {
 }
 
 /** The request bound in the attestation payload, reconstructed for reproduction
- *  from the decoded token: the request type, its material params, and the
+ *  from the decoded envelope: the request type, its material params, and the
  *  recorded result section when present. Carries no private material. */
 export interface EventReproductionRequest {
   requestType: string;
@@ -1074,30 +1074,30 @@ export interface EventReproductionRequest {
 }
 
 /** The execution-report facet of a reproduction response: the recorded result
- *  plus the attestation token the robot received verbatim. */
+ *  plus the signed attestation the robot received verbatim. */
 export interface ExecutionReportResponse {
   id: string;
   blocks: AttestationBlock[];
   outcomes: ExecutionOutcome[];
-  attestationToken: string;
+  signedAttestation: string;
   attestationKeyId: string;
   signed: boolean;
 }
 
 /** The confirm / cancel facet of a reproduction response: the resolved order plus
- *  the attestation token the robot received verbatim. */
+ *  the signed attestation the robot received verbatim. */
 export interface OrderMutationResponse {
   order: Order;
-  attestationToken: string;
+  signedAttestation: string;
   attestationKeyId: string;
   signed: boolean;
 }
 
 /** The exact type-specific API response the robot received for the attested
- *  request. Exactly one facet is populated, matching the request type. The token
- *  inside each facet is carried verbatim. */
+ *  request. Exactly one facet is populated, matching the request type. The signed
+ *  envelope inside each facet is carried verbatim. */
 export interface EventReproductionResponse {
-  submitResponse: ApprovalTokenResponse | null;
+  submitResponse: SignedApprovalResponse | null;
   executionReport: ExecutionReportResponse | null;
   confirm: OrderMutationResponse | null;
   cancel: OrderMutationResponse | null;
@@ -1116,7 +1116,7 @@ export interface EventReproductionESign {
 
 /** The controller-facing reproduction bundle for one order-history event's
  *  attestation: byte-for-byte what a robot / AI agent received from the live APIs
- *  for the request that produced this event. Signed artifacts (token,
+ *  for the request that produced this event. Signed artifacts (signedEnvelope,
  *  canonicalApproval, signature, publicKey.key) are verbatim server output and
  *  must never be re-serialized client-side. */
 export interface EventReproduction {
@@ -1124,7 +1124,7 @@ export interface EventReproduction {
   requestType: string;
   /** The event body, identical to GET /orders/{id}. */
   event: OrderEvent;
-  /** Persisted attestation metadata (token verbatim), or null when unattested. */
+  /** Persisted attestation metadata (signed envelope verbatim), or null when unattested. */
   attestation: EventAttestation | null;
   /** The request bound in the attestation payload, or null when unattested. */
   request: EventReproductionRequest | null;

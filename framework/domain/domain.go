@@ -86,6 +86,13 @@ var (
 	ErrExecutionReportRequired = registerSentinel(errors.New(
 		"order has execution-report activity; submit an explicit execution report",
 	))
+	// ErrApprovalRequired marks a confirm or cancel shortcut on an order that
+	// carries no verifiable signed hold-mode accept approval recorded by Officer:
+	// a drop-copy order, pre-trade reject, immediate-mode order, or a recorded
+	// approval that fails verification.
+	ErrApprovalRequired = registerSentinel(errors.New(
+		"order has no verifiable signed hold approval recorded by Officer",
+	))
 	// ErrHasDependents marks a delete that would cascade-delete dependent rows
 	// without an explicit force flag. The concrete error carries the blockers.
 	ErrHasDependents = registerSentinel(errors.New("has dependents"))

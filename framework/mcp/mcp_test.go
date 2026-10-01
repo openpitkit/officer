@@ -618,14 +618,12 @@ func (s *guardSource) SubmitDropCopyOrder(
 func (s *guardSource) ConfirmExecution(
 	context.Context,
 	string,
-	string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
 
 func (s *guardSource) CancelOrder(
 	context.Context,
-	string,
 	string,
 	string,
 	string,

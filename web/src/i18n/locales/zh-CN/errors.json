@@ -5,6 +5,7 @@
     "has_dependents": "资源存在关联行。",
     "conflict": "请求与当前状态冲突。",
     "terminal_order": "订单已处于终态。",
+    "approval_required": "此订单没有 Officer 在提交时记录的可验证交易前批准，因此确认/取消快捷操作不可用。请通过订单工作流提交完整的执行报告。",
     "execution_report_required": "此订单已有执行报告活动。请通过订单工作流提交完整的执行报告。",
     "precondition": "请求的前提条件未满足。",
     "too_large": "请求正文超过允许的大小限制。",

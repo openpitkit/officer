@@ -121,7 +121,7 @@ func TestApplyExecutionReport_RealTerminalGate(t *testing.T) {
 // carrying a structured commission in its own currency through the REAL
 // execution-report path (real backend.Service, localNode, SQLite store, and
 // Ed25519 signer) and proves the commission reaches the signed bytes in both
-// attestation-facing flows: the freshly-settled attestation token returned by
+// attestation-facing flows: the freshly-settled attestation envelope returned by
 // the POST, and the replay-from-event reconstruction the reproduction endpoint
 // serves from the persisted event. It also asserts the OrderEventPayload
 // commission round-trips through the store's JSON payload blob (no dedicated
@@ -163,12 +163,12 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 
-	// Fresh-settlement path: decode the token the settlement just signed and
+	// Fresh-settlement path: decode the envelope the settlement just signed and
 	// confirm its canonical bytes bind the structured commission.
 	fresh := bodyMap(t, rec.Result())
-	token, _ := fresh["attestationToken"].(string)
+	token, _ := fresh["signedAttestation"].(string)
 	if token == "" {
-		t.Fatalf("want attestationToken, got %v", fresh["attestationToken"])
+		t.Fatalf("want signedAttestation, got %v", fresh["signedAttestation"])
 	}
 	env, err := fwsigning.DecodeEnvelope(token)
 	if err != nil {
@@ -235,7 +235,7 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 	}
 
 	// Replay-from-event reconstruction path: the reproduction bundle decodes the
-	// persisted token and surfaces the bound commission both in the byte-identical
+	// persisted envelope and surfaces the bound commission both in the byte-identical
 	// canonicalApproval and in the reconstructed request result DTO.
 	reproPath := "/api/v1/orders/" + order.ExternalID.String() +
 		"/events/" + fill.ExternalID.String() + "/reproduction"

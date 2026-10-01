@@ -24,6 +24,7 @@ export type ApiErrorCode =
   | "has_dependents"
   | "conflict"
   | "terminal_order"
+  | "approval_required"
   | "execution_report_required"
   | "precondition"
   | "too_large"
@@ -125,6 +126,7 @@ function asCode(v: unknown): ApiErrorCode {
     case "has_dependents":
     case "conflict":
     case "terminal_order":
+    case "approval_required":
     case "execution_report_required":
     case "precondition":
     case "too_large":
@@ -149,6 +151,8 @@ function defaultTranslate(
     has_dependents: "The resource has dependent rows.",
     conflict: "The request conflicts with the current state.",
     terminal_order: "The order is in a terminal status.",
+    approval_required:
+      "This order has no verifiable pre-trade approval recorded by Officer at submit, so the confirm/cancel shortcut is unavailable. Submit a complete execution report through the order workflow.",
     execution_report_required:
       "This order already has execution-report activity. Submit a complete execution report through the order workflow.",
     precondition: "A precondition for the request was not met.",
@@ -192,6 +196,7 @@ function defaultMessage(
 function clientOwnedMessage(code: ApiErrorCode): boolean {
   return (
     code === "terminal_order" ||
+    code === "approval_required" ||
     code === "execution_report_required" ||
     code === "too_large"
   );

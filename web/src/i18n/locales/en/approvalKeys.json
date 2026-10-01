@@ -32,7 +32,7 @@
     "importBusy": "Importing…",
     "generateDialog": {
       "title": "Generate new signing key",
-      "description": "This will create a fresh Ed25519 key pair. The current active key will be deactivated. Connectors verifying in-flight tokens will still find the old public key until those tokens expire.",
+      "description": "This will create a fresh Ed25519 key pair. The current active key will be deactivated. Connectors can still resolve the old public key to verify envelopes signed under it.",
       "confirm": "Generate"
     },
     "errors": {
@@ -44,8 +44,8 @@
 
   "eSign": {
     "sectionTitle": "Electronic Signature",
-    "label": "Require signature on approval tokens",
-    "description": "When enabled, every approval token is signed with the active Ed25519 key. Connectors verify the signature before executing. When disabled, tokens carry the full payload and binding but no cryptographic signature; the binding is still checked.",
+    "label": "Require signature on approval and attestation envelopes",
+    "description": "When enabled, every approval and attestation envelope is signed with the active Ed25519 key. Connectors verify the signature before executing. When disabled, envelopes carry the full payload and binding but no cryptographic signature; the binding is still checked.",
     "missingKeyError": "Generate or import a signing key before enabling electronic signatures.",
     "busy": "Saving…"
   }

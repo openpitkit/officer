@@ -33,7 +33,7 @@ import (
 )
 
 // reproSigningStore is a minimal in-memory appsigning.Store for building real
-// signed tokens in reproduction tests. It lets a key be rotated (a later active
+// signed envelopes in reproduction tests. It lets a key be rotated (a later active
 // key generated) while the earlier key stays resolvable by id.
 type reproSigningStore struct {
 	keys   map[string]domain.SigningKey
@@ -142,7 +142,7 @@ func reproOrder(id domain.ExternalID) domain.Order {
 	}
 }
 
-// attestationFromToken decodes a real token into the persisted EventAttestation
+// attestationFromToken decodes a real envelope into the persisted EventAttestation
 // shape the store would hold, so the fake service can serve it verbatim.
 func attestationFromToken(t *testing.T, token string) *domain.EventAttestation {
 	t.Helper()
@@ -185,8 +185,8 @@ func reproURL(id domain.ExternalID) string {
 }
 
 // TestOrderReproduction_ByteExactSignedToken verifies the reproduction bundle
-// reproduces a signed order's token verbatim, its canonical bytes byte-identical
-// to what was signed, its signature, and resolves the public key by the token's
+// reproduces a signed order's envelope verbatim, its canonical bytes byte-identical
+// to what was signed, its signature, and resolves the public key by the envelope's
 // keyId. It also asserts no private key material appears anywhere in the body.
 func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 	ctx := context.Background()
@@ -246,10 +246,10 @@ func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 		t.Errorf("want requestType=submit, got %v", m["requestType"])
 	}
 
-	// attestation token verbatim.
+	// attestation envelope verbatim.
 	attestation, _ := m["attestation"].(map[string]any)
-	if attestation["token"] != token {
-		t.Errorf("attestation token not verbatim:\n got %v\nwant %s", attestation["token"], token)
+	if attestation["signedEnvelope"] != token {
+		t.Errorf("attestation envelope not verbatim:\n got %v\nwant %s", attestation["signedEnvelope"], token)
 	}
 
 	// request reproduces the bound submit request.
@@ -273,8 +273,8 @@ func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 	if !ok {
 		t.Fatalf("want submitResponse object, got %T", response["submitResponse"])
 	}
-	if submit["token"] != token {
-		t.Errorf("submitResponse token not verbatim: got %v", submit["token"])
+	if submit["signedApproval"] != token {
+		t.Errorf("submitResponse signedApproval not verbatim: got %v", submit["signedApproval"])
 	}
 	if submit["keyId"] != key.KeyID {
 		t.Errorf("want submitResponse keyId=%s, got %v", key.KeyID, submit["keyId"])
@@ -297,7 +297,7 @@ func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 		t.Fatal("test fixture is not actually signed")
 	}
 
-	// publicKey resolved by the token's keyId (rotation-safe seam exercised).
+	// publicKey resolved by the envelope's keyId (rotation-safe seam exercised).
 	publicKey, ok := m["publicKey"].(map[string]any)
 	if !ok {
 		t.Fatalf("want publicKey object, got %T", m["publicKey"])
@@ -309,7 +309,7 @@ func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 		t.Errorf("want publicKey material=%q, got %v", pub, publicKey["key"])
 	}
 	if svc.keyByIDLast != key.KeyID {
-		t.Errorf("public key must be resolved by the token keyId, got %q", svc.keyByIDLast)
+		t.Errorf("public key must be resolved by the envelope keyId, got %q", svc.keyByIDLast)
 	}
 
 	// eSign facet reports a signed ed25519 event.
@@ -492,7 +492,7 @@ func TestOrderReproduction_RotatedKeyResolvesNonActive(t *testing.T) {
 		t.Errorf("want the signing (old) key id %s, got %v", oldKey.KeyID, publicKey["keyId"])
 	}
 	if publicKey["key"] != oldPub {
-		t.Error("reproduction resolved the active key, not the key that signed the token")
+		t.Error("reproduction resolved the active key, not the key that signed the envelope")
 	}
 	if svc.keyByIDLast != oldKey.KeyID {
 		t.Errorf("want resolution by old key id, got %q", svc.keyByIDLast)
@@ -501,7 +501,7 @@ func TestOrderReproduction_RotatedKeyResolvesNonActive(t *testing.T) {
 
 // TestOrderReproduction_ESignOff verifies that an eSign-off order reports alg
 // "none", a null publicKey and empty signature, while submitResponse and the
-// verbatim token are still present.
+// verbatim envelope are still present.
 func TestOrderReproduction_ESignOff(t *testing.T) {
 	id := extID("repro-none")
 	token, err := appsigning.SignNone(reproPayload(id))
@@ -543,7 +543,7 @@ func TestOrderReproduction_ESignOff(t *testing.T) {
 	if esign["signed"] != false {
 		t.Errorf("want eSign.signed=false, got %v", esign["signed"])
 	}
-	// response.submitResponse and the verbatim token are still present.
+	// response.submitResponse and the verbatim envelope are still present.
 	response, ok := m["response"].(map[string]any)
 	if !ok {
 		t.Fatalf("want response present under eSign-off, got %T", m["response"])
@@ -552,8 +552,8 @@ func TestOrderReproduction_ESignOff(t *testing.T) {
 	if !ok {
 		t.Fatalf("want submitResponse present under eSign-off, got %T", response["submitResponse"])
 	}
-	if submit["token"] != token {
-		t.Errorf("submitResponse token not verbatim under eSign-off: got %v", submit["token"])
+	if submit["signedApproval"] != token {
+		t.Errorf("submitResponse signedApproval not verbatim under eSign-off: got %v", submit["signedApproval"])
 	}
 	// canonicalApproval is still reproduced (binding+display) under eSign-off.
 	if _, ok := m["canonicalApproval"].(string); !ok {

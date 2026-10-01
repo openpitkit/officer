@@ -150,8 +150,8 @@ type commissionDTO struct {
 }
 
 type orderApprovalDTO struct {
-	Token  string `json:"token"`
-	Signed bool   `json:"signed"`
+	SignedEnvelope string `json:"signedEnvelope"`
+	Signed         bool   `json:"signed"`
 }
 
 type tradeDTO struct {
@@ -224,7 +224,7 @@ type submitOrderInput struct {
 }
 
 type submitOrderOutput struct {
-	Token           string                `json:"token"`
+	SignedApproval  string                `json:"signedApproval"`
 	KeyID           string                `json:"keyId"`
 	OrderExternalID string                `json:"id"`
 	Verdict         string                `json:"verdict"`
@@ -250,7 +250,6 @@ type submitDropCopyOrderOutput struct {
 
 type confirmExecutionInput struct {
 	OrderExternalID string `json:"id"`
-	Token           string `json:"token"`
 }
 
 type confirmExecutionOutput struct {
@@ -260,7 +259,6 @@ type confirmExecutionOutput struct {
 
 type cancelInput struct {
 	OrderExternalID string `json:"id"`
-	Token           string `json:"token"`
 	LeavesQuantity  string `json:"leavesQuantity,omitempty"`
 	Reason          string `json:"reason,omitempty"`
 }

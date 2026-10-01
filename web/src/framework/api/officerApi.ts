@@ -27,7 +27,7 @@ import type {
   AdjustmentAmount,
   AdjustmentRejected,
   AdjustmentRequest,
-  ApprovalToken,
+  SignedApproval,
   AssetClass,
   AssetClassListFilters,
   AssetListFilters,
@@ -67,7 +67,7 @@ import type {
   MarketDataSymbolVerification,
   McpCommand,
   NodeHealth,
-  ApprovalTokenResponse,
+  SignedApprovalResponse,
   AttestationBlock,
   AttestationResult,
   EventAttestation,
@@ -2865,12 +2865,11 @@ export interface CreateOrderBody extends CreateOrderFields {
 export interface CreateOrderResult {
   order: Order;
   warning?: string;
-  /** The approval token issued by an ordinary submit. For `hold`, the UI
-   *  retains it for workflow shortcuts; drop-copy never returns one. */
-  approval?: ApprovalToken;
+  /** The signed approval issued by an ordinary submit; drop-copy never returns one. */
+  approval?: SignedApproval;
 }
 
-function normalizeApprovalToken(v: unknown): ApprovalToken {
+function normalizeSignedApproval(v: unknown): SignedApproval {
   const response = isObject(v) ? v : {};
   const wrapped = pick(
     response,
@@ -2881,7 +2880,9 @@ function normalizeApprovalToken(v: unknown): ApprovalToken {
   );
   const o = isObject(wrapped) ? wrapped : response;
   return {
-    token: asString(pick(o, "token", "Token")),
+    signedApproval: asString(
+      pick(o, "signedApproval", "SignedApproval", "signed_approval"),
+    ),
     keyId: asString(pick(o, "keyId", "KeyId", "key_id")),
     id: asString(pick(o, "id", "Id", "ID")),
     verdict: normalizeSubmitVerdict(pick(o, "verdict", "Verdict")),
@@ -2892,7 +2893,7 @@ function normalizeApprovalToken(v: unknown): ApprovalToken {
   };
 }
 
-function normalizeSubmitVerdict(v: unknown): ApprovalToken["verdict"] {
+function normalizeSubmitVerdict(v: unknown): SignedApproval["verdict"] {
   return v === "accept" || v === "reject" ? v : "";
 }
 
@@ -2916,7 +2917,7 @@ function minimalCreatedOrder(
     status: submitted.status ?? "submitted",
     displayPrice: "",
     dropCopy: body.mode === "drop_copy",
-    // The submit token is signed but not yet reflected in this placeholder, so
+    // The signed approval is not yet reflected in this placeholder, so
     // it reports unsigned until a real fetch replaces it.
     signed: false,
   };
@@ -2925,10 +2926,10 @@ function minimalCreatedOrder(
 export interface SubmittedOrder {
   id: string;
   status?: string;
-  approval?: ApprovalToken;
+  approval?: SignedApproval;
 }
 
-/** Submit an order and return its public id plus any approval token. The
+/** Submit an order and return its public id plus any signed approval. The
  *  drop-copy endpoint only accepts `missingAccount: "create"`; `"reject"`
  *  is a validation error there since a drop-copy report cannot be refused. */
 async function submitOrder(
@@ -2961,7 +2962,7 @@ async function submitOrder(
       ),
     };
   }
-  const approval = normalizeApprovalToken(v);
+  const approval = normalizeSignedApproval(v);
   return { id: approval.id, approval };
 }
 
@@ -3161,14 +3162,16 @@ function normalizePublicKeyMaterial(v: unknown): PublicKeyMaterial | null {
   };
 }
 
-function normalizeApprovalTokenResponse(
+function normalizeSignedApprovalResponse(
   v: unknown,
-): ApprovalTokenResponse | null {
+): SignedApprovalResponse | null {
   if (!isObject(v)) {
     return null;
   }
   return {
-    token: asString(pick(v, "token", "Token")),
+    signedApproval: asString(
+      pick(v, "signedApproval", "SignedApproval", "signed_approval"),
+    ),
     keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
     id: asString(pick(v, "id", "Id", "ID")),
     verdict: normalizeSubmitVerdict(pick(v, "verdict", "Verdict")),
@@ -3195,7 +3198,9 @@ function normalizeEventAttestation(v: unknown): EventAttestation | null {
   const rawAlg = asString(pick(v, "alg", "Alg"));
   const alg: EventAttestation["alg"] = rawAlg === "none" ? "none" : "ed25519";
   return {
-    token: asString(pick(v, "token", "Token")),
+    signedEnvelope: asString(
+      pick(v, "signedEnvelope", "SignedEnvelope", "signed_envelope"),
+    ),
     keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
     alg,
     requestType: asString(
@@ -3295,8 +3300,8 @@ function normalizeExecutionReportResponse(
       pick(resultObj, "outcomes", "Outcomes"),
       normalizeExecutionOutcome,
     ),
-    attestationToken: asString(
-      pick(v, "attestationToken", "AttestationToken", "attestation_token"),
+    signedAttestation: asString(
+      pick(v, "signedAttestation", "SignedAttestation", "signed_attestation"),
     ),
     attestationKeyId: asString(
       pick(v, "attestationKeyId", "AttestationKeyId", "attestation_key_id"),
@@ -3313,8 +3318,8 @@ function normalizeOrderMutationResponse(
   }
   return {
     order: normalizeOrder(pick(v, "order", "Order")),
-    attestationToken: asString(
-      pick(v, "attestationToken", "AttestationToken", "attestation_token"),
+    signedAttestation: asString(
+      pick(v, "signedAttestation", "SignedAttestation", "signed_attestation"),
     ),
     attestationKeyId: asString(
       pick(v, "attestationKeyId", "AttestationKeyId", "attestation_key_id"),
@@ -3330,7 +3335,7 @@ function normalizeEventReproductionResponse(
     return null;
   }
   return {
-    submitResponse: normalizeApprovalTokenResponse(
+    submitResponse: normalizeSignedApprovalResponse(
       pick(v, "submitResponse", "SubmitResponse", "submit_response"),
     ),
     executionReport: normalizeExecutionReportResponse(
@@ -3344,7 +3349,7 @@ function normalizeEventReproductionResponse(
 /** GET /orders/{id}/events/{eventId}/reproduction: the
  *  controller-facing per-event reproduction bundle. Officer signs every
  *  engine-processed request, so each attested event has its own bundle. Signed
- *  artifacts (token, canonicalApproval, signature, publicKey.key) are returned
+ *  artifacts (signedEnvelope, canonicalApproval, signature, publicKey.key) are returned
  *  verbatim and are never re-serialized here. */
 async function fetchEventReproduction(
   client: ApiClient,
@@ -3494,8 +3499,8 @@ async function submitExecutionReport(
       pick(ro, "outcomes", "Outcomes"),
       normalizeExecutionOutcome,
     ),
-    attestationToken: asString(
-      pick(o, "attestationToken", "AttestationToken", "attestation_token"),
+    signedAttestation: asString(
+      pick(o, "signedAttestation", "SignedAttestation", "signed_attestation"),
     ),
     attestationKeyId: asString(
       pick(o, "attestationKeyId", "AttestationKeyId", "attestation_key_id"),
@@ -3504,17 +3509,10 @@ async function submitExecutionReport(
   };
 }
 
-/** POST /orders/{id}/confirm body: the approval token from the
- *  workflow (`hold` wire mode) submit. */
-export interface ConfirmOrderBody {
-  token: string;
-}
-
-/** POST /orders/{id}/cancel body: the approval token from the workflow, optional
- *  caller-reported leaves recorded verbatim, and an optional reason. The SDK
- *  receives the order's own recorded reservation remainder. */
+/** POST /orders/{id}/cancel body: optional caller-reported leaves recorded
+ *  verbatim and an optional reason. The SDK receives the order's own recorded
+ *  reservation remainder. */
 export interface CancelOrderBody {
-  token: string;
   /** Caller-reported open base quantity. Officer records a supplied value
    *  verbatim on the order, in the report event, and in the attestation. This
    *  value never sets the financial reservation to release: the SDK receives
@@ -3537,23 +3535,22 @@ function orderMutationResponseOrThrow(v: unknown): OrderMutationResponse {
   );
 }
 
-/** POST /orders/{id}/confirm. Verifies the approval token and records
- *  order-confirmation history, returning the order plus its attestation. */
+/** POST /orders/{id}/confirm. Authorizes the shortcut from Officer's recorded
+ *  signed hold approval and returns the order plus its attestation. */
 async function confirmOrder(
   client: ApiClient,
   id: string,
-  body: ConfirmOrderBody,
   signal?: AbortSignal,
 ): Promise<OrderMutationResponse> {
   const v = await client.request(
     `${client.baseUrl}/orders/${encode(id)}/confirm`,
-    { method: "POST", body, signal },
+    { method: "POST", signal },
   );
   return orderMutationResponseOrThrow(v);
 }
 
-/** POST /orders/{id}/cancel. Verifies the approval token and records
- *  the untouched-order cancellation shortcut. */
+/** POST /orders/{id}/cancel. Authorizes the shortcut from Officer's recorded
+ *  signed hold approval and records the untouched-order cancellation. */
 async function cancelOrder(
   client: ApiClient,
   id: string,

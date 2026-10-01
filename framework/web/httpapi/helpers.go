@@ -419,6 +419,8 @@ func WriteErr(w http.ResponseWriter, err error) {
 		WriteErrMsg(w, http.StatusConflict, "terminal_order", domain.ErrTerminalOrder.Error())
 	case errors.Is(err, domain.ErrExecutionReportRequired):
 		WriteErrMsg(w, http.StatusConflict, "execution_report_required", err.Error())
+	case errors.Is(err, domain.ErrApprovalRequired):
+		WriteErrMsg(w, http.StatusConflict, "approval_required", err.Error())
 	case isCurrencyChangeBlocked(err):
 		writeCurrencyChangeBlockedErr(w, err)
 	case errors.Is(err, domain.ErrConflict):

@@ -65,7 +65,7 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 	svc := &Service{node: recorder}
 	ctx := systemCtx()
 
-	_, _, err := svc.CancelOrder(ctx, orderID, "token", "",
+	_, _, err := svc.CancelOrder(ctx, orderID, "",
 		"typo\ncancel approval 00000000 order ord-2 reason=routine")
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CancelOrder with a newline reason = %v, want ErrInvalid", err)
@@ -74,7 +74,7 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 		t.Fatal("cancel reached the node with an unvalidated reason")
 	}
 
-	_, _, err = svc.CancelOrder(ctx, orderID, "token", "", "typo")
+	_, _, err = svc.CancelOrder(ctx, orderID, "", "typo")
 	if errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CancelOrder with a plain reason = %v, want it accepted", err)
 	}
@@ -115,9 +115,9 @@ func (r *shortcutRecorder) AppendAudit(context.Context, store.AuditEntry, domain
 	return nil
 }
 
-// envelopeSigner verifies a token by decoding its envelope alone. The signature
-// is the signing package's subject; the verdict gate behind Verify is this
-// file's.
+// envelopeSigner verifies a recorded envelope by decoding it alone. The
+// signature is the signing package's subject; the verdict gate behind Verify is
+// this file's.
 type envelopeSigner struct{ fwsigning.Service }
 
 func (envelopeSigner) Verify(
@@ -132,12 +132,11 @@ func (envelopeSigner) Verify(
 
 func (envelopeSigner) NoESign(context.Context) (bool, error) { return true, nil }
 
-// TestImmediateTokenIsNoShortcut covers the token an immediate submit issues:
-// it is the receipt of an order already submitted and settled in one chain, so
-// confirm and cancel refuse it with ErrConflict on its very first presentation
-// and write nothing - no order event, no audit row. This gate is the only thing
-// between such a token and the shortcut paths.
-func TestImmediateTokenIsNoShortcut(t *testing.T) {
+// TestImmediateApprovalIsNoShortcut covers an immediate submit approval: it is
+// the receipt of an order already submitted and settled in one chain, so confirm
+// and cancel refuse the recorded approval and write nothing - no order event,
+// no audit row.
+func TestImmediateApprovalIsNoShortcut(t *testing.T) {
 	t.Parallel()
 
 	order := domain.Order{
@@ -186,11 +185,11 @@ func TestImmediateTokenIsNoShortcut(t *testing.T) {
 		call func(*Service) error
 	}{
 		{"confirm", func(svc *Service) error {
-			_, _, err := svc.ConfirmExecution(ctx, order.ExternalID.String(), token)
+			_, _, err := svc.ConfirmExecution(ctx, order.ExternalID.String())
 			return err
 		}},
 		{"cancel", func(svc *Service) error {
-			_, _, err := svc.CancelOrder(ctx, order.ExternalID.String(), token, "", "routine")
+			_, _, err := svc.CancelOrder(ctx, order.ExternalID.String(), "", "routine")
 			return err
 		}},
 	} {
@@ -200,12 +199,12 @@ func TestImmediateTokenIsNoShortcut(t *testing.T) {
 			svc := &Service{node: recorder, signer: envelopeSigner{}}
 
 			err := tc.call(svc)
-			if !errors.Is(err, domain.ErrConflict) ||
+			if !errors.Is(err, domain.ErrApprovalRequired) ||
 				!strings.Contains(err.Error(), `mode "immediate"`) {
-				t.Errorf("%s with an immediate token = %v, want ErrConflict on its mode", tc.name, err)
+				t.Errorf("%s with an immediate approval = %v, want ErrApprovalRequired on its mode", tc.name, err)
 			}
 			if len(recorder.writes) != 0 {
-				t.Errorf("%s with an immediate token wrote %v, want nothing", tc.name, recorder.writes)
+				t.Errorf("%s with an immediate approval wrote %v, want nothing", tc.name, recorder.writes)
 			}
 		})
 	}

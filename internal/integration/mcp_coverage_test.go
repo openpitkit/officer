@@ -164,13 +164,13 @@ func (s *setMDErrSource) SubmitDropCopyOrder(
 }
 
 func (s *setMDErrSource) ConfirmExecution(
-	context.Context, string, string,
+	context.Context, string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
 	return domain.Order{}, frameworkmcp.Attestation{}, nil
 }
 
 func (s *setMDErrSource) CancelOrder(
-	context.Context, string, string, string, string,
+	context.Context, string, string, string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
 	return domain.Order{}, frameworkmcp.Attestation{}, nil
 }

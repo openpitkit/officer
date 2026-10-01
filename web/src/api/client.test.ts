@@ -2120,7 +2120,7 @@ describe("event reproduction client", () => {
           signed: true,
         },
         attestation: {
-          token: "tok-verbatim",
+          signedEnvelope: "env-verbatim",
           keyId: "key-1",
           alg: "ed25519",
           requestType: "submit",
@@ -2143,7 +2143,7 @@ describe("event reproduction client", () => {
         },
         response: {
           submitResponse: {
-            token: "tok-verbatim",
+            signedApproval: "env-verbatim",
             keyId: "key-1",
             id: "ord-1",
             verdict: "reject",
@@ -2178,8 +2178,10 @@ describe("event reproduction client", () => {
     );
     // Signed artifacts are carried through verbatim.
     expect(result.requestType).toBe("submit");
-    expect(result.attestation?.token).toBe("tok-verbatim");
-    expect(result.response?.submitResponse?.token).toBe("tok-verbatim");
+    expect(result.attestation?.signedEnvelope).toBe("env-verbatim");
+    expect(result.response?.submitResponse?.signedApproval).toBe(
+      "env-verbatim",
+    );
     expect(result.response?.submitResponse?.verdict).toBe("reject");
     expect(result.response?.submitResponse?.reasons).toEqual([
       {
@@ -2203,6 +2205,34 @@ describe("event reproduction client", () => {
     });
   });
 
+  it("decodes a snake_case signed envelope", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        attestation: { signed_envelope: "env-snake-envelope" },
+      }),
+    );
+
+    const result = await fetchEventReproduction("ord-1", "evt-1");
+
+    expect(result.attestation?.signedEnvelope).toBe("env-snake-envelope");
+  });
+
+  it("decodes a snake_case signed approval response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        response: {
+          submitResponse: { signed_approval: "env-snake-response" },
+        },
+      }),
+    );
+
+    const result = await fetchEventReproduction("ord-1", "evt-1");
+
+    expect(result.response?.submitResponse?.signedApproval).toBe(
+      "env-snake-response",
+    );
+  });
+
   it("fetchEventReproduction ignores legacy order aliases", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
@@ -2222,7 +2252,7 @@ describe("event reproduction client", () => {
     expect(result.event.order).toBe("");
   });
 
-  it("fetchEventReproduction normalizes an execution-report facet with its verbatim token", async () => {
+  it("fetchEventReproduction normalizes an execution-report facet with its verbatim envelope", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
         requestType: "execution_report",
@@ -2241,7 +2271,7 @@ describe("event reproduction client", () => {
           signed: true,
         },
         attestation: {
-          token: "tok-fill",
+          signedEnvelope: "env-fill",
           keyId: "key-1",
           alg: "ed25519",
           requestType: "execution_report",
@@ -2312,7 +2342,7 @@ describe("event reproduction client", () => {
                 },
               ],
             },
-            attestationToken: "tok-fill",
+            signedAttestation: "env-fill",
             attestationKeyId: "key-1",
             signed: true,
           },
@@ -2339,7 +2369,9 @@ describe("event reproduction client", () => {
       orderStatus: "filled",
       commission: { amount: "-0.50", currency: "USD" },
     });
-    expect(result.response?.executionReport?.attestationToken).toBe("tok-fill");
+    expect(result.response?.executionReport?.signedAttestation).toBe(
+      "env-fill",
+    );
     // The per-asset outcomes surface through the reproduction facet verbatim.
     expect(result.response?.executionReport?.outcomes).toEqual([
       {
@@ -2490,7 +2522,7 @@ describe("order check client", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Orders - submit creates a signed approval token and addresses by external id
+// Orders - submit creates a signed approval envelope and addresses by external id
 // ---------------------------------------------------------------------------
 
 describe("Orders createOrder submit lifecycle", () => {
@@ -2499,7 +2531,7 @@ describe("Orders createOrder submit lifecycle", () => {
   ): Response {
     return new Response(
       JSON.stringify({
-        token: "approval-token",
+        signedApproval: "approval-envelope",
         keyId: "key-1",
         id: orderExternalId,
         verdict: "accept",
@@ -2514,7 +2546,7 @@ describe("Orders createOrder submit lifecycle", () => {
     return new Response(
       JSON.stringify({
         approval: {
-          token: "approval-token",
+          signedApproval: "approval-envelope",
           keyId: "key-1",
           id: orderExternalId,
           verdict: "accept",
@@ -2568,7 +2600,7 @@ describe("Orders createOrder submit lifecycle", () => {
       "reject",
     );
     expect(result.approval).toMatchObject({
-      token: "approval-token",
+      signedApproval: "approval-envelope",
       keyId: "key-1",
       id: "ord_alpha_0000000001",
       verdict: "accept",
@@ -2593,6 +2625,37 @@ describe("Orders createOrder submit lifecycle", () => {
       "/app/api/v1/orders/ord_alpha_0000000001",
       expect.any(Object),
     );
+  });
+
+  it("decodes a snake_case signed approval", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            signed_approval: "approval-envelope-snake",
+            keyId: "key-1",
+            id: "ord_alpha_0000000001",
+            verdict: "accept",
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(orderResponse());
+
+    const { createOrder } = api();
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+      },
+      "reject",
+    );
+
+    expect(result.approval?.signedApproval).toBe("approval-envelope-snake");
   });
 
   it("routes drop-copy orders through the distinct endpoint", async () => {
@@ -2736,7 +2799,7 @@ describe("Orders createOrder submit lifecycle", () => {
     );
   });
 
-  it("normalizes wrapped approval tokens", async () => {
+  it("normalizes wrapped approval envelopes", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(wrappedApprovalResponse("ord_wrapped_0000001"))
       .mockResolvedValueOnce(orderResponse("ord_wrapped_0000001"));
@@ -2767,7 +2830,7 @@ describe("Orders createOrder submit lifecycle", () => {
           JSON.stringify({
             order: { id: "ord_rejected_0000001" },
             submitResponse: {
-              token: "reject-token",
+              signedApproval: "reject-envelope",
               keyId: "key-1",
               id: "ord_rejected_0000001",
               verdict: "reject",
@@ -2799,7 +2862,7 @@ describe("Orders createOrder submit lifecycle", () => {
       "reject",
     );
     expect(result.approval).toEqual({
-      token: "reject-token",
+      signedApproval: "reject-envelope",
       keyId: "key-1",
       id: "ord_rejected_0000001",
       verdict: "reject",
@@ -2822,7 +2885,7 @@ describe("Orders createOrder submit lifecycle", () => {
           JSON.stringify({
             order: { id: "ord_legacy_0000001" },
             submitResponse: {
-              token: "legacy-token",
+              signedApproval: "legacy-envelope",
               keyId: "key-1",
               id: "ord_legacy_0000001",
               verdict: "",
@@ -2995,7 +3058,7 @@ describe("Orders submitExecutionReport", () => {
             },
           ],
         },
-        attestationToken: "tok-report",
+        signedAttestation: "env-report",
         attestationKeyId: "key-7",
         signed: true,
       }),
@@ -3049,7 +3112,7 @@ describe("Orders submitExecutionReport", () => {
         averageEntryPrice: "",
       },
     ]);
-    expect(result.attestationToken).toBe("tok-report");
+    expect(result.signedAttestation).toBe("env-report");
     expect(result.id).toBe("evt-report-1");
     expect(result.attestationKeyId).toBe("key-7");
     expect(result.signed).toBe(true);
@@ -3075,7 +3138,7 @@ describe("Orders confirmOrder and cancelOrder", () => {
           status: "filled",
           displayPrice: "",
         },
-        attestationToken: "tok-confirm",
+        signedAttestation: "env-confirm",
         attestationKeyId: "key-9",
         signed: true,
       }),
@@ -3083,18 +3146,16 @@ describe("Orders confirmOrder and cancelOrder", () => {
     );
   }
 
-  it("confirmOrder sends only the token and decodes the mutation response", async () => {
+  it("confirmOrder sends a body-less POST and decodes the mutation response", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
 
-    const result = await api().confirmOrder("ord_alpha_0000000001", {
-      token: "approval-token",
-    });
+    const result = await api().confirmOrder("ord_alpha_0000000001");
 
     expect(fetch).toHaveBeenCalledWith(
       "/app/api/v1/orders/ord_alpha_0000000001/confirm",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ token: "approval-token" }),
+        body: undefined,
       }),
     );
     expect(result.order).toMatchObject({
@@ -3103,16 +3164,15 @@ describe("Orders confirmOrder and cancelOrder", () => {
       price: "150.25",
       status: "filled",
     });
-    expect(result.attestationToken).toBe("tok-confirm");
+    expect(result.signedAttestation).toBe("env-confirm");
     expect(result.attestationKeyId).toBe("key-9");
     expect(result.signed).toBe(true);
   });
 
-  it("cancelOrder sends token, leaves, and reason and decodes the mutation response", async () => {
+  it("cancelOrder sends leaves and reason and decodes the mutation response", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
 
     const result = await api().cancelOrder("ord_alpha_0000000001", {
-      token: "approval-token",
       leavesQuantity: "7.5",
       reason: "operator request",
     });
@@ -3122,7 +3182,6 @@ describe("Orders confirmOrder and cancelOrder", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          token: "approval-token",
           leavesQuantity: "7.5",
           reason: "operator request",
         }),
@@ -3134,7 +3193,7 @@ describe("Orders confirmOrder and cancelOrder", () => {
       price: "150.25",
       status: "filled",
     });
-    expect(result.attestationToken).toBe("tok-confirm");
+    expect(result.signedAttestation).toBe("env-confirm");
     expect(result.attestationKeyId).toBe("key-9");
     expect(result.signed).toBe(true);
   });
@@ -3166,13 +3225,23 @@ describe("Orders conflict error decode", () => {
     );
   }
 
+  function approvalRequiredResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: "approval_required",
+          message: "backend detail is not client-owned",
+        },
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   it("confirmOrder surfaces execution_report_required on a 409", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(executionReportRequiredResponse());
 
     await expect(
-      api().confirmOrder("ord_alpha_0000000001", {
-        token: "approval-token",
-      }),
+      api().confirmOrder("ord_alpha_0000000001"),
     ).rejects.toMatchObject({
       name: "ApiError",
       code: "execution_report_required",
@@ -3185,13 +3254,26 @@ describe("Orders conflict error decode", () => {
 
     await expect(
       api().cancelOrder("ord_alpha_0000000001", {
-        token: "approval-token",
         leavesQuantity: "7.5",
       }),
     ).rejects.toMatchObject({
       name: "ApiError",
       code: "execution_report_required",
       status: 409,
+    });
+  });
+
+  it("confirmOrder surfaces approval_required on a 409", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(approvalRequiredResponse());
+
+    await expect(
+      api().confirmOrder("ord_alpha_0000000001"),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "approval_required",
+      status: 409,
+      message:
+        "This order has no verifiable pre-trade approval recorded by Officer at submit, so the confirm/cancel shortcut is unavailable. Submit a complete execution report through the order workflow.",
     });
   });
 

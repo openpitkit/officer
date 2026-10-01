@@ -47,7 +47,7 @@ func containsProviderType(providers []backend.MarketDataProvider, want string) b
 // order-resolving flow must fetch the stored order no more than the
 // attestation-aware budget below. Signing is additive: it re-reads the order to
 // bind its verdict/resolution event, so submit fetches once (attest read-back)
-// and confirm/cancel fetch twice (the token-binding read plus the attest
+// and confirm/cancel fetch twice (the approval read plus the attest
 // read-back).
 func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 	t.Parallel()
@@ -95,11 +95,11 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				tok := mustWorkflow(t, svc)
 				reset()
 				if _, _, err := svc.ConfirmExecution(
-					systemCtx(), tok.OrderExternalID, tok.Token,
+					systemCtx(), tok.OrderExternalID,
 				); err != nil {
 					t.Fatalf("ConfirmExecution: %v", err)
 				}
-				// Two fetches: the token-binding read plus the attestation read-back
+				// Two fetches: the approval read plus the attestation read-back
 				// that binds the confirmed event.
 				return 2
 			},
@@ -110,13 +110,13 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.ConfirmExecution(
-					systemCtx(), tok.OrderExternalID, tok.Token,
+					systemCtx(), tok.OrderExternalID,
 				); err != nil {
 					t.Fatalf("first confirm: %v", err)
 				}
 				reset()
 				order, att, err := svc.ConfirmExecution(
-					systemCtx(), tok.OrderExternalID, tok.Token,
+					systemCtx(), tok.OrderExternalID,
 				)
 				if err != nil {
 					t.Fatalf("idempotent confirm: %v", err)
@@ -125,7 +125,7 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 					t.Fatalf("idempotent confirm = %+v att=%+v, want unchanged status with attestation",
 						order, att)
 				}
-				// Two fetches: the token-binding read plus the confirmed-event
+				// Two fetches: the approval read plus the confirmed-event
 				// attestation read-back after the node returns without a new event.
 				return 2
 			},
@@ -136,17 +136,17 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.CancelOrder(
-					systemCtx(), tok.OrderExternalID, tok.Token, "10", "operator",
+					systemCtx(), tok.OrderExternalID, "10", "operator",
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				if _, _, err := svc.ConfirmExecution(
-					systemCtx(), tok.OrderExternalID, tok.Token,
+					systemCtx(), tok.OrderExternalID,
 				); !errors.Is(err, domain.ErrExecutionReportRequired) {
 					t.Fatalf("confirm after cancel = %v, want explicit report", err)
 				}
-				// One fetch: the token-binding read happens before the node-level
+				// One fetch: the approval read happens before the node-level
 				// terminal guard rejects without attestation.
 				return 1
 			},
@@ -158,11 +158,11 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				tok := mustWorkflow(t, svc)
 				reset()
 				if _, _, err := svc.CancelOrder(
-					systemCtx(), tok.OrderExternalID, tok.Token, "10", "stale price",
+					systemCtx(), tok.OrderExternalID, "10", "stale price",
 				); err != nil {
 					t.Fatalf("CancelOrder: %v", err)
 				}
-				// Two fetches: the token-binding read plus the attest read-back that
+				// Two fetches: the approval read plus the attest read-back that
 				// binds the cancelled event.
 				return 2
 			},
@@ -173,17 +173,17 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.CancelOrder(
-					systemCtx(), tok.OrderExternalID, tok.Token, "10", "setup",
+					systemCtx(), tok.OrderExternalID, "10", "setup",
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				if _, _, err := svc.CancelOrder(
-					systemCtx(), tok.OrderExternalID, tok.Token, "10", "too late",
+					systemCtx(), tok.OrderExternalID, "10", "too late",
 				); !errors.Is(err, domain.ErrExecutionReportRequired) {
 					t.Fatalf("second cancel = %v, want explicit report", err)
 				}
-				// One fetch: the token-binding read happens before the node-level
+				// One fetch: the approval read happens before the node-level
 				// conflict rejects without attestation.
 				return 1
 			},

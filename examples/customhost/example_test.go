@@ -446,14 +446,12 @@ func (s *customHostSource) SubmitDropCopyOrder(
 func (s *customHostSource) ConfirmExecution(
 	context.Context,
 	string,
-	string,
 ) (domain.Order, mcp.Attestation, error) {
 	return domain.Order{}, mcp.Attestation{}, nil
 }
 
 func (s *customHostSource) CancelOrder(
 	context.Context,
-	string,
 	string,
 	string,
 	string,

@@ -413,6 +413,32 @@ func TestWriteErrExecutionReportRequired(t *testing.T) {
 	}
 }
 
+func TestWriteErrApprovalRequired(t *testing.T) {
+	rec := httptest.NewRecorder()
+	cause := fmt.Errorf("confirm order: %w", domain.ErrApprovalRequired)
+
+	WriteErr(rec, cause)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "approval_required" {
+		t.Fatalf("code = %q, want approval_required", body.Error.Code)
+	}
+	if body.Error.Message != cause.Error() {
+		t.Fatalf("message = %q, want %q", body.Error.Message, cause)
+	}
+}
+
 func TestWriteErrValidationMetadata(t *testing.T) {
 	rec := httptest.NewRecorder()
 

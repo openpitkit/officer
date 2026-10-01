@@ -46,7 +46,7 @@ export function claudeDesktopConfig(url: string): string {
 export function claudeSkillMarkdown(url: string): string {
   return `---
 name: pit-officer
-description: Operate Pit Officer, a pre-trade risk and compliance control plane for trading operations, through its Model Context Protocol (MCP) server. Use when checking accounts, limits, or audit history, dry-running orders against pre-trade risk, or working with approval tokens and kill-switches.
+description: Operate Pit Officer, a pre-trade risk and compliance control plane for trading operations, through its Model Context Protocol (MCP) server. Use when checking accounts, limits, or audit history, dry-running orders against pre-trade risk, or working with order approvals and kill-switches.
 ---
 
 # Pit Officer
@@ -72,8 +72,8 @@ change at any time as the operator adjusts access.
 
 - Least-privilege surface: the server carries no secrets or credentials.
 - Most tools are read-only. Treat any mutating tool with extra care.
-- Any trading action or mutation must go through pre-trade checks and approval
-  tokens. Never bypass the pre-trade step.
+- Any trading action or mutation must go through pre-trade checks and
+  approval. Never bypass the pre-trade step.
 - Mutating and protective commands may be disabled by the operator. If a tool
   call returns a notice that the command is disabled, do NOT retry it - report
   back so the operator can enable it or your instructions can be adjusted.
@@ -112,8 +112,8 @@ any time as the operator adjusts access.
 
 - Least-privilege surface: the server carries no secrets or credentials.
 - Most tools are read-only. Treat any mutating tool with extra care.
-- Any trading action or mutation must go through pre-trade checks and approval
-  tokens. Never bypass the pre-trade step.
+- Any trading action or mutation must go through pre-trade checks and
+  approval. Never bypass the pre-trade step.
 - Mutating and protective commands may be disabled by the operator. If a tool
   call returns a notice that the command is disabled, do NOT retry it - report
   back so the operator can enable it or your instructions can be adjusted.

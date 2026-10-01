@@ -114,8 +114,8 @@ func TestServerToolSnapshot(t *testing.T) {
 		},
 		{
 			name: "submit_order",
-			description: "Submit an order intent through pre-trade and obtain a " +
-				"signed approval token. Mutates engine state and records the pre-trade " +
+			description: "Submit an order intent through pre-trade and obtain an " +
+				"approval envelope. Mutates engine state and records the pre-trade " +
 				"lock; protected and disabled by default.",
 		},
 		{
@@ -128,18 +128,18 @@ func TestServerToolSnapshot(t *testing.T) {
 		},
 		{
 			name: "confirm_execution",
-			description: "Record confirmation history for a previously approved " +
-				"workflow order by presenting its approval token. The shortcut is " +
-				"rejected after execution-report activity; protected and disabled " +
-				"by default.",
+			description: "Record confirmation history for a workflow order from the " +
+				"signed hold approval Officer recorded at submit. The shortcut is " +
+				"rejected after execution-report activity; protected and disabled by " +
+				"default.",
 		},
 		{
 			name: "cancel",
-			description: "Cancel an untouched workflow order by presenting its " +
-				"approval token. Optional caller-reported leavesQuantity is recorded " +
-				"verbatim when supplied; the SDK receives the order's own recorded " +
-				"reservation remainder. After execution-report activity, submit an explicit " +
-				"report. " +
+			description: "Cancel an untouched workflow order from the signed hold " +
+				"approval Officer recorded at submit. Optional caller-reported " +
+				"leavesQuantity is recorded verbatim when supplied; the SDK receives " +
+				"the order's own recorded reservation remainder. After execution-report " +
+				"activity, submit an explicit report. " +
 				"Protected and disabled by default.",
 		},
 	}
@@ -200,10 +200,24 @@ func TestServerToolSnapshot(t *testing.T) {
 				if _, ok := shape.Properties["leavesQuantity"]; !ok {
 					t.Fatalf("cancel input schema has no leavesQuantity: %s", wire)
 				}
+				if _, ok := shape.Properties["token"]; ok {
+					t.Fatalf("cancel input schema still has token: %s", wire)
+				}
 				for _, required := range shape.Required {
 					if required == "leavesQuantity" {
 						t.Fatalf("cancel input schema requires optional leavesQuantity: %s", wire)
 					}
+				}
+			}
+			if name == "confirm_execution" && schemaName == "input" {
+				var shape struct {
+					Properties map[string]json.RawMessage `json:"properties"`
+				}
+				if err := json.Unmarshal(raw, &shape); err != nil {
+					t.Fatalf("decode confirm input schema: %v", err)
+				}
+				if _, ok := shape.Properties["token"]; ok {
+					t.Fatalf("confirm input schema still has token: %s", wire)
 				}
 			}
 			if !strings.Contains(wire, `"id"`) {

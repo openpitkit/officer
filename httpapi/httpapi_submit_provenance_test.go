@@ -50,7 +50,7 @@ func TestSubmitOrderTokenSignsSurfacePrincipalAndOmitsAcceptReasons(t *testing.T
 	if _, present := body["reasons"]; present {
 		t.Fatalf("accepted submit emitted reasons: %v", body)
 	}
-	token, _ := body["token"].(string)
+	token, _ := body["signedApproval"].(string)
 	envelope, err := fwsigning.DecodeEnvelope(token)
 	if err != nil {
 		t.Fatalf("DecodeEnvelope: %v", err)

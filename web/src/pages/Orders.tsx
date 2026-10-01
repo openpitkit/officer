@@ -59,7 +59,6 @@ import {
   type TradesFilter,
 } from "@/framework";
 import type {
-  ApprovalToken,
   CheckResult,
   Commission,
   ExecutionBlock,
@@ -398,9 +397,6 @@ interface SubmitOrderDialogProps {
   onClose: () => void;
   onCreated: () => void;
   onOpenDetail: (externalId: string, banner?: string) => void;
-  /** Retain the accepted approval token of a workflow order so the operator can
-   *  use the confirm/cancel shortcuts. Called only for accepted `hold` submits. */
-  onWorkflowTokenIssued: (token: ApprovalToken) => void;
   accountSuggestions: string[];
   assetSuggestions: string[];
   /** Pre-seed all input fields (clone path). */
@@ -412,7 +408,6 @@ function SubmitOrderDialog({
   onClose,
   onCreated,
   onOpenDetail,
-  onWorkflowTokenIssued,
   accountSuggestions,
   assetSuggestions,
   initialValues,
@@ -740,11 +735,6 @@ function SubmitOrderDialog({
       );
       if (controller.signal.aborted) {
         return;
-      }
-      // A rejected pre-trade verdict has no accepted workflow to confirm or
-      // cancel. Retain only accepted `hold` tokens for the history shortcuts.
-      if (submitMode === "hold" && result.approval?.verdict === "accept") {
-        onWorkflowTokenIssued(result.approval);
       }
       onCreated();
       reset();
@@ -1917,16 +1907,9 @@ interface OrderDetailDialogProps {
     orderExternalId: string,
     values: ExecReportInitialValues,
   ) => void;
-  /** Approval token for a workflow order, or null when none is retained
-   *  (immediate order, or the token was lost on reload). */
-  workflowToken: ApprovalToken | null;
   /** Called after a workflow shortcut succeeds so the page refetches server
-   *  state. Confirmation keeps the token because it is history-only; a
-   *  successful cancellation consumes it. */
-  onWorkflowShortcutCompleted: (
-    orderExternalId: string,
-    action: "confirm" | "cancel",
-  ) => void;
+   *  state. */
+  onWorkflowShortcutCompleted: (orderExternalId: string) => void;
   successBanner?: string;
 }
 
@@ -1968,7 +1951,6 @@ function OrderDetailDialog({
   onExecReport,
   onCloneOrder,
   onCloneExecReport,
-  workflowToken,
   onWorkflowShortcutCompleted,
   successBanner,
 }: OrderDetailDialogProps) {
@@ -2036,10 +2018,15 @@ function OrderDetailDialog({
     return price;
   }
 
-  // The backend owns activity validation; the UI only checks whether this
-  // session still carries a token it can submit.
+  // The backend owns activity validation; the UI only checks whether the detail
+  // shows a non-terminal order with a recorded pre-trade accept attestation.
   const canUseWorkflowShortcut =
-    state.phase === "ready" && workflowToken !== null;
+    state.phase === "ready" &&
+    !TERMINAL_ORDER_STATUSES.some((status) => status === state.order.status) &&
+    state.events.some(
+      (event) =>
+        event.type === "pre_trade_accepted" && eventHasAttestation(event),
+    );
 
   // Cancellation leaves are optional and recorded verbatim: an absent value is
   // the request's own shape, a supplied one must survive the report contract.
@@ -2049,7 +2036,7 @@ function OrderDetailDialog({
   async function runWorkflowShortcut(action: "confirm" | "cancel") {
     if (
       orderExternalId === null ||
-      workflowToken === null ||
+      !canUseWorkflowShortcut ||
       shortcutAction !== null
     ) {
       return;
@@ -2061,18 +2048,15 @@ function OrderDetailDialog({
     setShortcutError(null);
     try {
       if (action === "confirm") {
-        await confirmOrder(orderExternalId, {
-          token: workflowToken.token,
-        });
+        await confirmOrder(orderExternalId);
       } else {
         await cancelOrder(orderExternalId, {
-          token: workflowToken.token,
           ...(cancelLeavesQuantity === ""
             ? {}
             : { leavesQuantity: cancelLeavesQuantity }),
         });
       }
-      onWorkflowShortcutCompleted(orderExternalId, action);
+      onWorkflowShortcutCompleted(orderExternalId);
     } catch (err) {
       setShortcutError(errMessage(err));
     } finally {
@@ -4492,32 +4476,7 @@ export function Orders() {
   const [lookupId, setLookupId] = useState("");
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupNotFoundOpen, setLookupNotFoundOpen] = useState(false);
-  const [verifyTokenOpen, setVerifyTokenOpen] = useState(false);
-  // Workflow approval tokens created in this session, keyed by order external
-  // id. The token is returned only by submit, so it remains in page state until
-  // cancellation, an explicit report, or reload; confirmation is history-only.
-  const [workflowOrderTokens, setWorkflowOrderTokens] = useState<
-    Record<string, ApprovalToken>
-  >({});
-
-  const rememberWorkflowToken = useCallback((token: ApprovalToken) => {
-    if (token.token === "" || token.id === "") {
-      return;
-    }
-    setWorkflowOrderTokens((prev) => ({ ...prev, [token.id]: token }));
-  }, []);
-
-  const forgetWorkflowToken = useCallback((orderExternalId: string) => {
-    setWorkflowOrderTokens((prev) => {
-      if (!(orderExternalId in prev)) {
-        return prev;
-      }
-      const next = { ...prev };
-      delete next[orderExternalId];
-      return next;
-    });
-  }, []);
-
+  const [verifyEnvelopeOpen, setVerifyEnvelopeOpen] = useState(false);
   function openDetail(externalId: string) {
     setDetailSuccessBanner(undefined);
     setDetailOrderExternalId(externalId);
@@ -5208,7 +5167,7 @@ export function Orders() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setVerifyTokenOpen(true)}
+            onClick={() => setVerifyEnvelopeOpen(true)}
           >
             <ShieldCheck className="h-3.5 w-3.5" />
             {t("panel.verifyTokenButton")}
@@ -5971,7 +5930,6 @@ export function Orders() {
         onOpenDetail={(id, banner) =>
           openDetailWithBanner(id, banner ?? t("addOrder.added"))
         }
-        onWorkflowTokenIssued={rememberWorkflowToken}
         accountSuggestions={allAccountSuggestions}
         assetSuggestions={assetSuggestions}
         initialValues={submitInitialValues}
@@ -5984,15 +5942,7 @@ export function Orders() {
         onExecReport={openExecReport}
         onCloneOrder={openCloneOrder}
         onCloneExecReport={openCloneExecReport}
-        workflowToken={
-          detailOrderExternalId !== null
-            ? (workflowOrderTokens[detailOrderExternalId] ?? null)
-            : null
-        }
-        onWorkflowShortcutCompleted={(id, action) => {
-          if (action === "cancel") {
-            forgetWorkflowToken(id);
-          }
+        onWorkflowShortcutCompleted={() => {
           setDetailRefreshKey((value) => value + 1);
           ordersResult.reload();
         }}
@@ -6003,9 +5953,6 @@ export function Orders() {
         orderExternalId={execReportOrderExternalId}
         onClose={closeExecReport}
         onSubmitted={(update) => {
-          // Any explicit report permanently moves this order out of the safe
-          // shortcut case: later lifecycle changes require another full report.
-          forgetWorkflowToken(update.orderExternalId);
           // Reflect only server truth: refetch the table and the open detail so
           // the rendered status/leaves come from the engine, not the request.
           if (detailOrderExternalId === update.orderExternalId) {
@@ -6036,8 +5983,8 @@ export function Orders() {
       <OrderVerificationPanel
         orderExternalId={null}
         initialMode="verify"
-        open={verifyTokenOpen}
-        onOpenChange={setVerifyTokenOpen}
+        open={verifyEnvelopeOpen}
+        onOpenChange={setVerifyEnvelopeOpen}
       />
     </Page>
   );

@@ -211,11 +211,12 @@ func handleGetOrderEventReproduction(svc backend.ControlPlane) http.HandlerFunc 
 // buildEventReproduction assembles the reproduction bundle for one event. It
 // reuses the live serializers for byte-identity: toOrderEventDTO for the event,
 // toEventAttestationDTO for the attestation metadata, and a reconstructed
-// type-specific response DTO that reproduces the exact live API response (token
-// verbatim). The bound request and the canonical signed bytes and base64
-// signature are recovered from the persisted token with the same signing code
-// that produced it (DecodeEnvelope + CanonicalBytes). The public key is resolved
-// rotation-safe by the attestation's keyId. No re-issue or re-sign occurs.
+// type-specific response DTO that reproduces the exact live API response
+// (envelope verbatim). The bound request and the canonical signed bytes and
+// base64 signature are recovered from the persisted envelope with the same
+// signing code that produced it (DecodeEnvelope + CanonicalBytes). The public
+// key is resolved rotation-safe by the attestation's keyId. No re-issue or
+// re-sign occurs.
 func buildEventReproduction(
 	ctx context.Context, svc backend.ControlPlane, event domain.OrderEvent,
 ) (eventReproductionDTO, error) {
@@ -243,15 +244,16 @@ func buildEventReproduction(
 	bundle.ESign.Alg = att.Alg
 	bundle.Attestation = toEventAttestationDTO(att)
 
-	// Decode the persisted token with the same signing code that built it and
+	// Decode the persisted envelope with the same signing code that built it and
 	// expose the payload in its exact canonical signed form and the bound request.
 	// This is byte-identical to what was signed; it is never re-serialized here.
 	env, err := fwsigning.DecodeEnvelope(att.Token)
 	if err != nil {
-		// A token that fails to decode is presentation-only degradation: the event
-		// row and its attestation metadata stay authoritative, so the bundle still
-		// returns with the canonical bytes, request, response and public key omitted.
-		bundle.Reason = "persisted attestation token could not be decoded"
+		// An envelope that fails to decode is presentation-only degradation: the
+		// event row and its attestation metadata stay authoritative, so the bundle
+		// still returns with the canonical bytes, request, response and public key
+		// omitted.
+		bundle.Reason = "persisted attestation envelope could not be decoded"
 		return bundle, nil
 	}
 	bundle.Request = toEventReproductionRequestDTO(env.Approval)
@@ -265,9 +267,9 @@ func buildEventReproduction(
 	bundle.CanonicalApproval = &canonStr
 	bundle.Signature = env.Signature
 
-	// Resolve the public key by the envelope's own keyId, not the active key, so a
-	// token signed under a since-rotated key reproduces the exact key that signed
-	// it. Under alg "none" there is no signing key or signature to reproduce.
+	// Resolve the public key by the envelope's own keyId, not the active key, so
+	// an envelope signed under a since-rotated key reproduces the exact key that
+	// signed it. Under alg "none" there is no signing key or signature to reproduce.
 	if env.Approval.Alg == fwsigning.AlgEd25519 && env.KeyID != "" {
 		pub, err := svc.PublicKeyByID(ctx, env.KeyID, "pem-pkcs8")
 		if err != nil {
@@ -335,17 +337,17 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 }
 
 // toEventReproductionResponseDTO reconstructs the exact type-specific live API
-// response the robot received for the attested request. The token is carried
-// verbatim in the response's attestation-token field, matching the live handler.
-// Only the facet matching the request type is populated.
+// response the robot received for the attested request. The envelope is carried
+// verbatim in the response's signedApproval or signedAttestation field, matching
+// the live handler. Only the facet matching the request type is populated.
 func toEventReproductionResponseDTO(
 	event domain.OrderEvent, att *domain.EventAttestation, p domain.ApprovalPayload,
 ) *eventReproductionResponseDTO {
 	out := &eventReproductionResponseDTO{}
 	switch att.RequestType {
 	case domain.AttestationRequestSubmit:
-		out.SubmitResponse = &approvalTokenDTO{
-			Token:           att.Token,
+		out.SubmitResponse = &signedApprovalDTO{
+			SignedApproval:  att.Token,
 			KeyID:           att.KeyID,
 			OrderExternalID: event.Order.String(),
 			Verdict:         p.Verdict,
@@ -357,11 +359,11 @@ func toEventReproductionResponseDTO(
 			reportID = event.Payload.ExecutionReport.ExternalID.String()
 		}
 		out.ExecutionReport = &executionReportResponseDTO{
-			ID:               reportID,
-			Result:           executionResultFromPayload(p),
-			AttestationToken: att.Token,
-			AttestationKeyID: att.KeyID,
-			Signed:           eventAttestationSigned(att),
+			ID:                reportID,
+			Result:            executionResultFromPayload(p),
+			SignedAttestation: att.Token,
+			AttestationKeyID:  att.KeyID,
+			Signed:            eventAttestationSigned(att),
 		}
 	case domain.AttestationRequestConfirm:
 		out.Confirm = orderMutationResponseFromPayload(event, att, p)
@@ -413,7 +415,7 @@ func executionResultFromPayload(p domain.ApprovalPayload) executionResultDTO {
 
 // orderMutationResponseFromPayload reconstructs the confirm/cancel response DTO
 // from persisted state. The order is rebuilt from the payload's bound params and
-// result status; the token is carried verbatim.
+// result status; the envelope is carried verbatim.
 func orderMutationResponseFromPayload(
 	event domain.OrderEvent, att *domain.EventAttestation, p domain.ApprovalPayload,
 ) *orderMutationResponseDTO {
@@ -434,9 +436,9 @@ func orderMutationResponseFromPayload(
 			DisplayPrice:        "",
 			Signed:              eventAttestationSigned(att),
 		},
-		AttestationToken: att.Token,
-		AttestationKeyID: att.KeyID,
-		Signed:           eventAttestationSigned(att),
+		SignedAttestation: att.Token,
+		AttestationKeyID:  att.KeyID,
+		Signed:            eventAttestationSigned(att),
 	}
 }
 
@@ -508,11 +510,11 @@ func handleApplyExecutionReport(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusCreated, executionReportResponseDTO{
-			ID:               result.ReportID.String(),
-			Result:           toExecutionResultDTO(result),
-			AttestationToken: att.Token,
-			AttestationKeyID: att.KeyID,
-			Signed:           att.Signed,
+			ID:                result.ReportID.String(),
+			Result:            toExecutionResultDTO(result),
+			SignedAttestation: att.Token,
+			AttestationKeyID:  att.KeyID,
+			Signed:            att.Signed,
 		})
 	}
 }

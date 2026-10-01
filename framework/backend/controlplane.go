@@ -219,10 +219,14 @@ type ControlPlane interface {
 	SubmitDropCopyOrder(
 		ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 	) (domain.Order, error)
+	// ConfirmExecution authorizes the shortcut from Officer's recorded signed
+	// hold-mode accept approval and records confirmation history.
 	ConfirmExecution(
-		ctx context.Context, orderID string, token string,
+		ctx context.Context, orderID string,
 	) (domain.Order, Attestation, error)
+	// CancelOrder authorizes the shortcut from Officer's recorded signed
+	// hold-mode accept approval and records a terminal cancellation report.
 	CancelOrder(
-		ctx context.Context, orderID string, token, leavesQuantity, reason string,
+		ctx context.Context, orderID, leavesQuantity, reason string,
 	) (domain.Order, Attestation, error)
 }

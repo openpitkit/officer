@@ -57,7 +57,7 @@
       "description": "Create or change a risk-limit / policy barrier."
     },
     "submit_order": {
-      "description": "Submit an order intent through pre-trade and obtain a signed approval token."
+      "description": "Submit an order intent through pre-trade and obtain an approval envelope."
     },
     "submit_drop_copy_order": {
       "description": "Submit an unsigned drop-copy order. Policies retain their normal state changes, but policy rejects and account or group kill-switch blocks do not stop the order."
@@ -67,9 +67,6 @@
     },
     "cancel": {
       "description": "Cancel a workflow order with no execution-report activity."
-    },
-    "get_next_token": {
-      "description": "Fetch the next approval token for a trade from the registry."
     },
     "report_fill": {
       "description": "Report an execution fill to the engine (post-trade)."
@@ -103,7 +100,7 @@
     }
   },
   "prompt": {
-    "intro": "You have access to the Pit Officer MCP server - a pre-trade risk and\ncompliance control plane for trading operations.\n\nTransport: streamable HTTP at the /mcp endpoint of this service.\nAlternatively available as `pit-officer mcp` over stdio.\n\nPrinciples:\n- Least-privilege surface. The server carries no secrets or credentials.\n- Most tools are read-only. Treat any mutating tool with extra care.\n- Any trading action or mutation must go through pre-trade checks and\n  approval tokens. Never bypass the pre-trade step.",
+    "intro": "You have access to the Pit Officer MCP server - a pre-trade risk and\ncompliance control plane for trading operations.\n\nTransport: streamable HTTP at the /mcp endpoint of this service.\nAlternatively available as `pit-officer mcp` over stdio.\n\nPrinciples:\n- Least-privilege surface. The server carries no secrets or credentials.\n- Most tools are read-only. Treat any mutating tool with extra care.\n- Any trading action or mutation must go through pre-trade checks and\n  approval. Never bypass the pre-trade step.",
     "discover": "Discover the available commands at runtime: call the MCP tool list\n(`tools/list`) after connecting and rely on each tool's self-described\ninput schema. Do not assume a fixed set of commands - the surface is\nself-describing and can change as the operator adjusts access.",
     "footer": "The operator controls which commands are enabled, and this can change at\nany time without notice. If a tool call returns a notice that the command\nis disabled in the panel, do NOT retry it - ask your orchestrator to\nextend or change your prompt/instructions accordingly (or to have the\noperator enable the command in Pit Officer)."
   }
