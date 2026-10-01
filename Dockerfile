@@ -21,8 +21,9 @@
 # stage that uses the value in its own body redeclares it.
 ARG GO_VERSION
 
-# Stage 1: build the dashboard SPA.
-FROM node:20-alpine AS frontend
+# Stage 1: build the dashboard SPA. Its output is platform-independent, so a
+# multi-platform build runs it once, natively, instead of under emulation.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
 
 WORKDIR /app/web
 

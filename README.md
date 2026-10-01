@@ -33,7 +33,9 @@ just run-mcp     # local stdio MCP server
 
 In a container, build the image with `just docker-build` and start it with
 `docker compose up`; `docker-compose.yml` pins the port, the database volume,
-and a read-only root filesystem.
+and a read-only root filesystem. Released versions are published as
+`ghcr.io/openpitkit/officer:X.Y.Z`; set that as `image:` in
+`docker-compose.yml` to run one without building.
 
 The subcommands, the environment variables and flags, and the authorization
 model are in the [configuration reference](docs/configuration.md).

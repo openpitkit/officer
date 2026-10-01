@@ -189,6 +189,17 @@ just docker-build myrepo/pit-officer:dev
 The image is built from the published OpenPit module, and the Docker build
 overwrites `web/dist` with compiled assets before the Go build.
 
+The build needs BuildKit, the default builder in current Docker, because the SPA
+stage runs on the build platform via `$BUILDPLATFORM`.
+
+A `vX.Y.Z` tag on a commit already on `main` publishes the image for
+`linux/amd64` and `linux/arm64` to `ghcr.io/openpitkit/officer` as `X.Y.Z`.
+`X.Y` moves to it only when it is the highest stable `X.Y.*` version on `main`,
+and `latest` moves only when it is the highest stable version on `main` overall.
+A tag on any other commit fails the workflow; a pre-release tag such as
+`v0.1.0-rc.1` gets only its own version. The workflow is
+`.github/workflows/release-image.yml`.
+
 ## Seeding
 
 `just seed` fills a running instance with demo accounts, balances, orders, and
