@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
@@ -109,35 +110,20 @@ func (r *realmStore) backupSnapshot(
 	if err != nil {
 		return nil, nil, err
 	}
-	temp, err := os.CreateTemp("", "pit-officer-backup-*.db")
+	// SQLite creates the snapshot and its side files itself, with its own mode, so
+	// they live in a fresh owner-only (0700) directory: a mode set on the file
+	// would leave it readable while VACUUM INTO writes it, and the umask can only
+	// narrow the directory, never widen it.
+	dir, err := os.MkdirTemp("", "pit-officer-backup-*")
 	if err != nil {
-		return nil, nil, fmt.Errorf("store: create backup snapshot path: %w", err)
+		return nil, nil, fmt.Errorf("store: create backup snapshot directory: %w", err)
 	}
-	path := temp.Name()
+	path := filepath.Join(dir, "snapshot.db")
 	removeSnapshot := func() error {
-		var result error
-		for _, candidate := range sqliteResetPaths(path) {
-			if err := os.Remove(candidate); err != nil &&
-				!errors.Is(err, os.ErrNotExist) {
-				result = errors.Join(
-					result,
-					fmt.Errorf("store: remove backup snapshot %q: %w", candidate, err),
-				)
-			}
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("store: remove backup snapshot %q: %w", dir, err)
 		}
-		return result
-	}
-	if err := temp.Close(); err != nil {
-		return nil, nil, errors.Join(
-			fmt.Errorf("store: close backup snapshot path: %w", err),
-			removeSnapshot(),
-		)
-	}
-	if err := os.Remove(path); err != nil {
-		return nil, nil, errors.Join(
-			fmt.Errorf("store: prepare backup snapshot path: %w", err),
-			removeSnapshot(),
-		)
+		return nil
 	}
 	if _, err := db.ExecContext(ctx, `VACUUM INTO ?`, path); err != nil {
 		return nil, nil, errors.Join(
