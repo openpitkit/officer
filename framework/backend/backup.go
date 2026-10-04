@@ -47,16 +47,22 @@ func (s *Service) ExportBackup(
 	return archive, backup.Filename(archive.Manifest.CreatedAt), nil
 }
 
-// RestoreBackup imports a portable archive. Market-data connectors keep running
-// across online publication and residual engine rebuilds; they are stopped only
-// when the effective restore changes their applied configuration.
+// RestoreBackup imports a portable archive. It stops the trading runtime before
+// changing the store and restarts it after both successful and failed restores.
+// Market-data connectors keep running across online publication and residual
+// engine rebuilds; they are stopped only when the effective restore changes
+// their applied configuration.
 func (s *Service) RestoreBackup(
 	ctx context.Context,
 	archive backup.Archive,
 	opts backup.RestoreOptions,
 ) (backup.RestoreSummary, error) {
 	s.marketDataMu.Lock()
-	defer s.marketDataMu.Unlock()
+	s.tradingMu.Lock()
+	defer func() {
+		s.tradingMu.Unlock()
+		s.marketDataMu.Unlock()
+	}()
 
 	if opts.Mode == "" {
 		return backup.RestoreSummary{},
@@ -103,22 +109,31 @@ func (s *Service) RestoreBackup(
 		}
 		mdPlan = plan
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return backup.RestoreSummary{}, err
+	}
 	mdStopped := false
 	if mdPlan.restart && s.md != nil {
 		s.md.Stop()
 		mdStopped = true
 	}
+	tradingStopped := false
+	if s.trading != nil {
+		s.trading.Stop()
+		tradingStopped = true
+	}
 	restoreOpts := opts
 	restoreOpts.ValidateMarketDataInstance = func(instance domain.MarketDataInstance) error {
 		return validateMarketDataProvider(s.registry, instance)
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return backup.RestoreSummary{}, err
-	}
 	summary, sink, err := n.RestoreBackup(
 		ctx, archive, restoreOpts, caller,
 	)
+	var tradingRestartErr error
+	if tradingStopped {
+		tradingRestartErr = s.restartTradingAfterBackup()
+	}
 	var reloadErr error
 	if reloadErr = s.signer.Reload(context.WithoutCancel(ctx)); reloadErr != nil {
 		reloadErr = fmt.Errorf("backend: reload signer after backup restore: %w", reloadErr)
@@ -127,7 +142,7 @@ func (s *Service) RestoreBackup(
 		if mdStopped {
 			err = errors.Join(err, s.restoreMarketDataAfterBackup(sink))
 		}
-		err = errors.Join(err, reloadErr)
+		err = errors.Join(err, tradingRestartErr, reloadErr)
 		return backup.RestoreSummary{},
 			fmt.Errorf("backend: restore backup: %w", err)
 	}
@@ -163,10 +178,10 @@ func (s *Service) RestoreBackup(
 		}
 	}
 	if postRestoreErr != nil {
-		return summary, errors.Join(postRestoreErr, reloadErr)
+		return summary, errors.Join(postRestoreErr, tradingRestartErr, reloadErr)
 	}
-	if reloadErr != nil {
-		return summary, reloadErr
+	if err := errors.Join(tradingRestartErr, reloadErr); err != nil {
+		return summary, err
 	}
 	return summary, nil
 }
@@ -449,36 +464,50 @@ func listRestoredManualUpdates(
 	return updates, nil
 }
 
-// ResetDatabase recreates the store from scratch and reconnects market-data
+// ResetDatabase stops the trading runtime, recreates the store from scratch,
+// restarts trading after both success and failure, and reconnects market-data
 // feeds to the reset engine sink.
 func (s *Service) ResetDatabase(ctx context.Context) error {
 	s.marketDataMu.Lock()
-	defer s.marketDataMu.Unlock()
+	s.tradingMu.Lock()
+	defer func() {
+		s.tradingMu.Unlock()
+		s.marketDataMu.Unlock()
+	}()
 
 	n := s.node
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
 
 	mdStopped := false
 	if s.md != nil {
 		s.md.Stop()
 		mdStopped = true
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return err
+	tradingStopped := false
+	if s.trading != nil {
+		s.trading.Stop()
+		tradingStopped = true
 	}
 	sink, err := n.ResetDatabase(ctx, caller)
+	var tradingRestartErr error
+	if tradingStopped {
+		tradingRestartErr = s.restartTradingAfterBackup()
+	}
 	if err != nil {
 		if mdStopped {
 			err = errors.Join(err, s.restoreMarketDataAfterBackup(sink))
 		}
+		err = errors.Join(err, tradingRestartErr)
 		return fmt.Errorf("backend: reset database: %w", err)
 	}
+	var marketDataRestartErr error
 	if mdStopped {
-		if err := s.restoreMarketDataAfterBackup(sink); err != nil {
-			return err
-		}
+		marketDataRestartErr = s.restoreMarketDataAfterBackup(sink)
 	}
-	return nil
+	return errors.Join(marketDataRestartErr, tradingRestartErr)
 }
 
 func (s *Service) restoreMarketDataAfterBackup(sink marketdata.Sink) error {
@@ -494,4 +523,11 @@ func (s *Service) restoreMarketDataAfterBackup(sink marketdata.Sink) error {
 			fmt.Errorf("backend: restart market-data after restore: %w", err))
 	}
 	return out
+}
+
+func (s *Service) restartTradingAfterBackup() error {
+	if err := s.trading.Restart(); err != nil {
+		return fmt.Errorf("backend: restart trading after database change: %w", err)
+	}
+	return nil
 }

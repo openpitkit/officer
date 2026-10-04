@@ -70,6 +70,9 @@ const (
 	// SectionActivityHistory carries adjustments, orders (with approvals),
 	// order events and trades.
 	SectionActivityHistory Section = "activity_history"
+	// SectionTrading carries trading connections, instruments, access, and venue
+	// order links.
+	SectionTrading Section = "trading"
 	// SectionAuditLog carries the append-only audit trail.
 	SectionAuditLog Section = "audit_log"
 )
@@ -86,6 +89,7 @@ var AllSections = []Section{
 	SectionGeneralSettings,
 	SectionUserSettings,
 	SectionActivityHistory,
+	SectionTrading,
 	SectionAuditLog,
 }
 
@@ -131,11 +135,13 @@ type Scope struct {
 	// Sections is the explicit section set; ignored when All is set.
 	Sections []Section `json:"sections,omitempty"`
 	// Accounts narrows the account-addressed rows of every section except
-	// positions.
+	// positions. Trading is all-or-nothing and ignores this selector; selecting
+	// activity history also selects trading.
 	Accounts EntitySelector `json:"accounts,omitempty"`
 	// Positions narrows the balance rows of the positions section independently.
 	Positions EntitySelector `json:"positions,omitempty"`
-	// All includes every section with no account narrowing.
+	// All includes every section; non-all account selectors still narrow the
+	// account-addressed rows selected above.
 	All bool `json:"all"`
 }
 
@@ -164,6 +170,9 @@ type RestoreSummary struct {
 	// MarketDataCredentialsUnavailable names instances restored disabled because
 	// their archived credentials could not be opened by this installation.
 	MarketDataCredentialsUnavailable []string `json:"marketDataCredentialsUnavailable,omitempty"`
+	// TradingCredentialsUnavailable names connections restored disabled because
+	// their archived credentials could not be opened by this installation.
+	TradingCredentialsUnavailable []string `json:"tradingCredentialsUnavailable,omitempty"`
 	// RestartRequired reports that this restore actually replaced the engine.
 	RestartRequired bool `json:"restartRequired"`
 }
@@ -399,6 +408,72 @@ type MarketDataInstrument struct {
 	Enabled bool `json:"enabled"`
 }
 
+// TradingConnection is the portable archive form of a venue connection.
+// Credentials are the database value exactly as stored, while account and
+// connection identities are portable codes and external ids.
+type TradingConnection struct {
+	// ExternalID is the connection's opaque public handle.
+	ExternalID domain.ExternalID `json:"externalId"`
+	// Provider is the trading-provider discriminator.
+	Provider string `json:"provider"`
+	// Label is the unique operator-facing connection name.
+	Label string `json:"label"`
+	// Mode identifies whether the venue environment is paper or live.
+	Mode domain.TradingMode `json:"mode"`
+	// VenueIdentity identifies the venue-side account reached by the credentials.
+	VenueIdentity string `json:"venueIdentity"`
+	// FeeAccount is the code of the account receiving unlinked venue fees.
+	FeeAccount domain.AccountID `json:"feeAccount,omitempty"`
+	// Credentials is the database value exactly as stored.
+	Credentials []byte `json:"credentials"`
+	// Enabled reports whether new orders may use the connection.
+	Enabled bool `json:"enabled"`
+}
+
+// TradingInstrument is the portable archive form of a connection instrument.
+type TradingInstrument struct {
+	// Connection is the owning connection's opaque public handle.
+	Connection domain.ExternalID `json:"connection"`
+	// ExternalSymbol is the venue-side symbol.
+	ExternalSymbol string `json:"externalSymbol"`
+	// BaseAsset is the code of the instrument underlying asset.
+	BaseAsset string `json:"baseAsset"`
+	// QuoteAsset is the code of the instrument settlement asset.
+	QuoteAsset string `json:"quoteAsset"`
+	// Enabled reports whether new orders may use this instrument mapping.
+	Enabled bool `json:"enabled"`
+}
+
+// TradingAccess is one portable account-to-connection binding.
+type TradingAccess struct {
+	// Account is the Officer account code receiving access.
+	Account domain.AccountID `json:"account"`
+	// Connection is the trading connection's opaque public handle.
+	Connection domain.ExternalID `json:"connection"`
+	// VenueAccount is the optional bound venue-side account.
+	VenueAccount string `json:"venueAccount,omitempty"`
+}
+
+// VenueOrder is one portable Officer-order-to-venue-order link.
+type VenueOrder struct {
+	// Order is the Officer order's opaque public handle.
+	Order domain.ExternalID `json:"order"`
+	// Connection is the trading connection used for the order.
+	Connection domain.ExternalID `json:"connection"`
+	// VenueAccount is the provider-specific venue-side account identifier.
+	VenueAccount string `json:"venueAccount,omitempty"`
+	// Route is the connector-read per-order JSON used for the send.
+	Route string `json:"route"`
+	// ClientOrderID is the idempotency identifier sent to the venue.
+	ClientOrderID string `json:"clientOrderId"`
+	// SendAttempted reports whether the venue call has been started.
+	SendAttempted bool `json:"sendAttempted"`
+	// VenueOrderID is the venue-assigned identifier, empty until acknowledged.
+	VenueOrderID string `json:"venueOrderId,omitempty"`
+	// CreatedAt is when the durable link was created.
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 // SigningKey is the portable archive form of a signing public key. The key_id
 // UUID is the key's own external handle and is preserved. Private key material
 // never enters the archive, and the surrogate id is never carried.
@@ -497,6 +572,14 @@ type Data struct {
 	// Trades are per-fill trade rows (by external id, linked to their order's
 	// external id).
 	Trades []domain.Trade `json:"trades,omitempty"`
+	// TradingConnections are configured venue connections (by external id).
+	TradingConnections []TradingConnection `json:"tradingConnections,omitempty"`
+	// TradingInstruments are per-connection venue symbol mappings.
+	TradingInstruments []TradingInstrument `json:"tradingInstruments,omitempty"`
+	// TradingAccess is the account-to-connection binding set.
+	TradingAccess []TradingAccess `json:"tradingAccess,omitempty"`
+	// VenueOrders link Officer orders to the venue orders sent for them.
+	VenueOrders []VenueOrder `json:"venueOrders,omitempty"`
 	// Audit is the append-only audit trail (by external id).
 	Audit []domain.AuditRow `json:"audit,omitempty"`
 	// MarketDataInstances are configured market-data sources (by external id).
@@ -647,10 +730,10 @@ var accountAddressedSections = []Section{
 
 // Normalize trims and deduplicates the scope's section list and selectors, then
 // force-includes the parent dictionary sections a scoped archive's rows resolve
-// against: any account-addressed section pulls in accounts+groups. This keeps a
-// scoped archive self-resolving (its rows never reference a parent the archive
-// omitted). It is a no-op when All is set, since All already carries every
-// section.
+// against: any account-addressed section pulls in accounts+groups, while
+// activity history and trading pull in each other. Trading remains
+// all-or-nothing and ignores account selectors. All already carries every
+// section, but its selectors are still normalized and applied.
 func (s Scope) Normalize() Scope {
 	s.Sections = normalizeSections(s.Sections)
 	s.Accounts = s.Accounts.Normalize()
@@ -662,8 +745,9 @@ func (s Scope) Normalize() Scope {
 }
 
 // forceParentSections appends, in canonical AllSections order, the parent
-// dictionary sections required by the included account-addressed sections,
-// leaving an already-complete or empty list untouched.
+// dictionary sections required by the included account-addressed sections.
+// Activity history and all-or-nothing trading are coupled: selecting either
+// selects both, and trading ignores account selectors.
 func forceParentSections(sections []Section) []Section {
 	has := make(map[Section]bool, len(sections))
 	for _, section := range sections {
@@ -677,8 +761,13 @@ func forceParentSections(sections []Section) []Section {
 			}
 		}
 	}
+	if has[SectionTrading] {
+		has[SectionAccountsGroups] = true
+		has[SectionActivityHistory] = true
+	}
 	if has[SectionActivityHistory] {
 		has[SectionGeneralSettings] = true
+		has[SectionTrading] = true
 	}
 	out := make([]Section, 0, len(has))
 	for _, section := range AllSections {
@@ -775,6 +864,14 @@ func FilterData(data Data, scope Scope) Data {
 			eventIDs,
 		)
 		out.Trades = filterTrades(data.Trades, orderIDs)
+	}
+	if scope.Included(SectionTrading) {
+		out.TradingConnections = append([]TradingConnection(nil),
+			data.TradingConnections...)
+		out.TradingInstruments = append([]TradingInstrument(nil),
+			data.TradingInstruments...)
+		out.TradingAccess = append([]TradingAccess(nil), data.TradingAccess...)
+		out.VenueOrders = append([]VenueOrder(nil), data.VenueOrders...)
 	}
 	if scope.Included(SectionAuditLog) {
 		out.Audit = filterAudit(data.Audit, scope.Accounts, groupByAccount)

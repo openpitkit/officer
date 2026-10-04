@@ -129,6 +129,7 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"GET /signing/config",
 		"PUT /signing/config",
 		"POST /orders/submit",
+		"POST /orders/send-paper",
 		"POST /orders/drop-copy/submit",
 		"POST /orders/{id}/confirm",
 		"POST /orders/{id}/cancel",
@@ -143,6 +144,20 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"DELETE /market-data/instances/{id}/instruments",
 		"POST /market-data/instances/{id}/verify-symbol",
 		"POST /market-data/instances/{id}/search-symbols",
+		"GET /trading",
+		"POST /trading/connections",
+		"PUT /trading/connections/{id}/settings",
+		"PUT /trading/connections/{id}/enabled",
+		"POST /trading/connections/{id}/check",
+		"PUT /trading/connections/{id}/instruments",
+		"DELETE /trading/connections/{id}/instruments",
+		"POST /trading/connections/{id}/verify-symbol",
+		"POST /trading/connections/{id}/search-symbols",
+		"PUT /trading/connections/{id}/access",
+		"DELETE /trading/connections/{id}/access",
+		"PUT /trading/connections/{id}/fee-account",
+		"DELETE /trading/connections/{id}/fee-account",
+		"GET /accounts/{code}/trading-destinations",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("route surface mismatch\ngot:  %v\nwant: %v", got, want)

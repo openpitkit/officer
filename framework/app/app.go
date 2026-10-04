@@ -63,6 +63,7 @@ type SigningFactory func(store.RealmStore) (signing.Service, error)
 type ServiceFactory func(
 	node.Node,
 	backend.MarketDataRuntime,
+	backend.TradingRuntime,
 	signing.Service,
 	*marketdata.Registry,
 	*frameworkmcp.ToolRegistry,
@@ -252,14 +253,7 @@ func (b *Builder) Build(
 	}
 
 	mcpRegistry := frameworkmcp.NewToolRegistry()
-	service, err := b.serviceFactory(localNode, manager, signer, b.mdRegistry, mcpRegistry)
-	if err != nil {
-		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build service: %w", err)
-	}
-	// The runtime intakes and reconciles venue orders; the send surface is not
-	// wired yet.
+	var service backend.ControlPlane
 	runtime, err := trading.NewRuntime(b.tradingRegistry, realm,
 		func(ctx context.Context, in domain.ExecutionReportInput) error {
 			_, _, err := service.ApplyExecutionReport(auth.ContextWithCaller(ctx, auth.SystemCaller()), in)
@@ -271,11 +265,20 @@ func (b *Builder) Build(
 				return fmt.Errorf("%s: %w", record.Rejected.Reason, trading.ErrAdjustmentRejected)
 			}
 			return err
+		},
+		func(ctx context.Context, connection domain.ExternalID, feeID, reason string) error {
+			return localNode.RecordVenueFeeSkipped(ctx, connection, feeID, reason, auth.SystemCaller())
 		}, logger)
 	if err != nil {
 		manager.Stop()
 		_ = localNode.Close()
 		return nil, fmt.Errorf("build trading runtime: %w", err)
+	}
+	service, err = b.serviceFactory(localNode, manager, runtime, signer, b.mdRegistry, mcpRegistry)
+	if err != nil {
+		manager.Stop()
+		_ = localNode.Close()
+		return nil, fmt.Errorf("build service: %w", err)
 	}
 	// Build's signal context can end before Close; Stop owns runtime
 	// cancellation.

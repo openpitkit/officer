@@ -37,6 +37,11 @@ func (rt *restoreTx) prune(ctx context.Context, scope backup.Scope, data backup.
 	// change which archive-source rows a scoped restore treats as in scope.
 	accountScope := archiveScopeAccounts(scope.Accounts, data.Accounts)
 	positionScope := archiveScopeAccounts(scope.Positions, data.Accounts)
+	if scope.Included(backup.SectionTrading) {
+		if err := rt.pruneTrading(ctx); err != nil {
+			return err
+		}
+	}
 	if scope.Included(backup.SectionAccountsGroups) {
 		if err := rt.pruneAccountsGroups(ctx, scope, accountScope, data); err != nil {
 			return err
@@ -75,6 +80,20 @@ func (rt *restoreTx) prune(ctx context.Context, scope backup.Scope, data backup.
 	if scope.Included(backup.SectionAuditLog) {
 		if err := rt.pruneAudit(ctx, scope.Accounts, accountScope, data.Audit); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (rt *restoreTx) pruneTrading(ctx context.Context) error {
+	for _, table := range []string{
+		"venue_order",
+		"trading_access",
+		"trading_instrument",
+		"trading_connection",
+	} {
+		if _, err := rt.tx.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+			return fmt.Errorf("store: prune %s: %w", table, err)
 		}
 	}
 	return nil

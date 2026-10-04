@@ -24,6 +24,7 @@ import (
 	"log/slog"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 )
 
 func (w *worker) intakeFees() {
@@ -41,6 +42,19 @@ func (w *worker) intakeFees() {
 	if !found {
 		return
 	}
+	account, accounts, err := w.r.store.GetTradingFeeAccounts(ctx, w.connection.ExternalID)
+	if err != nil {
+		w.log(slog.LevelError, "", "read connection fee accounts", err)
+		return
+	}
+	accountReason := ""
+	if account == "" {
+		if len(accounts) == 1 {
+			account = accounts[0]
+		} else {
+			accountReason = fmt.Sprintf("connection is used by %d accounts and has no fee account", len(accounts))
+		}
+	}
 	for {
 		if ctx.Err() != nil {
 			return
@@ -52,9 +66,10 @@ func (w *worker) intakeFees() {
 			}
 			if fee.ID == "" {
 				w.logFee(fee, "missing fee id or invalid fee status", domain.ErrInvalid)
+				w.reportFeeSkip(fee, "missing fee id")
 				return
 			}
-			if !w.intakeFee(ctx, reader, fee) {
+			if !w.intakeFee(ctx, reader, fee, account, accountReason) {
 				return
 			}
 			w.feeCursor = fee.ID
@@ -73,52 +88,80 @@ func (w *worker) intakeFees() {
 	}
 }
 
-func (w *worker) intakeFee(ctx context.Context, reader FeeReader, fee Fee) bool {
+func (w *worker) intakeFee(ctx context.Context, reader FeeReader, fee Fee, account domain.AccountID, accountReason string) bool {
 	if fee.Status == FeeNotApplicable {
 		w.logFee(fee, fee.Detail, nil)
-		return true
+		return w.reportFeeSkip(fee, fee.Detail)
 	}
 	if fee.Status != FeeExecuted {
 		w.logFee(fee, "missing fee id or invalid fee status", domain.ErrInvalid)
-		return true
+		return w.reportFeeSkip(fee, "invalid fee status")
 	}
-	accesses, err := w.r.store.ListTradingAccessForConnection(ctx, w.connection.ExternalID)
+	id := domain.ExternalID("trading:" + w.connection.ExternalID.String() + ":fee:" + fee.ID)
+	page, err := w.r.store.ListAdjustmentRows(ctx, store.AdjustmentListFilter{
+		ExternalID: id,
+		Page:       store.PageSpec{Limit: 1},
+	})
 	if err != nil {
-		w.logFee(fee, "read connection access", err)
+		w.logFee(fee, "check fee adjustment external id", err)
 		return false
 	}
-	accounts := make(map[domain.AccountID]struct{})
-	for _, access := range accesses {
-		accounts[access.Account] = struct{}{}
+	if len(page.Rows) > 0 {
+		if page.Rows[0].Accepted != nil {
+			return true
+		}
+		return w.reportFeeSkip(fee, "rejected by the core")
 	}
-	if len(accounts) != 1 {
-		w.logFee(fee, fmt.Sprintf("connection is used by %d accounts", len(accounts)), nil)
-		return true
+	if account == "" {
+		w.logFee(fee, accountReason, nil)
+		return w.reportFeeSkip(fee, accountReason)
 	}
 	asset, final, err := w.feeAsset(ctx, reader, fee.Asset)
 	if err != nil {
 		w.logFee(fee, "resolve fee asset", err)
+		if final {
+			return w.reportFeeSkip(fee, "resolve fee asset: "+err.Error())
+		}
 		return final
 	}
 	if ctx.Err() != nil {
 		return false
 	}
-	var account domain.AccountID
-	for account = range accounts {
-	}
-	id := domain.ExternalID("trading:" + w.connection.ExternalID.String() + ":fee:" + fee.ID)
 	err = w.r.adjust(context.WithoutCancel(w.r.ctx), account, id, domain.AdjustmentRequest{
 		Asset:   asset,
 		Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: fee.Amount},
 	})
 	if errors.Is(err, ErrAdjustmentRejected) {
 		w.logFee(fee, "rejected by the core: "+err.Error(), nil)
-		return true
+		return w.reportFeeSkip(fee, "rejected by the core")
 	}
 	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
 		w.logFee(fee, "apply fee adjustment", err)
 		return false
 	}
+	return true
+}
+
+func (w *worker) reportFeeSkip(fee Fee, reason string) bool {
+	w.r.mu.Lock()
+	reported := w.r.feeSkips[w.connection.ExternalID]
+	if _, found := reported[fee.ID]; found {
+		w.r.mu.Unlock()
+		return true
+	}
+	w.r.mu.Unlock()
+
+	if err := w.r.feeSkip(context.WithoutCancel(w.r.ctx), w.connection.ExternalID, fee.ID, reason); err != nil {
+		w.logFee(fee, "report skipped venue fee", err)
+		return false
+	}
+	w.r.mu.Lock()
+	if reported == nil {
+		reported = make(map[string]struct{})
+		w.r.feeSkips[w.connection.ExternalID] = reported
+	}
+	reported[fee.ID] = struct{}{}
+	w.r.mu.Unlock()
 	return true
 }
 

@@ -272,15 +272,15 @@ func TestTradingCredentialsRejectRowMove(t *testing.T) {
 	_, rs := newTestStore(t, WithMasterKey(key))
 
 	first, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider: domain.TradingProviderAlpaca, Label: "first-connection",
-		Mode: domain.TradingModeTest, Credentials: `{"key":"first"}`,
+		Provider: domain.TradingProviderAlpaca, Label: "first-connection", VenueIdentity: "first-account",
+		Mode: domain.TradingModePaper, Credentials: `{"key":"first"}`,
 	})
 	if err != nil {
 		t.Fatalf("CreateTradingConnection(first): %v", err)
 	}
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider: domain.TradingProviderAlpaca, Label: "second-connection",
-		Mode: domain.TradingModeTest, Credentials: `{"key":"second"}`,
+		Provider: domain.TradingProviderAlpaca, Label: "second-connection", VenueIdentity: "second-account",
+		Mode: domain.TradingModePaper, Credentials: `{"key":"second"}`,
 	})
 	if err != nil {
 		t.Fatalf("CreateTradingConnection(second): %v", err)
@@ -1042,10 +1042,11 @@ func TestTradingCredentialsSealedRoundTrip(t *testing.T) {
 	_, rs := newTestStore(t, WithMasterKey(key))
 	credentials := `{"key":"trading-secret"}`
 	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider:    domain.TradingProviderAlpaca,
-		Label:       "sealed-trading",
-		Mode:        domain.TradingModeTest,
-		Credentials: credentials,
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "sealed-trading",
+		VenueIdentity: "sealed-account",
+		Mode:          domain.TradingModePaper,
+		Credentials:   credentials,
 	})
 	if err != nil {
 		t.Fatalf("CreateTradingConnection: %v", err)
@@ -1086,10 +1087,11 @@ func TestMigrateWithMasterKeySealsExistingTradingCredentials(t *testing.T) {
 	connection, err := plaintextRealm.CreateTradingConnection(
 		ctx,
 		domain.TradingConnection{
-			Provider:    domain.TradingProviderAlpaca,
-			Label:       "pre-existing-trading",
-			Mode:        domain.TradingModeTest,
-			Credentials: credentials,
+			Provider:      domain.TradingProviderAlpaca,
+			Label:         "pre-existing-trading",
+			VenueIdentity: "existing-account",
+			Mode:          domain.TradingModePaper,
+			Credentials:   credentials,
 		},
 	)
 	if err != nil {

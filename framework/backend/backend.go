@@ -33,6 +33,7 @@ import (
 	"go.openpit.dev/officer/framework/mcp/catalog"
 	"go.openpit.dev/officer/framework/node"
 	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/framework/trading"
 )
 
 // MarketDataRuntime is the live view of the connector manager the backend
@@ -77,12 +78,29 @@ type Status struct {
 type Service struct {
 	node           node.Node
 	md             MarketDataRuntime
+	trading        TradingRuntime
 	registry       *marketdata.Registry
 	signer         fwsigning.Service
 	commands       catalog.Provider
 	lockSettlement LockSettlementPrice
 	marketDataMu   sync.Mutex
+	tradingMu      sync.Mutex
 }
+
+// TradingRuntime is the venue capability and lifecycle seam of the service.
+type TradingRuntime interface {
+	Providers() []trading.Provider
+	CheckAccount(context.Context, domain.TradingConnection) (trading.AccountInfo, error)
+	VerifySymbol(context.Context, domain.TradingConnection, string) (trading.SymbolVerification, error)
+	SearchSymbols(context.Context, domain.TradingConnection, string) ([]trading.SymbolMatch, error)
+	ConnectionStates() map[domain.ExternalID]trading.ConnectionState
+	PreCheck(context.Context, domain.Order, domain.TradingDestination) error
+	Send(context.Context, domain.ExternalID, domain.TradingDestination) (domain.VenueOrder, error)
+	Restart() error
+	Stop()
+}
+
+var _ TradingRuntime = (*trading.Runtime)(nil)
 
 // LockSettlementPrice derives a display settlement price from an opaque engine
 // lock blob.
@@ -99,6 +117,11 @@ func WithMarketDataRegistry(registry *marketdata.Registry) Option {
 			s.registry = registry
 		}
 	}
+}
+
+// WithTradingRuntime wires venue capabilities and configuration restarts.
+func WithTradingRuntime(rt TradingRuntime) Option {
+	return func(s *Service) { s.trading = rt }
 }
 
 // WithMCPCatalogProvider sets the live command catalogue provider used by the

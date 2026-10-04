@@ -32,7 +32,8 @@ func FirstPartyProviders() []fwtrading.Provider {
 func AlpacaProvider() fwtrading.Provider {
 	return fwtrading.Provider{
 		Type: domain.TradingProviderAlpaca, Title: "Alpaca",
-		VenueAccounts: false, VerifiesSymbols: true,
-		Build: NewAlpacaConnector,
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: true,
+		Build:        NewAlpacaConnector,
 	}
 }

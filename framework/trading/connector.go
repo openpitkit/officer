@@ -32,6 +32,12 @@ var ErrRejected = errors.New("trading: venue rejected the order")
 // ErrUnsupported means the connector cannot trade this order or instrument.
 var ErrUnsupported = errors.New("trading: not supported by the connector")
 
+// ErrNotSent means this Send call made no connector send call and left no
+// venue link of its own. The order was not sent by this call. A caller that
+// held the order for this one send may treat it as not sent; an existing link
+// from another send makes cancellation refuse.
+var ErrNotSent = errors.New("order was not handed to the venue")
+
 // ErrAdjustmentRejected means the core rejected a venue fee adjustment. The
 // adjustment id has been consumed; the wrapped error must include the reason.
 var ErrAdjustmentRejected = errors.New("trading: adjustment rejected")
@@ -130,6 +136,33 @@ type Connector interface {
 // refusal wraps ErrRejected or ErrUnsupported.
 type PreChecker interface {
 	PreCheck(ctx context.Context, order Order) error
+}
+
+// AccountInfo is the venue-side account a connection's credentials reach.
+type AccountInfo struct {
+	// Identity is the stable venue account identity, such as Alpaca's
+	// account id.
+	Identity string
+	Status   string
+}
+
+// AccountChecker identifies the account reached without opening a stream.
+type AccountChecker interface {
+	CheckAccount(ctx context.Context) (AccountInfo, error)
+}
+
+// SymbolMatch describes a venue symbol offered for instrument mapping.
+type SymbolMatch struct {
+	Symbol, Name, Class, Exchange string
+	Tradable                      bool
+}
+
+// SymbolSearcher searches venue symbols without opening a stream. An empty
+// trimmed query returns an empty, non-nil slice without contacting the venue.
+// No matches returns an empty slice; only venue or transport failures return
+// an error.
+type SymbolSearcher interface {
+	SearchSymbols(ctx context.Context, query string) ([]SymbolMatch, error)
 }
 
 // SymbolVerifier checks a mapped venue symbol without opening a stream.

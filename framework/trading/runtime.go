@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 )
 
 const (
@@ -45,14 +46,19 @@ type ReportSink func(ctx context.Context, in domain.ExecutionReportInput) error
 // the reject reason, even when the core persisted the rejected record.
 type AdjustmentSink func(ctx context.Context, account domain.AccountID, id domain.ExternalID, req domain.AdjustmentRequest) error
 
+// FeeSkipSink records that a venue fee was skipped and why. The application
+// writes an audit record.
+type FeeSkipSink func(ctx context.Context, connection domain.ExternalID, feeID, reason string) error
+
 // Store is the runtime's subset of store.RealmStore. Its trading methods retain
 // that interface's not-found, conflict and already-exists contracts.
 type Store interface {
 	GetTradingConnection(context.Context, domain.ExternalID) (domain.TradingConnection, bool, error)
+	// GetTradingFeeAccounts reads the fee account and distinct bindings atomically.
+	GetTradingFeeAccounts(context.Context, domain.ExternalID) (domain.AccountID, []domain.AccountID, error)
 	ListTradingConnections(context.Context) ([]domain.TradingConnection, error)
 	FindTradingInstrument(context.Context, domain.ExternalID, string, string) (domain.TradingInstrument, bool, error)
 	ListTradingAccess(context.Context, domain.AccountID) ([]domain.TradingAccess, error)
-	ListTradingAccessForConnection(context.Context, domain.ExternalID) ([]domain.TradingAccess, error)
 	ListTradingInstruments(context.Context, domain.ExternalID) ([]domain.TradingInstrument, error)
 	EarliestVenueOrderTime(context.Context, domain.ExternalID) (time.Time, bool, error)
 	CreateVenueOrder(context.Context, domain.VenueOrder) (domain.VenueOrder, error)
@@ -63,27 +69,37 @@ type Store interface {
 	ListOpenVenueOrders(context.Context, domain.ExternalID) ([]domain.VenueOrder, error)
 	GetOrder(context.Context, domain.ExternalID) (domain.OrderDetail, error)
 	ExecutionReportExists(context.Context, domain.ExternalID) (bool, error)
+	ListAdjustmentRows(context.Context, store.AdjustmentListFilter) (store.AdjustmentListPage, error)
 }
 
 // Runtime owns one serial worker per enabled connection or connection with
 // outstanding orders or any venue link. Disabled connections keep a worker
-// for tracking and fee intake only, without new sends. Connections must be
-// configured before Start.
+// for tracking and fee intake only, without new sends. Start reads the current
+// store state; Restart applies connection changes after stopping all workers.
+// Lifecycle calls are serialized, and Stop leaves the runtime restartable.
 type Runtime struct {
 	registry *Registry
 	store    Store
 	sink     ReportSink
 	adjust   AdjustmentSink
+	feeSkip  FeeSkipSink
 	logger   *slog.Logger
 
-	mu       sync.Mutex
-	started  bool
-	stopped  bool
-	ctx      context.Context
-	cancel   context.CancelFunc
-	workers  map[domain.ExternalID]*worker
-	wg       sync.WaitGroup
-	stopDone chan struct{}
+	lifecycleMu sync.Mutex
+	mu          sync.Mutex
+	started     bool
+	baseCtx     context.Context
+	ctx         context.Context
+	cancel      context.CancelFunc
+	workers     map[domain.ExternalID]*worker
+	feeSkips    map[domain.ExternalID]map[string]struct{}
+	wg          sync.WaitGroup
+}
+
+// ConnectionState reports why a held worker cannot reach its venue.
+// Unavailable is empty while the worker is available.
+type ConnectionState struct {
+	Unavailable string
 }
 
 type worker struct {
@@ -112,14 +128,15 @@ type taskResult struct {
 	err  error
 }
 
-// NewRuntime requires a registry, durable store, both core sinks and a logger.
-func NewRuntime(registry *Registry, st Store, sink ReportSink, adjust AdjustmentSink, logger *slog.Logger) (*Runtime, error) {
-	if registry == nil || st == nil || sink == nil || adjust == nil || logger == nil {
-		return nil, fmt.Errorf("trading: registry, store, report sink, adjustment sink and logger required: %w", domain.ErrInvalid)
+// NewRuntime requires a registry, durable store, both core sinks, a fee skip
+// sink and a logger.
+func NewRuntime(registry *Registry, st Store, sink ReportSink, adjust AdjustmentSink, feeSkip FeeSkipSink, logger *slog.Logger) (*Runtime, error) {
+	if registry == nil || st == nil || sink == nil || adjust == nil || feeSkip == nil || logger == nil {
+		return nil, fmt.Errorf("trading: registry, store, report sink, adjustment sink, fee skip sink and logger required: %w", domain.ErrInvalid)
 	}
 	return &Runtime{
-		registry: registry, store: st, sink: sink, adjust: adjust, logger: logger,
-		workers: make(map[domain.ExternalID]*worker), stopDone: make(chan struct{}),
+		registry: registry, store: st, sink: sink, adjust: adjust, feeSkip: feeSkip, logger: logger,
+		feeSkips: make(map[domain.ExternalID]map[string]struct{}),
 	}, nil
 }
 
@@ -127,13 +144,23 @@ func NewRuntime(registry *Registry, st Store, sink ReportSink, adjust Adjustment
 // orders or any venue link. A disabled connection's worker only tracks orders
 // and takes in fees; it sends no new orders.
 // Connector failures isolate one connection; only store failures abort startup.
-// A runtime can be started once, and cannot be started after Stop.
+// Start is valid again after Stop; starting a running runtime wraps
+// ErrConflict. ctx is retained for Restart and must be process-scoped, not
+// request-scoped.
 func (r *Runtime) Start(ctx context.Context) error {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	return r.start(ctx)
+}
+
+func (r *Runtime) start(ctx context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.started || r.stopped {
-		return fmt.Errorf("trading: runtime already started or stopped: %w", domain.ErrConflict)
+	if r.started {
+		r.mu.Unlock()
+		return fmt.Errorf("trading: runtime already started: %w", domain.ErrConflict)
 	}
+	r.mu.Unlock()
+	r.baseCtx = ctx
 	connections, err := r.store.ListTradingConnections(ctx)
 	if err != nil {
 		return err
@@ -155,8 +182,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 			}
 		}
 	}
-	r.started = true
-	r.ctx, r.cancel = context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	workers := make(map[domain.ExternalID]*worker)
 	for _, c := range connections {
 		if !c.Enabled && len(open[c.ExternalID]) == 0 && !traded[c.ExternalID] {
 			continue
@@ -165,13 +192,13 @@ func (r *Runtime) Start(ctx context.Context) error {
 			r: r, connection: c, tasks: make(chan task),
 			pending: make(map[string]struct{}),
 		}
-		r.workers[c.ExternalID] = w
+		workers[c.ExternalID] = w
 		for _, link := range open[c.ExternalID] {
 			w.pending[link.ClientOrderID] = struct{}{}
 		}
 		w.connector, err = r.registry.Build(c)
 		if err == nil {
-			w.events, err = w.connector.Subscribe(r.ctx)
+			w.events, err = w.connector.Subscribe(runCtx)
 			if err == nil && w.events == nil {
 				err = errors.New("trading: Subscribe returned no event channel")
 			}
@@ -180,36 +207,83 @@ func (r *Runtime) Start(ctx context.Context) error {
 			w.unavailable = err
 			r.logger.Error("trading connection unavailable",
 				"connection", c.ExternalID, "error", w.unavailable)
-			continue
 		}
-		r.wg.Add(1)
-		go w.run()
+	}
+	r.mu.Lock()
+	r.ctx, r.cancel, r.workers = runCtx, cancel, workers
+	r.started = true
+	r.mu.Unlock()
+	for _, w := range workers {
+		if w.unavailable == nil {
+			r.wg.Add(1)
+			go w.run()
+		}
 	}
 	return nil
 }
 
-// Stop cancels workers, waits for their current task, and closes every built
-// connector. It is idempotent, including concurrent calls.
+// Stop cancels connector calls, waits for current tasks and their durable
+// writes, then closes every built connector. It is idempotent, including
+// concurrent calls and calls before Start. A later Start or Restart creates
+// fresh workers.
 func (r *Runtime) Stop() {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	r.stop()
+}
+
+func (r *Runtime) stop() {
 	r.mu.Lock()
-	if r.stopped {
-		done := r.stopDone
+	if !r.started {
 		r.mu.Unlock()
-		<-done
 		return
 	}
-	r.stopped = true
-	if r.cancel != nil {
-		r.cancel()
-	}
+	r.started = false
+	r.cancel()
+	workers := r.workers
+	r.workers = nil
 	r.mu.Unlock()
 	r.wg.Wait()
-	for _, w := range r.workers {
+	for _, w := range workers {
 		if w.connector != nil {
 			w.connector.Close()
 		}
 	}
-	close(r.stopDone)
+}
+
+// Restart stops all workers, then starts from the current store state using the
+// last Start context. Calling it before Start returns domain.ErrConflict.
+// A failed Restart leaves the runtime stopped.
+func (r *Runtime) Restart() error {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	if r.baseCtx == nil {
+		return fmt.Errorf("trading: runtime has never started: %w", domain.ErrConflict)
+	}
+	r.stop()
+	if err := r.start(r.baseCtx); err != nil {
+		return fmt.Errorf("trading: restart: %w", err)
+	}
+	return nil
+}
+
+// ConnectionStates snapshots every worker held by the running generation.
+// Connections without workers and stopped runtimes are absent from the map.
+func (r *Runtime) ConnectionStates() map[domain.ExternalID]ConnectionState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.started || r.ctx.Err() != nil {
+		return map[domain.ExternalID]ConnectionState{}
+	}
+	states := make(map[domain.ExternalID]ConnectionState, len(r.workers))
+	for id, w := range r.workers {
+		state := ConnectionState{}
+		if w.unavailable != nil {
+			state.Unavailable = w.unavailable.Error()
+		}
+		states[id] = state
+	}
+	return states
 }
 
 // PreCheck checks a draft's destination and optional venue rules, without
@@ -225,7 +299,13 @@ func (r *Runtime) Send(ctx context.Context, order domain.ExternalID, dest domain
 	return r.submit(ctx, task{order: order, dest: dest})
 }
 
-func (r *Runtime) submit(ctx context.Context, t task) (domain.VenueOrder, error) {
+func (r *Runtime) submit(ctx context.Context, t task) (link domain.VenueOrder, err error) {
+	handedOff := false
+	defer func() {
+		if err != nil && !t.preCheck && !handedOff {
+			err = fmt.Errorf("%w: %w", ErrNotSent, err)
+		}
+	}()
 	if err := domain.ValidateTradingDestination(t.dest); err != nil {
 		return domain.VenueOrder{}, err
 	}
@@ -238,7 +318,7 @@ func (r *Runtime) submit(ctx context.Context, t task) (domain.VenueOrder, error)
 	}
 	r.mu.Lock()
 	w, ok := r.workers[t.dest.Connection]
-	if !r.started || r.stopped || r.ctx.Err() != nil {
+	if !r.started || r.ctx.Err() != nil {
 		r.mu.Unlock()
 		return domain.VenueOrder{}, fmt.Errorf("trading: runtime is not running: %w", domain.ErrConflict)
 	}
@@ -268,6 +348,7 @@ func (r *Runtime) submit(ctx context.Context, t task) (domain.VenueOrder, error)
 		return domain.VenueOrder{}, fmt.Errorf("trading: runtime stopped: %w", domain.ErrConflict)
 	case w.tasks <- t:
 	}
+	handedOff = true
 	select {
 	case <-ctx.Done():
 		return domain.VenueOrder{}, ctx.Err()
@@ -278,17 +359,37 @@ func (r *Runtime) submit(ctx context.Context, t task) (domain.VenueOrder, error)
 	}
 }
 
+// Providers returns the registered connector providers sorted by Type.
+func (r *Runtime) Providers() []Provider { return r.registry.Providers() }
+
+// CheckAccount checks a stored or draft connection without a running worker.
+func (r *Runtime) CheckAccount(ctx context.Context, connection domain.TradingConnection) (AccountInfo, error) {
+	result, supported, err := r.registry.CheckAccount(ctx, connection)
+	if err != nil {
+		return AccountInfo{}, err
+	}
+	if !supported {
+		return AccountInfo{}, ErrUnsupported
+	}
+	return result, nil
+}
+
+// SearchSymbols searches the supplied connection snapshot without a worker.
+func (r *Runtime) SearchSymbols(ctx context.Context, connection domain.TradingConnection, query string) ([]SymbolMatch, error) {
+	result, supported, err := r.registry.SearchSymbols(ctx, connection, query)
+	if err != nil {
+		return nil, err
+	}
+	if !supported {
+		return nil, ErrUnsupported
+	}
+	return result, nil
+}
+
 // VerifySymbol builds a fresh connector; unsupported verification returns
 // ErrUnsupported. It does not depend on a running worker or enabled sends.
-func (r *Runtime) VerifySymbol(ctx context.Context, connection domain.ExternalID, external string) (SymbolVerification, error) {
-	c, found, err := r.store.GetTradingConnection(ctx, connection)
-	if err != nil {
-		return SymbolVerification{}, err
-	}
-	if !found {
-		return SymbolVerification{}, fmt.Errorf("trading: connection %s: %w", connection, domain.ErrNotFound)
-	}
-	result, supported, err := r.registry.VerifySymbol(ctx, c, external)
+func (r *Runtime) VerifySymbol(ctx context.Context, connection domain.TradingConnection, external string) (SymbolVerification, error) {
+	result, supported, err := r.registry.VerifySymbol(ctx, connection, external)
 	if err != nil {
 		return SymbolVerification{}, err
 	}
@@ -449,7 +550,13 @@ func reportID(coid, suffix string) domain.ExternalID {
 	return domain.ExternalID("trading:" + coid + ":" + suffix)
 }
 
-func (w *worker) send(id domain.ExternalID, dest domain.TradingDestination) (domain.VenueOrder, error) {
+func (w *worker) send(id domain.ExternalID, dest domain.TradingDestination) (link domain.VenueOrder, err error) {
+	linked := false
+	defer func() {
+		if err != nil && !linked {
+			err = fmt.Errorf("%w: %w", ErrNotSent, err)
+		}
+	}()
 	// Only Stop cancels the worker. Accepted tasks do not use the caller ctx.
 	ctx := context.WithoutCancel(w.r.ctx)
 	detail, err := w.r.store.GetOrder(ctx, id)
@@ -458,6 +565,9 @@ func (w *worker) send(id domain.ExternalID, dest domain.TradingDestination) (dom
 	}
 	mapped, err := w.checkDestination(w.r.ctx, detail.Order, dest)
 	if err != nil {
+		if runErr := w.r.ctx.Err(); runErr != nil && errors.Is(err, runErr) {
+			return domain.VenueOrder{}, fmt.Errorf("trading: runtime stopped: %w: %w", err, domain.ErrConflict)
+		}
 		return domain.VenueOrder{}, err
 	}
 	detail, err = w.r.store.GetOrder(ctx, id)
@@ -472,13 +582,14 @@ func (w *worker) send(id domain.ExternalID, dest domain.TradingDestination) (dom
 		return domain.VenueOrder{}, err
 	}
 	mapped.ClientOrderID = string(coid)
-	link, err := w.r.store.CreateVenueOrder(ctx, domain.VenueOrder{
+	link, err = w.r.store.CreateVenueOrder(ctx, domain.VenueOrder{
 		Order: id, Connection: dest.Connection, VenueAccount: dest.VenueAccount,
 		Route: dest.Route, ClientOrderID: string(coid),
 	})
 	if err != nil {
 		return domain.VenueOrder{}, fmt.Errorf("trading: create venue link: %w", err)
 	}
+	linked = true
 	if err := w.r.sink(ctx, domain.ExecutionReportInput{
 		ExternalID: reportID(link.ClientOrderID, "claim"), Order: id,
 		OrderStatus: domain.OrderStatusCommitted,
@@ -486,6 +597,8 @@ func (w *worker) send(id domain.ExternalID, dest domain.TradingDestination) (dom
 		if deleteErr := w.r.store.DeleteVenueOrder(ctx, id); deleteErr != nil {
 			w.pending[link.ClientOrderID] = struct{}{}
 			w.log(slog.LevelError, link.ClientOrderID, "remove failed claim link", deleteErr)
+		} else {
+			linked = false
 		}
 		return link, err
 	}
@@ -498,6 +611,8 @@ func (w *worker) send(id domain.ExternalID, dest domain.TradingDestination) (dom
 		if deleteErr := w.r.store.DeleteVenueOrder(ctx, id); deleteErr != nil {
 			w.pending[link.ClientOrderID] = struct{}{}
 			w.log(slog.LevelError, link.ClientOrderID, "remove ineligible claim link", deleteErr)
+		} else {
+			linked = false
 		}
 		return link, err
 	}

@@ -153,6 +153,23 @@ func TestCatalogParity(t *testing.T) {
 		},
 	}
 
+	want = append(want,
+		catalog.CatalogCommand{Name: "send_paper_order", Title: "Send paper order", AgentDescription: "Check, hold and send an order to a paper venue.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "get_trading", Title: "Get trading", AgentDescription: "Read trading providers and connections.", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
+		catalog.CatalogCommand{Name: "create_trading_connection", Title: "Create trading connection", AgentDescription: "Create a trading connection with write-only credentials.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "update_trading_connection", Title: "Update trading connection", AgentDescription: "Update a trading connection label or write-only credentials.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "set_trading_connection_enabled", Title: "Set trading connection enabled", AgentDescription: "Enable or disable a trading connection.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "check_trading_connection", Title: "Check trading connection", AgentDescription: "Check the venue identity and status of a trading connection.", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
+		catalog.CatalogCommand{Name: "set_trading_instrument", Title: "Set trading instrument", AgentDescription: "Set a trading instrument mapping.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "delete_trading_instrument", Title: "Delete trading instrument", AgentDescription: "Delete a trading instrument mapping.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "verify_trading_symbol", Title: "Verify trading symbol", AgentDescription: "Verify whether a venue symbol exists and is tradable.", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
+		catalog.CatalogCommand{Name: "search_trading_symbols", Title: "Search trading symbols", AgentDescription: "Search venue symbols for a trading connection.", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
+		catalog.CatalogCommand{Name: "grant_trading_access", Title: "Grant trading access", AgentDescription: "Grant an Officer account access to a trading connection.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "revoke_trading_access", Title: "Revoke trading access", AgentDescription: "Revoke an Officer account access to a trading connection.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "set_trading_fee_account", Title: "Set trading fee account", AgentDescription: "Set the Officer account receiving unlinked venue fees.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "clear_trading_fee_account", Title: "Clear trading fee account", AgentDescription: "Clear the Officer account receiving unlinked venue fees.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		catalog.CatalogCommand{Name: "list_trading_destinations", Title: "List trading destinations", AgentDescription: "List the trading destinations available to an Officer account.", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
+	)
 	if got := openCatalog().All(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("catalog parity mismatch\nwant: %#v\ngot:  %#v", want, got)
 	}
@@ -180,6 +197,7 @@ func TestImplementedDescriptorOrder(t *testing.T) {
 		"confirm_execution",
 		"cancel",
 	}
+	want = append(want, "send_paper_order", "get_trading", "create_trading_connection", "update_trading_connection", "set_trading_connection_enabled", "check_trading_connection", "set_trading_instrument", "delete_trading_instrument", "verify_trading_symbol", "search_trading_symbols", "grant_trading_access", "revoke_trading_access", "set_trading_fee_account", "clear_trading_fee_account", "list_trading_destinations")
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("implemented tool order mismatch\nwant: %#v\ngot:  %#v", want, got)
 	}

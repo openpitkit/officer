@@ -65,6 +65,9 @@ type fakeVenue struct {
 	sends        []trading.Order
 	lookups      int
 	closes       int
+	builds       int
+	active       int
+	maxActive    int
 	reports      []domain.ExecutionReportInput
 	sendErr      error
 	preErr       error
@@ -84,6 +87,11 @@ func (v *fakeVenue) build(domain.TradingConnection) (trading.Connector, error) {
 	c := &fakeConnector{venue: v, events: make(chan trading.Event, 256)}
 	v.mu.Lock()
 	v.current = c
+	v.builds++
+	v.active++
+	if v.active > v.maxActive {
+		v.maxActive = v.active
+	}
 	v.mu.Unlock()
 	return c, nil
 }
@@ -102,6 +110,7 @@ func (c *fakeConnector) Close() {
 	c.closeEvents()
 	c.venue.mu.Lock()
 	c.venue.closes++
+	c.venue.active--
 	c.venue.mu.Unlock()
 }
 func (c *fakeConnector) PreCheck(ctx context.Context, order trading.Order) error {
@@ -225,7 +234,7 @@ func (f *fixture) fund(account domain.AccountID, amount string) {
 func (f *fixture) addConnection(provider, label string, access bool) domain.TradingConnection {
 	f.t.Helper()
 	c, err := f.st.CreateTradingConnection(testCtx, domain.TradingConnection{
-		Provider: provider, Label: label, Mode: domain.TradingModeTest,
+		Provider: provider, Label: label, Mode: domain.TradingModePaper, VenueIdentity: label,
 		Credentials: "{\"key\":\"do-not-log-key\",\"secret\":\"do-not-log-secret\"}", Enabled: true,
 	})
 	must(f.t, err)
@@ -233,7 +242,7 @@ func (f *fixture) addConnection(provider, label string, access bool) domain.Trad
 		Connection: c.ExternalID, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
 	}))
 	if access {
-		must(f.t, f.st.AddTradingAccess(testCtx, domain.TradingAccess{Account: "desk", Connection: c.ExternalID}))
+		must(f.t, f.st.PutTradingAccess(testCtx, domain.TradingAccess{Account: "desk", Connection: c.ExternalID}))
 	}
 	return c
 }
@@ -252,13 +261,22 @@ func (f *fixture) adjustmentSink(ctx context.Context, account domain.AccountID, 
 	return err
 }
 
+func (f *fixture) feeSkipSink(ctx context.Context, connection domain.ExternalID, feeID, reason string) error {
+	return f.n.RecordVenueFeeSkipped(ctx, connection, feeID, reason, auth.SystemCaller())
+}
+
 func (f *fixture) start() {
 	f.t.Helper()
-	r, err := trading.NewRuntime(f.registry, f.st, f.sink, f.adjustmentSink,
+	f.newRuntime()
+	must(f.t, f.runtime.Start(testCtx))
+}
+
+func (f *fixture) newRuntime() {
+	f.t.Helper()
+	r, err := trading.NewRuntime(f.registry, f.st, f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(f.t, err)
 	f.runtime = r
-	must(f.t, r.Start(testCtx))
 	f.t.Cleanup(r.Stop)
 }
 func (f *fixture) draft(quantity string) domain.Order {

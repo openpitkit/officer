@@ -347,10 +347,10 @@ func TestUpdateAccountPreservesStableIdentityAndDependents(t *testing.T) {
 
 func TestDeleteAccountReportsAndCascadesTradingAccess(t *testing.T) {
 	ctx, rs, connection := seedTradingFixtures(t)
-	if err := rs.AddTradingAccess(ctx, domain.TradingAccess{
+	if err := rs.PutTradingAccess(ctx, domain.TradingAccess{
 		Account: "acc-1", Connection: connection.ExternalID,
 	}); err != nil {
-		t.Fatalf("AddTradingAccess: %v", err)
+		t.Fatalf("PutTradingAccess: %v", err)
 	}
 
 	err := rs.DeleteAccount(ctx, "acc-1", false)

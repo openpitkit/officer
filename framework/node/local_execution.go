@@ -233,6 +233,12 @@ func (n *localNode) applyExecutionReport(
 		accountID: source,
 	}
 	begin := func(context.Context) (*executionReportChainState, error) {
+		if caller.Source != domain.SourceSystem {
+			if err := n.requireNoVenueOrder(ctx, in.Order); err != nil {
+				state.err = err
+				return nil, err
+			}
+		}
 		detail, err := n.realm.GetOrder(ctx, in.Order)
 		if err != nil {
 			state.err = fmt.Errorf("get execution report order: %w", err)
@@ -484,6 +490,12 @@ func (n *localNode) recordWorkflowExecutionReport(
 	}
 	state := &workflowExecutionReportChainState{ctx: ctx, in: in}
 	begin := func(context.Context) (*workflowExecutionReportChainState, error) {
+		if caller.Source != domain.SourceSystem {
+			if err := n.requireNoVenueOrder(ctx, in.Order); err != nil {
+				state.err = err
+				return nil, err
+			}
+		}
 		detail, err := n.realm.GetOrder(ctx, in.Order)
 		if err != nil {
 			state.err = fmt.Errorf("get execution report order: %w", err)

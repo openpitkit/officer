@@ -143,6 +143,70 @@ func TestServerToolSnapshot(t *testing.T) {
 				"Protected and disabled by default.",
 		},
 	}
+	want = append(want,
+		struct {
+			name        string
+			description string
+		}{name: "send_paper_order", description: "Check, hold and send an order to a paper venue. Returns the approval and " +
+			"acknowledged, refused or unknown send outcome. Mutating, protected and " +
+			"disabled by default. send_live_order comes with the live-trading token."},
+		struct {
+			name        string
+			description string
+		}{name: "get_trading", description: "Read trading providers and connections. Read-only - credentials are never exposed."},
+		struct {
+			name        string
+			description string
+		}{name: "create_trading_connection", description: "Create a trading connection with write-only credentials. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "update_trading_connection", description: "Update a trading connection label or write-only credentials. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "set_trading_connection_enabled", description: "Enable or disable a trading connection. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "check_trading_connection", description: "Check the venue identity and status of a trading connection. Read-only - credentials are never exposed."},
+		struct {
+			name        string
+			description string
+		}{name: "set_trading_instrument", description: "Set a trading instrument mapping. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "delete_trading_instrument", description: "Delete a trading instrument mapping. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "verify_trading_symbol", description: "Verify whether a venue symbol exists and is tradable. Read-only - credentials are never exposed."},
+		struct {
+			name        string
+			description string
+		}{name: "search_trading_symbols", description: "Search venue symbols for a trading connection. Read-only - credentials are never exposed."},
+		struct {
+			name        string
+			description string
+		}{name: "grant_trading_access", description: "Grant an Officer account access to a trading connection. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "revoke_trading_access", description: "Revoke an Officer account access to a trading connection. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "set_trading_fee_account", description: "Set the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "clear_trading_fee_account", description: "Clear the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default."},
+		struct {
+			name        string
+			description string
+		}{name: "list_trading_destinations", description: "List the trading destinations available to an Officer account. Read-only - credentials are never exposed."},
+	)
 	if len(list.Tools) != len(want) {
 		t.Fatalf("tool count: want %d got %d", len(want), len(list.Tools))
 	}
@@ -150,6 +214,99 @@ func TestServerToolSnapshot(t *testing.T) {
 	for _, got := range list.Tools {
 		gotByName[got.Name] = got
 	}
+	t.Run("paper-send-schema", func(t *testing.T) {
+		type schema struct {
+			Type        any                `json:"type"`
+			Description string             `json:"description"`
+			Required    []string           `json:"required"`
+			Properties  map[string]*schema `json:"properties"`
+		}
+		raw, err := json.Marshal(gotByName["send_paper_order"].InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var input schema
+		if err := json.Unmarshal(raw, &input); err != nil {
+			t.Fatal(err)
+		}
+		dest := input.Properties["destination"]
+		if dest == nil || dest.Type != "object" || dest.Properties["route"] == nil || dest.Properties["route"].Type != "object" {
+			t.Fatal("send destination.route must advertise an object")
+		}
+		for field, property := range dest.Properties {
+			if property.Description == "" {
+				t.Errorf("send destination.%s has no description", field)
+			}
+		}
+		for _, name := range input.Required {
+			if name == "id" || name == "price" {
+				t.Fatalf("send requires optional %s", name)
+			}
+		}
+		if len(dest.Required) != 1 || dest.Required[0] != "route" {
+			t.Fatal("send must require route only in destination")
+		}
+		if _, ok := gotByName["send_live_order"]; ok {
+			t.Fatal("live send must wait for the live-trading token")
+		}
+	})
+	t.Run("venue-route-schema", func(t *testing.T) {
+		type schema struct {
+			Type       any                `json:"type"`
+			Properties map[string]*schema `json:"properties"`
+		}
+		raw, err := json.Marshal(gotByName["get_order"].OutputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output schema
+		if err := json.Unmarshal(raw, &output); err != nil {
+			t.Fatal(err)
+		}
+		venue := output.Properties["venueOrder"]
+		if venue == nil || venue.Properties["route"] == nil || venue.Properties["route"].Type != "object" {
+			t.Fatalf("get_order venueOrder.route must advertise an object: %s", raw)
+		}
+	})
+	t.Run("trading-input-descriptions", func(t *testing.T) {
+		for name, tool := range gotByName {
+			if !strings.Contains(name, "trading") && name != "send_paper_order" {
+				continue
+			}
+			raw, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var input struct {
+				Properties map[string]struct {
+					Description string `json:"description"`
+				} `json:"properties"`
+			}
+			if err := json.Unmarshal(raw, &input); err != nil {
+				t.Fatal(err)
+			}
+			for field, property := range input.Properties {
+				if property.Description == "" {
+					t.Errorf("%s.%s has no input description", name, field)
+				}
+				if field == "credentials" && (!strings.Contains(property.Description, "rite-only") || !strings.Contains(property.Description, "{apiKey, apiSecret}")) {
+					t.Errorf("%s credentials must describe write-only Alpaca credentials", name)
+				}
+				if name == "update_trading_connection" && (field == "label" || field == "credentials") && !strings.Contains(property.Description, "omitted keeps the stored value") {
+					t.Errorf("%s.%s must describe omitted settings", name, field)
+				}
+				if field == "mode" && (!strings.Contains(property.Description, "paper") || !strings.Contains(property.Description, "live")) {
+					t.Errorf("%s.mode must describe paper and live", name)
+				}
+				if name == "list_trading_destinations" && field == "mode" && !strings.Contains(property.Description, "omitted lists every mode") {
+					t.Error("destination mode must describe listing every mode")
+				}
+				if field == "id" && !strings.Contains(property.Description, "store assign") {
+					t.Errorf("%s.id must describe store assignment", name)
+				}
+			}
+		}
+	})
 	for _, w := range want {
 		got, ok := gotByName[w.name]
 		if !ok {
@@ -164,7 +321,7 @@ func TestServerToolSnapshot(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"get_order", "submit_order", "submit_drop_copy_order", "confirm_execution", "cancel",
+		"get_order", "submit_order", "send_paper_order", "submit_drop_copy_order", "confirm_execution", "cancel",
 		"set_market_data_instrument",
 	} {
 		tool := gotByName[name]

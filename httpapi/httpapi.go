@@ -151,6 +151,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, log
 	register(registry, "signing.config.get", http.MethodGet, "/signing/config", handleGetSigningConfig(svc))
 	register(registry, "signing.config.put", http.MethodPut, "/signing/config", handleSetSigningConfig(svc))
 	register(registry, "orders.submit-token.post", http.MethodPost, "/orders/submit", handleSubmitOrderToken(svc))
+	register(registry, "orders.send-paper.post", http.MethodPost, "/orders/send-paper", handleSendPaperOrder(svc))
 	register(registry, "orders.submit-drop-copy.post", http.MethodPost, "/orders/drop-copy/submit", handleSubmitDropCopyOrder(svc))
 	register(registry, "orders.confirm.post", http.MethodPost, "/orders/{id}/confirm", handleConfirmExecution(svc))
 	register(registry, "orders.cancel.post", http.MethodPost, "/orders/{id}/cancel", handleCancelOrder(svc))
@@ -166,6 +167,21 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, log
 	register(registry, "market-data.instruments.delete", http.MethodDelete, "/market-data/instances/{id}/instruments", handleDeleteMarketDataInstrument(svc))
 	register(registry, "market-data.verify-symbol.post", http.MethodPost, "/market-data/instances/{id}/verify-symbol", handleVerifyMarketDataSymbol(svc))
 	register(registry, "market-data.search-symbols.post", http.MethodPost, "/market-data/instances/{id}/search-symbols", handleSearchMarketDataSymbols(svc))
+
+	register(registry, "trading.list.get", http.MethodGet, "/trading", handleGetTrading(svc))
+	register(registry, "trading.connections.create.post", http.MethodPost, "/trading/connections", handleCreateTradingConnection(svc))
+	register(registry, "trading.connections.settings.put", http.MethodPut, "/trading/connections/{id}/settings", handleUpdateTradingConnectionSettings(svc))
+	register(registry, "trading.connections.enabled.put", http.MethodPut, "/trading/connections/{id}/enabled", handleSetTradingConnectionEnabled(svc))
+	register(registry, "trading.connections.check.post", http.MethodPost, "/trading/connections/{id}/check", handleCheckTradingConnection(svc))
+	register(registry, "trading.instruments.upsert.put", http.MethodPut, "/trading/connections/{id}/instruments", handleUpsertTradingInstrument(svc))
+	register(registry, "trading.instruments.delete", http.MethodDelete, "/trading/connections/{id}/instruments", handleDeleteTradingInstrument(svc))
+	register(registry, "trading.verify-symbol.post", http.MethodPost, "/trading/connections/{id}/verify-symbol", handleVerifyTradingSymbol(svc))
+	register(registry, "trading.search-symbols.post", http.MethodPost, "/trading/connections/{id}/search-symbols", handleSearchTradingSymbols(svc))
+	register(registry, "trading.access.put", http.MethodPut, "/trading/connections/{id}/access", handlePutTradingAccess(svc))
+	register(registry, "trading.access.delete", http.MethodDelete, "/trading/connections/{id}/access", handleRemoveTradingAccess(svc))
+	register(registry, "trading.fee-account.put", http.MethodPut, "/trading/connections/{id}/fee-account", handleSetTradingFeeAccount(svc))
+	register(registry, "trading.fee-account.delete", http.MethodDelete, "/trading/connections/{id}/fee-account", handleDeleteTradingFeeAccount(svc))
+	register(registry, "accounts.trading-destinations.list.get", http.MethodGet, "/accounts/{code}/trading-destinations", handleListTradingDestinations(svc))
 }
 
 // NewRouteRegistry builds the application's v1 route registry.

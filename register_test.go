@@ -30,12 +30,14 @@ import (
 	"testing"
 	"testing/fstest"
 
+	openpit "go.openpit.dev/openpit"
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 
 	frameworkapp "go.openpit.dev/officer/framework/app"
@@ -51,6 +53,111 @@ import (
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 )
+
+type venueReportEngine struct {
+	*fakeEngine
+	async *asyncengine.AsyncEngine
+}
+
+func (e *venueReportEngine) AsyncEngine() *asyncengine.AsyncEngine {
+	return e.async
+}
+
+func (*venueReportEngine) AccountID(domain.AccountID) (param.AccountID, error) {
+	return param.NewAccountIDFromUint64(1), nil
+}
+
+type linkBeforeReportNode struct {
+	node.Node
+	realm      store.RealmStore
+	connection domain.ExternalID
+}
+
+func (n *linkBeforeReportNode) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput, caller domain.Caller) (engine.ExecutionReportResult, error) {
+	if _, err := n.realm.CreateVenueOrder(ctx, domain.VenueOrder{
+		Order: in.Order, Connection: n.connection, ClientOrderID: "client-order-1", Route: "{}",
+	}); err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	return n.Node.ApplyExecutionReport(ctx, in, caller)
+}
+
+func TestManualReportRefusesVenueLinkCreatedAfterServiceEntry(t *testing.T) {
+	ctx := context.Background()
+	st, err := sqlite.New(filepath.Join(t.TempDir(), "officer.db"), domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	driver, err := openpit.NewEngineBuilder().AccountSync().Builtin(policies.BuildOrderValidation()).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	async, err := asyncengine.NewBuilder(driver).WithStopUnderlying(driver.Stop).Dynamic().MaxQueues(0).Build()
+	if err != nil {
+		driver.Stop()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = async.StopGraceful(ctx) })
+	n, _, err := node.NewLocalNode(ctx, domain.DefaultRealm, st, func(engine.Snapshot) (engine.Engine, error) {
+		return &venueReportEngine{fakeEngine: &fakeEngine{running: true, sink: &fakeSink{}}, async: async}, nil
+	}, failOnFatal(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = n.Close() })
+	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := domain.Caller{Source: domain.SourceAPI, Principal: "operator"}
+	for _, code := range []string{"AAPL", "USD"} {
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := realm.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatal(err)
+	}
+	order, err := realm.CreateOrder(ctx, domain.Order{
+		Account: "acc-1", Source: caller.Source, Principal: caller.Principal,
+		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
+		Status: domain.OrderStatusSubmitted, DropCopy: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := realm.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider: "venue", Label: "Paper", Mode: domain.TradingModePaper,
+		VenueIdentity: "venue-1", Credentials: "{}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := backend.New(&linkBeforeReportNode{Node: n, realm: realm, connection: connection.ExternalID}, nil, nil, func([]byte, domain.Order) (string, error) {
+		return "", errUnexpectedOrderChain
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = s.ApplyExecutionReport(auth.ContextWithCaller(ctx, caller), domain.ExecutionReportInput{
+		Order: order.ExternalID, OrderStatus: domain.OrderStatusAccepted,
+	})
+	if !errors.Is(err, domain.ErrVenueOrderManaged) {
+		t.Fatalf("manual report after venue link = %v", err)
+	}
+	if _, linked, err := realm.GetVenueOrder(ctx, order.ExternalID); err != nil || !linked {
+		t.Fatalf("interleaving did not create venue link: %v", err)
+	}
+	detail, err := realm.GetOrder(ctx, order.ExternalID)
+	if err != nil || detail.Order.Status != order.Status || len(detail.Events) != 0 || len(detail.Trades) != 0 {
+		t.Fatalf("refused manual report changed order: %v", err)
+	}
+}
 
 func TestRegisterTradingComposition(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -70,7 +177,7 @@ func TestRegisterTradingComposition(t *testing.T) {
 	// Invalid credentials exercise the registered constructor without
 	// network I/O.
 	_, err = realm.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider: domain.TradingProviderAlpaca, Label: "paper", Mode: domain.TradingModeTest,
+		Provider: domain.TradingProviderAlpaca, Label: "paper", Mode: domain.TradingModePaper, VenueIdentity: "paper-account",
 		Credentials: "{}", Enabled: true,
 	})
 	if err != nil {
@@ -88,6 +195,14 @@ func TestRegisterTradingComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = app.Close() })
+	status, err := app.Service().GetTrading(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Providers) != 1 || status.Providers[0].Type != domain.TradingProviderAlpaca ||
+		len(status.Connections) != 1 || status.Connections[0].State != "unavailable" {
+		t.Fatal("trading runtime was not wired into the control plane before Start")
+	}
 	cancel()
 	if err := app.Close(); err != nil {
 		t.Fatal(err)

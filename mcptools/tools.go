@@ -20,15 +20,19 @@ package mcptools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 const auditDefaultLimit = 50
@@ -236,6 +240,54 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		false,
 		false,
 	))
+	registerTool(reg, descriptor("send_paper_order", "Send paper order",
+		"Check, hold and send an order to a paper venue. Returns the approval and "+
+			"acknowledged, refused or unknown send outcome. Mutating, protected and "+
+			"disabled by default. send_live_order comes with the live-trading token.",
+		"Check, hold and send an order to a paper venue.",
+		true, true, true, false), sendPaperOrderHandler)
+	registerTool(reg, descriptor("get_trading", "Get trading",
+		"Read trading providers and connections. Read-only - credentials are never exposed.",
+		"Read trading providers and connections.", false, false, true, true), getTradingHandler)
+	registerTool(reg, descriptor("create_trading_connection", "Create trading connection",
+		"Create a trading connection with write-only credentials. Mutates Officer control-plane config; protected and disabled by default.",
+		"Create a trading connection with write-only credentials.", true, true, true, false), createTradingConnectionHandler)
+	registerTool(reg, descriptor("update_trading_connection", "Update trading connection",
+		"Update a trading connection label or write-only credentials. Mutates Officer control-plane config; protected and disabled by default.",
+		"Update a trading connection label or write-only credentials.", true, true, true, false), updateTradingConnectionHandler)
+	registerTool(reg, descriptor("set_trading_connection_enabled", "Set trading connection enabled",
+		"Enable or disable a trading connection. Mutates Officer control-plane config; protected and disabled by default.",
+		"Enable or disable a trading connection.", true, true, true, false), setTradingConnectionEnabledHandler)
+	registerTool(reg, descriptor("check_trading_connection", "Check trading connection",
+		"Check the venue identity and status of a trading connection. Read-only - credentials are never exposed.",
+		"Check the venue identity and status of a trading connection.", false, false, true, true), checkTradingConnectionHandler)
+	registerTool(reg, descriptor("set_trading_instrument", "Set trading instrument",
+		"Set a trading instrument mapping. Mutates Officer control-plane config; protected and disabled by default.",
+		"Set a trading instrument mapping.", true, true, true, false), setTradingInstrumentHandler)
+	registerTool(reg, descriptor("delete_trading_instrument", "Delete trading instrument",
+		"Delete a trading instrument mapping. Mutates Officer control-plane config; protected and disabled by default.",
+		"Delete a trading instrument mapping.", true, true, true, false), deleteTradingInstrumentHandler)
+	registerTool(reg, descriptor("verify_trading_symbol", "Verify trading symbol",
+		"Verify whether a venue symbol exists and is tradable. Read-only - credentials are never exposed.",
+		"Verify whether a venue symbol exists and is tradable.", false, false, true, true), verifyTradingSymbolHandler)
+	registerTool(reg, descriptor("search_trading_symbols", "Search trading symbols",
+		"Search venue symbols for a trading connection. Read-only - credentials are never exposed.",
+		"Search venue symbols for a trading connection.", false, false, true, true), searchTradingSymbolsHandler)
+	registerTool(reg, descriptor("grant_trading_access", "Grant trading access",
+		"Grant an Officer account access to a trading connection. Mutates Officer control-plane config; protected and disabled by default.",
+		"Grant an Officer account access to a trading connection.", true, true, true, false), grantTradingAccessHandler)
+	registerTool(reg, descriptor("revoke_trading_access", "Revoke trading access",
+		"Revoke an Officer account access to a trading connection. Mutates Officer control-plane config; protected and disabled by default.",
+		"Revoke an Officer account access to a trading connection.", true, true, true, false), revokeTradingAccessHandler)
+	registerTool(reg, descriptor("set_trading_fee_account", "Set trading fee account",
+		"Set the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default.",
+		"Set the Officer account receiving unlinked venue fees.", true, true, true, false), setTradingFeeAccountHandler)
+	registerTool(reg, descriptor("clear_trading_fee_account", "Clear trading fee account",
+		"Clear the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default.",
+		"Clear the Officer account receiving unlinked venue fees.", true, true, true, false), clearTradingFeeAccountHandler)
+	registerTool(reg, descriptor("list_trading_destinations", "List trading destinations",
+		"List the trading destinations available to an Officer account. Read-only - credentials are never exposed.",
+		"List the trading destinations available to an Officer account.", false, false, true, true), listTradingDestinationsHandler)
 }
 
 func descriptor(
@@ -320,9 +372,10 @@ type getOrderInput struct {
 }
 
 type getOrderOutput struct {
-	Order    orderDTO          `json:"order"`
-	Approval *orderApprovalDTO `json:"approval"`
-	Trades   []tradeDTO        `json:"trades"`
+	Order      orderDTO          `json:"order"`
+	Approval   *orderApprovalDTO `json:"approval"`
+	Trades     []tradeDTO        `json:"trades"`
+	VenueOrder *venueOrderDTO    `json:"venueOrder,omitempty"`
 }
 
 type getAuditInput struct {
@@ -889,6 +942,13 @@ func getOrderHandler(
 			Approval: toOrderApprovalDTO(detail),
 			Trades:   toTradeDTOs(detail.Trades),
 		}
+		if detail.Venue != nil {
+			venue, err := toVenueOrderDTO(*detail.Venue)
+			if err != nil {
+				return "", getOrderOutput{}, err
+			}
+			out.VenueOrder = &venue
+		}
 		return fmt.Sprintf(
 			"order %s: %s (%d fill(s))",
 			detail.Order.ExternalID.String(),
@@ -1130,6 +1190,9 @@ func confirmExecutionHandler(
 		}
 		order, att, err := src.ConfirmExecution(ctx, orderExternalID)
 		if err != nil {
+			if errors.Is(err, domain.ErrVenueOrderManaged) {
+				return "", confirmExecutionOutput{}, tradingToolError("confirm execution", err, nil)
+			}
 			return "", confirmExecutionOutput{}, fmt.Errorf("confirm execution failed: %s", err)
 		}
 		out := confirmExecutionOutput{
@@ -1165,6 +1228,9 @@ func cancelHandler(
 			strings.TrimSpace(in.Reason),
 		)
 		if err != nil {
+			if errors.Is(err, domain.ErrVenueOrderManaged) {
+				return "", cancelOutput{}, tradingToolError("cancel", err, nil)
+			}
 			return "", cancelOutput{}, fmt.Errorf("cancel failed: %s", err)
 		}
 		out := cancelOutput{
@@ -1205,6 +1271,668 @@ func summarizeHealth(out healthOutput) string {
 		return "officer healthy"
 	}
 	return "officer degraded"
+}
+
+type tradingDTO struct {
+	Providers         []tradingProviderDTO   `json:"providers"`
+	Connections       []tradingConnectionDTO `json:"connections"`
+	CredentialsSealed bool                   `json:"credentialsSealed"`
+}
+
+type tradingProviderDTO struct {
+	Type            string `json:"type"`
+	Title           string `json:"title"`
+	VenueAccounts   bool   `json:"venueAccounts"`
+	VerifiesSymbols bool   `json:"verifiesSymbols"`
+	SearchesSymbols bool   `json:"searchesSymbols"`
+	UnlinkedFees    bool   `json:"unlinkedFees"`
+}
+
+type tradingConnectionDTO struct {
+	ID            string                 `json:"id"`
+	Provider      string                 `json:"provider"`
+	Label         string                 `json:"label"`
+	Mode          domain.TradingMode     `json:"mode"`
+	Enabled       bool                   `json:"enabled"`
+	VenueIdentity string                 `json:"venueIdentity"`
+	FeeAccount    string                 `json:"feeAccount"`
+	State         string                 `json:"state"`
+	Error         string                 `json:"error,omitempty"`
+	Secrets       map[string]bool        `json:"secrets"`
+	Instruments   []tradingInstrumentDTO `json:"instruments"`
+	Access        []tradingAccessDTO     `json:"access"`
+}
+
+type tradingInstrumentDTO struct {
+	ExternalSymbol string `json:"externalSymbol"`
+	BaseAsset      string `json:"baseAsset"`
+	QuoteAsset     string `json:"quoteAsset"`
+	Enabled        bool   `json:"enabled"`
+}
+
+type tradingAccessDTO struct {
+	Account      string `json:"account"`
+	VenueAccount string `json:"venueAccount"`
+}
+
+type venueOrderDTO struct {
+	Connection    string         `json:"connection"`
+	VenueAccount  string         `json:"venueAccount"`
+	Route         map[string]any `json:"route"`
+	ClientOrderID string         `json:"clientOrderId"`
+	VenueOrderID  string         `json:"venueOrderId,omitempty"`
+	SendAttempted bool           `json:"sendAttempted"`
+	CreatedAt     string         `json:"createdAt"`
+}
+
+func toTradingDTO(status backend.TradingStatus) tradingDTO {
+	out := tradingDTO{
+		Providers:         make([]tradingProviderDTO, 0, len(status.Providers)),
+		Connections:       make([]tradingConnectionDTO, 0, len(status.Connections)),
+		CredentialsSealed: status.CredentialsSealed,
+	}
+	for _, p := range status.Providers {
+		out.Providers = append(out.Providers, tradingProviderDTO{
+			Type: p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
+			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
+			UnlinkedFees: p.UnlinkedFees,
+		})
+	}
+	for _, c := range status.Connections {
+		out.Connections = append(out.Connections, toTradingConnectionDTO(c))
+	}
+	return out
+}
+
+func toTradingConnectionDTO(c backend.TradingConnectionStatus) tradingConnectionDTO {
+	out := tradingConnectionDTO{
+		ID: c.ExternalID.String(), Provider: c.Provider, Label: c.Label,
+		Mode: c.Mode, Enabled: c.Enabled, VenueIdentity: c.VenueIdentity,
+		FeeAccount: c.FeeAccount.String(), State: c.State,
+		Secrets:     make(map[string]bool, len(c.Secrets)),
+		Instruments: make([]tradingInstrumentDTO, 0, len(c.Instruments)),
+		Access:      make([]tradingAccessDTO, 0, len(c.Access)),
+	}
+	if c.State == "unavailable" {
+		out.Error = c.Unavailable
+	}
+	for key, present := range c.Secrets {
+		out.Secrets[key] = present
+	}
+	for _, i := range c.Instruments {
+		out.Instruments = append(out.Instruments, tradingInstrumentDTO{
+			ExternalSymbol: i.ExternalSymbol, BaseAsset: i.BaseAsset,
+			QuoteAsset: i.QuoteAsset, Enabled: i.Enabled,
+		})
+	}
+	for _, a := range c.Access {
+		out.Access = append(out.Access, tradingAccessDTO{Account: a.Account.String(), VenueAccount: a.VenueAccount})
+	}
+	return out
+}
+
+func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
+	if err := domain.ValidateTradingRoute(v.Route); err != nil {
+		return venueOrderDTO{}, fmt.Errorf("stored venue order route is invalid")
+	}
+	var route map[string]any
+	decoder := json.NewDecoder(strings.NewReader(v.Route))
+	decoder.UseNumber()
+	if err := decoder.Decode(&route); err != nil {
+		return venueOrderDTO{}, fmt.Errorf("stored venue order route is invalid")
+	}
+	return venueOrderDTO{
+		Connection: v.Connection.String(), VenueAccount: v.VenueAccount,
+		Route: route, ClientOrderID: v.ClientOrderID,
+		VenueOrderID: v.VenueOrderID, SendAttempted: v.SendAttempted,
+		CreatedAt: v.CreatedAt.Format(time.RFC3339Nano),
+	}, nil
+}
+
+type tradingConnectionOutput struct {
+	Connection tradingConnectionDTO `json:"connection"`
+}
+type tradingConnectionInput struct {
+	Connection string `json:"connection" jsonschema:"Trading connection id"`
+}
+type createTradingConnectionInput struct {
+	ID          string             `json:"id,omitempty" jsonschema:"Optional connection id; omitted lets the store assign one"`
+	Provider    string             `json:"provider" jsonschema:"Trading provider type; e.g. alpaca"`
+	Label       string             `json:"label" jsonschema:"Display label for the trading connection"`
+	Mode        domain.TradingMode `json:"mode" jsonschema:"paper or live"`
+	Credentials map[string]any     `json:"credentials" jsonschema:"Write-only provider credential object; Alpaca uses {apiKey, apiSecret}"`
+	Enabled     *bool              `json:"enabled" jsonschema:"Required: whether the trading connection is enabled"`
+}
+type updateTradingConnectionInput struct {
+	Connection  string         `json:"connection" jsonschema:"Trading connection id"`
+	Label       *string        `json:"label,omitempty" jsonschema:"Optional display label; omitted keeps the stored value"`
+	Credentials map[string]any `json:"credentials,omitempty" jsonschema:"Optional write-only provider credential object; Alpaca uses {apiKey, apiSecret}; omitted keeps the stored value"`
+}
+
+func (in *updateTradingConnectionInput) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Connection  string          `json:"connection"`
+		Label       json.RawMessage `json:"label"`
+		Credentials json.RawMessage `json:"credentials"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
+		return err
+	}
+	*in = updateTradingConnectionInput{Connection: raw.Connection}
+	if len(raw.Label) != 0 {
+		var label string
+		if err := json.Unmarshal(raw.Label, &label); err != nil {
+			return fmt.Errorf("label must be a string")
+		}
+		in.Label = &label
+	}
+	if len(raw.Credentials) != 0 {
+		if err := json.Unmarshal(raw.Credentials, &in.Credentials); err != nil || in.Credentials == nil {
+			return fmt.Errorf("credentials must be a JSON object")
+		}
+	}
+	return nil
+}
+
+type setTradingConnectionEnabledInput struct {
+	Connection string `json:"connection" jsonschema:"Trading connection id"`
+	Enabled    *bool  `json:"enabled" jsonschema:"Required: whether the trading connection is enabled"`
+}
+type checkTradingConnectionOutput struct {
+	VenueIdentity string `json:"venueIdentity"`
+	VenueStatus   string `json:"venueStatus"`
+}
+type setTradingInstrumentInput struct {
+	Connection     string `json:"connection" jsonschema:"Trading connection id"`
+	ExternalSymbol string `json:"externalSymbol" jsonschema:"Provider's venue symbol"`
+	BaseAsset      string `json:"baseAsset" jsonschema:"Officer asset being bought or sold"`
+	QuoteAsset     string `json:"quoteAsset" jsonschema:"Officer asset used for pricing"`
+	Enabled        *bool  `json:"enabled" jsonschema:"Required: whether the instrument mapping is enabled"`
+}
+type tradingSymbolInput struct {
+	Connection     string `json:"connection" jsonschema:"Trading connection id"`
+	ExternalSymbol string `json:"externalSymbol" jsonschema:"Provider's venue symbol"`
+}
+type verifyTradingSymbolOutput struct {
+	Supported bool   `json:"supported"`
+	Exists    bool   `json:"exists"`
+	Tradable  bool   `json:"tradable"`
+	Details   string `json:"details,omitempty"`
+}
+type searchTradingSymbolsInput struct {
+	Connection string `json:"connection" jsonschema:"Trading connection id"`
+	Query      string `json:"query" jsonschema:"Venue symbol search query"`
+}
+type tradingSymbolMatchDTO struct {
+	Symbol   string `json:"symbol"`
+	Name     string `json:"name,omitempty"`
+	Class    string `json:"class,omitempty"`
+	Exchange string `json:"exchange,omitempty"`
+	Tradable bool   `json:"tradable"`
+}
+type searchTradingSymbolsOutput struct {
+	Supported bool                    `json:"supported"`
+	Matches   []tradingSymbolMatchDTO `json:"matches"`
+}
+type grantTradingAccessInput struct {
+	Connection   string `json:"connection" jsonschema:"Trading connection id"`
+	Account      string `json:"account" jsonschema:"Officer account code"`
+	VenueAccount string `json:"venueAccount,omitempty" jsonschema:"Optional provider venue account id"`
+}
+type tradingAccountInput struct {
+	Connection string `json:"connection" jsonschema:"Trading connection id"`
+	Account    string `json:"account" jsonschema:"Officer account code"`
+}
+type listTradingDestinationsInput struct {
+	Account string             `json:"account" jsonschema:"Officer account code"`
+	Mode    domain.TradingMode `json:"mode,omitempty" jsonschema:"Optional paper or live filter; omitted lists every mode"`
+}
+type listTradingDestinationsOutput struct {
+	Destinations []httpx.TradingDestinationDTO `json:"destinations"`
+}
+
+func tradingToolError(operation string, err error, redact func(string) string) error {
+	code := ""
+	switch {
+	case errors.Is(err, domain.ErrLiveTradingUnavailable):
+		code = "live_trading_unavailable"
+	case errors.Is(err, domain.ErrTradingModeMismatch):
+		code = "trading_mode_mismatch"
+	case errors.Is(err, domain.ErrFeeAccountRequired):
+		code = "fee_account_required"
+	case errors.Is(err, domain.ErrVenueOrderManaged):
+		code = "venue_order_managed"
+	case errors.Is(err, domain.ErrNoDestination):
+		code = "no_destination"
+	case errors.Is(err, domain.ErrDestinationAmbiguous):
+		code = "destination_ambiguous"
+	}
+	message := err.Error()
+	var ambiguous *backend.DestinationAmbiguousError
+	if errors.As(err, &ambiguous) {
+		for _, c := range ambiguous.Candidates {
+			message += fmt.Sprintf("; %s (%s)", c.Connection.String(), c.Label)
+		}
+	}
+	if redact != nil {
+		message = redact(message)
+	}
+	if code != "" {
+		return fmt.Errorf("%s: %s", code, message)
+	}
+	return fmt.Errorf("%s failed: %s", operation, message)
+}
+
+func tradingConnectionSnapshot(ctx context.Context, src frameworkmcp.Source, id string) (tradingConnectionDTO, error) {
+	status, err := src.GetTrading(ctx)
+	if err != nil {
+		return tradingConnectionDTO{}, err
+	}
+	for _, c := range status.Connections {
+		if c.ExternalID.String() == id {
+			return toTradingConnectionDTO(c), nil
+		}
+	}
+	return tradingConnectionDTO{}, fmt.Errorf("trading connection is missing from the snapshot")
+}
+
+func tradingCredentialRedactor(credentials map[string]any) func(string) string {
+	var values []string
+	var collect func(any)
+	collect = func(value any) {
+		switch v := value.(type) {
+		case string:
+			if v != "" {
+				values = append(values, v)
+				encoded, _ := json.Marshal(v)
+				values = append(values, string(encoded[1:len(encoded)-1]))
+			}
+		case map[string]any:
+			for _, child := range v {
+				collect(child)
+			}
+		case []any:
+			for _, child := range v {
+				collect(child)
+			}
+		}
+	}
+	collect(credentials)
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	var pairs []string
+	for _, value := range values {
+		pairs = append(pairs, value, "[REDACTED]")
+	}
+	return strings.NewReplacer(pairs...).Replace
+}
+
+func redactTradingConnection(c tradingConnectionDTO, redact func(string) string) tradingConnectionDTO {
+	c.ID = redact(c.ID)
+	c.Provider = redact(c.Provider)
+	c.Label = redact(c.Label)
+	c.VenueIdentity = redact(c.VenueIdentity)
+	c.FeeAccount = redact(c.FeeAccount)
+	c.State = redact(c.State)
+	c.Error = redact(c.Error)
+	c.Mode = domain.TradingMode(redact(string(c.Mode)))
+	secrets := make(map[string]bool, len(c.Secrets))
+	for key, value := range c.Secrets {
+		secrets[redact(key)] = value
+	}
+	c.Secrets = secrets
+	for i := range c.Instruments {
+		item := &c.Instruments[i]
+		item.ExternalSymbol = redact(item.ExternalSymbol)
+		item.BaseAsset = redact(item.BaseAsset)
+		item.QuoteAsset = redact(item.QuoteAsset)
+	}
+	for i := range c.Access {
+		c.Access[i].Account = redact(c.Access[i].Account)
+		c.Access[i].VenueAccount = redact(c.Access[i].VenueAccount)
+	}
+	return c
+}
+
+func getTradingHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[struct{}, tradingDTO] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in struct{}) (string, tradingDTO, error) {
+		status, err := src.GetTrading(ctx)
+		if err != nil {
+			return "", tradingDTO{}, tradingToolError("get trading", err, nil)
+		}
+		return "trading connections", toTradingDTO(status), nil
+	}
+}
+func createTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[createTradingConnectionInput, tradingConnectionOutput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in createTradingConnectionInput) (string, tradingConnectionOutput, error) {
+		if strings.TrimSpace(in.Provider) == "" {
+			return "", tradingConnectionOutput{}, fmt.Errorf("provider is required")
+		}
+		if strings.TrimSpace(in.Label) == "" {
+			return "", tradingConnectionOutput{}, fmt.Errorf("label is required")
+		}
+		if strings.TrimSpace(string(in.Mode)) == "" {
+			return "", tradingConnectionOutput{}, fmt.Errorf("mode is required")
+		}
+
+		if !domain.TradingModeSupported(in.Mode) {
+			return "", tradingConnectionOutput{}, fmt.Errorf("mode must be paper or live")
+		}
+		if in.Credentials == nil {
+			return "", tradingConnectionOutput{}, fmt.Errorf("credentials is required")
+		}
+		if in.Enabled == nil {
+			return "", tradingConnectionOutput{}, fmt.Errorf("enabled is required")
+		}
+		credentials, err := json.Marshal(in.Credentials)
+		if err != nil {
+			return "", tradingConnectionOutput{}, fmt.Errorf("credentials must be a JSON object")
+		}
+		redact := tradingCredentialRedactor(in.Credentials)
+		connection := domain.TradingConnection{ExternalID: domain.ExternalID(in.ID), Provider: in.Provider, Label: in.Label, Mode: in.Mode, Credentials: string(credentials), Enabled: *in.Enabled}
+		created, err := src.CreateTradingConnection(ctx, connection)
+		if err != nil {
+			return "", tradingConnectionOutput{}, tradingToolError("create trading connection", err, redact)
+		}
+		snapshot, err := tradingConnectionSnapshot(ctx, src, created.ExternalID.String())
+		if err != nil {
+			return "", tradingConnectionOutput{}, tradingToolError("create trading connection", err, redact)
+		}
+		return "trading connection created", tradingConnectionOutput{Connection: redactTradingConnection(snapshot, redact)}, nil
+	}
+}
+func updateTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[updateTradingConnectionInput, tradingConnectionOutput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in updateTradingConnectionInput) (string, tradingConnectionOutput, error) {
+		connection := strings.TrimSpace(in.Connection)
+		if connection == "" {
+			return "", tradingConnectionOutput{}, fmt.Errorf("connection is required")
+		}
+
+		label := ""
+		if in.Label != nil {
+			label = *in.Label
+			if strings.TrimSpace(label) == "" {
+				return "", tradingConnectionOutput{}, fmt.Errorf("label is required")
+			}
+		}
+		credentials := ""
+		if in.Credentials != nil {
+			raw, err := json.Marshal(in.Credentials)
+			if err != nil {
+				return "", tradingConnectionOutput{}, fmt.Errorf("credentials must be a JSON object")
+			}
+			credentials = string(raw)
+		}
+		redact := tradingCredentialRedactor(in.Credentials)
+		if err := src.UpdateTradingConnectionSettings(ctx, connection, label, credentials); err != nil {
+			return "", tradingConnectionOutput{}, tradingToolError("update trading connection", err, redact)
+		}
+		snapshot, err := tradingConnectionSnapshot(ctx, src, connection)
+		if err != nil {
+			return "", tradingConnectionOutput{}, tradingToolError("update trading connection", err, redact)
+		}
+		return "trading connection updated", tradingConnectionOutput{Connection: redactTradingConnection(snapshot, redact)}, nil
+	}
+}
+func checkTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[tradingConnectionInput, checkTradingConnectionOutput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in tradingConnectionInput) (string, checkTradingConnectionOutput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", checkTradingConnectionOutput{}, fmt.Errorf("connection is required")
+		}
+
+		info, err := src.CheckTradingConnection(ctx, in.Connection)
+		if err != nil {
+			return "", checkTradingConnectionOutput{}, tradingToolError("check trading connection", err, nil)
+		}
+		return "trading connection checked", checkTradingConnectionOutput{VenueIdentity: info.Identity, VenueStatus: info.Status}, nil
+	}
+}
+func setTradingConnectionEnabledHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[setTradingConnectionEnabledInput, setTradingConnectionEnabledInput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in setTradingConnectionEnabledInput) (string, setTradingConnectionEnabledInput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", setTradingConnectionEnabledInput{}, fmt.Errorf("connection is required")
+		}
+		if in.Enabled == nil {
+			return "", setTradingConnectionEnabledInput{}, fmt.Errorf("enabled is required")
+		}
+		if err := src.SetTradingConnectionEnabled(ctx, in.Connection, *in.Enabled); err != nil {
+			return "", setTradingConnectionEnabledInput{}, tradingToolError("set trading connection enabled", err, nil)
+		}
+		return "set trading connection enabled", in, nil
+	}
+}
+func setTradingInstrumentHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[setTradingInstrumentInput, setTradingInstrumentInput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in setTradingInstrumentInput) (string, setTradingInstrumentInput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", setTradingInstrumentInput{}, fmt.Errorf("connection is required")
+		}
+		if strings.TrimSpace(in.ExternalSymbol) == "" {
+			return "", setTradingInstrumentInput{}, fmt.Errorf("externalSymbol is required")
+		}
+		if strings.TrimSpace(in.BaseAsset) == "" {
+			return "", setTradingInstrumentInput{}, fmt.Errorf("baseAsset is required")
+		}
+		if strings.TrimSpace(in.QuoteAsset) == "" {
+			return "", setTradingInstrumentInput{}, fmt.Errorf("quoteAsset is required")
+		}
+		if in.Enabled == nil {
+			return "", setTradingInstrumentInput{}, fmt.Errorf("enabled is required")
+		}
+		if err := src.UpsertTradingInstrument(ctx, domain.TradingInstrument{Connection: domain.ExternalID(in.Connection), ExternalSymbol: in.ExternalSymbol, BaseAsset: in.BaseAsset, QuoteAsset: in.QuoteAsset, Enabled: *in.Enabled}); err != nil {
+			return "", setTradingInstrumentInput{}, tradingToolError("set trading instrument", err, nil)
+		}
+		return "set trading instrument", in, nil
+	}
+}
+func deleteTradingInstrumentHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[tradingSymbolInput, tradingSymbolInput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in tradingSymbolInput) (string, tradingSymbolInput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", tradingSymbolInput{}, fmt.Errorf("connection is required")
+		}
+		if strings.TrimSpace(in.ExternalSymbol) == "" {
+			return "", tradingSymbolInput{}, fmt.Errorf("externalSymbol is required")
+		}
+		if err := src.DeleteTradingInstrument(ctx, in.Connection, in.ExternalSymbol); err != nil {
+			return "", tradingSymbolInput{}, tradingToolError("delete trading instrument", err, nil)
+		}
+		return "delete trading instrument", in, nil
+	}
+}
+func grantTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[grantTradingAccessInput, grantTradingAccessInput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in grantTradingAccessInput) (string, grantTradingAccessInput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", grantTradingAccessInput{}, fmt.Errorf("connection is required")
+		}
+		if strings.TrimSpace(in.Account) == "" {
+			return "", grantTradingAccessInput{}, fmt.Errorf("account is required")
+		}
+		if err := src.PutTradingAccess(ctx, domain.TradingAccess{Connection: domain.ExternalID(in.Connection), Account: domain.AccountID(in.Account), VenueAccount: in.VenueAccount}); err != nil {
+			return "", grantTradingAccessInput{}, tradingToolError("grant trading access", err, nil)
+		}
+		return "grant trading access", in, nil
+	}
+}
+func revokeTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[tradingAccountInput, tradingAccountInput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in tradingAccountInput) (string, tradingAccountInput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", tradingAccountInput{}, fmt.Errorf("connection is required")
+		}
+		if strings.TrimSpace(in.Account) == "" {
+			return "", tradingAccountInput{}, fmt.Errorf("account is required")
+		}
+		if err := src.RemoveTradingAccess(ctx, domain.AccountID(in.Account), domain.ExternalID(in.Connection)); err != nil {
+			return "", tradingAccountInput{}, tradingToolError("revoke trading access", err, nil)
+		}
+		return "revoke trading access", in, nil
+	}
+}
+func setTradingFeeAccountHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[tradingAccountInput, tradingAccountInput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in tradingAccountInput) (string, tradingAccountInput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", tradingAccountInput{}, fmt.Errorf("connection is required")
+		}
+		if strings.TrimSpace(in.Account) == "" {
+			return "", tradingAccountInput{}, fmt.Errorf("account is required")
+		}
+		if err := src.SetTradingFeeAccount(ctx, domain.ExternalID(in.Connection), domain.AccountID(in.Account)); err != nil {
+			return "", tradingAccountInput{}, tradingToolError("set trading fee account", err, nil)
+		}
+		return "set trading fee account", in, nil
+	}
+}
+func clearTradingFeeAccountHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[tradingConnectionInput, tradingConnectionInput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in tradingConnectionInput) (string, tradingConnectionInput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", tradingConnectionInput{}, fmt.Errorf("connection is required")
+		}
+		if err := src.SetTradingFeeAccount(ctx, domain.ExternalID(in.Connection), ""); err != nil {
+			return "", tradingConnectionInput{}, tradingToolError("clear trading fee account", err, nil)
+		}
+		return "clear trading fee account", in, nil
+	}
+}
+func verifyTradingSymbolHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[tradingSymbolInput, verifyTradingSymbolOutput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in tradingSymbolInput) (string, verifyTradingSymbolOutput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", verifyTradingSymbolOutput{}, fmt.Errorf("connection is required")
+		}
+		if strings.TrimSpace(in.ExternalSymbol) == "" {
+			return "", verifyTradingSymbolOutput{}, fmt.Errorf("externalSymbol is required")
+		}
+
+		result, err := src.VerifyTradingSymbol(ctx, in.Connection, in.ExternalSymbol)
+		if err != nil {
+			return "", verifyTradingSymbolOutput{}, tradingToolError("verify trading symbol", err, nil)
+		}
+		return "trading symbol verified", verifyTradingSymbolOutput{Supported: result.Supported, Exists: result.Exists, Tradable: result.Tradable, Details: result.Details}, nil
+	}
+}
+func searchTradingSymbolsHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[searchTradingSymbolsInput, searchTradingSymbolsOutput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in searchTradingSymbolsInput) (string, searchTradingSymbolsOutput, error) {
+		if strings.TrimSpace(in.Connection) == "" {
+			return "", searchTradingSymbolsOutput{}, fmt.Errorf("connection is required")
+		}
+		if strings.TrimSpace(in.Query) == "" {
+			return "", searchTradingSymbolsOutput{}, fmt.Errorf("query is required")
+		}
+
+		result, err := src.SearchTradingSymbols(ctx, in.Connection, in.Query)
+		if err != nil {
+			return "", searchTradingSymbolsOutput{}, tradingToolError("search trading symbols", err, nil)
+		}
+		out := searchTradingSymbolsOutput{Supported: result.Supported, Matches: make([]tradingSymbolMatchDTO, 0, len(result.Matches))}
+		for _, m := range result.Matches {
+			out.Matches = append(out.Matches, tradingSymbolMatchDTO{Symbol: m.Symbol, Name: m.Name, Class: m.Class, Exchange: m.Exchange, Tradable: m.Tradable})
+		}
+		return "trading symbols", out, nil
+	}
+}
+func listTradingDestinationsHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[listTradingDestinationsInput, listTradingDestinationsOutput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in listTradingDestinationsInput) (string, listTradingDestinationsOutput, error) {
+		if strings.TrimSpace(in.Account) == "" {
+			return "", listTradingDestinationsOutput{}, fmt.Errorf("account is required")
+		}
+
+		if in.Mode != "" && !domain.TradingModeSupported(in.Mode) {
+			return "", listTradingDestinationsOutput{}, fmt.Errorf("mode must be paper or live")
+		}
+		destinations, err := src.ListTradingDestinations(ctx, domain.AccountID(in.Account), in.Mode)
+		if err != nil {
+			return "", listTradingDestinationsOutput{}, tradingToolError("list trading destinations", err, nil)
+		}
+		out := listTradingDestinationsOutput{Destinations: httpx.ToTradingDestinationDTOs(destinations)}
+		return "trading destinations", out, nil
+	}
+}
+
+type sendPaperOrderInput struct {
+	ExternalID  string               `json:"id,omitempty" jsonschema:"Optional unique order id; omitted lets the store assign one"`
+	Account     string               `json:"account" jsonschema:"Officer account code"`
+	BaseAsset   string               `json:"baseAsset" jsonschema:"Asset being bought or sold"`
+	QuoteAsset  string               `json:"quoteAsset" jsonschema:"Asset used for pricing"`
+	Side        string               `json:"side" jsonschema:"buy or sell"`
+	AmountKind  string               `json:"amountKind" jsonschema:"quantity or volume"`
+	AmountValue string               `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
+	Price       string               `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
+	Destination sendDestinationInput `json:"destination" jsonschema:"Paper venue destination with an explicit route"`
+}
+
+type sendDestinationInput struct {
+	Connection   string         `json:"connection,omitempty" jsonschema:"Connection id; omit only when one enabled paper destination exists"`
+	VenueAccount string         `json:"venueAccount,omitempty" jsonschema:"Venue account; omitted uses the binding, supplied must match it"`
+	Route        map[string]any `json:"route" jsonschema:"Required venue route JSON object; Alpaca requires timeInForce"`
+}
+
+type sendPaperOrderOutput struct {
+	SignedApproval  string                `json:"signedApproval"`
+	KeyID           string                `json:"keyId"`
+	OrderExternalID string                `json:"id"`
+	Verdict         string                `json:"verdict"`
+	Reasons         []checkOrderRejectDTO `json:"reasons,omitempty"`
+	VenueSend       *venueSendDTO         `json:"venueSend,omitempty"`
+}
+
+type venueSendDTO struct {
+	Status     string         `json:"status"`
+	Error      string         `json:"error,omitempty"`
+	VenueOrder *venueOrderDTO `json:"venueOrder,omitempty"`
+}
+
+func sendPaperOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[sendPaperOrderInput, sendPaperOrderOutput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in sendPaperOrderInput) (string, sendPaperOrderOutput, error) {
+		if in.Destination.Route == nil {
+			return "", sendPaperOrderOutput{}, fmt.Errorf("destination route must be a JSON object")
+		}
+		route, err := json.Marshal(in.Destination.Route)
+		if err != nil {
+			return "", sendPaperOrderOutput{}, fmt.Errorf("destination route must be a JSON object")
+		}
+		o := domain.Order{Account: domain.AccountID(in.Account),
+			BaseAsset: in.BaseAsset, QuoteAsset: in.QuoteAsset,
+			Side: domain.OrderSide(in.Side), AmountKind: domain.OrderAmountKind(in.AmountKind),
+			AmountValue: in.AmountValue, Price: in.Price}
+		if in.ExternalID != "" {
+			o.ExternalID, err = domain.ParseExternalID(in.ExternalID)
+			if err != nil {
+				return "", sendPaperOrderOutput{}, err
+			}
+		}
+		dest := backend.SendDestination{VenueAccount: in.Destination.VenueAccount, Route: string(route)}
+		if in.Destination.Connection != "" {
+			dest.Connection, err = domain.ParseExternalID(in.Destination.Connection)
+			if err != nil {
+				return "", sendPaperOrderOutput{}, err
+			}
+		}
+		result, err := src.SendPaperOrder(ctx, o, dest)
+		if err != nil {
+			return "", sendPaperOrderOutput{}, tradingToolError("send paper order", err, nil)
+		}
+		tok := result.Token
+		out := sendPaperOrderOutput{
+			SignedApproval: tok.Token, KeyID: tok.KeyID, OrderExternalID: tok.OrderExternalID,
+			Verdict: tok.Verdict, Reasons: toMCPRejectDTOs(tok.Reasons),
+		}
+		if result.Send != nil {
+			out.VenueSend = &venueSendDTO{Status: result.Send.Status, Error: result.Send.Error}
+			if result.Send.Order != nil {
+				link, err := toVenueOrderDTO(*result.Send.Order)
+				if err != nil {
+					return "", sendPaperOrderOutput{}, err
+				}
+				out.VenueSend.VenueOrder = &link
+			}
+		}
+		outcome := "reject"
+		if result.Send != nil {
+			outcome = "accept; venue send " + result.Send.Status
+			if result.Send.Error != "" {
+				outcome += ": " + result.Send.Error
+			}
+		}
+		return fmt.Sprintf("order %s: %s", tok.OrderExternalID, outcome), out, nil
+	}
 }
 
 func isNotFound(err error) bool {

@@ -1491,6 +1491,74 @@ func (n *fakeNode) DeleteMarketDataInstrument(
 
 func (n *fakeNode) Close() error { return nil }
 
+func (n *fakeNode) CredentialsSealed() bool {
+	return true
+}
+
+func (n *fakeNode) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection, caller domain.Caller) (domain.TradingConnection, error) {
+	return domain.TradingConnection{}, domain.ErrNotImplemented
+}
+
+func (n *fakeNode) UpdateTradingConnectionSettings(ctx context.Context, id domain.ExternalID, label, credentials string, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
+func (n *fakeNode) SetTradingConnectionEnabled(ctx context.Context, id domain.ExternalID, enabled bool, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
+func (n *fakeNode) UpsertTradingInstrument(ctx context.Context, instrument domain.TradingInstrument, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
+func (n *fakeNode) DeleteTradingInstrument(ctx context.Context, connection domain.ExternalID, externalSymbol string, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
+func (n *fakeNode) PutTradingAccess(ctx context.Context, access domain.TradingAccess, requireFeeAccount bool, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
+func (n *fakeNode) SetTradingConnectionFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
+func (n *fakeNode) RecordVenueFeeSkipped(ctx context.Context, connection domain.ExternalID, feeID, reason string, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
+func (n *fakeNode) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
+func (n *fakeNode) GetTradingConnection(ctx context.Context, id domain.ExternalID) (domain.TradingConnection, bool, error) {
+	return domain.TradingConnection{}, false, nil
+}
+
+func (n *fakeNode) ListTradingConnections(ctx context.Context) ([]domain.TradingConnection, error) {
+	return nil, nil
+}
+
+func (n *fakeNode) ListTradingInstruments(ctx context.Context, connection domain.ExternalID) ([]domain.TradingInstrument, error) {
+	return nil, nil
+}
+
+func (n *fakeNode) ListTradingAccess(ctx context.Context, account domain.AccountID) ([]domain.TradingAccess, error) {
+	return nil, nil
+}
+
+func (n *fakeNode) ListTradingAccessForConnection(ctx context.Context, connection domain.ExternalID) ([]domain.TradingAccess, error) {
+	return nil, nil
+}
+
+func (n *fakeNode) GetVenueOrder(ctx context.Context, order domain.ExternalID) (domain.VenueOrder, bool, error) {
+	return domain.VenueOrder{}, false, nil
+}
+
+func (n *fakeNode) EarliestVenueOrderTime(ctx context.Context, connection domain.ExternalID) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 type fakeMarketDataRuntime struct {
 	registry   *marketdata.Registry
 	statuses   map[string]marketdata.InstanceRuntimeStatus

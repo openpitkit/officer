@@ -148,6 +148,14 @@ func handleGetOrder(svc backend.ControlPlane) http.HandlerFunc {
 			"events": events,
 			"trades": trades,
 		}
+		if detail.Venue != nil {
+			venue, err := toVenueOrderDTO(*detail.Venue)
+			if err != nil {
+				httpx.WriteErr(w, err)
+				return
+			}
+			body["venueOrder"] = venue
+		}
 		httpx.WriteJSON(w, http.StatusOK, body)
 	}
 }

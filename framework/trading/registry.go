@@ -20,16 +20,20 @@ package trading
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"go.openpit.dev/officer/framework/domain"
 )
 
 // Provider describes a connector factory and its destination capabilities.
 type Provider struct {
-	Type            string
-	Title           string
-	VenueAccounts   bool
+	Type          string
+	Title         string
+	VenueAccounts bool
+	// UnlinkedFees means fees arrive without an order link and need a fee account.
+	UnlinkedFees    bool
 	VerifiesSymbols bool
+	SearchesSymbols bool
 	Build           func(domain.TradingConnection) (Connector, error)
 }
 
@@ -61,6 +65,16 @@ func (r *Registry) Lookup(typ string) (Provider, bool) {
 	return p, ok
 }
 
+// Providers returns the registered providers sorted by Type.
+func (r *Registry) Providers() []Provider {
+	providers := make([]Provider, 0, len(r.providers))
+	for _, provider := range r.providers {
+		providers = append(providers, provider)
+	}
+	sort.Slice(providers, func(i, j int) bool { return providers[i].Type < providers[j].Type })
+	return providers
+}
+
 // Build constructs one connection's connector without subscribing.
 func (r *Registry) Build(connection domain.TradingConnection) (Connector, error) {
 	p, ok := r.Lookup(connection.Provider)
@@ -90,5 +104,37 @@ func (r *Registry) VerifySymbol(ctx context.Context, connection domain.TradingCo
 		return SymbolVerification{}, false, nil
 	}
 	result, err := v.VerifySymbol(ctx, external)
+	return result, true, err
+}
+
+// CheckAccount uses a fresh connector and reports supported=false when the
+// provider does not implement account checking.
+func (r *Registry) CheckAccount(ctx context.Context, connection domain.TradingConnection) (AccountInfo, bool, error) {
+	c, err := r.Build(connection)
+	if err != nil {
+		return AccountInfo{}, false, err
+	}
+	defer c.Close()
+	checker, ok := c.(AccountChecker)
+	if !ok {
+		return AccountInfo{}, false, nil
+	}
+	result, err := checker.CheckAccount(ctx)
+	return result, true, err
+}
+
+// SearchSymbols uses a fresh connector and reports supported=false when the
+// provider does not implement symbol search.
+func (r *Registry) SearchSymbols(ctx context.Context, connection domain.TradingConnection, query string) ([]SymbolMatch, bool, error) {
+	c, err := r.Build(connection)
+	if err != nil {
+		return nil, false, err
+	}
+	defer c.Close()
+	searcher, ok := c.(SymbolSearcher)
+	if !ok {
+		return nil, false, nil
+	}
+	result, err := searcher.SearchSymbols(ctx, query)
 	return result, true, err
 }

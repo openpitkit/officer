@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,9 +44,14 @@ func assertNoCredentials(t *testing.T, message string) {
 
 func TestParseCredentials(t *testing.T) {
 	valid := `{"apiKey":"test-key-marker","apiSecret":"test-secret-marker"}`
-	got, err := ParseCredentials(valid)
-	if err != nil || got != testCredentials {
-		t.Fatal("valid credentials refused")
+	for _, raw := range []string{
+		valid,
+		`{"apiKey":" \t test-key-marker \n ","apiSecret":"\n test-secret-marker \t "}`,
+	} {
+		got, err := ParseCredentials(raw)
+		if err != nil || got != testCredentials {
+			t.Fatal("valid credentials were refused or not trimmed")
+		}
 	}
 	for _, raw := range []string{
 		"", "null", "[]", `{}`, `{"apiKey":"x"}`,
@@ -56,6 +62,9 @@ func TestParseCredentials(t *testing.T) {
 		`{"api_key":"x","api_secret":"x"}`,
 		valid + " {}", `{"apiKey":"x","apiSecret":"x","test-secret-marker":true}`,
 		`{"apiKey":"test-key-marker","apiSecret":"test-secret-marker"`,
+		`{"apiKey":" \t test-key-marker \n ","apiSecret":" \t "}`,
+		`{"apiKey":" \n ","apiSecret":" \t test-secret-marker \n "}`,
+		`{"apiKey":" test-key-marker ","apiSecret":" test-secret-marker "`,
 	} {
 		_, err := ParseCredentials(raw)
 		if err == nil {
@@ -102,6 +111,136 @@ func TestAsset(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, errorText string
+		status                int
+		want                  Account
+	}{
+		{"identity and status", `{"id":"venue-account","status":"ACTIVE"}`, "", 200, Account{ID: "venue-account", Status: "ACTIVE"}},
+		{"unauthorized", `{"code":40110000,"message":"` + testCredentials.APIKey + " " + testCredentials.APISecret + `"}`, "", 401, Account{}},
+		{"missing id", `{"status":"ACTIVE"}`, "account id is missing", 200, Account{}},
+		{"empty id", `{"id":"","status":"ACTIVE"}`, "account id is missing", 200, Account{}},
+		{"null", `null`, "account id is missing", 200, Account{}},
+		{"malformed", `{"id":`, "decode response", 200, Account{}},
+		{"wrong type", `{"id":42}`, "decode response", 200, Account{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.RequestURI() != "/v2/account" {
+					t.Error("wrong account request")
+				}
+				if r.Header.Get("APCA-API-KEY-ID") != testCredentials.APIKey || r.Header.Get("APCA-API-SECRET-KEY") != testCredentials.APISecret {
+					t.Error("auth headers missing")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			account, err := NewClient(server.URL, testCredentials, server.Client()).Account(context.Background())
+			if tc.errorText != "" || tc.status != 200 {
+				if err == nil {
+					t.Fatal("invalid account response accepted")
+				}
+				assertNoCredentials(t, err.Error())
+				if tc.errorText != "" && !strings.Contains(err.Error(), tc.errorText) {
+					t.Fatalf("wrong account error: %v", err)
+				}
+				if tc.status != 200 {
+					var apiErr *APIError
+					if !errors.As(err, &apiErr) || apiErr.Status != tc.status {
+						t.Fatal("account APIError not preserved")
+					}
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if account != tc.want {
+				t.Fatalf("account=%+v want=%+v", account, tc.want)
+			}
+		})
+	}
+}
+
+func TestAssets(t *testing.T) {
+	const equityBody = `[{"id":"equity","symbol":"AAPL","name":"Apple","class":"us_equity","exchange":"NASDAQ","status":"active","tradable":true,"fractionable":true}]`
+	const cryptoBody = `[{"id":"crypto","symbol":"BTC/USD","name":"Bitcoin","class":"crypto","exchange":"ALPACA","status":"active","tradable":true,"min_order_size":"0.0001","min_trade_increment":"0.0001","price_increment":"1"}]`
+	want := []Asset{
+		{ID: "equity", Symbol: "AAPL", Name: "Apple", Class: "us_equity", Exchange: "NASDAQ", Status: "active", Tradable: true, Fractionable: true},
+		{ID: "crypto", Symbol: "BTC/USD", Name: "Bitcoin", Class: "crypto", Exchange: "ALPACA", Status: "active", Tradable: true, MinOrderSize: "0.0001", MinTradeIncrement: "0.0001", PriceIncrement: "1"},
+	}
+	for _, tc := range []struct {
+		name, equityBody, cryptoBody, errorText string
+		status                                  int
+		want                                    []Asset
+	}{
+		{"fields", equityBody, cryptoBody, "", 200, want},
+		{"empty", `[]`, `[]`, "", 200, []Asset{}},
+		{"null equity", `null`, `[]`, "assets list is missing", 200, nil},
+		{"null crypto", equityBody, `null`, "assets list is missing", 200, nil},
+		{"malformed", `[`, `[]`, "decode response", 200, nil},
+		{"wrong type", `{}`, `[]`, "decode response", 200, nil},
+		{"unauthorized", `{"code":40110000,"message":"` + testCredentials.APIKey + " " + testCredentials.APISecret + `"}`, `[]`, "", 401, nil},
+		{"venue failure", `{"code":50010000,"message":"unavailable"}`, `[]`, "", 500, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v2/assets" || r.URL.Query().Get("status") != "active" {
+					t.Error("wrong assets request")
+				}
+				var body string
+				switch class := r.URL.Query().Get("asset_class"); class {
+				case "us_equity":
+					body = tc.equityBody
+				case "crypto":
+					body = tc.cryptoBody
+				default:
+					t.Errorf("unexpected asset class %q", class)
+					http.Error(w, "unexpected asset class", http.StatusBadRequest)
+					return
+				}
+				if r.Header.Get("APCA-API-KEY-ID") != testCredentials.APIKey || r.Header.Get("APCA-API-SECRET-KEY") != testCredentials.APISecret {
+					t.Error("auth headers missing")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(body))
+			}))
+			defer server.Close()
+			assets, err := NewClient(server.URL, testCredentials, server.Client()).Assets(context.Background())
+			if tc.errorText != "" || tc.status != 200 {
+				if err == nil {
+					t.Fatal("invalid assets response accepted")
+				}
+				assertNoCredentials(t, err.Error())
+				if tc.errorText != "" && !strings.Contains(err.Error(), tc.errorText) {
+					t.Fatalf("wrong assets error: %v", err)
+				}
+				if tc.status != 200 {
+					var apiErr *APIError
+					if !errors.As(err, &apiErr) || apiErr.Status != tc.status {
+						t.Fatal("assets APIError not preserved")
+					}
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(assets, tc.want) {
+				t.Fatalf("assets=%+v want=%+v", assets, tc.want)
+			}
+		})
+	}
+}
+
+func TestAssetsTransportError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.Close()
+	assets, err := NewClient(server.URL, testCredentials, server.Client()).Assets(context.Background())
+	if err == nil || assets != nil {
+		t.Fatal("transport failure was not returned")
+	}
+	assertNoCredentials(t, err.Error())
 }
 
 type errorTransport struct{ err error }
@@ -153,6 +292,43 @@ func TestInvariantCredentialsNeverLeak(t *testing.T) {
 		t.Fatal("wrapped cause lost")
 	}
 	assertNoCredentials(t, err.Error())
+}
+
+func TestOverlappingCredentialsRedacted(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		credentials Credentials
+	}{
+		{"secret inside key", Credentials{APIKey: "shared-long", APISecret: "shared"}},
+		{"key inside secret", Credentials{APIKey: "shared", APISecret: "shared-long"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := tc.credentials.APISecret + " " + tc.credentials.APIKey
+			const expected = "[redacted] [redacted]"
+			t.Run("API error", func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusForbidden)
+					_ = json.NewEncoder(w).Encode(map[string]any{"code": 1, "message": message})
+				}))
+				defer server.Close()
+				client := NewClient(server.URL, tc.credentials, server.Client())
+				_, err := client.Request(context.Background(), http.MethodGet, "/v2/assets/AAPL", nil, nil)
+				var apiErr *APIError
+				if !errors.As(err, &apiErr) || apiErr.Message != expected {
+					t.Fatalf("overlapping credentials in API error: %v", err)
+				}
+			})
+			t.Run("transport error", func(t *testing.T) {
+				cause := errors.New(message)
+				client := NewClient("http://example.invalid", tc.credentials, &http.Client{Transport: errorTransport{cause}})
+				_, err := client.Request(context.Background(), http.MethodGet, "/v2/assets/AAPL", nil, nil)
+				if !errors.Is(err, cause) || !strings.Contains(err.Error(), expected) ||
+					strings.Contains(err.Error(), "shared") || strings.Contains(err.Error(), "-long") {
+					t.Fatalf("overlapping credentials in transport error: %v", err)
+				}
+			})
+		})
+	}
 }
 
 func TestTimeoutReadingErrorResponse(t *testing.T) {

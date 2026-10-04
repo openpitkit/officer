@@ -24,9 +24,11 @@ import (
 	"strings"
 	"testing"
 
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
@@ -248,4 +250,60 @@ func TestHandlerNilSource(t *testing.T) {
 	if !strings.Contains(err.Error(), "mcp: nil source") {
 		t.Fatalf("error should contain %q, got %q", "mcp: nil source", err.Error())
 	}
+}
+
+func (s *setMDErrSource) GetTrading(ctx context.Context) (backend.TradingStatus, error) {
+	return backend.TradingStatus{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {
+	return domain.TradingConnection{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) UpdateTradingConnectionSettings(ctx context.Context, id, label, credentials string) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) SetTradingConnectionEnabled(ctx context.Context, id string, enabled bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) CheckTradingConnection(ctx context.Context, id string) (trading.AccountInfo, error) {
+	return trading.AccountInfo{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) UpsertTradingInstrument(ctx context.Context, instrument domain.TradingInstrument) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) DeleteTradingInstrument(ctx context.Context, connection, externalSymbol string) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) VerifyTradingSymbol(ctx context.Context, id, external string) (backend.TradingSymbolVerification, error) {
+	return backend.TradingSymbolVerification{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) SearchTradingSymbols(ctx context.Context, id, query string) (backend.TradingSymbolSearch, error) {
+	return backend.TradingSymbolSearch{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) PutTradingAccess(ctx context.Context, access domain.TradingAccess) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) SetTradingFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]backend.TradingDestinationStatus, error) {
+	return nil, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return backend.VenueSendResult{}, domain.ErrNotImplemented
 }

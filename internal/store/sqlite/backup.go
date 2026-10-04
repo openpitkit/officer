@@ -39,6 +39,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
@@ -53,27 +54,30 @@ const backupSource = "pit-officer"
 // the rows scope includes. It gathers the full realm into a portable Data, then
 // hands it to backup.NewArchive, which narrows it to the scope. Every row is
 // serialized by portable identity; no surrogate key or engine id is emitted.
-// Before export starts, it returns domain.ErrConflict while any trading
-// connection exists. This check is race-free only when callers serialize the
-// operation with trading-connection creation: the node uses its mutation gate,
-// and any later management operation that creates connections must use it too.
+// A narrowed account selector is refused with domain.ErrInvalid when the scope
+// includes trading and trading state exists, because trading is intentionally
+// all-or-nothing.
 func (r *realmStore) ExportBackup(
 	ctx context.Context, scope backup.Scope,
 ) (backup.Archive, error) {
-	db, err := r.db()
-	if err != nil {
-		return backup.Archive{}, err
-	}
-	exists, err := tradingStateExists(ctx, db)
-	if err != nil {
-		return backup.Archive{}, err
-	}
-	if exists {
-		return backup.Archive{}, fmt.Errorf(
-			"store: backup export refused: trading connections exist and "+
-				"the backup does not cover trading state yet: %w",
-			domain.ErrConflict,
-		)
+	scope = scope.Normalize()
+	if scope.Included(backup.SectionTrading) && accountSelectorNarrowed(scope) {
+		db, err := r.db()
+		if err != nil {
+			return backup.Archive{}, err
+		}
+		exists, err := databaseHasTradingConnections(ctx, db)
+		if err != nil {
+			return backup.Archive{}, err
+		}
+		if exists {
+			return backup.Archive{}, fmt.Errorf(
+				"store: backup export with an account selector would narrow "+
+					"trading state; export all accounts or remove the account "+
+					"selector: %w",
+				domain.ErrInvalid,
+			)
+		}
 	}
 	return r.exportBackup(ctx, scope, nil)
 }
@@ -252,6 +256,18 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.Trades, err = r.ListAllTrades(ctx, "", ""); err != nil {
 		return backup.Data{}, err
 	}
+	if data.TradingConnections, err = r.exportTradingConnections(ctx); err != nil {
+		return backup.Data{}, err
+	}
+	if data.TradingInstruments, err = r.exportTradingInstruments(ctx); err != nil {
+		return backup.Data{}, err
+	}
+	if data.TradingAccess, err = r.exportTradingAccess(ctx); err != nil {
+		return backup.Data{}, err
+	}
+	if data.VenueOrders, err = r.exportVenueOrders(ctx); err != nil {
+		return backup.Data{}, err
+	}
 	if data.Audit, err = r.exportAudit(ctx); err != nil {
 		return backup.Data{}, err
 	}
@@ -286,10 +302,18 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 // failure rolls the whole transaction back, leaving the target realm untouched.
 // RestartRequired remains false here because only the node can decide whether
 // the committed delta crossed a live engine lifecycle boundary.
-// Before restore starts, it returns domain.ErrConflict while any trading
-// connection exists. This check is race-free only when callers serialize the
-// operation with trading-connection creation: the node uses its mutation gate,
-// and any later management operation that creates connections must use it too.
+// It returns domain.ErrInvalid before writing when an account-narrowed restore
+// would apply trading rows, or for any account-narrowed restore while the target
+// holds a venue-order link. It also refuses a narrowed replace-all that would
+// prune all-or-nothing trading state, a replace-all whose normalized scope needs
+// trading but the archive omits that section while the target holds a trading
+// connection, or a replace-all whose normalized scope includes accounts_groups
+// but not trading while the target holds a trading connection. Positions,
+// risk_limits and audit_log pull accounts_groups into the normalized scope.
+// It returns an error wrapping domain.ErrLiveTradingUnavailable
+// before writing, naming the connection label, when the restore would apply a
+// live-mode trading connection. Insert-missing skips a live connection whose
+// external id already exists.
 func (r *realmStore) RestoreBackup(
 	ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 ) (summary backup.RestoreSummary, err error) {
@@ -319,6 +343,14 @@ func (r *realmStore) RestoreBackup(
 	// Re-narrow the archive to the restore scope so a caller may restore a subset
 	// of a full archive; the archive already filtered to its own scope at export.
 	data := backup.FilterData(archive.Data, scope)
+	if accountSelectorNarrowed(scope) && archiveCarriesTrading(data) {
+		return backup.RestoreSummary{}, fmt.Errorf(
+			"store: backup restore with an account selector cannot apply an "+
+				"archive carrying trading rows; restore all accounts or remove "+
+				"the account selector: %w",
+			domain.ErrInvalid,
+		)
+	}
 	if err := backup.ValidateAccountBlocks(data.Accounts); err != nil {
 		return backup.RestoreSummary{}, fmt.Errorf("backup account block invalid: %w", err)
 	}
@@ -327,16 +359,65 @@ func (r *realmStore) RestoreBackup(
 	if err != nil {
 		return backup.RestoreSummary{}, err
 	}
-	exists, err := tradingStateExists(ctx, db)
-	if err != nil {
-		return backup.RestoreSummary{}, err
+	if accountSelectorNarrowed(scope) {
+		exists, err := databaseHasVenueOrders(ctx, db)
+		if err != nil {
+			return backup.RestoreSummary{}, err
+		}
+		if exists {
+			return backup.RestoreSummary{}, fmt.Errorf(
+				"store: backup restore with an account selector would narrow "+
+					"existing venue-order links; restore all accounts or remove "+
+					"the account selector: %w",
+				domain.ErrInvalid,
+			)
+		}
 	}
-	if exists {
-		return backup.RestoreSummary{}, fmt.Errorf(
-			"store: backup restore refused: trading connections exist and "+
-				"the backup does not cover trading state yet: %w",
-			domain.ErrConflict,
-		)
+	archiveHasTradingSection := slices.Contains(
+		archive.Manifest.Sections, backup.SectionTrading,
+	)
+	narrowedTradingReplaceAll := mode == backup.RestoreModeReplaceAll &&
+		accountSelectorNarrowed(scope) && scope.Included(backup.SectionTrading)
+	if mode == backup.RestoreModeReplaceAll &&
+		scope.Included(backup.SectionTrading) &&
+		(!archiveHasTradingSection || narrowedTradingReplaceAll) {
+		exists, err := databaseHasTradingConnections(ctx, db)
+		if err != nil {
+			return backup.RestoreSummary{}, err
+		}
+		if exists && !archiveHasTradingSection {
+			return backup.RestoreSummary{}, fmt.Errorf(
+				"store: the archive carries no trading section; restoring would "+
+					"remove this realm's trading connections: %w",
+				domain.ErrInvalid,
+			)
+		}
+		if exists && narrowedTradingReplaceAll {
+			return backup.RestoreSummary{}, fmt.Errorf(
+				"store: narrowed replace-all restore cannot include the %q "+
+					"section while the target holds trading connections; restore "+
+					"all accounts or remove the account selector: %w",
+				backup.SectionTrading, domain.ErrInvalid,
+			)
+		}
+	}
+	if mode == backup.RestoreModeReplaceAll &&
+		(scope.Included(backup.SectionAccountsGroups) ||
+			scope.Included(backup.SectionActivityHistory)) &&
+		!scope.Included(backup.SectionTrading) {
+		exists, err := databaseHasTradingConnections(ctx, db)
+		if err != nil {
+			return backup.RestoreSummary{}, err
+		}
+		if exists {
+			return backup.RestoreSummary{}, fmt.Errorf(
+				"store: replace-all restore of accounts or activity would "+
+					"invalidate trading state; include the %q section in the "+
+					"same restore scope: %w",
+				backup.SectionTrading,
+				domain.ErrInvalid,
+			)
+		}
 	}
 	dictionaries, err := r.dictionaries()
 	if err != nil {
@@ -406,6 +487,9 @@ func (rt *restoreTx) applyRuntime(section backup.Section, n int) {
 // machine-record foreign keys resolve regardless of which sections the scope
 // selected.
 func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Data) error {
+	if err := rt.validateAppliedTradingConnections(ctx, data.TradingConnections); err != nil {
+		return err
+	}
 	// Replace-all makes each included section equal the archive: before any
 	// insert, delete the in-scope rows the archive does not carry. Children are
 	// removed first (or by FK cascade) so no delete orphans a row or violates a
@@ -464,10 +548,47 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 			return err
 		}
 	}
+	if scope.Included(backup.SectionTrading) {
+		if err := rt.restoreTrading(ctx, data); err != nil {
+			return err
+		}
+	}
 	if scope.Included(backup.SectionAuditLog) {
 		if err := rt.restoreAudit(ctx, data.Audit); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func accountSelectorNarrowed(scope backup.Scope) bool {
+	return !scope.Accounts.All &&
+		(len(scope.Accounts.Accounts) > 0 || len(scope.Accounts.Groups) > 0)
+}
+
+func archiveCarriesTrading(data backup.Data) bool {
+	return len(data.TradingConnections) > 0 ||
+		len(data.TradingInstruments) > 0 ||
+		len(data.TradingAccess) > 0 ||
+		len(data.VenueOrders) > 0
+}
+
+func databaseHasTradingConnections(ctx context.Context, q sqlQueryer) (bool, error) {
+	var exists bool
+	if err := q.QueryRowContext(
+		ctx, `SELECT EXISTS(SELECT 1 FROM trading_connection)`,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("store: inspect trading connections: %w", err)
+	}
+	return exists, nil
+}
+
+func databaseHasVenueOrders(ctx context.Context, q sqlQueryer) (bool, error) {
+	var exists bool
+	if err := q.QueryRowContext(
+		ctx, `SELECT EXISTS(SELECT 1 FROM venue_order)`,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("store: inspect venue-order links: %w", err)
+	}
+	return exists, nil
 }

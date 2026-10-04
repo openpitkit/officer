@@ -32,6 +32,49 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+type venueLinkedRealm struct {
+	store.RealmStore
+	link domain.VenueOrder
+}
+
+func (r *venueLinkedRealm) GetVenueOrder(_ context.Context, order domain.ExternalID) (domain.VenueOrder, bool, error) {
+	return r.link, order == r.link.Order, nil
+}
+
+func TestLocalNode_VenueManagedReports(t *testing.T) {
+	for _, status := range []domain.OrderStatus{domain.OrderStatusFilled, domain.OrderStatusSubmitted} {
+		for _, source := range []domain.Source{domain.SourceAPI, domain.SourceSystem} {
+			t.Run(string(status)+"/"+string(source), func(t *testing.T) {
+				eng := newFakeEngine()
+				n, realm := newTestNode(t, eng)
+				ctx := context.Background()
+				order := testOrder(t, realm, "acc-1")
+				n.realm = &venueLinkedRealm{RealmStore: realm, link: domain.VenueOrder{Order: order.ExternalID}}
+				caller := domain.Caller{Source: source}
+				if source == domain.SourceAPI {
+					caller = testCaller
+				}
+				in := domain.ExecutionReportInput{Order: order.ExternalID, OrderStatus: status}
+				if status == domain.OrderStatusFilled {
+					in.FillQuantity, in.FillPrice, in.LeavesQuantity = "2", "400", "0"
+				}
+				_, err := n.ApplyExecutionReport(ctx, in, caller)
+				if source == domain.SourceAPI {
+					if !errors.Is(err, domain.ErrVenueOrderManaged) {
+						t.Fatalf("manual report = %v", err)
+					}
+					detail, readErr := realm.GetOrder(ctx, order.ExternalID)
+					if readErr != nil || detail.Order.Status != order.Status || len(detail.Events) != 0 || len(detail.Trades) != 0 || len(eng.execReportCalls) != 0 {
+						t.Fatalf("refused report changed order or reached engine: %v", readErr)
+					}
+				} else if err != nil {
+					t.Fatalf("system report = %v", err)
+				}
+			})
+		}
+	}
+}
+
 func testOrder(t *testing.T, st store.RealmStore, id domain.AccountID) domain.Order {
 	t.Helper()
 	seedTestAccount(t, st, id)

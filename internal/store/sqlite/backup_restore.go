@@ -810,6 +810,425 @@ func (rt *restoreTx) openArchivedMarketDataCredentials(
 	return credentials, nil
 }
 
+// --- Restore: trading -------------------------------------------------------
+
+func (rt *restoreTx) validateAppliedTradingConnections(
+	ctx context.Context, connections []backup.TradingConnection,
+) error {
+	for _, archived := range connections {
+		if archived.Mode != domain.TradingModeLive {
+			continue
+		}
+		if rt.mode == backup.RestoreModeInsertMissing {
+			exists, err := rowExists(
+				ctx, rt.tx,
+				`SELECT 1 FROM trading_connection WHERE external_id = ?`,
+				archived.ExternalID.Bytes(),
+			)
+			if err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+		}
+		return fmt.Errorf(
+			"store: restore live trading connection %q: %w",
+			archived.Label, domain.ErrLiveTradingUnavailable,
+		)
+	}
+	return nil
+}
+
+func (rt *restoreTx) restoreTrading(ctx context.Context, data backup.Data) error {
+	for _, archived := range data.TradingConnections {
+		if archived.ExternalID.IsZero() {
+			return fmt.Errorf(
+				"store: restore trading connection %q external id: %w",
+				archived.Label, domain.ErrInvalid,
+			)
+		}
+		exists, err := rowExists(
+			ctx, rt.tx,
+			`SELECT 1 FROM trading_connection WHERE external_id = ?`,
+			archived.ExternalID.Bytes(),
+		)
+		if err != nil {
+			return err
+		}
+		if rt.skip(backup.SectionTrading, exists) {
+			continue
+		}
+
+		credentials, openErr := rt.openArchivedTradingCredentials(archived)
+		enabled := archived.Enabled
+		if openErr != nil {
+			slog.Error(
+				"open archived trading credentials; restoring connection disabled",
+				"connection_id", archived.ExternalID.String(),
+				"error", openErr,
+			)
+			credentials = []byte("{}")
+			enabled = false
+			rt.summary.TradingCredentialsUnavailable = append(
+				rt.summary.TradingCredentialsUnavailable, archived.Label,
+			)
+		}
+		connection := domain.TradingConnection{
+			ExternalID:    archived.ExternalID,
+			Provider:      archived.Provider,
+			Label:         archived.Label,
+			Mode:          archived.Mode,
+			VenueIdentity: archived.VenueIdentity,
+			FeeAccount:    archived.FeeAccount,
+			Credentials:   string(credentials),
+			Enabled:       enabled,
+		}
+		if err := restoreValidationError(
+			domain.ValidateTradingConnection(connection),
+		); err != nil {
+			return fmt.Errorf(
+				"store: restore trading connection %q: %w",
+				connection.ExternalID, err,
+			)
+		}
+		var feeAccountID any
+		if connection.FeeAccount != "" {
+			resolved, err := resolveAccountID(ctx, rt.tx, connection.FeeAccount)
+			if err != nil {
+				if errors.Is(err, domain.ErrInvalid) {
+					return fmt.Errorf(
+						"store: restore trading connection %q fee account %q "+
+							"is missing; include that account in the %q section: %w",
+						connection.ExternalID, connection.FeeAccount,
+						backup.SectionAccountsGroups, domain.ErrInvalid,
+					)
+				}
+				return err
+			}
+			feeAccountID = resolved
+		}
+		storedCredentials, err := rt.store.sealValue(
+			tradingConnectionTable,
+			tradingCredentialsColumn,
+			connection.ExternalID.String(),
+			credentials,
+		)
+		if err != nil {
+			return err
+		}
+		if exists {
+			_, err = rt.tx.ExecContext(
+				ctx,
+				`UPDATE trading_connection
+				 SET provider = ?, label = ?, mode = ?, venue_identity = ?,
+				     fee_account_id = ?, credentials = ?, enabled = ?
+				 WHERE external_id = ?`,
+				connection.Provider, connection.Label, connection.Mode,
+				connection.VenueIdentity, feeAccountID, storedCredentials,
+				connection.Enabled, connection.ExternalID.Bytes(),
+			)
+		} else {
+			_, err = rt.tx.ExecContext(
+				ctx,
+				`INSERT INTO trading_connection
+				 (external_id, provider, label, mode, venue_identity,
+				  fee_account_id, credentials, enabled)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				connection.ExternalID.Bytes(), connection.Provider,
+				connection.Label, connection.Mode, connection.VenueIdentity,
+				feeAccountID, storedCredentials, connection.Enabled,
+			)
+		}
+		if err != nil {
+			return fmt.Errorf(
+				"store: restore trading connection %q: %w",
+				connection.ExternalID, err,
+			)
+		}
+		rt.applyRuntime(backup.SectionTrading, 1)
+	}
+
+	if err := rt.restoreTradingInstruments(ctx, data.TradingInstruments); err != nil {
+		return err
+	}
+	if err := rt.restoreTradingAccess(ctx, data.TradingAccess); err != nil {
+		return err
+	}
+	return rt.restoreVenueOrders(ctx, data.VenueOrders)
+}
+
+func (rt *restoreTx) restoreTradingInstruments(
+	ctx context.Context, instruments []backup.TradingInstrument,
+) error {
+	for _, archived := range instruments {
+		instrument := domain.TradingInstrument{
+			Connection:     archived.Connection,
+			ExternalSymbol: archived.ExternalSymbol,
+			BaseAsset:      archived.BaseAsset,
+			QuoteAsset:     archived.QuoteAsset,
+			Enabled:        archived.Enabled,
+		}
+		if err := restoreValidationError(
+			domain.ValidateTradingInstrument(instrument),
+		); err != nil {
+			return fmt.Errorf(
+				"store: restore trading instrument %q/%q: %w",
+				instrument.Connection, instrument.ExternalSymbol, err,
+			)
+		}
+		connectionID, err := rt.restoreTradingConnectionID(
+			ctx, instrument.Connection, "trading instrument",
+		)
+		if err != nil {
+			return err
+		}
+		baseID, err := resolveAssetID(ctx, rt.tx, instrument.BaseAsset)
+		if err != nil {
+			return fmt.Errorf(
+				"store: restore trading instrument %q/%q base asset %q; "+
+					"include that asset in the archive: %w",
+				instrument.Connection, instrument.ExternalSymbol,
+				instrument.BaseAsset, err,
+			)
+		}
+		quoteID, err := resolveAssetID(ctx, rt.tx, instrument.QuoteAsset)
+		if err != nil {
+			return fmt.Errorf(
+				"store: restore trading instrument %q/%q quote asset %q; "+
+					"include that asset in the archive: %w",
+				instrument.Connection, instrument.ExternalSymbol,
+				instrument.QuoteAsset, err,
+			)
+		}
+		exists, err := rowExists(
+			ctx, rt.tx,
+			`SELECT 1 FROM trading_instrument
+			 WHERE connection_id = ? AND external_symbol = ?`,
+			connectionID, instrument.ExternalSymbol,
+		)
+		if err != nil {
+			return err
+		}
+		if rt.skip(backup.SectionTrading, exists) {
+			continue
+		}
+		if _, err := rt.tx.ExecContext(
+			ctx,
+			`INSERT INTO trading_instrument
+			 (connection_id, external_symbol, base_asset_id, quote_asset_id, enabled)
+			 VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(connection_id, external_symbol) DO UPDATE SET
+			   base_asset_id = excluded.base_asset_id,
+			   quote_asset_id = excluded.quote_asset_id,
+			   enabled = excluded.enabled`,
+			connectionID, instrument.ExternalSymbol, baseID, quoteID,
+			instrument.Enabled,
+		); err != nil {
+			return fmt.Errorf(
+				"store: restore trading instrument %q/%q: %w",
+				instrument.Connection, instrument.ExternalSymbol, err,
+			)
+		}
+		rt.applyRuntime(backup.SectionTrading, 1)
+	}
+	return nil
+}
+
+func (rt *restoreTx) restoreTradingAccess(
+	ctx context.Context, accesses []backup.TradingAccess,
+) error {
+	for _, archived := range accesses {
+		access := domain.TradingAccess{
+			Account:      archived.Account,
+			Connection:   archived.Connection,
+			VenueAccount: archived.VenueAccount,
+		}
+		if err := restoreValidationError(domain.ValidateTradingAccess(access)); err != nil {
+			return fmt.Errorf(
+				"store: restore trading access %q/%q: %w",
+				access.Account, access.Connection, err,
+			)
+		}
+		accountID, err := resolveAccountID(ctx, rt.tx, access.Account)
+		if err != nil {
+			if errors.Is(err, domain.ErrInvalid) {
+				return fmt.Errorf(
+					"store: restore trading access %q/%q account is missing; "+
+						"include that account in the %q section: %w",
+					access.Account, access.Connection,
+					backup.SectionAccountsGroups, domain.ErrInvalid,
+				)
+			}
+			return err
+		}
+		connectionID, err := rt.restoreTradingConnectionID(
+			ctx, access.Connection, "trading access",
+		)
+		if err != nil {
+			return err
+		}
+		exists, err := rowExists(
+			ctx, rt.tx,
+			`SELECT 1 FROM trading_access
+			 WHERE account_id = ? AND connection_id = ?`,
+			accountID, connectionID,
+		)
+		if err != nil {
+			return err
+		}
+		if rt.skip(backup.SectionTrading, exists) {
+			continue
+		}
+		if _, err := rt.tx.ExecContext(
+			ctx,
+			`INSERT INTO trading_access (account_id, connection_id, venue_account)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT(account_id, connection_id) DO UPDATE SET
+			   venue_account = excluded.venue_account`,
+			accountID, connectionID, access.VenueAccount,
+		); err != nil {
+			return fmt.Errorf(
+				"store: restore trading access %q/%q: %w",
+				access.Account, access.Connection, err,
+			)
+		}
+		rt.applyRuntime(backup.SectionTrading, 1)
+	}
+	return nil
+}
+
+func (rt *restoreTx) restoreVenueOrders(
+	ctx context.Context, venueOrders []backup.VenueOrder,
+) error {
+	for _, archived := range venueOrders {
+		venueOrder := domain.VenueOrder{
+			Order:         archived.Order,
+			Connection:    archived.Connection,
+			VenueAccount:  archived.VenueAccount,
+			Route:         archived.Route,
+			ClientOrderID: archived.ClientOrderID,
+			SendAttempted: archived.SendAttempted,
+			VenueOrderID:  archived.VenueOrderID,
+			CreatedAt:     archived.CreatedAt,
+		}
+		if err := restoreValidationError(domain.ValidateVenueOrder(venueOrder)); err != nil {
+			return fmt.Errorf(
+				"store: restore venue-order link for order %q: %w",
+				venueOrder.Order, err,
+			)
+		}
+		orderID, err := rt.restoreVenueOrderOrderID(ctx, venueOrder.Order)
+		if err != nil {
+			return err
+		}
+		connectionID, err := rt.restoreTradingConnectionID(
+			ctx, venueOrder.Connection, "venue-order link",
+		)
+		if err != nil {
+			return err
+		}
+		exists, err := rowExists(
+			ctx, rt.tx, `SELECT 1 FROM venue_order WHERE order_id = ?`, orderID,
+		)
+		if err != nil {
+			return err
+		}
+		if rt.skip(backup.SectionTrading, exists) {
+			continue
+		}
+		var venueOrderID any
+		if venueOrder.VenueOrderID != "" {
+			venueOrderID = venueOrder.VenueOrderID
+		}
+		if _, err := rt.tx.ExecContext(
+			ctx,
+			`INSERT INTO venue_order
+			 (order_id, connection_id, venue_account, route, client_order_id,
+			  send_attempted, venue_order_id, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(order_id) DO UPDATE SET
+			   connection_id = excluded.connection_id,
+			   venue_account = excluded.venue_account,
+			   route = excluded.route,
+			   client_order_id = excluded.client_order_id,
+			   send_attempted = excluded.send_attempted,
+			   venue_order_id = excluded.venue_order_id,
+			   created_at = excluded.created_at`,
+			orderID, connectionID, venueOrder.VenueAccount, venueOrder.Route,
+			venueOrder.ClientOrderID, venueOrder.SendAttempted, venueOrderID,
+			timeStr(venueOrder.CreatedAt),
+		); err != nil {
+			return fmt.Errorf(
+				"store: restore venue-order link for order %q and connection %q: %w",
+				venueOrder.Order, venueOrder.Connection, err,
+			)
+		}
+		rt.applyRuntime(backup.SectionTrading, 1)
+	}
+	return nil
+}
+
+func (rt *restoreTx) openArchivedTradingCredentials(
+	archived backup.TradingConnection,
+) ([]byte, error) {
+	if rt.credentialForm == backup.CredentialFormPlaintext {
+		return append([]byte(nil), archived.Credentials...), nil
+	}
+	key := rt.store.sealer.Load()
+	if key == nil {
+		return nil, fmt.Errorf(
+			"store: open archived trading credentials for row %q: "+
+				"no master key configured",
+			archived.ExternalID,
+		)
+	}
+	credentials, err := rt.store.openValueWithKey(
+		*key,
+		rt.sourceRealm,
+		tradingConnectionTable,
+		tradingCredentialsColumn,
+		archived.ExternalID.String(),
+		archived.Credentials,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"store: open archived trading credentials for row %q: %w",
+			archived.ExternalID,
+			err,
+		)
+	}
+	return credentials, nil
+}
+
+func (rt *restoreTx) restoreTradingConnectionID(
+	ctx context.Context, id domain.ExternalID, owner string,
+) (int64, error) {
+	connectionID, err := resolveTradingConnectionID(ctx, rt.tx, id)
+	if errors.Is(err, domain.ErrNotFound) {
+		return 0, fmt.Errorf(
+			"store: restore %s references missing trading connection %q; "+
+				"include that connection in the %q section: %w",
+			owner, id, backup.SectionTrading, domain.ErrInvalid,
+		)
+	}
+	return connectionID, err
+}
+
+func (rt *restoreTx) restoreVenueOrderOrderID(
+	ctx context.Context, id domain.ExternalID,
+) (int64, error) {
+	orderID, err := lookupOrderID(ctx, rt.tx, id)
+	if errors.Is(err, domain.ErrNotFound) {
+		return 0, fmt.Errorf(
+			"store: restore venue-order link references missing order %q; "+
+				"include that order in the %q section: %w",
+			id, backup.SectionActivityHistory, domain.ErrInvalid,
+		)
+	}
+	return orderID, err
+}
+
 // --- Restore: settings ------------------------------------------------------
 
 // restoreGeneralSettings restores the MCP access overrides, the signing config

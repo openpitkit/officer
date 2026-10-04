@@ -29,10 +29,10 @@ import (
 type TradingMode string
 
 const (
-	// TradingModeTest identifies a paper, testnet or demo environment.
-	TradingModeTest TradingMode = "test"
-	// TradingModeReal identifies a real-money environment.
-	TradingModeReal TradingMode = "real"
+	// TradingModePaper identifies a paper, testnet or demo environment.
+	TradingModePaper TradingMode = "paper"
+	// TradingModeLive identifies a real-money environment.
+	TradingModeLive TradingMode = "live"
 )
 
 // TradingProviderAlpaca is the Alpaca trading-provider discriminator.
@@ -40,13 +40,14 @@ const TradingProviderAlpaca = "alpaca"
 
 // TradingModeSupported reports whether mode is a supported trading mode.
 func TradingModeSupported(mode TradingMode) bool {
-	return mode == TradingModeTest || mode == TradingModeReal
+	return mode == TradingModePaper || mode == TradingModeLive
 }
 
 // TradingConnection describes one configured connection to a trading venue.
-// Credentials is opaque connector-read JSON configuration and is sealed at
-// rest. Enabled gates new sends only; orders already sent continue to be
-// tracked when the connection is disabled.
+// Credentials is opaque connector-read JSON configuration, stored like
+// market-data credentials: sealed at rest with the master key when configured,
+// plaintext otherwise. Enabled gates new sends only; orders already sent
+// continue to be tracked when the connection is disabled.
 type TradingConnection struct {
 	// ExternalID is the opaque public handle of this connection.
 	ExternalID ExternalID
@@ -54,12 +55,18 @@ type TradingConnection struct {
 	Provider string
 	// Label is the unique, case-insensitive operator-facing name.
 	Label string
-	// Mode identifies whether the venue environment is test or real money.
+	// Mode identifies whether the venue environment is paper or live.
 	Mode TradingMode
+	// VenueIdentity identifies the venue-side account reached by the credentials.
+	// A second connection to the same provider and venue identity is refused.
+	VenueIdentity string
 	// Credentials is opaque connector-read JSON configuration.
 	Credentials string
 	// Enabled reports whether new orders may be sent through the connection.
 	Enabled bool
+	// FeeAccount receives unlinked venue fees whole. Empty uses the single
+	// bound Officer account, when there is exactly one.
+	FeeAccount AccountID
 }
 
 // TradingInstrument maps one venue symbol to one Officer instrument on a
@@ -77,15 +84,15 @@ type TradingInstrument struct {
 	Enabled bool
 }
 
-// TradingAccess grants an Officer account access to a trading connection and
-// venue-side account. VenueAccount may be empty when one connection represents
-// one venue account.
+// TradingAccess binds one Officer account to one trading connection. There is
+// one binding per account and connection. VenueAccount is the optional bound
+// venue-side account, empty when none.
 type TradingAccess struct {
 	// Account is the Officer account receiving access.
 	Account AccountID
 	// Connection is the trading connection the account may use.
 	Connection ExternalID
-	// VenueAccount is the provider-specific venue-side account identifier.
+	// VenueAccount is the optional bound venue-side account, empty when none.
 	VenueAccount string
 }
 
@@ -124,28 +131,46 @@ type VenueOrder struct {
 
 // ValidateTradingConnection validates a trading connection before storage.
 func ValidateTradingConnection(connection TradingConnection) error {
-	if err := validateCanonicalTradingString("provider", connection.Provider); err != nil {
+	if connection.FeeAccount != "" {
+		if err := ValidateAccountID(connection.FeeAccount); err != nil {
+			return fmt.Errorf("trading connection fee account: %w", err)
+		}
+	}
+	if err := validateCanonicalTradingString("venue identity", connection.VenueIdentity); err != nil {
 		return err
 	}
-	if err := validateCanonicalTradingString("label", connection.Label); err != nil {
+	if connection.VenueIdentity == "" {
+		return fmt.Errorf("trading connection venue identity: %w", ErrInvalid)
+	}
+	if err := validateCanonicalTradingString("provider", connection.Provider); err != nil {
 		return err
 	}
 	if strings.TrimSpace(string(connection.Mode)) != string(connection.Mode) {
 		return fmt.Errorf("trading connection mode is not canonical: %w", ErrInvalid)
 	}
-	if connection.Credentials != strings.TrimSpace(connection.Credentials) {
-		return fmt.Errorf("trading connection credentials are not canonical: %w", ErrInvalid)
-	}
 	if connection.Provider == "" {
 		return fmt.Errorf("trading connection provider: %w", ErrInvalid)
-	}
-	if connection.Label == "" {
-		return fmt.Errorf("trading connection label: %w", ErrInvalid)
 	}
 	if !TradingModeSupported(connection.Mode) {
 		return fmt.Errorf("trading connection mode %q: %w", connection.Mode, ErrInvalid)
 	}
-	if err := validateTradingJSONObject(connection.Credentials); err != nil {
+	return ValidateTradingConnectionSettings(connection.Label, connection.Credentials)
+}
+
+// ValidateTradingConnectionSettings requires a canonical, non-empty label and
+// canonical credentials containing a JSON object. It returns ErrInvalid for
+// invalid settings without exposing credentials in the error.
+func ValidateTradingConnectionSettings(label, credentials string) error {
+	if err := validateCanonicalTradingString("label", label); err != nil {
+		return err
+	}
+	if label == "" {
+		return fmt.Errorf("trading connection label: %w", ErrInvalid)
+	}
+	if credentials != strings.TrimSpace(credentials) {
+		return fmt.Errorf("trading connection credentials are not canonical: %w", ErrInvalid)
+	}
+	if err := validateTradingJSONObject(credentials); err != nil {
 		return fmt.Errorf("trading connection credentials: %w", ErrInvalid)
 	}
 	return nil
@@ -199,10 +224,15 @@ func ValidateTradingDestination(destination TradingDestination) error {
 	if err := validateCanonicalTradingString("venue account", destination.VenueAccount); err != nil {
 		return err
 	}
-	if destination.Route != strings.TrimSpace(destination.Route) {
+	return ValidateTradingRoute(destination.Route)
+}
+
+// ValidateTradingRoute requires a JSON object without surrounding whitespace.
+func ValidateTradingRoute(route string) error {
+	if route != strings.TrimSpace(route) {
 		return fmt.Errorf("trading destination route is not canonical: %w", ErrInvalid)
 	}
-	if err := validateTradingJSONObject(destination.Route); err != nil {
+	if err := validateTradingJSONObject(route); err != nil {
 		return fmt.Errorf("trading destination route: %w", ErrInvalid)
 	}
 	return nil

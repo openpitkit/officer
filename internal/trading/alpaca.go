@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,8 @@ type alpacaConnector struct {
 var (
 	_ fwtrading.Connector      = (*alpacaConnector)(nil)
 	_ fwtrading.PreChecker     = (*alpacaConnector)(nil)
+	_ fwtrading.AccountChecker = (*alpacaConnector)(nil)
+	_ fwtrading.SymbolSearcher = (*alpacaConnector)(nil)
 	_ fwtrading.SymbolVerifier = (*alpacaConnector)(nil)
 )
 
@@ -66,9 +69,9 @@ var (
 func NewAlpacaConnector(connection domain.TradingConnection) (fwtrading.Connector, error) {
 	var restURL, streamURL string
 	switch connection.Mode {
-	case domain.TradingModeTest:
+	case domain.TradingModePaper:
 		restURL, streamURL = alpaca.PaperRESTURL, alpacaPaperStreamURL
-	case domain.TradingModeReal:
+	case domain.TradingModeLive:
 		restURL, streamURL = alpaca.LiveRESTURL, alpacaLiveStreamURL
 	default:
 		return nil, errors.New("alpaca: unsupported trading mode")
@@ -115,9 +118,13 @@ func parseAlpacaRoute(raw string) (string, error) {
 }
 
 func positiveDecimal(raw, field string) (decimal.Decimal, error) {
-	value, err := decimal.NewFromString(raw)
+	if len(raw) > alpacaDecimalMaxLength {
+		return decimal.Decimal{}, fmt.Errorf("%w: %s decimal exceeds %d characters",
+			fwtrading.ErrRejected, field, alpacaDecimalMaxLength)
+	}
+	value, err := domain.ParseOpenQuantity(raw)
 	if err != nil || !value.IsPositive() {
-		return decimal.Decimal{}, fmt.Errorf("%w: %s must be a positive decimal", fwtrading.ErrRejected, field)
+		return decimal.Decimal{}, fmt.Errorf("%w: %s must be a positive plain decimal", fwtrading.ErrRejected, field)
 	}
 	return value, nil
 }
@@ -360,4 +367,57 @@ func (c *alpacaConnector) VerifySymbol(ctx context.Context, external string) (fw
 		details += ", fractionable"
 	}
 	return fwtrading.SymbolVerification{Exists: true, Tradable: asset.Status == "active" && asset.Tradable, Details: details}, nil
+}
+
+// CheckAccount identifies the account reached by the connector's credentials.
+func (c *alpacaConnector) CheckAccount(ctx context.Context) (fwtrading.AccountInfo, error) {
+	account, err := c.client.Account(ctx)
+	if err != nil {
+		return fwtrading.AccountInfo{}, err
+	}
+	return fwtrading.AccountInfo{Identity: account.ID, Status: account.Status}, nil
+}
+
+// SearchSymbols ranks active assets by exact symbol, symbol prefix, then name
+// substring, sorting each group by symbol and returning at most 50 matches.
+func (c *alpacaConnector) SearchSymbols(ctx context.Context, query string) ([]fwtrading.SymbolMatch, error) {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return []fwtrading.SymbolMatch{}, nil
+	}
+	assets, err := c.client.Assets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var groups [3][]fwtrading.SymbolMatch
+	for _, asset := range assets {
+		if asset.Status != "active" {
+			continue
+		}
+		symbol := strings.ToLower(asset.Symbol)
+		var group int
+		switch {
+		case symbol == query:
+			group = 0
+		case strings.HasPrefix(symbol, query):
+			group = 1
+		case strings.Contains(strings.ToLower(asset.Name), query):
+			group = 2
+		default:
+			continue
+		}
+		groups[group] = append(groups[group], fwtrading.SymbolMatch{
+			Symbol: asset.Symbol, Name: asset.Name, Class: asset.Class,
+			Exchange: asset.Exchange, Tradable: asset.Status == "active" && asset.Tradable,
+		})
+	}
+	matches := make([]fwtrading.SymbolMatch, 0)
+	for _, group := range groups {
+		sort.Slice(group, func(i, j int) bool { return group[i].Symbol < group[j].Symbol })
+		matches = append(matches, group...)
+	}
+	if len(matches) > 50 {
+		matches = matches[:50]
+	}
+	return matches, nil
 }

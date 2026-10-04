@@ -1258,6 +1258,8 @@ type OrderDetail struct {
 	DisplayPrice string `json:"-"`
 	Events       []OrderEvent
 	Trades       []Trade
+	// Venue is nil until the order is linked to a trading venue.
+	Venue *VenueOrder
 }
 
 // Signed reports the order-level rollup: the order carries at least one

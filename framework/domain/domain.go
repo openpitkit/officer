@@ -86,6 +86,10 @@ var (
 	ErrExecutionReportRequired = registerSentinel(errors.New(
 		"order has execution-report activity; submit an explicit execution report",
 	))
+	// ErrVenueOrderManaged refuses operator-driven venue order lifecycle changes.
+	ErrVenueOrderManaged = registerSentinel(errors.New(
+		"the order is managed by its trading venue",
+	))
 	// ErrApprovalRequired marks a confirm or cancel shortcut on an order that
 	// carries no verifiable signed hold-mode accept approval recorded by Officer:
 	// a drop-copy order, pre-trade reject, immediate-mode order, or a recorded
@@ -105,6 +109,17 @@ var (
 	// ErrTerminalOrder marks the remaining Officer safety net for terminal
 	// orders; callers can bypass it with force and route straight to the engine.
 	ErrTerminalOrder = registerSentinel(errors.New("order in terminal status"))
+	// ErrLiveTradingUnavailable marks a live connection refused until the
+	// live-trading token exists.
+	ErrLiveTradingUnavailable = registerSentinel(errors.New("live trading unavailable"))
+	// ErrTradingModeMismatch marks a send whose mode differs from its connection.
+	ErrTradingModeMismatch = registerSentinel(errors.New("trading mode mismatch"))
+	// ErrDestinationAmbiguous requires an explicit connection for the send.
+	ErrDestinationAmbiguous = registerSentinel(errors.New("several destinations; name one"))
+	// ErrNoDestination marks an account without an eligible send destination.
+	ErrNoDestination = registerSentinel(errors.New("no destination for the account in this mode"))
+	// ErrFeeAccountRequired prevents ambiguous attribution of unlinked fees.
+	ErrFeeAccountRequired = registerSentinel(errors.New("the connection's fee account must be set: the venue's fees cannot be split between Officer accounts"))
 	// ErrNoChange marks a successful engine command that produced no account
 	// modifications for Officer to persist.
 	ErrNoChange = registerSentinel(errors.New("no change"))
@@ -428,6 +443,8 @@ const (
 	AuditActionExecutionReport    AuditAction = "execution_report"
 	AuditActionSetMcpAccess       AuditAction = "set_mcp_access"
 	AuditActionSetMarketData      AuditAction = "set_market_data"
+	AuditActionSetTrading         AuditAction = "set_trading"
+	AuditActionVenueFeeSkipped    AuditAction = "venue_fee_skipped"
 	AuditActionExportBackup       AuditAction = "export_backup"
 	AuditActionRestoreBackup      AuditAction = "restore_backup"
 	AuditActionExportBusinessCSV  AuditAction = "export_business_csv"
@@ -503,6 +520,8 @@ func AllAuditActions() []AuditAction {
 		AuditActionDeleteAssetClass,
 		AuditActionSetMcpAccess,
 		AuditActionSetMarketData,
+		AuditActionSetTrading,
+		AuditActionVenueFeeSkipped,
 		AuditActionExportBackup,
 		AuditActionRestoreBackup,
 		AuditActionExportBusinessCSV,

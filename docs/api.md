@@ -54,6 +54,30 @@ Non-mutating tools are enabled by default. Every tool that changes state ships
 disabled, stays disabled until an operator enables it by name, and refuses the
 call while it is off.
 
+## Trading
+
+Trading credentials are JSON objects accepted on write; no trading route or
+MCP tool returns them. A backup export carries the stored credentials according
+to its `credentialForm`: sealed under a master key, plaintext without one, as with
+market-data credentials. Modes are `paper` and `live`; live connection creation
+is refused until the live-trading token exists. `GET /trading` reports
+`credentialsSealed`, which tells whether stored keys are sealed.
+
+A venue-linked order is managed by its venue connection. Manual execution
+reports, confirm and cancel refuse it with `venue_order_managed`. Trading MCP
+tools follow the catalog rule above: mutating tools ship disabled.
+
+Paper sends use `POST /orders/send-paper` or `send_paper_order`; live counterparts
+`POST /orders/send-live` and `send_live_order` come with the live-trading token.
+`acknowledged` means the venue accepted. `refused` means a definitive refusal by
+the venue or Officer provably did not hand it the order, recorded cancelled with
+leaves 0 and reservation released; `error` says why.
+`unknown` means the call could not establish the outcome or read the stored link,
+or the venue refused but cancellation is not recorded yet or could not be
+confirmed; `error` says why. `GET /orders/{id}` is authoritative, and the runtime
+reconciles orders that reached the send step, retrying cancellation after a
+refusal.
+
 ## Audit source
 
 Every control-plane action is recorded with the surface it arrived on. The

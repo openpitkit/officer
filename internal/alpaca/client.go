@@ -51,10 +51,12 @@ func ParseCredentials(raw string) (Credentials, error) {
 			return Credentials{}, errors.New("alpaca: unknown credentials field")
 		}
 	}
-	if strings.TrimSpace(fields["apiKey"]) == "" || strings.TrimSpace(fields["apiSecret"]) == "" {
+	apiKey := strings.TrimSpace(fields["apiKey"])
+	apiSecret := strings.TrimSpace(fields["apiSecret"])
+	if apiKey == "" || apiSecret == "" {
 		return Credentials{}, errors.New("alpaca: apiKey and apiSecret are required")
 	}
-	return Credentials{APIKey: fields["apiKey"], APISecret: fields["apiSecret"]}, nil
+	return Credentials{APIKey: apiKey, APISecret: apiSecret}, nil
 }
 
 // APIError is an HTTP refusal. Code and Message are empty for other body shapes.
@@ -102,12 +104,17 @@ func (e *requestError) Error() string { return e.message }
 func (e *requestError) Unwrap() error { return e.cause }
 
 func (c *Client) redact(message string) string {
-	for _, value := range []string{c.credentials.APISecret, c.credentials.APIKey} {
+	values := []string{c.credentials.APIKey, c.credentials.APISecret}
+	if len(values[0]) < len(values[1]) {
+		values[0], values[1] = values[1], values[0]
+	}
+	replacements := make([]string, 0, 4)
+	for _, value := range values {
 		if value != "" {
-			message = strings.ReplaceAll(message, value, "[redacted]")
+			replacements = append(replacements, value, "[redacted]")
 		}
 	}
-	return message
+	return strings.NewReplacer(replacements...).Replace(message)
 }
 
 func (c *Client) wrap(operation string, err error) error {
@@ -194,4 +201,42 @@ func (c *Client) Asset(ctx context.Context, symbol string) (Asset, bool, error) 
 		return Asset{}, false, err
 	}
 	return asset, true, nil
+}
+
+// Account is the venue account reached by the client's credentials.
+type Account struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+// Account reads the account identity and status. A missing id is an error.
+func (c *Client) Account(ctx context.Context) (Account, error) {
+	var account Account
+	_, err := c.Request(ctx, http.MethodGet, "/v2/account", nil, &account)
+	if err != nil {
+		return Account{}, err
+	}
+	if account.ID == "" {
+		return Account{}, errors.New("alpaca: account id is missing")
+	}
+	return account, nil
+}
+
+// Assets reads active US equities and crypto pairs with separate /v2/assets
+// requests for asset_class=us_equity and asset_class=crypto. A null list is
+// an error.
+func (c *Client) Assets(ctx context.Context) ([]Asset, error) {
+	assets := make([]Asset, 0)
+	for _, class := range []string{"us_equity", "crypto"} {
+		var classAssets []Asset
+		_, err := c.Request(ctx, http.MethodGet, "/v2/assets?status=active&asset_class="+class, nil, &classAssets)
+		if err != nil {
+			return nil, err
+		}
+		if classAssets == nil {
+			return nil, errors.New("alpaca: assets list is missing")
+		}
+		assets = append(assets, classAssets...)
+	}
+	return assets, nil
 }

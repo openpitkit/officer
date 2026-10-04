@@ -587,9 +587,6 @@ type Store interface {
 	Path() string
 
 	// Reset closes, recreates, and migrates the backing database from scratch.
-	// It returns domain.ErrConflict while any trading connection exists. The
-	// check runs before the reset, so callers must serialize Reset with
-	// trading-connection creation (the node's mutation gate does).
 	Reset(ctx context.Context) error
 
 	// Close releases the database connection. It is idempotent.
@@ -1188,9 +1185,15 @@ type RealmStore interface {
 
 	// --- Trading connections and venue orders ---
 
+	// CredentialsSealed reports whether credentials written now are sealed
+	// under a master key.
+	CredentialsSealed() bool
+
 	// CreateTradingConnection persists a new connection, assigning its external
-	// id, and returns it with ExternalID populated. A duplicate external id or
-	// case-insensitive label returns domain.ErrAlreadyExists.
+	// id, and returns it with ExternalID populated. A duplicate external id,
+	// case-insensitive label, or provider/venue identity returns
+	// domain.ErrAlreadyExists.
+	// A non-empty FeeAccount returns domain.ErrInvalid; set it separately.
 	CreateTradingConnection(
 		ctx context.Context, connection domain.TradingConnection,
 	) (domain.TradingConnection, error)
@@ -1201,13 +1204,37 @@ type RealmStore interface {
 		ctx context.Context, id domain.ExternalID,
 	) (domain.TradingConnection, bool, error)
 
+	// GetTradingFeeAccounts reads the fee account and distinct bindings atomically.
+	// An unknown connection returns domain.ErrNotFound.
+	GetTradingFeeAccounts(
+		ctx context.Context, connection domain.ExternalID,
+	) (domain.AccountID, []domain.AccountID, error)
+
 	// ListTradingConnections returns every connection, ordered by external id.
 	ListTradingConnections(ctx context.Context) ([]domain.TradingConnection, error)
+
+	// UpdateTradingConnectionSettings replaces label and credentials, sealing
+	// credentials when a master key is configured, storing plaintext otherwise.
+	// Returns domain.ErrNotFound when absent and domain.ErrAlreadyExists on a
+	// duplicate case-insensitive label. Provider, mode, identity and enabled
+	// remain unchanged.
+	// Returns domain.ErrInvalid for an invalid label or credentials. Callers must
+	// ensure new credentials reach the connection's stored VenueIdentity; the
+	// store cannot check it.
+	UpdateTradingConnectionSettings(
+		ctx context.Context, id domain.ExternalID, label, credentials string,
+	) error
 
 	// SetTradingConnectionEnabled toggles whether new sends may use a connection.
 	// Returns domain.ErrNotFound when absent.
 	SetTradingConnectionEnabled(
 		ctx context.Context, id domain.ExternalID, enabled bool,
+	) error
+
+	// SetTradingConnectionFeeAccount sets the account receiving unlinked fees.
+	// Empty clears it; unknown connections or accounts return ErrNotFound.
+	SetTradingConnectionFeeAccount(
+		ctx context.Context, connection domain.ExternalID, account domain.AccountID,
 	) error
 
 	// UpsertTradingInstrument inserts or replaces a connection instrument keyed
@@ -1233,10 +1260,22 @@ type RealmStore interface {
 		quoteAsset string,
 	) (domain.TradingInstrument, bool, error)
 
-	// AddTradingAccess grants an account access to a connection and venue-side
-	// account. Unknown accounts or connections return domain.ErrNotFound; a
-	// duplicate grant returns domain.ErrAlreadyExists.
-	AddTradingAccess(ctx context.Context, access domain.TradingAccess) error
+	// PutTradingAccess inserts an account/connection binding or replaces its
+	// optional bound venue account. Unknown accounts or connections return
+	// domain.ErrNotFound.
+	PutTradingAccess(ctx context.Context, access domain.TradingAccess) error
+
+	// RemoveTradingAccess removes one account/connection binding. Returns
+	// domain.ErrNotFound when the binding is absent.
+	RemoveTradingAccess(
+		ctx context.Context, account domain.AccountID, connection domain.ExternalID,
+	) error
+
+	// DeleteTradingInstrument removes one mapping. Returns domain.ErrNotFound
+	// when the connection or mapping is absent.
+	DeleteTradingInstrument(
+		ctx context.Context, connection domain.ExternalID, externalSymbol string,
+	) error
 
 	// ListTradingAccess returns an account's grants ordered by connection
 	// external id and then venue-side account.
@@ -1361,9 +1400,6 @@ type RealmStore interface {
 	// id, and every cross-row link is expressed by code or external id. No
 	// surrogate key and no engine id is serialized; the realm round-trips between
 	// an isolated and a shared database with its public identity intact.
-	// It returns domain.ErrConflict while any trading connection exists. The
-	// check runs before the snapshot, so callers must serialize ExportBackup
-	// with trading-connection creation (the node's mutation gate does).
 	ExportBackup(ctx context.Context, scope backup.Scope) (backup.Archive, error)
 
 	// RestoreBackup imports a portable archive into the bound realm under opts.
@@ -1375,10 +1411,7 @@ type RealmStore interface {
 	// scope selectors, and reports per-section counts. The store does not decide
 	// whether an engine replacement is required; the node classifies and publishes
 	// the committed runtime delta online, setting RestoreSummary.RestartRequired
-	// only if it actually replaces the engine. It returns domain.ErrConflict while
-	// any trading connection exists. The check runs before the restore
-	// transaction, so callers must serialize RestoreBackup with
-	// trading-connection creation (the node's mutation gate does).
+	// only if it actually replaces the engine.
 	RestoreBackup(
 		ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 	) (backup.RestoreSummary, error)

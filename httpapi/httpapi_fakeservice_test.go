@@ -30,9 +30,32 @@ import (
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 )
 
 type fakeService struct {
+	paperSendResult       backend.VenueSendResult
+	paperDestination      backend.SendDestination
+	tradingStatus         backend.TradingStatus
+	tradingErr            error
+	tradingSnapshotErr    error
+	tradingCalls          []string
+	tradingConnection     domain.TradingConnection
+	tradingCreateResult   domain.TradingConnection
+	tradingID             string
+	tradingLabel          string
+	tradingCredentials    string
+	tradingEnabled        bool
+	tradingInstrument     domain.TradingInstrument
+	tradingAccess         domain.TradingAccess
+	tradingAccount        domain.AccountID
+	tradingMode           domain.TradingMode
+	tradingSymbol         string
+	tradingQuery          string
+	tradingCheck          trading.AccountInfo
+	tradingVerification   backend.TradingSymbolVerification
+	tradingSearch         backend.TradingSymbolSearch
+	tradingDestinations   []backend.TradingDestinationStatus
 	accounts              []domain.Account
 	accountRows           []store.AccountListRow
 	accountFilter         store.AccountListFilter
@@ -183,6 +206,89 @@ type fakeService struct {
 	// orders submitted-then-resolved, keyed by their used external id, so a fake
 	// SubmitOrderToken can create once and confirm/cancel resolve the same order.
 	submittedOrders map[string]domain.Order
+}
+
+func (f *fakeService) GetTrading(context.Context) (backend.TradingStatus, error) {
+	f.tradingCalls = append(f.tradingCalls, "get")
+	return f.tradingStatus, f.tradingSnapshotErr
+}
+
+func (f *fakeService) CreateTradingConnection(_ context.Context, c domain.TradingConnection) (domain.TradingConnection, error) {
+	f.tradingCalls = append(f.tradingCalls, "create")
+	f.tradingConnection = c
+	return f.tradingCreateResult, f.tradingErr
+}
+
+func (f *fakeService) UpdateTradingConnectionSettings(_ context.Context, id, label, credentials string) error {
+	f.tradingCalls = append(f.tradingCalls, "settings")
+	f.tradingID, f.tradingLabel, f.tradingCredentials = id, label, credentials
+	return f.tradingErr
+}
+
+func (f *fakeService) SetTradingConnectionEnabled(_ context.Context, id string, enabled bool) error {
+	f.tradingCalls = append(f.tradingCalls, "enabled")
+	f.tradingID, f.tradingEnabled = id, enabled
+	return f.tradingErr
+}
+
+func (f *fakeService) CheckTradingConnection(_ context.Context, id string) (trading.AccountInfo, error) {
+	f.tradingCalls = append(f.tradingCalls, "check")
+	f.tradingID = id
+	return f.tradingCheck, f.tradingErr
+}
+
+func (f *fakeService) UpsertTradingInstrument(_ context.Context, inst domain.TradingInstrument) error {
+	f.tradingCalls = append(f.tradingCalls, "instrument")
+	f.tradingInstrument = inst
+	return f.tradingErr
+}
+
+func (f *fakeService) DeleteTradingInstrument(_ context.Context, id, symbol string) error {
+	f.tradingCalls = append(f.tradingCalls, "delete-instrument")
+	f.tradingID, f.tradingSymbol = id, symbol
+	return f.tradingErr
+}
+
+func (f *fakeService) VerifyTradingSymbol(_ context.Context, id, symbol string) (backend.TradingSymbolVerification, error) {
+	f.tradingCalls = append(f.tradingCalls, "verify")
+	f.tradingID, f.tradingSymbol = id, symbol
+	return f.tradingVerification, f.tradingErr
+}
+
+func (f *fakeService) SearchTradingSymbols(_ context.Context, id, query string) (backend.TradingSymbolSearch, error) {
+	f.tradingCalls = append(f.tradingCalls, "search")
+	f.tradingID, f.tradingQuery = id, query
+	return f.tradingSearch, f.tradingErr
+}
+
+func (f *fakeService) PutTradingAccess(_ context.Context, access domain.TradingAccess) error {
+	f.tradingCalls = append(f.tradingCalls, "access")
+	f.tradingAccess = access
+	return f.tradingErr
+}
+
+func (f *fakeService) RemoveTradingAccess(_ context.Context, account domain.AccountID, id domain.ExternalID) error {
+	f.tradingCalls = append(f.tradingCalls, "delete-access")
+	f.tradingAccount, f.tradingID = account, id.String()
+	return f.tradingErr
+}
+
+func (f *fakeService) SetTradingFeeAccount(_ context.Context, id domain.ExternalID, account domain.AccountID) error {
+	f.tradingCalls = append(f.tradingCalls, "fee-account")
+	f.tradingID, f.tradingAccount = id.String(), account
+	return f.tradingErr
+}
+
+func (f *fakeService) ListTradingDestinations(_ context.Context, account domain.AccountID, mode domain.TradingMode) ([]backend.TradingDestinationStatus, error) {
+	f.tradingCalls = append(f.tradingCalls, "destinations")
+	f.tradingAccount, f.tradingMode = account, mode
+	return f.tradingDestinations, f.tradingErr
+}
+
+func (s *fakeService) SendPaperOrder(_ context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	s.tradingCalls = append(s.tradingCalls, "send-paper")
+	s.submitOrderIn, s.paperDestination = o, dest
+	return s.paperSendResult, s.tradingErr
 }
 
 type setMcpCall struct {

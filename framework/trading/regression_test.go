@@ -64,7 +64,7 @@ func TestSendRechecksEligibility(t *testing.T) {
 						}
 						return f.sink(ctx, in)
 					}
-					r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink,
+					r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink, f.feeSkipSink,
 						slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 					must(t, err)
 					must(t, r.Start(testCtx))
@@ -72,18 +72,23 @@ func TestSendRechecksEligibility(t *testing.T) {
 					t.Cleanup(r.Stop)
 				}
 				link, err := f.runtime.Send(testCtx, order.ExternalID, f.dest)
-				if !errors.Is(err, domain.ErrConflict) {
-					t.Fatalf("changed order send error = %v, want conflict", err)
-				}
+				wantErr := domain.ErrConflict
 				condition := "execution-report activity"
 				switch activity {
 				case "confirm":
 					condition = "confirmed"
+					if window == "claim" {
+						wantErr = domain.ErrVenueOrderManaged
+						condition = "managed by its trading venue"
+					}
 				case "client-fill":
 					condition = "not committed"
 					if window == "claim" {
 						condition = "trades"
 					}
+				}
+				if !errors.Is(err, wantErr) {
+					t.Fatalf("changed order send error = %v, want %v", err, wantErr)
 				}
 				if !strings.Contains(err.Error(), condition) {
 					t.Fatalf("send error %v does not name %q", err, condition)
@@ -129,7 +134,7 @@ func TestMissingVenueOrderGrace(t *testing.T) {
 			f := newFixture(t)
 			f.venue.sendErr = errors.New("venue request timed out")
 			st := datedLinkStore{Store: f.st, createdAt: time.Now().Add(-tc.age)}
-			r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink,
+			r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			must(t, r.Start(testCtx))
@@ -314,7 +319,7 @@ func TestInvalidCommissionPendingRetry(t *testing.T) {
 				}
 				return nil
 			}
-			r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink,
+			r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			must(t, r.Start(testCtx))
@@ -438,7 +443,7 @@ func (s preCheckReadStore) ListTradingAccess(ctx context.Context, _ domain.Accou
 func TestPreCheckStoreReadsUseCallerContext(t *testing.T) {
 	f := newFixture(t)
 	st := preCheckReadStore{Store: f.st, readContext: make(chan context.Context, 1)}
-	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink,
+	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(t, err)
 	must(t, r.Start(testCtx))

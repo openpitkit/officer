@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -55,15 +56,15 @@ func TestProvidersAndEndpoints(t *testing.T) {
 		t.Fatal("expected one provider")
 	}
 	p := providers[0]
-	if p.Type != domain.TradingProviderAlpaca || p.Title != "Alpaca" || p.VenueAccounts || !p.VerifiesSymbols || p.Build == nil {
+	if p.Type != domain.TradingProviderAlpaca || p.Title != "Alpaca" || p.VenueAccounts || !p.VerifiesSymbols || !p.SearchesSymbols || !p.UnlinkedFees || p.Build == nil {
 		t.Fatal("provider contract differs")
 	}
 	for _, tc := range []struct {
 		mode         domain.TradingMode
 		rest, stream string
 	}{
-		{domain.TradingModeTest, alpaca.PaperRESTURL, alpacaPaperStreamURL},
-		{domain.TradingModeReal, alpaca.LiveRESTURL, alpacaLiveStreamURL},
+		{domain.TradingModePaper, alpaca.PaperRESTURL, alpacaPaperStreamURL},
+		{domain.TradingModeLive, alpaca.LiveRESTURL, alpacaLiveStreamURL},
 	} {
 		connector, err := p.Build(domain.TradingConnection{Mode: tc.mode, Credentials: tradingCredentials})
 		if err != nil {
@@ -81,7 +82,7 @@ func TestProvidersAndEndpoints(t *testing.T) {
 			t.Fatal("wrong REST endpoint")
 		}
 	}
-	if c, err := NewAlpacaConnector(domain.TradingConnection{Mode: domain.TradingModeTest, Credentials: "{}"}); err == nil || c != nil {
+	if c, err := NewAlpacaConnector(domain.TradingConnection{Mode: domain.TradingModePaper, Credentials: "{}"}); err == nil || c != nil {
 		t.Fatal("bad credentials must return an error and a nil connector")
 	}
 }
@@ -137,6 +138,22 @@ func TestPreCheck(t *testing.T) {
 		{"below dollar precision fail", func(a *alpaca.Asset, o *fwtrading.Order) { o.LimitPrice = "0.99999" }, fwtrading.ErrRejected, "4 decimal"},
 		{"price trailing zeros", func(a *alpaca.Asset, o *fwtrading.Order) { o.LimitPrice = "1.1000" }, nil, ""},
 		{"market", func(a *alpaca.Asset, o *fwtrading.Order) { o.LimitPrice = "" }, nil, ""},
+		{"bounded quantity exponent", func(a *alpaca.Asset, o *fwtrading.Order) { o.Quantity = "1e2147483647" }, fwtrading.ErrRejected, "quantity"},
+		{"bounded quantity negative exponent", func(a *alpaca.Asset, o *fwtrading.Order) { o.Quantity = "1e-2147483648" }, fwtrading.ErrRejected, "quantity"},
+		{"bounded quantity small exponent", func(a *alpaca.Asset, o *fwtrading.Order) { o.Quantity = "1e2" }, fwtrading.ErrRejected, "quantity"},
+		{"bounded quantity small negative exponent", func(a *alpaca.Asset, o *fwtrading.Order) { o.Quantity = "1e-2" }, fwtrading.ErrRejected, "quantity"},
+		{"bounded quantity too long", func(a *alpaca.Asset, o *fwtrading.Order) { o.Quantity = strings.Repeat("1", alpacaDecimalMaxLength+1) }, fwtrading.ErrRejected, "quantity"},
+		{"bounded limit price exponent", func(a *alpaca.Asset, o *fwtrading.Order) { o.LimitPrice = "1e2147483647" }, fwtrading.ErrRejected, "limit price"},
+		{"bounded limit price negative exponent", func(a *alpaca.Asset, o *fwtrading.Order) { o.LimitPrice = "1e-2147483648" }, fwtrading.ErrRejected, "limit price"},
+		{"bounded limit price small exponent", func(a *alpaca.Asset, o *fwtrading.Order) { o.LimitPrice = "1e2" }, fwtrading.ErrRejected, "limit price"},
+		{"bounded limit price small negative exponent", func(a *alpaca.Asset, o *fwtrading.Order) { o.LimitPrice = "1e-2" }, fwtrading.ErrRejected, "limit price"},
+		{"bounded limit price too long", func(a *alpaca.Asset, o *fwtrading.Order) {
+			o.LimitPrice = strings.Repeat("1", alpacaDecimalMaxLength+1)
+		}, fwtrading.ErrRejected, "limit price"},
+		{"exact decimal length", func(a *alpaca.Asset, o *fwtrading.Order) {
+			o.Quantity = strings.Repeat("1", alpacaDecimalMaxLength)
+			o.LimitPrice = strings.Repeat("1", alpacaDecimalMaxLength)
+		}, nil, ""},
 		{"invalid quantity", func(a *alpaca.Asset, o *fwtrading.Order) { o.Quantity = "bad" }, fwtrading.ErrRejected, "quantity"},
 		{"zero quantity", func(a *alpaca.Asset, o *fwtrading.Order) { o.Quantity = "0" }, fwtrading.ErrRejected, "quantity"},
 		{"negative quantity", func(a *alpaca.Asset, o *fwtrading.Order) { o.Quantity = "-1" }, fwtrading.ErrRejected, "quantity"},
@@ -211,6 +228,15 @@ func TestPreCheck(t *testing.T) {
 				}
 			} else if !errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.message) {
 				t.Fatal("rule did not reject with its reason")
+			}
+			if strings.HasPrefix(tc.name, "bounded ") {
+				raw := order.Quantity
+				if tc.message == "limit price" {
+					raw = order.LimitPrice
+				}
+				if strings.Contains(err.Error(), raw) {
+					t.Fatal("refusal echoed the input value")
+				}
 			}
 		})
 	}
@@ -514,6 +540,229 @@ func TestLookup(t *testing.T) {
 	defer server.Close()
 	if _, found, err := testAlpacaConnector(t, server).Lookup(context.Background(), fwtrading.OrderRef{ClientOrderID: "unknown"}); err != nil || found {
 		t.Fatal("404 must be not found")
+	}
+}
+
+func TestCheckAccount(t *testing.T) {
+	credentials, err := alpaca.ParseCredentials(tradingCredentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, body, errorText string
+		status                int
+		want                  fwtrading.AccountInfo
+	}{
+		{"identity and status", `{"id":"venue-account","status":"ACTIVE"}`, "", 200, fwtrading.AccountInfo{Identity: "venue-account", Status: "ACTIVE"}},
+		{"unauthorized", `{"code":40110000,"message":"` + credentials.APIKey + " " + credentials.APISecret + `"}`, "", 401, fwtrading.AccountInfo{}},
+		{"missing id", `{"status":"ACTIVE"}`, "account id is missing", 200, fwtrading.AccountInfo{}},
+		{"malformed", `{"id":`, "decode response", 200, fwtrading.AccountInfo{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.RequestURI() != "/v2/account" {
+					t.Error("wrong account request")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			account, err := testAlpacaConnector(t, server).CheckAccount(context.Background())
+			if tc.errorText != "" || tc.status != 200 {
+				if err == nil {
+					t.Fatal("invalid account response accepted")
+				}
+				if strings.Contains(err.Error(), credentials.APIKey) || strings.Contains(err.Error(), credentials.APISecret) {
+					t.Fatal("account error leaked credentials")
+				}
+				if tc.errorText != "" && !strings.Contains(err.Error(), tc.errorText) {
+					t.Fatalf("wrong account error: %v", err)
+				}
+				if tc.status != 200 {
+					var apiErr *alpaca.APIError
+					if !errors.As(err, &apiErr) || apiErr.Status != tc.status {
+						t.Fatal("account APIError not preserved")
+					}
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if account != tc.want {
+				t.Fatalf("account=%+v want=%+v", account, tc.want)
+			}
+		})
+	}
+}
+
+func TestSearchSymbols(t *testing.T) {
+	assets := []alpaca.Asset{
+		{Symbol: "ZZZ", Name: "AAPL trust", Class: "us_equity", Exchange: "NYSE", Status: "active", Tradable: true},
+		{Symbol: "AAPLZ", Name: "AAPL last", Class: "us_equity", Exchange: "NASDAQ", Status: "active", Tradable: true},
+		{Symbol: "BTC/USD", Name: "Bitcoin Dollar", Class: "crypto", Exchange: "ALPACA", Status: "active", Tradable: true},
+		{Symbol: "AA", Name: "AAPL first", Class: "us_equity", Exchange: "NYSE", Status: "active", Tradable: true},
+		{Symbol: "AAPL", Name: "Apple AAPL", Class: "us_equity", Exchange: "NASDAQ", Status: "active", Tradable: true},
+		{Symbol: "AAPL0", Name: "AAPL inactive", Class: "us_equity", Exchange: "NASDAQ", Status: "inactive", Tradable: true},
+		{Symbol: "AAPLA", Name: "AAPL fund", Class: "us_equity", Exchange: "NASDAQ", Status: "active", Tradable: false},
+		{Symbol: "BTC/EUR", Name: "Bitcoin Euro", Class: "crypto", Exchange: "ALPACA", Status: "active", Tradable: true},
+		{Symbol: "OTHER", Name: "Unrelated", Class: "us_equity", Exchange: "NYSE", Status: "active", Tradable: true},
+	}
+	want := []fwtrading.SymbolMatch{
+		{Symbol: "AAPL", Name: "Apple AAPL", Class: "us_equity", Exchange: "NASDAQ", Tradable: true},
+		{Symbol: "AAPLA", Name: "AAPL fund", Class: "us_equity", Exchange: "NASDAQ", Tradable: false},
+		{Symbol: "AAPLZ", Name: "AAPL last", Class: "us_equity", Exchange: "NASDAQ", Tradable: true},
+		{Symbol: "AA", Name: "AAPL first", Class: "us_equity", Exchange: "NYSE", Tradable: true},
+		{Symbol: "ZZZ", Name: "AAPL trust", Class: "us_equity", Exchange: "NYSE", Tradable: true},
+	}
+	crypto := []fwtrading.SymbolMatch{
+		{Symbol: "BTC/EUR", Name: "Bitcoin Euro", Class: "crypto", Exchange: "ALPACA", Tradable: true},
+		{Symbol: "BTC/USD", Name: "Bitcoin Dollar", Class: "crypto", Exchange: "ALPACA", Tradable: true},
+	}
+	for _, tc := range []struct {
+		name, query string
+		want        []fwtrading.SymbolMatch
+	}{
+		{"exact prefix name ordering", "aapl", want},
+		{"case and whitespace", " \tAaPl\n", want},
+		{"name substring", "bitcoin", crypto},
+		{"crypto prefix", " bTc/ ", crypto},
+		{"crypto exact", "btc/usd", crypto[1:]},
+		{"inactive excluded", "aapl0", []fwtrading.SymbolMatch{}},
+		{"no matches", "missing", []fwtrading.SymbolMatch{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v2/assets" || r.URL.Query().Get("status") != "active" {
+					t.Error("wrong assets request")
+				}
+				class := r.URL.Query().Get("asset_class")
+				if class != "us_equity" && class != "crypto" {
+					t.Errorf("unexpected asset class %q", class)
+					http.Error(w, "unexpected asset class", http.StatusBadRequest)
+					return
+				}
+				filtered := make([]alpaca.Asset, 0)
+				for _, asset := range assets {
+					if asset.Class == class {
+						filtered = append(filtered, asset)
+					}
+				}
+				_ = json.NewEncoder(w).Encode(filtered)
+			}))
+			defer server.Close()
+			matches, err := testAlpacaConnector(t, server).SearchSymbols(context.Background(), tc.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(matches, tc.want) {
+				t.Fatalf("matches=%+v want=%+v", matches, tc.want)
+			}
+		})
+	}
+}
+
+func TestSearchSymbolsEmptyQuery(t *testing.T) {
+	for _, tc := range []struct{ name, query string }{
+		{"empty", ""},
+		{"whitespace", " \t\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Error("empty query made a venue request")
+				_ = json.NewEncoder(w).Encode([]alpaca.Asset{})
+			}))
+			defer server.Close()
+			matches, err := testAlpacaConnector(t, server).SearchSymbols(context.Background(), tc.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if matches == nil || len(matches) != 0 {
+				t.Fatalf("matches=%+v want=empty non-nil slice", matches)
+			}
+		})
+	}
+}
+
+func TestSearchSymbolsLimit(t *testing.T) {
+	var assets []alpaca.Asset
+	for i := 60; i >= 0; i-- {
+		assets = append(assets, alpaca.Asset{Symbol: fmt.Sprintf("CAP%02d", i), Class: "us_equity", Status: "active", Tradable: true})
+	}
+	assets = append(assets, alpaca.Asset{Symbol: "AAA", Name: "CAP name", Class: "us_equity", Status: "active", Tradable: true})
+	assets = append(assets, alpaca.Asset{Symbol: "CAP", Class: "us_equity", Status: "active", Tradable: true})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v2/assets" || r.URL.Query().Get("status") != "active" {
+			t.Error("wrong assets request")
+		}
+		switch class := r.URL.Query().Get("asset_class"); class {
+		case "us_equity":
+			_ = json.NewEncoder(w).Encode(assets)
+		case "crypto":
+			_ = json.NewEncoder(w).Encode([]alpaca.Asset{})
+		default:
+			t.Errorf("unexpected asset class %q", class)
+			http.Error(w, "unexpected asset class", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	matches, err := testAlpacaConnector(t, server).SearchSymbols(context.Background(), "CAP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 50 {
+		t.Fatalf("matches=%d want=50", len(matches))
+	}
+	if matches[0].Symbol != "CAP" {
+		t.Fatal("exact match was not retained before capping")
+	}
+	for i := 1; i < len(matches); i++ {
+		if matches[i].Symbol != fmt.Sprintf("CAP%02d", i-1) {
+			t.Fatalf("match %d has wrong symbol %q", i, matches[i].Symbol)
+		}
+	}
+}
+
+func TestSearchSymbolsErrors(t *testing.T) {
+	credentials, err := alpaca.ParseCredentials(tradingCredentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, body, errorText string
+		status                int
+		closeServer           bool
+	}{
+		{"unauthorized", `{"code":40110000,"message":"` + credentials.APIKey + " " + credentials.APISecret + `"}`, "", 401, false},
+		{"venue failure", `{"code":50010000,"message":"unavailable"}`, "", 500, false},
+		{"malformed", `[`, "decode response", 200, false},
+		{"transport", `[]`, "request", 200, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			c := testAlpacaConnector(t, server)
+			if tc.closeServer {
+				server.Close()
+			}
+			matches, err := c.SearchSymbols(context.Background(), "AAPL")
+			if err == nil || matches != nil {
+				t.Fatal("search failure was not returned")
+			}
+			if strings.Contains(err.Error(), credentials.APIKey) || strings.Contains(err.Error(), credentials.APISecret) {
+				t.Fatal("search error leaked credentials")
+			}
+			if tc.errorText != "" && !strings.Contains(err.Error(), tc.errorText) {
+				t.Fatalf("wrong search error: %v", err)
+			}
+			if tc.status != 200 {
+				var apiErr *alpaca.APIError
+				if !errors.As(err, &apiErr) || apiErr.Status != tc.status {
+					t.Fatal("search APIError not preserved")
+				}
+			}
+		})
 	}
 }
 

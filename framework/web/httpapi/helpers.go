@@ -31,6 +31,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 )
 
@@ -403,6 +404,18 @@ func WriteErr(w http.ResponseWriter, err error) {
 		WriteErrMsg(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
 	case errors.Is(err, domain.ErrInvalid):
 		WriteValidationErr(w, err)
+	case errors.Is(err, domain.ErrLiveTradingUnavailable):
+		WriteErrMsg(w, http.StatusForbidden, "live_trading_unavailable", domain.ErrLiveTradingUnavailable.Error())
+	case errors.Is(err, domain.ErrTradingModeMismatch):
+		WriteErrMsg(w, http.StatusConflict, "trading_mode_mismatch", domain.ErrTradingModeMismatch.Error())
+	case errors.Is(err, domain.ErrFeeAccountRequired):
+		WriteErrMsg(w, http.StatusConflict, "fee_account_required", domain.ErrFeeAccountRequired.Error())
+	case errors.Is(err, domain.ErrVenueOrderManaged):
+		WriteErrMsg(w, http.StatusConflict, "venue_order_managed", domain.ErrVenueOrderManaged.Error())
+	case errors.Is(err, domain.ErrNoDestination):
+		WriteErrMsg(w, http.StatusConflict, "no_destination", domain.ErrNoDestination.Error())
+	case errors.Is(err, domain.ErrDestinationAmbiguous):
+		writeDestinationAmbiguousErr(w, err)
 	case errors.Is(err, domain.ErrForbidden):
 		WriteErrMsg(w, http.StatusForbidden, "forbidden", domain.ErrForbidden.Error())
 	// A rejected missing account is matched before the generic not-found case so
@@ -432,12 +445,56 @@ func WriteErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrUpstream):
 		slog.Warn("upstream provider request failed", "error", err)
 		WriteErrMsg(w, http.StatusBadGateway, "upstream",
-			"The market-data provider couldn't complete the request. "+
-				"Check the symbol and your provider access, then try again.")
+			"The provider couldn't complete the request. "+
+				"Check your provider access and the request, then try again.")
 	default:
 		slog.Error("unhandled internal error serving request", "error", err)
 		WriteErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
 	}
+}
+
+// TradingDestinationDTO is the wire representation shared by destination lists
+// and destination-ambiguous errors.
+type TradingDestinationDTO struct {
+	Connection   string             `json:"connection"`
+	Label        string             `json:"label"`
+	Provider     string             `json:"provider"`
+	Mode         domain.TradingMode `json:"mode"`
+	Enabled      bool               `json:"enabled"`
+	VenueAccount string             `json:"venueAccount"`
+	State        string             `json:"state"`
+	Error        string             `json:"error,omitempty"`
+}
+
+// ToTradingDestinationDTOs encodes destinations, including an error only for
+// unavailable destinations. An empty input produces an empty JSON array.
+func ToTradingDestinationDTOs(in []backend.TradingDestinationStatus) []TradingDestinationDTO {
+	out := make([]TradingDestinationDTO, 0, len(in))
+	for _, d := range in {
+		candidate := TradingDestinationDTO{
+			Connection: d.Connection.String(), Label: d.Label, Provider: d.Provider,
+			Mode: d.Mode, Enabled: d.Enabled, VenueAccount: d.VenueAccount, State: d.State,
+		}
+		if d.State == "unavailable" {
+			candidate.Error = d.Unavailable
+		}
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func writeDestinationAmbiguousErr(w http.ResponseWriter, err error) {
+	var destinations []backend.TradingDestinationStatus
+	var typed *backend.DestinationAmbiguousError
+	if errors.As(err, &typed) {
+		destinations = typed.Candidates
+	}
+	WriteJSON(w, http.StatusConflict, map[string]any{
+		"error": map[string]any{
+			"code": "destination_ambiguous", "message": domain.ErrDestinationAmbiguous.Error(),
+			"candidates": ToTradingDestinationDTOs(destinations),
+		},
+	})
 }
 
 // ProblemError identifies one invalid request member. Pointer is a JSON

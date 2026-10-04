@@ -52,6 +52,8 @@ tags:
     description: Operator UI preferences
   - name: market-data
     description: Market-data source configuration and latest quote snapshots
+  - name: trading
+    description: Venue connections, instrument mappings and account access
   - name: backup
     description: Portable database backup and restore
   - name: business-csv
@@ -118,6 +120,10 @@ paths:
     post:
       operationId: exportBackup
       summary: Export a portable database backup
+      description: >
+        Trading is included with activity_history and ignores account selectors.
+        A narrowed account selector is refused with 422 while connections exist
+        and trading is in scope.
       tags: [backup]
       requestBody:
         required: true
@@ -166,6 +172,10 @@ paths:
         rejected: the body embeds a whole backup archive, a portable artifact
         another Officer build may have written with fields this build does not
         know.
+        The trading runtime stops before restore and restarts afterwards,
+        after both success and failure.
+        Trading scope restrictions are described by BackupScope; applying a
+        live-mode connection returns 403 live_trading_unavailable before writing.
       tags: [backup]
       requestBody:
         required: true
@@ -202,6 +212,8 @@ paths:
                 properties:
                   summary:
                     $ref: "#/components/schemas/BackupRestoreSummary"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -250,6 +262,9 @@ paths:
     post:
       operationId: resetDatabase
       summary: Delete all data and recreate the database
+      description: >
+        The trading runtime stops before reset and restarts afterwards,
+        after both success and failure.
       tags: [backup]
       requestBody:
         required: true
@@ -840,6 +855,11 @@ paths:
     delete:
       operationId: deleteAccount
       summary: Delete an account
+      description: >
+        A connection's fee account cannot be deleted (409 conflict), even with
+        force. Force-deleting an account removes its venue-fee adjustments, so
+        fees it received may be booked again to the connection's current fee
+        account on the next restart.
       tags: [accounts]
       parameters:
         - $ref: "#/components/parameters/ForceCascade"
@@ -853,7 +873,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/HasDependentsError"
+          $ref: "#/components/responses/AccountHasDependentsOrConflictError"
         "503":
           $ref: "#/components/responses/EngineRestartingError"
         "500":
@@ -2138,6 +2158,9 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Trade"
+                  venueOrder:
+                    description: Omitted for an ordinary order, never null.
+                    $ref: "#/components/schemas/VenueOrder"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -2193,6 +2216,8 @@ paths:
       description: >
         Advances the parent order to a target lifecycle status. The instrument,
         account, and side are taken from the parent order.
+        A venue-linked order refuses manual execution reports with 409
+        venue_order_managed.
 
         Reports are serialized on the account pipeline. Caller-reported
         `leavesQuantity` is recorded verbatim when supplied. Reservation
@@ -3272,6 +3297,63 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /orders/send-paper:
+    post:
+      operationId: sendPaperOrder
+      summary: Check, hold and send an order to a paper venue
+      description: >
+        Checks the account, paper destination, mapping and venue rules before
+        creating or holding an order. Errors before any order exists hold and
+        send nothing. The route must be an explicit JSON object. Omitting the
+        connection requires exactly one enabled paper destination; ambiguity
+        returns destination_ambiguous with candidates. A supplied venueAccount
+        must match the account binding. A live connection returns
+        trading_mode_mismatch. A venue pre-check refusal returns 422 with the
+        venue's reason. A pre-trade reject returns 201 without venueSend and
+        sends nothing. GET /orders/{id} is authoritative; the runtime reconciles
+        any order that reached the send step. The live counterpart
+        /orders/send-live comes with the live-trading token.
+      tags: [trading]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendPaperOrderRequest"
+      responses:
+        "201":
+          description: Order recorded with its approval and optional venue outcome.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendPaperOrderResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "403":
+          description: Forbidden destination.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: >
+            Trading mode mismatch, no destination, ambiguity, duplicate id,
+            disabled connection, disabled instrument or runtime not running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /orders/drop-copy/submit:
     post:
       operationId: submitDropCopyOrder
@@ -3326,6 +3408,7 @@ paths:
         order with no execution-report activity. If no such approval is
         recorded, or activity already exists, the caller must submit a complete
         execution report through the order workflow instead.
+        Venue-linked orders refuse this shortcut with 409 venue_order_managed.
       tags: [signing]
       responses:
         "200":
@@ -3364,6 +3447,7 @@ paths:
         If no such approval is recorded, or activity already exists, the caller
         must submit a complete execution report through the order workflow
         instead.
+        Venue-linked orders refuse this shortcut with 409 venue_order_managed.
       tags: [signing]
       requestBody:
         required: true
@@ -3400,6 +3484,484 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/OrderShortcutConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Trading
+  # ---------------------------------------------------------------------------
+
+  /trading:
+    get:
+      operationId: getTrading
+      summary: List trading providers and connections without credential values
+      tags: [trading]
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingResponse"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections:
+    post:
+      operationId: createTradingConnection
+      summary: Create and check a venue connection
+      tags: [trading]
+      description: >
+        Mode is immutable and must be paper or live. Live creation is refused
+        with live_trading_unavailable until the live token exists. Credentials
+        are a JSON object on input and only key-presence flags on output.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradingConnectionCreate"
+      responses:
+        "201":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingConnectionResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections/{id}/settings:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    put:
+      operationId: updateTradingConnectionSettings
+      summary: Update label or credentials for the same venue identity
+      tags: [trading]
+      description: >
+        Omitted fields leave the stored value unchanged. Supplied credentials
+        merge into the stored object; changing venue identity is a conflict.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradingConnectionSettingsUpdate"
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections/{id}/enabled:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    put:
+      operationId: setTradingConnectionEnabled
+      summary: Enable or disable a connection
+      tags: [trading]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradingEnabled"
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingEnabled"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections/{id}/check:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    post:
+      operationId: checkTradingConnection
+      summary: Check venue account identity and status
+      tags: [trading]
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingCheckResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections/{id}/instruments:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    put:
+      operationId: upsertTradingInstrument
+      summary: Create or replace a venue symbol mapping
+      tags: [trading]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradingInstrument"
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteTradingInstrument
+      summary: Delete a venue symbol mapping
+      tags: [trading]
+      parameters:
+        - name: externalSymbol
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "204":
+          description: Request completed.
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections/{id}/verify-symbol:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    post:
+      operationId: verifyTradingSymbol
+      summary: Verify venue symbol existence and tradability
+      tags: [trading]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradingSymbolRequest"
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingVerificationResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections/{id}/search-symbols:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    post:
+      operationId: searchTradingSymbols
+      summary: Search venue symbols
+      tags: [trading]
+      description: Blank query is rejected with 422 before calling the provider.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradingSearchRequest"
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingSearchResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections/{id}/access:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    put:
+      operationId: putTradingAccess
+      summary: Grant an Officer account access to a connection
+      tags: [trading]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradingAccessRequest"
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: removeTradingAccess
+      summary: Remove an Officer account's connection access
+      tags: [trading]
+      parameters:
+        - name: account
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "204":
+          description: Request completed.
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trading/connections/{id}/fee-account:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    put:
+      operationId: setTradingFeeAccount
+      summary: Set the account receiving unlinked venue fees
+      tags: [trading]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradingFeeAccountRequest"
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteTradingFeeAccount
+      summary: Clear the connection's fee account
+      tags: [trading]
+      responses:
+        "204":
+          description: Request completed.
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{code}/trading-destinations:
+    parameters:
+      - $ref: "#/components/parameters/AccountCode"
+    get:
+      operationId: listTradingDestinations
+      summary: List an account's trading destinations
+      tags: [trading]
+      parameters:
+        - name: mode
+          in: query
+          required: false
+          description: Omit to list both modes.
+          schema:
+            $ref: "#/components/schemas/TradingMode"
+      responses:
+        "200":
+          description: Request completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradingDestinationsResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "403":
+          $ref: "#/components/responses/LiveTradingUnavailableError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -4001,6 +4563,16 @@ components:
       schema:
         $ref: "#/components/schemas/Id"
 
+    TradingConnectionId:
+      name: id
+      in: path
+      required: true
+      description: >
+        URL-encoded trading connection id - the connection's opaque
+        public handle, never a surrogate or engine id.
+      schema:
+        $ref: "#/components/schemas/Id"
+
     SourceFilter:
       name: source
       in: query
@@ -4165,6 +4737,7 @@ components:
         `execution_report_required`. Submit a complete execution report through
         the normal order workflow instead. A terminal order returns
         `terminal_order`.
+        Venue-linked orders always return venue_order_managed.
       content:
         application/json:
           schema:
@@ -4176,6 +4749,18 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/HasDependentsError"
+
+    AccountHasDependentsOrConflictError:
+      description: >
+        Delete would remove dependent rows without force (has_dependents), or
+        the account is a connection's fee account and cannot be deleted even
+        with force (conflict).
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/HasDependentsError"
+              - $ref: "#/components/schemas/Error"
 
     AccountMissingError:
       description: >
@@ -4201,6 +4786,24 @@ components:
 
     UpstreamError:
       description: Upstream provider request failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    LiveTradingUnavailableError:
+      description: Live trading is refused until the live token exists (live_trading_unavailable).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    TradingConflictError:
+      description: >
+        A connection or account dependency conflicts with the request. A
+        required unlinked-fee target returns fee_account_required. A venue-linked
+        order refuses manual execution reports, confirm and cancel with
+        venue_order_managed.
       content:
         application/json:
           schema:
@@ -4342,6 +4945,14 @@ components:
         error:
           type: object
           required: [code, message]
+          allOf:
+            - if:
+                properties:
+                  code:
+                    const: destination_ambiguous
+                required: [code]
+              then:
+                required: [candidates]
           properties:
             code:
               type: string
@@ -4351,12 +4962,22 @@ components:
                 `terminal_order`, `approval_required`,
                 `execution_report_required`, `precondition`, `too_large`,
                 `forbidden`, `reserved_group`,
+                `live_trading_unavailable`, `trading_mode_mismatch`,
+                `fee_account_required`, `venue_order_managed`, `no_destination`,
+                `destination_ambiguous`,
                 `engine_restarting`, `signing`, `upstream`, `not_implemented`,
                 or `internal`.
               example: not_found
             message:
               type: string
               example: account not found
+            candidates:
+              type: array
+              description: >
+                Present inside error for destination_ambiguous, including an
+                empty array for the bare sentinel.
+              items:
+                $ref: "#/components/schemas/TradingDestination"
 
     CurrencyChangeBlockedError:
       type: object
@@ -4503,6 +5124,7 @@ components:
         - market_data_settings
         - general_settings
         - activity_history
+        - trading
         - audit_log
 
     BackupRestoreMode:
@@ -4529,6 +5151,10 @@ components:
 
     BackupExportScope:
       type: object
+      description: >
+        Trading travels with activity_history, is all-or-nothing and ignores
+        account selectors. Export narrowed by an account selector is refused
+        with 422 while connections exist and trading is in scope.
       additionalProperties: false
       properties:
         all:
@@ -4565,6 +5191,20 @@ components:
 
     BackupScope:
       type: object
+      description: >
+        Trading travels with activity_history, is all-or-nothing and ignores
+        account selectors. An account-narrowed restore that would apply trading
+        rows is refused with 422. Any account-narrowed restore while the target
+        holds existing venue-order links is refused with 422. An account-narrowed
+        replace_all including trading is refused with 422 while the target holds
+        a trading connection. A replace_all needing trading from an archive
+        without a trading section is refused with 422 while the target holds a
+        trading connection. A replace_all whose normalized scope includes
+        accounts_groups but not trading is refused with 422 while the target
+        holds a trading connection; positions, risk_limits and audit_log pull
+        accounts_groups into the normalized scope. Applying a live-mode
+        connection is refused with 403 live_trading_unavailable before writing;
+        insert_missing skips a live connection whose external id already exists.
       properties:
         all:
           type: boolean
@@ -4588,7 +5228,7 @@ components:
         credentialForm:
           type: string
           enum: [plaintext, sealed]
-          description: Form shared by every archived market-data credential.
+          description: Form shared by every archived credential (market data and trading).
         manifest:
           description: Archive metadata used to validate and route restore.
           $ref: "#/components/schemas/BackupManifest"
@@ -4720,6 +5360,22 @@ components:
           description: Serialized trade rows.
           items:
             type: object
+        tradingConnections:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupTradingConnection"
+        tradingInstruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupTradingInstrument"
+        tradingAccess:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupTradingAccess"
+        venueOrders:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupVenueOrder"
         audit:
           type: array
           description: Serialized audit log rows.
@@ -4788,6 +5444,14 @@ components:
             type: integer
         marketDataCredentialsUnavailable:
           type: array
+          items:
+            type: string
+        tradingCredentialsUnavailable:
+          type: array
+          description: >
+            Connections whose sealed credentials could not be opened are
+            restored disabled with no keys. Repair with PUT
+            /trading/connections/{id}/settings, then enable the connection.
           items:
             type: string
         restartRequired:
@@ -6063,6 +6727,431 @@ components:
           type: boolean
           description: Whether the operator dismissed the first-run welcome dialog.
 
+    # Trading
+
+    TradingMode:
+      type: string
+      enum: [paper, live]
+
+    TradingState:
+      type: string
+      enum: [running, unavailable, stopped]
+
+    TradingCredentials:
+      type: object
+      additionalProperties: true
+      description: Provider credentials, accepted only on input. Never returned.
+
+    TradingProvider:
+      type: object
+      additionalProperties: false
+      required: [type, title, venueAccounts, verifiesSymbols, searchesSymbols, unlinkedFees]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        venueAccounts:
+          type: boolean
+        verifiesSymbols:
+          type: boolean
+        searchesSymbols:
+          type: boolean
+        unlinkedFees:
+          type: boolean
+
+    TradingInstrument:
+      type: object
+      additionalProperties: false
+      required: [externalSymbol, baseAsset, quoteAsset, enabled]
+      properties:
+        externalSymbol:
+          type: string
+          minLength: 1
+        baseAsset:
+          type: string
+          minLength: 1
+        quoteAsset:
+          type: string
+          minLength: 1
+        enabled:
+          type: boolean
+
+    TradingAccess:
+      type: object
+      additionalProperties: false
+      required: [account, venueAccount]
+      properties:
+        account:
+          type: string
+          minLength: 1
+        venueAccount:
+          type: string
+
+    TradingConnection:
+      type: object
+      additionalProperties: false
+      required: [id, provider, label, mode, enabled, venueIdentity, feeAccount, state, secrets, instruments, access]
+      properties:
+        id:
+          $ref: "#/components/schemas/Id"
+        provider:
+          type: string
+        label:
+          type: string
+        mode:
+          $ref: "#/components/schemas/TradingMode"
+        enabled:
+          type: boolean
+        venueIdentity:
+          type: string
+        feeAccount:
+          type: string
+          description: Empty string when unset.
+        state:
+          $ref: "#/components/schemas/TradingState"
+        error:
+          type: string
+          description: Omitted unless unavailable and a reason is present.
+        secrets:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: Key presence only; credential values are never returned.
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradingInstrument"
+        access:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradingAccess"
+
+    TradingDestination:
+      type: object
+      additionalProperties: false
+      required: [connection, label, provider, mode, enabled, venueAccount, state]
+      properties:
+        connection:
+          $ref: "#/components/schemas/Id"
+        label:
+          type: string
+        provider:
+          type: string
+        mode:
+          $ref: "#/components/schemas/TradingMode"
+        enabled:
+          type: boolean
+        venueAccount:
+          type: string
+        state:
+          $ref: "#/components/schemas/TradingState"
+        error:
+          type: string
+          description: Omitted unless unavailable and a reason is present.
+
+    Trading:
+      type: object
+      additionalProperties: false
+      description: >
+        Collections are always present, including empty arrays;
+        credentialsSealed is present even when false.
+      required: [providers, connections, credentialsSealed]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradingProvider"
+        connections:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradingConnection"
+        credentialsSealed:
+          type: boolean
+
+    TradingResponse:
+      type: object
+      additionalProperties: false
+      required: [trading]
+      properties:
+        trading:
+          $ref: "#/components/schemas/Trading"
+
+    TradingConnectionResponse:
+      type: object
+      additionalProperties: false
+      required: [connection]
+      properties:
+        connection:
+          $ref: "#/components/schemas/TradingConnection"
+
+    TradingConnectionCreate:
+      type: object
+      additionalProperties: false
+      required: [provider, label, mode, credentials, enabled]
+      properties:
+        id:
+          $ref: "#/components/schemas/Id"
+        provider:
+          type: string
+          minLength: 1
+        label:
+          type: string
+          minLength: 1
+        mode:
+          $ref: "#/components/schemas/TradingMode"
+        credentials:
+          $ref: "#/components/schemas/TradingCredentials"
+        enabled:
+          type: boolean
+
+    TradingConnectionSettingsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        label:
+          type: string
+          minLength: 1
+        credentials:
+          $ref: "#/components/schemas/TradingCredentials"
+
+    TradingEnabled:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+
+    TradingCheck:
+      type: object
+      additionalProperties: false
+      required: [venueIdentity, venueStatus]
+      properties:
+        venueIdentity:
+          type: string
+        venueStatus:
+          type: string
+
+    TradingCheckResponse:
+      type: object
+      additionalProperties: false
+      required: [check]
+      properties:
+        check:
+          $ref: "#/components/schemas/TradingCheck"
+
+    TradingSymbolRequest:
+      type: object
+      additionalProperties: false
+      required: [externalSymbol]
+      properties:
+        externalSymbol:
+          type: string
+          minLength: 1
+
+    TradingSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          description: Must contain a non-whitespace character.
+
+    TradingVerification:
+      type: object
+      additionalProperties: false
+      required: [supported, exists, tradable]
+      properties:
+        supported:
+          type: boolean
+        exists:
+          type: boolean
+        tradable:
+          type: boolean
+        details:
+          type: string
+          description: Omitted when absent.
+
+    TradingVerificationResponse:
+      type: object
+      additionalProperties: false
+      required: [verification]
+      properties:
+        verification:
+          $ref: "#/components/schemas/TradingVerification"
+
+    TradingSymbolMatch:
+      type: object
+      additionalProperties: false
+      description: Absent name, class and exchange are omitted, never null.
+      required: [symbol, tradable]
+      properties:
+        symbol:
+          type: string
+        name:
+          type: string
+        class:
+          type: string
+        exchange:
+          type: string
+        tradable:
+          type: boolean
+
+    TradingSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [supported, matches]
+      properties:
+        supported:
+          type: boolean
+        matches:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradingSymbolMatch"
+
+    TradingAccessRequest:
+      type: object
+      additionalProperties: false
+      required: [account]
+      properties:
+        account:
+          type: string
+          minLength: 1
+        venueAccount:
+          type: string
+
+    TradingFeeAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [account]
+      properties:
+        account:
+          type: string
+          minLength: 1
+
+    TradingDestinationsResponse:
+      type: object
+      additionalProperties: false
+      required: [destinations]
+      properties:
+        destinations:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradingDestination"
+
+    VenueOrder:
+      type: object
+      additionalProperties: false
+      description: >
+        Venue rejection, cancellation and expiry produce order status cancelled
+        with leavesQuantity 0. Manual execution reports, confirm and cancel are
+        refused with venue_order_managed.
+      required: [connection, venueAccount, route, clientOrderId, sendAttempted, createdAt]
+      properties:
+        connection:
+          $ref: "#/components/schemas/Id"
+        venueAccount:
+          type: string
+        route:
+          type: object
+          additionalProperties: true
+          description: Connector route as a JSON object, never a JSON string.
+        clientOrderId:
+          type: string
+        venueOrderId:
+          type: string
+          description: Omitted until acknowledged by the venue.
+        sendAttempted:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    BackupTradingConnection:
+      type: object
+      additionalProperties: false
+      required: [externalId, provider, label, mode, venueIdentity, credentials, enabled]
+      properties:
+        externalId:
+          $ref: "#/components/schemas/Id"
+        provider:
+          type: string
+        label:
+          type: string
+        mode:
+          $ref: "#/components/schemas/TradingMode"
+        venueIdentity:
+          type: string
+        feeAccount:
+          type: string
+        credentials:
+          type: string
+          format: byte
+          description: >
+            Base64 database credential bytes in the archive's credentialForm,
+            never runtime plaintext in a connection response.
+        enabled:
+          type: boolean
+
+    BackupTradingInstrument:
+      type: object
+      additionalProperties: false
+      required: [connection, externalSymbol, baseAsset, quoteAsset, enabled]
+      properties:
+        connection:
+          $ref: "#/components/schemas/Id"
+        externalSymbol:
+          type: string
+          minLength: 1
+        baseAsset:
+          type: string
+          minLength: 1
+        quoteAsset:
+          type: string
+          minLength: 1
+        enabled:
+          type: boolean
+
+    BackupTradingAccess:
+      type: object
+      additionalProperties: false
+      required: [connection, account]
+      properties:
+        connection:
+          $ref: "#/components/schemas/Id"
+        account:
+          type: string
+          minLength: 1
+        venueAccount:
+          type: string
+
+    BackupVenueOrder:
+      type: object
+      additionalProperties: false
+      required: [order, connection, route, clientOrderId, sendAttempted, createdAt]
+      properties:
+        order:
+          $ref: "#/components/schemas/Id"
+        connection:
+          $ref: "#/components/schemas/Id"
+        venueAccount:
+          type: string
+        route:
+          type: string
+          description: Compact connector JSON text in the portable backup format.
+        clientOrderId:
+          type: string
+        venueOrderId:
+          type: string
+        sendAttempted:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
     # Market data
 
     MarketData:
@@ -6586,6 +7675,65 @@ components:
                 price; `hold` waits for execution reports.
               enum: [immediate, hold]
       unevaluatedProperties: false
+
+    SendPaperOrderRequest:
+      allOf:
+        - $ref: "#/components/schemas/OrderSubmissionRequest"
+        - type: object
+          required: [destination]
+          properties:
+            id:
+              $ref: "#/components/schemas/Id"
+              description: Optional unique order id; omitted lets the store assign one.
+            destination:
+              type: object
+              required: [route]
+              properties:
+                connection:
+                  $ref: "#/components/schemas/Id"
+                  description: Omit only when one enabled paper destination exists.
+                venueAccount:
+                  type: string
+                  description: Omitted uses the binding; supplied must match it.
+                route:
+                  type: object
+                  description: Explicit venue route; Alpaca requires timeInForce.
+                  additionalProperties: true
+              additionalProperties: false
+      unevaluatedProperties: false
+
+    SendPaperOrderResponse:
+      allOf:
+        - $ref: "#/components/schemas/SignedApproval"
+        - type: object
+          properties:
+            venueSend:
+              $ref: "#/components/schemas/VenueSend"
+              description: Omitted when the pre-trade verdict is reject.
+
+    VenueSend:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [acknowledged, refused, unknown]
+          description: >
+            acknowledged: the venue accepted the order.
+            refused: a definitive refusal by the venue, or Officer provably did
+            not hand the order to the venue; the order is recorded cancelled
+            with leaves 0 and its reservation released; error says why.
+            unknown: the call could not establish the outcome, could not read
+            the stored venue link, or the venue refused but cancellation is not
+            recorded yet or could not be confirmed; error says why.
+            GET /orders/{id} is authoritative and the runtime reconciles orders
+            that reached the send step, retrying cancellation after a refusal.
+        error:
+          type: string
+          description: Reason for refused or unknown; omitted when absent.
+        venueOrder:
+          $ref: "#/components/schemas/VenueOrder"
+          description: Stored venue link; omitted when absent, never null.
 
     DropCopyOrderRequest:
       allOf:

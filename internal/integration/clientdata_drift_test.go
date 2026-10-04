@@ -168,6 +168,13 @@ var clientDataAllowlist = []clientDataAllow{
 	},
 	{
 		Surface: driftBackup,
+		Entity:  "trading-connections",
+		Field:   "Credentials",
+		Kind:    "type-mismatch",
+		Why:     "archive credentials are bytes so sealed values remain byte-exact",
+	},
+	{
+		Surface: driftBackup,
 		Entity:  "signing-keys",
 		Field:   "PrivateKey",
 		Kind:    "uncovered",
@@ -691,6 +698,30 @@ var backupParitySpecs = []paritySpec{
 	},
 	{
 		surface: driftBackup,
+		entity:  "trading-connections",
+		source:  reflect.TypeOf(domain.TradingConnection{}),
+		target:  reflect.TypeOf(backup.TradingConnection{}),
+	},
+	{
+		surface: driftBackup,
+		entity:  "trading-instruments",
+		source:  reflect.TypeOf(domain.TradingInstrument{}),
+		target:  reflect.TypeOf(backup.TradingInstrument{}),
+	},
+	{
+		surface: driftBackup,
+		entity:  "trading-access",
+		source:  reflect.TypeOf(domain.TradingAccess{}),
+		target:  reflect.TypeOf(backup.TradingAccess{}),
+	},
+	{
+		surface: driftBackup,
+		entity:  "venue-orders",
+		source:  reflect.TypeOf(domain.VenueOrder{}),
+		target:  reflect.TypeOf(backup.VenueOrder{}),
+	},
+	{
+		surface: driftBackup,
 		entity:  "market-data-quotes",
 		source:  reflect.TypeOf(domain.MarketDataQuote{}),
 		target:  reflect.TypeOf(domain.MarketDataQuote{}),
@@ -822,10 +853,6 @@ var nonClientDataSchemaTables = map[string]string{
 	"realm":                    "single-row realm identity metadata, not portable realm contents",
 	"secret_state":             "single-row installation cryptographic state, tied to its master key and not portable",
 	"source_kind":              "closed-domain reference dictionary, not portable client data",
-	"trading_access":           "trading state with no backup section yet; backup export, restore and database reset refuse while a trading connection exists",
-	"trading_connection":       "trading state with no backup section yet; backup export, restore and database reset refuse while a trading connection exists",
-	"trading_instrument":       "trading state with no backup section yet; backup export, restore and database reset refuse while a trading connection exists",
-	"venue_order":              "trading state with no backup section yet; backup export, restore and database reset refuse while a trading connection exists",
 }
 
 // schemaClientTables is the canonical client-data contract. Each SQLite column
@@ -1108,6 +1135,46 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"quote_asset_id":  "QuoteAsset",
 			"enabled":         "Enabled",
 			"manual_price":    "ManualPrice",
+		},
+	},
+	"trading_connection": {
+		backup: map[string]string{
+			"external_id":    "ExternalID",
+			"provider":       "Provider",
+			"label":          "Label",
+			"mode":           "Mode",
+			"venue_identity": "VenueIdentity",
+			"credentials":    "Credentials",
+			"enabled":        "Enabled",
+			"fee_account_id": "FeeAccount",
+		},
+	},
+	"trading_instrument": {
+		backup: map[string]string{
+			"connection_id":   "Connection",
+			"external_symbol": "ExternalSymbol",
+			"base_asset_id":   "BaseAsset",
+			"quote_asset_id":  "QuoteAsset",
+			"enabled":         "Enabled",
+		},
+	},
+	"trading_access": {
+		backup: map[string]string{
+			"account_id":    "Account",
+			"connection_id": "Connection",
+			"venue_account": "VenueAccount",
+		},
+	},
+	"venue_order": {
+		backup: map[string]string{
+			"order_id":        "Order",
+			"connection_id":   "Connection",
+			"venue_account":   "VenueAccount",
+			"route":           "Route",
+			"client_order_id": "ClientOrderID",
+			"send_attempted":  "SendAttempted",
+			"venue_order_id":  "VenueOrderID",
+			"created_at":      "CreatedAt",
 		},
 	},
 	"signing_key": {
@@ -1779,6 +1846,49 @@ func seedClientDataDriftRealm(
 			Enabled:        true,
 		},
 	))
+	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "Alpaca Sentinel",
+		Mode:          domain.TradingModePaper,
+		VenueIdentity: "venue-account-sentinel",
+		Credentials:   `{"key":"trading-sentinel"}`,
+		Enabled:       true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	must(t, "SetTradingConnectionFeeAccount", rs.SetTradingConnectionFeeAccount(
+		ctx, connection.ExternalID, "acc-1",
+	))
+	must(t, "UpsertTradingInstrument", rs.UpsertTradingInstrument(
+		ctx, domain.TradingInstrument{
+			Connection:     connection.ExternalID,
+			ExternalSymbol: "AAPL",
+			BaseAsset:      "AAPL",
+			QuoteAsset:     "USD",
+			Enabled:        true,
+		},
+	))
+	must(t, "PutTradingAccess", rs.PutTradingAccess(ctx, domain.TradingAccess{
+		Account:      "acc-1",
+		Connection:   connection.ExternalID,
+		VenueAccount: "venue-account-sentinel",
+	}))
+	if _, err := rs.CreateVenueOrder(ctx, domain.VenueOrder{
+		Order:         order.ExternalID,
+		Connection:    connection.ExternalID,
+		VenueAccount:  "venue-account-sentinel",
+		Route:         `{"strategy":"sentinel"}`,
+		ClientOrderID: "client-order-sentinel",
+	}); err != nil {
+		t.Fatalf("CreateVenueOrder: %v", err)
+	}
+	must(t, "MarkVenueOrderSendAttempted", rs.MarkVenueOrderSendAttempted(
+		ctx, order.ExternalID,
+	))
+	must(t, "SetVenueOrderID", rs.SetVenueOrderID(
+		ctx, order.ExternalID, "venue-order-sentinel",
+	))
 	must(t, "SetSigningConfig", rs.SetSigningConfig(ctx, "no_esign", "0"))
 	must(t, "SetMcpAccess", rs.SetMcpAccess(ctx, "submit_order", true))
 	must(t, "SetUserSetting", rs.SetUserSetting(
@@ -1951,6 +2061,10 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"audit", data.Audit},
 		{"market-data-instances", data.MarketDataInstances},
 		{"market-data-instruments", data.MarketDataInstruments},
+		{"trading-connections", data.TradingConnections},
+		{"trading-instruments", data.TradingInstruments},
+		{"trading-access", data.TradingAccess},
+		{"venue-orders", data.VenueOrders},
 		{"signing-keys", data.SigningKeys},
 		{"signing-config", data.SigningConfig},
 		{"mcp-access", data.McpAccess},

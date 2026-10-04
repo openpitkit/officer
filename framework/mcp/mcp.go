@@ -31,6 +31,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/mcp/catalog"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
@@ -64,6 +65,35 @@ type Source interface {
 	SetMarketDataInstrumentEnabled(
 		ctx context.Context, instanceID, externalSymbol string, enabled bool,
 	) error
+	// GetTrading returns provider capabilities and connection status snapshots.
+	GetTrading(ctx context.Context) (backend.TradingStatus, error)
+	// CreateTradingConnection stores a connection, assigning an id when empty.
+	CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error)
+	// UpdateTradingConnectionSettings updates label and write-only credentials;
+	// empty values keep the corresponding stored values.
+	UpdateTradingConnectionSettings(ctx context.Context, id, label, credentials string) error
+	// SetTradingConnectionEnabled enables or disables a stored connection.
+	SetTradingConnectionEnabled(ctx context.Context, id string, enabled bool) error
+	// CheckTradingConnection queries the venue's account identity and status.
+	CheckTradingConnection(ctx context.Context, id string) (trading.AccountInfo, error)
+	// UpsertTradingInstrument stores a venue symbol's Officer asset mapping.
+	UpsertTradingInstrument(ctx context.Context, instrument domain.TradingInstrument) error
+	// DeleteTradingInstrument removes the connection's venue symbol mapping.
+	DeleteTradingInstrument(ctx context.Context, connection, externalSymbol string) error
+	// VerifyTradingSymbol reports venue symbol existence and tradability.
+	VerifyTradingSymbol(ctx context.Context, id, external string) (backend.TradingSymbolVerification, error)
+	// SearchTradingSymbols queries venue symbols and reports search support.
+	SearchTradingSymbols(ctx context.Context, id, query string) (backend.TradingSymbolSearch, error)
+	// PutTradingAccess grants an Officer account access to a venue connection.
+	PutTradingAccess(ctx context.Context, access domain.TradingAccess) error
+	// RemoveTradingAccess revokes an account's access to a connection.
+	RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error
+	// SetTradingFeeAccount assigns the unlinked-fee account; empty clears it.
+	SetTradingFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID) error
+	// ListTradingDestinations returns account destinations; empty mode lists all.
+	ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]backend.TradingDestinationStatus, error)
+	// SendPaperOrder checks, holds and sends an order to a paper connection.
+	SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error)
 	// CommandEnabled reports whether the operator has the named MCP command enabled.
 	CommandEnabled(ctx context.Context, command string) (bool, error)
 	// SubmitOrderToken runs the pre-trade pipeline and issues an approval token.
@@ -710,4 +740,60 @@ func attestationFromBackend(att backend.Attestation) Attestation {
 		KeyID:  att.KeyID,
 		Signed: att.Signed,
 	}
+}
+
+func (s controlPlaneSource) GetTrading(ctx context.Context) (backend.TradingStatus, error) {
+	return s.cp.GetTrading(ctx)
+}
+
+func (s controlPlaneSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {
+	return s.cp.CreateTradingConnection(ctx, connection)
+}
+
+func (s controlPlaneSource) UpdateTradingConnectionSettings(ctx context.Context, id, label, credentials string) error {
+	return s.cp.UpdateTradingConnectionSettings(ctx, id, label, credentials)
+}
+
+func (s controlPlaneSource) SetTradingConnectionEnabled(ctx context.Context, id string, enabled bool) error {
+	return s.cp.SetTradingConnectionEnabled(ctx, id, enabled)
+}
+
+func (s controlPlaneSource) CheckTradingConnection(ctx context.Context, id string) (trading.AccountInfo, error) {
+	return s.cp.CheckTradingConnection(ctx, id)
+}
+
+func (s controlPlaneSource) UpsertTradingInstrument(ctx context.Context, instrument domain.TradingInstrument) error {
+	return s.cp.UpsertTradingInstrument(ctx, instrument)
+}
+
+func (s controlPlaneSource) DeleteTradingInstrument(ctx context.Context, connection, externalSymbol string) error {
+	return s.cp.DeleteTradingInstrument(ctx, connection, externalSymbol)
+}
+
+func (s controlPlaneSource) VerifyTradingSymbol(ctx context.Context, id, external string) (backend.TradingSymbolVerification, error) {
+	return s.cp.VerifyTradingSymbol(ctx, id, external)
+}
+
+func (s controlPlaneSource) SearchTradingSymbols(ctx context.Context, id, query string) (backend.TradingSymbolSearch, error) {
+	return s.cp.SearchTradingSymbols(ctx, id, query)
+}
+
+func (s controlPlaneSource) PutTradingAccess(ctx context.Context, access domain.TradingAccess) error {
+	return s.cp.PutTradingAccess(ctx, access)
+}
+
+func (s controlPlaneSource) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
+	return s.cp.RemoveTradingAccess(ctx, account, connection)
+}
+
+func (s controlPlaneSource) SetTradingFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID) error {
+	return s.cp.SetTradingFeeAccount(ctx, connection, account)
+}
+
+func (s controlPlaneSource) ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]backend.TradingDestinationStatus, error) {
+	return s.cp.ListTradingDestinations(ctx, account, mode)
+}
+
+func (s controlPlaneSource) SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return s.cp.SendPaperOrder(ctx, o, dest)
 }

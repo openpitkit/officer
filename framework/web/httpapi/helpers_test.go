@@ -23,9 +23,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 )
 
@@ -62,6 +64,103 @@ func TestDecodeBodyRequiresOneNonNullValue(t *testing.T) {
 				t.Fatalf("Content-Type = %q", got)
 			}
 		})
+	}
+}
+
+func TestWriteErrTradingCodes(t *testing.T) {
+	for _, tc := range []struct {
+		code   string
+		err    error
+		status int
+	}{
+		{"live_trading_unavailable", domain.ErrLiveTradingUnavailable, 403},
+		{"trading_mode_mismatch", domain.ErrTradingModeMismatch, 409},
+		{"fee_account_required", domain.ErrFeeAccountRequired, 409},
+		{"venue_order_managed", domain.ErrVenueOrderManaged, 409},
+		{"no_destination", domain.ErrNoDestination, 409},
+		{"destination_ambiguous", domain.ErrDestinationAmbiguous, 409},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			generic := domain.ErrConflict
+			if tc.status == 403 {
+				generic = domain.ErrForbidden
+			}
+			rec := httptest.NewRecorder()
+			WriteErr(rec, fmt.Errorf("hidden-credential-value: %w: %w", generic, tc.err))
+			if rec.Code != tc.status {
+				t.Fatalf("status=%d want=%d", rec.Code, tc.status)
+			}
+			var body struct {
+				Error struct {
+					Code, Message string
+					Candidates    []any
+				}
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error.Code != tc.code || body.Error.Message != tc.err.Error() {
+				t.Fatalf("body=%s", rec.Body)
+			}
+			if strings.Contains(rec.Body.String(), "hidden-credential-value") {
+				t.Fatal("error leaked credential")
+			}
+			if tc.code == "destination_ambiguous" && (body.Error.Candidates == nil || len(body.Error.Candidates) != 0) {
+				t.Fatal("bare sentinel candidates must be []")
+			}
+		})
+	}
+}
+
+func TestWriteErrDestinationCandidates(t *testing.T) {
+	id, err := domain.ParseExternalID("connection-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	WriteErr(rec, fmt.Errorf("wrapped: %w", &backend.DestinationAmbiguousError{Candidates: []backend.TradingDestinationStatus{
+		{Connection: id, Label: "Paper", Provider: "alpaca", Mode: domain.TradingModePaper, Enabled: true, VenueAccount: "sub-1", State: "running", Unavailable: "must be omitted"},
+		{Connection: id, Label: "Unavailable", Provider: "alpaca", Mode: domain.TradingModePaper, State: "unavailable", Unavailable: "keys unavailable"},
+	}}))
+	if rec.Code != 409 {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	e := got["error"].(map[string]any)
+	if e["code"] != "destination_ambiguous" || e["message"] != domain.ErrDestinationAmbiguous.Error() {
+		t.Fatalf("body=%s", rec.Body)
+	}
+	candidates := e["candidates"].([]any)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates=%v", candidates)
+	}
+	first := candidates[0].(map[string]any)
+	if len(first) != 7 || first["connection"] != "connection-1" || first["label"] != "Paper" || first["provider"] != "alpaca" || first["mode"] != "paper" || first["enabled"] != true || first["venueAccount"] != "sub-1" || first["state"] != "running" {
+		t.Fatalf("candidate=%v", first)
+	}
+	second := candidates[1].(map[string]any)
+	if len(second) != 8 || second["error"] != "keys unavailable" {
+		t.Fatalf("candidate=%v", second)
+	}
+}
+
+func TestWriteErrUpstreamNeutralMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteErr(rec, domain.ErrUpstream)
+	if rec.Code != 502 {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	var body struct {
+		Error struct{ Code, Message string }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != "upstream" || body.Error.Message != "The provider couldn't complete the request. Check your provider access and the request, then try again." {
+		t.Fatalf("body=%s", rec.Body)
 	}
 }
 

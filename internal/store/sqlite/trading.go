@@ -35,7 +35,8 @@ import (
 )
 
 const tradingConnectionSelect = `
-SELECT external_id, provider, label, mode, credentials, enabled
+SELECT external_id, provider, label, mode, venue_identity, credentials, enabled,
+       (SELECT code FROM account WHERE id = trading_connection.fee_account_id)
 FROM trading_connection`
 
 const tradingInstrumentSelect = `
@@ -53,11 +54,18 @@ FROM venue_order vo
 JOIN order_record o ON o.id = vo.order_id
 JOIN trading_connection c ON c.id = vo.connection_id`
 
+func (r *realmStore) CredentialsSealed() bool {
+	return r.store.sealer.Load() != nil
+}
+
 func (r *realmStore) CreateTradingConnection(
 	ctx context.Context, connection domain.TradingConnection,
 ) (domain.TradingConnection, error) {
 	if err := domain.ValidateTradingConnection(connection); err != nil {
 		return connection, err
+	}
+	if connection.FeeAccount != "" {
+		return connection, fmt.Errorf("set fee account after creating the connection: %w", domain.ErrInvalid)
 	}
 	xid, err := externalIDForInsert(connection.ExternalID)
 	if err != nil {
@@ -77,16 +85,22 @@ func (r *realmStore) CreateTradingConnection(
 	_, err = db.ExecContext(
 		ctx,
 		`INSERT INTO trading_connection
-		 (external_id, provider, label, mode, credentials, enabled)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 (external_id, provider, label, mode, venue_identity, credentials, enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), connection.Provider, connection.Label, connection.Mode,
-		credentials, connection.Enabled,
+		connection.VenueIdentity, credentials, connection.Enabled,
 	)
 	if err != nil {
 		if isSQLiteUniqueOn(err, "trading_connection", "external_id") {
 			return connection, fmt.Errorf(
 				"trading connection %q: %w",
 				xid.String(), domain.ErrAlreadyExists,
+			)
+		}
+		if isSQLiteUniqueOn(err, "trading_connection", "provider") {
+			return connection, fmt.Errorf(
+				"trading connection venue identity %q: %w",
+				connection.VenueIdentity, domain.ErrAlreadyExists,
 			)
 		}
 		if isSQLiteUnique(err) {
@@ -171,6 +185,39 @@ func (r *realmStore) SetTradingConnectionEnabled(
 	return notFoundIfNoRows(result, "trading connection", id.String())
 }
 
+func (r *realmStore) SetTradingConnectionFeeAccount(
+	ctx context.Context, connection domain.ExternalID, account domain.AccountID,
+) error {
+	if account != "" {
+		if err := domain.ValidateAccountID(account); err != nil {
+			return err
+		}
+	}
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	var feeAccountID sql.NullInt64
+	if account != "" {
+		id, err := resolveAccountID(ctx, db, account)
+		if errors.Is(err, domain.ErrInvalid) {
+			return fmt.Errorf("account %q: %w", account, domain.ErrNotFound)
+		}
+		if err != nil {
+			return err
+		}
+		feeAccountID = sql.NullInt64{Int64: id, Valid: true}
+	}
+	result, err := db.ExecContext(ctx,
+		`UPDATE trading_connection SET fee_account_id = ? WHERE external_id = ?`,
+		feeAccountID, connection.Bytes(),
+	)
+	if err != nil {
+		return fmt.Errorf("store: set trading connection fee account: %w", err)
+	}
+	return notFoundIfNoRows(result, "trading connection", connection.String())
+}
+
 func scanTradingConnection(
 	scanner sqlScanner, store *sqliteStore,
 ) (domain.TradingConnection, error) {
@@ -178,10 +225,11 @@ func scanTradingConnection(
 		connection  domain.TradingConnection
 		rawID       []byte
 		credentials []byte
+		feeAccount  sql.NullString
 	)
 	if err := scanner.Scan(
 		&rawID, &connection.Provider, &connection.Label, &connection.Mode,
-		&credentials, &connection.Enabled,
+		&connection.VenueIdentity, &credentials, &connection.Enabled, &feeAccount,
 	); err != nil {
 		return domain.TradingConnection{}, err
 	}
@@ -191,6 +239,7 @@ func scanTradingConnection(
 			fmt.Errorf("store: decode trading connection external id: %w", err)
 	}
 	connection.ExternalID = xid
+	connection.FeeAccount = domain.AccountID(feeAccount.String)
 	plaintext, err := store.openValue(
 		tradingConnectionTable, tradingCredentialsColumn,
 		xid.String(), credentials,
@@ -200,6 +249,80 @@ func scanTradingConnection(
 	}
 	connection.Credentials = string(plaintext)
 	return connection, nil
+}
+
+func (r *realmStore) UpdateTradingConnectionSettings(
+	ctx context.Context, id domain.ExternalID, label, credentials string,
+) error {
+	if err := domain.ValidateTradingConnectionSettings(label, credentials); err != nil {
+		return err
+	}
+	storedCredentials, err := r.store.sealValue(
+		tradingConnectionTable, tradingCredentialsColumn,
+		id.String(), []byte(credentials),
+	)
+	if err != nil {
+		return err
+	}
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
+		ctx,
+		`UPDATE trading_connection SET label = ?, credentials = ? WHERE external_id = ?`,
+		label, storedCredentials, id.Bytes(),
+	)
+	if err != nil {
+		if isSQLiteUnique(err) {
+			return fmt.Errorf("trading connection label %q: %w", label, domain.ErrAlreadyExists)
+		}
+		return fmt.Errorf("store: update trading connection settings: %w", err)
+	}
+	return notFoundIfNoRows(res, "trading connection", id.String())
+}
+
+func (r *realmStore) DeleteTradingInstrument(
+	ctx context.Context, connection domain.ExternalID, externalSymbol string,
+) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
+		ctx,
+		`DELETE FROM trading_instrument
+		 WHERE connection_id = (
+		   SELECT id FROM trading_connection WHERE external_id = ?
+		 ) AND external_symbol = ?`,
+		connection.Bytes(), externalSymbol,
+	)
+	if err != nil {
+		return fmt.Errorf("store: delete trading instrument: %w", err)
+	}
+	return notFoundIfNoRows(res, "trading instrument", externalSymbol)
+}
+
+func (r *realmStore) RemoveTradingAccess(
+	ctx context.Context, account domain.AccountID, connection domain.ExternalID,
+) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
+		ctx,
+		`DELETE FROM trading_access
+		 WHERE account_id = (SELECT id FROM account WHERE code = ?)
+		 AND connection_id = (
+		   SELECT id FROM trading_connection WHERE external_id = ?
+		 )`,
+		string(account), connection.Bytes(),
+	)
+	if err != nil {
+		return fmt.Errorf("store: remove trading access: %w", err)
+	}
+	return notFoundIfNoRows(res, "trading access", connection.String())
 }
 
 func resolveTradingConnectionID(
@@ -372,7 +495,7 @@ func scanTradingInstrument(
 	return instrument, nil
 }
 
-func (r *realmStore) AddTradingAccess(
+func (r *realmStore) PutTradingAccess(
 	ctx context.Context, access domain.TradingAccess,
 ) error {
 	if err := domain.ValidateTradingAccess(access); err != nil {
@@ -396,14 +519,13 @@ func (r *realmStore) AddTradingAccess(
 	_, err = db.ExecContext(
 		ctx,
 		`INSERT INTO trading_access (account_id, connection_id, venue_account)
-		 VALUES (?, ?, ?)`,
+		 VALUES (?, ?, ?)
+		 ON CONFLICT (account_id, connection_id)
+		 DO UPDATE SET venue_account = excluded.venue_account`,
 		accountID, connectionID, access.VenueAccount,
 	)
 	if err != nil {
-		if isSQLiteUnique(err) {
-			return fmt.Errorf("trading access: %w", domain.ErrAlreadyExists)
-		}
-		return fmt.Errorf("store: add trading access: %w", err)
+		return fmt.Errorf("store: put trading access: %w", err)
 	}
 	return nil
 }
@@ -452,6 +574,48 @@ func (r *realmStore) ListTradingAccess(
 		return nil, fmt.Errorf("store: iterate trading access: %w", err)
 	}
 	return accesses, nil
+}
+
+func (r *realmStore) GetTradingFeeAccounts(
+	ctx context.Context, connection domain.ExternalID,
+) (domain.AccountID, []domain.AccountID, error) {
+	db, err := r.db()
+	if err != nil {
+		return "", nil, err
+	}
+	rows, err := db.QueryContext(ctx,
+		`SELECT DISTINCT COALESCE(fee.code, ''), COALESCE(bound.code, '')
+		 FROM trading_connection c
+		 LEFT JOIN account fee ON fee.id = c.fee_account_id
+		 LEFT JOIN trading_access ta ON ta.connection_id = c.id
+		 LEFT JOIN account bound ON bound.id = ta.account_id
+		 WHERE c.external_id = ?
+		 ORDER BY 2`, connection.Bytes(),
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("store: get trading fee accounts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var feeAccount domain.AccountID
+	accounts := make([]domain.AccountID, 0)
+	found := false
+	for rows.Next() {
+		var account domain.AccountID
+		if err := rows.Scan(&feeAccount, &account); err != nil {
+			return "", nil, fmt.Errorf("store: scan trading fee accounts: %w", err)
+		}
+		found = true
+		if account != "" {
+			accounts = append(accounts, account)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", nil, fmt.Errorf("store: iterate trading fee accounts: %w", err)
+	}
+	if !found {
+		return "", nil, domain.ErrNotFound
+	}
+	return feeAccount, accounts, nil
 }
 
 func (r *realmStore) ListTradingAccessForConnection(

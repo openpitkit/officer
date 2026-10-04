@@ -511,6 +511,9 @@ func (r *memoryRealm) ListAdjustmentRows(
 	}
 	out := make([]domain.AccountAdjustmentRecord, 0, len(records))
 	for _, rec := range records {
+		if !filter.ExternalID.IsZero() && rec.ExternalID != filter.ExternalID {
+			continue
+		}
 		if !textMatches(filter.Account, rec.Account.String()) ||
 			!textMatches(filter.Asset, rec.Asset) {
 			continue

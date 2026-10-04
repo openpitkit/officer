@@ -660,6 +660,108 @@ type Node interface {
 		ctx context.Context, instance domain.ExternalID, externalSymbol string, caller domain.Caller,
 	) error
 
+	// CredentialsSealed reports whether credentials written now are sealed
+	// under a master key.
+	CredentialsSealed() bool
+
+	// CreateTradingConnection persists one connection and returns its external id.
+	// It audits the action after the store write succeeds.
+	CreateTradingConnection(
+		ctx context.Context, connection domain.TradingConnection, caller domain.Caller,
+	) (domain.TradingConnection, error)
+
+	// UpdateTradingConnectionSettings replaces label and credentials only.
+	// It audits the action after the store write succeeds.
+	UpdateTradingConnectionSettings(
+		ctx context.Context, id domain.ExternalID, label, credentials string, caller domain.Caller,
+	) error
+
+	// SetTradingConnectionEnabled toggles whether a connection permits new sends.
+	// It audits the action after the store write succeeds.
+	SetTradingConnectionEnabled(
+		ctx context.Context, id domain.ExternalID, enabled bool, caller domain.Caller,
+	) error
+
+	// UpsertTradingInstrument inserts or replaces one instrument mapping.
+	// It audits the action after the store write succeeds.
+	UpsertTradingInstrument(
+		ctx context.Context, instrument domain.TradingInstrument, caller domain.Caller,
+	) error
+
+	// DeleteTradingInstrument removes one instrument mapping.
+	// It audits the action after the store write succeeds.
+	DeleteTradingInstrument(
+		ctx context.Context, connection domain.ExternalID, externalSymbol string, caller domain.Caller,
+	) error
+
+	// PutTradingAccess inserts or replaces an account/connection binding and
+	// its optional bound venue account.
+	// It audits the action after the store write succeeds.
+	// When requireFeeAccount is true, a second distinct account requires the
+	// connection's fee account; re-putting the same account remains allowed.
+	PutTradingAccess(
+		ctx context.Context, access domain.TradingAccess, requireFeeAccount bool,
+		caller domain.Caller,
+	) error
+
+	// SetTradingConnectionFeeAccount assigns unlinked fees to the given account.
+	// Clearing is refused while more than one distinct Officer account is bound.
+	SetTradingConnectionFeeAccount(
+		ctx context.Context, connection domain.ExternalID, account domain.AccountID,
+		caller domain.Caller,
+	) error
+
+	// RecordVenueFeeSkipped audits a fee that could not be applied.
+	RecordVenueFeeSkipped(
+		ctx context.Context, connection domain.ExternalID, feeID, reason string,
+		caller domain.Caller,
+	) error
+
+	// RemoveTradingAccess removes one account/connection binding.
+	// It audits the action after the store write succeeds.
+	RemoveTradingAccess(
+		ctx context.Context, account domain.AccountID, connection domain.ExternalID, caller domain.Caller,
+	) error
+
+	// GetTradingConnection returns one connection. The bool is false when absent.
+	GetTradingConnection(
+		ctx context.Context, id domain.ExternalID,
+	) (domain.TradingConnection, bool, error)
+
+	// ListTradingConnections returns every connection ordered by external id.
+	ListTradingConnections(
+		ctx context.Context,
+	) ([]domain.TradingConnection, error)
+
+	// ListTradingInstruments returns a connection's mappings ordered by symbol.
+	ListTradingInstruments(
+		ctx context.Context, connection domain.ExternalID,
+	) ([]domain.TradingInstrument, error)
+
+	// ListTradingAccess returns an account's grants ordered by connection and
+	// venue account.
+	ListTradingAccess(
+		ctx context.Context, account domain.AccountID,
+	) ([]domain.TradingAccess, error)
+
+	// ListTradingAccessForConnection returns a connection's grants ordered by
+	// account and venue account.
+	ListTradingAccessForConnection(
+		ctx context.Context, connection domain.ExternalID,
+	) ([]domain.TradingAccess, error)
+
+	// GetVenueOrder returns the venue link for an order. The bool is false when
+	// absent.
+	GetVenueOrder(
+		ctx context.Context, order domain.ExternalID,
+	) (domain.VenueOrder, bool, error)
+
+	// EarliestVenueOrderTime returns the connection's first venue-order time.
+	// The bool is false when the connection has no links.
+	EarliestVenueOrderTime(
+		ctx context.Context, connection domain.ExternalID,
+	) (time.Time, bool, error)
+
 	// CheckOrder runs a non-mutating pre-trade dry-run for probe against the
 	// engine, returning whether the order would pass plus the would-be lock or
 	// block. It mutates nothing and writes no audit row.

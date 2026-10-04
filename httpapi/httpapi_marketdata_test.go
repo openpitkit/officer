@@ -979,6 +979,9 @@ func TestVerifyMarketDataSymbol_Upstream(t *testing.T) {
 		t.Fatalf("want code=upstream, got %v", errObj["code"])
 	}
 	msg, _ := errObj["message"].(string)
+	if msg != "The provider couldn't complete the request. Check your provider access and the request, then try again." {
+		t.Fatalf("unexpected upstream message: %q", msg)
+	}
 	if strings.Contains(msg, "403") || strings.Contains(msg, "finnhub") {
 		t.Fatalf("message leaks provider jargon: %q", msg)
 	}

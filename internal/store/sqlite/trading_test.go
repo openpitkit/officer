@@ -18,16 +18,295 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
+
+func TestCredentialsSealed(t *testing.T) {
+	for _, sealed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sealed=%v", sealed), func(t *testing.T) {
+			var opts []Option
+			if sealed {
+				opts = append(opts, WithMasterKey(mustStoreMasterKey(t, 0x71)))
+			}
+			_, rs := newTestStore(t, opts...)
+			if got := rs.CredentialsSealed(); got != sealed {
+				t.Fatalf("CredentialsSealed = %v, want %v", got, sealed)
+			}
+		})
+	}
+}
+
+func TestTradingVenueIdentityStorage(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	got, found, err := rs.GetTradingConnection(ctx, connection.ExternalID)
+	if err != nil || !found || got.VenueIdentity != connection.VenueIdentity {
+		t.Fatalf("venue identity not read back: found=%v identity=%q err=%v", found, got.VenueIdentity, err)
+	}
+	listed, err := rs.ListTradingConnections(ctx)
+	if err != nil || len(listed) != 1 || listed[0].VenueIdentity != connection.VenueIdentity {
+		t.Fatal("listed venue identity differs")
+	}
+	duplicate := connection
+	duplicate.ExternalID = ""
+	duplicate.Label = "second connection"
+	_, err = rs.CreateTradingConnection(ctx, duplicate)
+	if !errors.Is(err, domain.ErrAlreadyExists) || !strings.Contains(err.Error(), "venue identity") || !strings.Contains(err.Error(), connection.VenueIdentity) {
+		t.Fatalf("duplicate venue identity error = %v, want named ErrAlreadyExists", err)
+	}
+	if strings.Contains(err.Error(), connection.Credentials) {
+		t.Fatal("duplicate error exposes credentials")
+	}
+	duplicate.VenueIdentity = "different-account"
+	if _, err := rs.CreateTradingConnection(ctx, duplicate); err != nil {
+		t.Fatalf("different identity rejected: %v", err)
+	}
+	duplicate.Label = "other provider"
+	duplicate.Provider = "another-provider"
+	duplicate.VenueIdentity = connection.VenueIdentity
+	if _, err := rs.CreateTradingConnection(ctx, duplicate); err != nil {
+		t.Fatalf("different provider rejected: %v", err)
+	}
+	duplicate = connection
+	duplicate.ExternalID = ""
+	duplicate.Label = strings.ToUpper(connection.Label)
+	duplicate.VenueIdentity = "third-account"
+	_, err = rs.CreateTradingConnection(ctx, duplicate)
+	if !errors.Is(err, domain.ErrAlreadyExists) || !strings.Contains(err.Error(), "label") {
+		t.Fatalf("duplicate label error = %v", err)
+	}
+	duplicate = connection
+	duplicate.Label = "duplicate id"
+	duplicate.VenueIdentity = "fourth-account"
+	_, err = rs.CreateTradingConnection(ctx, duplicate)
+	if !errors.Is(err, domain.ErrAlreadyExists) || !strings.Contains(err.Error(), connection.ExternalID.String()) {
+		t.Fatalf("duplicate id error = %v", err)
+	}
+}
+
+func TestUpdateTradingConnectionSettings(t *testing.T) {
+	ctx, rs, original := seedTradingFixtures(t)
+	const credentials = `{"key":"replacement-secret"}`
+	if err := rs.UpdateTradingConnectionSettings(ctx, original.ExternalID, "new label", credentials); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := rs.GetTradingConnection(ctx, original.ExternalID)
+	if err != nil || !found {
+		t.Fatalf("get updated connection: found=%v err=%v", found, err)
+	}
+	want := original
+	want.Label, want.Credentials = "new label", credentials
+	if got != want {
+		t.Fatal("settings were not replaced or immutable fields changed")
+	}
+	if err := rs.UpdateTradingConnectionSettings(ctx, "absent", "absent", credentials); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("absent connection error = %v, want ErrNotFound", err)
+	}
+	other := original
+	other.ExternalID, other.Label, other.VenueIdentity = "", "taken label", "other-account"
+	if _, err := rs.CreateTradingConnection(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	err = rs.UpdateTradingConnectionSettings(ctx, original.ExternalID, "TAKEN LABEL", credentials)
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("duplicate label error = %v, want ErrAlreadyExists", err)
+	}
+	if strings.Contains(err.Error(), credentials) {
+		t.Fatal("update error exposes credentials")
+	}
+	got, found, err = rs.GetTradingConnection(ctx, original.ExternalID)
+	if err != nil || !found || got != want {
+		t.Fatal("failed update changed stored settings")
+	}
+}
+
+func TestUpdateTradingConnectionSettingsRejectsInvalid(t *testing.T) {
+	for _, sealed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sealed=%v", sealed), func(t *testing.T) {
+			ctx := context.Background()
+			var rs store.RealmStore
+			if sealed {
+				_, rs = newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x72)))
+			} else {
+				_, rs = newTestStore(t)
+			}
+			original, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+				Provider: domain.TradingProviderAlpaca, Label: "paper", Mode: domain.TradingModePaper,
+				VenueIdentity: "paper-account", Credentials: `{"key":"original-secret"}`,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var originalStored []byte
+			if err := rs.(*realmStore).rawDB().QueryRowContext(ctx,
+				"SELECT credentials FROM trading_connection WHERE external_id = ?", original.ExternalID.Bytes(),
+			).Scan(&originalStored); err != nil {
+				t.Fatal(err)
+			}
+			for _, test := range []struct {
+				name, label, credentials string
+			}{
+				{"empty label", "", "{}"},
+				{"label leading space", " paper", "{}"},
+				{"label trailing space", "paper ", "{}"},
+				{"credentials leading space", "renamed", " {}"},
+				{"credentials trailing space", "renamed", "{} "},
+				{"empty credentials", "renamed", ""},
+				{"invalid credentials", "renamed", "{"},
+				{"array credentials", "renamed", "[]"},
+				{"string credentials", "renamed", `"secret"`},
+				{"number credentials", "renamed", "1"},
+				{"boolean credentials", "renamed", "true"},
+				{"null credentials", "renamed", "null"},
+				{"trailing JSON", "renamed", "{} {}"},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					err := rs.UpdateTradingConnectionSettings(ctx, original.ExternalID, test.label, test.credentials)
+					if !errors.Is(err, domain.ErrInvalid) {
+						t.Errorf("invalid settings error = %v, want ErrInvalid", err)
+					}
+					got, found, err := rs.GetTradingConnection(ctx, original.ExternalID)
+					if err != nil || !found || got != original {
+						t.Errorf("invalid settings changed connection: found=%v err=%v", found, err)
+					}
+					var stored []byte
+					if err := rs.(*realmStore).rawDB().QueryRowContext(ctx,
+						"SELECT credentials FROM trading_connection WHERE external_id = ?", original.ExternalID.Bytes(),
+					).Scan(&stored); err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(stored, originalStored) {
+						t.Error("invalid settings changed stored credentials")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestUpdateTradingConnectionSettingsSealed(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x72)))
+	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider: domain.TradingProviderAlpaca, Label: "sealed", Mode: domain.TradingModePaper,
+		VenueIdentity: "sealed-account", Credentials: `{"key":"old-secret"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const credentials = `{"key":"new-sealed-secret"}`
+	if err := rs.UpdateTradingConnectionSettings(ctx, connection.ExternalID, "renamed", credentials); err != nil {
+		t.Fatal(err)
+	}
+	var stored []byte
+	if err := rs.(*realmStore).rawDB().QueryRowContext(ctx,
+		"SELECT credentials FROM trading_connection WHERE external_id = ?", connection.ExternalID.Bytes(),
+	).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(stored, []byte(credentials)) || bytes.Contains(stored, []byte("new-sealed-secret")) {
+		t.Fatal("updated credentials stored as plaintext")
+	}
+	got, found, err := rs.GetTradingConnection(ctx, connection.ExternalID)
+	if err != nil || !found || got.Credentials != credentials || got.Label != "renamed" {
+		t.Fatal("sealed settings update did not round trip")
+	}
+	other := connection
+	other.ExternalID, other.Label, other.VenueIdentity = "", "other", "other-account"
+	other, err = rs.CreateTradingConnection(ctx, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rs.(*realmStore).rawDB().ExecContext(ctx,
+		"UPDATE trading_connection SET credentials = ? WHERE external_id = ?", stored, other.ExternalID.Bytes(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = rs.GetTradingConnection(ctx, other.ExternalID)
+	if err == nil || got.Credentials != "" {
+		t.Fatal("updated credentials accepted after row move")
+	}
+}
+
+func TestDeleteTradingInstrument(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	for _, symbol := range []string{"AAPL", "MSFT"} {
+		if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+			Connection: connection.ExternalID, ExternalSymbol: symbol, BaseAsset: symbol, QuoteAsset: "USD",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rs.DeleteTradingInstrument(ctx, connection.ExternalID, "AAPL"); err != nil {
+		t.Fatal(err)
+	}
+	instruments, err := rs.ListTradingInstruments(ctx, connection.ExternalID)
+	if err != nil || len(instruments) != 1 || instruments[0].ExternalSymbol != "MSFT" {
+		t.Fatal("delete did not remove exactly one mapping")
+	}
+	for _, id := range []domain.ExternalID{connection.ExternalID, "absent"} {
+		if err := rs.DeleteTradingInstrument(ctx, id, "AAPL"); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("missing mapping/connection error = %v, want ErrNotFound", err)
+		}
+	}
+}
+
+func TestRemoveTradingAccess(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	access := domain.TradingAccess{Account: "acc-1", Connection: connection.ExternalID, VenueAccount: "venue-account"}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatal(err)
+	}
+	other := domain.TradingAccess{Account: "acc-2", Connection: connection.ExternalID}
+	for _, binding := range []domain.TradingAccess{access, other} {
+		if err := rs.PutTradingAccess(ctx, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rs.RemoveTradingAccess(ctx, access.Account, access.Connection); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := rs.ListTradingAccessForConnection(ctx, connection.ExternalID)
+	if err != nil || !reflect.DeepEqual(bindings, []domain.TradingAccess{other}) {
+		t.Fatal("remove did not delete exactly the account/connection binding")
+	}
+	if err := rs.RemoveTradingAccess(ctx, access.Account, access.Connection); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing binding error = %v, want ErrNotFound", err)
+	}
+	for _, missing := range []domain.TradingAccess{
+		{Account: access.Account, Connection: "absent"},
+		{Account: "absent", Connection: access.Connection},
+	} {
+		if err := rs.RemoveTradingAccess(ctx, missing.Account, missing.Connection); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("missing account/connection error = %v, want ErrNotFound", err)
+		}
+	}
+}
+
+func TestTradingSchemaModeVocabulary(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	db := rs.(*realmStore).rawDB()
+	for _, mode := range []string{"live", "paper"} {
+		if _, err := db.ExecContext(ctx, "UPDATE trading_connection SET mode = ? WHERE external_id = ?", mode, connection.ExternalID.Bytes()); err != nil {
+			t.Fatalf("schema rejected %s: %v", mode, err)
+		}
+	}
+	for _, mode := range []string{"test", "real"} {
+		if _, err := db.ExecContext(ctx, "UPDATE trading_connection SET mode = ? WHERE external_id = ?", mode, connection.ExternalID.Bytes()); err == nil {
+			t.Fatalf("schema accepted old mode %q", mode)
+		}
+	}
+}
 
 func seedTradingFixtures(
 	t *testing.T,
@@ -47,11 +326,12 @@ func seedTradingFixtures(
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider:    domain.TradingProviderAlpaca,
-		Label:       "Alpaca paper",
-		Mode:        domain.TradingModeTest,
-		Credentials: `{"key":"fixture"}`,
-		Enabled:     true,
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "Alpaca paper",
+		VenueIdentity: "paper-account",
+		Mode:          domain.TradingModePaper,
+		Credentials:   `{"key":"fixture"}`,
+		Enabled:       true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTradingConnection: %v", err)
@@ -76,7 +356,7 @@ func createTradingOrder(
 func TestEarliestVenueOrderTime(t *testing.T) {
 	ctx, rs, first := seedTradingFixtures(t)
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider: domain.TradingProviderAlpaca, Label: "Other", Mode: domain.TradingModeTest,
+		Provider: domain.TradingProviderAlpaca, Label: "Other", Mode: domain.TradingModePaper, VenueIdentity: "other-account",
 		Credentials: `{}`, Enabled: true,
 	})
 	if err != nil {
@@ -117,7 +397,7 @@ func TestEarliestVenueOrderTime(t *testing.T) {
 func TestListTradingAccessForConnection(t *testing.T) {
 	ctx, rs, first := seedTradingFixtures(t)
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider: domain.TradingProviderAlpaca, Label: "Other", Mode: domain.TradingModeTest,
+		Provider: domain.TradingProviderAlpaca, Label: "Other", Mode: domain.TradingModePaper, VenueIdentity: "other-account",
 		Credentials: `{}`, Enabled: true,
 	})
 	if err != nil {
@@ -134,12 +414,11 @@ func TestListTradingAccessForConnection(t *testing.T) {
 	}
 	want := []domain.TradingAccess{
 		{Account: "acc-1", Connection: first.ExternalID},
-		{Account: "acc-1", Connection: first.ExternalID, VenueAccount: "z"},
 		{Account: "acc-2", Connection: first.ExternalID, VenueAccount: "a"},
 	}
 	other := domain.TradingAccess{Account: "acc-2", Connection: second.ExternalID}
-	for _, row := range []domain.TradingAccess{want[2], other, want[1], want[0]} {
-		if err := rs.AddTradingAccess(ctx, row); err != nil {
+	for _, row := range []domain.TradingAccess{want[1], other, want[0]} {
+		if err := rs.PutTradingAccess(ctx, row); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -153,16 +432,150 @@ func TestListTradingAccessForConnection(t *testing.T) {
 	}
 }
 
+func TestTradingConnectionFeeAccount(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "fees"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []domain.AccountID{"fees", "acc-1", ""} {
+		if err := rs.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, account); err != nil {
+			t.Fatal(err)
+		}
+		got, found, err := rs.GetTradingConnection(ctx, connection.ExternalID)
+		if err != nil || !found || got.FeeAccount != account {
+			t.Fatalf("fee account = %q, want %q, found=%v err=%v", got.FeeAccount, account, found, err)
+		}
+		connections, err := rs.ListTradingConnections(ctx)
+		if err != nil || len(connections) != 1 {
+			t.Fatalf("list connections = %+v, err=%v", connections, err)
+		}
+		for _, listed := range connections {
+			if listed.FeeAccount != account {
+				t.Fatalf("listed fee account = %q, want %q", listed.FeeAccount, account)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name       string
+		connection domain.ExternalID
+		account    domain.AccountID
+		want       error
+	}{
+		{"unknown connection", "missing", "fees", domain.ErrNotFound},
+		{"clear unknown connection", "missing", "", domain.ErrNotFound},
+		{"unknown account", connection.ExternalID, "missing", domain.ErrNotFound},
+		{"invalid account", connection.ExternalID, " fees", domain.ErrInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := rs.SetTradingConnectionFeeAccount(ctx, tc.connection, tc.account); !errors.Is(err, tc.want) {
+				t.Fatalf("set fee account error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCreateTradingConnectionRefusesFeeAccount(t *testing.T) {
+	for _, account := range []domain.AccountID{"acc-1", "missing"} {
+		t.Run(account.String(), func(t *testing.T) {
+			ctx, rs, connection := seedTradingFixtures(t)
+			connection.ExternalID = "refused"
+			connection.Label, connection.VenueIdentity = "refused", "refused"
+			connection.FeeAccount = account
+			if _, err := rs.CreateTradingConnection(ctx, connection); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("create fee account error = %v, want ErrInvalid", err)
+			}
+			if _, found, err := rs.GetTradingConnection(ctx, connection.ExternalID); err != nil || found {
+				t.Fatalf("refused create persisted connection: found=%v err=%v", found, err)
+			}
+		})
+	}
+}
+
+func TestGetTradingFeeAccounts(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	if _, _, err := rs.GetTradingFeeAccounts(ctx, "missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unknown connection error = %v", err)
+	}
+	check := func(wantFee domain.AccountID, wantBound []domain.AccountID) {
+		t.Helper()
+		fee, bound, err := rs.GetTradingFeeAccounts(ctx, connection.ExternalID)
+		if err != nil || fee != wantFee || !reflect.DeepEqual(bound, wantBound) {
+			t.Fatalf("fee snapshot = %q, %v, err=%v; want %q, %v", fee, bound, err, wantFee, wantBound)
+		}
+	}
+	check("", []domain.AccountID{})
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "acc-2"); err != nil {
+		t.Fatal(err)
+	}
+	check("acc-2", []domain.AccountID{})
+	for _, account := range []domain.AccountID{"acc-2", "acc-1"} {
+		if err := rs.PutTradingAccess(ctx, domain.TradingAccess{Connection: connection.ExternalID, Account: account}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("acc-2", []domain.AccountID{"acc-1", "acc-2"})
+	if err := rs.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, ""); err != nil {
+		t.Fatal(err)
+	}
+	check("", []domain.AccountID{"acc-1", "acc-2"})
+	if err := rs.RemoveTradingAccess(ctx, "acc-2", connection.ExternalID); err != nil {
+		t.Fatal(err)
+	}
+	check("", []domain.AccountID{"acc-1"})
+}
+
+func TestDeleteTradingFeeAccountRefused(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprintf("force=%v", force), func(t *testing.T) {
+			ctx, rs, connection := seedTradingFixtures(t)
+			if err := rs.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "acc-1"); err != nil {
+				t.Fatal(err)
+			}
+			if err := rs.PutTradingAccess(ctx, domain.TradingAccess{Connection: connection.ExternalID, Account: "acc-1"}); err != nil {
+				t.Fatal(err)
+			}
+			err := rs.DeleteAccount(ctx, "acc-1", force)
+			if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), connection.Label) {
+				t.Fatalf("delete fee account error = %v, want conflict naming connection %q", err, connection.Label)
+			}
+			if _, found, err := rs.GetAccount(ctx, "acc-1"); err != nil || !found {
+				t.Fatalf("refused deletion removed account: found=%v err=%v", found, err)
+			}
+			got, found, err := rs.GetTradingConnection(ctx, connection.ExternalID)
+			if err != nil || !found || got.FeeAccount != "acc-1" {
+				t.Fatalf("refused deletion broke fee account: %+v, found=%v err=%v", got, found, err)
+			}
+			accesses, err := rs.ListTradingAccessForConnection(ctx, connection.ExternalID)
+			if err != nil || len(accesses) != 1 {
+				t.Fatalf("refused deletion removed bindings: %+v, err=%v", accesses, err)
+			}
+			if err := rs.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := rs.RemoveTradingAccess(ctx, "acc-1", connection.ExternalID); err != nil {
+				t.Fatal(err)
+			}
+			if err := rs.DeleteAccount(ctx, "acc-1", force); err != nil {
+				t.Fatalf("delete after clearing fee account: %v", err)
+			}
+		})
+	}
+}
+
 func TestTradingConnectionCreateGetListEnable(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	first, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		ExternalID:  "connection-b",
-		Provider:    domain.TradingProviderAlpaca,
-		Label:       "Second",
-		Mode:        domain.TradingModeTest,
-		Credentials: `{"key":"second"}`,
-		Enabled:     true,
+		ExternalID:    "connection-b",
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "Second",
+		VenueIdentity: "second-account",
+		Mode:          domain.TradingModePaper,
+		Credentials:   `{"key":"second"}`,
+		Enabled:       true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTradingConnection(first): %v", err)
@@ -171,11 +584,12 @@ func TestTradingConnectionCreateGetListEnable(t *testing.T) {
 		t.Fatal("CreateTradingConnection did not preserve the supplied external id")
 	}
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		ExternalID:  "connection-a",
-		Provider:    domain.TradingProviderAlpaca,
-		Label:       "First",
-		Mode:        domain.TradingModeReal,
-		Credentials: `{"key":"first"}`,
+		ExternalID:    "connection-a",
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "First",
+		VenueIdentity: "first-account",
+		Mode:          domain.TradingModeLive,
+		Credentials:   `{"key":"first"}`,
 	})
 	if err != nil {
 		t.Fatalf("CreateTradingConnection(second): %v", err)
@@ -223,11 +637,12 @@ func TestTradingConnectionValidationAndUniqueness(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	connection := domain.TradingConnection{
-		ExternalID:  "connection-id",
-		Provider:    domain.TradingProviderAlpaca,
-		Label:       "Alpaca",
-		Mode:        domain.TradingModeTest,
-		Credentials: `{}`,
+		ExternalID:    "connection-id",
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "Alpaca",
+		VenueIdentity: "alpaca-account",
+		Mode:          domain.TradingModePaper,
+		Credentials:   `{}`,
 	}
 	if _, err := rs.CreateTradingConnection(ctx, connection); err != nil {
 		t.Fatalf("CreateTradingConnection: %v", err)
@@ -246,7 +661,7 @@ func TestTradingConnectionValidationAndUniqueness(t *testing.T) {
 	invalidMode := connection
 	invalidMode.ExternalID = "invalid-mode"
 	invalidMode.Label = "Invalid mode"
-	invalidMode.Mode = "paper"
+	invalidMode.Mode = "unknown"
 	if _, err := rs.CreateTradingConnection(ctx, invalidMode); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("invalid mode error = %v", err)
 	}
@@ -353,57 +768,58 @@ func TestTradingInstrumentUnknownReferences(t *testing.T) {
 	}
 }
 
-func TestTradingAccessAddListDuplicateAndUnknown(t *testing.T) {
+func TestTradingAccessPutListReplaceAndUnknown(t *testing.T) {
 	ctx, rs, connection := seedTradingFixtures(t)
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		ExternalID:  "connection-a",
-		Provider:    domain.TradingProviderAlpaca,
-		Label:       "Alpaca real",
-		Mode:        domain.TradingModeReal,
-		Credentials: `{}`,
+		ExternalID: "connection-a", Provider: domain.TradingProviderAlpaca,
+		Label: "Alpaca live", VenueIdentity: "live-account",
+		Mode: domain.TradingModeLive, Credentials: "{}",
 	})
 	if err != nil {
-		t.Fatalf("CreateTradingConnection(second): %v", err)
+		t.Fatal(err)
 	}
-	for _, access := range []domain.TradingAccess{
-		{Account: "acc-1", Connection: connection.ExternalID, VenueAccount: "z"},
-		{Account: "acc-1", Connection: second.ExternalID, VenueAccount: "b"},
-		{Account: "acc-1", Connection: second.ExternalID, VenueAccount: "a"},
+	firstAccess := domain.TradingAccess{Account: "acc-1", Connection: connection.ExternalID, VenueAccount: "z"}
+	access := domain.TradingAccess{Account: "acc-1", Connection: second.ExternalID, VenueAccount: "b"}
+	for _, binding := range []domain.TradingAccess{firstAccess, access} {
+		if err := rs.PutTradingAccess(ctx, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	access.VenueAccount = "a"
+	if err := rs.PutTradingAccess(ctx, access); err != nil {
+		t.Fatalf("replace binding: %v", err)
+	}
+	if err := rs.PutTradingAccess(ctx, access); err != nil {
+		t.Fatalf("repeat binding: %v", err)
+	}
+	bindings, err := rs.ListTradingAccess(ctx, "acc-1")
+	want := []domain.TradingAccess{access, firstAccess}
+	sort.Slice(want, func(i, j int) bool {
+		return want[i].Connection < want[j].Connection
+	})
+	if err != nil || !reflect.DeepEqual(bindings, want) {
+		t.Fatalf("bindings = %v, want replaced binding and unaffected connection; err=%v", bindings, err)
+	}
+	access.VenueAccount = ""
+	for i := range want {
+		if want[i].Connection == access.Connection {
+			want[i] = access
+		}
+	}
+	if err := rs.PutTradingAccess(ctx, access); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err = rs.ListTradingAccess(ctx, "acc-1")
+	if err != nil || !reflect.DeepEqual(bindings, want) {
+		t.Fatal("empty venue account did not replace the bound account")
+	}
+	for _, missing := range []domain.TradingAccess{
+		{Account: "missing", Connection: connection.ExternalID},
+		{Account: "acc-1", Connection: "missing"},
 	} {
-		if err := rs.AddTradingAccess(ctx, access); err != nil {
-			t.Fatalf("AddTradingAccess: %v", err)
+		if err := rs.PutTradingAccess(ctx, missing); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("unknown account/connection error = %v, want ErrNotFound", err)
 		}
-	}
-	if err := rs.AddTradingAccess(ctx, domain.TradingAccess{
-		Account: "acc-1", Connection: second.ExternalID, VenueAccount: "a",
-	}); !errors.Is(err, domain.ErrAlreadyExists) {
-		t.Fatalf("duplicate trading access error = %v", err)
-	}
-	accesses, err := rs.ListTradingAccess(ctx, "acc-1")
-	if err != nil {
-		t.Fatalf("ListTradingAccess: %v", err)
-	}
-	if len(accesses) != 3 {
-		t.Fatalf("ListTradingAccess count = %d, want 3", len(accesses))
-	}
-	for i := 1; i < len(accesses); i++ {
-		previous := accesses[i-1]
-		current := accesses[i]
-		if previous.Connection > current.Connection ||
-			(previous.Connection == current.Connection &&
-				previous.VenueAccount > current.VenueAccount) {
-			t.Fatal("ListTradingAccess is not ordered by connection and venue account")
-		}
-	}
-	if err := rs.AddTradingAccess(ctx, domain.TradingAccess{
-		Account: "missing", Connection: connection.ExternalID,
-	}); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("unknown access account error = %v", err)
-	}
-	if err := rs.AddTradingAccess(ctx, domain.TradingAccess{
-		Account: "acc-1", Connection: "missing",
-	}); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("unknown access connection error = %v", err)
 	}
 }
 
@@ -610,11 +1026,12 @@ func TestListOpenVenueOrdersUsesDomainTerminalStatuses(t *testing.T) {
 	secondConnection, err := rs.CreateTradingConnection(
 		ctx,
 		domain.TradingConnection{
-			Provider:    domain.TradingProviderAlpaca,
-			Label:       "Alpaca second paper",
-			Mode:        domain.TradingModeTest,
-			Credentials: `{"key":"second"}`,
-			Enabled:     true,
+			Provider:      domain.TradingProviderAlpaca,
+			Label:         "Alpaca second paper",
+			VenueIdentity: "second-paper-account",
+			Mode:          domain.TradingModePaper,
+			Credentials:   `{"key":"second"}`,
+			Enabled:       true,
 		},
 	)
 	if err != nil {

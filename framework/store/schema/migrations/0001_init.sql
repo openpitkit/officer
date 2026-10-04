@@ -477,15 +477,22 @@ CREATE INDEX idx_market_data_instruments_quote_asset
 
 -- Trading-venue connections. provider selects the connector; label is a
 -- unique, case-insensitive operator-facing name; credentials holds plaintext or
--- a sealed binary value according to store state. enabled gates new sends only.
+-- a sealed binary value according to store state. venue_identity identifies the
+-- venue-side account, unique per provider. enabled gates new sends only.
+-- fee_account_id is the Officer account receiving order-unlinked venue fees
+-- whole; NULL means none (fees go to the single bound account, or are skipped
+-- and audited); ON DELETE RESTRICT stops deletion from silently rerouting fees.
 CREATE TABLE trading_connection (
     id          {{PK}},
     external_id {{XID}} UNIQUE,
     provider    TEXT NOT NULL,
     label       TEXT NOT NULL COLLATE NOCASE UNIQUE,
-    mode        TEXT NOT NULL CHECK (mode IN ('test', 'real')),
+    mode        TEXT NOT NULL CHECK (mode IN ('paper', 'live')),
+    venue_identity TEXT NOT NULL,
     credentials BLOB NOT NULL,
-    enabled     {{BOOL}} NOT NULL DEFAULT 0
+    enabled     {{BOOL}} NOT NULL DEFAULT 0,
+    fee_account_id INTEGER REFERENCES account(id) ON DELETE RESTRICT,
+    UNIQUE (provider, venue_identity)
 );
 
 -- Per-instrument selection for a trading connection: the venue symbol mapped
@@ -506,12 +513,13 @@ CREATE INDEX idx_trading_instruments_base_asset
 CREATE INDEX idx_trading_instruments_quote_asset
     ON trading_instrument (quote_asset_id);
 
--- Per-account permission to send through a connection and venue-side account.
+-- One binding per Officer account and connection. venue_account is the
+-- optional bound venue-side account; an empty string means none.
 CREATE TABLE trading_access (
     account_id    INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
     connection_id INTEGER NOT NULL REFERENCES trading_connection(id) ON DELETE CASCADE,
     venue_account TEXT    NOT NULL,
-    PRIMARY KEY (account_id, connection_id, venue_account)
+    PRIMARY KEY (account_id, connection_id)
 );
 
 CREATE INDEX idx_trading_access_connection

@@ -178,6 +178,161 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 	return order.ExternalID
 }
 
+const tradingBackupSecret = `{"key":"trading-backup-secret"}`
+
+func seedTradingBackupState(
+	t *testing.T, ctx context.Context, rs fwstore.RealmStore,
+) (domain.TradingConnection, domain.ExternalID) {
+	t.Helper()
+	order := seedRealm(t, ctx, rs)
+	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "Alpaca paper",
+		Mode:          domain.TradingModePaper,
+		VenueIdentity: "venue-account-1",
+		Credentials:   tradingBackupSecret,
+		Enabled:       true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	if err := rs.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "acc-1"); err != nil {
+		t.Fatalf("SetTradingConnectionFeeAccount: %v", err)
+	}
+	if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+		Connection:     connection.ExternalID,
+		ExternalSymbol: "AAPL/USD",
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Enabled:        true,
+	}); err != nil {
+		t.Fatalf("UpsertTradingInstrument: %v", err)
+	}
+	if err := rs.PutTradingAccess(ctx, domain.TradingAccess{
+		Account:      "acc-1",
+		Connection:   connection.ExternalID,
+		VenueAccount: "venue-subaccount-1",
+	}); err != nil {
+		t.Fatalf("PutTradingAccess: %v", err)
+	}
+	if _, err := rs.CreateVenueOrder(ctx, domain.VenueOrder{
+		Order:         order,
+		Connection:    connection.ExternalID,
+		VenueAccount:  "venue-subaccount-1",
+		Route:         `{"type":"smart"}`,
+		ClientOrderID: "client-order-1",
+	}); err != nil {
+		t.Fatalf("CreateVenueOrder: %v", err)
+	}
+	if err := rs.MarkVenueOrderSendAttempted(ctx, order); err != nil {
+		t.Fatalf("MarkVenueOrderSendAttempted: %v", err)
+	}
+	if err := rs.SetVenueOrderID(ctx, order, "venue-order-1"); err != nil {
+		t.Fatalf("SetVenueOrderID: %v", err)
+	}
+	connection.FeeAccount = "acc-1"
+	return connection, order
+}
+
+func assertTradingBackupState(
+	t *testing.T,
+	ctx context.Context,
+	rs fwstore.RealmStore,
+	wantConnection domain.TradingConnection,
+	wantOrder domain.ExternalID,
+	wantCredentials string,
+	wantEnabled bool,
+	overwritten bool,
+) {
+	t.Helper()
+	connections, err := rs.ListTradingConnections(ctx)
+	if err != nil {
+		t.Fatalf("ListTradingConnections: %v", err)
+	}
+	if len(connections) != 1 {
+		t.Fatalf("trading connections = %d, want 1", len(connections))
+	}
+	gotConnection := connections[0]
+	if gotConnection.ExternalID != wantConnection.ExternalID ||
+		gotConnection.Provider != wantConnection.Provider ||
+		gotConnection.Label != wantConnection.Label ||
+		gotConnection.Mode != wantConnection.Mode ||
+		gotConnection.VenueIdentity != wantConnection.VenueIdentity ||
+		gotConnection.FeeAccount != wantConnection.FeeAccount ||
+		gotConnection.Credentials != wantCredentials ||
+		gotConnection.Enabled != wantEnabled {
+		t.Fatalf("trading connection = %+v, want identity/metadata %+v credentials %q enabled %v",
+			gotConnection, wantConnection, wantCredentials, wantEnabled)
+	}
+
+	instruments, err := rs.ListTradingInstruments(ctx, wantConnection.ExternalID)
+	if err != nil || len(instruments) != 1 {
+		t.Fatalf("trading instruments = %+v, err=%v", instruments, err)
+	}
+	wantInstrumentEnabled := true
+	wantVenueAccount := "venue-subaccount-1"
+	wantRoute := `{"type":"smart"}`
+	wantClientOrderID := "client-order-1"
+	wantVenueOrderID := "venue-order-1"
+	if overwritten {
+		wantInstrumentEnabled = false
+		wantVenueAccount = "overwritten-account"
+		wantRoute = `{"type":"direct"}`
+		wantClientOrderID = "client-order-overwritten"
+		wantVenueOrderID = "venue-order-overwritten"
+	}
+	if got := instruments[0]; got.ExternalSymbol != "AAPL/USD" ||
+		got.BaseAsset != "AAPL" || got.QuoteAsset != "USD" ||
+		got.Enabled != wantInstrumentEnabled {
+		t.Fatalf("trading instrument = %+v", got)
+	}
+	access, err := rs.ListTradingAccess(ctx, "acc-1")
+	if err != nil || len(access) != 1 ||
+		access[0].Connection != wantConnection.ExternalID ||
+		access[0].VenueAccount != wantVenueAccount {
+		t.Fatalf("trading access = %+v, err=%v", access, err)
+	}
+	venueOrder, ok, err := rs.GetVenueOrder(ctx, wantOrder)
+	if err != nil || !ok {
+		t.Fatalf("GetVenueOrder: ok=%v err=%v", ok, err)
+	}
+	if venueOrder.Connection != wantConnection.ExternalID ||
+		venueOrder.VenueAccount != wantVenueAccount ||
+		venueOrder.Route != wantRoute ||
+		venueOrder.ClientOrderID != wantClientOrderID ||
+		!venueOrder.SendAttempted ||
+		venueOrder.VenueOrderID != wantVenueOrderID ||
+		venueOrder.CreatedAt.IsZero() {
+		t.Fatalf("venue order = %+v", venueOrder)
+	}
+}
+
+func cloneBackupArchive(t *testing.T, archive backup.Archive) backup.Archive {
+	t.Helper()
+	raw, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatalf("marshal archive clone: %v", err)
+	}
+	var cloned backup.Archive
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		t.Fatalf("unmarshal archive clone: %v", err)
+	}
+	return cloned
+}
+
+func assertTradingBackupInvalid(t *testing.T, err error, want string) {
+	t.Helper()
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("error = %v, want ErrInvalid", err)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want context %q", err, want)
+	}
+	if strings.Contains(err.Error(), tradingBackupSecret) {
+		t.Fatalf("error leaked trading credential: %q", err)
+	}
+}
+
 func snapshotBackupData(
 	t *testing.T, ctx context.Context, rs fwstore.RealmStore,
 ) backup.Data {
@@ -3221,6 +3376,10 @@ var backupExportedTables = map[string]bool{
 	"audit":                      true,
 	"market_data_instance":       true,
 	"market_data_instrument":     true,
+	"trading_connection":         true,
+	"trading_instrument":         true,
+	"trading_access":             true,
+	"venue_order":                true,
 	"signing_key":                true,
 	"signing_config":             true,
 	"mcp_access":                 true,
@@ -3243,11 +3402,6 @@ var backupExcludedTables = map[string]bool{
 	"attestation_alg":          true, // immutable enum dictionary, seeded by Migrate
 	"attestation_request_type": true, // immutable enum dictionary, seeded by Migrate
 	"attestation_mode":         true, // immutable enum dictionary, seeded by Migrate
-	// trading state: export, restore and reset refuse while a trading connection exists
-	"trading_connection": true,
-	"trading_instrument": true,
-	"trading_access":     true,
-	"venue_order":        true,
 }
 
 // TestBackupCompleteness introspects sqlite_master for every user table and
@@ -3283,45 +3437,504 @@ func TestBackupCompleteness(t *testing.T) {
 	}
 }
 
-func TestTradingStateRefusesBackupExportRestoreAndReset(t *testing.T) {
-	ctx := context.Background()
-	_, source := newRealmStore(t, "trading-refusal-source")
-	if _, err := source.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
-		t.Fatalf("CreateAsset(source): %v", err)
+func TestBackupTradingRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		sealed bool
+	}{
+		{name: "plaintext"},
+		{name: "sealed", sealed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			var opts []Option
+			if test.sealed {
+				opts = append(opts, WithMasterKey(mustStoreMasterKey(t, 0x61)))
+			}
+			_, source := newRealmStoreWithOptions(t, domain.RealmID("trading-source-"+test.name), opts...)
+			connection, order := seedTradingBackupState(t, ctx, source)
+
+			archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+			if err != nil {
+				t.Fatalf("ExportBackup: %v", err)
+			}
+			wantForm := backup.CredentialFormPlaintext
+			if test.sealed {
+				wantForm = backup.CredentialFormSealed
+			}
+			if archive.CredentialForm != wantForm {
+				t.Fatalf("CredentialForm = %q, want %q", archive.CredentialForm, wantForm)
+			}
+			if len(archive.Data.TradingConnections) != 1 ||
+				len(archive.Data.TradingInstruments) != 1 ||
+				len(archive.Data.TradingAccess) != 1 ||
+				len(archive.Data.VenueOrders) != 1 {
+				t.Fatalf("incomplete trading archive: %+v", archive.Data)
+			}
+			var storedCredentials []byte
+			if err := source.(*realmStore).rawDB().QueryRowContext(
+				ctx,
+				`SELECT credentials FROM trading_connection WHERE external_id = ?`,
+				connection.ExternalID.Bytes(),
+			).Scan(&storedCredentials); err != nil {
+				t.Fatalf("read stored trading credentials: %v", err)
+			}
+			if !bytes.Equal(archive.Data.TradingConnections[0].Credentials, storedCredentials) {
+				t.Fatal("archive trading credentials differ from stored database value")
+			}
+			if test.sealed && strings.Contains(string(storedCredentials), tradingBackupSecret) {
+				t.Fatal("sealed archive contains plaintext trading credentials")
+			}
+
+			_, target := newRealmStoreWithOptions(t, domain.RealmID("trading-target-"+test.name), opts...)
+			summary, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+			})
+			if err != nil {
+				t.Fatalf("RestoreBackup: %v", err)
+			}
+			if len(summary.TradingCredentialsUnavailable) != 0 {
+				t.Fatalf("unavailable trading credentials = %v", summary.TradingCredentialsUnavailable)
+			}
+			assertTradingBackupState(t, ctx, target, connection, order, tradingBackupSecret, true, false)
+		})
 	}
+}
+
+func TestBackupRestoreUnavailableSealedTradingCredentials(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStoreWithOptions(
+		t, "sealed-trading-source", WithMasterKey(mustStoreMasterKey(t, 0x71)),
+	)
+	connection, order := seedTradingBackupState(t, ctx, source)
 	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
 	if err != nil {
-		t.Fatalf("ExportBackup(source): %v", err)
+		t.Fatalf("ExportBackup: %v", err)
 	}
 
-	blockedStore, blocked := newRealmStore(t, "trading-refusal-target")
-	if _, err := blocked.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider:    domain.TradingProviderAlpaca,
-		Label:       "blocks backup",
-		Mode:        domain.TradingModeTest,
-		Credentials: `{}`,
-	}); err != nil {
-		t.Fatalf("CreateTradingConnection: %v", err)
-	}
-	if _, err := blocked.ExportBackup(
-		ctx, backup.Scope{All: true},
-	); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("ExportBackup error = %v, want ErrConflict", err)
-	}
-	if _, err := blocked.RestoreBackup(ctx, archive, backup.RestoreOptions{
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+	_, target := newRealmStoreWithOptions(
+		t, "sealed-trading-target", WithMasterKey(mustStoreMasterKey(t, 0x72)),
+	)
+	summary, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
-	}); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("RestoreBackup error = %v, want ErrConflict", err)
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
 	}
-	if _, ok, err := blocked.GetAsset(ctx, "AAPL"); err != nil || ok {
-		t.Fatalf("GetAsset after refused restore: ok=%v err=%v", ok, err)
+	if !reflect.DeepEqual(summary.TradingCredentialsUnavailable, []string{connection.Label}) {
+		t.Fatalf("unavailable trading credentials = %v, want %q",
+			summary.TradingCredentialsUnavailable, connection.Label)
 	}
-	if err := blockedStore.Reset(ctx); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("Reset error = %v, want ErrConflict", err)
+	assertTradingBackupState(t, ctx, target, connection, order, "{}", false, false)
+	if strings.Contains(logs.String(), tradingBackupSecret) {
+		t.Fatalf("restore log leaked trading credential: %s", logs.String())
 	}
-	connections, err := blocked.ListTradingConnections(ctx)
-	if err != nil || len(connections) != 1 {
-		t.Fatalf("trading connection after refusals: count=%d err=%v", len(connections), err)
+}
+
+func TestBackupRestoreRejectsLiveTradingBeforeWrites(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStore(t, "live-trading-source")
+	seedTradingBackupState(t, ctx, source)
+	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	archive.Data.TradingConnections[0].Mode = domain.TradingModeLive
+
+	_, target := newRealmStore(t, "live-trading-target")
+	_, err = target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	})
+	if !errors.Is(err, domain.ErrLiveTradingUnavailable) {
+		t.Fatalf("RestoreBackup error = %v, want ErrLiveTradingUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), archive.Data.TradingConnections[0].Label) {
+		t.Fatalf("RestoreBackup error = %q, want connection label", err)
+	}
+	accounts, listErr := target.ListAccounts(ctx)
+	if listErr != nil || len(accounts) != 0 {
+		t.Fatalf("accounts after refused restore = %+v, err=%v", accounts, listErr)
+	}
+	connections, listErr := target.ListTradingConnections(ctx)
+	if listErr != nil || len(connections) != 0 {
+		t.Fatalf("connections after refused restore = %+v, err=%v", connections, listErr)
+	}
+}
+
+func TestBackupTradingScopeRefusals(t *testing.T) {
+	ctx := context.Background()
+	narrowedAccounts := backup.Scope{
+		Sections: []backup.Section{backup.SectionAccountsGroups},
+		Accounts: backup.EntitySelector{Accounts: []string{"acc-1"}},
+	}
+	narrowedTrading := backup.Scope{
+		Sections: []backup.Section{backup.SectionTrading},
+		Accounts: backup.EntitySelector{Accounts: []string{"acc-1"}},
+	}
+
+	t.Run("export with account selector", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-narrow-export")
+		seedTradingBackupState(t, ctx, source)
+		_, err := source.ExportBackup(ctx, narrowedTrading)
+		assertTradingBackupInvalid(t, err, "export all accounts")
+	})
+
+	t.Run("export all sections with account selector", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-all-narrow-export")
+		seedTradingBackupState(t, ctx, source)
+		_, err := source.ExportBackup(ctx, backup.Scope{
+			All:      true,
+			Accounts: backup.EntitySelector{Accounts: []string{"acc-1"}},
+		})
+		assertTradingBackupInvalid(t, err, "export all accounts")
+	})
+
+	t.Run("export non-trading section with account selector", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-narrow-settings-export")
+		seedTradingBackupState(t, ctx, source)
+		archive, err := source.ExportBackup(ctx, backup.Scope{
+			Sections: []backup.Section{backup.SectionUserSettings},
+			Accounts: backup.EntitySelector{Accounts: []string{"acc-1"}},
+		})
+		if err != nil {
+			t.Fatalf("ExportBackup: %v", err)
+		}
+		if !reflect.DeepEqual(
+			archive.Manifest.Sections, []backup.Section{backup.SectionUserSettings},
+		) {
+			t.Fatalf("archive sections = %v, want user settings only", archive.Manifest.Sections)
+		}
+	})
+
+	t.Run("restore trading archive with account selector", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-narrow-archive")
+		seedTradingBackupState(t, ctx, source)
+		archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+		if err != nil {
+			t.Fatalf("ExportBackup: %v", err)
+		}
+		_, target := newRealmStore(t, "trading-narrow-restore")
+		_, err = target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			Scope: narrowedTrading, Mode: backup.RestoreModeOverwrite,
+		})
+		assertTradingBackupInvalid(t, err, "restore all accounts")
+	})
+
+	t.Run("restore into target with venue-order links and account selector", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-narrow-empty-source")
+		seedRealm(t, ctx, source)
+		archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+		if err != nil {
+			t.Fatalf("ExportBackup: %v", err)
+		}
+		_, target := newRealmStore(t, "trading-narrow-linked-target")
+		seedTradingBackupState(t, ctx, target)
+		_, err = target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			Scope: narrowedAccounts, Mode: backup.RestoreModeOverwrite,
+		})
+		assertTradingBackupInvalid(t, err, "venue-order links")
+	})
+
+	t.Run("replace accounts without trading section", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-prune-source")
+		seedRealm(t, ctx, source)
+		archive, err := source.ExportBackup(ctx, backup.Scope{
+			Sections: []backup.Section{backup.SectionAccountsGroups},
+		})
+		if err != nil {
+			t.Fatalf("ExportBackup: %v", err)
+		}
+		_, target := newRealmStore(t, "trading-prune-target")
+		if _, err := target.CreateTradingConnection(ctx, domain.TradingConnection{
+			Provider: domain.TradingProviderAlpaca, Label: "keep", Mode: domain.TradingModePaper,
+			VenueIdentity: "keep", Credentials: tradingBackupSecret,
+		}); err != nil {
+			t.Fatalf("CreateTradingConnection: %v", err)
+		}
+		_, err = target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			Scope: backup.Scope{Sections: []backup.Section{backup.SectionAccountsGroups}},
+			Mode:  backup.RestoreModeReplaceAll,
+		})
+		assertTradingBackupInvalid(t, err, `include the "trading" section`)
+	})
+
+	t.Run("restore activity from archive without trading section", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-missing-section-source")
+		seedRealm(t, ctx, source)
+		archive, err := source.ExportBackup(ctx, backup.Scope{
+			Sections: []backup.Section{backup.SectionUserSettings},
+		})
+		if err != nil {
+			t.Fatalf("ExportBackup: %v", err)
+		}
+		_, target := newRealmStore(t, "trading-missing-section-target")
+		if _, err := target.CreateTradingConnection(ctx, domain.TradingConnection{
+			Provider: domain.TradingProviderAlpaca, Label: "keep", Mode: domain.TradingModePaper,
+			VenueIdentity: "keep", Credentials: tradingBackupSecret,
+		}); err != nil {
+			t.Fatalf("CreateTradingConnection: %v", err)
+		}
+		_, err = target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			Scope: backup.Scope{Sections: []backup.Section{backup.SectionActivityHistory}},
+			Mode:  backup.RestoreModeReplaceAll,
+		})
+		assertTradingBackupInvalid(t, err,
+			"the archive carries no trading section; restoring would remove this realm's trading connections")
+	})
+
+	t.Run("overwrite activity without trading section preserves connection", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-missing-section-overwrite-source")
+		order := seedRealm(t, ctx, source)
+		archive, err := source.ExportBackup(ctx, backup.Scope{
+			Sections: []backup.Section{backup.SectionActivityHistory},
+		})
+		if err != nil {
+			t.Fatalf("ExportBackup: %v", err)
+		}
+		sections := archive.Manifest.Sections[:0]
+		for _, section := range archive.Manifest.Sections {
+			if section != backup.SectionTrading {
+				sections = append(sections, section)
+			}
+		}
+		archive.Manifest.Sections = sections
+
+		_, target := newRealmStore(t, "trading-missing-section-overwrite-target")
+		connection, err := target.CreateTradingConnection(ctx, domain.TradingConnection{
+			Provider: domain.TradingProviderAlpaca, Label: "keep", Mode: domain.TradingModePaper,
+			VenueIdentity: "keep", Credentials: tradingBackupSecret,
+		})
+		if err != nil {
+			t.Fatalf("CreateTradingConnection: %v", err)
+		}
+		if _, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			Scope: backup.Scope{Sections: []backup.Section{backup.SectionActivityHistory}},
+			Mode:  backup.RestoreModeOverwrite,
+		}); err != nil {
+			t.Fatalf("RestoreBackup: %v", err)
+		}
+		if _, err := target.GetOrder(ctx, order); err != nil {
+			t.Fatalf("GetOrder after activity restore: %v", err)
+		}
+		connections, err := target.ListTradingConnections(ctx)
+		if err != nil {
+			t.Fatalf("ListTradingConnections: %v", err)
+		}
+		if len(connections) != 1 ||
+			connections[0].ExternalID != connection.ExternalID ||
+			connections[0].Label != connection.Label ||
+			connections[0].Credentials != connection.Credentials {
+			t.Fatalf("trading connection changed after overwrite: %+v", connections)
+		}
+	})
+
+	t.Run("narrowed replace all including trading", func(t *testing.T) {
+		_, source := newRealmStore(t, "trading-narrow-replace-source")
+		archive, err := source.ExportBackup(ctx, backup.Scope{
+			Sections: []backup.Section{backup.SectionTrading},
+		})
+		if err != nil {
+			t.Fatalf("ExportBackup: %v", err)
+		}
+		_, target := newRealmStore(t, "trading-narrow-replace-target")
+		if _, err := target.CreateTradingConnection(ctx, domain.TradingConnection{
+			Provider: domain.TradingProviderAlpaca, Label: "keep", Mode: domain.TradingModePaper,
+			VenueIdentity: "keep", Credentials: tradingBackupSecret,
+		}); err != nil {
+			t.Fatalf("CreateTradingConnection: %v", err)
+		}
+		_, err = target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			Scope: backup.Scope{
+				Sections: []backup.Section{backup.SectionTrading},
+				Accounts: backup.EntitySelector{Accounts: []string{"acc-1"}},
+			},
+			Mode: backup.RestoreModeReplaceAll,
+		})
+		assertTradingBackupInvalid(t, err, "narrowed replace-all")
+	})
+}
+
+func TestBackupTradingMissingReferencesAreRefused(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStore(t, "trading-missing-reference-source")
+	seedTradingBackupState(t, ctx, source)
+	valid, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*backup.Archive) string
+		want   string
+	}{
+		{
+			name: "fee account",
+			mutate: func(archive *backup.Archive) string {
+				archive.Data.TradingConnections[0].FeeAccount = "missing-account"
+				return "missing-account"
+			},
+			want: "include that account",
+		},
+		{
+			name: "binding account",
+			mutate: func(archive *backup.Archive) string {
+				archive.Data.TradingAccess[0].Account = "missing-account"
+				return "missing-account"
+			},
+			want: "include that account",
+		},
+		{
+			name: "venue order",
+			mutate: func(archive *backup.Archive) string {
+				missing := mustExternalID(t)
+				archive.Data.VenueOrders[0].Order = missing
+				return missing.String()
+			},
+			want: "include that order",
+		},
+		{
+			name: "venue connection",
+			mutate: func(archive *backup.Archive) string {
+				missing := mustExternalID(t)
+				archive.Data.VenueOrders[0].Connection = missing
+				return missing.String()
+			},
+			want: "include that connection",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			archive := cloneBackupArchive(t, valid)
+			identity := test.mutate(&archive)
+			_, target := newRealmStore(t, domain.RealmID("trading-missing-"+strings.ReplaceAll(test.name, " ", "-")))
+			_, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+			})
+			assertTradingBackupInvalid(t, err, identity)
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("RestoreBackup error = %q, want action %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestBackupTradingRestoreModes(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStore(t, "trading-modes-source")
+	connection, order := seedTradingBackupState(t, ctx, source)
+	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	_, target := newRealmStore(t, "trading-modes-target")
+	if _, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup(replace_all): %v", err)
+	}
+
+	overwrite := cloneBackupArchive(t, archive)
+	overwrite.Data.TradingConnections[0].Label = "Alpaca overwritten"
+	overwrite.Data.TradingConnections[0].Credentials = []byte(`{"key":"overwritten"}`)
+	overwrite.Data.TradingConnections[0].Enabled = false
+	overwrite.Data.TradingInstruments[0].Enabled = false
+	overwrite.Data.TradingAccess[0].VenueAccount = "overwritten-account"
+	overwrite.Data.VenueOrders[0].VenueAccount = "overwritten-account"
+	overwrite.Data.VenueOrders[0].Route = `{"type":"direct"}`
+	overwrite.Data.VenueOrders[0].ClientOrderID = "client-order-overwritten"
+	overwrite.Data.VenueOrders[0].VenueOrderID = "venue-order-overwritten"
+	if _, err := target.RestoreBackup(ctx, overwrite, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}); err != nil {
+		t.Fatalf("RestoreBackup(overwrite): %v", err)
+	}
+	connection.Label = "Alpaca overwritten"
+	connection.Credentials = `{"key":"overwritten"}`
+	assertTradingBackupState(t, ctx, target, connection, order, connection.Credentials, false, true)
+
+	insertMissing := cloneBackupArchive(t, archive)
+	insertMissing.Data.TradingConnections[0].Label = "must be skipped"
+	insertMissing.Data.TradingInstruments[0].Enabled = true
+	insertMissing.Data.TradingAccess[0].VenueAccount = "must-be-skipped"
+	insertMissing.Data.VenueOrders[0].Route = `{"type":"must-be-skipped"}`
+	summary, err := target.RestoreBackup(ctx, insertMissing, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeInsertMissing,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup(insert_missing): %v", err)
+	}
+	if summary.Skipped[backup.SectionTrading] != 4 {
+		t.Fatalf("skipped trading rows = %d, want 4", summary.Skipped[backup.SectionTrading])
+	}
+	assertTradingBackupState(t, ctx, target, connection, order, connection.Credentials, false, true)
+}
+
+func TestBackupTradingReplaceAllPrunesDependenciesFirst(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStore(t, "trading-replace-source")
+	wantConnection, wantOrder := seedTradingBackupState(t, ctx, source)
+	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	_, target := newRealmStore(t, "trading-replace-target")
+	oldConnection, oldOrder := seedTradingBackupState(t, ctx, target)
+	const targetOnlyAccount = domain.AccountID("target-only-trading-account")
+	if _, err := target.CreateAccount(ctx, domain.Account{
+		Code: targetOnlyAccount, Title: "Target-only trading account", GroupCode: "grp-1",
+	}); err != nil {
+		t.Fatalf("CreateAccount(target only): %v", err)
+	}
+	if err := target.SetTradingConnectionFeeAccount(
+		ctx, oldConnection.ExternalID, targetOnlyAccount,
+	); err != nil {
+		t.Fatalf("SetTradingConnectionFeeAccount(target only): %v", err)
+	}
+	if err := target.PutTradingAccess(ctx, domain.TradingAccess{
+		Account: targetOnlyAccount, Connection: oldConnection.ExternalID,
+		VenueAccount: "target-only-venue-account",
+	}); err != nil {
+		t.Fatalf("PutTradingAccess(target only): %v", err)
+	}
+	if _, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	assertTradingBackupState(t, ctx, target, wantConnection, wantOrder, tradingBackupSecret, true, false)
+	connections, err := target.ListTradingConnections(ctx)
+	if err != nil || len(connections) != 1 || connections[0].ExternalID == oldConnection.ExternalID {
+		t.Fatalf("old connection survived replace_all: %+v err=%v", connections, err)
+	}
+	if _, ok, err := target.GetVenueOrder(ctx, oldOrder); err != nil || ok {
+		t.Fatalf("old venue-order link survived replace_all: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := target.GetAccount(ctx, targetOnlyAccount); err != nil || ok {
+		t.Fatalf("target-only fee account survived replace_all: ok=%v err=%v", ok, err)
+	}
+	access, err := target.ListTradingAccess(ctx, targetOnlyAccount)
+	if err != nil || len(access) != 0 {
+		t.Fatalf("target-only trading access survived replace_all: %+v err=%v", access, err)
+	}
+}
+
+func TestResetClearsTradingState(t *testing.T) {
+	ctx := context.Background()
+	store, realm := newRealmStore(t, "trading-reset")
+	_, order := seedTradingBackupState(t, ctx, realm)
+	if err := store.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	connections, err := realm.ListTradingConnections(ctx)
+	if err != nil || len(connections) != 0 {
+		t.Fatalf("connections after reset = %+v, err=%v", connections, err)
+	}
+	if _, ok, err := realm.GetVenueOrder(ctx, order); err != nil || ok {
+		t.Fatalf("venue-order link after reset: ok=%v err=%v", ok, err)
 	}
 }
 

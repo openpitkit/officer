@@ -1562,6 +1562,18 @@ func (r *realmStore) DeleteAccount(
 		}
 		return err
 	}
+	var feeConnection string
+	err = tx.QueryRowContext(ctx,
+		`SELECT label FROM trading_connection
+		 WHERE fee_account_id = ? ORDER BY id LIMIT 1`, accountID,
+	).Scan(&feeConnection)
+	if err == nil {
+		return fmt.Errorf("account %q is the fee account of trading connection %q: %w",
+			code, feeConnection, domain.ErrConflict)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: read account fee connection: %w", err)
+	}
 	if !force {
 		deps, err := accountDependents(ctx, tx, accountID)
 		if err != nil {

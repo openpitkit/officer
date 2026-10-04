@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -46,6 +47,39 @@ func (r *attestorFailingSettlementRealm) RecordOrderSettlementWithAttestation(
 		}
 	}
 	return r.RecordOrderSettlement(ctx, settlement)
+}
+
+func TestLocalNode_VenueManagedShortcuts(t *testing.T) {
+	for _, action := range []string{"confirm", "cancel"} {
+		for _, source := range []domain.Source{domain.SourceAPI, domain.SourceSystem} {
+			t.Run(action+"/"+string(source), func(t *testing.T) {
+				eng := newFakeEngine()
+				n, realm := newTestNode(t, eng)
+				order := submitShortcutOrder(t, n, realm, eng)
+				n.realm = &venueLinkedRealm{RealmStore: realm, link: domain.VenueOrder{Order: order.ExternalID}}
+				before, err := realm.GetOrder(context.Background(), order.ExternalID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				caller := domain.Caller{Source: source}
+				if source == domain.SourceAPI {
+					caller = testCaller
+				}
+				if action == "confirm" {
+					_, err = n.ConfirmOrder(context.Background(), order.ExternalID, caller)
+				} else {
+					_, _, err = n.CancelOrder(context.Background(), order.ExternalID, "20", caller)
+				}
+				if !errors.Is(err, domain.ErrVenueOrderManaged) {
+					t.Fatalf("%s = %v", action, err)
+				}
+				after, err := realm.GetOrder(context.Background(), order.ExternalID)
+				if err != nil || !reflect.DeepEqual(before, after) || len(eng.execReportCalls) != 0 {
+					t.Fatalf("refused shortcut changed order or reached engine: %v", err)
+				}
+			})
+		}
+	}
 }
 
 func submitShortcutOrder(

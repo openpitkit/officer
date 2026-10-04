@@ -1013,6 +1013,10 @@ func (n *localNode) confirmOrder(
 	runner := builder.Then(func(
 		_ context.Context, state *confirmationChainState,
 	) error {
+		if err := n.requireNoVenueOrder(state.ctx, order); err != nil {
+			state.err = err
+			return err
+		}
 		detail, err := n.realm.GetOrder(state.ctx, order)
 		if err != nil {
 			state.err = fmt.Errorf("get order: %w", err)
@@ -1140,6 +1144,10 @@ func (n *localNode) cancelOrder(
 		accountID: source,
 	}
 	begin := func(context.Context) (*executionReportChainState, error) {
+		if err := n.requireNoVenueOrder(ctx, order); err != nil {
+			state.err = err
+			return nil, err
+		}
 		detail, err := n.realm.GetOrder(ctx, order)
 		if err != nil {
 			state.err = fmt.Errorf("get order: %w", err)

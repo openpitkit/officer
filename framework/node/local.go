@@ -560,7 +560,13 @@ func (n *localNode) RestoreBackup(
 	if runtimeScope {
 		beforeRuntime, _, err = n.captureRestoreRuntimeSnapshot(ctx)
 	} else {
-		rollback, err = n.realm.ExportBackup(ctx, normalizedScope)
+		rollbackScope := normalizedScope
+		rollbackScope.Accounts = backup.EntitySelector{}
+		rollbackScope.Positions = backup.EntitySelector{}
+		rollback, err = n.realm.ExportBackup(ctx, rollbackScope)
+		if err == nil {
+			rollback.Data = backup.FilterData(rollback.Data, normalizedScope)
+		}
 	}
 	if err != nil {
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),

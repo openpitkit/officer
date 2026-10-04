@@ -274,6 +274,8 @@ func (r *memoryRealm) accountWithCurrencyCascade(account domain.Account) domain.
 func (r *memoryRealm) UpdateAccount(
 	_ context.Context, oldCode domain.AccountID, account domain.Account,
 ) (domain.Account, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	current, ok := r.accounts[oldCode]
 	if !ok {
 		return domain.Account{}, domain.ErrNotFound
@@ -292,6 +294,12 @@ func (r *memoryRealm) UpdateAccount(
 }
 
 func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID) {
+	for id, connection := range r.tradingConnections {
+		if connection.FeeAccount == oldCode {
+			connection.FeeAccount = newCode
+			r.tradingConnections[id] = connection
+		}
+	}
 	nextBalances := map[string]domain.Balance{}
 	for key, balance := range r.balances {
 		if balance.Account == oldCode {
@@ -378,8 +386,15 @@ func renameSpotFundsPnlBoundsLimits(
 func (r *memoryRealm) DeleteAccount(
 	_ context.Context, code domain.AccountID, _ bool,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, ok := r.accounts[code]; !ok {
 		return domain.ErrNotFound
+	}
+	for _, connection := range r.tradingConnections {
+		if connection.FeeAccount == code {
+			return fmt.Errorf("account %q is the fee account of trading connection %q: %w", code, connection.Label, domain.ErrConflict)
+		}
 	}
 	delete(r.accounts, code)
 	return nil

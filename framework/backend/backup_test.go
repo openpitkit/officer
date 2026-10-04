@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,10 @@ type backupRestoreTestNode struct {
 	// received, so tests can assert the routed call rather than infer it.
 	restoreCalls    int
 	restoredArchive backup.Archive
+	operationCalls  *[]string
+	restoreSummary  backup.RestoreSummary
+	restoreErr      error
+	resetErr        error
 }
 
 func (n *backupRestoreTestNode) ListMarketDataInstances(
@@ -75,6 +80,12 @@ func (n *backupRestoreTestNode) RestoreBackup(
 	opts backup.RestoreOptions,
 	_ domain.Caller,
 ) (backup.RestoreSummary, marketdata.Sink, error) {
+	if n.operationCalls != nil {
+		*n.operationCalls = append(*n.operationCalls, "node.restore")
+	}
+	if n.restoreErr != nil {
+		return backup.RestoreSummary{}, nil, n.restoreErr
+	}
 	if opts.ValidateMarketDataInstance != nil {
 		for _, archived := range archive.Data.MarketDataInstances {
 			if err := opts.ValidateMarketDataInstance(domain.MarketDataInstance{
@@ -108,7 +119,16 @@ func (n *backupRestoreTestNode) RestoreBackup(
 			stored.Enabled = archived.Enabled
 		}
 	}
-	return backup.RestoreSummary{}, nil, nil
+	return n.restoreSummary, nil, nil
+}
+
+func (n *backupRestoreTestNode) ResetDatabase(
+	context.Context, domain.Caller,
+) (marketdata.Sink, error) {
+	if n.operationCalls != nil {
+		*n.operationCalls = append(*n.operationCalls, "node.reset")
+	}
+	return nil, n.resetErr
 }
 
 type backupRestoreTestRuntime struct {
@@ -117,6 +137,22 @@ type backupRestoreTestRuntime struct {
 	stops    int
 	restarts int
 	pushed   []domain.MarketDataInstrument
+}
+
+type backupTradingRuntime struct {
+	TradingRuntime
+
+	calls      *[]string
+	restartErr error
+}
+
+func (r *backupTradingRuntime) Stop() {
+	*r.calls = append(*r.calls, "trading.stop")
+}
+
+func (r *backupTradingRuntime) Restart() error {
+	*r.calls = append(*r.calls, "trading.restart")
+	return r.restartErr
 }
 
 type backupRestoreTestConnector struct{}
@@ -207,6 +243,174 @@ func newBackupRestoreTestService(
 		registry: registry,
 		signer:   fwsigning.ServiceOrUnavailable(nil),
 	}, n, md
+}
+
+func newBackupTradingLifecycleService(
+	n *backupRestoreTestNode, tradingRuntime TradingRuntime,
+) *Service {
+	return &Service{
+		node:     n,
+		trading:  tradingRuntime,
+		registry: marketdata.NewRegistry(),
+		signer:   fwsigning.ServiceOrUnavailable(nil),
+	}
+}
+
+func TestRestoreBackupStopsAndRestartsTradingRuntime(t *testing.T) {
+	t.Parallel()
+	restoreFailure := errors.New("test restore failure")
+	restartFailure := errors.New("test trading restart failure")
+
+	for _, test := range []struct {
+		name        string
+		restoreErr  error
+		restartErr  error
+		withRuntime bool
+		wantCalls   []string
+	}{
+		{
+			name:        "success",
+			withRuntime: true,
+			wantCalls:   []string{"trading.stop", "node.restore", "trading.restart"},
+		},
+		{
+			name:        "restart failure after success",
+			restartErr:  restartFailure,
+			withRuntime: true,
+			wantCalls:   []string{"trading.stop", "node.restore", "trading.restart"},
+		},
+		{
+			name:        "restore failure",
+			restoreErr:  restoreFailure,
+			withRuntime: true,
+			wantCalls:   []string{"trading.stop", "node.restore", "trading.restart"},
+		},
+		{
+			name:        "restart failure after restore failure",
+			restoreErr:  restoreFailure,
+			restartErr:  restartFailure,
+			withRuntime: true,
+			wantCalls:   []string{"trading.stop", "node.restore", "trading.restart"},
+		},
+		{
+			name:      "no runtime",
+			wantCalls: []string{"node.restore"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var calls []string
+			n := &backupRestoreTestNode{
+				operationCalls: &calls,
+				restoreErr:     test.restoreErr,
+				restoreSummary: backup.RestoreSummary{
+					TradingCredentialsUnavailable: []string{"Alpaca paper"},
+				},
+			}
+			var runtime TradingRuntime
+			if test.withRuntime {
+				runtime = &backupTradingRuntime{
+					calls: &calls, restartErr: test.restartErr,
+				}
+			}
+			svc := newBackupTradingLifecycleService(n, runtime)
+			archive := backupRestoreSourceArchive("trading lifecycle test")
+			summary, err := svc.RestoreBackup(systemCtx(), archive, backup.RestoreOptions{
+				Scope: backup.Scope{Sections: []backup.Section{backup.SectionTrading}},
+				Mode:  backup.RestoreModeOverwrite,
+			})
+			if test.restoreErr != nil {
+				if !errors.Is(err, test.restoreErr) {
+					t.Fatalf("RestoreBackup error = %v, want %v", err, test.restoreErr)
+				}
+			} else {
+				if test.restartErr == nil && err != nil {
+					t.Fatalf("RestoreBackup: %v", err)
+				}
+				if !reflect.DeepEqual(
+					summary.TradingCredentialsUnavailable, []string{"Alpaca paper"},
+				) {
+					t.Fatalf("trading credential summary = %+v", summary)
+				}
+			}
+			if test.restartErr != nil && !errors.Is(err, test.restartErr) {
+				t.Fatalf("RestoreBackup error = %v, want restart error %v", err, test.restartErr)
+			}
+			if !reflect.DeepEqual(calls, test.wantCalls) {
+				t.Fatalf("calls = %v, want %v", calls, test.wantCalls)
+			}
+		})
+	}
+}
+
+func TestResetDatabaseStopsAndRestartsTradingRuntime(t *testing.T) {
+	t.Parallel()
+	resetFailure := errors.New("test reset failure")
+	restartFailure := errors.New("test trading restart failure")
+
+	for _, test := range []struct {
+		name        string
+		resetErr    error
+		restartErr  error
+		withRuntime bool
+		wantCalls   []string
+	}{
+		{
+			name:        "success",
+			withRuntime: true,
+			wantCalls:   []string{"trading.stop", "node.reset", "trading.restart"},
+		},
+		{
+			name:        "restart failure after success",
+			restartErr:  restartFailure,
+			withRuntime: true,
+			wantCalls:   []string{"trading.stop", "node.reset", "trading.restart"},
+		},
+		{
+			name:        "reset failure",
+			resetErr:    resetFailure,
+			withRuntime: true,
+			wantCalls:   []string{"trading.stop", "node.reset", "trading.restart"},
+		},
+		{
+			name:        "restart failure after reset failure",
+			resetErr:    resetFailure,
+			restartErr:  restartFailure,
+			withRuntime: true,
+			wantCalls:   []string{"trading.stop", "node.reset", "trading.restart"},
+		},
+		{
+			name:      "no runtime",
+			wantCalls: []string{"node.reset"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var calls []string
+			n := &backupRestoreTestNode{operationCalls: &calls, resetErr: test.resetErr}
+			var runtime TradingRuntime
+			if test.withRuntime {
+				runtime = &backupTradingRuntime{
+					calls: &calls, restartErr: test.restartErr,
+				}
+			}
+			svc := newBackupTradingLifecycleService(n, runtime)
+			err := svc.ResetDatabase(systemCtx())
+			if test.resetErr != nil {
+				if !errors.Is(err, test.resetErr) {
+					t.Fatalf("ResetDatabase error = %v, want %v", err, test.resetErr)
+				}
+			} else if test.restartErr == nil && err != nil {
+				t.Fatalf("ResetDatabase: %v", err)
+			}
+			if test.restartErr != nil && !errors.Is(err, test.restartErr) {
+				t.Fatalf("ResetDatabase error = %v, want restart error %v", err, test.restartErr)
+			}
+			if !reflect.DeepEqual(calls, test.wantCalls) {
+				t.Fatalf("calls = %v, want %v", calls, test.wantCalls)
+			}
+		})
+	}
 }
 
 func backupRestoreTestArchive(

@@ -819,6 +819,9 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 	stored domain.OrderDetail,
 	action string,
 ) (domain.ApprovalPayload, fwsigning.Service, error) {
+	if err := s.requireNoVenueOrder(ctx, stored.Order.ExternalID); err != nil {
+		return domain.ApprovalPayload{}, nil, err
+	}
 	if isDropCopyOrder(stored.Order) {
 		return domain.ApprovalPayload{}, nil, fmt.Errorf(
 			"backend: drop-copy order has no signed hold approval recorded by Officer and cannot be %s: %w",

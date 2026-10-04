@@ -1638,6 +1638,21 @@ func TestValidateMarketDataMark(t *testing.T) {
 	}
 }
 
+func TestDestinationSentinels(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		err     error
+		message string
+	}{
+		{domain.ErrDestinationAmbiguous, "several destinations; name one"},
+		{domain.ErrNoDestination, "no destination for the account in this mode"},
+	} {
+		if tc.err.Error() != tc.message || !domain.IsSentinel(tc.err) {
+			t.Errorf("destination sentinel = %v, want registered %q", tc.err, tc.message)
+		}
+	}
+}
+
 func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -1647,18 +1662,24 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrAlreadyExists":           domain.ErrAlreadyExists,
 		"ErrConflict":                domain.ErrConflict,
 		"ErrCurrencyValuedLimit":     domain.ErrCurrencyValuedLimit,
+		"ErrDestinationAmbiguous":    domain.ErrDestinationAmbiguous,
 		"ErrEngineRestarting":        domain.ErrEngineRestarting,
 		"ErrExecutionReportRequired": domain.ErrExecutionReportRequired,
+		"ErrFeeAccountRequired":      domain.ErrFeeAccountRequired,
 		"ErrForbidden":               domain.ErrForbidden,
 		"ErrHasDependents":           domain.ErrHasDependents,
 		"ErrInvalid":                 domain.ErrInvalid,
+		"ErrLiveTradingUnavailable":  domain.ErrLiveTradingUnavailable,
 		"ErrNoChange":                domain.ErrNoChange,
+		"ErrNoDestination":           domain.ErrNoDestination,
 		"ErrNotFound":                domain.ErrNotFound,
 		"ErrNotImplemented":          domain.ErrNotImplemented,
 		"ErrReservedGroup":           domain.ErrReservedGroup,
 		"ErrTerminalOrder":           domain.ErrTerminalOrder,
 		"ErrTooLarge":                domain.ErrTooLarge,
+		"ErrTradingModeMismatch":     domain.ErrTradingModeMismatch,
 		"ErrUpstream":                domain.ErrUpstream,
+		"ErrVenueOrderManaged":       domain.ErrVenueOrderManaged,
 	}
 	declared := exportedDomainErrorVariableNames(t)
 	registered := make([]string, 0, len(sentinels))

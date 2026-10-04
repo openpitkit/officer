@@ -27,6 +27,7 @@ import (
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 )
 
 // ControlPlane is the backend seam consumed by HTTP and extension handlers.
@@ -141,6 +142,22 @@ type ControlPlane interface {
 		ctx context.Context, instanceID, externalSymbol string, enabled bool,
 	) error
 	DeleteMarketDataInstrument(ctx context.Context, instanceID, externalSymbol string) error
+	GetTrading(ctx context.Context) (TradingStatus, error)
+	// CreateTradingConnection returns the stored settings without credentials.
+	CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error)
+	UpdateTradingConnectionSettings(ctx context.Context, id, label, credentials string) error
+	SetTradingConnectionEnabled(ctx context.Context, id string, enabled bool) error
+	CheckTradingConnection(ctx context.Context, id string) (trading.AccountInfo, error)
+	UpsertTradingInstrument(ctx context.Context, instrument domain.TradingInstrument) error
+	DeleteTradingInstrument(ctx context.Context, connection, externalSymbol string) error
+	VerifyTradingSymbol(ctx context.Context, id, external string) (TradingSymbolVerification, error)
+	SearchTradingSymbols(ctx context.Context, id, query string) (TradingSymbolSearch, error)
+	PutTradingAccess(ctx context.Context, access domain.TradingAccess) error
+	RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error
+	SetTradingFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID) error
+	ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]TradingDestinationStatus, error)
+	// SendPaperOrder pre-checks, holds, and sends through a paper connection.
+	SendPaperOrder(ctx context.Context, o domain.Order, dest SendDestination) (VenueSendResult, error)
 	CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error)
 	UpdateGroup(
 		ctx context.Context,

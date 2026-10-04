@@ -309,10 +309,11 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	tradingConnection, err := rs.CreateTradingConnection(
 		ctx,
 		domain.TradingConnection{
-			Provider:    domain.TradingProviderAlpaca,
-			Label:       "sweep-trading",
-			Mode:        domain.TradingModeTest,
-			Credentials: `{}`,
+			Provider:      domain.TradingProviderAlpaca,
+			Label:         "sweep-trading",
+			VenueIdentity: "sweep-account",
+			Mode:          domain.TradingModePaper,
+			Credentials:   `{}`,
 		},
 	)
 	if err != nil {
@@ -421,10 +422,11 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}
 	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider:    domain.TradingProviderAlpaca,
-		Label:       "cascade-trading",
-		Mode:        domain.TradingModeTest,
-		Credentials: `{}`,
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "cascade-trading",
+		VenueIdentity: "cascade-account",
+		Mode:          domain.TradingModePaper,
+		Credentials:   `{}`,
 	})
 	if err != nil {
 		t.Fatalf("CreateTradingConnection: %v", err)

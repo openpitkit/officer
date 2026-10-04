@@ -406,6 +406,202 @@ func (r *realmStore) exportInstruments(
 	return out, nil
 }
 
+func (r *realmStore) exportTradingConnections(
+	ctx context.Context,
+) ([]backup.TradingConnection, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
+		ctx,
+		`SELECT c.external_id, c.provider, c.label, c.mode,
+		        c.venue_identity, COALESCE(a.code, ''), c.credentials, c.enabled
+		 FROM trading_connection c
+		 LEFT JOIN account a ON a.id = c.fee_account_id
+		 ORDER BY c.external_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: export trading connections: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]backup.TradingConnection, 0)
+	for rows.Next() {
+		var (
+			connection backup.TradingConnection
+			rawID      []byte
+		)
+		if err := rows.Scan(
+			&rawID, &connection.Provider, &connection.Label, &connection.Mode,
+			&connection.VenueIdentity, &connection.FeeAccount,
+			&connection.Credentials, &connection.Enabled,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan trading connection for export: %w", err)
+		}
+		connection.ExternalID, err = domain.ExternalIDFromBytes(rawID)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"store: decode trading connection external id for export: %w", err,
+			)
+		}
+		out = append(out, connection)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate trading connections for export: %w", err)
+	}
+	return out, nil
+}
+
+func (r *realmStore) exportTradingInstruments(
+	ctx context.Context,
+) ([]backup.TradingInstrument, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
+		ctx,
+		`SELECT c.external_id, i.external_symbol, b.code, q.code, i.enabled
+		 FROM trading_instrument i
+		 JOIN trading_connection c ON c.id = i.connection_id
+		 JOIN asset b ON b.id = i.base_asset_id
+		 JOIN asset q ON q.id = i.quote_asset_id
+		 ORDER BY c.external_id, i.external_symbol`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: export trading instruments: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]backup.TradingInstrument, 0)
+	for rows.Next() {
+		var (
+			instrument backup.TradingInstrument
+			rawID      []byte
+		)
+		if err := rows.Scan(
+			&rawID, &instrument.ExternalSymbol, &instrument.BaseAsset,
+			&instrument.QuoteAsset, &instrument.Enabled,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan trading instrument for export: %w", err)
+		}
+		instrument.Connection, err = domain.ExternalIDFromBytes(rawID)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"store: decode trading instrument connection for export: %w", err,
+			)
+		}
+		out = append(out, instrument)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate trading instruments for export: %w", err)
+	}
+	return out, nil
+}
+
+func (r *realmStore) exportTradingAccess(
+	ctx context.Context,
+) ([]backup.TradingAccess, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
+		ctx,
+		`SELECT a.code, c.external_id, ta.venue_account
+		 FROM trading_access ta
+		 JOIN account a ON a.id = ta.account_id
+		 JOIN trading_connection c ON c.id = ta.connection_id
+		 ORDER BY a.code, c.external_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: export trading access: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]backup.TradingAccess, 0)
+	for rows.Next() {
+		var (
+			access backup.TradingAccess
+			rawID  []byte
+		)
+		if err := rows.Scan(&access.Account, &rawID, &access.VenueAccount); err != nil {
+			return nil, fmt.Errorf("store: scan trading access for export: %w", err)
+		}
+		access.Connection, err = domain.ExternalIDFromBytes(rawID)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"store: decode trading access connection for export: %w", err,
+			)
+		}
+		out = append(out, access)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate trading access for export: %w", err)
+	}
+	return out, nil
+}
+
+func (r *realmStore) exportVenueOrders(
+	ctx context.Context,
+) ([]backup.VenueOrder, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
+		ctx,
+		`SELECT o.external_id, c.external_id, vo.venue_account, vo.route,
+		        vo.client_order_id, vo.send_attempted,
+		        COALESCE(vo.venue_order_id, ''), vo.created_at
+		 FROM venue_order vo
+		 JOIN order_record o ON o.id = vo.order_id
+		 JOIN trading_connection c ON c.id = vo.connection_id
+		 ORDER BY o.external_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: export venue orders: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]backup.VenueOrder, 0)
+	for rows.Next() {
+		var (
+			venueOrder    backup.VenueOrder
+			rawOrder      []byte
+			rawConnection []byte
+			createdAt     string
+		)
+		if err := rows.Scan(
+			&rawOrder, &rawConnection, &venueOrder.VenueAccount,
+			&venueOrder.Route, &venueOrder.ClientOrderID,
+			&venueOrder.SendAttempted, &venueOrder.VenueOrderID, &createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan venue order for export: %w", err)
+		}
+		venueOrder.Order, err = domain.ExternalIDFromBytes(rawOrder)
+		if err != nil {
+			return nil, fmt.Errorf("store: decode venue order id for export: %w", err)
+		}
+		venueOrder.Connection, err = domain.ExternalIDFromBytes(rawConnection)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"store: decode venue order connection for export: %w", err,
+			)
+		}
+		venueOrder.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("store: parse venue order created_at: %w", err)
+		}
+		out = append(out, venueOrder)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate venue orders for export: %w", err)
+	}
+	return out, nil
+}
+
 // exportSigningKeys reads only public signing material. A signing private key is
 // installation identity and never enters an archive.
 func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey, error) {

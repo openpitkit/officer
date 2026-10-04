@@ -65,7 +65,7 @@ func (s *postClaimStore) DeleteVenueOrder(ctx context.Context, id domain.Externa
 
 func TestPostClaimRecovery(t *testing.T) {
 	for _, recovery := range []string{"retry", "restart"} {
-		for _, activity := range []string{"read-failure", "confirm", "client-report", "client-fill"} {
+		for _, activity := range []string{"read-failure", "client-report", "client-fill"} {
 			t.Run(recovery+"/"+activity, func(t *testing.T) {
 				t.Parallel()
 				f := newFixture(t)
@@ -78,11 +78,7 @@ func TestPostClaimRecovery(t *testing.T) {
 				st.deleteFail.Store(activity != "read-failure")
 				sink := func(ctx context.Context, in domain.ExecutionReportInput) error {
 					claim := strings.HasSuffix(string(in.ExternalID), ":claim")
-					if claim && activity == "confirm" {
-						if _, err := f.n.ConfirmOrder(ctx, order.ExternalID, testCaller); err != nil {
-							return err
-						}
-					} else if claim && (activity == "client-report" || activity == "client-fill") {
+					if claim && (activity == "client-report" || activity == "client-fill") {
 						report := domain.ExecutionReportInput{ExternalID: "client-report",
 							Order: order.ExternalID, OrderStatus: domain.OrderStatusCommitted}
 						if activity == "client-fill" {
@@ -104,7 +100,7 @@ func TestPostClaimRecovery(t *testing.T) {
 					}
 					return nil
 				}
-				r, err := trading.NewRuntime(f.registry, st, sink, f.adjustmentSink,
+				r, err := trading.NewRuntime(f.registry, st, sink, f.adjustmentSink, f.feeSkipSink,
 					slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 				must(t, err)
 				must(t, r.Start(testCtx))
@@ -180,10 +176,8 @@ func TestClaimReportFailure(t *testing.T) {
 			f := newFixture(t)
 			order := f.submit("10")
 			claimErr := errors.New("claim report sink failed")
-			wantStatus := domain.OrderStatusCommitted
 			if failure == "cancel-shortcut" {
-				claimErr = domain.ErrTerminalOrder
-				wantStatus = domain.OrderStatusCancelled
+				claimErr = domain.ErrVenueOrderManaged
 			}
 			claimAttempted := false
 			sink := func(ctx context.Context, in domain.ExecutionReportInput) error {
@@ -198,7 +192,7 @@ func TestClaimReportFailure(t *testing.T) {
 				}
 				return f.sink(ctx, in)
 			}
-			r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink,
+			r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			must(t, r.Start(testCtx))
@@ -215,7 +209,7 @@ func TestClaimReportFailure(t *testing.T) {
 			claimed, err := f.st.ExecutionReportExists(testCtx,
 				domain.ExternalID("trading:"+link.ClientOrderID+":claim"))
 			must(t, err)
-			if claimed || f.detail(order).Order.Status != wantStatus {
+			if claimed || f.detail(order).Order.Status != domain.OrderStatusCommitted {
 				t.Fatalf("failed claim changed order: claimed=%t status=%s", claimed, f.detail(order).Order.Status)
 			}
 			if sends, lookups := f.venue.counts(); sends != 0 || lookups != 0 || link.SendAttempted {
@@ -241,7 +235,7 @@ func (s failingStore) ListTradingConnections(ctx context.Context) ([]domain.Trad
 func TestMarkAttemptFailureIsRecoveredWithoutVenueCall(t *testing.T) {
 	f := newFixture(t)
 	errMark := errors.New("send marker storage failed")
-	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, markErr: errMark}, f.sink, f.adjustmentSink,
+	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, markErr: errMark}, f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(t, err)
 	must(t, r.Start(testCtx))
@@ -267,7 +261,7 @@ func TestMarkAttemptFailureIsRecoveredWithoutVenueCall(t *testing.T) {
 func TestStartStoreFailure(t *testing.T) {
 	f := newFixture(t)
 	failed := errors.New("connection store unavailable")
-	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, listErr: failed}, f.sink, f.adjustmentSink, slog.Default())
+	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, listErr: failed}, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
 	must(t, err)
 	t.Cleanup(r.Stop)
 	if err := r.Start(testCtx); !errors.Is(err, failed) {

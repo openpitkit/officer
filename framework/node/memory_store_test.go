@@ -71,6 +71,11 @@ type memoryRealm struct {
 	instances   map[domain.ExternalID]domain.MarketDataInstance
 	instruments map[string]domain.MarketDataInstrument
 
+	credentialsSealed  bool
+	tradingConnections map[domain.ExternalID]domain.TradingConnection
+	tradingInstruments map[string]domain.TradingInstrument
+	tradingAccess      []domain.TradingAccess
+
 	signingKeys   map[string]domain.SigningKey
 	signingConfig map[string]string
 	mcpAccess     map[string]bool
@@ -103,6 +108,8 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		attestations:             map[domain.ExternalID]domain.EventAttestation{},
 		instances:                map[domain.ExternalID]domain.MarketDataInstance{},
 		instruments:              map[string]domain.MarketDataInstrument{},
+		tradingConnections:       map[domain.ExternalID]domain.TradingConnection{},
+		tradingInstruments:       map[string]domain.TradingInstrument{},
 		signingKeys:              map[string]domain.SigningKey{},
 		signingConfig:            map[string]string{},
 		mcpAccess:                map[string]bool{},

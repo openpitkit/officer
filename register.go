@@ -100,6 +100,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	b.SetServiceFactory(func(
 		n node.Node,
 		md fwbackend.MarketDataRuntime,
+		rt fwbackend.TradingRuntime,
 		signer fwsigning.Service,
 		registry *fwmarketdata.Registry,
 		mcpRegistry *frameworkmcp.ToolRegistry,
@@ -110,6 +111,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 			signer,
 			engine.LockSettlementPrice,
 			fwbackend.WithMarketDataRegistry(registry),
+			fwbackend.WithTradingRuntime(rt),
 			fwbackend.WithMCPCatalogProvider(mcpRegistry),
 		)
 		if err != nil {

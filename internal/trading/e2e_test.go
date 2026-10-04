@@ -193,14 +193,14 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	_, err = n.CreateAsset(ctx, domain.Asset{Code: "AAPL"}, caller)
 	must(err)
 	connection, err := realm.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider: domain.TradingProviderAlpaca, Label: "paper", Mode: domain.TradingModeTest,
+		Provider: domain.TradingProviderAlpaca, Label: "paper", Mode: domain.TradingModePaper, VenueIdentity: "paper-account",
 		Credentials: tradingCredentials, Enabled: true,
 	})
 	must(err)
 	must(realm.UpsertTradingInstrument(ctx, domain.TradingInstrument{
 		Connection: connection.ExternalID, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
 	}))
-	must(realm.AddTradingAccess(ctx, domain.TradingAccess{Account: "desk", Connection: connection.ExternalID}))
+	must(realm.PutTradingAccess(ctx, domain.TradingAccess{Account: "desk", Connection: connection.ExternalID}))
 	dest := domain.TradingDestination{Connection: connection.ExternalID, Route: `{"timeInForce":"day"}`}
 	registry := fwtrading.NewRegistry()
 	provider := AlpacaProvider()
@@ -218,6 +218,9 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 			func(context.Context, domain.AccountID, domain.ExternalID, domain.AdjustmentRequest) error {
 				t.Error("venue fee arrived before the app restart")
 				return fmt.Errorf("unexpected fee before restart")
+			},
+			func(ctx context.Context, connection domain.ExternalID, feeID, reason string) error {
+				return n.RecordVenueFeeSkipped(ctx, connection, feeID, reason, auth.SystemCaller())
 			}, slog.Default())
 		must(err)
 		t.Cleanup(runtime.Stop)
@@ -366,9 +369,9 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 			return n, eng, err
 		})
 		builder.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) { return signing.New(st) })
-		builder.SetServiceFactory(func(n node.Node, md backend.MarketDataRuntime, signer fwsigning.Service,
+		builder.SetServiceFactory(func(n node.Node, md backend.MarketDataRuntime, rt backend.TradingRuntime, signer fwsigning.Service,
 			_ *marketdata.Registry, _ *frameworkmcp.ToolRegistry) (backend.ControlPlane, error) {
-			return backend.New(n, md, signer, engine.LockSettlementPrice)
+			return backend.New(n, md, signer, engine.LockSettlementPrice, backend.WithTradingRuntime(rt))
 		})
 		builder.SetAuthorizer(httpx.AllowAll{})
 		builder.SetCallerResolver(func(*http.Request) (domain.Caller, error) { return caller, nil })
@@ -423,6 +426,18 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		must(err)
 		return len(records) == 2
 	})
+	wait("app skipped-fee audit", func() bool {
+		rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
+		must(err)
+		return len(rows) == 1
+	})
+	rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
+	must(err)
+	if len(rows) != 1 || rows[0].Source != domain.SourceSystem || rows[0].Actor != "" || rows[0].Account != "" ||
+		!strings.Contains(rows[0].Detail, connection.ExternalID.String()) || !strings.Contains(rows[0].Detail, "rejected-fee") ||
+		!strings.Contains(rows[0].Detail, "rejected by the core") || strings.Contains(rows[0].Detail, "test-key-marker") || strings.Contains(rows[0].Detail, "test-secret-marker") {
+		t.Fatalf("app skipped-fee audit = %+v", rows)
+	}
 	assertBalances("977.25", "12")
 	records, err := realm.ListAdjustments(ctx, "desk", domain.SourceSystem, 10)
 	must(err)

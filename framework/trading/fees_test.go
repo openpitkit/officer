@@ -101,7 +101,7 @@ func newFeeFixture(t *testing.T) (*fixture, *feeVenue) {
 	f := newFixture(t)
 	v := &feeVenue{fakeVenue: f.venue}
 	f.registry = trading.NewRegistry()
-	must(t, f.registry.Register(trading.Provider{Type: "fake", Title: "Fee venue",
+	must(t, f.registry.Register(trading.Provider{Type: "fake", Title: "Fee venue", UnlinkedFees: true,
 		Build: func(connection domain.TradingConnection) (trading.Connector, error) {
 			c, err := v.build(connection)
 			if err != nil {
@@ -114,12 +114,35 @@ func newFeeFixture(t *testing.T) (*fixture, *feeVenue) {
 
 func feeBalance(t *testing.T, f *fixture, asset, want string) {
 	t.Helper()
-	balance, found, err := f.n.GetBalance(testCtx, "desk", asset)
+	feeAccountBalance(t, f, "desk", asset, want)
+}
+
+func feeAccountBalance(t *testing.T, f *fixture, account domain.AccountID, asset, want string) {
+	t.Helper()
+	balance, found, err := f.n.GetBalance(testCtx, account, asset)
 	must(t, err)
 	if !found {
 		t.Fatalf("fee balance missing for %s", asset)
 	}
 	assertDecimal(t, balance.Available, want)
+}
+
+func feeSkipRows(t *testing.T, f *fixture, want int) []domain.AuditRow {
+	t.Helper()
+	rows, err := f.n.ListAuditFiltered(testCtx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 100)
+	must(t, err)
+	if len(rows) != want {
+		t.Fatalf("venue_fee_skipped rows = %d, want %d: %+v", len(rows), want, rows)
+	}
+	for _, row := range rows {
+		if row.Source != domain.SourceSystem || row.Actor != "" || row.Account != "" || !strings.Contains(row.Detail, f.connection.ExternalID.String()) {
+			t.Fatalf("venue fee skip caller/connection = %+v", row)
+		}
+		if strings.Contains(row.Detail, "do-not-log-key") || strings.Contains(row.Detail, "do-not-log-secret") {
+			t.Fatalf("venue fee skip contains credentials: %+v", row)
+		}
+	}
+	return rows
 }
 
 func postedFee(id, asset, amount string) trading.Fee {
@@ -137,10 +160,6 @@ func TestFeeIntakeExactAssetsAndReplay(t *testing.T) {
 	}))
 	must(t, f.adjustmentSink(testCtx, "desk", "seed-ether", domain.AdjustmentRequest{
 		Asset: "ETHER", Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "1"},
-	}))
-	// Several venue accounts for the same Officer account are still unambiguous.
-	must(t, f.st.AddTradingAccess(testCtx, domain.TradingAccess{
-		Account: "desk", Connection: f.connection.ExternalID, VenueAccount: "second-grant",
 	}))
 	v.fees = []trading.Fee{postedFee("USD-fee", "USD", "-0.123456789"), postedFee("crypto-fee", "ETH", "-0.000195"),
 		{ID: "pre-Officer", Asset: "USD", Amount: "-100", Status: trading.FeeExecuted, At: time.Now().Add(-time.Hour)}}
@@ -198,12 +217,285 @@ func TestFeeIntakeExactAssetsAndReplay(t *testing.T) {
 	}
 }
 
+func TestFeeAccountTargets(t *testing.T) {
+	for _, scenario := range []string{"no bindings", "one binding", "two bindings", "bound fee account"} {
+		t.Run(scenario, func(t *testing.T) {
+			f, v := newFeeFixture(t)
+			f.fund("fees", "1000")
+			f.fund("other", "1000")
+			feeAccount := domain.AccountID("fees")
+			if scenario == "bound fee account" {
+				feeAccount = "desk"
+			}
+			must(t, f.n.SetTradingConnectionFeeAccount(testCtx, f.connection.ExternalID, feeAccount, testCaller))
+			f.start()
+			f.send(f.submit("1"))
+			if scenario == "no bindings" {
+				must(t, f.n.RemoveTradingAccess(testCtx, "desk", f.connection.ExternalID, testCaller))
+			}
+			if scenario == "two bindings" || scenario == "bound fee account" {
+				must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{Connection: f.connection.ExternalID, Account: "other"}, true, testCaller))
+			}
+			v.mu.Lock()
+			v.fees = []trading.Fee{postedFee("whole-fee", "USD", "-0.125")}
+			v.mu.Unlock()
+			f.venue.push(trading.Event{Kind: trading.EventConnected})
+			f.flush()
+			wantDesk, wantFees := "998", "999.875"
+			if feeAccount == "desk" {
+				wantDesk, wantFees = "997.875", "1000"
+			}
+			feeAccountBalance(t, f, "desk", "USD", wantDesk)
+			feeAccountBalance(t, f, "fees", "USD", wantFees)
+			feeAccountBalance(t, f, "other", "USD", "1000")
+			feeSkipRows(t, f, 0)
+			must(t, f.runtime.Restart())
+			f.venue.push(trading.Event{Kind: trading.EventConnected})
+			f.flush()
+			feeAccountBalance(t, f, "desk", "USD", wantDesk)
+			feeAccountBalance(t, f, "fees", "USD", wantFees)
+			feeAccountBalance(t, f, "other", "USD", "1000")
+		})
+	}
+}
+
+func TestFeeAccountChangeWithoutRestart(t *testing.T) {
+	f, v := newFeeFixture(t)
+	f.fund("fees", "1000")
+	f.fund("other", "1000")
+	must(t, f.n.SetTradingConnectionFeeAccount(testCtx, f.connection.ExternalID, "fees", testCaller))
+	f.start()
+	f.send(f.submit("1"))
+	v.mu.Lock()
+	v.fees = []trading.Fee{postedFee("first-page", "USD", "-1"), postedFee("second-page", "USD", "-1")}
+	v.pageSize = 1
+	var reads atomic.Int32
+	v.onFees = func(ctx context.Context) error {
+		if reads.Add(1) == 1 {
+			return f.n.SetTradingConnectionFeeAccount(ctx, f.connection.ExternalID, "other", testCaller)
+		}
+		return nil
+	}
+	v.mu.Unlock()
+	f.venue.push(trading.Event{Kind: trading.EventConnected})
+	f.flush()
+	feeAccountBalance(t, f, "fees", "USD", "998")
+	feeAccountBalance(t, f, "other", "USD", "1000")
+	v.mu.Lock()
+	v.fees = append(v.fees, postedFee("next-pass", "USD", "-1"))
+	v.mu.Unlock()
+	f.venue.push(trading.Event{Kind: trading.EventConnected})
+	f.flush()
+	feeAccountBalance(t, f, "fees", "USD", "998")
+	feeAccountBalance(t, f, "other", "USD", "999")
+	must(t, f.runtime.Restart())
+	f.venue.push(trading.Event{Kind: trading.EventConnected})
+	f.flush()
+	feeAccountBalance(t, f, "fees", "USD", "998")
+	feeAccountBalance(t, f, "other", "USD", "999")
+	feeAccountBalance(t, f, "desk", "USD", "998")
+	feeSkipRows(t, f, 0)
+}
+
+type feeAccountChangeStore struct {
+	trading.Store
+	change func()
+	armed  atomic.Bool
+}
+
+func (s *feeAccountChangeStore) GetTradingConnection(ctx context.Context, id domain.ExternalID) (domain.TradingConnection, bool, error) {
+	connection, found, err := s.Store.GetTradingConnection(ctx, id)
+	if err == nil && found && s.armed.CompareAndSwap(true, false) {
+		s.change()
+	}
+	return connection, found, err
+}
+
+func (s *feeAccountChangeStore) GetTradingFeeAccounts(ctx context.Context, id domain.ExternalID) (domain.AccountID, []domain.AccountID, error) {
+	account, bound, err := s.Store.GetTradingFeeAccounts(ctx, id)
+	if err == nil && s.armed.CompareAndSwap(true, false) {
+		s.change()
+	}
+	return account, bound, err
+}
+
+func TestFeeAccountSnapshotPreventsMixedTarget(t *testing.T) {
+	f, v := newFeeFixture(t)
+	f.fund("fees", "1000")
+	f.fund("other", "1000")
+	st := &feeAccountChangeStore{Store: f.st}
+	st.change = func() {
+		must(t, f.n.SetTradingConnectionFeeAccount(testCtx, f.connection.ExternalID, "fees", testCaller))
+		must(t, f.n.RemoveTradingAccess(testCtx, "desk", f.connection.ExternalID, testCaller))
+		must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{Account: "other", Connection: f.connection.ExternalID}, true, testCaller))
+	}
+	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	must(t, err)
+	f.runtime = r
+	must(t, r.Start(testCtx))
+	defer r.Stop()
+	f.send(f.submit("1"))
+	v.mu.Lock()
+	v.fees = []trading.Fee{postedFee("snapshot", "USD", "-1")}
+	v.mu.Unlock()
+	st.armed.Store(true)
+	f.venue.push(trading.Event{Kind: trading.EventConnected})
+	f.flush()
+	if st.armed.Load() {
+		t.Fatal("operator-change hook did not run")
+	}
+	feeAccountBalance(t, f, "desk", "USD", "997")
+	feeAccountBalance(t, f, "fees", "USD", "1000")
+	feeAccountBalance(t, f, "other", "USD", "1000")
+	feeSkipRows(t, f, 0)
+}
+
+func TestAppliedFeeReplayAfterTargetOrMappingRemoval(t *testing.T) {
+	for _, change := range []string{"revoke binding", "remove mapping"} {
+		t.Run(change, func(t *testing.T) {
+			f, v := newFeeFixture(t)
+			v.fees = []trading.Fee{postedFee("applied", "USD", "-1")}
+			var applied atomic.Int32
+			sink := func(ctx context.Context, account domain.AccountID, id domain.ExternalID, req domain.AdjustmentRequest) error {
+				applied.Add(1)
+				return f.adjustmentSink(ctx, account, id, req)
+			}
+			r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink, f.feeSkipSink,
+				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			must(t, err)
+			f.runtime = r
+			must(t, r.Start(testCtx))
+			defer r.Stop()
+			f.send(f.submit("1"))
+			f.venue.push(trading.Event{Kind: trading.EventConnected})
+			f.flush()
+			feeBalance(t, f, "USD", "997")
+			r.Stop()
+			if change == "revoke binding" {
+				must(t, f.n.RemoveTradingAccess(testCtx, "desk", f.connection.ExternalID, testCaller))
+			} else {
+				must(t, f.n.DeleteTradingInstrument(testCtx, f.connection.ExternalID, "AAPL", testCaller))
+			}
+			must(t, r.Start(testCtx))
+			f.venue.push(trading.Event{Kind: trading.EventConnected})
+			f.flush()
+			feeSkipRows(t, f, 0)
+			feeBalance(t, f, "USD", "997")
+			if applied.Load() != 1 {
+				t.Fatalf("fee applied %d times, want once", applied.Load())
+			}
+			if len(v.cursors()) != 2 {
+				t.Fatalf("fee reads=%v, want replay after restart", v.cursors())
+			}
+		})
+	}
+}
+
+func TestRuntimeRequiresFeeSkipSink(t *testing.T) {
+	f := newFixture(t)
+	r, err := trading.NewRuntime(f.registry, f.st, f.sink, f.adjustmentSink, nil, slog.Default())
+	if r != nil || !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("runtime without fee skip sink = %v, err=%v", r, err)
+	}
+}
+
+func TestFeeSkipSinkFailureRetries(t *testing.T) {
+	for _, failure := range []error{errors.New("audit unavailable"), domain.ErrEngineRestarting} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f, v := newFeeFixture(t)
+				v.fees = []trading.Fee{
+					{ID: "skipped", Status: trading.FeeNotApplicable, Detail: "activity needs attention", At: time.Now().Add(time.Second)},
+					postedFee("accepted", "USD", "-1"),
+				}
+				var reports atomic.Int32
+				sink := func(ctx context.Context, connection domain.ExternalID, feeID, reason string) error {
+					if reports.Add(1) == 1 {
+						return failure
+					}
+					return f.feeSkipSink(ctx, connection, feeID, reason)
+				}
+				r, err := trading.NewRuntime(f.registry, f.st, f.sink, f.adjustmentSink, sink,
+					slog.New(slog.NewJSONHandler(f.logs, nil)))
+				must(t, err)
+				f.runtime = r
+				must(t, r.Start(testCtx))
+				defer r.Stop()
+				f.send(f.submit("1"))
+				f.venue.push(trading.Event{Kind: trading.EventConnected})
+				synctest.Wait()
+				feeBalance(t, f, "USD", "998")
+				feeSkipRows(t, f, 0)
+				if reports.Load() != 1 || !strings.Contains(f.logs.text(), "report skipped venue fee") || !strings.Contains(f.logs.text(), failure.Error()) {
+					t.Fatalf("failed fee skip sink reports=%d logs=%s", reports.Load(), f.logs.text())
+				}
+				time.Sleep(time.Hour)
+				synctest.Wait()
+				if reports.Load() != 2 {
+					t.Fatalf("fee skip report attempts=%d, want retry without restart", reports.Load())
+				}
+				feeSkipRows(t, f, 1)
+				feeBalance(t, f, "USD", "997")
+				must(t, r.Restart())
+				f.venue.push(trading.Event{Kind: trading.EventConnected})
+				synctest.Wait()
+				if reports.Load() != 2 {
+					t.Fatalf("successful fee skip repeated after restart: %d", reports.Load())
+				}
+				feeSkipRows(t, f, 1)
+				feeBalance(t, f, "USD", "997")
+			})
+		})
+	}
+}
+
+type feeAccountReadFailureStore struct {
+	trading.Store
+	fail atomic.Bool
+}
+
+func (s *feeAccountReadFailureStore) GetTradingFeeAccounts(ctx context.Context, connection domain.ExternalID) (domain.AccountID, []domain.AccountID, error) {
+	if s.fail.Load() {
+		return "", nil, errors.New("fee accounts read unavailable")
+	}
+	return s.Store.GetTradingFeeAccounts(ctx, connection)
+}
+
+func TestFeeAccountReadFailuresRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f, v := newFeeFixture(t)
+		v.fees = []trading.Fee{postedFee("retry", "USD", "-1")}
+		st := &feeAccountReadFailureStore{Store: f.st}
+		r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+			slog.New(slog.NewJSONHandler(f.logs, nil)))
+		must(t, err)
+		f.runtime = r
+		must(t, r.Start(testCtx))
+		defer r.Stop()
+		f.send(f.submit("1"))
+		st.fail.Store(true)
+		f.venue.push(trading.Event{Kind: trading.EventConnected})
+		synctest.Wait()
+		feeBalance(t, f, "USD", "998")
+		feeSkipRows(t, f, 0)
+		if !strings.Contains(f.logs.text(), "read unavailable") || len(v.cursors()) != 0 {
+			t.Fatal("fee intake did not stop and log the snapshot read failure")
+		}
+		st.fail.Store(false)
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		feeBalance(t, f, "USD", "997")
+		feeSkipRows(t, f, 0)
+	})
+}
+
 type feeAccessStore struct {
 	trading.Store
 }
 
-func (st feeAccessStore) ListTradingAccessForConnection(context.Context, domain.ExternalID) ([]domain.TradingAccess, error) {
-	return nil, nil
+func (st feeAccessStore) GetTradingFeeAccounts(context.Context, domain.ExternalID) (domain.AccountID, []domain.AccountID, error) {
+	return "", nil, nil
 }
 
 func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
@@ -222,7 +514,7 @@ func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
 				wantLog = "connection is used by 0 accounts"
 			case "two accounts":
 				f.fund("other", "1000")
-				must(t, f.st.AddTradingAccess(testCtx, domain.TradingAccess{Account: "other", Connection: f.connection.ExternalID}))
+				must(t, f.st.PutTradingAccess(testCtx, domain.TradingAccess{Account: "other", Connection: f.connection.ExternalID}))
 				wantLog = "connection is used by 2 accounts"
 			case "unmapped asset":
 				fee.Asset, wantLog = "EUR", "maps to 0 Officer assets"
@@ -250,7 +542,7 @@ func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
 				applied.Add(1)
 				return f.adjustmentSink(ctx, account, id, req)
 			}
-			r, err := trading.NewRuntime(f.registry, st, f.sink, sink,
+			r, err := trading.NewRuntime(f.registry, st, f.sink, sink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			f.runtime = r
@@ -262,6 +554,14 @@ func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
 			if applied.Load() != 0 {
 				t.Fatal("inapplicable or ambiguous fee reached the adjustment sink")
 			}
+			rows := feeSkipRows(t, f, 1)
+			if !strings.Contains(rows[0].Detail, fee.ID) || !strings.Contains(rows[0].Detail, wantLog) {
+				t.Fatalf("fee skip lost id or reason: %+v", rows)
+			}
+			must(t, r.Restart())
+			f.venue.push(trading.Event{Kind: trading.EventConnected})
+			f.flush()
+			feeSkipRows(t, f, 1)
 			feeBalance(t, f, "USD", "998")
 			logs := f.logs.text()
 			if !strings.Contains(logs, wantLog) || !strings.Contains(logs, `"level":"ERROR"`) ||
@@ -289,7 +589,7 @@ func TestFeeIntakePollRetries(t *testing.T) {
 				if failure == "reader" {
 					v.err = errors.New("venue fee read failed")
 				}
-				r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink,
+				r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink, f.feeSkipSink,
 					slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 				must(t, err)
 				f.runtime = r
@@ -302,6 +602,7 @@ func TestFeeIntakePollRetries(t *testing.T) {
 				if !strings.Contains(f.logs.text(), map[string]string{"sink": "adjustment unavailable", "reader": "venue fee read failed"}[failure]) {
 					t.Fatal("fee failure was not logged")
 				}
+				feeSkipRows(t, f, 0)
 				v.mu.Lock()
 				v.err = nil
 				v.mu.Unlock()
@@ -317,6 +618,7 @@ func TestFeeIntakePollRetries(t *testing.T) {
 				if calls != 2 {
 					t.Fatalf("fee polls = %d, want exactly reconnect and hourly retry", calls)
 				}
+				feeSkipRows(t, f, 0)
 				time.Sleep(time.Hour)
 				synctest.Wait()
 				feeBalance(t, f, "USD", "997")
@@ -359,16 +661,8 @@ func TestFeeReadIsBoundedAndSerialWithSend(t *testing.T) {
 
 type feeRetryStore struct {
 	trading.Store
-	failure                      string
-	accessCalls, instrumentCalls int
-}
-
-func (s *feeRetryStore) ListTradingAccessForConnection(ctx context.Context, connection domain.ExternalID) ([]domain.TradingAccess, error) {
-	s.accessCalls++
-	if s.failure == "access store" && s.accessCalls == 2 {
-		return nil, errors.New("access store unavailable")
-	}
-	return s.Store.ListTradingAccessForConnection(ctx, connection)
+	failure         string
+	instrumentCalls int
 }
 
 func (s *feeRetryStore) ListTradingInstruments(ctx context.Context, connection domain.ExternalID) ([]domain.TradingInstrument, error) {
@@ -380,7 +674,7 @@ func (s *feeRetryStore) ListTradingInstruments(ctx context.Context, connection d
 }
 
 func TestFeeCursorResumesAfterFailure(t *testing.T) {
-	for _, failure := range []string{"sink", "access store", "instrument store"} {
+	for _, failure := range []string{"sink", "instrument store"} {
 		t.Run(failure, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f, v := newFeeFixture(t)
@@ -400,7 +694,7 @@ func TestFeeCursorResumesAfterFailure(t *testing.T) {
 					}
 					return f.adjustmentSink(ctx, account, id, req)
 				}
-				r, err := trading.NewRuntime(f.registry, &feeRetryStore{Store: f.st, failure: failure}, f.sink, sink,
+				r, err := trading.NewRuntime(f.registry, &feeRetryStore{Store: f.st, failure: failure}, f.sink, sink, f.feeSkipSink,
 					slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 				must(t, err)
 				f.runtime = r
@@ -483,7 +777,7 @@ func TestFeeCoreRejectionIsFinal(t *testing.T) {
 			}
 			return f.adjustmentSink(ctx, account, id, req)
 		}
-		r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink,
+		r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink, f.feeSkipSink,
 			slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		must(t, err)
 		f.runtime = r
@@ -495,11 +789,74 @@ func TestFeeCoreRejectionIsFinal(t *testing.T) {
 		feeBalance(t, f, "USD", "997")
 		time.Sleep(time.Hour)
 		synctest.Wait()
+		rows := feeSkipRows(t, f, 1)
+		if !strings.Contains(rows[0].Detail, "rejected") || !strings.Contains(rows[0].Detail, "rejected by the core") {
+			t.Fatalf("core rejection skip audit = %+v", rows)
+		}
 		if rejects.Load() != 1 || strings.Count(f.logs.text(), "fee rejected not applied: rejected by the core: risk blocked") != 1 ||
 			!strings.Contains(f.logs.text(), `"level":"ERROR"`) {
 			t.Fatalf("core rejection must be logged once and consumed: rejects=%d logs=%s", rejects.Load(), f.logs.text())
 		}
 	})
+}
+
+func TestPersistedFeeCoreRejectionRetriesSkipReport(t *testing.T) {
+	for _, failure := range []error{errors.New("audit unavailable"), domain.ErrEngineRestarting} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f, v := newFeeFixture(t)
+				v.fees = []trading.Fee{postedFee("rejected", "USD", "79228162514264337593543950335")}
+				var adjustments, reports atomic.Int32
+				adjust := func(ctx context.Context, account domain.AccountID, id domain.ExternalID, req domain.AdjustmentRequest) error {
+					adjustments.Add(1)
+					return f.adjustmentSink(ctx, account, id, req)
+				}
+				skip := func(ctx context.Context, connection domain.ExternalID, feeID, reason string) error {
+					if reports.Add(1) == 1 {
+						return failure
+					}
+					return f.feeSkipSink(ctx, connection, feeID, reason)
+				}
+				r, err := trading.NewRuntime(f.registry, f.st, f.sink, adjust, skip,
+					slog.New(slog.NewJSONHandler(f.logs, nil)))
+				must(t, err)
+				f.runtime = r
+				must(t, r.Start(testCtx))
+				defer r.Stop()
+				f.send(f.submit("1"))
+				f.venue.push(trading.Event{Kind: trading.EventConnected})
+				synctest.Wait()
+				feeID := domain.ExternalID("trading:" + f.connection.ExternalID.String() + ":fee:rejected")
+				records, err := f.st.ListAdjustments(testCtx, "desk", domain.SourceSystem, 10)
+				must(t, err)
+				if len(records) != 1 || records[0].ExternalID != feeID || records[0].Accepted != nil || records[0].Rejected == nil {
+					t.Fatalf("core rejection was not persisted: %+v", records)
+				}
+				feeSkipRows(t, f, 0)
+				feeBalance(t, f, "USD", "998")
+				if adjustments.Load() != 1 || reports.Load() != 1 || !strings.Contains(f.logs.text(), failure.Error()) {
+					t.Fatalf("first pass adjustments=%d reports=%d logs=%s", adjustments.Load(), reports.Load(), f.logs.text())
+				}
+				time.Sleep(time.Hour)
+				synctest.Wait()
+				rows := feeSkipRows(t, f, 1)
+				if !strings.Contains(rows[0].Detail, "fee rejected: rejected by the core") {
+					t.Fatalf("core rejection skip audit = %+v", rows)
+				}
+				if adjustments.Load() != 1 || reports.Load() != 2 {
+					t.Fatalf("retry adjustments=%d reports=%d, want 1 and 2", adjustments.Load(), reports.Load())
+				}
+				must(t, r.Restart())
+				f.venue.push(trading.Event{Kind: trading.EventConnected})
+				synctest.Wait()
+				feeSkipRows(t, f, 1)
+				feeBalance(t, f, "USD", "998")
+				if adjustments.Load() != 1 || reports.Load() != 2 {
+					t.Fatalf("replay adjustments=%d reports=%d, want 1 and 2", adjustments.Load(), reports.Load())
+				}
+			})
+		})
+	}
 }
 
 func TestFeeAdjustmentOutlivesReadDeadline(t *testing.T) {
@@ -520,7 +877,7 @@ func TestFeeAdjustmentOutlivesReadDeadline(t *testing.T) {
 			}
 			return f.adjustmentSink(ctx, account, id, req)
 		}
-		r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink,
+		r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink, f.feeSkipSink,
 			slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		must(t, err)
 		f.runtime = r

@@ -238,11 +238,30 @@ func (s *Service) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
+	venue, linked, err := n.GetVenueOrder(ctx, order)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
+	detail.Venue = nil
+	if linked {
+		detail.Venue = &venue
+	}
 	detail.DisplayPrice, err = s.orderDisplayPrice(detail.Order)
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
 	return detail, nil
+}
+
+func (s *Service) requireNoVenueOrder(ctx context.Context, order domain.ExternalID) error {
+	_, linked, err := s.node.GetVenueOrder(ctx, order)
+	if err != nil {
+		return err
+	}
+	if linked {
+		return fmt.Errorf("order %s: %w", order, domain.ErrVenueOrderManaged)
+	}
+	return nil
 }
 
 // ListOrders returns the most recent n orders, optionally narrowed to a

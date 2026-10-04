@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -34,6 +35,116 @@ import (
 // The DTOs below are the JSON wire contract of the HTTP surface. They carry the
 // camelCase tags the dashboard SPA expects. Domain and control-plane types
 // carry no JSON tags; this package owns the encoding and the mapping.
+
+type tradingDTO struct {
+	Providers         []tradingProviderDTO   `json:"providers"`
+	Connections       []tradingConnectionDTO `json:"connections"`
+	CredentialsSealed bool                   `json:"credentialsSealed"`
+}
+
+type tradingProviderDTO struct {
+	Type            string `json:"type"`
+	Title           string `json:"title"`
+	VenueAccounts   bool   `json:"venueAccounts"`
+	VerifiesSymbols bool   `json:"verifiesSymbols"`
+	SearchesSymbols bool   `json:"searchesSymbols"`
+	UnlinkedFees    bool   `json:"unlinkedFees"`
+}
+
+type tradingConnectionDTO struct {
+	ID            string                 `json:"id"`
+	Provider      string                 `json:"provider"`
+	Label         string                 `json:"label"`
+	Mode          domain.TradingMode     `json:"mode"`
+	Enabled       bool                   `json:"enabled"`
+	VenueIdentity string                 `json:"venueIdentity"`
+	FeeAccount    string                 `json:"feeAccount"`
+	State         string                 `json:"state"`
+	Error         string                 `json:"error,omitempty"`
+	Secrets       map[string]bool        `json:"secrets"`
+	Instruments   []tradingInstrumentDTO `json:"instruments"`
+	Access        []tradingAccessDTO     `json:"access"`
+}
+
+type tradingInstrumentDTO struct {
+	ExternalSymbol string `json:"externalSymbol"`
+	BaseAsset      string `json:"baseAsset"`
+	QuoteAsset     string `json:"quoteAsset"`
+	Enabled        bool   `json:"enabled"`
+}
+
+type tradingAccessDTO struct {
+	Account      string `json:"account"`
+	VenueAccount string `json:"venueAccount"`
+}
+
+type venueOrderDTO struct {
+	Connection    string          `json:"connection"`
+	VenueAccount  string          `json:"venueAccount"`
+	Route         json.RawMessage `json:"route"`
+	ClientOrderID string          `json:"clientOrderId"`
+	VenueOrderID  string          `json:"venueOrderId,omitempty"`
+	SendAttempted bool            `json:"sendAttempted"`
+	CreatedAt     string          `json:"createdAt"`
+}
+
+func toTradingDTO(status backend.TradingStatus) tradingDTO {
+	out := tradingDTO{
+		Providers:         make([]tradingProviderDTO, 0, len(status.Providers)),
+		Connections:       make([]tradingConnectionDTO, 0, len(status.Connections)),
+		CredentialsSealed: status.CredentialsSealed,
+	}
+	for _, p := range status.Providers {
+		out.Providers = append(out.Providers, tradingProviderDTO{
+			Type: p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
+			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
+			UnlinkedFees: p.UnlinkedFees,
+		})
+	}
+	for _, c := range status.Connections {
+		out.Connections = append(out.Connections, toTradingConnectionDTO(c))
+	}
+	return out
+}
+
+func toTradingConnectionDTO(c backend.TradingConnectionStatus) tradingConnectionDTO {
+	out := tradingConnectionDTO{
+		ID: c.ExternalID.String(), Provider: c.Provider, Label: c.Label,
+		Mode: c.Mode, Enabled: c.Enabled, VenueIdentity: c.VenueIdentity,
+		FeeAccount: c.FeeAccount.String(), State: c.State,
+		Secrets:     make(map[string]bool, len(c.Secrets)),
+		Instruments: make([]tradingInstrumentDTO, 0, len(c.Instruments)),
+		Access:      make([]tradingAccessDTO, 0, len(c.Access)),
+	}
+	if c.State == "unavailable" {
+		out.Error = c.Unavailable
+	}
+	for key, present := range c.Secrets {
+		out.Secrets[key] = present
+	}
+	for _, i := range c.Instruments {
+		out.Instruments = append(out.Instruments, tradingInstrumentDTO{
+			ExternalSymbol: i.ExternalSymbol, BaseAsset: i.BaseAsset,
+			QuoteAsset: i.QuoteAsset, Enabled: i.Enabled,
+		})
+	}
+	for _, a := range c.Access {
+		out.Access = append(out.Access, tradingAccessDTO{Account: a.Account.String(), VenueAccount: a.VenueAccount})
+	}
+	return out
+}
+
+func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
+	if err := domain.ValidateTradingRoute(v.Route); err != nil {
+		return venueOrderDTO{}, fmt.Errorf("stored venue order route is invalid")
+	}
+	return venueOrderDTO{
+		Connection: v.Connection.String(), VenueAccount: v.VenueAccount,
+		Route: json.RawMessage(v.Route), ClientOrderID: v.ClientOrderID,
+		VenueOrderID: v.VenueOrderID, SendAttempted: v.SendAttempted,
+		CreatedAt: v.CreatedAt.Format(time.RFC3339Nano),
+	}, nil
+}
 
 // healthDTO is the body of GET /api/v1/health.
 type healthDTO struct {
@@ -1884,4 +1995,26 @@ func toServiceDTO(info backend.ServiceInfo) serviceDTO {
 		Profile: info.EngineBuildProfile,
 		Release: info.Release,
 	}
+}
+
+type sendPaperOrderRequestDTO struct {
+	submitDropCopyOrderRequestDTO
+	Destination sendDestinationDTO `json:"destination"`
+}
+
+type sendDestinationDTO struct {
+	Connection   string          `json:"connection,omitempty"`
+	VenueAccount string          `json:"venueAccount,omitempty"`
+	Route        json.RawMessage `json:"route"`
+}
+
+type sendPaperOrderResponseDTO struct {
+	signedApprovalDTO
+	VenueSend *venueSendDTO `json:"venueSend,omitempty"`
+}
+
+type venueSendDTO struct {
+	Status     string         `json:"status"`
+	Error      string         `json:"error,omitempty"`
+	VenueOrder *venueOrderDTO `json:"venueOrder,omitempty"`
 }

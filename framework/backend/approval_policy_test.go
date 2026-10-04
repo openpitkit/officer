@@ -96,6 +96,10 @@ func (r *shortcutRecorder) GetOrder(context.Context, domain.ExternalID) (domain.
 	return r.stored, nil
 }
 
+func (*shortcutRecorder) GetVenueOrder(context.Context, domain.ExternalID) (domain.VenueOrder, bool, error) {
+	return domain.VenueOrder{}, false, nil
+}
+
 func (r *shortcutRecorder) ConfirmOrderWithAttestation(
 	context.Context, domain.ExternalID, domain.Caller, store.EventAttestor,
 ) (domain.Order, error) {

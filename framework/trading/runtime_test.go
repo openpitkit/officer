@@ -193,7 +193,7 @@ func TestDefinitiveSendRefusal(t *testing.T) {
 			f.start()
 			order := f.submit("10")
 			_, err := f.runtime.Send(testCtx, order.ExternalID, f.dest)
-			if !errors.Is(err, refusal) {
+			if !errors.Is(err, refusal) || errors.Is(err, trading.ErrNotSent) {
 				t.Fatalf("send error = %v", err)
 			}
 			detail := f.detail(order)
@@ -216,7 +216,7 @@ func TestUnknownSendOutcome(t *testing.T) {
 			f.start()
 			order := f.submit("10")
 			link, err := f.runtime.Send(testCtx, order.ExternalID, f.dest)
-			if !errors.Is(err, domain.ErrUpstream) || !strings.Contains(err.Error(), "reconciliation") {
+			if !errors.Is(err, domain.ErrUpstream) || !strings.Contains(err.Error(), "reconciliation") || errors.Is(err, trading.ErrNotSent) {
 				t.Fatalf("send error = %v", err)
 			}
 			if !errors.Is(err, f.venue.sendErr) {
@@ -353,7 +353,7 @@ func TestClaimPrecedesSendAndCancelShortcutRefuses(t *testing.T) {
 		t.Fatal("venue send happened without a persisted claim")
 	}
 	_, _, err := f.n.CancelOrder(testCtx, order.ExternalID, "0", testCaller)
-	if !errors.Is(err, domain.ErrExecutionReportRequired) {
+	if !errors.Is(err, domain.ErrVenueOrderManaged) {
 		t.Fatalf("cancel shortcut = %v", err)
 	}
 }
@@ -525,7 +525,7 @@ func TestVenueAccountAccessMustMatchExactly(t *testing.T) {
 	f := newFixture(t)
 	must(t, f.registry.Register(trading.Provider{Type: "accounts", VenueAccounts: true, Build: f.venue.build}))
 	c := f.addConnection("accounts", "multi-account", false)
-	must(t, f.st.AddTradingAccess(testCtx, domain.TradingAccess{Account: "desk", Connection: c.ExternalID, VenueAccount: "allowed"}))
+	must(t, f.st.PutTradingAccess(testCtx, domain.TradingAccess{Account: "desk", Connection: c.ExternalID, VenueAccount: "allowed"}))
 	f.start()
 	for _, tc := range []struct {
 		account string
@@ -621,7 +621,7 @@ func TestCallerCancellationAndSingleWorker(t *testing.T) {
 	go func() { _, err := f.runtime.Send(ctx, order.ExternalID, f.dest); result <- err }()
 	mapped := <-entered
 	cancel()
-	if err := <-result; !errors.Is(err, context.Canceled) {
+	if err := <-result; !errors.Is(err, context.Canceled) || errors.Is(err, trading.ErrNotSent) {
 		t.Fatalf("cancelled caller=%v", err)
 	}
 	f.venue.push(trading.Event{Kind: trading.EventOrder, Ref: trading.OrderRef{ClientOrderID: mapped.ClientOrderID}})

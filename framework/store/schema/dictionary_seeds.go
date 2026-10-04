@@ -131,6 +131,8 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{42, string(domain.AuditActionApprovalConfirmed)},
 			{43, string(domain.AuditActionApprovalCancelled)},
 			{44, string(domain.AuditActionSubmitDropCopy)},
+			{45, string(domain.AuditActionSetTrading)},
+			{46, string(domain.AuditActionVenueFeeSkipped)},
 		}},
 		{AttestationAlgTable, []EnumCodeSeed{
 			{1, "ed25519"},

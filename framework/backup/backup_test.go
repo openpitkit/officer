@@ -329,10 +329,51 @@ func TestTouchesRuntime(t *testing.T) {
 	}
 	// Settings-only and user-settings-only and audit-only do not rebuild the
 	// engine.
-	for _, s := range []Section{SectionGeneralSettings, SectionUserSettings, SectionAuditLog} {
+	for _, s := range []Section{
+		SectionGeneralSettings, SectionUserSettings, SectionTrading, SectionAuditLog,
+	} {
 		if TouchesRuntime(Scope{Sections: []Section{s}}) {
 			t.Fatalf("section %q must not touch runtime", s)
 		}
+	}
+}
+
+func TestTradingScopeCarriesRequiredParentsAndIsAllOrNothing(t *testing.T) {
+	t.Parallel()
+
+	connectionA := domain.ExternalID("01JABCDEFGHJKMNPQRSTVWXY1")
+	connectionB := domain.ExternalID("01JABCDEFGHJKMNPQRSTVWXY2")
+	data := Data{
+		TradingConnections: []TradingConnection{
+			{ExternalID: connectionA, Label: "A"},
+			{ExternalID: connectionB, Label: "B"},
+		},
+		TradingAccess: []TradingAccess{
+			{Account: "acc-1", Connection: connectionA},
+			{Account: "acc-2", Connection: connectionB},
+		},
+	}
+	scope := Scope{
+		Sections: []Section{SectionTrading},
+		Accounts: EntitySelector{Accounts: []string{"acc-1"}},
+	}
+	normalized := scope.Normalize()
+	for _, section := range []Section{
+		SectionAccountsGroups, SectionActivityHistory, SectionTrading,
+	} {
+		if !normalized.Included(section) {
+			t.Fatalf("trading scope omitted required section %q: %+v", section, normalized.Sections)
+		}
+	}
+	filtered := FilterData(data, scope)
+	if !reflect.DeepEqual(filtered.TradingConnections, data.TradingConnections) ||
+		!reflect.DeepEqual(filtered.TradingAccess, data.TradingAccess) {
+		t.Fatalf("account selector narrowed trading data: %+v", filtered)
+	}
+
+	activity := Scope{Sections: []Section{SectionActivityHistory}}.Normalize()
+	if !activity.Included(SectionTrading) {
+		t.Fatalf("activity scope omitted trading: %+v", activity.Sections)
 	}
 }
 
