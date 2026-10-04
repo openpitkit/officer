@@ -802,7 +802,11 @@ var expectedSchemaTableNames = []string{
 	"signing_key",
 	"source_kind",
 	"trade",
+	"trading_access",
+	"trading_connection",
+	"trading_instrument",
 	"user_setting",
+	"venue_order",
 }
 
 var nonClientDataSchemaTables = map[string]string{
@@ -818,6 +822,10 @@ var nonClientDataSchemaTables = map[string]string{
 	"realm":                    "single-row realm identity metadata, not portable realm contents",
 	"secret_state":             "single-row installation cryptographic state, tied to its master key and not portable",
 	"source_kind":              "closed-domain reference dictionary, not portable client data",
+	"trading_access":           "trading state with no backup section yet; backup export, restore and database reset refuse while a trading connection exists",
+	"trading_connection":       "trading state with no backup section yet; backup export, restore and database reset refuse while a trading connection exists",
+	"trading_instrument":       "trading state with no backup section yet; backup export, restore and database reset refuse while a trading connection exists",
+	"venue_order":              "trading state with no backup section yet; backup export, restore and database reset refuse while a trading connection exists",
 }
 
 // schemaClientTables is the canonical client-data contract. Each SQLite column

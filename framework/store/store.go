@@ -587,6 +587,9 @@ type Store interface {
 	Path() string
 
 	// Reset closes, recreates, and migrates the backing database from scratch.
+	// It returns domain.ErrConflict while any trading connection exists. The
+	// check runs before the reset, so callers must serialize Reset with
+	// trading-connection creation (the node's mutation gate does).
 	Reset(ctx context.Context) error
 
 	// Close releases the database connection. It is idempotent.
@@ -1183,6 +1186,123 @@ type RealmStore interface {
 		ctx context.Context, instance domain.ExternalID, externalSymbol string,
 	) error
 
+	// --- Trading connections and venue orders ---
+
+	// CreateTradingConnection persists a new connection, assigning its external
+	// id, and returns it with ExternalID populated. A duplicate external id or
+	// case-insensitive label returns domain.ErrAlreadyExists.
+	CreateTradingConnection(
+		ctx context.Context, connection domain.TradingConnection,
+	) (domain.TradingConnection, error)
+
+	// GetTradingConnection returns the connection with the given external id.
+	// The bool is false when absent.
+	GetTradingConnection(
+		ctx context.Context, id domain.ExternalID,
+	) (domain.TradingConnection, bool, error)
+
+	// ListTradingConnections returns every connection, ordered by external id.
+	ListTradingConnections(ctx context.Context) ([]domain.TradingConnection, error)
+
+	// SetTradingConnectionEnabled toggles whether new sends may use a connection.
+	// Returns domain.ErrNotFound when absent.
+	SetTradingConnectionEnabled(
+		ctx context.Context, id domain.ExternalID, enabled bool,
+	) error
+
+	// UpsertTradingInstrument inserts or replaces a connection instrument keyed
+	// by (connection, external symbol). Unknown connections or assets return
+	// domain.ErrNotFound. A base/quote pair already mapped to another symbol
+	// returns domain.ErrAlreadyExists.
+	UpsertTradingInstrument(
+		ctx context.Context, instrument domain.TradingInstrument,
+	) error
+
+	// ListTradingInstruments returns every instrument of the connection, ordered
+	// by external symbol, with asset codes populated.
+	ListTradingInstruments(
+		ctx context.Context, connection domain.ExternalID,
+	) ([]domain.TradingInstrument, error)
+
+	// FindTradingInstrument returns the connection instrument for the base and
+	// quote asset pair. The bool is false when absent.
+	FindTradingInstrument(
+		ctx context.Context,
+		connection domain.ExternalID,
+		baseAsset string,
+		quoteAsset string,
+	) (domain.TradingInstrument, bool, error)
+
+	// AddTradingAccess grants an account access to a connection and venue-side
+	// account. Unknown accounts or connections return domain.ErrNotFound; a
+	// duplicate grant returns domain.ErrAlreadyExists.
+	AddTradingAccess(ctx context.Context, access domain.TradingAccess) error
+
+	// ListTradingAccess returns an account's grants ordered by connection
+	// external id and then venue-side account.
+	ListTradingAccess(
+		ctx context.Context, account domain.AccountID,
+	) ([]domain.TradingAccess, error)
+
+	// ListTradingAccessForConnection returns every grant of a connection,
+	// ordered by account code and then venue-side account.
+	ListTradingAccessForConnection(
+		ctx context.Context, connection domain.ExternalID,
+	) ([]domain.TradingAccess, error)
+
+	// EarliestVenueOrderTime returns the creation time of the connection's first
+	// venue-order link, including terminal orders. The bool is false when the
+	// connection has no links.
+	EarliestVenueOrderTime(
+		ctx context.Context, connection domain.ExternalID,
+	) (time.Time, bool, error)
+
+	// CreateVenueOrder creates a pre-send venue-order link and stamps CreatedAt.
+	// A send-attempted or acknowledged input returns domain.ErrInvalid. Unknown
+	// orders or connections return domain.ErrNotFound; a duplicate order link or
+	// client order id returns domain.ErrAlreadyExists.
+	CreateVenueOrder(
+		ctx context.Context, order domain.VenueOrder,
+	) (domain.VenueOrder, error)
+
+	// SetVenueOrderID records the venue acknowledgement once. An empty id returns
+	// domain.ErrInvalid, a missing link domain.ErrNotFound, and changing an
+	// already recorded id domain.ErrConflict. Repeating the same id is a no-op.
+	SetVenueOrderID(
+		ctx context.Context, order domain.ExternalID, venueOrderID string,
+	) error
+
+	// MarkVenueOrderSendAttempted durably records that the venue call is about to
+	// start. Repeating it is a no-op; a missing link returns domain.ErrNotFound.
+	MarkVenueOrderSendAttempted(
+		ctx context.Context, order domain.ExternalID,
+	) error
+
+	// DeleteVenueOrder removes a link whose send never started. A missing link
+	// returns domain.ErrNotFound; a send-attempted or acknowledged link returns
+	// domain.ErrConflict.
+	DeleteVenueOrder(ctx context.Context, order domain.ExternalID) error
+
+	// GetVenueOrder returns the link for the Officer order. The bool is false
+	// when absent.
+	GetVenueOrder(
+		ctx context.Context, order domain.ExternalID,
+	) (domain.VenueOrder, bool, error)
+
+	// FindVenueOrderByClientID returns a connection's link for the client order
+	// id. The bool is false when absent.
+	FindVenueOrderByClientID(
+		ctx context.Context,
+		connection domain.ExternalID,
+		clientOrderID string,
+	) (domain.VenueOrder, bool, error)
+
+	// ListOpenVenueOrders returns links whose Officer order status is not
+	// terminal, ordered by creation time and Officer order id.
+	ListOpenVenueOrders(
+		ctx context.Context, connection domain.ExternalID,
+	) ([]domain.VenueOrder, error)
+
 	// --- Signing keys and config (key_id is the key's own UUID handle) ---
 
 	// UpsertSigningKey inserts or replaces a signing key row. PrivateKey must be
@@ -1241,6 +1361,9 @@ type RealmStore interface {
 	// id, and every cross-row link is expressed by code or external id. No
 	// surrogate key and no engine id is serialized; the realm round-trips between
 	// an isolated and a shared database with its public identity intact.
+	// It returns domain.ErrConflict while any trading connection exists. The
+	// check runs before the snapshot, so callers must serialize ExportBackup
+	// with trading-connection creation (the node's mutation gate does).
 	ExportBackup(ctx context.Context, scope backup.Scope) (backup.Archive, error)
 
 	// RestoreBackup imports a portable archive into the bound realm under opts.
@@ -1252,7 +1375,10 @@ type RealmStore interface {
 	// scope selectors, and reports per-section counts. The store does not decide
 	// whether an engine replacement is required; the node classifies and publishes
 	// the committed runtime delta online, setting RestoreSummary.RestartRequired
-	// only if it actually replaces the engine.
+	// only if it actually replaces the engine. It returns domain.ErrConflict while
+	// any trading connection exists. The check runs before the restore
+	// transaction, so callers must serialize RestoreBackup with
+	// trading-connection creation (the node's mutation gate does).
 	RestoreBackup(
 		ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 	) (backup.RestoreSummary, error)

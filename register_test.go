@@ -18,6 +18,7 @@
 package officer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io/fs"
@@ -50,6 +51,51 @@ import (
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 )
+
+func TestRegisterTradingComposition(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, err := sqlite.New(filepath.Join(t.TempDir(), "officer.db"), domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Invalid credentials exercise the registered constructor without
+	// network I/O.
+	_, err = realm.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider: domain.TradingProviderAlpaca, Label: "paper", Mode: domain.TradingModeTest,
+		Credentials: "{}", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := frameworkapp.NewBuilder()
+	if err := Register(builder, Config{}); err != nil {
+		t.Fatal(err)
+	}
+	builder.SetStoreFactory(func() (store.Store, error) { return st, nil })
+	builder.SetNodeBuilder(fakeEngineNodeBuilder)
+	var logs bytes.Buffer
+	app, err := builder.Build(ctx, slog.New(slog.NewTextHandler(&logs, nil)), failOnFatal(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+	cancel()
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "alpaca: apiKey and apiSecret are required") {
+		t.Fatalf("registered Alpaca constructor was not called: %s", logs.String())
+	}
+}
 
 func TestRegisterBuildUsesPopulatedMCPCatalog(t *testing.T) {
 	ctx := auth.ContextWithCaller(context.Background(), auth.SystemCaller())

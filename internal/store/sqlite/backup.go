@@ -53,9 +53,28 @@ const backupSource = "pit-officer"
 // the rows scope includes. It gathers the full realm into a portable Data, then
 // hands it to backup.NewArchive, which narrows it to the scope. Every row is
 // serialized by portable identity; no surrogate key or engine id is emitted.
+// Before export starts, it returns domain.ErrConflict while any trading
+// connection exists. This check is race-free only when callers serialize the
+// operation with trading-connection creation: the node uses its mutation gate,
+// and any later management operation that creates connections must use it too.
 func (r *realmStore) ExportBackup(
 	ctx context.Context, scope backup.Scope,
 ) (backup.Archive, error) {
+	db, err := r.db()
+	if err != nil {
+		return backup.Archive{}, err
+	}
+	exists, err := tradingStateExists(ctx, db)
+	if err != nil {
+		return backup.Archive{}, err
+	}
+	if exists {
+		return backup.Archive{}, fmt.Errorf(
+			"store: backup export refused: trading connections exist and "+
+				"the backup does not cover trading state yet: %w",
+			domain.ErrConflict,
+		)
+	}
 	return r.exportBackup(ctx, scope, nil)
 }
 
@@ -267,6 +286,10 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 // failure rolls the whole transaction back, leaving the target realm untouched.
 // RestartRequired remains false here because only the node can decide whether
 // the committed delta crossed a live engine lifecycle boundary.
+// Before restore starts, it returns domain.ErrConflict while any trading
+// connection exists. This check is race-free only when callers serialize the
+// operation with trading-connection creation: the node uses its mutation gate,
+// and any later management operation that creates connections must use it too.
 func (r *realmStore) RestoreBackup(
 	ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 ) (summary backup.RestoreSummary, err error) {
@@ -303,6 +326,17 @@ func (r *realmStore) RestoreBackup(
 	db, err := r.db()
 	if err != nil {
 		return backup.RestoreSummary{}, err
+	}
+	exists, err := tradingStateExists(ctx, db)
+	if err != nil {
+		return backup.RestoreSummary{}, err
+	}
+	if exists {
+		return backup.RestoreSummary{}, fmt.Errorf(
+			"store: backup restore refused: trading connections exist and "+
+				"the backup does not cover trading state yet: %w",
+			domain.ErrConflict,
+		)
 	}
 	dictionaries, err := r.dictionaries()
 	if err != nil {

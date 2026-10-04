@@ -2034,6 +2034,7 @@ func accountDependents(
 		{"limit_order_size", `SELECT COUNT(*) FROM limit_order_size WHERE account_id = ?`},
 		{"limit_spot_funds_pnl_bound", `SELECT COUNT(*)
 		 FROM limit_spot_funds_pnl_bound WHERE account_id = ?`},
+		{"trading_access", `SELECT COUNT(*) FROM trading_access WHERE account_id = ?`},
 	}
 	return collectDependents(ctx, q, checks, accountID)
 }
@@ -2063,6 +2064,8 @@ func assetDependents(
 		{"trade", `SELECT COUNT(*) FROM trade
 		 WHERE base_asset_id = ? OR quote_asset_id = ?`},
 		{"market_data_instrument", `SELECT COUNT(*) FROM market_data_instrument
+		 WHERE base_asset_id = ? OR quote_asset_id = ?`},
+		{"trading_instrument", `SELECT COUNT(*) FROM trading_instrument
 		 WHERE base_asset_id = ? OR quote_asset_id = ?`},
 	}
 	return collectDependents(ctx, q, checks, assetID)

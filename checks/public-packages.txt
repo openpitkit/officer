@@ -18,6 +18,7 @@ go.openpit.dev/officer/framework/secret
 go.openpit.dev/officer/framework/signing
 go.openpit.dev/officer/framework/store
 go.openpit.dev/officer/framework/store/schema
+go.openpit.dev/officer/framework/trading
 go.openpit.dev/officer/framework/web/httpapi
 go.openpit.dev/officer/httpapi
 go.openpit.dev/officer/mcptools

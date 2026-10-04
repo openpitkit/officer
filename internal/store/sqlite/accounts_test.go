@@ -344,3 +344,68 @@ func TestUpdateAccountPreservesStableIdentityAndDependents(t *testing.T) {
 		t.Fatalf("order account = %q, want %q", detail.Order.Account, updated.Code)
 	}
 }
+
+func TestDeleteAccountReportsAndCascadesTradingAccess(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	if err := rs.AddTradingAccess(ctx, domain.TradingAccess{
+		Account: "acc-1", Connection: connection.ExternalID,
+	}); err != nil {
+		t.Fatalf("AddTradingAccess: %v", err)
+	}
+
+	err := rs.DeleteAccount(ctx, "acc-1", false)
+	var dependentErr domain.HasDependentsError
+	if !errors.As(err, &dependentErr) {
+		t.Fatalf("DeleteAccount(no force) error = %v, want HasDependentsError", err)
+	}
+	if len(dependentErr.Dependents) != 1 ||
+		dependentErr.Dependents[0] != (domain.DependentCount{
+			Kind: "trading_access", Count: 1,
+		}) {
+		t.Fatalf("DeleteAccount(no force) dependents = %+v", dependentErr.Dependents)
+	}
+	if err := rs.DeleteAccount(ctx, "acc-1", true); err != nil {
+		t.Fatalf("DeleteAccount(force): %v", err)
+	}
+	accesses, err := rs.ListTradingAccess(ctx, "acc-1")
+	if err != nil {
+		t.Fatalf("ListTradingAccess after delete: %v", err)
+	}
+	if len(accesses) != 0 {
+		t.Fatalf("trading access rows after account cascade = %d, want 0", len(accesses))
+	}
+}
+
+func TestDeleteAssetReportsAndCascadesTradingInstrument(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+		Connection:     connection.ExternalID,
+		ExternalSymbol: "AAPL",
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+	}); err != nil {
+		t.Fatalf("UpsertTradingInstrument: %v", err)
+	}
+
+	err := rs.DeleteAsset(ctx, "AAPL", false)
+	var dependentErr domain.HasDependentsError
+	if !errors.As(err, &dependentErr) {
+		t.Fatalf("DeleteAsset(no force) error = %v, want HasDependentsError", err)
+	}
+	if len(dependentErr.Dependents) != 1 ||
+		dependentErr.Dependents[0] != (domain.DependentCount{
+			Kind: "trading_instrument", Count: 1,
+		}) {
+		t.Fatalf("DeleteAsset(no force) dependents = %+v", dependentErr.Dependents)
+	}
+	if err := rs.DeleteAsset(ctx, "AAPL", true); err != nil {
+		t.Fatalf("DeleteAsset(force): %v", err)
+	}
+	instruments, err := rs.ListTradingInstruments(ctx, connection.ExternalID)
+	if err != nil {
+		t.Fatalf("ListTradingInstruments after delete: %v", err)
+	}
+	if len(instruments) != 0 {
+		t.Fatalf("trading instruments after asset cascade = %d, want 0", len(instruments))
+	}
+}

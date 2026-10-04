@@ -39,6 +39,7 @@ import (
 	"go.openpit.dev/officer/httpapi"
 	appmarketdata "go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/store/sqlite"
+	apptrading "go.openpit.dev/officer/internal/trading"
 	"go.openpit.dev/officer/mcptools"
 	"go.openpit.dev/officer/signing"
 	"go.openpit.dev/officer/web"
@@ -89,6 +90,11 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	for _, provider := range appmarketdata.FirstPartyProviders() {
 		if err := b.RegisterMarketDataProvider(provider); err != nil {
 			return fmt.Errorf("officer: register market data provider: %w", err)
+		}
+	}
+	for _, provider := range apptrading.FirstPartyProviders() {
+		if err := b.RegisterTradingProvider(provider); err != nil {
+			return fmt.Errorf("officer: register trading provider: %w", err)
 		}
 	}
 	b.SetServiceFactory(func(

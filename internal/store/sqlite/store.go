@@ -270,12 +270,27 @@ func (s *sqliteStore) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Reset recreates the SQLite file and reapplies the bundled migration.
+// Reset recreates the SQLite file and reapplies the bundled migration. Before
+// reset starts, it returns domain.ErrConflict while any trading connection
+// exists. This check is race-free only when callers serialize the operation
+// with trading-connection creation: the node uses its mutation gate, and any
+// later management operation that creates connections must use it too.
 func (s *sqliteStore) Reset(ctx context.Context) error {
 	path := s.path
 	oldDB := s.currentDB()
 	if oldDB == nil {
 		return fmt.Errorf("store: reset sqlite: database is closed")
+	}
+	exists, err := tradingStateExists(ctx, oldDB)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf(
+			"store: reset refused: trading connections exist and reset "+
+				"does not preserve trading state: %w",
+			domain.ErrConflict,
+		)
 	}
 
 	tmp, err := os.CreateTemp(
@@ -735,4 +750,14 @@ func isSQLiteUniqueOn(err error, table, column string) bool {
 		strings.Contains(
 			err.Error(), "UNIQUE constraint failed: "+table+"."+column,
 		)
+}
+
+func tradingStateExists(ctx context.Context, q sqlQueryer) (bool, error) {
+	var count int
+	if err := q.QueryRowContext(
+		ctx, `SELECT COUNT(*) FROM trading_connection`,
+	).Scan(&count); err != nil {
+		return false, fmt.Errorf("store: count trading connections: %w", err)
+	}
+	return count > 0, nil
 }

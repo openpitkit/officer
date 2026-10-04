@@ -304,6 +304,28 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	for _, i := range instances {
 		assertExternalID(t, "listed md instance", i.ExternalID)
 	}
+
+	// Trading connection (machine record by external id).
+	tradingConnection, err := rs.CreateTradingConnection(
+		ctx,
+		domain.TradingConnection{
+			Provider:    domain.TradingProviderAlpaca,
+			Label:       "sweep-trading",
+			Mode:        domain.TradingModeTest,
+			Credentials: `{}`,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	assertExternalID(t, "trading_connection", tradingConnection.ExternalID)
+	tradingConnections, err := rs.ListTradingConnections(ctx)
+	if err != nil {
+		t.Fatalf("ListTradingConnections: %v", err)
+	}
+	for _, connection := range tradingConnections {
+		assertExternalID(t, "listed trading connection", connection.ExternalID)
+	}
 }
 
 // assertExternalID verifies that id is non-zero, its string form is exactly
@@ -398,9 +420,29 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}
+	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider:    domain.TradingProviderAlpaca,
+		Label:       "cascade-trading",
+		Mode:        domain.TradingModeTest,
+		Credentials: `{}`,
+	})
+	if err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+		Connection:     connection.ExternalID,
+		ExternalSymbol: "AAPL",
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+	}); err != nil {
+		t.Fatalf("UpsertTradingInstrument: %v", err)
+	}
 
 	rstore := rs.(*realmStore)
-	for _, table := range []string{"order_record", "order_event", "trade", "event_attestation"} {
+	for _, table := range []string{
+		"order_record", "order_event", "trade", "event_attestation",
+		"trading_instrument",
+	} {
 		if n := countRows(t, ctx, rstore, table); n != 1 {
 			t.Fatalf("%s before asset delete = %d, want 1", table, n)
 		}
@@ -412,7 +454,10 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 		t.Fatalf("DeleteAsset(AAPL): %v", err)
 	}
 
-	for _, table := range []string{"order_record", "order_event", "trade", "event_attestation"} {
+	for _, table := range []string{
+		"order_record", "order_event", "trade", "event_attestation",
+		"trading_instrument",
+	} {
 		if n := countRows(t, ctx, rstore, table); n != 0 {
 			t.Fatalf("%s after asset delete = %d, want 0 (cascade)", table, n)
 		}

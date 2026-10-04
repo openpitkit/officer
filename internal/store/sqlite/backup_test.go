@@ -3243,6 +3243,11 @@ var backupExcludedTables = map[string]bool{
 	"attestation_alg":          true, // immutable enum dictionary, seeded by Migrate
 	"attestation_request_type": true, // immutable enum dictionary, seeded by Migrate
 	"attestation_mode":         true, // immutable enum dictionary, seeded by Migrate
+	// trading state: export, restore and reset refuse while a trading connection exists
+	"trading_connection": true,
+	"trading_instrument": true,
+	"trading_access":     true,
+	"venue_order":        true,
 }
 
 // TestBackupCompleteness introspects sqlite_master for every user table and
@@ -3275,6 +3280,66 @@ func TestBackupCompleteness(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate table names: %v", err)
+	}
+}
+
+func TestTradingStateRefusesBackupExportRestoreAndReset(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStore(t, "trading-refusal-source")
+	if _, err := source.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatalf("CreateAsset(source): %v", err)
+	}
+	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup(source): %v", err)
+	}
+
+	blockedStore, blocked := newRealmStore(t, "trading-refusal-target")
+	if _, err := blocked.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider:    domain.TradingProviderAlpaca,
+		Label:       "blocks backup",
+		Mode:        domain.TradingModeTest,
+		Credentials: `{}`,
+	}); err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	if _, err := blocked.ExportBackup(
+		ctx, backup.Scope{All: true},
+	); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("ExportBackup error = %v, want ErrConflict", err)
+	}
+	if _, err := blocked.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("RestoreBackup error = %v, want ErrConflict", err)
+	}
+	if _, ok, err := blocked.GetAsset(ctx, "AAPL"); err != nil || ok {
+		t.Fatalf("GetAsset after refused restore: ok=%v err=%v", ok, err)
+	}
+	if err := blockedStore.Reset(ctx); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("Reset error = %v, want ErrConflict", err)
+	}
+	connections, err := blocked.ListTradingConnections(ctx)
+	if err != nil || len(connections) != 1 {
+		t.Fatalf("trading connection after refusals: count=%d err=%v", len(connections), err)
+	}
+}
+
+func TestBackupExportRestoreAndResetWithoutTradingState(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStore(t, "no-trading-source")
+	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	targetStore, target := newRealmStore(t, "no-trading-target")
+	if _, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if err := targetStore.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
 	}
 }
 

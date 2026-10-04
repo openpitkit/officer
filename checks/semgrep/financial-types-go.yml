@@ -19,8 +19,9 @@
 #
 # officer's money domain type is github.com/shopspring/decimal.Decimal, used
 # throughout framework/domain, httpapi, internal/store/sqlite,
-# framework/backend, framework/businesscsv, framework/marketdata and
-# framework/node. A raw float64 in one of these packages is the usual way the
+# framework/backend, framework/businesscsv, framework/marketdata,
+# framework/node, framework/trading, internal/trading and internal/alpaca.
+# A raw float64 in one of these packages is the usual way the
 # domain model gets bypassed; deliberately not keyed on field names, since a
 # rule matching only `price`/`amount`/`qty` misses every field named
 # otherwise.
@@ -59,6 +60,9 @@ rules:
         - /framework/businesscsv/**
         - /framework/marketdata/**
         - /framework/node/**
+        - /framework/trading/**
+        - /internal/trading/**
+        - /internal/alpaca/**
       exclude:
         - "**/*_test.go"
         - /internal/marketdata/**

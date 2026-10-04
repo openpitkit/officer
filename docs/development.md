@@ -40,6 +40,8 @@ is a command or under `internal/`, and cannot be imported:
 - `framework/signing` - the approval-signing seam and the approval envelope.
 - `framework/store` - the database connector seam, scoped by realm.
 - `framework/store/schema` - the canonical store schema every connector shares.
+- `framework/trading` - trading connectors, providers, registry, and the runtime
+  that sends held orders to venues and takes their executions back.
 - `framework/web/httpapi` - the HTTP router, route registry, and `Authorizer`.
 
 `checks/public-packages.txt` is meant to hold these packages and the two
@@ -51,11 +53,11 @@ an `internal` path element drift from the list.
 
 `Register` fills a builder with the default composition: the SQLite store, one
 local node over the default realm running the OpenPit engine, the signer, the
-control-plane service, the built-in market-data providers, the REST routes, the
-MCP tools, the dashboard, allow-all authorization, and an operator caller for
-every request. A `Set` call after it replaces that part; `AddToolRegistrar` and
-`RegisterMarketDataProvider` add to it. `Build` then opens and migrates the
-store and builds the node:
+control-plane service, the built-in market-data and trading providers, the REST
+routes, the MCP tools, the dashboard, allow-all authorization, and an operator
+caller for every request. A `Set` call after it replaces that part;
+`AddToolRegistrar`, `RegisterMarketDataProvider`, and `RegisterTradingProvider`
+add to it. `Build` then opens and migrates the store and builds the node:
 
 ```go
 builder := app.NewBuilder() // go.openpit.dev/officer/framework/app

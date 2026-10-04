@@ -36,6 +36,7 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
@@ -85,22 +86,24 @@ type SPAFactory func() (fs.FS, error)
 
 // Builder collects the concrete hooks that make one composition.
 type Builder struct {
-	storeFactory   StoreFactory
-	nodeBuilder    NodeBuilder
-	signingFactory SigningFactory
-	serviceFactory ServiceFactory
-	routeConfig    RouteConfigBuilder
-	toolRegistrars []ToolRegistrar
-	spaFactory     SPAFactory
-	authorizer     httpx.Authorizer
-	callerResolver auth.CallerResolver
-	mdRegistry     *marketdata.Registry
+	storeFactory    StoreFactory
+	nodeBuilder     NodeBuilder
+	signingFactory  SigningFactory
+	serviceFactory  ServiceFactory
+	routeConfig     RouteConfigBuilder
+	toolRegistrars  []ToolRegistrar
+	spaFactory      SPAFactory
+	authorizer      httpx.Authorizer
+	callerResolver  auth.CallerResolver
+	mdRegistry      *marketdata.Registry
+	tradingRegistry *trading.Registry
 }
 
 // NewBuilder constructs an empty composition builder.
 func NewBuilder() *Builder {
 	return &Builder{
-		mdRegistry: marketdata.NewRegistry(),
+		mdRegistry:      marketdata.NewRegistry(),
+		tradingRegistry: trading.NewRegistry(),
 	}
 }
 
@@ -157,6 +160,14 @@ func (b *Builder) RegisterMarketDataProvider(provider marketdata.Provider) error
 		b.mdRegistry = marketdata.NewRegistry()
 	}
 	return b.mdRegistry.Register(provider)
+}
+
+// RegisterTradingProvider adds or replaces a trading provider.
+func (b *Builder) RegisterTradingProvider(provider trading.Provider) error {
+	if b.tradingRegistry == nil {
+		b.tradingRegistry = trading.NewRegistry()
+	}
+	return b.tradingRegistry.Register(provider)
 }
 
 // Build assembles the configured app and starts runtime services. The signer
@@ -247,6 +258,33 @@ func (b *Builder) Build(
 		_ = localNode.Close()
 		return nil, fmt.Errorf("build service: %w", err)
 	}
+	// The runtime intakes and reconciles venue orders; the send surface is not
+	// wired yet.
+	runtime, err := trading.NewRuntime(b.tradingRegistry, realm,
+		func(ctx context.Context, in domain.ExecutionReportInput) error {
+			_, _, err := service.ApplyExecutionReport(auth.ContextWithCaller(ctx, auth.SystemCaller()), in)
+			return err
+		},
+		func(ctx context.Context, account domain.AccountID, id domain.ExternalID, req domain.AdjustmentRequest) error {
+			record, err := service.ApplyAdjustment(auth.ContextWithCaller(ctx, auth.SystemCaller()), account, id, req, domain.MissingAccountReject)
+			if err == nil && record.Rejected != nil {
+				return fmt.Errorf("%s: %w", record.Rejected.Reason, trading.ErrAdjustmentRejected)
+			}
+			return err
+		}, logger)
+	if err != nil {
+		manager.Stop()
+		_ = localNode.Close()
+		return nil, fmt.Errorf("build trading runtime: %w", err)
+	}
+	// Build's signal context can end before Close; Stop owns runtime
+	// cancellation.
+	if err := runtime.Start(context.WithoutCancel(ctx)); err != nil {
+		runtime.Stop()
+		manager.Stop()
+		_ = localNode.Close()
+		return nil, fmt.Errorf("start trading runtime: %w", err)
+	}
 	src := frameworkmcp.SourceFor(service)
 	for _, registrar := range b.toolRegistrars {
 		registrar(mcpRegistry, src)
@@ -256,6 +294,7 @@ func (b *Builder) Build(
 		service:        service,
 		node:           localNode,
 		marketData:     manager,
+		trading:        runtime,
 		mcpRegistry:    mcpRegistry,
 		source:         src,
 		version:        nodeVersionSource{node: localNode},
@@ -290,6 +329,9 @@ func (b *Builder) validate() error {
 	if b.mdRegistry == nil {
 		b.mdRegistry = marketdata.NewRegistry()
 	}
+	if b.tradingRegistry == nil {
+		b.tradingRegistry = trading.NewRegistry()
+	}
 	return nil
 }
 
@@ -298,6 +340,7 @@ type App struct {
 	service        backend.ControlPlane
 	node           node.Node
 	marketData     *marketdata.Manager
+	trading        *trading.Runtime
 	mcpRegistry    *frameworkmcp.ToolRegistry
 	source         frameworkmcp.Source
 	version        frameworkmcp.VersionSource
@@ -336,6 +379,9 @@ func (a *App) RecordServiceLifecycle(
 
 // Close stops producers before closing the node and engine.
 func (a *App) Close() error {
+	if a.trading != nil {
+		a.trading.Stop()
+	}
 	// Quote producers must stop before the node closes the engine and its
 	// market-data service; pushing into that closed service would be use-after-free.
 	if a.marketData != nil {

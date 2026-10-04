@@ -475,6 +475,63 @@ CREATE INDEX idx_market_data_instruments_base_asset
 CREATE INDEX idx_market_data_instruments_quote_asset
     ON market_data_instrument (quote_asset_id);
 
+-- Trading-venue connections. provider selects the connector; label is a
+-- unique, case-insensitive operator-facing name; credentials holds plaintext or
+-- a sealed binary value according to store state. enabled gates new sends only.
+CREATE TABLE trading_connection (
+    id          {{PK}},
+    external_id {{XID}} UNIQUE,
+    provider    TEXT NOT NULL,
+    label       TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    mode        TEXT NOT NULL CHECK (mode IN ('test', 'real')),
+    credentials BLOB NOT NULL,
+    enabled     {{BOOL}} NOT NULL DEFAULT 0
+);
+
+-- Per-instrument selection for a trading connection: the venue symbol mapped
+-- to an Officer instrument (base, quote). The connection reference cascades.
+CREATE TABLE trading_instrument (
+    id              {{PK}},
+    connection_id   INTEGER NOT NULL REFERENCES trading_connection(id) ON DELETE CASCADE,
+    external_symbol TEXT    NOT NULL,
+    base_asset_id   INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    quote_asset_id  INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    enabled         {{BOOL}} NOT NULL DEFAULT 0,
+    UNIQUE (connection_id, external_symbol),
+    UNIQUE (connection_id, base_asset_id, quote_asset_id)
+);
+
+CREATE INDEX idx_trading_instruments_base_asset
+    ON trading_instrument (base_asset_id);
+CREATE INDEX idx_trading_instruments_quote_asset
+    ON trading_instrument (quote_asset_id);
+
+-- Per-account permission to send through a connection and venue-side account.
+CREATE TABLE trading_access (
+    account_id    INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    connection_id INTEGER NOT NULL REFERENCES trading_connection(id) ON DELETE CASCADE,
+    venue_account TEXT    NOT NULL,
+    PRIMARY KEY (account_id, connection_id, venue_account)
+);
+
+CREATE INDEX idx_trading_access_connection
+    ON trading_access (connection_id);
+
+-- Durable link from an Officer order to its venue order. The link is created,
+-- marked send-attempted immediately before the venue call, then acknowledged
+-- with venue_order_id. Only a link never marked attempted may be deleted.
+CREATE TABLE venue_order (
+    order_id        INTEGER PRIMARY KEY REFERENCES order_record(id) ON DELETE CASCADE,
+    connection_id   INTEGER NOT NULL REFERENCES trading_connection(id) ON DELETE RESTRICT,
+    venue_account   TEXT    NOT NULL,
+    route           TEXT    NOT NULL,
+    client_order_id TEXT    NOT NULL,
+    send_attempted  {{BOOL}} NOT NULL DEFAULT 0,
+    venue_order_id  TEXT,
+    created_at      TEXT    NOT NULL,
+    UNIQUE (connection_id, client_order_id)
+);
+
 -- Ed25519 signing keys. key_id is the key's own UUID handle. An empty plaintext
 -- marks a verify-only key: an empty column in an unsealed store, or a sealed
 -- envelope of the empty value in a sealed store. Store state decides the form,

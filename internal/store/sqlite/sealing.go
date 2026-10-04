@@ -33,6 +33,8 @@ const (
 	signingPrivateKeyColumn     = "private_key"
 	marketDataInstanceTable     = "market_data_instance"
 	marketDataCredentialsColumn = "credentials"
+	tradingConnectionTable      = "trading_connection"
+	tradingCredentialsColumn    = "credentials"
 )
 
 func (s *sqliteStore) sealValue(table, column, rowID string, plaintext []byte) ([]byte, error) {
@@ -177,7 +179,16 @@ func (s *sqliteStore) sealRealm(
 	if err := s.sealSigningPrivateKeys(ctx, tx, key); err != nil {
 		return err
 	}
-	if err := s.sealMarketDataCredentials(ctx, tx, key); err != nil {
+	if err := s.sealCredentials(
+		ctx, tx, key,
+		marketDataInstanceTable, marketDataCredentialsColumn, "market data",
+	); err != nil {
+		return err
+	}
+	if err := s.sealCredentials(
+		ctx, tx, key,
+		tradingConnectionTable, tradingCredentialsColumn, "trading",
+	); err != nil {
 		return err
 	}
 	// The verifier and owed scrub must commit with the sealed values so a restart
@@ -243,57 +254,67 @@ func (s *sqliteStore) sealSigningPrivateKeys(
 	return nil
 }
 
-func (s *sqliteStore) sealMarketDataCredentials(
-	ctx context.Context, tx *sql.Tx, key secret.MasterKey,
+func (s *sqliteStore) sealCredentials(
+	ctx context.Context,
+	tx *sql.Tx,
+	key secret.MasterKey,
+	table string,
+	column string,
+	noun string,
 ) error {
-	type marketDataSecret struct {
+	type storedCredential struct {
 		externalID  domain.ExternalID
 		credentials []byte
 	}
 
 	rows, err := tx.QueryContext(
-		ctx, `SELECT external_id, credentials FROM market_data_instance`,
+		ctx, fmt.Sprintf("SELECT external_id, %s FROM %s", column, table),
 	)
 	if err != nil {
-		return fmt.Errorf("store: read market data credentials for sealing: %w", err)
+		return fmt.Errorf("store: read %s credentials for sealing: %w", noun, err)
 	}
-	secrets := make([]marketDataSecret, 0)
+	secrets := make([]storedCredential, 0)
 	for rows.Next() {
 		var rawID, credentials []byte
 		if err := rows.Scan(&rawID, &credentials); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("store: scan market data credentials for sealing: %w", err)
+			return fmt.Errorf("store: scan %s credentials for sealing: %w", noun, err)
 		}
 		externalID, err := domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("store: decode market data external id for sealing: %w", err)
+			return fmt.Errorf(
+				"store: decode %s external id for sealing: %w", noun, err,
+			)
 		}
-		secrets = append(secrets, marketDataSecret{
+		secrets = append(secrets, storedCredential{
 			externalID: externalID, credentials: credentials,
 		})
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("store: iterate market data credentials for sealing: %w", err)
+		return fmt.Errorf("store: iterate %s credentials for sealing: %w", noun, err)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("store: close market data credentials for sealing: %w", err)
+		return fmt.Errorf("store: close %s credentials for sealing: %w", noun, err)
 	}
 
 	for _, item := range secrets {
 		sealed, err := s.sealValueWithKey(
-			key, marketDataInstanceTable, marketDataCredentialsColumn,
+			key, table, column,
 			item.externalID.String(), item.credentials,
 		)
 		if err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(
-			ctx, `UPDATE market_data_instance SET credentials = ? WHERE external_id = ?`,
+			ctx,
+			fmt.Sprintf(
+				"UPDATE %s SET %s = ? WHERE external_id = ?", table, column,
+			),
 			sealed, item.externalID.Bytes(),
 		); err != nil {
-			return fmt.Errorf("store: seal market data credentials: %w", err)
+			return fmt.Errorf("store: seal %s credentials: %w", noun, err)
 		}
 	}
 	return nil

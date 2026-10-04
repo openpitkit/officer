@@ -266,6 +266,55 @@ func TestCredentialsRejectRowMove(t *testing.T) {
 	}
 }
 
+func TestTradingCredentialsRejectRowMove(t *testing.T) {
+	ctx := context.Background()
+	key := mustStoreMasterKey(t, 0x32)
+	_, rs := newTestStore(t, WithMasterKey(key))
+
+	first, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider: domain.TradingProviderAlpaca, Label: "first-connection",
+		Mode: domain.TradingModeTest, Credentials: `{"key":"first"}`,
+	})
+	if err != nil {
+		t.Fatalf("CreateTradingConnection(first): %v", err)
+	}
+	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider: domain.TradingProviderAlpaca, Label: "second-connection",
+		Mode: domain.TradingModeTest, Credentials: `{"key":"second"}`,
+	})
+	if err != nil {
+		t.Fatalf("CreateTradingConnection(second): %v", err)
+	}
+
+	db := rs.(*realmStore).rawDB()
+	var moved []byte
+	if err := db.QueryRowContext(
+		ctx, `SELECT credentials FROM trading_connection WHERE external_id = ?`,
+		first.ExternalID.Bytes(),
+	).Scan(&moved); err != nil {
+		t.Fatalf("read source trading credentials: %v", err)
+	}
+	if _, err := db.ExecContext(
+		ctx, `UPDATE trading_connection SET credentials = ? WHERE external_id = ?`,
+		moved, second.ExternalID.Bytes(),
+	); err != nil {
+		t.Fatalf("move trading credentials: %v", err)
+	}
+
+	got, ok, err := rs.GetTradingConnection(ctx, second.ExternalID)
+	if err == nil {
+		t.Fatal("GetTradingConnection after row move returned nil error")
+	}
+	if ok || got.Credentials != "" {
+		t.Fatal("GetTradingConnection after row move returned credentials")
+	}
+	if !strings.Contains(err.Error(), "trading_connection.credentials") {
+		t.Fatalf(
+			"GetTradingConnection error does not name the secret column: %v", err,
+		)
+	}
+}
+
 func TestSigningKeyRejectsRowMove(t *testing.T) {
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x32)
@@ -984,6 +1033,100 @@ func TestResetWithMasterKeyRecreatesSealedDatabase(t *testing.T) {
 	}
 	if !match {
 		t.Fatal("Reset stored the wrong key verifier")
+	}
+}
+
+func TestTradingCredentialsSealedRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	key := mustStoreMasterKey(t, 0x71)
+	_, rs := newTestStore(t, WithMasterKey(key))
+	credentials := `{"key":"trading-secret"}`
+	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider:    domain.TradingProviderAlpaca,
+		Label:       "sealed-trading",
+		Mode:        domain.TradingModeTest,
+		Credentials: credentials,
+	})
+	if err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+
+	got, ok, err := rs.GetTradingConnection(ctx, connection.ExternalID)
+	if err != nil || !ok {
+		t.Fatalf("GetTradingConnection: ok=%v err=%v", ok, err)
+	}
+	if got.Credentials != credentials {
+		t.Fatal("GetTradingConnection did not return original credentials")
+	}
+	var stored []byte
+	if err := rs.(*realmStore).rawDB().QueryRowContext(
+		ctx,
+		`SELECT credentials FROM trading_connection WHERE external_id = ?`,
+		connection.ExternalID.Bytes(),
+	).Scan(&stored); err != nil {
+		t.Fatalf("read stored trading credentials: %v", err)
+	}
+	if bytes.Equal(stored, []byte(credentials)) {
+		t.Fatal("stored trading credentials equal plaintext")
+	}
+}
+
+func TestMigrateWithMasterKeySealsExistingTradingCredentials(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	plaintextStore := openSQLiteStoreForTest(t, path)
+	if err := plaintextStore.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate plaintext store: %v", err)
+	}
+	plaintextRealm, err := plaintextStore.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm plaintext store: %v", err)
+	}
+	credentials := `{"key":"pre-existing-trading-secret"}`
+	connection, err := plaintextRealm.CreateTradingConnection(
+		ctx,
+		domain.TradingConnection{
+			Provider:    domain.TradingProviderAlpaca,
+			Label:       "pre-existing-trading",
+			Mode:        domain.TradingModeTest,
+			Credentials: credentials,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	if err := plaintextStore.Close(); err != nil {
+		t.Fatalf("close plaintext store: %v", err)
+	}
+
+	sealedStore := openSQLiteStoreForTest(
+		t, path, WithMasterKey(mustStoreMasterKey(t, 0x72)),
+	)
+	_ = captureSlogForTest(t)
+	if err := sealedStore.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate sealed store: %v", err)
+	}
+	var stored []byte
+	if err := sealedStore.currentDB().QueryRowContext(
+		ctx,
+		`SELECT credentials FROM trading_connection WHERE external_id = ?`,
+		connection.ExternalID.Bytes(),
+	).Scan(&stored); err != nil {
+		t.Fatalf("read sealed trading credentials: %v", err)
+	}
+	if bytes.Equal(stored, []byte(credentials)) {
+		t.Fatal("pre-existing trading credentials remained plaintext")
+	}
+	sealedRealm, err := sealedStore.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm sealed store: %v", err)
+	}
+	got, ok, err := sealedRealm.GetTradingConnection(ctx, connection.ExternalID)
+	if err != nil || !ok {
+		t.Fatalf("GetTradingConnection: ok=%v err=%v", ok, err)
+	}
+	if got.Credentials != credentials {
+		t.Fatal("sealed trading credentials did not round trip")
 	}
 }
 
