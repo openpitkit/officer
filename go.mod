@@ -4,7 +4,7 @@ go 1.25.11
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/go-chi/chi/v5 v5.2.1
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v0.2.0
 	github.com/scmhub/ibapi v0.10.44
