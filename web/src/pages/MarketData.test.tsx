@@ -81,6 +81,11 @@ function renderMarketDataPage() {
         deleteMarketDataInstance: deleteInstanceMock,
         deleteMarketDataInstrument: deleteInstrumentMock,
         fetchMarketData: fetchMarketDataMock,
+        fetchTrading: vi.fn().mockResolvedValue({
+          providers: [],
+          connections: [],
+          credentialsSealed: true,
+        }),
         searchMarketDataSymbols: searchMock,
         updateMarketDataInstanceSettings: updateSettingsMock,
         upsertMarketDataInstrument: upsertMock,

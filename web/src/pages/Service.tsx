@@ -33,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import type {
@@ -54,6 +54,7 @@ import {
   StaleState,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
+import { useUnencryptedSensitiveData } from "@/components/SensitiveDataBanner";
 import { StatRow } from "@/components/StatRow";
 import { StatusDot } from "@/components/StatusDot";
 import { Badge } from "@/components/ui/badge";
@@ -119,6 +120,7 @@ const backupSections: BackupSection[] = [
   "general_settings",
   "user_settings",
   "activity_history",
+  "trading",
   "audit_log",
 ];
 
@@ -134,6 +136,12 @@ const accountScopedSections = new Set<BackupSection>([
   "activity_history",
   "audit_log",
 ]);
+
+const tradingSections: BackupSection[] = [
+  "accounts_groups",
+  "activity_history",
+  "trading",
+];
 
 const serviceTabIDs = serviceTabs.map(({ id }) => id);
 const backupWorkflowTabIDs = backupWorkflowTabs.map(({ id }) => id);
@@ -335,6 +343,7 @@ export function BackupCard() {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
   const { exportBackup, restoreBackup } = useOfficerApi();
+  const { unencrypted, trading: tradingLoad } = useUnencryptedSensitiveData();
   const [workflow, setWorkflow] = useState<BackupWorkflow>("export");
   const [all, setAll] = useState(true);
   const [sections, setSections] = useState<BackupSection[]>(backupSections);
@@ -351,6 +360,12 @@ export function BackupCard() {
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<BackupRestoreSummary | null>(null);
   const [downloaded, setDownloaded] = useState("");
+  const tradingSelected = all || sections.includes("trading");
+  const exportAllAccounts =
+    workflow === "export" &&
+    tradingSelected &&
+    tradingLoad.state === "ready" &&
+    tradingLoad.data.connections.length > 0;
 
   const resetScopeControls = () => {
     setAll(true);
@@ -365,10 +380,20 @@ export function BackupCard() {
   };
 
   const toggleSection = (section: BackupSection) => {
+    const coupled = section === "trading" || section === "activity_history";
+    const added = coupled ? tradingSections : [section];
+    const removed =
+      section === "accounts_groups"
+        ? tradingSections
+        : coupled
+          ? ["trading", "activity_history"]
+          : [section];
     setSections((current) =>
       current.includes(section)
-        ? current.filter((item) => item !== section)
-        : [...current, section],
+        ? current.filter((item) => !removed.includes(item))
+        : backupSections.filter(
+            (item) => current.includes(item) || added.includes(item),
+          ),
     );
   };
 
@@ -379,7 +404,9 @@ export function BackupCard() {
     }
     out.sections = sections;
     if (sections.some((section) => accountScopedSections.has(section))) {
-      out.accounts = selectorScope(accountAll, accountIDs, accountGroups);
+      out.accounts = exportAllAccounts
+        ? { all: true }
+        : selectorScope(accountAll, accountIDs, accountGroups);
     }
     if (sections.includes("positions")) {
       out.positions = selectorScope(
@@ -444,6 +471,7 @@ export function BackupCard() {
       all={all}
       setAll={setAll}
       sections={sections}
+      exportAllAccounts={exportAllAccounts}
       toggleSection={toggleSection}
       accountAll={accountAll}
       setAccountAll={setAccountAll}
@@ -520,6 +548,24 @@ export function BackupCard() {
                 />
                 {t("backup.zip")}
               </label>
+              {unencrypted && tradingSelected && (
+                <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-xs text-[var(--danger)]">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <div>
+                      <p>{t("backup.unencryptedWarning")}</p>
+                      <a
+                        href="https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        {tc("sensitiveData.masterKeyLink")}
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
               <Button
                 type="button"
                 size="sm"
@@ -621,6 +667,24 @@ export function BackupCard() {
                 })}
               </p>
             ) : null}
+            {summary.tradingCredentialsUnavailable?.length ? (
+              <p className="text-xs text-[var(--danger)]">
+                <Trans
+                  t={t}
+                  i18nKey="backup.tradingCredentialsUnavailable"
+                  components={{
+                    connections: (
+                      <span>
+                        {summary.tradingCredentialsUnavailable.join(", ")}
+                      </span>
+                    ),
+                    tradingLink: (
+                      <Link to="/trading-connections" className="underline" />
+                    ),
+                  }}
+                />
+              </p>
+            ) : null}
           </>
         )}
       </CardContent>
@@ -632,6 +696,7 @@ function BackupScopeControls(props: {
   all: boolean;
   setAll: (value: boolean) => void;
   sections: BackupSection[];
+  exportAllAccounts: boolean;
   toggleSection: (section: BackupSection) => void;
   accountAll: boolean;
   setAccountAll: (value: boolean) => void;
@@ -685,15 +750,18 @@ function BackupScopeControls(props: {
         ))}
       </div>
 
+      <p className="text-xs text-muted-lt">{t("backup.tradingSectionsHint")}</p>
+
       <div className="grid gap-3 md:grid-cols-2">
         <SelectorBox
           title={t("backup.accounts.title")}
           allLabel={t("backup.accounts.all")}
-          all={props.accountAll}
+          all={props.exportAllAccounts || props.accountAll}
+          disabled={props.exportAllAccounts}
           setAll={props.setAccountAll}
-          accounts={props.accountIDs}
+          accounts={props.exportAllAccounts ? "" : props.accountIDs}
           setAccounts={props.setAccountIDs}
-          groups={props.accountGroups}
+          groups={props.exportAllAccounts ? "" : props.accountGroups}
           setGroups={props.setAccountGroups}
           accountsPlaceholder={t("backup.accountsPlaceholder")}
           groupsPlaceholder={t("backup.groupsPlaceholder")}
@@ -711,6 +779,11 @@ function BackupScopeControls(props: {
           groupsPlaceholder={t("backup.positionsGroupsPlaceholder")}
         />
       </div>
+      {props.exportAllAccounts && (
+        <p className="text-xs text-muted-lt">
+          {t("backup.tradingAccountsHint")}
+        </p>
+      )}
     </div>
   );
 }
@@ -719,6 +792,7 @@ function SelectorBox(props: {
   title: string;
   allLabel: string;
   all: boolean;
+  disabled?: boolean;
   setAll: (value: boolean) => void;
   accounts: string;
   setAccounts: (value: string) => void;
@@ -734,6 +808,7 @@ function SelectorBox(props: {
         <input
           type="checkbox"
           checked={props.all}
+          disabled={props.disabled}
           onChange={(event) => props.setAll(event.target.checked)}
         />
         {props.allLabel}

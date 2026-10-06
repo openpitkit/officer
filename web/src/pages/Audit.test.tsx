@@ -42,6 +42,17 @@ vi.mock("@/api/useMarketData", () => ({
     reload: () => {},
   }),
 }));
+// SensitiveDataBanner polls GET /trading.
+vi.mock("@/api/useTrading", () => ({
+  useTrading: () => ({
+    load: {
+      state: "ready",
+      data: { providers: [], connections: [], credentialsSealed: true },
+      error: null,
+    },
+    reload: () => {},
+  }),
+}));
 import { useAuditActions, useAuditPage } from "@/api/useAudit";
 
 const useAuditPageMock = vi.mocked(useAuditPage);

@@ -51,6 +51,17 @@ vi.mock("@/api/useMarketData", () => ({
     reload: () => {},
   }),
 }));
+// SensitiveDataBanner polls GET /trading.
+vi.mock("@/api/useTrading", () => ({
+  useTrading: () => ({
+    load: {
+      state: "ready",
+      data: { providers: [], connections: [], credentialsSealed: true },
+      error: null,
+    },
+    reload: () => {},
+  }),
+}));
 const useSigningKeysMock = vi.mocked(useSigningKeys);
 const exportPublicKeyMock = vi.fn();
 const generateSigningKeyMock = vi.fn();

@@ -75,6 +75,10 @@
     "noCommands": "未定义命令。"
   },
   "backup": {
+    "unencryptedWarning": "此备份将包含未加密的敏感数据：交易连接的 API 密钥在未配置主密钥的情况下存储，并以明文形式写入归档。请妥善保管文件，或先设置主密钥。",
+    "tradingSectionsHint": "交易连接包含账户和分组、订单和成交；订单和成交包含交易连接。",
+    "tradingAccountsHint": "交易数据将针对所有账户导出和恢复。",
+    "tradingCredentialsUnavailable": "无法恢复 <connections/> 的 API 密钥。这些交易连接已恢复为禁用状态：请在<tradingLink>交易连接</tradingLink>中重新输入密钥。",
     "title": "数据库备份",
     "tabs": {
       "ariaLabel": "备份流程",
@@ -96,6 +100,7 @@
     "restoreScopeWarningTitle": "只会影响选定分区。",
     "restoreScopeWarning": "恢复模式只应用于上面选择的数据；除非勾选“所有数据”，否则不会作用于整个数据库。",
     "sections": {
+      "trading": "交易连接",
       "accounts_groups": "账户和分组",
       "positions": "持仓",
       "risk_limits": "风险限制",

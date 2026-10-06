@@ -21,6 +21,7 @@ import {
   BadgeDollarSign,
   BriefcaseBusiness,
   ClipboardList,
+  Cable,
   Database,
   Info,
   KeyRound,
@@ -56,6 +57,7 @@ import { Orders } from "@/pages/Orders";
 import { Positions } from "@/pages/Positions";
 import { Service } from "@/pages/Service";
 import { SigningKeys } from "@/pages/SigningKeys";
+import { TradingConnections } from "@/pages/TradingConnections";
 import {
   ActivityColumns,
   AuditStrip,
@@ -72,6 +74,7 @@ const appRouteComponents = {
   positions: Positions,
   orders: Orders,
   "market-data": MarketData,
+  "trading-connections": TradingConnections,
   audit: Audit,
   "mcp-access": McpAccess,
   "signing-keys": SigningKeys,
@@ -90,8 +93,8 @@ export function registerOfficerDefaults(): void {
   registerAppVocabulary();
 
   // Route ids: dashboard, accounts, policies, limits-redirect, positions,
-  // orders, trading-redirect, market-data, audit, mcp-access, signing-keys,
-  // service.
+  // orders, trading-redirect, market-data, trading-connections, audit,
+  // mcp-access, signing-keys, service.
   for (const route of appRoutes) {
     if ("redirectTo" in route) {
       registerRoute(route);
@@ -104,8 +107,8 @@ export function registerOfficerDefaults(): void {
   }
 
   // Nav ids: dashboard, accounts, positions, orders, policies,
-  // restart-required, audit, mcp-access, signing-keys, market-data, service,
-  // non-release, about.
+  // restart-required, audit, mcp-access, signing-keys, market-data,
+  // trading-connections, service, non-release, about.
   registerNav({
     id: "dashboard",
     to: "/",
@@ -195,6 +198,14 @@ export function registerOfficerDefaults(): void {
     icon: Database,
     section: "footer",
     order: 40,
+  });
+  registerNav({
+    id: "trading-connections",
+    to: "/trading-connections",
+    labelKey: "nav.tradingConnections",
+    icon: Cable,
+    section: "footer",
+    order: 45,
   });
   registerNav({
     id: "service",

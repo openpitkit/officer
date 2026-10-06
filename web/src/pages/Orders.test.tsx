@@ -36,9 +36,11 @@ import type {
   OrderEvent,
   OrderListFilters,
   Trade,
+  TradingDestination,
+  VenueOrder,
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
-import { ApiError } from "@/framework";
+import { ApiError, type ApiErrorCode } from "@/framework";
 import { badgeVariants } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { SidebarProvider } from "@/components/SidebarContext";
@@ -46,6 +48,8 @@ import i18n from "@/i18n";
 import { Orders } from "@/pages/Orders";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
+import { setGlobalAccountFilter } from "@/lib/globalAccountFilter";
+import { DEFAULT_SEARCH_DEBOUNCE_MS } from "@/lib/useDebounce";
 
 // Replace the polling hooks with ready-empty stubs and the one-shot account
 // fetch so the page renders without any network traffic.
@@ -58,6 +62,44 @@ vi.mock("@/api/useBalances", () => ({ useBalances: vi.fn() }));
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
     load: { state: "ready", data: { restartRequired: false }, error: null },
+    reload: () => {},
+  }),
+}));
+// SensitiveDataBanner polls GET /trading.
+vi.mock("@/api/useTrading", () => ({
+  useTrading: () => ({
+    load: {
+      state: "ready",
+      data: {
+        providers: [
+          {
+            type: "alpaca",
+            title: "Alpaca",
+            venueAccounts: true,
+            verifiesSymbols: true,
+            searchesSymbols: true,
+            unlinkedFees: true,
+          },
+        ],
+        connections: [
+          {
+            id: "alpaca-paper",
+            provider: "alpaca",
+            label: "Primary Alpaca",
+            mode: "paper",
+            enabled: true,
+            venueIdentity: "PA-1",
+            state: "running",
+            secrets: { apiKey: true, apiSecret: true },
+            instruments: [],
+            access: [],
+            feeAccount: "",
+          },
+        ],
+        credentialsSealed: true,
+      },
+      error: null,
+    },
     reload: () => {},
   }),
 }));
@@ -144,12 +186,14 @@ const createOrderMock = vi.fn();
 const exportBusinessCsvMock = vi.fn();
 const fetchAccountsMock = vi.fn();
 const fetchAssetsMock = vi.fn();
+const fetchTradingDestinationsMock = vi.fn();
 const fetchOrderDetailMock = vi.fn();
 const fetchEventReproductionMock = vi.fn();
 const fetchPublicKeyByIdMock = vi.fn();
 const submitExecutionReportMock = vi.fn();
 const confirmOrderMock = vi.fn();
 const cancelOrderMock = vi.fn();
+const sendPaperOrderMock = vi.fn();
 
 const proto = window.HTMLElement.prototype as HTMLElement & {
   hasPointerCapture?: (pointerId: number) => boolean;
@@ -178,6 +222,44 @@ const sampleOrder: Order = {
   signed: false,
 };
 
+const alpacaDestination: TradingDestination = {
+  connection: "alpaca-paper",
+  label: "Primary Alpaca",
+  provider: "alpaca",
+  mode: "paper",
+  enabled: true,
+  venueAccount: "PA-1",
+  state: "running",
+};
+
+const linkedVenueOrder: VenueOrder = {
+  connection: "alpaca-paper",
+  venueAccount: "PA-1",
+  route: { timeInForce: "day" },
+  clientOrderId: sampleOrder.id,
+  venueOrderId: "venue-123",
+  sendAttempted: true,
+  createdAt: "2026-06-24T00:01:00Z",
+};
+
+function removeStoredPreference(key: string) {
+  try {
+    window.localStorage?.removeItem(key);
+  } catch {
+    // Test environments may expose no localStorage; the app falls back to cookies.
+  }
+  document.cookie = `${encodeURIComponent(key)}=; Max-Age=0; Path=/; SameSite=Lax`;
+}
+
+function setStoredPreference(key: string, value: string) {
+  try {
+    window.localStorage?.setItem(key, value);
+  } catch {
+    // Keep the cookie mirror in sync with the production storage fallback.
+  }
+  document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)}; Path=/; SameSite=Lax`;
+}
+
 function renderOrders(initialEntry: string) {
   render(
     <I18nextProvider i18n={i18n}>
@@ -201,12 +283,14 @@ function renderOrders(initialEntry: string) {
         exportBusinessCsv: exportBusinessCsvMock,
         fetchAccounts: fetchAccountsMock,
         fetchAssets: fetchAssetsMock,
+        fetchTradingDestinations: fetchTradingDestinationsMock,
         fetchOrderDetail: fetchOrderDetailMock,
         fetchEventReproduction: fetchEventReproductionMock,
         fetchPublicKeyById: fetchPublicKeyByIdMock,
         submitExecutionReport: submitExecutionReportMock,
         confirmOrder: confirmOrderMock,
         cancelOrder: cancelOrderMock,
+        sendPaperOrder: sendPaperOrderMock,
       },
     },
   );
@@ -218,8 +302,12 @@ beforeEach(async () => {
   useOrdersMock.mockReturnValue(readyPage<Order>([]));
   useTradesMock.mockReturnValue(readyPage<Trade>([]));
   useBalancesMock.mockReturnValue(readyEmpty<Balance[]>([]));
+  setGlobalAccountFilter("");
+  removeStoredPreference("pit-officer-orders-send-to-venue");
+  removeStoredPreference("pit-officer-orders-venue-mode");
   fetchAccountsMock.mockResolvedValue([]);
   fetchAssetsMock.mockResolvedValue([]);
+  fetchTradingDestinationsMock.mockResolvedValue([]);
   checkOrderMock.mockResolvedValue({
     passed: true,
     rejects: [],
@@ -259,6 +347,17 @@ beforeEach(async () => {
     signedAttestation: "",
     attestationKeyId: "",
     signed: false,
+  });
+  sendPaperOrderMock.mockResolvedValue({
+    signedApproval: "paper-envelope",
+    keyId: "key-1",
+    id: sampleOrder.id,
+    verdict: "accept",
+    reasons: [],
+    venueSend: {
+      status: "acknowledged",
+      venueOrder: linkedVenueOrder,
+    },
   });
   fetchOrderDetailMock.mockResolvedValue({
     order: sampleOrder,
@@ -429,6 +528,49 @@ describe("Orders account pre-fill", () => {
 async function openDialog(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getAllByRole("button", { name: /add order/i })[0]);
   return screen.findByRole("dialog");
+}
+
+async function fillOrderFields(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+) {
+  await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+  await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+  await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+  await user.click(within(dialog).getByRole("radio", { name: "Buy" }));
+  await user.click(
+    within(dialog).getByRole("radio", { name: "Quantity (base)" }),
+  );
+  await user.type(within(dialog).getByLabelText("Amount"), "10");
+}
+
+async function enablePaperSending(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+) {
+  await user.click(
+    within(dialog).getByRole("checkbox", { name: "Send to venue" }),
+  );
+  await user.click(within(dialog).getByRole("radio", { name: "Paper" }));
+}
+
+async function chooseTimeInForce(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  option: string,
+) {
+  const focusSpy = vi
+    .spyOn(HTMLElement.prototype, "focus")
+    .mockImplementation(() => {});
+  try {
+    const select = await within(dialog).findByRole("combobox", {
+      name: "Time in force",
+    });
+    await user.click(select);
+    await user.click(await screen.findByRole("option", { name: option }));
+  } finally {
+    focusSpy.mockRestore();
+  }
 }
 
 describe("Orders status filter", () => {
@@ -2854,5 +2996,1139 @@ describe("Orders verify envelope toolbar", () => {
     expect(
       screen.queryByRole("tab", { name: "Reproduction" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("Orders venue sending", () => {
+  it("keeps the existing submit request unchanged while sending is off", async () => {
+    const user = userEvent.setup();
+    createOrderMock.mockRejectedValue(
+      new ApiError("Request inspected", "validation", 400),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await user.click(
+      within(dialog).getByRole("radio", { name: /Submit and wait/ }),
+    );
+
+    await user.click(within(dialog).getByRole("button", { name: "Add Order" }));
+
+    await waitFor(() =>
+      expect(createOrderMock).toHaveBeenCalledWith(
+        {
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "10",
+          mode: "hold",
+        },
+        "reject",
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      await within(dialog).findByText("Request inspected"),
+    ).toBeInTheDocument();
+    expect(sendPaperOrderMock).not.toHaveBeenCalled();
+  });
+
+  it("starts with no venue mode when no preference is stored", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Send to venue" }),
+    );
+
+    expect(
+      within(dialog).getByRole("radio", { name: "Paper" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(within(dialog).getByRole("radio", { name: "Live" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+  });
+
+  it("persists sending and mode across close, reopen, and a successful send", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    renderOrders("/orders");
+    let dialog = await openDialog(user);
+
+    await enablePaperSending(user, dialog);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    dialog = await openDialog(user);
+
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Send to venue" }),
+    ).toBeChecked();
+    expect(
+      within(dialog).getByRole("radio", { name: "Paper" }),
+    ).toHaveAttribute("aria-checked", "true");
+
+    await fillOrderFields(user, dialog);
+    await waitFor(() =>
+      expect(fetchTradingDestinationsMock).toHaveBeenCalledWith(
+        "desk-alpha",
+        "paper",
+        expect.any(AbortSignal),
+      ),
+    );
+    await within(dialog).findByRole("radio", {
+      name: /Primary Alpaca.*Alpaca.*PA-1/,
+    });
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    );
+
+    const detail = await screen.findByRole("dialog", {
+      name: "Order ord-alpha-1",
+    });
+    await within(detail).findByText("Account");
+    await user.click(
+      within(detail).getAllByRole("button", { name: "Close" })[0],
+    );
+    dialog = await openDialog(user);
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Send to venue" }),
+    ).toBeChecked();
+    expect(
+      within(dialog).getByRole("radio", { name: "Paper" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("starts a cloned order with no inherited target or TIF", async () => {
+    const user = userEvent.setup();
+    let resolveCloneDestinations!: (destinations: TradingDestination[]) => void;
+    fetchTradingDestinationsMock
+      .mockResolvedValueOnce([alpacaDestination])
+      .mockImplementationOnce(
+        () =>
+          new Promise<TradingDestination[]>((resolve) => {
+            resolveCloneDestinations = resolve;
+          }),
+      );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    await chooseTimeInForce(user, dialog, "GTC - Good till cancelled");
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    );
+
+    const detail = await screen.findByRole("dialog", {
+      name: `Order ${sampleOrder.id}`,
+    });
+    await act(async () => {
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, DEFAULT_SEARCH_DEBOUNCE_MS + 50),
+      );
+    });
+    await user.click(
+      await within(detail).findByRole("button", {
+        name: `Clone order ${sampleOrder.id}`,
+      }),
+    );
+
+    const clone = await screen.findByRole("dialog", { name: "Add order" });
+    expect(within(clone).getByLabelText("Account")).toHaveValue("desk-alpha");
+    expect(
+      within(clone).queryByRole("combobox", { name: "Time in force" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(clone).getByRole("button", { name: "Send to venue" }),
+    ).toBeDisabled();
+
+    await waitFor(() =>
+      expect(fetchTradingDestinationsMock).toHaveBeenCalledTimes(2),
+    );
+    await act(async () => {
+      resolveCloneDestinations([alpacaDestination]);
+      await Promise.resolve();
+    });
+
+    expect(
+      await within(clone).findByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      within(clone).getByRole("combobox", { name: "Time in force" }),
+    ).toHaveTextContent("Choose time in force");
+    expect(
+      within(clone).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    ).toBeDisabled();
+  });
+
+  it("fetches destinations and preselects the only selectable target", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+
+    await waitFor(() =>
+      expect(fetchTradingDestinationsMock).toHaveBeenCalledWith(
+        "desk-alpha",
+        "paper",
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      await within(dialog).findByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    const timeInForce = within(dialog).getByRole("combobox", {
+      name: "Time in force",
+    });
+    expect(timeInForce).toHaveTextContent("Choose time in force");
+    expect(timeInForce).toBeRequired();
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    ).toBeDisabled();
+
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    ).toBeEnabled();
+  });
+
+  it("keeps current targets when the selected mode is chosen again", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+
+    expect(
+      await within(dialog).findByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("radio", { name: "Paper" }));
+
+    expect(
+      within(dialog).getByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).toBeInTheDocument();
+    expect(fetchTradingDestinationsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps current targets when the exact account suggestion is picked", async () => {
+    const user = userEvent.setup();
+    fetchAccountsMock.mockResolvedValue([{ code: "desk-alpha" }]);
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await enablePaperSending(user, dialog);
+    expect(
+      await within(dialog).findByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).toBeInTheDocument();
+
+    await user.click(within(dialog).getByLabelText("Account"));
+    await user.click(
+      await within(dialog).findByRole("option", { name: "desk-alpha" }),
+    );
+
+    expect(
+      within(dialog).getByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).toBeInTheDocument();
+    expect(fetchTradingDestinationsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches targets on reopen with a pre-filled account and stored preferences", async () => {
+    const user = userEvent.setup();
+    setStoredPreference("pit-officer-orders-send-to-venue", "true");
+    setStoredPreference("pit-officer-orders-venue-mode", "paper");
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    renderOrders("/orders?account=desk-alpha");
+
+    let dialog = await openDialog(user);
+    expect(
+      await within(dialog).findByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    dialog = await openDialog(user);
+    expect(
+      await within(dialog).findByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).toBeInTheDocument();
+    expect(fetchTradingDestinationsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send to the previous account target during the debounce", async () => {
+    const user = userEvent.setup();
+    let resolveAlpha!: (destinations: TradingDestination[]) => void;
+    let resolveBeta!: (destinations: TradingDestination[]) => void;
+    fetchTradingDestinationsMock.mockImplementation(
+      (account: string) =>
+        new Promise<TradingDestination[]>((resolve) => {
+          if (account === "desk-alpha") {
+            resolveAlpha = resolve;
+          } else {
+            resolveBeta = resolve;
+          }
+        }),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    await waitFor(() =>
+      expect(fetchTradingDestinationsMock).toHaveBeenCalledWith(
+        "desk-alpha",
+        "paper",
+        expect.any(AbortSignal),
+      ),
+    );
+
+    const account = within(dialog).getByLabelText("Account");
+    fireEvent.change(account, { target: { value: "desk-beta" } });
+    await act(async () => {
+      resolveAlpha([alpacaDestination]);
+      await Promise.resolve();
+    });
+
+    expect(
+      within(dialog).queryByRole("radio", {
+        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Time in force" }),
+    ).not.toBeInTheDocument();
+    const send = within(dialog).getByRole("button", { name: "Send to venue" });
+    expect(send).toBeDisabled();
+    await user.click(send);
+    expect(sendPaperOrderMock).not.toHaveBeenCalled();
+
+    await waitFor(() =>
+      expect(fetchTradingDestinationsMock).toHaveBeenCalledWith(
+        "desk-beta",
+        "paper",
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Time in force" }),
+    ).not.toBeInTheDocument();
+    await act(async () => {
+      resolveBeta([
+        {
+          ...alpacaDestination,
+          connection: "alpaca-beta",
+          label: "Beta Alpaca",
+          venueAccount: "PB-1",
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(
+      await within(dialog).findByRole("radio", {
+        name: /Beta Alpaca.*Alpaca.*PB-1/,
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      within(dialog).getByRole("combobox", { name: "Time in force" }),
+    ).toHaveTextContent("Choose time in force");
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    ).toBeDisabled();
+  });
+
+  it("requires an explicit choice when several targets are selectable", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([
+      alpacaDestination,
+      {
+        ...alpacaDestination,
+        connection: "alpaca-secondary",
+        label: "Secondary Alpaca",
+        venueAccount: "PA-2",
+      },
+    ]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+
+    const primary = await within(dialog).findByRole("radio", {
+      name: /Primary Alpaca.*PA-1/,
+    });
+    const secondary = within(dialog).getByRole("radio", {
+      name: /Secondary Alpaca.*PA-2/,
+    });
+    expect(primary).toHaveAttribute("aria-checked", "false");
+    expect(secondary).toHaveAttribute("aria-checked", "false");
+    expect(
+      within(dialog).getByRole("button", { name: "Send to venue" }),
+    ).toBeDisabled();
+
+    await user.click(secondary);
+    await chooseTimeInForce(user, dialog, "GTC - Good till cancelled");
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    ).toBeEnabled();
+  });
+
+  it("does not allow disabled or unavailable destinations", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([
+      { ...alpacaDestination, enabled: false, label: "Disabled Alpaca" },
+      {
+        ...alpacaDestination,
+        connection: "alpaca-unavailable",
+        label: "Unavailable Alpaca",
+        state: "unavailable",
+        error: "Invalid API key",
+      },
+    ]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+
+    expect(
+      await within(dialog).findByRole("radio", {
+        name: /Disabled Alpaca.*Disabled/,
+      }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("radio", {
+        name: /Unavailable Alpaca.*Unavailable: Invalid API key/,
+      }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByText("No paper targets for account desk-alpha."),
+    ).toBeInTheDocument();
+  });
+
+  it("explains missing paper and live targets and links to setup", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await enablePaperSending(user, dialog);
+
+    expect(
+      await within(dialog).findByText(
+        "No paper targets for account desk-alpha.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("link", {
+        name: "Set up a trading connection",
+      }),
+    ).toHaveAttribute("href", "/trading-connections");
+
+    await user.click(within(dialog).getByRole("radio", { name: "Live" }));
+    expect(
+      within(dialog).getByText(
+        "Live trading is not available yet: it arrives together with the live connection token.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      await within(dialog).findByText(
+        "No live targets for account desk-alpha.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a destination fetch error instead of a no-target explanation", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockRejectedValue(
+      new ApiError("Destination lookup failed", "upstream", 502),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await enablePaperSending(user, dialog);
+
+    expect(
+      await within(dialog).findByText("Destination lookup failed"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(/No paper targets/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("disables and clears quote volume when venue sending turns on", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    const volume = within(dialog).getByRole("radio", {
+      name: "Volume (quote)",
+    });
+    const quantity = within(dialog).getByRole("radio", {
+      name: "Quantity (base)",
+    });
+    await user.click(volume);
+    expect(volume).toHaveAttribute("aria-checked", "true");
+
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Send to venue" }),
+    );
+
+    expect(volume).toBeDisabled();
+    expect(volume).toHaveAttribute("aria-checked", "false");
+    expect(quantity).toHaveAttribute("aria-checked", "false");
+    expect(
+      within(dialog).getByText("Orders are sent to the venue by quantity."),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("radiogroup", { name: "Submit mode" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ignores the hidden drop-copy price rules while sending to a venue", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await user.click(within(dialog).getByRole("radio", { name: /Drop copy/ }));
+    expect(
+      within(dialog).getByLabelText("Limit price (required for drop-copy)"),
+    ).toBeInTheDocument();
+
+    await enablePaperSending(user, dialog);
+    await within(dialog).findByRole("radio", {
+      name: /Primary Alpaca.*Alpaca.*PA-1/,
+    });
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+
+    expect(
+      within(dialog).getByLabelText("Limit price (optional)"),
+    ).toHaveAttribute("placeholder", "leave empty = market");
+    expect(
+      within(dialog).queryByText(
+        "Market orders cannot be submitted as drop-copy.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    ).toBeEnabled();
+  });
+
+  it("sends the exact paper-order body with the selected TIF", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    sendPaperOrderMock.mockRejectedValue(
+      new ApiError("Request inspected", "upstream", 502),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText("ID (optional)"), "client-9");
+    await fillOrderFields(user, dialog);
+    await user.type(
+      within(dialog).getByLabelText("Limit price (optional)"),
+      "42.5",
+    );
+    await enablePaperSending(user, dialog);
+    await chooseTimeInForce(user, dialog, "IOC - Immediate or cancel");
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(sendPaperOrderMock).toHaveBeenCalledWith(
+        {
+          id: "client-9",
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "10",
+          price: "42.5",
+          destination: {
+            connection: "alpaca-paper",
+            venueAccount: "PA-1",
+            route: { timeInForce: "ioc" },
+          },
+        },
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      await within(dialog).findByText("Request inspected"),
+    ).toBeInTheDocument();
+    expect(createOrderMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "acknowledged",
+      {
+        status: "acknowledged" as const,
+        venueOrder: linkedVenueOrder,
+      },
+      "Sent to Alpaca · paper. Venue order venue-123.",
+      "border-[var(--ok)]",
+    ],
+    [
+      "venue-refused",
+      {
+        status: "refused" as const,
+        error: "Buying power exceeded",
+        venueOrder: { ...linkedVenueOrder, venueOrderId: undefined },
+      },
+      "The order was not placed on Alpaca: Buying power exceeded. Officer recorded it as cancelled.",
+      "border-[var(--danger)]",
+    ],
+    [
+      "not-sent refused",
+      {
+        status: "refused" as const,
+        error: "order was not handed to the venue",
+      },
+      "The order was not placed on Alpaca: order was not handed to the venue. Officer recorded it as cancelled.",
+      "border-[var(--danger)]",
+    ],
+    [
+      "unknown",
+      { status: "unknown" as const, error: "Request timed out" },
+      "The venue did not confirm the order: Request timed out. Officer is reconciling it; the order status below is authoritative.",
+      "border-[var(--warn)]",
+    ],
+    [
+      "pre-trade reject",
+      undefined,
+      "Pre-trade checks rejected the order. Nothing was sent to the venue.",
+      "border-[var(--danger)]",
+    ],
+  ])(
+    "opens detail with the %s venue outcome banner",
+    async (_, venueSend, text, toneClass) => {
+      const user = userEvent.setup();
+      fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+      sendPaperOrderMock.mockResolvedValue({
+        signedApproval: "paper-envelope",
+        keyId: "key-1",
+        id: sampleOrder.id,
+        verdict: venueSend ? "accept" : "reject",
+        reasons: [],
+        ...(venueSend ? { venueSend } : {}),
+      });
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFields(user, dialog);
+      await enablePaperSending(user, dialog);
+      await chooseTimeInForce(user, dialog, "DAY - Day");
+
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: "Send to Alpaca · paper",
+        }),
+      );
+
+      const banner = await screen.findByText(text);
+      expect(banner).toHaveClass(toneClass);
+      const detail = screen.getByRole("dialog", {
+        name: `Order ${sampleOrder.id}`,
+      });
+      await within(detail).findByText("Account");
+    },
+  );
+
+  it.each([
+    ["trading_mode_mismatch", 409],
+    ["precondition", 422],
+    ["upstream", 502],
+  ])("keeps the form after a %s send error", async (code, status) => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    sendPaperOrderMock.mockRejectedValue(
+      new ApiError("Server kept this order out", code as ApiErrorCode, status),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    );
+
+    expect(
+      await within(dialog).findByText("Server kept this order out"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Account")).toHaveValue("desk-alpha");
+    expect(sendPaperOrderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["connection reset", "connection reset.", "connection reset。"])(
+    "warns after a network error (%s) without doubling the stop and never retries the send",
+    async (message) => {
+      const user = userEvent.setup();
+      fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+      sendPaperOrderMock.mockRejectedValue(new ApiError(message, "network"));
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFields(user, dialog);
+      await enablePaperSending(user, dialog);
+      await chooseTimeInForce(user, dialog, "DAY - Day");
+
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: "Send to Alpaca · paper",
+        }),
+      );
+
+      expect(
+        await within(dialog).findByText(
+          "The send request did not complete: connection reset. Check Orders before sending again - the order may already exist.",
+        ),
+      ).toBeInTheDocument();
+      expect(sendPaperOrderMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    [
+      "an unreadable successful response",
+      new ApiError("response body is not valid JSON.", "internal", 201),
+      "response body is not valid JSON",
+    ],
+    [
+      "a venue-send normalization failure",
+      new ApiError("venue send payload is invalid。", "internal"),
+      "venue send payload is invalid",
+    ],
+    [
+      "a body-less gateway timeout",
+      new ApiError("Gateway Timeout", "internal", 504),
+      "HTTP 504",
+    ],
+    [
+      "an internal server error",
+      new ApiError("Officer internal error", "internal", 500),
+      "HTTP 500",
+    ],
+    [
+      "a body-less service unavailable response",
+      new ApiError(
+        "The risk engine is restarting; retry after it finishes.",
+        "engine_restarting",
+        503,
+      ),
+      "HTTP 503",
+    ],
+  ])("warns after %s and never retries", async (_, sendError, message) => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    sendPaperOrderMock.mockRejectedValue(sendError);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Send to Alpaca · paper",
+      }),
+    );
+
+    expect(
+      await within(dialog).findByText(
+        `The send request did not complete: ${message}. Check Orders before sending again - the order may already exist.`,
+      ),
+    ).toBeInTheDocument();
+    expect(sendPaperOrderMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+async function openSampleOrderDetail(
+  user: ReturnType<typeof userEvent.setup>,
+  detail: {
+    order: Order;
+    events: OrderEvent[];
+    trades: Trade[];
+    venueOrder?: VenueOrder;
+  },
+) {
+  useOrdersMock.mockReturnValue(readyPage<Order>([detail.order]));
+  fetchOrderDetailMock.mockResolvedValue(detail);
+  renderOrders("/orders");
+  await user.click(screen.getByText(detail.order.id));
+  return screen.findByRole("dialog", {
+    name: `Order ${detail.order.id}`,
+  });
+}
+
+describe("Order detail venue section", () => {
+  it.each([
+    ["acknowledged", linkedVenueOrder, sampleOrder, "venue-123"],
+    [
+      "awaiting acknowledgement",
+      { ...linkedVenueOrder, venueOrderId: undefined },
+      sampleOrder,
+      "Awaiting venue acknowledgement",
+    ],
+    [
+      "not acknowledged",
+      { ...linkedVenueOrder, venueOrderId: undefined },
+      { ...sampleOrder, status: "cancelled" },
+      "Not acknowledged by the venue",
+    ],
+    [
+      "not sent",
+      {
+        ...linkedVenueOrder,
+        venueOrderId: undefined,
+        sendAttempted: false,
+      },
+      sampleOrder,
+      "Not sent yet",
+    ],
+  ])(
+    "shows the %s venue-order state",
+    async (_, venueOrder, order, expected) => {
+      const user = userEvent.setup();
+      const dialog = await openSampleOrderDetail(user, {
+        order,
+        events: [],
+        trades: [],
+        venueOrder,
+      });
+
+      expect(within(dialog).getByText("Venue")).toBeInTheDocument();
+      expect(within(dialog).getByText("Primary Alpaca")).toBeInTheDocument();
+      expect(within(dialog).getByText("PA-1")).toBeInTheDocument();
+      expect(within(dialog).getByText(expected)).toBeInTheDocument();
+      expect(within(dialog).getByText("DAY")).toBeInTheDocument();
+      expect(within(dialog).getByText("Linked at")).toBeInTheDocument();
+      expect(
+        within(dialog).getByText("No fills from the venue yet."),
+      ).toBeInTheDocument();
+      expect(
+        within(dialog).queryByText(
+          "No fills recorded yet. Submit an execution report to create a trade.",
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ["submitted", "Submitted"],
+    ["accepted", "Accepted"],
+    ["committed", "Open"],
+    ["partially_filled", "Open"],
+    ["filled", "Filled"],
+    ["cancelled", "Cancelled, rejected or expired at the venue"],
+    ["rejected", "Rejected"],
+  ])("maps %s to venue status %s", async (status, expected) => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      order: { ...sampleOrder, status },
+      events: [],
+      trades: [],
+      venueOrder: linkedVenueOrder,
+    });
+
+    const venueStatus = within(dialog).getByText("Venue status").parentElement;
+    expect(venueStatus).toHaveTextContent(expected);
+  });
+
+  it("links venue adjustments when the global account filter allows it", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      order: sampleOrder,
+      events: [],
+      trades: [],
+      venueOrder: linkedVenueOrder,
+    });
+
+    expect(
+      within(dialog).getByText(
+        "Alpaca fees that are not tied to orders are booked later as account adjustments.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("link", { name: "View adjustments" }),
+    ).toHaveAttribute(
+      "href",
+      "/positions?tab=history&account=desk-alpha&source=system",
+    );
+  });
+
+  it("omits the adjustments link for a different global account", async () => {
+    const user = userEvent.setup();
+    setGlobalAccountFilter("desk-other");
+    const dialog = await openSampleOrderDetail(user, {
+      order: sampleOrder,
+      events: [],
+      trades: [],
+      venueOrder: linkedVenueOrder,
+    });
+
+    expect(
+      within(dialog).getByText(
+        "Alpaca fees that are not tied to orders are booked later as account adjustments.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("link", { name: "View adjustments" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses provider-neutral fee copy when the connection is unknown", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      order: sampleOrder,
+      events: [],
+      trades: [],
+      venueOrder: {
+        ...linkedVenueOrder,
+        connection: "missing-connection",
+      },
+    });
+
+    expect(
+      within(dialog).getByText(
+        "Venue fees that are not tied to orders are booked later as account adjustments.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(/missing-connection fees/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides manual execution actions for a venue-linked order", async () => {
+    const user = userEvent.setup();
+    const acceptedEvent: OrderEvent = {
+      id: "evt-accepted",
+      order: sampleOrder.id,
+      at: sampleOrder.at,
+      type: "pre_trade_accepted",
+      source: "panel",
+      principal: "",
+      signed: true,
+      alg: "ed25519",
+    };
+    const fillEvent: OrderEvent = {
+      ...acceptedEvent,
+      id: "evt-fill",
+      type: "fill",
+      fillQuantity: "1",
+      fillPrice: "10",
+    };
+    const trade: Trade = {
+      id: "trade-1",
+      order: sampleOrder.id,
+      account: sampleOrder.account,
+      at: sampleOrder.at,
+      source: "panel",
+      baseAsset: sampleOrder.baseAsset,
+      quoteAsset: sampleOrder.quoteAsset,
+      side: sampleOrder.side,
+      quantity: "1",
+      price: "10",
+      lockPrice: "10",
+    };
+    const dialog = await openSampleOrderDetail(user, {
+      order: sampleOrder,
+      events: [acceptedEvent, fillEvent],
+      trades: [trade],
+      venueOrder: linkedVenueOrder,
+    });
+
+    expect(
+      within(dialog).getByText(
+        "Fills and cancellation of this order come from the venue.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: "Confirm" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: "Cancel order" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", {
+        name: "Submit execution report",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", {
+        name: `Clone execution report from order ${sampleOrder.id}`,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: /clone order/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps manual execution actions for an ordinary order", async () => {
+    const user = userEvent.setup();
+    const acceptedEvent: OrderEvent = {
+      id: "evt-accepted",
+      order: sampleOrder.id,
+      at: sampleOrder.at,
+      type: "pre_trade_accepted",
+      source: "panel",
+      principal: "",
+      signed: true,
+      alg: "ed25519",
+    };
+    const fillEvent: OrderEvent = {
+      ...acceptedEvent,
+      id: "evt-fill",
+      type: "fill",
+      fillQuantity: "1",
+      fillPrice: "10",
+    };
+    const dialog = await openSampleOrderDetail(user, {
+      order: sampleOrder,
+      events: [acceptedEvent, fillEvent],
+      trades: [],
+    });
+
+    expect(
+      within(dialog).getByRole("button", { name: "Confirm" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel order" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Submit execution report",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", {
+        name: `Clone execution report from order ${sampleOrder.id}`,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        "No fills recorded yet. Submit an execution report to create a trade.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the verification panel open when polling refreshes a venue order", async () => {
+    const user = userEvent.setup();
+    const signedEvent: OrderEvent = {
+      id: "evt-signed",
+      order: sampleOrder.id,
+      at: sampleOrder.at,
+      type: "fill",
+      source: "panel",
+      principal: "",
+      fillQuantity: "1",
+      fillPrice: "10",
+      signed: true,
+      alg: "ed25519",
+    };
+    useOrdersMock.mockReturnValue(readyPage<Order>([sampleOrder]));
+    fetchOrderDetailMock
+      .mockResolvedValueOnce({
+        order: sampleOrder,
+        events: [signedEvent],
+        trades: [],
+        venueOrder: linkedVenueOrder,
+      })
+      .mockResolvedValueOnce({
+        order: { ...sampleOrder, status: "filled" },
+        events: [signedEvent],
+        trades: [],
+        venueOrder: linkedVenueOrder,
+      });
+    fetchEventReproductionMock.mockRejectedValue(
+      new Error("Verification fixture intentionally unavailable"),
+    );
+    let poll: (() => void) | undefined;
+    const setIntervalSpy = vi
+      .spyOn(window, "setInterval")
+      .mockImplementationOnce((handler) => {
+        if (typeof handler === "function") {
+          poll = () => handler();
+        }
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      });
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+
+    renderOrders("/orders");
+    await user.click(screen.getByText(sampleOrder.id));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
+
+    const detail = screen.getByRole("dialog", {
+      name: `Order ${sampleOrder.id}`,
+    });
+    await user.click(
+      within(detail).getByRole("button", {
+        name: "Reproduce and verify this event's signature",
+      }),
+    );
+    const verification = await screen.findByRole("dialog", {
+      name: "Reproduce and verify",
+    });
+    expect(poll).toBeDefined();
+
+    await act(async () => {
+      poll?.();
+      await Promise.resolve();
+    });
+
+    expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2);
+    expect(
+      within(detail).queryByText(/Loading order details/),
+    ).not.toBeInTheDocument();
+    expect(within(detail).getByText("Filled")).toBeInTheDocument();
+    expect(verification).toBeInTheDocument();
+    await waitFor(() => expect(clearIntervalSpy).toHaveBeenCalledWith(1));
+
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
   });
 });

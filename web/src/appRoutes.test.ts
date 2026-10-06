@@ -47,6 +47,11 @@ describe("app route manifest", () => {
           target: "/orders",
         },
         { id: "market-data", path: "/market-data", kind: "canonical" },
+        {
+          id: "trading-connections",
+          path: "/trading-connections",
+          kind: "canonical",
+        },
         { id: "audit", path: "/audit", kind: "canonical" },
         { id: "mcp-access", path: "/mcp-access", kind: "canonical" },
         { id: "signing-keys", path: "/signing-keys", kind: "canonical" },

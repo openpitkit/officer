@@ -35,6 +35,16 @@ import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
 vi.mock("@/api/useLimits", () => ({ useLimitsPage: vi.fn() }));
+vi.mock("@/api/useTrading", () => ({
+  useTrading: () => ({
+    load: {
+      state: "ready",
+      data: { providers: [], connections: [], credentialsSealed: true },
+      error: null,
+    },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
     load: { state: "ready", data: { restartRequired: false }, error: null },

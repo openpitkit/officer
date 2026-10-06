@@ -1,0 +1,125 @@
+{
+  "title": "Trading connections",
+  "empty": {
+    "title": "No trading connections",
+    "description": "Configure a trading connection to send orders to a venue."
+  },
+  "missingProvider": "Provider {{provider}} is missing from the trading snapshot.",
+  "mode": {
+    "paper": "Paper",
+    "live": "Live"
+  },
+  "state": {
+    "running": "Running",
+    "unavailable": "Unavailable",
+    "stopped": "Stopped"
+  },
+  "connection": {
+    "venueAccount": "Venue account",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "apiKeyStored": "API key: stored",
+    "apiKeyNotSet": "API key: not set",
+    "apiSecretStored": "API secret: stored",
+    "apiSecretNotSet": "API secret: not set"
+  },
+  "actions": {
+    "addConnection": "Add trading connection",
+    "check": "Check connection",
+    "editSettings": "Edit settings",
+    "enable": "Enable",
+    "disable": "Disable",
+    "save": "Save",
+    "addInstrument": "Add instrument",
+    "addAccount": "Add account",
+    "revoke": "Revoke",
+    "setFeeAccount": "Set fee account"
+  },
+  "create": {
+    "step": "Step {{current}} of 3",
+    "chooseVenue": "Choose venue",
+    "prepareAccount": "Prepare your {{provider}} account",
+    "connectionDetails": "Connection details",
+    "site": "Site",
+    "docs": "Docs",
+    "back": "Back",
+    "next": "Next",
+    "mode": "Mode",
+    "liveNote": "Live trading is not available yet: it arrives together with the live connection token.",
+    "submit": "Create connection",
+    "creating": "Creating…",
+    "alpaca": {
+      "createAccount": "Create an Alpaca account.",
+      "signUp": "Sign up at Alpaca",
+      "logIn": "Log in",
+      "openPaperAccount": "Open your paper trading account: in the Alpaca dashboard, switch the account selector at the top to Paper Trading. Alpaca gives every account a paper account with simulated funds.",
+      "openDashboard": "Open the Alpaca dashboard",
+      "aboutPaperTrading": "About paper trading",
+      "generateKeys": "Generate paper API keys: with Paper Trading selected, find the API Keys panel on the dashboard and click Generate New Key. Copy the API key and the secret - Alpaca shows the secret only once. Paper keys work only for the paper account.",
+      "keepDashboardOpen": "Keep the dashboard open - the next step asks for both values."
+    }
+  },
+  "setup": {
+    "title": "Setup checklist",
+    "goToStep": "Go to step: {{step}}",
+    "done": "Done",
+    "notDone": "Not done"
+  },
+  "check": {
+    "result": "Venue account {{id}} · status {{status}}"
+  },
+  "settings": {
+    "description": "Leave fields blank to keep the stored values.",
+    "label": "Label",
+    "keepStoredSecret": "Keep stored secret"
+  },
+  "unsealed": {
+    "title": "Keys will be stored unencrypted",
+    "description": "Officer runs without a master key, so these API keys are written to its database in plain text. Anyone who can read the database or a backup can trade on this account. Set a master key to store them sealed.",
+    "link": "How to set a master key",
+    "caution": "A lost master key makes the database unopenable - back the key up before you set it."
+  },
+  "instruments": {
+    "title": "Instruments",
+    "empty": "No instruments configured",
+    "externalSymbol": "External symbol",
+    "baseAsset": "Base asset",
+    "quoteAsset": "Quote asset",
+    "deleteTitle": "Delete instrument?",
+    "deleteDescription": "{{symbol}} will be removed from {{label}}."
+  },
+  "table": {
+    "actions": "Actions"
+  },
+  "search": {
+    "label": "Search symbol",
+    "action": "Search",
+    "results": "Symbol matches",
+    "empty": "No matching symbols",
+    "unavailable": "Symbol search unavailable",
+    "notTradable": "Not tradable"
+  },
+  "verify": {
+    "action": "Verify symbol",
+    "tradable": "Symbol exists and is tradable",
+    "notTradable": "Symbol exists but is not tradable",
+    "notFound": "Symbol not found",
+    "unavailable": "Verification unavailable"
+  },
+  "access": {
+    "title": "Account access",
+    "account": "Account",
+    "empty": "No accounts have access",
+    "feeRequired": "Set a fee account first. {{provider}} charges fees that are not tied to orders; with several accounts on one connection Officer needs one account to book them on.",
+    "revokeTitle": "Revoke access?",
+    "revokeDescription": "Revoke access of {{account}} to {{label}}?"
+  },
+  "fee": {
+    "title": "Fee account",
+    "description": "{{provider}} fees are not tied to orders. On a connection shared by several accounts, they are all booked on this account.",
+    "notSet": "Not set",
+    "createAndUse": "Create account {{code}} and use it"
+  }
+}

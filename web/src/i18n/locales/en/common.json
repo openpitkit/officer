@@ -1,4 +1,9 @@
 {
+  "sensitiveData": {
+    "title": "Sensitive data is stored unencrypted",
+    "detail": "Officer runs without a master key: API keys of trading connections are kept in plain text in its database and in backups. Set a master key to store them sealed.",
+    "masterKeyLink": "How to set a master key"
+  },
   "language": {
     "label": "Language",
     "ariaLabel": "Change language"
@@ -345,6 +350,7 @@
     "restartRequired": "Restart needed",
     "mcpAccess": "MCP access",
     "marketData": "Market Data",
+    "tradingConnections": "Trading connections",
     "service": "Service",
     "signingKeys": "Signing Keys"
   },

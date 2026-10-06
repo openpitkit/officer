@@ -1,0 +1,125 @@
+{
+  "title": "交易连接",
+  "empty": {
+    "title": "没有交易连接",
+    "description": "配置交易连接以向交易场所发送订单。"
+  },
+  "missingProvider": "交易连接快照中缺少提供方 {{provider}}。",
+  "mode": {
+    "paper": "模拟交易",
+    "live": "实盘交易"
+  },
+  "state": {
+    "running": "运行中",
+    "unavailable": "不可用",
+    "stopped": "已停止"
+  },
+  "connection": {
+    "venueAccount": "交易场所账户",
+    "enabled": "已启用",
+    "disabled": "已停用",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "apiKeyStored": "API key: 已保存",
+    "apiKeyNotSet": "API key: 未设置",
+    "apiSecretStored": "API secret: 已保存",
+    "apiSecretNotSet": "API secret: 未设置"
+  },
+  "actions": {
+    "addConnection": "添加交易连接",
+    "check": "检查连接",
+    "editSettings": "编辑设置",
+    "enable": "启用",
+    "disable": "停用",
+    "save": "保存",
+    "addInstrument": "添加工具",
+    "addAccount": "添加账户",
+    "revoke": "撤销",
+    "setFeeAccount": "设置手续费账户"
+  },
+  "create": {
+    "step": "第 {{current}} 步，共 3 步",
+    "chooseVenue": "选择交易场所",
+    "prepareAccount": "准备您的 {{provider}} 账户",
+    "connectionDetails": "连接详情",
+    "site": "网站",
+    "docs": "文档",
+    "back": "返回",
+    "next": "下一步",
+    "mode": "模式",
+    "liveNote": "实盘交易暂不可用：它将与实盘连接令牌一同提供。",
+    "submit": "创建连接",
+    "creating": "正在创建…",
+    "alpaca": {
+      "createAccount": "创建 Alpaca 账户。",
+      "signUp": "注册 Alpaca",
+      "logIn": "登录",
+      "openPaperAccount": "打开模拟交易账户：在 Alpaca 控制面板中，将顶部的账户选择器切换为 Paper Trading。每个 Alpaca 账户都配有包含模拟资金的模拟交易账户。",
+      "openDashboard": "打开 Alpaca 控制面板",
+      "aboutPaperTrading": "关于模拟交易",
+      "generateKeys": "生成模拟交易 API 密钥：选择 Paper Trading 后，在控制面板中找到 API Keys 面板，然后点击 Generate New Key。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。模拟交易密钥仅适用于模拟交易账户。",
+      "keepDashboardOpen": "保持控制面板打开 - 下一步需要这两个值。"
+    }
+  },
+  "setup": {
+    "title": "设置检查清单",
+    "goToStep": "转到步骤：{{step}}",
+    "done": "已完成",
+    "notDone": "未完成"
+  },
+  "check": {
+    "result": "交易场所账户 {{id}} · 状态 {{status}}"
+  },
+  "settings": {
+    "description": "将字段留空以保留已保存的值。",
+    "label": "标签",
+    "keepStoredSecret": "保留已保存的密钥"
+  },
+  "unsealed": {
+    "title": "密钥将以未加密形式保存",
+    "description": "Officer 未配置主密钥，因此这些 API 密钥会以明文写入数据库。任何能够读取数据库或备份的人都可以使用此账户进行交易。请设置主密钥以加密保存这些密钥。",
+    "link": "如何设置主密钥",
+    "caution": "主密钥丢失后将无法打开数据库 - 请在设置前备份主密钥。"
+  },
+  "instruments": {
+    "title": "工具",
+    "empty": "未配置工具",
+    "externalSymbol": "外部代码",
+    "baseAsset": "基础资产",
+    "quoteAsset": "计价资产",
+    "deleteTitle": "删除工具？",
+    "deleteDescription": "{{symbol}} 将从 {{label}} 中删除。"
+  },
+  "table": {
+    "actions": "操作"
+  },
+  "search": {
+    "label": "搜索代码",
+    "action": "搜索",
+    "results": "匹配代码",
+    "empty": "没有匹配的代码",
+    "unavailable": "代码搜索不可用",
+    "notTradable": "不可交易"
+  },
+  "verify": {
+    "action": "校验代码",
+    "tradable": "代码存在且可交易",
+    "notTradable": "代码存在但不可交易",
+    "notFound": "未找到代码",
+    "unavailable": "校验不可用"
+  },
+  "access": {
+    "title": "账户访问权限",
+    "account": "账户",
+    "empty": "没有账户拥有访问权限",
+    "feeRequired": "请先设置手续费账户。{{provider}} 收取不与订单关联的费用；多个账户共用一个连接时，Officer 需要指定一个账户记账。",
+    "revokeTitle": "撤销访问权限？",
+    "revokeDescription": "撤销账户 {{account}} 对 {{label}} 的访问权限？"
+  },
+  "fee": {
+    "title": "手续费账户",
+    "description": "{{provider}} 的费用不与订单关联。多个账户共用一个连接时，这些费用全部记入此账户。",
+    "notSet": "未设置",
+    "createAndUse": "创建账户 {{code}} 并使用它"
+  }
+}

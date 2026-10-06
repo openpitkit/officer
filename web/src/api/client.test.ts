@@ -18,8 +18,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { normalizeSigningKeysStatus } from "@/api/client";
-import type { BackupArchive } from "@/api/types";
-import { createApiClient, createOfficerApi } from "@/framework";
+import type { BackupArchive, TradingSnapshot, VenueOrder } from "@/api/types";
+import { ApiError, createApiClient, createOfficerApi } from "@/framework";
 
 function api() {
   return createOfficerApi(
@@ -122,6 +122,937 @@ function jsonResponse(body: unknown): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("trading client", () => {
+  const connection = {
+    id: "paper/desk #1",
+    provider: "alpaca",
+    label: "Paper desk",
+    mode: "paper" as const,
+    enabled: true,
+    venueIdentity: "paper-account",
+    state: "running" as const,
+    secrets: { apiKey: true, apiSecret: false },
+    instruments: [
+      {
+        externalSymbol: "AAPL",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        enabled: true,
+      },
+    ],
+    access: [{ account: "desk/1 #paper", venueAccount: "" }],
+    feeAccount: "",
+  };
+  const trading: TradingSnapshot = {
+    providers: [
+      {
+        type: "alpaca",
+        title: "Alpaca",
+        venueAccounts: false,
+        verifiesSymbols: true,
+        searchesSymbols: true,
+        unlinkedFees: true,
+      },
+    ],
+    connections: [connection],
+    credentialsSealed: true,
+  };
+  const venueOrder: VenueOrder = {
+    connection: connection.id,
+    venueAccount: "",
+    route: { timeInForce: "day", providerField: "value" },
+    clientOrderId: "client-1",
+    venueOrderId: "venue-1",
+    sendAttempted: true,
+    createdAt: "2026-10-04T12:30:00Z",
+  };
+  const paperBody = {
+    id: "order-1",
+    account: "desk/1 #paper",
+    baseAsset: "AAPL",
+    quoteAsset: "USD",
+    side: "buy",
+    amountKind: "quantity",
+    amountValue: "2.5",
+    price: "100.25",
+    destination: {
+      connection: connection.id,
+      venueAccount: "",
+      route: { timeInForce: "day" },
+    },
+  };
+  const approval = {
+    signedApproval: "signed-envelope",
+    keyId: "key-1",
+    id: "order-1",
+    verdict: "accept",
+  };
+
+  it.each([
+    [true, true, "desk/1 #paper"],
+    [false, false, ""],
+  ] as const)(
+    "normalizes the trading snapshot with flags %s/%s and feeAccount %s",
+    async (credentialsSealed, unlinkedFees, feeAccount) => {
+      const snapshot = {
+        ...trading,
+        providers: [{ ...trading.providers[0], unlinkedFees }],
+        connections: [{ ...connection, feeAccount }],
+        credentialsSealed,
+      };
+      const signal = new AbortController().signal;
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          trading: {
+            ...snapshot,
+            providers: [{ ...snapshot.providers[0], extra: "ignored" }],
+            connections: [{ ...snapshot.connections[0], extra: "ignored" }],
+          },
+        }),
+      );
+
+      expect(await api().fetchTrading(signal)).toEqual(snapshot);
+      expect(fetch).toHaveBeenCalledWith(
+        "/app/api/v1/trading",
+        expect.objectContaining({ method: "GET", body: undefined, signal }),
+      );
+    },
+  );
+
+  it.each([undefined, "unknown"])(
+    "rejects missing or unknown connection mode %s",
+    async (mode) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          trading: { ...trading, connections: [{ ...connection, mode }] },
+        }),
+      );
+
+      const result = api().fetchTrading();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({ code: "internal" });
+    },
+  );
+
+  it("rejects an unknown connection state", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        trading: {
+          ...trading,
+          connections: [{ ...connection, state: "unknown" }],
+        },
+      }),
+    );
+
+    const result = api().fetchTrading();
+
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({ code: "internal" });
+  });
+
+  describe.each(["providers", "connections"] as const)(
+    "snapshot %s",
+    (field) => {
+      it.each([undefined, null, {}, "invalid"])(
+        "rejects a missing or non-array collection %s",
+        async (value) => {
+          vi.mocked(fetch).mockResolvedValue(
+            jsonResponse({ trading: { ...trading, [field]: value } }),
+          );
+
+          const result = api().fetchTrading();
+
+          await expect(result).rejects.toBeInstanceOf(ApiError);
+          await expect(result).rejects.toMatchObject({ code: "internal" });
+        },
+      );
+    },
+  );
+
+  describe.each(["instruments", "access"] as const)(
+    "connection %s",
+    (field) => {
+      it.each([undefined, null, {}, "invalid"])(
+        "rejects a missing or non-array collection %s",
+        async (value) => {
+          vi.mocked(fetch).mockResolvedValue(
+            jsonResponse({
+              trading: {
+                ...trading,
+                connections: [{ ...connection, [field]: value }],
+              },
+            }),
+          );
+
+          const result = api().fetchTrading();
+
+          await expect(result).rejects.toBeInstanceOf(ApiError);
+          await expect(result).rejects.toMatchObject({ code: "internal" });
+        },
+      );
+    },
+  );
+
+  it.each([undefined, null, "false", 0])(
+    "rejects missing or non-boolean credentialsSealed %s",
+    async (credentialsSealed) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ trading: { ...trading, credentialsSealed } }),
+      );
+
+      const result = api().fetchTrading();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({ code: "internal" });
+    },
+  );
+
+  it.each([null, [], "invalid", false])(
+    "rejects a non-object trading envelope %s",
+    async (snapshot) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading: snapshot }));
+
+      const result = api().fetchTrading();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({ code: "internal" });
+    },
+  );
+
+  it.each([undefined, null, "true"])(
+    "rejects missing or invalid provider unlinkedFees %s",
+    async (unlinkedFees) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          trading: {
+            ...trading,
+            providers: [{ ...trading.providers[0], unlinkedFees }],
+          },
+        }),
+      );
+
+      const result = api().fetchTrading();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message:
+          "Invalid or missing trading provider unlinkedFees in the API response",
+      });
+    },
+  );
+
+  it.each([undefined, null, false])(
+    "rejects missing or invalid connection feeAccount %s",
+    async (feeAccount) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          trading: {
+            ...trading,
+            connections: [{ ...connection, feeAccount }],
+          },
+        }),
+      );
+
+      const result = api().fetchTrading();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message:
+          "Trading connection feeAccount is missing from the API response",
+      });
+    },
+  );
+
+  it("creates a connection with credentials as an object", async () => {
+    const body = {
+      id: connection.id,
+      provider: "alpaca",
+      label: "Paper desk",
+      mode: "paper" as const,
+      credentials: { apiKey: "test-key", apiSecret: "test-secret" },
+      enabled: true,
+    };
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ connection }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    expect(await api().createTradingConnection(body)).toEqual(connection);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) }),
+    );
+  });
+
+  it.each<{
+    label?: string;
+    credentials?: Record<string, string>;
+  }>([
+    { label: "Renamed", credentials: { apiKey: "new-key", apiSecret: "" } },
+    { label: "", credentials: {} },
+    {},
+  ])(
+    "updates settings without changing blank or omitted fields",
+    async (body) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading }));
+
+      expect(
+        await api().updateTradingConnectionSettings(connection.id, body),
+      ).toEqual(trading);
+      expect(fetch).toHaveBeenCalledWith(
+        "/app/api/v1/trading/connections/paper%2Fdesk%20%231/settings",
+        expect.objectContaining({ method: "PUT", body: JSON.stringify(body) }),
+      );
+    },
+  );
+
+  it.each([true, false])("sets connection enabled to %s", async (enabled) => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ enabled }));
+
+    expect(
+      await api().setTradingConnectionEnabled(connection.id, enabled),
+    ).toBe(enabled);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/enabled",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      }),
+    );
+  });
+
+  it("checks a connection without a request body", async () => {
+    const check = { venueIdentity: "paper-account", venueStatus: "ACTIVE" };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ check }));
+
+    expect(await api().checkTradingConnection(connection.id)).toEqual(check);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/check",
+      expect.objectContaining({ method: "POST", body: undefined }),
+    );
+  });
+
+  it.each([true, false])(
+    "upserts an instrument and unwraps the snapshot with credentialsSealed %s",
+    async (credentialsSealed) => {
+      const snapshot = { ...trading, credentialsSealed };
+      const body = connection.instruments[0];
+      vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading: snapshot }));
+
+      expect(await api().upsertTradingInstrument(connection.id, body)).toEqual(
+        snapshot,
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        "/app/api/v1/trading/connections/paper%2Fdesk%20%231/instruments",
+        expect.objectContaining({ method: "PUT", body: JSON.stringify(body) }),
+      );
+    },
+  );
+
+  it("deletes an instrument with an encoded symbol and accepts 204", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+
+    expect(
+      await api().deleteTradingInstrument(connection.id, "BRK/B #1"),
+    ).toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/instruments?externalSymbol=BRK%2FB+%231",
+      expect.objectContaining({ method: "DELETE", body: undefined }),
+    );
+  });
+
+  it("verifies a symbol and unwraps venue metadata", async () => {
+    const verification = {
+      supported: true,
+      exists: true,
+      tradable: false,
+      details: "Trading is suspended",
+    };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ verification }));
+
+    expect(await api().verifyTradingSymbol(connection.id, "AAPL")).toEqual(
+      verification,
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/verify-symbol",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ externalSymbol: "AAPL" }),
+      }),
+    );
+  });
+
+  it("searches symbols and normalizes optional match fields", async () => {
+    const search = {
+      supported: true,
+      matches: [
+        {
+          symbol: "AAPL",
+          name: "Apple Inc.",
+          class: "us_equity",
+          exchange: "NASDAQ",
+          tradable: true,
+        },
+        { symbol: "AAPL.TEST", tradable: false },
+      ],
+    };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(search));
+
+    expect(
+      await api().searchTradingSymbols(connection.id, { query: "Apple" }),
+    ).toEqual(search);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/search-symbols",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "Apple" }),
+      }),
+    );
+  });
+
+  it.each([
+    { account: "desk/1 #paper", venueAccount: "" },
+    { account: "desk/1 #paper" },
+  ])("grants access with the supplied body %j", async (body) => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading }));
+
+    expect(await api().grantTradingAccess(connection.id, body)).toEqual(
+      trading,
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/access",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(body) }),
+    );
+  });
+
+  it("revokes access with only an encoded account and accepts 204", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+
+    expect(
+      await api().revokeTradingAccess(connection.id, "desk/1 #paper"),
+    ).toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/access?account=desk%2F1+%23paper",
+      expect.objectContaining({ method: "DELETE", body: undefined }),
+    );
+  });
+
+  it("sets the fee account and unwraps the trading snapshot", async () => {
+    const account = "desk/1 #paper";
+    const snapshot = {
+      ...trading,
+      connections: [{ ...connection, feeAccount: account }],
+    };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading: snapshot }));
+
+    expect(await api().setTradingFeeAccount(connection.id, account)).toEqual(
+      snapshot,
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/fee-account",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ account }),
+      }),
+    );
+  });
+
+  it.each([
+    ["fetchTrading", () => api().fetchTrading()],
+    [
+      "updateTradingConnectionSettings",
+      () => api().updateTradingConnectionSettings(connection.id, {}),
+    ],
+    [
+      "upsertTradingInstrument",
+      () =>
+        api().upsertTradingInstrument(connection.id, connection.instruments[0]),
+    ],
+    [
+      "grantTradingAccess",
+      () => api().grantTradingAccess(connection.id, { account: "desk" }),
+    ],
+    [
+      "setTradingFeeAccount",
+      () => api().setTradingFeeAccount(connection.id, "desk"),
+    ],
+  ] as const)(
+    "rejects a %s response without a trading snapshot",
+    async (_method, request) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse({}));
+
+      const result = request();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message: "Trading snapshot is missing from the API response",
+      });
+    },
+  );
+
+  it.each([undefined, null, "false", 0])(
+    "rejects a missing or non-boolean enabled echo %s",
+    async (enabled) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse({ enabled }));
+
+      const result = api().setTradingConnectionEnabled(connection.id, false);
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({ code: "internal" });
+    },
+  );
+
+  it("clears the fee account on the encoded path and accepts 204", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+
+    expect(await api().clearTradingFeeAccount(connection.id)).toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/fee-account",
+      expect.objectContaining({ method: "DELETE", body: undefined }),
+    );
+  });
+
+  it.each(["setTradingFeeAccount", "revokeTradingAccess"] as const)(
+    "preserves the not_found response from %s",
+    async (method) => {
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "not_found",
+              message: "Account or binding not found",
+            },
+          }),
+          { status: 404, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+      const result = api()[method](connection.id, "missing");
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "not_found",
+        status: 404,
+        message: "Account or binding not found",
+      });
+    },
+  );
+
+  it.each([
+    [undefined, ""],
+    ["paper", "?mode=paper"],
+    ["live", "?mode=live"],
+  ] as const)("fetches destinations with mode %s", async (mode, query) => {
+    const destinations = [
+      {
+        connection: connection.id,
+        label: connection.label,
+        provider: "alpaca",
+        mode: "paper",
+        enabled: false,
+        venueAccount: "",
+        state: "unavailable",
+        error: "Venue unavailable",
+      },
+    ];
+    const signal = new AbortController().signal;
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ destinations }));
+
+    expect(
+      await api().fetchTradingDestinations("desk/1 #paper", mode, signal),
+    ).toEqual(destinations);
+    expect(fetch).toHaveBeenCalledWith(
+      `/app/api/v1/accounts/desk%2F1%20%23paper/trading-destinations${query}`,
+      expect.objectContaining({ method: "GET", body: undefined, signal }),
+    );
+  });
+
+  it("rejects an unknown destination mode", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        destinations: [
+          { ...connection, connection: connection.id, mode: "unknown" },
+        ],
+      }),
+    );
+
+    const result = api().fetchTradingDestinations("desk");
+
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({ code: "internal" });
+  });
+
+  it("preserves empty connection collections and unavailable errors", async () => {
+    const unavailable = {
+      ...connection,
+      mode: "live",
+      enabled: false,
+      state: "unavailable",
+      error: "Invalid API key",
+      instruments: [],
+      access: [],
+    };
+    const stopped = { ...unavailable, state: "stopped", error: undefined };
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        trading: {
+          providers: [],
+          connections: [unavailable, stopped],
+          credentialsSealed: false,
+        },
+      }),
+    );
+
+    expect(await api().fetchTrading()).toEqual({
+      providers: [],
+      connections: [unavailable, stopped],
+      credentialsSealed: false,
+    });
+  });
+
+  it.each([true, false])(
+    "fetches order detail with a normalized venue order and sendAttempted %s",
+    async (sendAttempted) => {
+      const linkedOrder = { ...venueOrder, sendAttempted };
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          order: { id: "order/1", leavesQuantity: "2.5" },
+          events: [],
+          trades: [],
+          venueOrder: linkedOrder,
+        }),
+      );
+
+      const detail = await api().fetchOrderDetail("order/1");
+
+      expect(detail.order.id).toBe("order/1");
+      expect(detail.events).toEqual([]);
+      expect(detail.trades).toEqual([]);
+      expect(detail.venueOrder).toEqual(linkedOrder);
+      expect(fetch).toHaveBeenCalledWith(
+        "/app/api/v1/orders/order%2F1",
+        expect.objectContaining({ method: "GET", body: undefined }),
+      );
+    },
+  );
+
+  it.each([undefined, null, { timeInForce: 1 }])(
+    "rejects a missing or invalid venue order route %s",
+    async (route) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          order: { id: "order-1", leavesQuantity: "0" },
+          events: [],
+          trades: [],
+          venueOrder: { ...venueOrder, route },
+        }),
+      );
+
+      const result = api().fetchOrderDetail("order-1");
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({ code: "internal" });
+    },
+  );
+
+  it.each([undefined, null, "false", 0])(
+    "rejects missing or non-boolean venue order sendAttempted %s",
+    async (sendAttempted) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          order: { id: "order-1", leavesQuantity: "0" },
+          events: [],
+          trades: [],
+          venueOrder: { ...venueOrder, sendAttempted },
+        }),
+      );
+
+      const result = api().fetchOrderDetail("order-1");
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({ code: "internal" });
+    },
+  );
+
+  it("keeps venueOrder absent for an ordinary order detail", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        order: { id: "order-1", leavesQuantity: "0" },
+        events: [],
+        trades: [],
+      }),
+    );
+
+    expect(await api().fetchOrderDetail("order-1")).not.toHaveProperty(
+      "venueOrder",
+    );
+  });
+
+  it("sends a paper order and returns approval and venue acknowledgment", async () => {
+    const venueSend = { status: "acknowledged", venueOrder };
+    const signal = new AbortController().signal;
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ ...approval, venueSend }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    expect(await api().sendPaperOrder(paperBody, signal)).toEqual({
+      ...approval,
+      reasons: [],
+      venueSend,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/send-paper",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(paperBody),
+        signal,
+      }),
+    );
+  });
+
+  it("sends a paper order with only the required destination route", async () => {
+    const body = {
+      ...paperBody,
+      destination: { route: paperBody.destination.route },
+    };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(approval));
+
+    await api().sendPaperOrder(body);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/send-paper",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) }),
+    );
+  });
+
+  it.each(["refused", "unknown"])(
+    "returns a %s venue send without venue acknowledgment",
+    async (status) => {
+      const pending = { ...venueOrder };
+      delete pending.venueOrderId;
+      const venueSend = { status, error: "Venue reason", venueOrder: pending };
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ ...approval, venueSend }),
+      );
+
+      const result = await api().sendPaperOrder(paperBody);
+
+      expect(result.venueSend).toEqual(venueSend);
+      expect(result.venueSend?.venueOrder).not.toHaveProperty("venueOrderId");
+    },
+  );
+
+  it("rejects an unknown venueSend status", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ ...approval, venueSend: { status: "pending" } }),
+    );
+
+    const result = api().sendPaperOrder(paperBody);
+
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({ code: "internal" });
+  });
+
+  it("returns a pre-trade reject without venueSend or a follow-up request", async () => {
+    const rejected = {
+      ...approval,
+      verdict: "reject",
+      reasons: [
+        {
+          code: "limit",
+          scope: "account",
+          policy: "position",
+          reason: "Too large",
+        },
+      ],
+    };
+    const body = {
+      account: paperBody.account,
+      baseAsset: paperBody.baseAsset,
+      quoteAsset: paperBody.quoteAsset,
+      side: paperBody.side,
+      amountKind: paperBody.amountKind,
+      amountValue: paperBody.amountValue,
+      destination: paperBody.destination,
+    };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(rejected));
+
+    const result = await api().sendPaperOrder(body);
+
+    expect(result).toMatchObject(rejected);
+    expect(result).not.toHaveProperty("venueSend");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/send-paper",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) }),
+    );
+  });
+
+  it("uses the venue reason from a 422 problem response", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          type: "about:blank",
+          title: "Validation failed",
+          status: 422,
+          detail: "AAPL is not tradable at this venue",
+          errors: [
+            {
+              code: "validation",
+              constraint: "tradable",
+              pointer: "/destination",
+            },
+          ],
+        }),
+        {
+          status: 422,
+          headers: { "Content-Type": "application/problem+json" },
+        },
+      ),
+    );
+
+    const result = api().sendPaperOrder(paperBody);
+
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "precondition",
+      status: 422,
+      message: "AAPL is not tradable at this venue",
+    });
+  });
+
+  it("uses a 400 problem detail with the existing status code", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          type: "about:blank",
+          title: "Bad request",
+          status: 400,
+          detail: "The request body contains invalid JSON",
+          errors: [{ code: "bad_request" }],
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/problem+json" },
+        },
+      ),
+    );
+
+    const result = api().sendPaperOrder(paperBody);
+
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "validation",
+      status: 400,
+      message: "The request body contains invalid JSON",
+    });
+  });
+
+  it.each([
+    ["fee_account_required", 409, "A fee account is required."],
+    [
+      "trading_mode_mismatch",
+      409,
+      "The connection uses a different trading mode.",
+    ],
+    [
+      "destination_ambiguous",
+      409,
+      "Multiple trading destinations match the request.",
+    ],
+    ["no_destination", 409, "No trading destination is available."],
+    ["live_trading_unavailable", 403, "Live trading is unavailable."],
+    ["forbidden", 403, "Access is denied."],
+    [
+      "upstream",
+      502,
+      "An upstream service is unreachable or refused the request.",
+    ],
+  ] as const)(
+    "preserves the %s contract code and its default message",
+    async (code, status, message) => {
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(JSON.stringify({ error: { code } }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      const result = api().sendPaperOrder(paperBody);
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({ code, status, message });
+    },
+  );
+
+  it("preserves the trading_mode_mismatch server message", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "trading_mode_mismatch",
+            message: "Connection is live, paper mode is required",
+          },
+        }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const result = api().sendPaperOrder(paperBody);
+
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "trading_mode_mismatch",
+      status: 409,
+      message: "Connection is live, paper mode is required",
+    });
+  });
+
+  it.each([
+    [
+      "grantTradingAccess",
+      "A fee account is required before binding another Officer account",
+    ],
+    [
+      "clearTradingFeeAccount",
+      "A fee account is required while multiple Officer accounts are bound",
+    ],
+  ] as const)(
+    "preserves the fee_account_required server message from %s",
+    async (method, message) => {
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: { code: "fee_account_required", message } }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+      const result =
+        method === "grantTradingAccess"
+          ? api().grantTradingAccess(connection.id, { account: "other-desk" })
+          : api().clearTradingFeeAccount(connection.id);
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "fee_account_required",
+        status: 409,
+        message,
+      });
+    },
+  );
+});
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -1428,6 +2359,7 @@ describe("backup client", () => {
     expect(result.applied).toEqual({});
     expect(result.skipped).toEqual({});
     expect(result.marketDataCredentialsUnavailable).toBeUndefined();
+    expect(result.tradingCredentialsUnavailable).toBeUndefined();
     expect(result.restartRequired).toBe(false);
   });
 
@@ -1479,6 +2411,56 @@ describe("backup client", () => {
           archive: backupArchive,
           scope: { all: true },
           mode: "insert_missing",
+        }),
+      ).rejects.toThrow("The service encountered an internal error.");
+    },
+  );
+
+  it.each([
+    "tradingCredentialsUnavailable",
+    "TradingCredentialsUnavailable",
+    "trading_credentials_unavailable",
+  ])("normalizes unavailable trading credentials from %s", async (field) => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        summary: {
+          applied: { trading: 2 },
+          skipped: {},
+          restartRequired: false,
+          [field]: ["Alpaca paper", "Second connection"],
+        },
+      }),
+    );
+    const result = await restoreBackup({
+      archive: backupArchive,
+      scope: { all: true },
+      mode: "overwrite",
+    });
+    expect(result.tradingCredentialsUnavailable).toEqual([
+      "Alpaca paper",
+      "Second connection",
+    ]);
+    expect(result.applied.trading).toBe(2);
+  });
+
+  it.each([null, "Alpaca paper", 1, {}, ["Alpaca paper", 1]])(
+    "rejects malformed unavailable trading credentials: %j",
+    async (unavailable) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          summary: {
+            applied: {},
+            skipped: {},
+            restartRequired: false,
+            tradingCredentialsUnavailable: unavailable,
+          },
+        }),
+      );
+      await expect(
+        restoreBackup({
+          archive: backupArchive,
+          scope: { all: true },
+          mode: "overwrite",
         }),
       ).rejects.toThrow("The service encountered an internal error.");
     },

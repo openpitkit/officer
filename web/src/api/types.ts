@@ -687,6 +687,149 @@ export interface Overview {
   activity: ActivityEntry[];
 }
 
+// --- Trading connections ---
+
+/** Venue environment used by a trading connection. */
+export type TradingMode = "paper" | "live";
+/** Runtime availability of a configured trading connection. */
+export type TradingConnectionState = "running" | "unavailable" | "stopped";
+
+/** Trading venue capabilities advertised by Officer. */
+export interface TradingProvider {
+  type: string;
+  title: string;
+  /** Whether the provider supports selecting a venue account. */
+  venueAccounts: boolean;
+  verifiesSymbols: boolean;
+  searchesSymbols: boolean;
+  /** The venue charges fees not tied to orders, such as Alpaca FEE/CFEE. */
+  unlinkedFees: boolean;
+}
+
+/** Mapping from a venue symbol to an Officer asset pair. */
+export interface TradingInstrument {
+  externalSymbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  enabled: boolean;
+}
+
+/** Binding that grants an Officer account access to a venue account. */
+export interface TradingAccessGrant {
+  account: string;
+  venueAccount: string;
+}
+
+/** Configured venue connection with instrument mappings and access bindings. */
+export interface TradingConnection {
+  id: string;
+  provider: string;
+  label: string;
+  mode: TradingMode;
+  enabled: boolean;
+  /** Identity reported by the venue, such as the Alpaca account id. */
+  venueIdentity: string;
+  state: TradingConnectionState;
+  error?: string;
+  /** Presence flags only; credential values are write-only. */
+  secrets: { apiKey: boolean; apiSecret: boolean };
+  instruments: TradingInstrument[];
+  access: TradingAccessGrant[];
+  /** Officer account for unlinked fees; need not be bound; empty when unset. */
+  feeAccount: string;
+}
+
+/** Current trading providers, connections and credential storage mode. */
+export interface TradingSnapshot {
+  providers: TradingProvider[];
+  connections: TradingConnection[];
+  /** True: keys are sealed under the master key; false: stored unencrypted. */
+  credentialsSealed: boolean;
+}
+
+/** Venue identity and status returned by a connection check. */
+export interface TradingConnectionCheck {
+  venueIdentity: string;
+  venueStatus: string;
+}
+
+/** Provider support, existence and tradability of a venue symbol. */
+export interface TradingSymbolVerification {
+  supported: boolean;
+  exists: boolean;
+  tradable: boolean;
+  details?: string;
+}
+
+/** Venue symbol and optional metadata returned by a provider search. */
+export interface TradingSymbolMatch {
+  symbol: string;
+  name?: string;
+  class?: string;
+  exchange?: string;
+  tradable: boolean;
+}
+
+/** Provider search capability and matching venue symbols. */
+export interface TradingSymbolSearch {
+  supported: boolean;
+  matches: TradingSymbolMatch[];
+}
+
+/** Trading destination accessible to an Officer account. */
+export interface TradingDestination {
+  connection: string;
+  label: string;
+  provider: string;
+  mode: TradingMode;
+  enabled: boolean;
+  venueAccount: string;
+  state: TradingConnectionState;
+  error?: string;
+}
+
+/** Venue linkage and send tracking for an Officer order. */
+export interface VenueOrder {
+  connection: string;
+  venueAccount: string;
+  /** Provider-defined route fields, preserved as strings. */
+  route: Record<string, string>;
+  clientOrderId: string;
+  /** Absent until the venue has acknowledged the order. */
+  venueOrderId?: string;
+  /** Whether Officer has attempted to send the order to the venue. */
+  sendAttempted: boolean;
+  /** When the order was linked to the connection, not when it was sent. */
+  createdAt: string;
+}
+
+/** Result of sending an approved paper order to its venue. */
+export interface VenueSendOutcome {
+  /**
+   * Acknowledged: the venue accepted the order and returned its id.
+   * Refused: definitive venue refusal; Officer recorded it cancelled with
+   * leaves 0. Unknown: the outcome could not be established;
+   * GET /orders/{id} is authoritative.
+   */
+  status: "acknowledged" | "refused" | "unknown";
+  error?: string;
+  venueOrder?: VenueOrder;
+}
+
+/** Officer order with its events, trades and optional venue linkage. */
+export interface OrderDetail {
+  order: Order;
+  events: OrderEvent[];
+  trades: Trade[];
+  venueOrder?: VenueOrder;
+}
+
+/** Pre-trade approval and optional outcome of a paper order send. */
+export interface PaperSendResult extends SignedApproval {
+  /** Absent when pre-trade validation rejects the order. */
+  venueSend?: VenueSendOutcome;
+}
+
 // --- Market data ---
 
 export interface MarketDataProvider {
@@ -843,6 +986,7 @@ export type BackupSection =
   | "general_settings"
   | "user_settings"
   | "activity_history"
+  | "trading"
   | "audit_log";
 
 export type RestoreMode = "replace_all" | "overwrite" | "insert_missing";
@@ -911,6 +1055,7 @@ export interface BackupRestoreSummary {
   applied: Partial<Record<BackupSection, number>>;
   skipped: Partial<Record<BackupSection, number>>;
   marketDataCredentialsUnavailable?: string[];
+  tradingCredentialsUnavailable?: string[];
   restartRequired: boolean;
 }
 

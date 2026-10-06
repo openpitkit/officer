@@ -75,6 +75,10 @@
     "noCommands": "No commands defined."
   },
   "backup": {
+    "unencryptedWarning": "This backup will contain sensitive data unencrypted: API keys of trading connections are stored without a master key and go into the archive in plain text. Keep the file private, or set a master key first.",
+    "tradingSectionsHint": "Trading connections include accounts and groups, and orders and trades; orders and trades include trading connections.",
+    "tradingAccountsHint": "Trading data is exported and restored for all accounts.",
+    "tradingCredentialsUnavailable": "API keys could not be restored for <connections/>. Those trading connections were restored disabled: enter their keys again in <tradingLink>Trading connections</tradingLink>.",
     "title": "Database backup",
     "tabs": {
       "ariaLabel": "Backup workflow",
@@ -96,6 +100,7 @@
     "restoreScopeWarningTitle": "Only selected sections are affected.",
     "restoreScopeWarning": "Restore modes apply to the data selected above, not to the entire database unless All data is checked.",
     "sections": {
+      "trading": "Trading connections",
       "accounts_groups": "Accounts and groups",
       "positions": "Positions",
       "risk_limits": "Risk limits",

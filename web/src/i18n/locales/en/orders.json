@@ -189,7 +189,41 @@
       "validationError": "Account, instrument, and amount are required.",
       "missingAccountConfirmTitle": "Account does not exist",
       "missingAccountConfirmDescription": "Account {{account}} does not exist yet. Create it with default settings (no group, no currency) and continue?",
-      "missingAccountConfirmAction": "Create account and continue"
+      "missingAccountConfirmAction": "Create account and continue",
+      "venue": {
+        "description": "Evaluate the order against the risk engine and send it to the selected venue when approved.",
+        "sendToVenue": "Send to venue",
+        "mode": "Mode",
+        "modeValues": {
+          "paper": "paper",
+          "live": "live"
+        },
+        "target": "Target",
+        "loadingTargets": "Loading targets…",
+        "disabled": "Disabled",
+        "unavailable": "Unavailable: {{error}}",
+        "noTargets": "No {{mode}} targets for account {{account}}.",
+        "setupConnection": "Set up a trading connection",
+        "timeInForce": "Time in force",
+        "chooseTimeInForce": "Choose time in force",
+        "timeInForceOptions": {
+          "day": "DAY - Day",
+          "gtc": "GTC - Good till cancelled",
+          "opg": "OPG - At the open",
+          "cls": "CLS - At the close",
+          "ioc": "IOC - Immediate or cancel",
+          "fok": "FOK - Fill or kill"
+        },
+        "aboutTimeInForce": "About time in force",
+        "unsupportedProvider": "Sending to {{provider}} is not supported by this panel.",
+        "quantityHint": "Orders are sent to the venue by quantity.",
+        "sendButton": "Send to {{venue}} · {{mode}}",
+        "acknowledged": "Sent to {{venue}} · {{mode}}. Venue order {{venueOrderId}}.",
+        "refused": "The order was not placed on {{venue}}: {{error}}. Officer recorded it as cancelled.",
+        "unknown": "The venue did not confirm the order: {{error}}. Officer is reconciling it; the order status below is authoritative.",
+        "preTradeRejected": "Pre-trade checks rejected the order. Nothing was sent to the venue.",
+        "networkError": "The send request did not complete: {{message}}. Check Orders before sending again - the order may already exist."
+      }
     }
   },
 
@@ -309,7 +343,27 @@
       "trades": {
         "sectionTitle": "Trades for this order",
         "empty": "No fills recorded yet. Submit an execution report to create a trade.",
+        "emptyVenue": "No fills from the venue yet.",
         "submitExecReport": "Submit execution report"
+      },
+      "venue": {
+        "sectionTitle": "Venue",
+        "connection": "Connection",
+        "venueAccount": "Venue account",
+        "venueOrderId": "Venue order ID",
+        "notSentYet": "Not sent yet",
+        "notAcknowledged": "Not acknowledged by the venue",
+        "awaitingAcknowledgement": "Awaiting venue acknowledgement",
+        "venueStatus": "Venue status",
+        "statusOpen": "Open",
+        "statusFilled": "Filled",
+        "statusCancelled": "Cancelled, rejected or expired at the venue",
+        "timeInForce": "Time in force",
+        "linkedAt": "Linked at",
+        "fees": "{{venue}} fees that are not tied to orders are booked later as account adjustments.",
+        "feesUnknownProvider": "Venue fees that are not tied to orders are booked later as account adjustments.",
+        "viewAdjustments": "View adjustments",
+        "managedByVenue": "Fills and cancellation of this order come from the venue."
       }
     }
   },

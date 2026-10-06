@@ -54,6 +54,22 @@ import type {
   GroupListFilters,
   Health,
   Limit,
+  TradingMode,
+  TradingConnectionState,
+  TradingProvider,
+  TradingInstrument,
+  TradingAccessGrant,
+  TradingConnection,
+  TradingSnapshot,
+  TradingConnectionCheck,
+  TradingSymbolVerification,
+  TradingSymbolMatch,
+  TradingSymbolSearch,
+  TradingDestination,
+  VenueOrder,
+  VenueSendOutcome,
+  PaperSendResult,
+  OrderDetail,
   MarketDataDiagnostic,
   MarketDataDiagnosticAction,
   MarketDataInstrument,
@@ -1201,6 +1217,260 @@ function normalizeOverview(v: unknown): Overview {
   };
 }
 
+function normalizeTradingMode(v: unknown): TradingMode {
+  if (v === "paper" || v === "live") {
+    return v;
+  }
+  throw new ApiError("Invalid trading mode in the API response", "internal");
+}
+
+function normalizeTradingConnectionState(v: unknown): TradingConnectionState {
+  if (v === "running" || v === "unavailable" || v === "stopped") {
+    return v;
+  }
+  throw new ApiError(
+    "Invalid trading connection state in the API response",
+    "internal",
+  );
+}
+
+function normalizeTradingProvider(v: unknown): TradingProvider {
+  const o = isObject(v) ? v : {};
+  if (typeof o.unlinkedFees !== "boolean") {
+    throw new ApiError(
+      "Invalid or missing trading provider unlinkedFees in the API response",
+      "internal",
+    );
+  }
+  return {
+    type: asString(o.type),
+    title: asString(o.title),
+    venueAccounts: asBool(o.venueAccounts),
+    verifiesSymbols: asBool(o.verifiesSymbols),
+    searchesSymbols: asBool(o.searchesSymbols),
+    unlinkedFees: o.unlinkedFees,
+  };
+}
+
+function normalizeTradingInstrument(v: unknown): TradingInstrument {
+  const o = isObject(v) ? v : {};
+  return {
+    externalSymbol: asString(o.externalSymbol),
+    baseAsset: asString(o.baseAsset),
+    quoteAsset: asString(o.quoteAsset),
+    enabled: asBool(o.enabled),
+  };
+}
+
+function normalizeTradingAccessGrant(v: unknown): TradingAccessGrant {
+  const o = isObject(v) ? v : {};
+  return {
+    account: asString(o.account),
+    venueAccount: asString(o.venueAccount),
+  };
+}
+
+function normalizeTradingConnection(v: unknown): TradingConnection {
+  const o = isObject(v) ? v : {};
+  if (!Array.isArray(o.instruments)) {
+    throw new ApiError(
+      "Invalid or missing trading connection instruments in the API response",
+      "internal",
+    );
+  }
+  if (!Array.isArray(o.access)) {
+    throw new ApiError(
+      "Invalid or missing trading connection access in the API response",
+      "internal",
+    );
+  }
+  const secrets = isObject(o.secrets) ? o.secrets : {};
+  const connection: TradingConnection = {
+    id: asString(o.id),
+    provider: asString(o.provider),
+    label: asString(o.label),
+    mode: normalizeTradingMode(o.mode),
+    enabled: asBool(o.enabled),
+    venueIdentity: asString(o.venueIdentity),
+    state: normalizeTradingConnectionState(o.state),
+    secrets: {
+      apiKey: asBool(secrets.apiKey),
+      apiSecret: asBool(secrets.apiSecret),
+    },
+    instruments: o.instruments.map(normalizeTradingInstrument),
+    access: o.access.map(normalizeTradingAccessGrant),
+    feeAccount: requireStringField(
+      o,
+      "Trading connection feeAccount",
+      "feeAccount",
+    ),
+  };
+  if (o.error !== undefined) {
+    connection.error = asString(o.error);
+  }
+  return connection;
+}
+
+function normalizeTradingSnapshot(v: unknown): TradingSnapshot {
+  if (!isObject(v) || !isObject(v.trading)) {
+    throw new ApiError(
+      "Trading snapshot is missing from the API response",
+      "internal",
+    );
+  }
+  const o = v.trading;
+  if (!Array.isArray(o.providers)) {
+    throw new ApiError(
+      "Invalid or missing trading providers in the API response",
+      "internal",
+    );
+  }
+  if (!Array.isArray(o.connections)) {
+    throw new ApiError(
+      "Invalid or missing trading connections in the API response",
+      "internal",
+    );
+  }
+  if (typeof o.credentialsSealed !== "boolean") {
+    throw new ApiError(
+      "Invalid or missing trading credentialsSealed in the API response",
+      "internal",
+    );
+  }
+  return {
+    providers: o.providers.map(normalizeTradingProvider),
+    connections: o.connections.map(normalizeTradingConnection),
+    credentialsSealed: o.credentialsSealed,
+  };
+}
+
+function normalizeTradingConnectionCheck(v: unknown): TradingConnectionCheck {
+  const o = isObject(v) ? v : {};
+  return {
+    venueIdentity: asString(o.venueIdentity),
+    venueStatus: asString(o.venueStatus),
+  };
+}
+
+function normalizeTradingSymbolVerification(
+  v: unknown,
+): TradingSymbolVerification {
+  const o = isObject(v) ? v : {};
+  const result: TradingSymbolVerification = {
+    supported: asBool(o.supported),
+    exists: asBool(o.exists),
+    tradable: asBool(o.tradable),
+  };
+  if (o.details !== undefined) {
+    result.details = asString(o.details);
+  }
+  return result;
+}
+
+function normalizeTradingSymbolMatch(v: unknown): TradingSymbolMatch {
+  const o = isObject(v) ? v : {};
+  const match: TradingSymbolMatch = {
+    symbol: asString(o.symbol),
+    tradable: asBool(o.tradable),
+  };
+  if (o.name !== undefined) {
+    match.name = asString(o.name);
+  }
+  if (o.class !== undefined) {
+    match.class = asString(o.class);
+  }
+  if (o.exchange !== undefined) {
+    match.exchange = asString(o.exchange);
+  }
+  return match;
+}
+
+function normalizeTradingSymbolSearch(v: unknown): TradingSymbolSearch {
+  const o = isObject(v) ? v : {};
+  return {
+    supported: asBool(o.supported),
+    matches: normalizeArray(o.matches, normalizeTradingSymbolMatch),
+  };
+}
+
+function normalizeTradingDestination(v: unknown): TradingDestination {
+  const o = isObject(v) ? v : {};
+  const destination: TradingDestination = {
+    connection: asString(o.connection),
+    label: asString(o.label),
+    provider: asString(o.provider),
+    mode: normalizeTradingMode(o.mode),
+    enabled: asBool(o.enabled),
+    venueAccount: asString(o.venueAccount),
+    state: normalizeTradingConnectionState(o.state),
+  };
+  if (o.error !== undefined) {
+    destination.error = asString(o.error);
+  }
+  return destination;
+}
+
+function normalizeVenueOrder(v: unknown): VenueOrder {
+  const o = isObject(v) ? v : {};
+  if (!isObject(o.route)) {
+    throw new ApiError(
+      "Venue order route is missing from the API response",
+      "internal",
+    );
+  }
+  const route: Record<string, string> = {};
+  for (const [key, value] of Object.entries(o.route)) {
+    if (typeof value !== "string") {
+      throw new ApiError(
+        "Invalid venue order route field in the API response",
+        "internal",
+      );
+    }
+    route[key] = value;
+  }
+  if (typeof o.sendAttempted !== "boolean") {
+    throw new ApiError(
+      "Invalid or missing venue order sendAttempted in the API response",
+      "internal",
+    );
+  }
+  const order: VenueOrder = {
+    connection: asString(o.connection),
+    venueAccount: asString(o.venueAccount),
+    route,
+    clientOrderId: asString(o.clientOrderId),
+    sendAttempted: o.sendAttempted,
+    createdAt: asString(o.createdAt),
+  };
+  if (o.venueOrderId !== undefined) {
+    order.venueOrderId = asString(o.venueOrderId);
+  }
+  return order;
+}
+
+function normalizeVenueSendOutcome(v: unknown): VenueSendOutcome {
+  const o = isObject(v) ? v : {};
+  const status = o.status;
+  if (
+    status !== "acknowledged" &&
+    status !== "refused" &&
+    status !== "unknown"
+  ) {
+    throw new ApiError(
+      "Invalid venue send status in the API response",
+      "internal",
+    );
+  }
+  const outcome: VenueSendOutcome = { status };
+  if (o.error !== undefined) {
+    outcome.error = asString(o.error);
+  }
+  if (o.venueOrder !== undefined) {
+    outcome.venueOrder = normalizeVenueOrder(o.venueOrder);
+  }
+  return outcome;
+}
+
 function normalizeMarketDataProvider(v: unknown): MarketDataProvider {
   const o = isObject(v) ? v : {};
   return {
@@ -1553,6 +1823,12 @@ function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
     "MarketDataCredentialsUnavailable",
     "market_data_credentials_unavailable",
   );
+  const tradingCredentialsUnavailable = pick(
+    o,
+    "tradingCredentialsUnavailable",
+    "TradingCredentialsUnavailable",
+    "trading_credentials_unavailable",
+  );
   if (
     !isObject(applied) ||
     !isObject(skipped) ||
@@ -1561,6 +1837,11 @@ function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
       (!Array.isArray(marketDataCredentialsUnavailable) ||
         !marketDataCredentialsUnavailable.every(
           (instance) => typeof instance === "string",
+        ))) ||
+    (tradingCredentialsUnavailable !== undefined &&
+      (!Array.isArray(tradingCredentialsUnavailable) ||
+        !tradingCredentialsUnavailable.every(
+          (connection) => typeof connection === "string",
         )))
   ) {
     throw new ApiError(
@@ -1572,6 +1853,9 @@ function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
     applied: applied as BackupRestoreSummary["applied"],
     skipped: skipped as BackupRestoreSummary["skipped"],
     marketDataCredentialsUnavailable: marketDataCredentialsUnavailable as
+      | string[]
+      | undefined,
+    tradingCredentialsUnavailable: tradingCredentialsUnavailable as
       | string[]
       | undefined,
     restartRequired,
@@ -1624,6 +1908,198 @@ async function fetchOverview(
       { signal },
     ),
   );
+}
+
+// --- Trading connections ---
+
+/** GET /trading. */
+async function fetchTrading(
+  client: ApiClient,
+  signal?: AbortSignal,
+): Promise<TradingSnapshot> {
+  const v = await client.request(`${client.baseUrl}/trading`, { signal });
+  return normalizeTradingSnapshot(v);
+}
+
+async function createTradingConnection(
+  client: ApiClient,
+  body: {
+    id?: string;
+    provider: string;
+    label: string;
+    mode: TradingMode;
+    credentials: Record<string, string>;
+    enabled: boolean;
+  },
+): Promise<TradingConnection> {
+  const v = await client.request(`${client.baseUrl}/trading/connections`, {
+    method: "POST",
+    body,
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeTradingConnection(o.connection);
+}
+
+/** Empty label and credential fields keep their stored values. */
+async function updateTradingConnectionSettings(
+  client: ApiClient,
+  id: string,
+  body: {
+    label?: string;
+    credentials?: Record<string, string>;
+  },
+): Promise<TradingSnapshot> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/settings`,
+    { method: "PUT", body },
+  );
+  return normalizeTradingSnapshot(v);
+}
+
+async function setTradingConnectionEnabled(
+  client: ApiClient,
+  id: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/enabled`,
+    { method: "PUT", body: { enabled } },
+  );
+  const o = isObject(v) ? v : {};
+  if (typeof o.enabled !== "boolean") {
+    throw new ApiError(
+      "Invalid or missing trading connection enabled in the API response",
+      "internal",
+    );
+  }
+  return o.enabled;
+}
+
+async function checkTradingConnection(
+  client: ApiClient,
+  id: string,
+): Promise<TradingConnectionCheck> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/check`,
+    { method: "POST" },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizeTradingConnectionCheck(o.check);
+}
+
+async function upsertTradingInstrument(
+  client: ApiClient,
+  id: string,
+  body: TradingInstrument,
+): Promise<TradingSnapshot> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/instruments`,
+    { method: "PUT", body },
+  );
+  return normalizeTradingSnapshot(v);
+}
+
+async function deleteTradingInstrument(
+  client: ApiClient,
+  id: string,
+  externalSymbol: string,
+): Promise<void> {
+  const params = new URLSearchParams({ externalSymbol });
+  await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/instruments?${params.toString()}`,
+    { method: "DELETE" },
+  );
+}
+
+async function verifyTradingSymbol(
+  client: ApiClient,
+  id: string,
+  externalSymbol: string,
+): Promise<TradingSymbolVerification> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/verify-symbol`,
+    { method: "POST", body: { externalSymbol } },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizeTradingSymbolVerification(o.verification);
+}
+
+async function searchTradingSymbols(
+  client: ApiClient,
+  id: string,
+  input: { query: string },
+): Promise<TradingSymbolSearch> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/search-symbols`,
+    { method: "POST", body: input },
+  );
+  return normalizeTradingSymbolSearch(v);
+}
+
+async function grantTradingAccess(
+  client: ApiClient,
+  id: string,
+  body: { account: string; venueAccount?: string },
+): Promise<TradingSnapshot> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/access`,
+    { method: "PUT", body },
+  );
+  return normalizeTradingSnapshot(v);
+}
+
+async function revokeTradingAccess(
+  client: ApiClient,
+  id: string,
+  account: string,
+): Promise<void> {
+  const params = new URLSearchParams({ account });
+  await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/access?${params.toString()}`,
+    { method: "DELETE" },
+  );
+}
+
+async function setTradingFeeAccount(
+  client: ApiClient,
+  id: string,
+  account: string,
+): Promise<TradingSnapshot> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/fee-account`,
+    { method: "PUT", body: { account } },
+  );
+  return normalizeTradingSnapshot(v);
+}
+
+async function clearTradingFeeAccount(
+  client: ApiClient,
+  id: string,
+): Promise<void> {
+  await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/fee-account`,
+    { method: "DELETE" },
+  );
+}
+
+/** Includes disabled connection/account pairs. */
+async function fetchTradingDestinations(
+  client: ApiClient,
+  code: string,
+  mode?: TradingMode,
+  signal?: AbortSignal,
+): Promise<TradingDestination[]> {
+  const params = new URLSearchParams();
+  if (mode !== undefined) {
+    params.set("mode", mode);
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(code)}/trading-destinations${query}`,
+    { signal },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizeArray(o.destinations, normalizeTradingDestination);
 }
 
 // --- Market data ---
@@ -2966,6 +3442,31 @@ async function submitOrder(
   return { id: approval.id, approval };
 }
 
+/** Send a paper order without creating an account or fetching order detail. */
+async function sendPaperOrder(
+  client: ApiClient,
+  body: Omit<CreateOrderBody, "mode"> & {
+    destination: {
+      connection?: string;
+      venueAccount?: string;
+      route: Record<string, string>;
+    };
+  },
+  signal?: AbortSignal,
+): Promise<PaperSendResult> {
+  const v = await client.request(`${client.baseUrl}/orders/send-paper`, {
+    method: "POST",
+    body,
+    signal,
+  });
+  const o = isObject(v) ? v : {};
+  const result: PaperSendResult = normalizeSignedApproval(v);
+  if (o.venueSend !== undefined) {
+    result.venueSend = normalizeVenueSendOutcome(o.venueSend);
+  }
+  return result;
+}
+
 /** POST /orders/submit, then fetch the created order for the dashboard table. */
 async function createOrder(
   client: ApiClient,
@@ -3122,16 +3623,20 @@ async function fetchOrderDetail(
   client: ApiClient,
   id: string,
   signal?: AbortSignal,
-): Promise<{ order: Order; events: OrderEvent[]; trades: Trade[] }> {
+): Promise<OrderDetail> {
   const v = await client.request(`${client.baseUrl}/orders/${encode(id)}`, {
     signal,
   });
   const o = isObject(v) ? v : {};
-  return {
+  const detail: OrderDetail = {
     order: normalizeOrder(pick(o, "order", "Order")),
     events: normalizeArray(pick(o, "events", "Events"), normalizeOrderEvent),
     trades: normalizeArray(pick(o, "trades", "Trades"), normalizeTrade),
   };
+  if (o.venueOrder !== undefined) {
+    detail.venueOrder = normalizeVenueOrder(o.venueOrder);
+  }
+  return detail;
 }
 
 // asNullableString maps an absent/null wire value to null and any string to
@@ -3992,6 +4497,20 @@ export function createOfficerApi(client: ApiClient) {
     fetchStatus: bind(fetchStatus),
     fetchHealth: bind(fetchHealth),
     fetchOverview: bind(fetchOverview),
+    fetchTrading: bind(fetchTrading),
+    createTradingConnection: bind(createTradingConnection),
+    updateTradingConnectionSettings: bind(updateTradingConnectionSettings),
+    setTradingConnectionEnabled: bind(setTradingConnectionEnabled),
+    checkTradingConnection: bind(checkTradingConnection),
+    upsertTradingInstrument: bind(upsertTradingInstrument),
+    deleteTradingInstrument: bind(deleteTradingInstrument),
+    verifyTradingSymbol: bind(verifyTradingSymbol),
+    searchTradingSymbols: bind(searchTradingSymbols),
+    grantTradingAccess: bind(grantTradingAccess),
+    revokeTradingAccess: bind(revokeTradingAccess),
+    setTradingFeeAccount: bind(setTradingFeeAccount),
+    clearTradingFeeAccount: bind(clearTradingFeeAccount),
+    fetchTradingDestinations: bind(fetchTradingDestinations),
     fetchMarketData: bind(fetchMarketData),
     createMarketDataInstance: bind(createMarketDataInstance),
     updateMarketDataInstanceSettings: bind(updateMarketDataInstanceSettings),
@@ -4051,6 +4570,7 @@ export function createOfficerApi(client: ApiClient) {
     fetchAdjustmentsPage: bind(fetchAdjustmentsPage),
     fetchAdjustments: bind(fetchAdjustments),
     submitOrder: bind(submitOrder),
+    sendPaperOrder: bind(sendPaperOrder),
     createOrder: bind(createOrder),
     checkOrder: bind(checkOrder),
     fetchOrdersPage: bind(fetchOrdersPage),

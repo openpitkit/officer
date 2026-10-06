@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   AlertTriangle,
@@ -70,8 +70,13 @@ import type {
   Source,
   SortOrder,
   Trade,
+  TradingDestination,
+  TradingMode,
+  TradingSnapshot,
+  VenueOrder,
 } from "@/api/types";
 import { useOrdersPage } from "@/api/useOrders";
+import { useTrading } from "@/api/useTrading";
 import { useTradesPage } from "@/api/useTrades";
 import { operatorOptions } from "@/lib/dataControlLabels";
 import {
@@ -100,6 +105,10 @@ import {
 import { shareUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
 import { cn } from "@/lib/utils";
+import {
+  readStoredPreference,
+  writeStoredPreference,
+} from "@/lib/browserStorage";
 import { OrderVerificationPanel } from "@/pages/OrderVerificationPanel";
 import { Autocomplete } from "@/components/Autocomplete";
 import {
@@ -157,6 +166,18 @@ import {
 } from "@/components/ui/table";
 import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
+
+const SEND_TO_VENUE_PREFERENCE = "pit-officer-orders-send-to-venue";
+const VENUE_MODE_PREFERENCE = "pit-officer-orders-venue-mode";
+
+const ALPACA_TIME_IN_FORCE = ["day", "gtc", "opg", "cls", "ioc", "fok"];
+
+type DetailBannerTone = "ok" | "warn" | "danger";
+
+interface DetailBanner {
+  text: string;
+  tone: DetailBannerTone;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -396,9 +417,10 @@ interface SubmitOrderDialogProps {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
-  onOpenDetail: (externalId: string, banner?: string) => void;
+  onOpenDetail: (externalId: string, banner?: DetailBanner) => void;
   accountSuggestions: string[];
   assetSuggestions: string[];
+  tradingSnapshot: TradingSnapshot | null;
   /** Pre-seed all input fields (clone path). */
   initialValues?: OrderInitialValues;
 }
@@ -410,12 +432,20 @@ function SubmitOrderDialog({
   onOpenDetail,
   accountSuggestions,
   assetSuggestions,
+  tradingSnapshot,
   initialValues,
 }: SubmitOrderDialogProps) {
   const { t } = useTranslation("orders");
+  const { t: tt } = useTranslation("trading");
   const { t: tc } = useTranslation();
-  const { checkOrder, createOrder, fetchAccounts, fetchAssets } =
-    useOfficerApi();
+  const {
+    checkOrder,
+    createOrder,
+    fetchAccounts,
+    fetchAssets,
+    fetchTradingDestinations,
+    sendPaperOrder,
+  } = useOfficerApi();
 
   const [externalId, setExternalId] = useState("");
   const [account, setAccount] = useState(initialValues?.account ?? "");
@@ -429,6 +459,16 @@ function SubmitOrderDialog({
     initialValues?.amountValue ?? "",
   );
   const [price, setPrice] = useState(initialValues?.price ?? "");
+  const [sendToVenue, setSendToVenue] = useState(false);
+  const [venueMode, setVenueMode] = useState<TradingMode | "">("");
+  const [destinations, setDestinations] = useState<TradingDestination[]>([]);
+  const [destinationsKey, setDestinationsKey] = useState("");
+  const [destinationsLoading, setDestinationsLoading] = useState(false);
+  const [destinationsError, setDestinationsError] = useState<string | null>(
+    null,
+  );
+  const [selectedConnection, setSelectedConnection] = useState("");
+  const [timeInForce, setTimeInForce] = useState("");
   const [submitMode, setSubmitMode] = useState<
     "immediate" | "drop_copy" | "hold" | null
   >(null);
@@ -457,11 +497,40 @@ function SubmitOrderDialog({
     string[]
   >([]);
   const checkAbortRef = useRef<AbortController | null>(null);
+  const destinationsAbortRef = useRef<AbortController | null>(null);
   const submitAbortRef = useRef<AbortController | null>(null);
   const accountFieldRef = useRef<HTMLInputElement | null>(null);
 
+  const currentDestinationsKey =
+    account.trim() !== "" && venueMode !== ""
+      ? JSON.stringify([account.trim(), venueMode])
+      : "";
+  const destinationsAreCurrent =
+    currentDestinationsKey !== "" && destinationsKey === currentDestinationsKey;
+  const selectedDestination = destinationsAreCurrent
+    ? destinations.find(
+        (destination) => destination.connection === selectedConnection,
+      )
+    : undefined;
+  const selectedDestinationIsSelectable =
+    selectedDestination !== undefined &&
+    selectedDestination.enabled &&
+    selectedDestination.state !== "unavailable";
+  const selectedProviderTitle = selectedDestination
+    ? (tradingSnapshot?.providers.find(
+        (provider) => provider.type === selectedDestination.provider,
+      )?.title ?? selectedDestination.provider)
+    : "";
+  const selectableDestinations = destinationsAreCurrent
+    ? destinations.filter(
+        (destination) =>
+          destination.enabled && destination.state !== "unavailable",
+      )
+    : [];
+
   useEffect(() => {
     return () => {
+      destinationsAbortRef.current?.abort();
       submitAbortRef.current?.abort();
     };
   }, []);
@@ -538,9 +607,62 @@ function SubmitOrderDialog({
     return () => controller.abort();
   }, [debouncedBaseAsset, debouncedQuoteAsset, fetchAssets]);
 
+  useEffect(() => {
+    if (!open || !sendToVenue || debouncedAccount === "" || venueMode === "") {
+      return;
+    }
+    destinationsAbortRef.current?.abort();
+    const controller = new AbortController();
+    destinationsAbortRef.current = controller;
+    const requestKey = JSON.stringify([debouncedAccount, venueMode]);
+    // A changed account or mode invalidates the old target immediately.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDestinationsKey(requestKey);
+    setDestinations([]);
+    setSelectedConnection("");
+    setTimeInForce("");
+    setDestinationsError(null);
+    setDestinationsLoading(true);
+    fetchTradingDestinations(debouncedAccount, venueMode, controller.signal)
+      .then((nextDestinations) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const selectable = nextDestinations.filter(
+          (destination) =>
+            destination.enabled && destination.state !== "unavailable",
+        );
+        setDestinations(nextDestinations);
+        setSelectedConnection(
+          selectable.length === 1 ? selectable[0].connection : "",
+        );
+        setDestinationsLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setDestinations([]);
+        setDestinationsError(errMessage(err));
+        setDestinationsLoading(false);
+      });
+    return () => {
+      controller.abort();
+      if (destinationsAbortRef.current === controller) {
+        destinationsAbortRef.current = null;
+      }
+    };
+  }, [
+    debouncedAccount,
+    fetchTradingDestinations,
+    open,
+    sendToVenue,
+    venueMode,
+  ]);
+
   // Debounced live check: fires after the shared search interval.
   useEffect(() => {
-    if (submitMode === "drop_copy") {
+    if (!sendToVenue && submitMode === "drop_copy") {
       checkAbortRef.current?.abort();
       checkAbortRef.current = null;
       // Drop-copy still runs policies, but their rejects are intentionally not
@@ -613,21 +735,33 @@ function SubmitOrderDialog({
     amountKind,
     amountValue,
     price,
+    sendToVenue,
     submitMode,
   ]);
 
   // Reseed from initialValues whenever the dialog opens (clone path).
   useEffect(() => {
     if (open) {
+      const storedSendToVenue =
+        readStoredPreference(SEND_TO_VENUE_PREFERENCE) === "true";
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccount(initialValues?.account ?? "");
       setBaseAsset(initialValues?.baseAsset ?? "");
       setQuoteAsset(initialValues?.quoteAsset ?? "");
       setExternalId("");
       setSide(initialValues?.side ?? "");
-      setAmountKind(initialValues?.amountKind ?? "");
+      setAmountKind(
+        storedSendToVenue && initialValues?.amountKind === "volume"
+          ? ""
+          : (initialValues?.amountKind ?? ""),
+      );
       setAmountValue(initialValues?.amountValue ?? "");
       setPrice(initialValues?.price ?? "");
+      setSendToVenue(storedSendToVenue);
+      const storedMode = readStoredPreference(VENUE_MODE_PREFERENCE);
+      setVenueMode(
+        storedMode === "paper" || storedMode === "live" ? storedMode : "",
+      );
       setSubmitMode(null);
       setDropCopyConfirmOpen(false);
       setBusy(false);
@@ -650,6 +784,12 @@ function SubmitOrderDialog({
     setAmountKind(initialValues?.amountKind ?? "");
     setAmountValue(initialValues?.amountValue ?? "");
     setPrice(initialValues?.price ?? "");
+    setDestinations([]);
+    setDestinationsKey("");
+    setDestinationsLoading(false);
+    setDestinationsError(null);
+    setSelectedConnection("");
+    setTimeInForce("");
     setSubmitMode(null);
     setDropCopyConfirmOpen(false);
     setMissingAccountConfirmOpen(false);
@@ -665,6 +805,130 @@ function SubmitOrderDialog({
   function handleClose() {
     reset();
     onClose();
+  }
+
+  function changeAccount(value: string) {
+    setAccount(value);
+  }
+
+  function changeVenueMode(mode: TradingMode) {
+    setVenueMode(mode);
+    writeStoredPreference(VENUE_MODE_PREFERENCE, mode);
+  }
+
+  function changeSendToVenue(next: boolean) {
+    setSendToVenue(next);
+    writeStoredPreference(SEND_TO_VENUE_PREFERENCE, String(next));
+    if (next && amountKind === "volume") {
+      setAmountKind("");
+    }
+  }
+
+  async function sendToSelectedVenue() {
+    if (
+      !account.trim() ||
+      !baseAsset.trim() ||
+      !quoteAsset.trim() ||
+      !amountValue.trim() ||
+      !isPositiveDecimalString(amountValue) ||
+      !isOptionalPositiveDecimalString(price) ||
+      amountKind !== "quantity" ||
+      venueMode !== "paper" ||
+      selectedDestination === undefined ||
+      !selectedDestinationIsSelectable ||
+      timeInForce === ""
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    submitAbortRef.current?.abort();
+    const controller = new AbortController();
+    submitAbortRef.current = controller;
+    try {
+      const submissionID = externalId.trim();
+      const result = await sendPaperOrder(
+        {
+          ...(submissionID ? { id: submissionID } : {}),
+          account: account.trim(),
+          baseAsset: baseAsset.trim(),
+          quoteAsset: quoteAsset.trim(),
+          side: side as OrderSide,
+          amountKind: "quantity",
+          amountValue: amountValue.trim(),
+          ...(price.trim() ? { price: price.trim() } : {}),
+          destination: {
+            connection: selectedDestination.connection,
+            venueAccount: selectedDestination.venueAccount,
+            route: { timeInForce },
+          },
+        },
+        controller.signal,
+      );
+      if (controller.signal.aborted) {
+        return;
+      }
+      let banner: DetailBanner;
+      if (result.venueSend?.status === "acknowledged") {
+        banner = {
+          tone: "ok",
+          text: t("addOrder.dialog.venue.acknowledged", {
+            venue: selectedProviderTitle,
+            mode: t(`addOrder.dialog.venue.modeValues.${venueMode}`),
+            venueOrderId: result.venueSend.venueOrder?.venueOrderId,
+          }),
+        };
+      } else if (result.venueSend?.status === "refused") {
+        banner = {
+          tone: "danger",
+          text: t("addOrder.dialog.venue.refused", {
+            venue: selectedProviderTitle,
+            error: result.venueSend.error,
+          }),
+        };
+      } else if (result.venueSend?.status === "unknown") {
+        banner = {
+          tone: "warn",
+          text: t("addOrder.dialog.venue.unknown", {
+            error: result.venueSend.error,
+          }),
+        };
+      } else {
+        banner = {
+          tone: "danger",
+          text: t("addOrder.dialog.venue.preTradeRejected"),
+        };
+      }
+      onCreated();
+      reset();
+      onClose();
+      onOpenDetail(result.id, banner);
+    } catch (err) {
+      const definitiveServerRefusal =
+        err instanceof ApiError &&
+        err.status !== undefined &&
+        ((err.status >= 400 && err.status < 500) ||
+          (err.status === 502 && err.code === "upstream"));
+      if (definitiveServerRefusal) {
+        setError(errMessage(err));
+      } else {
+        setError(
+          t("addOrder.dialog.venue.networkError", {
+            message:
+              err instanceof ApiError &&
+              err.status !== undefined &&
+              err.status >= 500
+                ? `HTTP ${err.status}`
+                : errMessage(err).replace(/[.。]$/, ""),
+          }),
+        );
+      }
+    } finally {
+      if (submitAbortRef.current === controller) {
+        submitAbortRef.current = null;
+      }
+      setBusy(false);
+    }
   }
 
   async function submit(missingAccount: MissingAccountPolicy = "reject") {
@@ -739,7 +1003,10 @@ function SubmitOrderDialog({
       onCreated();
       reset();
       onClose();
-      onOpenDetail(result.order.id, result.warning);
+      onOpenDetail(
+        result.order.id,
+        result.warning ? { text: result.warning, tone: "ok" } : undefined,
+      );
     } catch (err) {
       if (controller.signal.aborted) {
         return;
@@ -763,6 +1030,10 @@ function SubmitOrderDialog({
   }
 
   function requestSubmit() {
+    if (sendToVenue) {
+      void sendToSelectedVenue();
+      return;
+    }
     if (submitMode === "drop_copy") {
       setDropCopyConfirmOpen(true);
       return;
@@ -772,23 +1043,30 @@ function SubmitOrderDialog({
 
   // Every required choice must be made before the order can be submitted; the
   // button stays disabled until then so nothing slips through without a mode.
-  const canSubmit =
+  const dropCopyPriceRequired = !sendToVenue && submitMode === "drop_copy";
+  const commonFieldsValid =
     account.trim() !== "" &&
     baseAsset.trim() !== "" &&
     quoteAsset.trim() !== "" &&
     amountValue.trim() !== "" &&
     isPositiveDecimalString(amountValue) &&
     isOptionalPositiveDecimalString(price) &&
-    (submitMode !== "drop_copy" || isPositiveDecimalString(price)) &&
-    side !== "" &&
-    amountKind !== "" &&
-    submitMode !== null;
+    (!dropCopyPriceRequired || isPositiveDecimalString(price)) &&
+    side !== "";
+  const canSubmit = sendToVenue
+    ? commonFieldsValid &&
+      amountKind === "quantity" &&
+      venueMode === "paper" &&
+      selectedDestinationIsSelectable &&
+      selectedDestination?.provider === "alpaca" &&
+      timeInForce !== ""
+    : commonFieldsValid && amountKind !== "" && submitMode !== null;
 
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
-        if (!v) handleClose();
+        if (!v && !(sendToVenue && busy)) handleClose();
       }}
     >
       <DialogContent
@@ -801,7 +1079,11 @@ function SubmitOrderDialog({
         <DialogHeader>
           <DialogTitle>{t("addOrder.dialog.title")}</DialogTitle>
           <DialogDescription>
-            {t("addOrder.dialog.description")}
+            {t(
+              sendToVenue
+                ? "addOrder.dialog.venue.description"
+                : "addOrder.dialog.description",
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -830,7 +1112,7 @@ function SubmitOrderDialog({
               ref={accountFieldRef}
               id="so-account"
               value={account}
-              onChange={setAccount}
+              onChange={changeAccount}
               suggestions={
                 debouncedAccount === ""
                   ? []
@@ -840,9 +1122,236 @@ function SubmitOrderDialog({
               }
               placeholder={t("addOrder.dialog.accountPlaceholder")}
               disabled={busy}
-              onClear={() => setAccount("")}
+              onClear={() => changeAccount("")}
               clearLabel={tc("filters.clearField")}
             />
+          </div>
+          <div className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
+            <div className="flex items-center gap-2">
+              <input
+                id="so-send-to-venue"
+                type="checkbox"
+                checked={sendToVenue}
+                onChange={(event) =>
+                  changeSendToVenue(event.currentTarget.checked)
+                }
+                disabled={busy}
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              <Label htmlFor="so-send-to-venue">
+                {t("addOrder.dialog.venue.sendToVenue")}
+              </Label>
+            </div>
+
+            {sendToVenue && (
+              <div className="space-y-4 border-t border-border pt-3">
+                <div className="space-y-1.5">
+                  <Label id="so-venue-mode-label">
+                    {t("addOrder.dialog.venue.mode")}
+                  </Label>
+                  <div
+                    role="radiogroup"
+                    aria-labelledby="so-venue-mode-label"
+                    className="grid grid-cols-2 gap-2"
+                  >
+                    {(["paper", "live"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={venueMode === mode}
+                        onClick={() => changeVenueMode(mode)}
+                        disabled={busy}
+                        className={[
+                          "h-9 rounded-card border px-3 text-sm font-semibold transition-colors",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          venueMode === mode
+                            ? "border-accent bg-accent-dim text-text"
+                            : "border-border bg-surface text-muted-lt hover:bg-surface-hover hover:text-text",
+                        ].join(" ")}
+                      >
+                        {tt(`mode.${mode}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {venueMode === "live" && (
+                  <p className="text-xs text-muted-lt">
+                    {tt("create.liveNote")}
+                  </p>
+                )}
+
+                {debouncedAccount !== "" &&
+                  debouncedAccount === account.trim() &&
+                  venueMode !== "" && (
+                    <div className="space-y-2">
+                      <Label id="so-target-label">
+                        {t("addOrder.dialog.venue.target")}
+                      </Label>
+                      {destinationsAreCurrent && destinationsLoading && (
+                        <p className="text-xs text-muted-lt">
+                          {t("addOrder.dialog.venue.loadingTargets")}
+                        </p>
+                      )}
+                      {destinationsAreCurrent && destinationsError && (
+                        <p className="text-xs text-[var(--danger)]">
+                          {destinationsError}
+                        </p>
+                      )}
+                      {destinationsAreCurrent &&
+                        !destinationsLoading &&
+                        !destinationsError &&
+                        destinations.length > 0 && (
+                          <div
+                            role="radiogroup"
+                            aria-labelledby="so-target-label"
+                            className="space-y-2"
+                          >
+                            {destinations.map((destination) => {
+                              const selectable =
+                                destination.enabled &&
+                                destination.state !== "unavailable";
+                              const providerTitle =
+                                tradingSnapshot?.providers.find(
+                                  (provider) =>
+                                    provider.type === destination.provider,
+                                )?.title ?? destination.provider;
+                              return (
+                                <button
+                                  key={destination.connection}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={
+                                    selectedConnection ===
+                                    destination.connection
+                                  }
+                                  onClick={() => {
+                                    setSelectedConnection(
+                                      destination.connection,
+                                    );
+                                    setTimeInForce("");
+                                  }}
+                                  disabled={busy || !selectable}
+                                  className={[
+                                    "w-full rounded-card border px-3 py-2 text-left text-xs transition-colors",
+                                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                                    selectedConnection ===
+                                    destination.connection
+                                      ? "border-accent bg-accent-dim text-text"
+                                      : "border-border bg-surface text-muted-lt hover:bg-surface-hover hover:text-text",
+                                    !selectable &&
+                                      "cursor-not-allowed opacity-50 hover:bg-surface",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" ")}
+                                >
+                                  <span className="block font-semibold text-text">
+                                    {destination.label}
+                                  </span>
+                                  <span className="block">
+                                    {providerTitle}
+                                    {destination.venueAccount !== "" && (
+                                      <> · {destination.venueAccount}</>
+                                    )}
+                                  </span>
+                                  {!destination.enabled && (
+                                    <span className="block text-[var(--danger)]">
+                                      {t("addOrder.dialog.venue.disabled")}
+                                    </span>
+                                  )}
+                                  {destination.enabled &&
+                                    destination.state === "unavailable" && (
+                                      <span className="block text-[var(--danger)]">
+                                        {t(
+                                          "addOrder.dialog.venue.unavailable",
+                                          { error: destination.error },
+                                        )}
+                                      </span>
+                                    )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      {destinationsAreCurrent &&
+                        !destinationsLoading &&
+                        !destinationsError &&
+                        selectableDestinations.length === 0 && (
+                          <div className="space-y-1 text-xs text-muted-lt">
+                            <p>
+                              {t("addOrder.dialog.venue.noTargets", {
+                                mode: t(
+                                  `addOrder.dialog.venue.modeValues.${venueMode}`,
+                                ),
+                                account: account.trim(),
+                              })}
+                            </p>
+                            <Link
+                              to="/trading-connections"
+                              className="font-medium text-accent underline-offset-2 hover:underline"
+                            >
+                              {t("addOrder.dialog.venue.setupConnection")}
+                            </Link>
+                          </div>
+                        )}
+                    </div>
+                  )}
+
+                {selectedDestinationIsSelectable &&
+                  selectedDestination.provider === "alpaca" && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="so-time-in-force">
+                        {t("addOrder.dialog.venue.timeInForce")}
+                      </Label>
+                      <Select
+                        value={timeInForce}
+                        onValueChange={setTimeInForce}
+                        required
+                        disabled={busy}
+                      >
+                        <SelectTrigger
+                          id="so-time-in-force"
+                          className="h-9 w-full text-sm"
+                        >
+                          <SelectValue
+                            placeholder={t(
+                              "addOrder.dialog.venue.chooseTimeInForce",
+                            )}
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ALPACA_TIME_IN_FORCE.map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {t(
+                                `addOrder.dialog.venue.timeInForceOptions.${value}`,
+                              )}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <a
+                        href="https://docs.alpaca.markets/us/docs/orders-at-alpaca#time-in-force"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
+                      >
+                        {t("addOrder.dialog.venue.aboutTimeInForce")}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  )}
+
+                {selectedDestinationIsSelectable &&
+                  selectedDestination?.provider !== "alpaca" && (
+                    <p className="text-xs text-[var(--danger)]">
+                      {t("addOrder.dialog.venue.unsupportedProvider", {
+                        provider: selectedDestination?.provider,
+                      })}
+                    </p>
+                  )}
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -921,66 +1430,68 @@ function SubmitOrderDialog({
               })}
             </div>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <Label id="so-mode-label">
-                {t("addOrder.dialog.submitMode")}
-              </Label>
-              <a
-                href="/docs"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
+          {!sendToVenue && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <Label id="so-mode-label">
+                  {t("addOrder.dialog.submitMode")}
+                </Label>
+                <a
+                  href="/docs"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
+                >
+                  {t("addOrder.dialog.openApi")}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+              <div
+                role="radiogroup"
+                aria-labelledby="so-mode-label"
+                className="grid grid-cols-3 gap-2"
               >
-                {t("addOrder.dialog.openApi")}
-                <ExternalLink className="h-3 w-3" />
-              </a>
+                {(["immediate", "drop_copy", "hold"] as const).map((mode) => {
+                  const selected = submitMode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setSubmitMode(mode)}
+                      disabled={busy}
+                      className={[
+                        "min-h-[4.5rem] rounded-card border px-3 py-2 text-left transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        selected
+                          ? "border-accent bg-accent-dim text-text"
+                          : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
+                      ].join(" ")}
+                    >
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-text">
+                        {mode === "drop_copy" && (
+                          <AlertTriangle className="h-3.5 w-3.5 text-[var(--danger)]" />
+                        )}
+                        {mode === "immediate"
+                          ? t("addOrder.dialog.submitModeImmediate")
+                          : mode === "drop_copy"
+                            ? t("addOrder.dialog.submitModeDropCopy")
+                            : t("addOrder.dialog.submitModeHold")}
+                      </span>
+                      <span className="mt-1 block text-[0.6875rem] leading-snug">
+                        {mode === "immediate"
+                          ? t("addOrder.dialog.submitModeImmediateHelp")
+                          : mode === "drop_copy"
+                            ? t("addOrder.dialog.submitModeDropCopyHelp")
+                            : t("addOrder.dialog.submitModeHoldHelp")}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <div
-              role="radiogroup"
-              aria-labelledby="so-mode-label"
-              className="grid grid-cols-3 gap-2"
-            >
-              {(["immediate", "drop_copy", "hold"] as const).map((mode) => {
-                const selected = submitMode === mode;
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    onClick={() => setSubmitMode(mode)}
-                    disabled={busy}
-                    className={[
-                      "min-h-[4.5rem] rounded-card border px-3 py-2 text-left transition-colors",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      selected
-                        ? "border-accent bg-accent-dim text-text"
-                        : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
-                    ].join(" ")}
-                  >
-                    <span className="flex items-center gap-1.5 text-xs font-semibold text-text">
-                      {mode === "drop_copy" && (
-                        <AlertTriangle className="h-3.5 w-3.5 text-[var(--danger)]" />
-                      )}
-                      {mode === "immediate"
-                        ? t("addOrder.dialog.submitModeImmediate")
-                        : mode === "drop_copy"
-                          ? t("addOrder.dialog.submitModeDropCopy")
-                          : t("addOrder.dialog.submitModeHold")}
-                    </span>
-                    <span className="mt-1 block text-[0.6875rem] leading-snug">
-                      {mode === "immediate"
-                        ? t("addOrder.dialog.submitModeImmediateHelp")
-                        : mode === "drop_copy"
-                          ? t("addOrder.dialog.submitModeDropCopyHelp")
-                          : t("addOrder.dialog.submitModeHoldHelp")}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="so-amount">{t("addOrder.dialog.amount")}</Label>
             <div className="flex gap-2">
@@ -998,7 +1509,7 @@ function SubmitOrderDialog({
                       role="radio"
                       aria-checked={selected}
                       onClick={() => setAmountKind(value)}
-                      disabled={busy}
+                      disabled={busy || (sendToVenue && value === "volume")}
                       className={[
                         "h-9 rounded-card border px-2.5 text-xs font-medium transition-colors",
                         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -1024,11 +1535,16 @@ function SubmitOrderDialog({
                 clearLabel={tc("filters.clearField")}
               />
             </div>
+            {sendToVenue && (
+              <p className="text-[0.6875rem] text-muted">
+                {t("addOrder.dialog.venue.quantityHint")}
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="so-price">
               {t(
-                submitMode === "drop_copy"
+                dropCopyPriceRequired
                   ? "addOrder.dialog.limitPriceDropCopy"
                   : "addOrder.dialog.limitPrice",
               )}
@@ -1038,7 +1554,7 @@ function SubmitOrderDialog({
               value={price}
               onChange={setPrice}
               placeholder={t(
-                submitMode === "drop_copy"
+                dropCopyPriceRequired
                   ? "addOrder.dialog.limitPriceDropCopyPlaceholder"
                   : "addOrder.dialog.limitPricePlaceholder",
               )}
@@ -1047,14 +1563,16 @@ function SubmitOrderDialog({
               onClear={() => setPrice("")}
               clearLabel={tc("filters.clearField")}
             />
-            {submitMode === "drop_copy" && (
+            {dropCopyPriceRequired && (
               <p className="text-xs text-muted">
                 {t("addOrder.dialog.limitPriceDropCopyHint")}
               </p>
             )}
           </div>
 
-          {submitMode !== "drop_copy" && <CheckPreview state={checkState} />}
+          {(sendToVenue || submitMode !== "drop_copy") && (
+            <CheckPreview state={checkState} />
+          )}
 
           {error && (
             <ErrorBanner message={error} onDismiss={() => setError(null)} />
@@ -1074,11 +1592,21 @@ function SubmitOrderDialog({
               onClick={requestSubmit}
               disabled={busy || !canSubmit}
             >
-              {busy
-                ? t("addOrder.dialog.submitBusy")
-                : submitMode === "drop_copy"
-                  ? t("addOrder.dialog.submitDropCopy")
-                  : t("addOrder.dialog.submit")}
+              {sendToVenue
+                ? selectedDestinationIsSelectable
+                  ? t("addOrder.dialog.venue.sendButton", {
+                      venue: selectedProviderTitle,
+                      mode:
+                        venueMode === ""
+                          ? ""
+                          : t(`addOrder.dialog.venue.modeValues.${venueMode}`),
+                    })
+                  : t("addOrder.dialog.venue.sendToVenue")
+                : busy
+                  ? t("addOrder.dialog.submitBusy")
+                  : submitMode === "drop_copy"
+                    ? t("addOrder.dialog.submitDropCopy")
+                    : t("addOrder.dialog.submit")}
             </Button>
           </DialogFooter>
         </div>
@@ -1910,13 +2438,20 @@ interface OrderDetailDialogProps {
   /** Called after a workflow shortcut succeeds so the page refetches server
    *  state. */
   onWorkflowShortcutCompleted: (orderExternalId: string) => void;
-  successBanner?: string;
+  successBanner?: DetailBanner;
+  tradingSnapshot: TradingSnapshot | null;
 }
 
 type DetailState =
   | { phase: "loading" }
   | { phase: "error"; message: string }
-  | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[] };
+  | {
+      phase: "ready";
+      order: Order;
+      events: OrderEvent[];
+      trades: Trade[];
+      venueOrder?: VenueOrder;
+    };
 
 /** Whether a timeline event carries a persisted attestation the operator can
  *  reproduce and verify. A signed event has a real Ed25519 signature; an
@@ -1953,10 +2488,12 @@ function OrderDetailDialog({
   onCloneExecReport,
   onWorkflowShortcutCompleted,
   successBanner,
+  tradingSnapshot,
 }: OrderDetailDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
   const { fetchOrderDetail, confirmOrder, cancelOrder } = useOfficerApi();
+  const globalAccountFilter = useGlobalAccountFilter();
 
   const [state, setState] = useState<DetailState>({ phase: "loading" });
   // The event whose per-event reproduction/verification panel is open, or null
@@ -1970,6 +2507,7 @@ function OrderDetailDialog({
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [cancelFormOpen, setCancelFormOpen] = useState(false);
   const [cancelLeavesQuantity, setCancelLeavesQuantity] = useState("");
+  const [pollError, setPollError] = useState<string | null>(null);
 
   useEffect(() => {
     if (orderExternalId === null) {
@@ -1983,13 +2521,15 @@ function OrderDetailDialog({
     setShortcutError(null);
     setCancelFormOpen(false);
     setCancelLeavesQuantity("");
+    setPollError(null);
     const controller = new AbortController();
     fetchOrderDetail(orderExternalId, controller.signal)
-      .then(({ order, events, trades }) => {
+      .then(({ order, events, trades, venueOrder }) => {
         if (controller.signal.aborted) {
           return;
         }
-        setState({ phase: "ready", order, events, trades });
+        setPollError(null);
+        setState({ phase: "ready", order, events, trades, venueOrder });
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
@@ -1998,6 +2538,39 @@ function OrderDetailDialog({
       });
     return () => controller.abort();
   }, [fetchOrderDetail, orderExternalId, refreshKey]);
+
+  const pollVenueOrder =
+    state.phase === "ready" &&
+    state.venueOrder !== undefined &&
+    ACTIVE_ORDER_STATUSES.some((status) => status === state.order.status);
+
+  useEffect(() => {
+    if (orderExternalId === null || !pollVenueOrder) {
+      return;
+    }
+    let controller: AbortController | null = null;
+    const timer = window.setInterval(() => {
+      controller?.abort();
+      controller = new AbortController();
+      const requestController = controller;
+      fetchOrderDetail(orderExternalId, requestController.signal)
+        .then(({ order, events, trades, venueOrder }) => {
+          if (!requestController.signal.aborted) {
+            setPollError(null);
+            setState({ phase: "ready", order, events, trades, venueOrder });
+          }
+        })
+        .catch((err: unknown) => {
+          if (!requestController.signal.aborted) {
+            setPollError(errMessage(err));
+          }
+        });
+    }, 5000);
+    return () => {
+      window.clearInterval(timer);
+      controller?.abort();
+    };
+  }, [fetchOrderDetail, orderExternalId, pollVenueOrder]);
 
   if (orderExternalId === null) {
     return null;
@@ -2022,6 +2595,7 @@ function OrderDetailDialog({
   // shows a non-terminal order with a recorded pre-trade accept attestation.
   const canUseWorkflowShortcut =
     state.phase === "ready" &&
+    state.venueOrder === undefined &&
     !TERMINAL_ORDER_STATUSES.some((status) => status === state.order.status) &&
     state.events.some(
       (event) =>
@@ -2032,6 +2606,49 @@ function OrderDetailDialog({
   // the request's own shape, a supplied one must survive the report contract.
   const cancelLeavesValid =
     cancelLeavesQuantity === "" || isOpenQuantityString(cancelLeavesQuantity);
+
+  const venueOrder = state.phase === "ready" ? state.venueOrder : undefined;
+  const venueConnection = venueOrder
+    ? tradingSnapshot?.connections.find(
+        (connection) => connection.id === venueOrder.connection,
+      )
+    : undefined;
+  const venueTitle = venueConnection
+    ? (tradingSnapshot?.providers.find(
+        (provider) => provider.type === venueConnection.provider,
+      )?.title ?? venueConnection.provider)
+    : "";
+  const venueOrderIdState =
+    state.phase === "ready" && venueOrder && !venueOrder.venueOrderId
+      ? !venueOrder.sendAttempted
+        ? t("detail.dialog.venue.notSentYet")
+        : TERMINAL_ORDER_STATUSES.some(
+              (status) => status === state.order.status,
+            )
+          ? t("detail.dialog.venue.notAcknowledged")
+          : t("detail.dialog.venue.awaitingAcknowledgement")
+      : "";
+  const venueStatus =
+    state.phase === "ready" && venueOrder
+      ? state.order.status === "committed" ||
+        state.order.status === "partially_filled"
+        ? t("detail.dialog.venue.statusOpen")
+        : state.order.status === "filled"
+          ? t("detail.dialog.venue.statusFilled")
+          : state.order.status === "cancelled"
+            ? t("detail.dialog.venue.statusCancelled")
+            : t(`filter.status.${state.order.status}`)
+      : "";
+  const adjustmentsLinkAllowed =
+    state.phase === "ready" &&
+    (globalAccountFilter.account === "" ||
+      globalAccountFilter.account === state.order.account);
+  const bannerClass =
+    successBanner?.tone === "danger"
+      ? "border-[var(--danger)] bg-[var(--danger-dim)] text-[var(--danger)]"
+      : successBanner?.tone === "warn"
+        ? "border-[var(--warn)] bg-[var(--warn-dim)] text-[var(--warn)]"
+        : "border-[var(--ok)] bg-[var(--ok-dim)] text-[var(--ok)]";
 
   async function runWorkflowShortcut(action: "confirm" | "cancel") {
     if (
@@ -2098,8 +2715,13 @@ function OrderDetailDialog({
           </DialogHeader>
 
           {successBanner && (
-            <div className="rounded-card border border-[var(--ok)] bg-[var(--ok-dim)] px-3 py-2 text-xs font-medium text-[var(--ok)]">
-              {successBanner}
+            <div
+              className={cn(
+                "rounded-card border px-3 py-2 text-xs font-medium",
+                bannerClass,
+              )}
+            >
+              {successBanner.text}
             </div>
           )}
 
@@ -2116,6 +2738,13 @@ function OrderDetailDialog({
 
           {state.phase === "error" && (
             <p className="text-xs text-[var(--danger)]">{state.message}</p>
+          )}
+
+          {pollError && (
+            <ErrorBanner
+              message={pollError}
+              onDismiss={() => setPollError(null)}
+            />
           )}
 
           {state.phase === "ready" && (
@@ -2196,6 +2825,93 @@ function OrderDetailDialog({
                   </div>
                 )}
               </div>
+
+              {venueOrder && (
+                <div className="space-y-3">
+                  <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
+                    {t("detail.dialog.venue.sectionTitle")}
+                  </p>
+                  <div className="grid grid-cols-2 gap-3 rounded-card border border-border bg-surface-2 p-3 text-xs">
+                    <div>
+                      <span className="text-muted-lt">
+                        {t("detail.dialog.venue.connection")}
+                      </span>
+                      <div className="mt-0.5 text-text">
+                        {venueConnection?.label ?? venueOrder.connection}
+                      </div>
+                    </div>
+                    {venueOrder.venueAccount !== "" && (
+                      <div>
+                        <span className="text-muted-lt">
+                          {t("detail.dialog.venue.venueAccount")}
+                        </span>
+                        <div className="nums mt-0.5 text-text">
+                          {venueOrder.venueAccount}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-muted-lt">
+                        {t("detail.dialog.venue.venueOrderId")}
+                      </span>
+                      <div className="mt-0.5 text-text">
+                        {venueOrder.venueOrderId ? (
+                          <IdCell
+                            value={venueOrder.venueOrderId}
+                            copyTitle={t("common:rowActions.copyId")}
+                            copiedTitle={t("common:rowActions.copiedId")}
+                          />
+                        ) : (
+                          venueOrderIdState
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-muted-lt">
+                        {t("detail.dialog.venue.venueStatus")}
+                      </span>
+                      <div className="mt-0.5 text-text">{venueStatus}</div>
+                    </div>
+                    <div>
+                      <span className="text-muted-lt">
+                        {t("detail.dialog.venue.timeInForce")}
+                      </span>
+                      <div className="nums mt-0.5 text-text">
+                        {venueOrder.route.timeInForce.toUpperCase()}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-muted-lt">
+                        {t("detail.dialog.venue.linkedAt")}
+                      </span>
+                      <div className="nums mt-0.5 text-text">
+                        {formatDateTime(venueOrder.createdAt)}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-lt">
+                    {venueConnection
+                      ? t("detail.dialog.venue.fees", { venue: venueTitle })
+                      : t("detail.dialog.venue.feesUnknownProvider")}
+                    {adjustmentsLinkAllowed && (
+                      <>
+                        {" "}
+                        <Link
+                          to={`/positions?tab=history&account=${encodeURIComponent(
+                            state.order.account,
+                          )}&source=system`}
+                          className="font-medium text-accent underline-offset-2 hover:underline"
+                        >
+                          {t("detail.dialog.venue.viewAdjustments")}
+                        </Link>
+                      </>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-lt">
+                    {t("detail.dialog.venue.managedByVenue")}
+                  </p>
+                </div>
+              )}
 
               {/* Event timeline */}
               <div>
@@ -2371,7 +3087,8 @@ function OrderDetailDialog({
                               <GitFork className="h-3.5 w-3.5" />
                             </Button>
                           )}
-                          {ev.type === "fill" &&
+                          {!venueOrder &&
+                            ev.type === "fill" &&
                             ev.fillQuantity !== undefined && (
                               <Button
                                 variant="ghost"
@@ -2411,7 +3128,11 @@ function OrderDetailDialog({
                 </p>
                 {state.trades.length === 0 ? (
                   <p className="text-xs text-muted-lt">
-                    {t("detail.dialog.trades.empty")}
+                    {t(
+                      venueOrder
+                        ? "detail.dialog.trades.emptyVenue"
+                        : "detail.dialog.trades.empty",
+                    )}
                   </p>
                 ) : (
                   <Table>
@@ -2509,22 +3230,24 @@ function OrderDetailDialog({
                             {formatDateTime(trade.at)}
                           </TableCell>
                           <TableCell className="text-right">
-                            <RowActions>
-                              <CloneButton
-                                title={t("clone.execReportAriaLabel", {
-                                  tradeId: trade.id,
-                                })}
-                                onClick={() =>
-                                  onCloneExecReport(orderExternalId, {
-                                    quantity: trade.quantity,
-                                    price: trade.price,
-                                    lockPrice: trade.lockPrice,
-                                    commission: trade.commission,
-                                    leaves: state.order.leavesQuantity,
-                                  })
-                                }
-                              />
-                            </RowActions>
+                            {!venueOrder && (
+                              <RowActions>
+                                <CloneButton
+                                  title={t("clone.execReportAriaLabel", {
+                                    tradeId: trade.id,
+                                  })}
+                                  onClick={() =>
+                                    onCloneExecReport(orderExternalId, {
+                                      quantity: trade.quantity,
+                                      price: trade.price,
+                                      lockPrice: trade.lockPrice,
+                                      commission: trade.commission,
+                                      leaves: state.order.leavesQuantity,
+                                    })
+                                  }
+                                />
+                              </RowActions>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -2613,22 +3336,24 @@ function OrderDetailDialog({
               )}
 
               <DialogFooter>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="sm:mr-auto"
-                  onClick={() =>
-                    onExecReport(
-                      orderExternalId,
-                      execReportInitialValuesFromOrder(
-                        state.order,
-                        state.events,
-                      ),
-                    )
-                  }
-                >
-                  {t("detail.dialog.trades.submitExecReport")}
-                </Button>
+                {!venueOrder && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="sm:mr-auto"
+                    onClick={() =>
+                      onExecReport(
+                        orderExternalId,
+                        execReportInitialValuesFromOrder(
+                          state.order,
+                          state.events,
+                        ),
+                      )
+                    }
+                  >
+                    {t("detail.dialog.trades.submitExecReport")}
+                  </Button>
+                )}
                 {state.phase === "ready" && (
                   <Button
                     variant="outline"
@@ -3711,6 +4436,9 @@ export function Orders() {
 
   const [params] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
+  const tradingResult = useTrading();
+  const tradingSnapshot =
+    tradingResult.load.state === "ready" ? tradingResult.load.data : null;
   // A deep link from the Assets screen lands on the trades tab when asked
   // (?tab=trades) and seeds the matching base-asset filter on both tabs.
   const [tab, setTab] = useState<TabId>(
@@ -4465,7 +5193,7 @@ export function Orders() {
   >(params.get("order"));
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const [detailSuccessBanner, setDetailSuccessBanner] = useState<
-    string | undefined
+    DetailBanner | undefined
   >(undefined);
   const [execReportOrderExternalId, setExecReportOrderExternalId] = useState<
     string | null
@@ -4482,7 +5210,7 @@ export function Orders() {
     setDetailOrderExternalId(externalId);
   }
 
-  function openDetailWithBanner(externalId: string, banner: string) {
+  function openDetailWithBanner(externalId: string, banner: DetailBanner) {
     setDetailSuccessBanner(banner);
     setDetailOrderExternalId(externalId);
   }
@@ -5928,10 +6656,14 @@ export function Orders() {
         }}
         onCreated={ordersResult.reload}
         onOpenDetail={(id, banner) =>
-          openDetailWithBanner(id, banner ?? t("addOrder.added"))
+          openDetailWithBanner(
+            id,
+            banner ?? { text: t("addOrder.added"), tone: "ok" },
+          )
         }
         accountSuggestions={allAccountSuggestions}
         assetSuggestions={assetSuggestions}
+        tradingSnapshot={tradingSnapshot}
         initialValues={submitInitialValues}
       />
 
@@ -5947,6 +6679,7 @@ export function Orders() {
           ordersResult.reload();
         }}
         successBanner={detailSuccessBanner}
+        tradingSnapshot={tradingSnapshot}
       />
 
       <ExecReportDialog

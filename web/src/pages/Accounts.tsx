@@ -46,6 +46,7 @@ import type {
 } from "@/api/types";
 import { useAccountsPage } from "@/api/useAccounts";
 import { useGroupsPage } from "@/api/useGroups";
+import { useTrading } from "@/api/useTrading";
 import { validateAccountID } from "@/api/validate";
 import { Autocomplete } from "@/components/Autocomplete";
 import { AssetCodeSuggestionFailure } from "@/components/AssetCodeSuggestionFailure";
@@ -1801,6 +1802,7 @@ function DeleteAccountConfirm({
 }) {
   const { t } = useTranslation("accounts");
   const { deleteAccount } = useOfficerApi();
+  const { load: tradingLoad } = useTrading();
   const [error, setError] = useState<string | null>(null);
   const [dependents, setDependents] = useState<ApiErrorDependent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -1843,6 +1845,12 @@ function DeleteAccountConfirm({
             <span className="nums text-accent">{account?.code}</span>{" "}
             {t("deleteAccount.descriptionSuffix")}
           </AlertDialogDescription>
+          {tradingLoad.state === "ready" &&
+            tradingLoad.data.connections.length > 0 && (
+              <p className="text-xs text-[var(--danger)]">
+                {t("deleteAccount.tradingWarning")}
+              </p>
+            )}
         </AlertDialogHeader>
         {dependents.length > 0 && (
           <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] p-3 text-xs">

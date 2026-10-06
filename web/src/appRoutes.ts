@@ -52,6 +52,7 @@ export const appRoutes = [
     redirectTo: "/orders",
   },
   { id: "market-data", path: "/market-data", order: 80 },
+  { id: "trading-connections", path: "/trading-connections", order: 85 },
   { id: "audit", path: "/audit", order: 90 },
   { id: "mcp-access", path: "/mcp-access", order: 100 },
   { id: "signing-keys", path: "/signing-keys", order: 110 },

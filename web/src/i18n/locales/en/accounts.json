@@ -324,11 +324,13 @@
     "submit": "Delete"
   },
   "deleteAccount": {
+    "tradingWarning": "Trading connections exist. Deleting this account deletes all its data by cascade, including fees booked from trading connections. After Officer restarts, those venue fees may be booked again to the connection's current fee account.",
     "title": "Delete account?",
     "descriptionPrefix": "Account",
     "descriptionSuffix": "will be permanently removed. Dependent trading records are deleted only after explicit force confirmation.",
     "dependentsTitle": "Dependent rows block deletion",
     "dependentKinds": {
+      "trading_access": "Trading connection access",
       "balances": "Balances",
       "orders": "Orders",
       "order_events": "Order events",

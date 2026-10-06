@@ -34,10 +34,12 @@ import type {
   BusinessCsvEntity,
   BusinessCsvExportFilters,
   Group,
+  TradingSnapshot,
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
 import { useAccountsPage } from "@/api/useAccounts";
 import { useGroupsPage } from "@/api/useGroups";
+import { useTrading } from "@/api/useTrading";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { ApiError, AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework";
 import i18n from "@/i18n";
@@ -47,6 +49,7 @@ import { ThemeProvider } from "@/theme/ThemeProvider";
 
 vi.mock("@/api/useAccounts", () => ({ useAccountsPage: vi.fn() }));
 vi.mock("@/api/useGroups", () => ({ useGroupsPage: vi.fn() }));
+vi.mock("@/api/useTrading", () => ({ useTrading: vi.fn() }));
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
     load: { state: "ready", data: { restartRequired: false }, error: null },
@@ -103,6 +106,29 @@ const fetchGroupsMock = vi.fn();
 const blockAccountMock = vi.fn();
 const unblockAccountMock = vi.fn();
 const unblockGroupMock = vi.fn();
+const useTradingMock = vi.mocked(useTrading);
+const deleteAccountMock = vi.fn();
+const tradingSnapshot: TradingSnapshot = {
+  providers: [],
+  credentialsSealed: true,
+  connections: [
+    {
+      id: "alpaca-1",
+      provider: "alpaca",
+      label: "Alpaca paper",
+      mode: "paper",
+      enabled: false,
+      venueIdentity: "venue-123",
+      state: "stopped",
+      secrets: { apiKey: true, apiSecret: true },
+      feeAccount: "",
+      instruments: [],
+      access: [],
+    },
+  ],
+};
+const tradingWarning =
+  "Trading connections exist. Deleting this account deletes all its data by cascade, including fees booked from trading connections. After Officer restarts, those venue fees may be booked again to the connection's current fee account.";
 const useAccountsMock = vi.mocked(useAccountsPage);
 const useGroupsMock = vi.mocked(useGroupsPage);
 
@@ -248,6 +274,7 @@ function renderAccounts(initialEntry = "/accounts") {
         blockAccount: blockAccountMock,
         unblockAccount: unblockAccountMock,
         unblockGroup: unblockGroupMock,
+        deleteAccount: deleteAccountMock,
       },
     },
   );
@@ -255,6 +282,9 @@ function renderAccounts(initialEntry = "/accounts") {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  useTradingMock.mockReturnValue(
+    ready({ ...tradingSnapshot, connections: [] }),
+  );
   // Pin the locale so assertions match the English catalog regardless of the
   // detector's navigator guess under jsdom.
   await i18n.changeLanguage("en");
@@ -337,6 +367,75 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("DeleteAccountConfirm", () => {
+  it("warns about trading fees even when credentials are sealed", async () => {
+    useTradingMock.mockReturnValue(ready(tradingSnapshot));
+    const user = userEvent.setup();
+    renderAccounts();
+    await user.click(screen.getByRole("button", { name: "Delete desk-alpha" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete account?" });
+    expect(await within(dialog).findByText(tradingWarning)).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Delete" }),
+    ).toBeEnabled();
+  });
+
+  it("does not warn when there are no trading connections", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+    await user.click(screen.getByRole("button", { name: "Delete desk-alpha" }));
+    expect(
+      within(screen.getByRole("alertdialog")).queryByText(tradingWarning),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["loading", "error"])(
+    "does not warn when trading is %s",
+    async (state) => {
+      if (state === "loading") {
+        useTradingMock.mockReturnValue({
+          load: { state: "loading", data: null, error: null },
+          reload: vi.fn(),
+        });
+      } else {
+        useTradingMock.mockReturnValue({
+          load: { state: "error", data: null, error: "trading unavailable" },
+          reload: vi.fn(),
+        });
+      }
+      const user = userEvent.setup();
+      renderAccounts();
+      await user.click(
+        screen.getByRole("button", { name: "Delete desk-alpha" }),
+      );
+      expect(
+        within(screen.getByRole("alertdialog")).queryByText(tradingWarning),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("labels trading access dependents after a refused delete", async () => {
+    const user = userEvent.setup();
+    const error = new ApiError(
+      "account has dependents",
+      "has_dependents",
+      409,
+      [{ kind: "trading_access", count: 2 }],
+    );
+    deleteAccountMock.mockRejectedValue(error);
+    renderAccounts();
+    await user.click(screen.getByRole("button", { name: "Delete desk-alpha" }));
+    const dialog = screen.getByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    const label = await within(dialog).findByText("Trading connection access");
+    expect(label.closest("li")).toHaveTextContent("2");
+    expect(deleteAccountMock).toHaveBeenCalledWith("desk-alpha", false);
+    expect(
+      within(dialog).getByRole("button", { name: "Force delete" }),
+    ).toBeEnabled();
+  });
 });
 
 describe("CreateAccountDialog", () => {

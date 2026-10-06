@@ -44,6 +44,16 @@ const navigateMock = vi.fn();
 
 vi.mock("@/api/useAssets", () => ({ useAssets: vi.fn() }));
 vi.mock("@/api/useAssetClasses", () => ({ useAssetClasses: vi.fn() }));
+vi.mock("@/api/useTrading", () => ({
+  useTrading: () => ({
+    load: {
+      state: "ready",
+      data: { providers: [], connections: [], credentialsSealed: true },
+      error: null,
+    },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
     load: { state: "ready", data: { restartRequired: false }, error: null },

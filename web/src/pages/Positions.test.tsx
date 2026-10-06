@@ -45,6 +45,16 @@ import { ThemeProvider } from "@/theme/ThemeProvider";
 vi.mock("@/api/useAccounts", () => ({ useAccounts: vi.fn() }));
 vi.mock("@/api/useAdjustments", () => ({ useAdjustmentsPage: vi.fn() }));
 vi.mock("@/api/useBalances", () => ({ useBalancesPage: vi.fn() }));
+vi.mock("@/api/useTrading", () => ({
+  useTrading: () => ({
+    load: {
+      state: "ready",
+      data: { providers: [], connections: [], credentialsSealed: true },
+      error: null,
+    },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
     load: { state: "ready", data: { restartRequired: false }, error: null },

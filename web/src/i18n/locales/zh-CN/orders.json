@@ -189,7 +189,41 @@
       "validationError": "账户、标的和数量为必填项。",
       "missingAccountConfirmTitle": "账户不存在",
       "missingAccountConfirmDescription": "账户 {{account}} 尚不存在。是否以默认设置（无分组、无货币）创建该账户并继续？",
-      "missingAccountConfirmAction": "创建账户并继续"
+      "missingAccountConfirmAction": "创建账户并继续",
+      "venue": {
+        "description": "订单将由风控引擎评估，并在批准后发送到所选交易场所。",
+        "sendToVenue": "发送到交易场所",
+        "mode": "模式",
+        "modeValues": {
+          "paper": "模拟",
+          "live": "实盘"
+        },
+        "target": "目标",
+        "loadingTargets": "正在加载目标…",
+        "disabled": "已禁用",
+        "unavailable": "不可用：{{error}}",
+        "noTargets": "账户 {{account}} 没有可用的{{mode}}目标。",
+        "setupConnection": "设置交易连接",
+        "timeInForce": "有效期",
+        "chooseTimeInForce": "选择有效期",
+        "timeInForceOptions": {
+          "day": "DAY - 当日有效",
+          "gtc": "GTC - 撤销前有效",
+          "opg": "OPG - 开盘时",
+          "cls": "CLS - 收盘时",
+          "ioc": "IOC - 立即成交或取消",
+          "fok": "FOK - 全部成交或取消"
+        },
+        "aboutTimeInForce": "关于有效期",
+        "unsupportedProvider": "此面板不支持向 {{provider}} 发送订单。",
+        "quantityHint": "订单按数量发送到交易场所。",
+        "sendButton": "发送到 {{venue}} · {{mode}}",
+        "acknowledged": "已发送到 {{venue}} · {{mode}}。交易场所订单 {{venueOrderId}}。",
+        "refused": "订单未能下达到 {{venue}}：{{error}}。Officer 已将其记录为已取消。",
+        "unknown": "交易场所未确认订单：{{error}}。Officer 正在执行对账；以下订单状态为权威状态。",
+        "preTradeRejected": "交易前检查拒绝了订单。未向交易场所发送任何内容。",
+        "networkError": "发送请求未完成：{{message}}。再次发送前请检查订单 - 该订单可能已经存在。"
+      }
     }
   },
 
@@ -309,7 +343,27 @@
       "trades": {
         "sectionTitle": "该订单的成交记录",
         "empty": "暂无成交记录。提交执行报告以创建成交。",
+        "emptyVenue": "尚无来自交易场所的成交。",
         "submitExecReport": "提交执行报告"
+      },
+      "venue": {
+        "sectionTitle": "交易场所",
+        "connection": "连接",
+        "venueAccount": "交易场所账户",
+        "venueOrderId": "交易场所订单 ID",
+        "notSentYet": "尚未发送",
+        "notAcknowledged": "交易场所未确认",
+        "awaitingAcknowledgement": "正在等待交易场所确认",
+        "venueStatus": "交易场所状态",
+        "statusOpen": "未结",
+        "statusFilled": "已成交",
+        "statusCancelled": "已在交易场所取消、拒绝或到期",
+        "timeInForce": "有效期",
+        "linkedAt": "关联时间",
+        "fees": "与订单无关的 {{venue}} 费用稍后会记作账户调整。",
+        "feesUnknownProvider": "与订单无关的交易场所费用稍后会记作账户调整。",
+        "viewAdjustments": "查看调整",
+        "managedByVenue": "此订单的成交和取消信息来自交易场所。"
       }
     }
   },

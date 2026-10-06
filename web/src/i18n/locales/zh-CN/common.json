@@ -1,4 +1,9 @@
 {
+  "sensitiveData": {
+    "title": "敏感数据未加密存储",
+    "detail": "Officer 未配置主密钥：交易连接的 API 密钥以明文形式保存在数据库和备份中。请设置主密钥以加密存储这些密钥。",
+    "masterKeyLink": "如何设置主密钥"
+  },
   "language": {
     "label": "语言",
     "ariaLabel": "切换语言"
@@ -345,6 +350,7 @@
     "restartRequired": "需要重启",
     "mcpAccess": "MCP 访问",
     "marketData": "行情数据",
+    "tradingConnections": "交易连接",
     "service": "服务",
     "signingKeys": "签名密钥"
   },

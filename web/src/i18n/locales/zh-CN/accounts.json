@@ -324,11 +324,13 @@
     "submit": "删除"
   },
   "deleteAccount": {
+    "tradingWarning": "存在交易连接。删除此账户将级联删除其所有数据，包括通过交易连接入账的费用。Officer 重启后，这些交易场所费用可能会再次记入该连接当前的手续费账户。",
     "title": "删除账户？",
     "descriptionPrefix": "账户",
     "descriptionSuffix": "将被永久删除。仅在明确强制确认后才会删除关联交易记录。",
     "dependentsTitle": "关联行阻止删除",
     "dependentKinds": {
+      "trading_access": "交易连接访问权限",
       "balances": "余额",
       "orders": "订单",
       "order_events": "订单事件",

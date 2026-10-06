@@ -23,6 +23,13 @@ export type ApiErrorCode =
   | "not_found"
   | "has_dependents"
   | "conflict"
+  | "fee_account_required"
+  | "trading_mode_mismatch"
+  | "destination_ambiguous"
+  | "no_destination"
+  | "live_trading_unavailable"
+  | "forbidden"
+  | "upstream"
   | "terminal_order"
   | "approval_required"
   | "execution_report_required"
@@ -125,6 +132,13 @@ function asCode(v: unknown): ApiErrorCode {
     case "not_found":
     case "has_dependents":
     case "conflict":
+    case "fee_account_required":
+    case "trading_mode_mismatch":
+    case "destination_ambiguous":
+    case "no_destination":
+    case "live_trading_unavailable":
+    case "forbidden":
+    case "upstream":
     case "terminal_order":
     case "approval_required":
     case "execution_report_required":
@@ -150,6 +164,13 @@ function defaultTranslate(
     not_found: "The requested resource was not found.",
     has_dependents: "The resource has dependent rows.",
     conflict: "The request conflicts with the current state.",
+    fee_account_required: "A fee account is required.",
+    trading_mode_mismatch: "The connection uses a different trading mode.",
+    destination_ambiguous: "Multiple trading destinations match the request.",
+    no_destination: "No trading destination is available.",
+    live_trading_unavailable: "Live trading is unavailable.",
+    forbidden: "Access is denied.",
+    upstream: "An upstream service is unreachable or refused the request.",
     terminal_order: "The order is in a terminal status.",
     approval_required:
       "This order has no verifiable pre-trade approval recorded by Officer at submit, so the confirm/cancel shortcut is unavailable. Submit a complete execution report through the order workflow.",
@@ -236,6 +257,8 @@ async function toApiError(
         bodyMessage = asString(pick(err, "message", "Message"));
         dependents = asDependents(pick(err, "dependents", "Dependents"));
         account = asAccountCode(pick(err, "account", "Account"));
+      } else if (err === undefined && typeof body.detail === "string") {
+        bodyMessage = body.detail;
       }
     }
   } catch {
