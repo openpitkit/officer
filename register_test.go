@@ -207,7 +207,7 @@ func TestRegisterTradingComposition(t *testing.T) {
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logs.String(), "alpaca: apiKey and apiSecret are required") {
+	if !strings.Contains(logs.String(), "alpaca: apiKey is required") {
 		t.Fatalf("registered Alpaca constructor was not called: %s", logs.String())
 	}
 }

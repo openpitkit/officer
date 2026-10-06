@@ -239,10 +239,10 @@ func (m *memoryRealm) UpsertTradingInstrument(_ context.Context, instrument doma
 		return domain.ErrNotFound
 	}
 	if _, ok := m.assets[instrument.BaseAsset]; !ok {
-		return domain.ErrNotFound
+		return domain.NewAssetMissingError(instrument.BaseAsset)
 	}
 	if _, ok := m.assets[instrument.QuoteAsset]; !ok {
-		return domain.ErrNotFound
+		return domain.NewAssetMissingError(instrument.QuoteAsset)
 	}
 	key := fmt.Sprintf("%s/%s", instrument.Connection, instrument.ExternalSymbol)
 	for existingKey, existing := range m.tradingInstruments {

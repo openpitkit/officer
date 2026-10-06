@@ -31,6 +31,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.openpit.dev/officer/framework/domain"
 )
 
 var testCredentials = Credentials{APIKey: "test-key-marker", APISecret: "test-secret-marker"}
@@ -69,6 +71,28 @@ func TestParseCredentials(t *testing.T) {
 		_, err := ParseCredentials(raw)
 		if err == nil {
 			t.Fatal("invalid credentials accepted")
+		}
+		assertNoCredentials(t, err.Error())
+	}
+}
+
+func TestParseCredentialsNamesBlankMember(t *testing.T) {
+	for _, tc := range []struct {
+		raw, pointer string
+	}{
+		{`{"apiKey":"   ","apiSecret":"test-secret-marker"}`, "/apiKey"},
+		{`{"apiSecret":"test-secret-marker"}`, "/apiKey"},
+		{`{"apiKey":"test-key-marker","apiSecret":" \t "}`, "/apiSecret"},
+		{`{"apiKey":"test-key-marker"}`, "/apiSecret"},
+		{`{"apiKey":"x","apiSecret":"x","extra":"x"}`, ""},
+		{`[]`, ""},
+	} {
+		_, err := ParseCredentials(tc.raw)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("ParseCredentials(%s) error = %v, want ErrInvalid", tc.raw, err)
+		}
+		if got := domain.ValidationPointer(err); got != tc.pointer {
+			t.Fatalf("ParseCredentials(%s) pointer = %q, want %q", tc.raw, got, tc.pointer)
 		}
 		assertNoCredentials(t, err.Error())
 	}

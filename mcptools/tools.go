@@ -1508,6 +1508,8 @@ func tradingToolError(operation string, err error, redact func(string) string) e
 		code = "no_destination"
 	case errors.Is(err, domain.ErrDestinationAmbiguous):
 		code = "destination_ambiguous"
+	case errors.As(err, new(domain.AssetMissingError)):
+		code = "asset_missing"
 	}
 	message := err.Error()
 	var ambiguous *backend.DestinationAmbiguousError
@@ -1544,7 +1546,9 @@ func tradingCredentialRedactor(credentials map[string]any) func(string) string {
 	collect = func(value any) {
 		switch v := value.(type) {
 		case string:
-			if v != "" {
+			// A blank value holds no secret; redacting it would garble the
+			// whitespace of every message that names the refused member.
+			if strings.TrimSpace(v) != "" {
 				values = append(values, v)
 				encoded, _ := json.Marshal(v)
 				values = append(values, string(encoded[1:len(encoded)-1]))

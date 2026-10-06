@@ -486,6 +486,40 @@ func TestWriteErrAccountMissingWinsOverNotFound(t *testing.T) {
 	}
 }
 
+// TestWriteErrAssetMissing covers the asset_missing envelope: a 404 with its own
+// code and the missing asset code as a structured field.
+func TestWriteErrAssetMissing(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	cause := fmt.Errorf(
+		"upsert trading instrument: %w", domain.NewAssetMissingError("USDT"),
+	)
+	WriteErr(rec, cause)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Asset   string `json:"asset"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "asset_missing" {
+		t.Fatalf("code = %q, want asset_missing", body.Error.Code)
+	}
+	if body.Error.Asset != "USDT" {
+		t.Fatalf("asset = %q, want USDT", body.Error.Asset)
+	}
+	if body.Error.Message != cause.Error() {
+		t.Fatalf("message = %q, want %q", body.Error.Message, cause)
+	}
+}
+
 func TestWriteErrExecutionReportRequired(t *testing.T) {
 	rec := httptest.NewRecorder()
 

@@ -1238,9 +1238,11 @@ type RealmStore interface {
 	) error
 
 	// UpsertTradingInstrument inserts or replaces a connection instrument keyed
-	// by (connection, external symbol). Unknown connections or assets return
-	// domain.ErrNotFound. A base/quote pair already mapped to another symbol
-	// returns domain.ErrAlreadyExists.
+	// by (connection, external symbol). An unknown connection returns
+	// domain.ErrNotFound; an unknown base or quote asset returns
+	// domain.AssetMissingError naming it and never creates the asset. A
+	// base/quote pair already mapped to another symbol returns
+	// domain.ErrAlreadyExists.
 	UpsertTradingInstrument(
 		ctx context.Context, instrument domain.TradingInstrument,
 	) error

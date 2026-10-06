@@ -2159,6 +2159,35 @@ describe("append-only list clients", () => {
       status: 404,
     });
   });
+
+  it("parses an asset_missing 404 into a typed ApiError carrying the asset code", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "asset_missing",
+            message: 'upsert trading instrument: asset "USDT" does not exist',
+            asset: "USDT",
+          },
+        }),
+        { status: 404, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      api().upsertTradingInstrument("alpaca-1", {
+        externalSymbol: "BTC/USDT",
+        baseAsset: "BTC",
+        quoteAsset: "USDT",
+        enabled: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "asset_missing",
+      asset: "USDT",
+      status: 404,
+    });
+  });
 });
 
 describe("backup client", () => {

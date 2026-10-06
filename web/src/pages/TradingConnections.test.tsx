@@ -69,6 +69,7 @@ const api = {
   setTradingFeeAccount: vi.fn(),
   clearTradingFeeAccount: vi.fn(),
   createAccount: vi.fn(),
+  createAsset: vi.fn(),
 };
 let snapshot: TradingSnapshot;
 let accounts: string[];
@@ -1214,6 +1215,107 @@ describe("Trading connections", () => {
       "AAPL",
     );
     expect(api.fetchTrading.mock.calls.length).toBe(callsBeforeSave);
+  });
+
+  it("offers to create a missing asset by its code and repeats the save", async () => {
+    const user = userEvent.setup();
+    api.upsertTradingInstrument
+      .mockRejectedValueOnce(
+        new ApiError(
+          'upsert trading instrument: asset "USDT" does not exist',
+          "asset_missing",
+          404,
+          undefined,
+          undefined,
+          "USDT",
+        ),
+      )
+      .mockResolvedValueOnce(snapshot);
+    api.createAsset.mockResolvedValue({
+      code: "USDT",
+      title: "",
+      assetClass: "",
+    });
+    renderTrading();
+    const scope = await card();
+    const form = within(scope.getByRole("form", { name: "Add instrument" }));
+    await user.type(
+      form.getByRole("textbox", { name: "External symbol" }),
+      "BTC/USDT",
+    );
+    await user.type(form.getByRole("combobox", { name: "Base asset" }), "BTC");
+    await user.type(
+      form.getByRole("combobox", { name: "Quote asset" }),
+      "USDT",
+    );
+    await user.click(form.getByRole("button", { name: "Save" }));
+    const notice = await form.findByRole("alert");
+    expect(notice).toHaveTextContent("Asset USDT does not exist in Officer.");
+    expect(
+      scope.queryByText(/upsert trading instrument/),
+    ).not.toBeInTheDocument();
+    expect(api.createAsset).not.toHaveBeenCalled();
+    const symbol = form.getByRole("textbox", { name: "External symbol" });
+    const createAndSave = within(notice).getByRole("button", {
+      name: "Create asset USDT and save",
+    });
+    await user.clear(symbol);
+    expect(createAndSave).toBeDisabled();
+    await user.type(symbol, "BTC/USDT");
+    await user.click(createAndSave);
+    await waitFor(() =>
+      expect(
+        form.getByRole("textbox", { name: "External symbol" }),
+      ).toHaveValue(""),
+    );
+    expect(api.createAsset).toHaveBeenCalledExactlyOnceWith("USDT", "", "");
+    expect(api.upsertTradingInstrument).toHaveBeenCalledTimes(2);
+    expect(api.upsertTradingInstrument).toHaveBeenLastCalledWith("alpaca-1", {
+      externalSymbol: "BTC/USDT",
+      baseAsset: "BTC",
+      quoteAsset: "USDT",
+      enabled: true,
+    });
+    expect(api.createAsset.mock.invocationCallOrder[0]).toBeLessThan(
+      api.upsertTradingInstrument.mock.invocationCallOrder[1],
+    );
+    expect(form.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a missing asset refused outside the draft as the server message", async () => {
+    const user = userEvent.setup();
+    snapshot = {
+      ...snapshot,
+      connections: [
+        connection({
+          instruments: [
+            {
+              externalSymbol: "BTC/USDT",
+              baseAsset: "BTC",
+              quoteAsset: "USDT",
+              enabled: true,
+            },
+          ],
+        }),
+      ],
+    };
+    api.upsertTradingInstrument.mockRejectedValue(
+      new ApiError(
+        'asset "USDT" does not exist',
+        "asset_missing",
+        404,
+        undefined,
+        undefined,
+        "USDT",
+      ),
+    );
+    renderTrading();
+    const scope = await card();
+    await user.click(scope.getByRole("button", { name: "Disable" }));
+    expect(
+      await scope.findByText('asset "USDT" does not exist'),
+    ).toBeInTheDocument();
+    expect(api.createAsset).not.toHaveBeenCalled();
   });
 
   it("toggles an instrument with the same mapping and confirms deletion", async () => {

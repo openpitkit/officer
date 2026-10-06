@@ -581,6 +581,73 @@ func TestTradingRefusalsEndToEnd(t *testing.T) {
 	}
 }
 
+func TestTradingBlankCredentialEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, false)
+	blank := tradingE2ECreateInput("Paper", "paper")
+	// A single-space value must not be redacted out of the refusal text.
+	blank["credentials"] = map[string]string{"apiKey": " ", "apiSecret": "test-secret-marker"}
+	problem := tradingE2EDecode[httpx.ProblemDetails](t, f.rest(http.MethodPost, "/trading/connections", blank, http.StatusUnprocessableEntity))
+	if len(problem.Errors) != 1 || problem.Errors[0].Code != "validation" ||
+		problem.Errors[0].Pointer != "/credentials/apiKey" || problem.Errors[0].Constraint != "required" ||
+		!strings.Contains(problem.Detail, "apiKey is required") {
+		t.Fatalf("blank key problem = %+v", problem)
+	}
+	f.rest(http.MethodPut, "/mcp-access/create_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
+	// A single-space value must not be redacted out of the refusal text.
+	blank["credentials"] = map[string]string{"apiKey": "test-key-marker", "apiSecret": " "}
+	result := f.mcp("create_trading_connection", blank, true)
+	if len(result.Content) != 1 {
+		t.Fatalf("blank secret MCP content = %v", result.Content)
+	}
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok ||
+		!strings.HasPrefix(text.Text, "create trading connection failed: ") || !strings.Contains(text.Text, "apiSecret is required") {
+		t.Fatalf("blank secret MCP error = %v", result.Content)
+	}
+	connections, err := f.realm.ListTradingConnections(f.ctx)
+	tradingE2EMust(t, err)
+	f.venueMu.Lock()
+	accountCalls := f.requests["/v2/account"]
+	f.venueMu.Unlock()
+	if len(connections) != 0 || accountCalls != 0 {
+		t.Fatalf("blank credentials created %d connections and reached the venue %d times", len(connections), accountCalls)
+	}
+}
+
+func TestTradingMissingAssetEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, false)
+	id := f.createREST()
+	f.rest(http.MethodPost, "/assets", map[string]any{"code": "BTC"}, http.StatusCreated)
+	path := "/trading/connections/" + id + "/instruments"
+	instrument := map[string]any{"externalSymbol": "BTC/USDT", "baseAsset": "BTC", "quoteAsset": "USDT", "enabled": true}
+	missing := tradingE2EDecode[struct {
+		Error struct {
+			Code  string `json:"code"`
+			Asset string `json:"asset"`
+		} `json:"error"`
+	}](t, f.rest(http.MethodPut, path, instrument, http.StatusNotFound))
+	if missing.Error.Code != "asset_missing" || missing.Error.Asset != "USDT" {
+		t.Fatalf("missing asset error = %+v", missing.Error)
+	}
+	f.rest(http.MethodPut, "/mcp-access/set_trading_instrument", map[string]any{"enabled": true}, http.StatusOK)
+	result := f.mcp("set_trading_instrument", map[string]any{"connection": id, "externalSymbol": "BTC/USDT", "baseAsset": "BTC", "quoteAsset": "USDT", "enabled": true}, true)
+	if len(result.Content) != 1 {
+		t.Fatalf("missing asset MCP content = %v", result.Content)
+	}
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok ||
+		!strings.HasPrefix(text.Text, "asset_missing: ") || !strings.Contains(text.Text, `"USDT"`) {
+		t.Fatalf("missing asset MCP error = %v", result.Content)
+	}
+	assets, err := f.realm.ListAssets(f.ctx)
+	tradingE2EMust(t, err)
+	for _, asset := range assets {
+		if asset.Code == "USDT" {
+			t.Fatal("refused instrument created its missing asset")
+		}
+	}
+	f.rest(http.MethodPost, "/assets", map[string]any{"code": "USDT"}, http.StatusCreated)
+	f.rest(http.MethodPut, path, instrument, http.StatusOK)
+}
+
 func (f *tradingE2E) wait(what string, check func() bool) {
 	f.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

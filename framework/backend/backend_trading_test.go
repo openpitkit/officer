@@ -455,6 +455,45 @@ func TestTradingStatusRedactsOverlappingCredentials(t *testing.T) {
 	}
 }
 
+func TestTradingCreateCredentialRefusalIsValidation(t *testing.T) {
+	s, n, rt := newTradingTestService(t)
+	rt.checkErr = fmt.Errorf("trading: build connector: %w",
+		domain.NewValidationError("/credentials/apiKey", "format", "key test-key-value is malformed"))
+	_, err := s.CreateTradingConnection(systemCtx(), tradingTestConnection())
+	if !errors.Is(err, domain.ErrInvalid) || errors.Is(err, domain.ErrUpstream) {
+		t.Fatalf("create error = %v, want validation and not upstream", err)
+	}
+	if got := domain.ValidationPointer(err); got != "/credentials/apiKey" {
+		t.Fatalf("pointer = %q, want /credentials/apiKey", got)
+	}
+	if err.Error() != "trading: build connector: key [redacted] is malformed" {
+		t.Fatalf("credential refusal text = %q, want the value redacted", err)
+	}
+	if len(n.writes) != 0 || rt.restarts != 0 {
+		t.Fatal("refused create mutated state")
+	}
+}
+
+func TestTradingCreateBlankCredentialKeepsRefusalText(t *testing.T) {
+	s, _, rt := newTradingTestService(t)
+	rt.checkErr = domain.NewValidationError("/credentials/apiKey", "required", "alpaca: apiKey is required")
+	c := tradingTestConnection()
+	c.Credentials = `{"apiKey":" ","apiSecret":"test-secret-value"}`
+	_, err := s.CreateTradingConnection(systemCtx(), c)
+	if err == nil || err.Error() != "alpaca: apiKey is required" {
+		t.Fatalf("blank key refusal = %v, want the text intact", err)
+	}
+}
+
+func TestTradingCreateProviderInvalidOutsideCredentialsIsUpstream(t *testing.T) {
+	s, _, rt := newTradingTestService(t)
+	rt.checkErr = fmt.Errorf("trading: provider %q returned no connector: %w", "venue", domain.ErrInvalid)
+	_, err := s.CreateTradingConnection(systemCtx(), tradingTestConnection())
+	if !errors.Is(err, domain.ErrUpstream) {
+		t.Fatalf("create error = %v, want upstream", err)
+	}
+}
+
 func TestTradingUpstreamCause(t *testing.T) {
 	for _, cause := range []string{
 		"apiKey and apiSecret are required",

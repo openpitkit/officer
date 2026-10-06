@@ -88,7 +88,9 @@
     "baseAsset": "Базовый актив",
     "quoteAsset": "Котируемый актив",
     "deleteTitle": "Удалить инструмент?",
-    "deleteDescription": "{{symbol}} будет удалён из подключения {{label}}."
+    "deleteDescription": "{{symbol}} будет удалён из подключения {{label}}.",
+    "assetMissing": "Актив {{asset}} не существует в Officer. Officer не создаёт активы неявно; создайте его, чтобы сохранить инструмент.",
+    "createAssetAndSave": "Создать актив {{asset}} и сохранить"
   },
   "table": {
     "actions": "Действия"

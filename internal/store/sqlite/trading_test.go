@@ -757,14 +757,34 @@ func TestTradingInstrumentUnknownReferences(t *testing.T) {
 		t.Fatalf("unknown connection error = %v", err)
 	}
 	unknownBase := base
-	unknownBase.BaseAsset = "UNKNOWN"
-	if err := rs.UpsertTradingInstrument(ctx, unknownBase); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("unknown base asset error = %v", err)
-	}
+	unknownBase.BaseAsset = "UNKNOWNB"
+	assertTradingAssetMissing(t, rs.UpsertTradingInstrument(ctx, unknownBase), "UNKNOWNB")
 	unknownQuote := base
-	unknownQuote.QuoteAsset = "UNKNOWN"
-	if err := rs.UpsertTradingInstrument(ctx, unknownQuote); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("unknown quote asset error = %v", err)
+	unknownQuote.QuoteAsset = "UNKNOWNQ"
+	assertTradingAssetMissing(t, rs.UpsertTradingInstrument(ctx, unknownQuote), "UNKNOWNQ")
+	instruments, err := rs.ListTradingInstruments(ctx, connection.ExternalID)
+	if err != nil {
+		t.Fatalf("ListTradingInstruments: %v", err)
+	}
+	if len(instruments) != 0 {
+		t.Fatalf("instruments after refused upserts = %+v, want none", instruments)
+	}
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "UNKNOWNQ"}); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	if err := rs.UpsertTradingInstrument(ctx, unknownQuote); err != nil {
+		t.Fatalf("upsert after creating the missing asset: %v", err)
+	}
+}
+
+func assertTradingAssetMissing(t *testing.T, err error, asset string) {
+	t.Helper()
+	var missing domain.AssetMissingError
+	if !errors.As(err, &missing) || missing.Asset != asset {
+		t.Fatalf("unknown asset error = %v, want AssetMissingError for %q", err, asset)
+	}
+	if errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unknown asset error = %v, must not be ErrNotFound", err)
 	}
 }
 

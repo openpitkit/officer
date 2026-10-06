@@ -352,7 +352,7 @@ func resolveTradingAssetID(
 ) (int64, error) {
 	id, err := resolveAssetID(ctx, q, code)
 	if errors.Is(err, domain.ErrInvalid) {
-		return 0, fmt.Errorf("asset %q: %w", code, domain.ErrNotFound)
+		return 0, domain.NewAssetMissingError(code)
 	}
 	return id, err
 }

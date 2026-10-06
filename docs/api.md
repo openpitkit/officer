@@ -61,7 +61,9 @@ MCP tool returns them. A backup export carries the stored credentials according
 to its `credentialForm`: sealed under a master key, plaintext without one, as with
 market-data credentials. Modes are `paper` and `live`; live connection creation
 is refused until the live-trading token exists. `GET /trading` reports
-`credentialsSealed`, which tells whether stored keys are sealed.
+`credentialsSealed`, which tells whether stored keys are sealed. An instrument
+mapping whose base or quote asset Officer does not know is refused with
+`asset_missing`, naming the asset; Officer never creates the asset itself.
 
 A venue-linked order is managed by its venue connection. Manual execution
 reports, confirm and cancel refuse it with `venue_order_managed`. Trading MCP

@@ -38,6 +38,7 @@ export type ApiErrorCode =
   | "engine_restarting"
   | "not_implemented"
   | "account_missing"
+  | "asset_missing"
   | "internal"
   | "network"
   | "signing";
@@ -49,6 +50,8 @@ export class ApiError extends Error {
   readonly dependents?: ApiErrorDependent[];
   /** The account code the request named, when `code` is "account_missing". */
   readonly account?: string;
+  /** The asset code the request named, when `code` is "asset_missing". */
+  readonly asset?: string;
 
   constructor(
     message: string,
@@ -56,6 +59,7 @@ export class ApiError extends Error {
     status?: number,
     dependents?: ApiErrorDependent[],
     account?: string,
+    asset?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -63,6 +67,7 @@ export class ApiError extends Error {
     this.status = status;
     this.dependents = dependents;
     this.account = account;
+    this.asset = asset;
   }
 }
 
@@ -147,6 +152,7 @@ function asCode(v: unknown): ApiErrorCode {
     case "engine_restarting":
     case "not_implemented":
     case "account_missing":
+    case "asset_missing":
     case "internal":
     case "signing":
       return v;
@@ -182,6 +188,7 @@ function defaultTranslate(
       "The risk engine is restarting; retry after it finishes.",
     not_implemented: "The requested operation is not implemented.",
     account_missing: "The account does not exist.",
+    asset_missing: "The asset does not exist.",
     internal: "The service encountered an internal error.",
     network: "Could not reach the service.",
     signing: "The signing operation was rejected.",
@@ -234,7 +241,7 @@ function asDependents(v: unknown): ApiErrorDependent[] | undefined {
     .filter((dep) => dep.kind.length > 0 && dep.count > 0);
 }
 
-function asAccountCode(v: unknown): string | undefined {
+function asEntityCode(v: unknown): string | undefined {
   const s = asString(v);
   return s.length > 0 ? s : undefined;
 }
@@ -248,6 +255,7 @@ async function toApiError(
   let bodyMessage = "";
   let dependents: ApiErrorDependent[] | undefined;
   let account: string | undefined;
+  let asset: string | undefined;
   try {
     const body = (await res.json()) as unknown;
     if (isObject(body)) {
@@ -256,7 +264,8 @@ async function toApiError(
         code = asCode(pick(err, "code", "Code"));
         bodyMessage = asString(pick(err, "message", "Message"));
         dependents = asDependents(pick(err, "dependents", "Dependents"));
-        account = asAccountCode(pick(err, "account", "Account"));
+        account = asEntityCode(pick(err, "account", "Account"));
+        asset = asEntityCode(pick(err, "asset", "Asset"));
       } else if (err === undefined && typeof body.detail === "string") {
         bodyMessage = body.detail;
       }
@@ -289,7 +298,7 @@ async function toApiError(
       : code === "internal"
         ? t("errors:http", { path: requestPath, status: res.status })
         : defaultMessage(code, t);
-  return new ApiError(message, code, res.status, dependents, account);
+  return new ApiError(message, code, res.status, dependents, account, asset);
 }
 
 function filenameFromDisposition(value: string | null): string {

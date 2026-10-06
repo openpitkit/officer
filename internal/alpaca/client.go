@@ -28,6 +28,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // PaperRESTURL and LiveRESTURL identify the separate Alpaca environments.
@@ -39,22 +41,27 @@ const (
 // Credentials identifies one account in one environment.
 type Credentials struct{ APIKey, APISecret string }
 
-// ParseCredentials accepts only a JSON object with apiKey and apiSecret.
-// Errors never include input values or unknown field names.
+// ParseCredentials accepts only a JSON object with apiKey and apiSecret, each
+// non-blank after trimming. Errors are domain validation errors whose JSON
+// pointer is relative to the credentials object, and they never include input
+// values or unknown field names.
 func ParseCredentials(raw string) (Credentials, error) {
 	var fields map[string]string
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
-		return Credentials{}, errors.New("alpaca: invalid credentials JSON")
+		return Credentials{}, domain.NewValidationError("", "type", "alpaca: invalid credentials JSON")
 	}
 	for field := range fields {
 		if field != "apiKey" && field != "apiSecret" {
-			return Credentials{}, errors.New("alpaca: unknown credentials field")
+			return Credentials{}, domain.NewValidationError("", "unknown_field", "alpaca: unknown credentials field")
 		}
 	}
 	apiKey := strings.TrimSpace(fields["apiKey"])
+	if apiKey == "" {
+		return Credentials{}, domain.NewValidationError("/apiKey", "required", "alpaca: apiKey is required")
+	}
 	apiSecret := strings.TrimSpace(fields["apiSecret"])
-	if apiKey == "" || apiSecret == "" {
-		return Credentials{}, errors.New("alpaca: apiKey and apiSecret are required")
+	if apiSecret == "" {
+		return Credentials{}, domain.NewValidationError("/apiSecret", "required", "alpaca: apiSecret is required")
 	}
 	return Credentials{APIKey: apiKey, APISecret: apiSecret}, nil
 }

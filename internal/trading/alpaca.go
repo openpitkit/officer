@@ -86,7 +86,8 @@ func NewAlpacaConnector(connection domain.TradingConnection) (fwtrading.Connecto
 func newAlpacaConnector(connection domain.TradingConnection, restURL, streamURL string) (*alpacaConnector, error) {
 	credentials, err := alpaca.ParseCredentials(connection.Credentials)
 	if err != nil {
-		return nil, err
+		// The credentials object is the request's credentials member.
+		return nil, domain.WithValidationPointer("/credentials"+domain.ValidationPointer(err), err)
 	}
 	return &alpacaConnector{
 		client:      alpaca.NewClient(restURL, credentials, &http.Client{Timeout: alpacaHTTPTimeout}),

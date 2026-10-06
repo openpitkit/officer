@@ -212,6 +212,16 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 		return domain.TradingConnection{}, fmt.Errorf(
 			"trading provider cannot identify its venue account: %w: %w", domain.ErrInvalid, trading.ErrUnsupported)
 	}
+	// A provider that refuses the request's credentials before reaching the
+	// venue reports a validation error naming the member, not an upstream one.
+	if pointer := domain.ValidationPointer(err); errors.Is(err, domain.ErrInvalid) &&
+		(pointer == "/credentials" || strings.HasPrefix(pointer, "/credentials/")) {
+		_, message, redactErr := tradingCredentialStatus(c.Credentials, err.Error())
+		if redactErr != nil {
+			return domain.TradingConnection{}, redactErr
+		}
+		return domain.TradingConnection{}, &redactedTradingError{text: message, cause: err}
+	}
 	if err != nil {
 		return domain.TradingConnection{}, tradingUpstreamError("check account for create", c, err)
 	}
@@ -787,7 +797,9 @@ func tradingCredentialRedactor(credentials string) (map[string]bool, *strings.Re
 	redact = func(value any) {
 		switch v := value.(type) {
 		case string:
-			if v != "" {
+			// A blank value holds no secret; redacting it would garble the
+			// whitespace of every message that names the refused member.
+			if strings.TrimSpace(v) != "" {
 				credentialStrings = append(credentialStrings, v)
 			}
 		case []any:

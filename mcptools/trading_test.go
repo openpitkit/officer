@@ -40,6 +40,7 @@ func TestTradingToolError(t *testing.T) {
 		{"managed", domain.ErrVenueOrderManaged, "venue_order_managed: "},
 		{"none", domain.ErrNoDestination, "no_destination: "},
 		{"ambiguous", domain.ErrDestinationAmbiguous, "destination_ambiguous: "},
+		{"asset", domain.NewAssetMissingError("USDT"), "asset_missing: "},
 		{"ordinary", errors.New("offline"), "send failed: "},
 	}
 	for _, tc := range cases {
@@ -66,6 +67,14 @@ func TestTradingToolError(t *testing.T) {
 		got := tradingToolError("create", err, redact).Error()
 		if got != "live_trading_unavailable: [REDACTED]: live trading unavailable" {
 			t.Fatalf("redacted prefix: %q", got)
+		}
+	})
+	t.Run("redaction-skips-blank-values", func(t *testing.T) {
+		err := errors.New("alpaca: apiSecret is required")
+		redact := tradingCredentialRedactor(map[string]any{"apiKey": "key-value", "apiSecret": " "})
+		got := tradingToolError("create trading connection", err, redact).Error()
+		if got != "create trading connection failed: alpaca: apiSecret is required" {
+			t.Fatalf("blank credential redaction: %q", got)
 		}
 	})
 }

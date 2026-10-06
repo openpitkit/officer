@@ -3517,6 +3517,10 @@ paths:
         Mode is immutable and must be paper or live. Live creation is refused
         with live_trading_unavailable until the live token exists. Credentials
         are a JSON object on input and only key-presence flags on output.
+        Credentials the provider refuses before contacting the venue are a 422
+        validation error: a key blank after trimming is pointed at by name,
+        such as `/credentials/apiKey`; an unknown member or a malformed object
+        is pointed at as `/credentials`, since member names are never echoed.
       requestBody:
         required: true
         content:
@@ -3662,6 +3666,10 @@ paths:
       operationId: upsertTradingInstrument
       summary: Create or replace a venue symbol mapping
       tags: [trading]
+      description: >
+        Base and quote must be assets Officer already knows. An unknown one is
+        refused with `asset_missing` naming it; the asset is never created
+        implicitly.
       requestBody:
         required: true
         content:
@@ -3680,7 +3688,7 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
         "404":
-          $ref: "#/components/responses/NotFoundError"
+          $ref: "#/components/responses/AssetMissingOrNotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
         "403":
@@ -4784,6 +4792,19 @@ components:
               - $ref: "#/components/schemas/Error"
               - $ref: "#/components/schemas/AccountMissingError"
 
+    AssetMissingOrNotFoundError:
+      description: >
+        Either the addressed resource does not exist (`not_found`) or the
+        request named an asset Officer does not know (`asset_missing`, with
+        the asset code in the envelope). Officer never creates the asset
+        itself: create it, then repeat the request.
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/Error"
+              - $ref: "#/components/schemas/AssetMissingError"
+
     UpstreamError:
       description: Upstream provider request failed.
       content:
@@ -4958,7 +4979,7 @@ components:
               type: string
               description: >
                 Machine-readable code: `validation`, `not_found`,
-                `account_missing`, `conflict`, `currency_change_blocked`, `has_dependents`,
+                `account_missing`, `asset_missing`, `conflict`, `currency_change_blocked`, `has_dependents`,
                 `terminal_order`, `approval_required`,
                 `execution_report_required`, `precondition`, `too_large`,
                 `forbidden`, `reserved_group`,
@@ -5066,6 +5087,25 @@ components:
               type: string
               description: The account code the request named.
               example: acc-1
+
+    AssetMissingError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, asset]
+          properties:
+            code:
+              type: string
+              enum: [asset_missing]
+            message:
+              type: string
+              example: asset "USDT" does not exist
+            asset:
+              type: string
+              description: The asset code the request named.
+              example: USDT
 
     # Business CSV
 

@@ -106,6 +106,11 @@ var (
 	// is a request parameter the same call could have created, not an addressed
 	// resource that turned out to be absent. The concrete error carries the code.
 	ErrAccountMissing = registerSentinel(errors.New("account does not exist"))
+	// ErrAssetMissing marks a request that named an asset code Officer does not
+	// know where Officer never creates the asset on its own. Like
+	// ErrAccountMissing it is not an ErrNotFound: the asset is a request
+	// parameter, not the addressed resource. The concrete error carries the code.
+	ErrAssetMissing = registerSentinel(errors.New("asset does not exist"))
 	// ErrTerminalOrder marks the remaining Officer safety net for terminal
 	// orders; callers can bypass it with force and route straight to the engine.
 	ErrTerminalOrder = registerSentinel(errors.New("order in terminal status"))
@@ -214,6 +219,26 @@ func (e AccountMissingError) Unwrap() error { return ErrAccountMissing }
 // NewAccountMissingError creates a typed missing-account error.
 func NewAccountMissingError(account AccountID) error {
 	return AccountMissingError{Account: account}
+}
+
+// AssetMissingError carries the asset code a request named and Officer does
+// not know, so a surface can report it as a structured field instead of
+// parsing the message.
+type AssetMissingError struct {
+	Asset string
+}
+
+// Error names the asset the request could not resolve.
+func (e AssetMissingError) Error() string {
+	return fmt.Sprintf("asset %q does not exist", e.Asset)
+}
+
+// Unwrap lets callers match the typed error with errors.Is.
+func (e AssetMissingError) Unwrap() error { return ErrAssetMissing }
+
+// NewAssetMissingError creates a typed missing-asset error.
+func NewAssetMissingError(asset string) error {
+	return AssetMissingError{Asset: asset}
 }
 
 // MissingAccountPolicy is the caller's explicit choice for a request that names

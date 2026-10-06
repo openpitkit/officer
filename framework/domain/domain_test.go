@@ -1659,6 +1659,7 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 	sentinels := map[string]error{
 		"ErrAccountMissing":          domain.ErrAccountMissing,
 		"ErrApprovalRequired":        domain.ErrApprovalRequired,
+		"ErrAssetMissing":            domain.ErrAssetMissing,
 		"ErrAlreadyExists":           domain.ErrAlreadyExists,
 		"ErrConflict":                domain.ErrConflict,
 		"ErrCurrencyValuedLimit":     domain.ErrCurrencyValuedLimit,
@@ -1783,5 +1784,30 @@ func TestWithValidationPointerRelabelsWrappedError(t *testing.T) {
 	nonValidation := errors.New("not a validation error")
 	if got := domain.WithValidationPointer("/code", nonValidation); got != nonValidation {
 		t.Errorf("non-validation error = %v, want unchanged %v", got, nonValidation)
+	}
+}
+
+// TestAssetMissingErrorMatching covers the sentinel contract: the typed error
+// matches ErrAssetMissing, carries the offending code, and is deliberately not
+// an ErrNotFound so the surface can emit a distinct error code.
+func TestAssetMissingErrorMatching(t *testing.T) {
+	t.Parallel()
+
+	err := fmt.Errorf("upsert trading instrument: %w", domain.NewAssetMissingError("USDT"))
+	if !errors.Is(err, domain.ErrAssetMissing) {
+		t.Fatalf("error = %v, want ErrAssetMissing", err)
+	}
+	if errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("ErrAssetMissing must not match ErrNotFound")
+	}
+	var typed domain.AssetMissingError
+	if !errors.As(err, &typed) {
+		t.Fatalf("error %v does not carry AssetMissingError", err)
+	}
+	if typed.Asset != "USDT" {
+		t.Fatalf("carried asset = %q, want USDT", typed.Asset)
+	}
+	if !strings.Contains(err.Error(), `"USDT"`) {
+		t.Fatalf("message %q does not name the asset", err)
 	}
 }

@@ -399,6 +399,7 @@ func pathString(r *http.Request, key, msg string) (string, error) {
 // WriteErr maps a domain sentinel error to the appropriate HTTP status and JSON
 // error body.
 func WriteErr(w http.ResponseWriter, err error) {
+	var assetMissing domain.AssetMissingError
 	switch {
 	case errors.Is(err, domain.ErrTooLarge):
 		WriteErrMsg(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
@@ -422,6 +423,14 @@ func WriteErr(w http.ResponseWriter, err error) {
 	// it keeps its own code and its structured account field.
 	case errors.Is(err, domain.ErrAccountMissing):
 		writeAccountMissingErr(w, err)
+	case errors.As(err, &assetMissing):
+		WriteJSON(w, http.StatusNotFound, map[string]any{
+			"error": map[string]any{
+				"code":    "asset_missing",
+				"message": err.Error(),
+				"asset":   assetMissing.Asset,
+			},
+		})
 	case errors.Is(err, domain.ErrNotFound):
 		WriteErrMsg(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, domain.ErrAlreadyExists):

@@ -19,6 +19,7 @@
     "engine_restarting": "风控引擎正在重启；请在完成后重试。",
     "not_implemented": "请求的操作尚未实现。",
     "account_missing": "该账户不存在。",
+    "asset_missing": "该资产不存在。",
     "internal": "服务遇到内部错误。",
     "network": "无法连接到服务。",
     "signing": "签名操作被拒绝。"

@@ -88,7 +88,9 @@
     "baseAsset": "Base asset",
     "quoteAsset": "Quote asset",
     "deleteTitle": "Delete instrument?",
-    "deleteDescription": "{{symbol}} will be removed from {{label}}."
+    "deleteDescription": "{{symbol}} will be removed from {{label}}.",
+    "assetMissing": "Asset {{asset}} does not exist in Officer. Officer does not create assets implicitly; create it to save the instrument.",
+    "createAssetAndSave": "Create asset {{asset}} and save"
   },
   "table": {
     "actions": "Actions"

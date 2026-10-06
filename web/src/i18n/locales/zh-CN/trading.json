@@ -88,7 +88,9 @@
     "baseAsset": "基础资产",
     "quoteAsset": "计价资产",
     "deleteTitle": "删除工具？",
-    "deleteDescription": "{{symbol}} 将从 {{label}} 中删除。"
+    "deleteDescription": "{{symbol}} 将从 {{label}} 中删除。",
+    "assetMissing": "Officer 中不存在资产 {{asset}}。Officer 不会隐式创建资产；请先创建该资产，再保存工具。",
+    "createAssetAndSave": "创建资产 {{asset}} 并保存"
   },
   "table": {
     "actions": "操作"

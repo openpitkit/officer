@@ -601,6 +601,7 @@ function ConnectionCard({
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState("");
   const [feeRequired, setFeeRequired] = useState(false);
+  const [missingAsset, setMissingAsset] = useState<string | null>(null);
   const [checkError, setCheckError] = useState("");
   const [searchError, setSearchError] = useState("");
   const [verifyError, setVerifyError] = useState<{
@@ -723,7 +724,11 @@ function ConnectionCard({
     return () => controller.abort();
   }, [feeQuery, fetchAccountState]);
 
-  const run = async (fn: () => Promise<unknown>): Promise<boolean> => {
+  // handled answers a failure the caller presents itself instead of the banner.
+  const run = async (
+    fn: () => Promise<unknown>,
+    handled?: (err: unknown) => boolean,
+  ): Promise<boolean> => {
     setBusy(true);
     setError("");
     setFeeRequired(false);
@@ -732,7 +737,9 @@ function ConnectionCard({
       reload();
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (!handled?.(err)) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
       setFeeRequired(
         err instanceof ApiError && err.code === "fee_account_required",
       );
@@ -858,21 +865,38 @@ function ConnectionCard({
     verifyError?.symbol === draft.externalSymbol.trim()
       ? verifyError.message
       : "";
-  const saveInstrument = async () => {
-    if (
-      busy ||
-      draft.externalSymbol.trim() === "" ||
-      draft.baseAsset.trim() === "" ||
-      draft.quoteAsset.trim() === ""
-    )
-      return;
-    const ok = await run(() =>
-      api.upsertTradingInstrument(connection.id, {
-        externalSymbol: draft.externalSymbol.trim(),
-        baseAsset: draft.baseAsset.trim(),
-        quoteAsset: draft.quoteAsset.trim(),
-        enabled: draft.enabled,
-      }),
+  const draftComplete =
+    draft.externalSymbol.trim() !== "" &&
+    draft.baseAsset.trim() !== "" &&
+    draft.quoteAsset.trim() !== "";
+  // createAsset names an asset the operator chose to create before the save.
+  const saveInstrument = async (createAsset?: string) => {
+    if (busy || !draftComplete) return;
+    setMissingAsset(null);
+    const ok = await run(
+      async () => {
+        if (createAsset !== undefined) {
+          await api.createAsset(createAsset, "", "");
+        }
+        await api.upsertTradingInstrument(connection.id, {
+          externalSymbol: draft.externalSymbol.trim(),
+          baseAsset: draft.baseAsset.trim(),
+          quoteAsset: draft.quoteAsset.trim(),
+          enabled: draft.enabled,
+        });
+      },
+      // A missing asset is answered in the instrument form, not as raw text.
+      (err) => {
+        if (
+          err instanceof ApiError &&
+          err.code === "asset_missing" &&
+          err.asset !== undefined
+        ) {
+          setMissingAsset(err.asset);
+          return true;
+        }
+        return false;
+      },
     );
     if (ok) {
       setDraft({
@@ -1349,15 +1373,32 @@ function ConnectionCard({
                 {t("connection.enabled")}
               </Label>
             </div>
-            <Button
-              type="submit"
-              disabled={
-                busy ||
-                draft.externalSymbol.trim() === "" ||
-                draft.baseAsset.trim() === "" ||
-                draft.quoteAsset.trim() === ""
-              }
-            >
+            {missingAsset !== null &&
+              (draft.baseAsset.trim() === missingAsset ||
+                draft.quoteAsset.trim() === missingAsset) && (
+                <div
+                  role="alert"
+                  className="space-y-2 text-xs text-[var(--warn)]"
+                >
+                  <p>
+                    {t("instruments.assetMissing", { asset: missingAsset })}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || !draftComplete}
+                    onClick={() => {
+                      void saveInstrument(missingAsset);
+                    }}
+                  >
+                    {t("instruments.createAssetAndSave", {
+                      asset: missingAsset,
+                    })}
+                  </Button>
+                </div>
+              )}
+            <Button type="submit" disabled={busy || !draftComplete}>
               {t("actions.save")}
             </Button>
           </form>
