@@ -672,7 +672,9 @@ func (*fakeEngine) CheckOrderModel(domain.OrderProbe) (model.Order, error) {
 	return model.Order{}, errUnexpectedOrderChain
 }
 
-func (*fakeEngine) RejectedOrder(domain.Order, []reject.Reject) engine.OrderResult {
+func (*fakeEngine) RejectedOrder(
+	domain.Order, []reject.Reject,
+) (engine.OrderResult, error) {
 	panic(errUnexpectedOrderChain)
 }
 
@@ -690,7 +692,7 @@ func (*fakeEngine) AppliedDropCopyOrder(
 
 func (*fakeEngine) RejectedImmediate(
 	domain.Order, []reject.Reject,
-) engine.ImmediateResult {
+) (engine.ImmediateResult, error) {
 	panic(errUnexpectedOrderChain)
 }
 

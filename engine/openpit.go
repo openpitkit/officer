@@ -486,7 +486,8 @@ func (e *openPitEngine) AppliedSpotFundsAccountPnl(
 		result.AccountBlocks,
 		account,
 		domain.PolicySpotFundsPnlBoundsKillSwitch,
-	), nil
+		e.res,
+	)
 }
 
 // OrderModel resolves an Officer order to the SDK model used as a chain source.
@@ -650,7 +651,7 @@ func (e *openPitEngine) AppliedAccountAdjustmentBatch(
 	batch accountadjustment.BatchResult,
 ) ([]fwengine.AdjustmentResult, *domain.AdjustmentOutcomeRejected, error) {
 	if rej, ok := batch.BatchError.Get(); ok {
-		rejected, err := outcomeRejectedFrom(rej)
+		rejected, err := outcomeRejectedFrom(rej, e.res)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -661,9 +662,13 @@ func (e *openPitEngine) AppliedAccountAdjustmentBatch(
 	// there and then. The block is batch-level, so it is stamped on every result
 	// of this batch; the caller mirrors blocks keyed by account, which collapses
 	// the repeats. Waiting for a later fill to rediscover the block is forbidden.
-	blocks := policyConfigurationBlocksFrom(
+	blocks, err := policyConfigurationBlocksFrom(
 		batch.AccountBlocks, account, domain.PolicySpotFundsPnlBoundsKillSwitch,
+		e.res,
 	)
+	if err != nil {
+		return nil, nil, err
+	}
 	outcomes := batch.Outcomes
 	if len(outcomes) == 0 && len(blocks) == 0 {
 		return nil, nil, nil
@@ -686,8 +691,12 @@ func (e *openPitEngine) AppliedAccountAdjustmentBatch(
 // RejectedOrder materializes the rejected branch of an SDK order chain.
 func (e *openPitEngine) RejectedOrder(
 	_ domain.Order, rejects []reject.Reject,
-) fwengine.OrderResult {
-	return fwengine.OrderResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}
+) (fwengine.OrderResult, error) {
+	mapped, err := orderRejectsFrom(rejects, e.res)
+	if err != nil {
+		return fwengine.OrderResult{}, err
+	}
+	return fwengine.OrderResult{Accepted: false, Rejects: mapped}, nil
 }
 
 // ReservedOrder captures every persistence value while reservation is live.
@@ -733,14 +742,18 @@ func (e *openPitEngine) materializeOrderResult(
 	if err != nil {
 		return fwengine.OrderResult{}, err
 	}
-	var blocks []reject.AccountBlock
+	var engineBlocks []reject.AccountBlock
 	if block != nil {
-		blocks = append(blocks, *block)
+		engineBlocks = append(engineBlocks, *block)
+	}
+	blocks, err := executionBlocksFrom(engineBlocks, o.Account, e.res)
+	if err != nil {
+		return fwengine.OrderResult{}, err
 	}
 	return fwengine.OrderResult{
 		Accepted:            true,
 		Lock:                lockBytes,
-		Blocks:              executionBlocksFrom(blocks, o.Account),
+		Blocks:              blocks,
 		Outcomes:            outcomes,
 		SettlementLockPrice: settlement,
 	}, nil
@@ -758,10 +771,18 @@ func (e *openPitEngine) CheckedOrder(
 				"engine: read dry-run account block: %w", err,
 			)
 		}
+		rejects, err := orderRejectsFrom(result.Rejects(), e.res)
+		if err != nil {
+			return domain.CheckResult{}, err
+		}
+		wouldBlock, err := accountBlockFrom(block, probe.Account, e.res)
+		if err != nil {
+			return domain.CheckResult{}, err
+		}
 		return domain.CheckResult{
 			Passed:     false,
-			Rejects:    orderRejectsFrom(result.Rejects()),
-			WouldBlock: accountBlockFrom(block, probe.Account),
+			Rejects:    rejects,
+			WouldBlock: wouldBlock,
 		}, nil
 	}
 	lock, err := result.Lock()
@@ -789,7 +810,10 @@ func (e *openPitEngine) SettledExecutionReport(
 	accountID param.AccountID,
 	result pretrade.PostTradeResult,
 ) (fwengine.ExecutionReportResult, error) {
-	blocks := executionBlocksFrom(result.AccountBlocks, in.Account)
+	blocks, err := executionBlocksFrom(result.AccountBlocks, in.Account, e.res)
+	if err != nil {
+		return fwengine.ExecutionReportResult{}, err
+	}
 	outcomes, err := balanceOutcomesFromList(result.AccountAdjustments, e.res)
 	if err != nil {
 		return fwengine.ExecutionReportResult{}, err
@@ -1269,11 +1293,16 @@ func seedSpotFundsAccountPnls(
 				"engine: seed spot funds account pnl: %w", err,
 			)
 		}
-		blocks = append(blocks, policyConfigurationBlocksFrom(
+		seedBlocks, err := policyConfigurationBlocksFrom(
 			configuration.AccountBlocks,
 			seed.code,
 			domain.PolicySpotFundsPnlBoundsKillSwitch,
-		)...)
+			res,
+		)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, seedBlocks...)
 	}
 	return blocks, nil
 }

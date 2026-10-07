@@ -649,8 +649,10 @@ func (e *realGateEngine) CheckOrderModel(probe domain.OrderProbe) (model.Order, 
 	})
 }
 
-func (*realGateEngine) RejectedOrder(domain.Order, []reject.Reject) engine.OrderResult {
-	return engine.OrderResult{}
+func (*realGateEngine) RejectedOrder(
+	domain.Order, []reject.Reject,
+) (engine.OrderResult, error) {
+	return engine.OrderResult{}, nil
 }
 
 func (*realGateEngine) ReservedOrder(
@@ -670,8 +672,8 @@ func (e *realGateEngine) AppliedDropCopyOrder(
 
 func (*realGateEngine) RejectedImmediate(
 	domain.Order, []reject.Reject,
-) engine.ImmediateResult {
-	return engine.ImmediateResult{}
+) (engine.ImmediateResult, error) {
+	return engine.ImmediateResult{}, nil
 }
 
 func (*realGateEngine) PrepareImmediateReservation(

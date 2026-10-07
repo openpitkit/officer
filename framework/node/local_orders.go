@@ -306,7 +306,12 @@ func (n *localNode) submitOrder(
 		state *submitOrderChainState,
 		rejects []reject.Reject,
 	) error {
-		state.result = eng.RejectedOrder(state.order, rejects)
+		result, resultErr := eng.RejectedOrder(state.order, rejects)
+		if resultErr != nil {
+			state.err = fmt.Errorf("submit order: %w", resultErr)
+			return state.err
+		}
+		state.result = result
 		if len(state.result.Rejects) == 0 {
 			state.err = fmt.Errorf("submit order: engine rejection has no reject reason")
 			return state.err
@@ -674,7 +679,12 @@ func (n *localNode) submitImmediate(
 		state *submitImmediateChainState,
 		rejects []reject.Reject,
 	) error {
-		state.result = eng.RejectedImmediate(state.order, rejects)
+		result, resultErr := eng.RejectedImmediate(state.order, rejects)
+		if resultErr != nil {
+			state.err = fmt.Errorf("submit immediate: %w", resultErr)
+			return state.err
+		}
+		state.result = result
 		if len(state.result.Rejects) == 0 {
 			state.err = fmt.Errorf(
 				"submit immediate: engine rejection has no reject reason",

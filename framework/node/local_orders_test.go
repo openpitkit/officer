@@ -1301,12 +1301,12 @@ func (e *fakeEngine) recordChainSubmit(o domain.Order) error {
 
 func (e *fakeEngine) RejectedOrder(
 	o domain.Order, _ []reject.Reject,
-) engine.OrderResult {
+) (engine.OrderResult, error) {
 	_ = e.recordChainSubmit(o)
 	return engine.OrderResult{
 		Accepted: false,
 		Rejects:  []domain.OrderReject{*e.submitReject},
-	}
+	}, nil
 }
 
 func (e *fakeEngine) ReservedOrder(
@@ -1332,14 +1332,14 @@ func (e *fakeEngine) AppliedDropCopyOrder(
 
 func (e *fakeEngine) RejectedImmediate(
 	o domain.Order, _ []reject.Reject,
-) engine.ImmediateResult {
+) (engine.ImmediateResult, error) {
 	_ = e.recordChainSubmit(o)
 	result := engine.ImmediateResult{Accepted: false}
 	if e.submitReject != nil &&
 		*e.submitReject != (domain.OrderReject{}) {
 		result.Rejects = []domain.OrderReject{*e.submitReject}
 	}
-	return result
+	return result, nil
 }
 
 func (e *fakeEngine) PrepareImmediateReservation(

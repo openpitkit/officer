@@ -202,7 +202,7 @@ func materializeOrderResult(
 			return fwengine.OrderResult{}, applyErr
 		}
 		if len(rejects) > 0 {
-			return e.RejectedOrder(order, rejects), nil
+			return e.RejectedOrder(order, rejects)
 		}
 		if operation == nil {
 			return fwengine.OrderResult{}, errors.New("drop-copy operation missing")
@@ -222,7 +222,7 @@ func materializeOrderResult(
 		return fwengine.OrderResult{}, executeErr
 	}
 	if len(rejects) > 0 {
-		return e.RejectedOrder(order, rejects), nil
+		return e.RejectedOrder(order, rejects)
 	}
 	if reservation == nil {
 		return fwengine.OrderResult{}, errors.New("reservation missing")
@@ -257,7 +257,7 @@ func materializeImmediateResult(
 			return fwengine.ImmediateResult{}, applyErr
 		}
 		if len(rejects) > 0 {
-			return e.RejectedImmediate(order, rejects), nil
+			return e.RejectedImmediate(order, rejects)
 		}
 		if operation == nil {
 			return fwengine.ImmediateResult{}, errors.New("drop-copy operation missing")
@@ -278,7 +278,7 @@ func materializeImmediateResult(
 			return fwengine.ImmediateResult{}, executeErr
 		}
 		if len(rejects) > 0 {
-			return e.RejectedImmediate(order, rejects), nil
+			return e.RejectedImmediate(order, rejects)
 		}
 		if reservation == nil {
 			return fwengine.ImmediateResult{}, errors.New("reservation missing")

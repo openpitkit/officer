@@ -233,7 +233,7 @@ func TestOutcomeRejectedFrom_CarriesFailedAdjustmentIndex(t *testing.T) {
 			reject.ScopeAccount,
 		)},
 		FailedAdjustmentIndex: 2,
-	})
+	}, idResolver{})
 	if err != nil {
 		t.Fatalf("outcomeRejectedFrom: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestOutcomeRejectedFrom_CarriesFailedAdjustmentIndex(t *testing.T) {
 func TestOutcomeRejectedFrom_NoRejectIsError(t *testing.T) {
 	t.Parallel()
 	rejected, err := outcomeRejectedFrom(
-		reject.AccountAdjustmentBatchError{FailedAdjustmentIndex: 1},
+		reject.AccountAdjustmentBatchError{FailedAdjustmentIndex: 1}, idResolver{},
 	)
 	if err == nil {
 		t.Fatalf("want error for a batch error without rejects, got %+v", rejected)
@@ -2080,11 +2080,15 @@ func TestPolicyConfigurationBlocksFromCarriesAccountAndFallbackPolicy(t *testing
 		"P&L bound breached",
 		"lower=-100",
 	)
-	got := policyConfigurationBlocksFrom(
+	got, err := policyConfigurationBlocksFrom(
 		[]reject.AccountBlock{block},
 		"acc-1",
 		domain.PolicySpotFundsPnlBoundsKillSwitch,
+		idResolver{},
 	)
+	if err != nil {
+		t.Fatalf("policyConfigurationBlocksFrom: %v", err)
+	}
 	if len(got) != 1 {
 		t.Fatalf("blocks = %+v, want one", got)
 	}
@@ -2400,6 +2404,88 @@ func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 	}
 }
 
+// TestEngine_InsufficientFundsRejectNamesAssetCode runs an unfunded buy through
+// the dry-run and the submission against the REAL native engine and checks that
+// both rejects name the missing asset by its Officer code, not by the engine id
+// (USD is engine asset 2 here).
+func TestEngine_InsufficientFundsRejectNamesAssetCode(t *testing.T) {
+	t.Parallel()
+	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		Assets:   testAssets(),
+		Accounts: []domain.Account{account("acc-1")},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	defer eng.Stop()
+	const want = `asset "USD": available 0, requested 100`
+
+	checked, err := materializeCheckedOrder(
+		eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"),
+	)
+	if err != nil {
+		t.Fatalf("CheckOrder: %v", err)
+	}
+	if checked.Passed || len(checked.Rejects) != 1 ||
+		checked.Rejects[0].Code != domain.RejectCodeInsufficientFunds ||
+		checked.Rejects[0].Details != want {
+		t.Fatalf("CheckOrder = %+v, want one insufficient_funds reject %q", checked, want)
+	}
+
+	submitted, err := materializeOrderResult(eng, domain.Order{
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+		AmountValue: "1", Price: "100",
+	})
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if submitted.Accepted || len(submitted.Rejects) != 1 ||
+		submitted.Rejects[0].Code != domain.RejectCodeInsufficientFunds ||
+		submitted.Rejects[0].Details != want {
+		t.Fatalf("SubmitOrder = %+v, want one insufficient_funds reject %q", submitted, want)
+	}
+}
+
+// TestIDResolver_AssetCodesIn pins the rewrite of engine asset ids in reject
+// and block text: every "asset"/"currency" id becomes its quoted Officer code,
+// already rewritten and other text is left as it is, and an id with no
+// published asset is an error rather than text with the engine id left in it.
+func TestIDResolver_AssetCodesIn(t *testing.T) {
+	t.Parallel()
+	assets := append(testAssets(), domain.Asset{Code: "99", EngineAssetID: 8})
+	res, err := newIDResolver(nil, nil, assets)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	for _, tc := range []struct{ text, want string }{
+		{"asset 2: available 0, requested 100", `asset "USD": available 0, requested 100`},
+		{
+			"requested quantity 7 for asset 1, max allowed: 5; " +
+				"requested notional 700 for asset 2, max allowed: 500",
+			`requested quantity 7 for asset "AAPL", max allowed: 5; ` +
+				`requested notional 700 for asset "USD", max allowed: 500`,
+		},
+		{"account currency 2, barrier currency 5", `account currency "USD", barrier currency "EUR"`},
+		{"lower bound breached: realized pnl -7, lower bound -5, currency 8",
+			`lower bound breached: realized pnl -7, lower bound -5, currency "99"`},
+		// Text already rewritten, as a restored block comes back from the
+		// engine: the numeric code "99" is not engine id 99.
+		{`lower bound breached: realized pnl -7, lower bound -5, currency "99"`,
+			`lower bound breached: realized pnl -7, lower bound -5, currency "99"`},
+		{"submitted 3 orders in 10s window, max allowed: 2", "submitted 3 orders in 10s window, max allowed: 2"},
+		{"", ""},
+	} {
+		got, err := res.assetCodesIn(tc.text)
+		if err != nil || got != tc.want {
+			t.Errorf("assetCodesIn(%q) = %q, %v; want %q", tc.text, got, err, tc.want)
+		}
+	}
+	if got, err := res.assetCodesIn("asset 99: available 0, requested 1"); err == nil {
+		t.Fatalf("unknown asset engine id = %q, want error", got)
+	}
+}
+
 // TestEngine_CheckOrderStandingBlockIsRejectOnly runs a dry-run for an account
 // the engine has kill-switched. The engine latches nothing new, so the report
 // carries no would-be block: the standing block reaches the caller as the
@@ -2435,6 +2521,42 @@ func TestEngine_CheckOrderStandingBlockIsRejectOnly(t *testing.T) {
 	}
 	if out.WouldBlock != nil {
 		t.Fatalf("no block was latched, want nil would-block, got %+v", out.WouldBlock)
+	}
+}
+
+// TestEngine_RestoredBlockTextIsNotRewrittenAgain restores a persisted block
+// whose details Officer already rewrote, naming the asset with the numeric code
+// "99" while engine id 99 is another asset. The engine re-emits the restored
+// cause as a reject, and the dry-run must report it as persisted rather than
+// read the code as an engine id.
+func TestEngine_RestoredBlockTextIsNotRewrittenAgain(t *testing.T) {
+	t.Parallel()
+	const details = `lower bound breached: realized pnl -7, lower bound -5, currency "99"`
+	blocked := account("acc-1")
+	blocked.Blocked = true
+	blocked.BlockCode = rejectCodeName(reject.CodePnlKillSwitchTriggered)
+	blocked.BlockPolicy = "spot_funds"
+	blocked.BlockReason = "account pnl kill switch triggered"
+	blocked.BlockDetails = details
+	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		Assets: append(
+			testAssets(),
+			domain.Asset{Code: "99", EngineAssetID: 8},
+			domain.Asset{Code: "EURX", EngineAssetID: 99},
+		),
+		Accounts: []domain.Account{blocked},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
+	}
+	defer eng.Stop()
+
+	out, err := materializeCheckedOrder(eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	if err != nil {
+		t.Fatalf("CheckOrder: %v", err)
+	}
+	if out.Passed || len(out.Rejects) != 1 || out.Rejects[0].Details != details {
+		t.Fatalf("CheckOrder = %+v, want the restored block as one reject %q", out, details)
 	}
 }
 
@@ -2543,7 +2665,10 @@ func TestAccountBlockFrom_OnlyTranscribesLatchedBlock(t *testing.T) {
 		"P&L bound breached",
 		"lower=-100",
 	)
-	got := accountBlockFrom(&block, "acc-1")
+	got, err := accountBlockFrom(&block, "acc-1", idResolver{})
+	if err != nil {
+		t.Fatalf("accountBlockFrom: %v", err)
+	}
 	if got == nil {
 		t.Fatal("latched engine block must be transcribed")
 	}
@@ -2554,8 +2679,8 @@ func TestAccountBlockFrom_OnlyTranscribesLatchedBlock(t *testing.T) {
 		got.Details != block.Details {
 		t.Fatalf("mapped block = %+v, want the engine block stamped with the account", got)
 	}
-	if got := accountBlockFrom(nil, "acc-1"); got != nil {
-		t.Fatalf("no latched block must map to nil, got %+v", got)
+	if got, err := accountBlockFrom(nil, "acc-1", idResolver{}); err != nil || got != nil {
+		t.Fatalf("no latched block must map to nil, got %+v, %v", got, err)
 	}
 }
 

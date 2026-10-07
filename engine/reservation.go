@@ -32,11 +32,12 @@ import (
 // RejectedImmediate materializes the rejected branch of an immediate chain.
 func (e *openPitEngine) RejectedImmediate(
 	_ domain.Order, rejects []reject.Reject,
-) fwengine.ImmediateResult {
-	return fwengine.ImmediateResult{
-		Accepted: false,
-		Rejects:  orderRejectsFrom(rejects),
+) (fwengine.ImmediateResult, error) {
+	mapped, err := orderRejectsFrom(rejects, e.res)
+	if err != nil {
+		return fwengine.ImmediateResult{}, err
 	}
+	return fwengine.ImmediateResult{Accepted: false, Rejects: mapped}, nil
 }
 
 // PrepareImmediateReservation derives the report while the reservation can
@@ -121,7 +122,12 @@ func (e *openPitEngine) prepareImmediate(
 	}
 	var blocks []domain.AccountBlock
 	if block != nil {
-		blocks = executionBlocksFrom([]reject.AccountBlock{*block}, o.Account)
+		blocks, err = executionBlocksFrom(
+			[]reject.AccountBlock{*block}, o.Account, e.res,
+		)
+		if err != nil {
+			return fwengine.ImmediatePreparation{}, err
+		}
 	}
 	return fwengine.ImmediatePreparation{
 		ExecutionReport:     report,
@@ -173,13 +179,19 @@ func (e *openPitEngine) SettleImmediate(
 			"the account P&L outcome is unmappable", err,
 		)
 	}
+	postTradeBlocks, err := executionBlocksFrom(
+		postTrade.AccountBlocks, o.Account, e.res,
+	)
+	if err != nil {
+		return fwengine.ImmediateResult{}, immediateReconciliationError(
+			o, prepared.ReconciliationState,
+			"the account block is unmappable", err,
+		)
+	}
 	blocks := append(
 		[]domain.AccountBlock(nil), prepared.Blocks...,
 	)
-	blocks = append(
-		blocks,
-		executionBlocksFrom(postTrade.AccountBlocks, o.Account)...,
-	)
+	blocks = append(blocks, postTradeBlocks...)
 	persistence := executionReportPersistenceFrom(
 		prepared.ReportInput,
 		blocks,

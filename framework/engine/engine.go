@@ -235,12 +235,12 @@ type OrderChainAdapter interface {
 	AsyncEngine() *asyncengine.AsyncEngine
 	OrderModel(domain.Order) (model.Order, error)
 	CheckOrderModel(domain.OrderProbe) (model.Order, error)
-	RejectedOrder(domain.Order, []reject.Reject) OrderResult
+	RejectedOrder(domain.Order, []reject.Reject) (OrderResult, error)
 	ReservedOrder(domain.Order, asyncengine.OperationResult) (OrderResult, error)
 	AppliedDropCopyOrder(
 		domain.Order, asyncengine.DropCopyResult,
 	) (OrderResult, error)
-	RejectedImmediate(domain.Order, []reject.Reject) ImmediateResult
+	RejectedImmediate(domain.Order, []reject.Reject) (ImmediateResult, error)
 	PrepareImmediateReservation(
 		domain.Order, asyncengine.OperationResult,
 	) (ImmediatePreparation, error)

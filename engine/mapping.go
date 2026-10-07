@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -184,6 +185,50 @@ func (r idResolver) assetAlias(asset param.Asset) (string, error) {
 		return "", unknownAssetReadyIDError(asset)
 	}
 	return code, nil
+}
+
+// engineAssetText matches an asset named in engine reject or block text. The
+// engine knows an asset only by the decimal engine id Officer registered it
+// under, and its wording names one after "asset" or "currency": "asset 2:
+// available 0", "for asset 2", "settlement asset 2", "barrier currency 2".
+var engineAssetText = regexp.MustCompile(`\b(?:asset|currency) ([0-9]+)\b`)
+
+// assetCodesIn rewrites every asset that engine reject or block text names by
+// its engine id to its quoted Officer code, so a reason reads `asset "USD"`
+// rather than "asset 2". The quotes delimit a code that may hold any printable
+// character, and they keep the rewrite from matching again: a persisted block
+// is restored into the engine with the rewritten text, the engine re-emits it
+// as a reject, and a numeric code such as "99" must not be read as engine id 99.
+// An id without a published code means the resolver and the engine disagree
+// about the dictionary, so the text is refused rather than passed on with the
+// engine id left in it.
+func (r idResolver) assetCodesIn(text string) (string, error) {
+	matches := engineAssetText.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return text, nil
+	}
+	if r.shared == nil {
+		return "", fmt.Errorf("engine: asset resolver is not initialized")
+	}
+	r.shared.mu.RLock()
+	defer r.shared.mu.RUnlock()
+	var out strings.Builder
+	end := 0
+	for _, match := range matches {
+		idStart, idEnd := match[2], match[3]
+		code, ok := r.shared.assetAliases[text[idStart:idEnd]]
+		if !ok {
+			return "", fmt.Errorf(
+				"engine: engine text %q names unknown asset engine id %s",
+				text, text[idStart:idEnd],
+			)
+		}
+		out.WriteString(text[end:idStart])
+		out.WriteString(strconv.Quote(code))
+		end = idEnd
+	}
+	out.WriteString(text[end:])
+	return out.String(), nil
 }
 
 // group resolves a group code to its engine group id. An unknown code is caller
@@ -1469,27 +1514,36 @@ func pnlHaltReasonFromSDK(
 // A batch error without a reject is a broken engine contract: the batch failed
 // and named no cause, and Officer has no answer to put in its place.
 func outcomeRejectedFrom(
-	batch reject.AccountAdjustmentBatchError,
+	batch reject.AccountAdjustmentBatchError, res idResolver,
 ) (domain.AdjustmentOutcomeRejected, error) {
 	if len(batch.Rejects) == 0 {
 		return domain.AdjustmentOutcomeRejected{}, fmt.Errorf(
 			"engine: account adjustment batch rejected at index %d without a reject",
 			batch.FailedAdjustmentIndex)
 	}
-	rejected := adjustmentRejectFrom(batch.Rejects[0])
+	rejected, err := adjustmentRejectFrom(batch.Rejects[0], res)
+	if err != nil {
+		return domain.AdjustmentOutcomeRejected{}, err
+	}
 	rejected.FailedAdjustmentIndex = batch.FailedAdjustmentIndex
 	return rejected, nil
 }
 
 // adjustmentRejectFrom maps one binding reject onto the domain rejected outcome.
-func adjustmentRejectFrom(r reject.Reject) domain.AdjustmentOutcomeRejected {
+func adjustmentRejectFrom(
+	r reject.Reject, res idResolver,
+) (domain.AdjustmentOutcomeRejected, error) {
+	details, err := res.assetCodesIn(sanitizeText(r.Details))
+	if err != nil {
+		return domain.AdjustmentOutcomeRejected{}, err
+	}
 	return domain.AdjustmentOutcomeRejected{
 		Code:    rejectCodeName(r.Code),
 		Scope:   rejectScopeName(r.Scope),
 		Policy:  r.Policy,
 		Reason:  sanitizeText(r.Reason),
-		Details: sanitizeText(r.Details),
-	}
+		Details: details,
+	}, nil
 }
 
 // --- order translation ------------------------------------------------------
@@ -1581,18 +1635,24 @@ func tradeAmountFrom(kind domain.OrderAmountKind, value string) (param.TradeAmou
 }
 
 // orderRejectsFrom maps a binding reject slice onto domain order rejects.
-func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
+func orderRejectsFrom(
+	rejects []reject.Reject, res idResolver,
+) ([]domain.OrderReject, error) {
 	out := make([]domain.OrderReject, 0, len(rejects))
 	for _, r := range rejects {
+		details, err := res.assetCodesIn(sanitizeText(r.Details))
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, domain.OrderReject{
 			Code:    rejectCodeName(r.Code),
 			Scope:   rejectScopeName(r.Scope),
 			Policy:  r.Policy,
 			Reason:  sanitizeText(r.Reason),
-			Details: sanitizeText(r.Details),
+			Details: details,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // --- execution report translation -------------------------------------------
@@ -1899,19 +1959,23 @@ func executionReportLockBytes(in domain.ExecutionReportInput) ([]byte, error) {
 // result onto domain blocks, stamping each with account (the binding's block
 // record does not name the account).
 func executionBlocksFrom(
-	blocks []reject.AccountBlock, account domain.AccountID,
-) []domain.AccountBlock {
+	blocks []reject.AccountBlock, account domain.AccountID, res idResolver,
+) ([]domain.AccountBlock, error) {
 	out := make([]domain.AccountBlock, 0, len(blocks))
 	for _, b := range blocks {
+		details, err := res.assetCodesIn(sanitizeText(b.Details))
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, domain.AccountBlock{
 			Account: account,
 			Policy:  sanitizeText(b.Policy),
 			Code:    rejectCodeName(b.Code),
 			Reason:  sanitizeText(b.Reason),
-			Details: sanitizeText(b.Details),
+			Details: details,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // policyConfigurationBlocksFrom maps blocks emitted while configuring one
@@ -1920,22 +1984,27 @@ func executionBlocksFrom(
 // carries both across the engine boundary.
 func policyConfigurationBlocksFrom(
 	blocks []reject.AccountBlock, account domain.AccountID, policy string,
-) []domain.AccountBlock {
+	res idResolver,
+) ([]domain.AccountBlock, error) {
 	out := make([]domain.AccountBlock, 0, len(blocks))
 	for _, b := range blocks {
 		blockPolicy := sanitizeText(b.Policy)
 		if blockPolicy == "" {
 			blockPolicy = policy
 		}
+		details, err := res.assetCodesIn(sanitizeText(b.Details))
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, domain.AccountBlock{
 			Account: account,
 			Policy:  blockPolicy,
 			Code:    rejectCodeName(b.Code),
 			Reason:  sanitizeText(b.Reason),
-			Details: sanitizeText(b.Details),
+			Details: details,
 		})
 	}
-	return out
+	return out, nil
 }
 
 func policyConfigurationBlockOutcomesFrom(
@@ -1947,9 +2016,13 @@ func policyConfigurationBlockOutcomesFrom(
 		if err != nil {
 			return nil, err
 		}
-		blocks = append(blocks, policyConfigurationBlocksFrom(
-			[]reject.AccountBlock{outcome.Block}, account, policy,
-		)...)
+		accountBlocks, err := policyConfigurationBlocksFrom(
+			[]reject.AccountBlock{outcome.Block}, account, policy, res,
+		)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, accountBlocks...)
 	}
 	return blocks, nil
 }
@@ -1966,18 +2039,22 @@ func policyConfigurationBlockOutcomesFrom(
 // re-emits its standing block as an account-scope reject, which reaches the
 // caller through the report's reject list, so there is nothing here to derive.
 func accountBlockFrom(
-	block *reject.AccountBlock, account domain.AccountID,
-) *domain.AccountBlock {
+	block *reject.AccountBlock, account domain.AccountID, res idResolver,
+) (*domain.AccountBlock, error) {
 	if block == nil {
-		return nil
+		return nil, nil
+	}
+	details, err := res.assetCodesIn(sanitizeText(block.Details))
+	if err != nil {
+		return nil, err
 	}
 	return &domain.AccountBlock{
 		Account: account,
 		Policy:  sanitizeText(block.Policy),
 		Code:    rejectCodeName(block.Code),
 		Reason:  sanitizeText(block.Reason),
-		Details: sanitizeText(block.Details),
-	}
+		Details: details,
+	}, nil
 }
 
 // --- reject code/scope naming -----------------------------------------------
@@ -1995,7 +2072,8 @@ func accountBlockFrom(
 //
 // Encoding is the only judgement made here. Whatever survives the scrub is the
 // engine's own wording and is transcribed as is, including short values such as
-// "0.5", ">10" or "-5%" that carry the whole answer.
+// "0.5", ">10" or "-5%" that carry the whole answer; only the asset engine ids
+// in Details are then replaced by their codes (assetCodesIn).
 func sanitizeText(s string) string {
 	if s == "" {
 		return ""
