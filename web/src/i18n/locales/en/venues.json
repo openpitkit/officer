@@ -1,0 +1,54 @@
+{
+  "providers": {
+    "count_one": "{{count}} provider",
+    "count_other": "{{count}} providers",
+    "site": "Site",
+    "docs": "Docs",
+    "symbols": "Symbols"
+  },
+  "references": {
+    "site": "Provider site",
+    "docs": "Provider docs",
+    "symbols": "Valid symbols"
+  },
+  "instrument": {
+    "externalSymbol": "External symbol",
+    "baseAsset": "Base",
+    "quoteAsset": "Quote"
+  },
+  "actions": {
+    "addInstrument": "Add instrument",
+    "enable": "Enable",
+    "disable": "Disable",
+    "deleteInstrument": "Delete instrument"
+  },
+  "state": {
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "table": {
+    "external": "External",
+    "instrument": "Instrument",
+    "state": "State",
+    "actions": "Actions"
+  },
+  "verify": {
+    "action": "Verify symbol",
+    "exists": "Symbol exists",
+    "notFound": "Symbol not found",
+    "didYouMean": "Did you mean {{suggestion}}?",
+    "failed": "Verification failed",
+    "notTradable": "Symbol exists but is not tradable"
+  },
+  "resolve": {
+    "action": "Resolve",
+    "searching": "Resolving…",
+    "filterLabel": "Filter resolved symbols",
+    "filterPlaceholder": "Filter resolved symbols",
+    "noFilteredResults": "No results match the filter"
+  },
+  "deleteInstrument": {
+    "title": "Delete instrument?"
+  },
+  "emptyInstruments": "No instruments configured"
+}

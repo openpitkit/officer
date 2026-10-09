@@ -1,0 +1,56 @@
+{
+  "providers": {
+    "count_one": "Провайдеров: {{count}}",
+    "count_few": "Провайдеров: {{count}}",
+    "count_many": "Провайдеров: {{count}}",
+    "count_other": "Провайдеров: {{count}}",
+    "site": "Сайт",
+    "docs": "Документация",
+    "symbols": "Символы"
+  },
+  "references": {
+    "site": "Сайт провайдера",
+    "docs": "Документация провайдера",
+    "symbols": "Список символов"
+  },
+  "instrument": {
+    "externalSymbol": "Внешний символ",
+    "baseAsset": "База",
+    "quoteAsset": "Котировка"
+  },
+  "actions": {
+    "addInstrument": "Добавить инструмент",
+    "enable": "Включить",
+    "disable": "Выключить",
+    "deleteInstrument": "Удалить инструмент"
+  },
+  "state": {
+    "enabled": "Включён",
+    "disabled": "Выключен"
+  },
+  "table": {
+    "external": "Внешний",
+    "instrument": "Инструмент",
+    "state": "Состояние",
+    "actions": "Действия"
+  },
+  "verify": {
+    "action": "Проверить символ",
+    "exists": "Символ существует",
+    "notFound": "Символ не найден",
+    "didYouMean": "Возможно, вы имели в виду {{suggestion}}?",
+    "failed": "Не удалось проверить",
+    "notTradable": "Символ существует, но недоступен для торговли"
+  },
+  "resolve": {
+    "action": "Найти",
+    "searching": "Поиск…",
+    "filterLabel": "Фильтр найденных символов",
+    "filterPlaceholder": "Фильтр найденных символов",
+    "noFilteredResults": "Под фильтр ничего не подходит"
+  },
+  "deleteInstrument": {
+    "title": "Удалить инструмент?"
+  },
+  "emptyInstruments": "Инструменты не настроены"
+}

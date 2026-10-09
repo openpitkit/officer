@@ -9,9 +9,6 @@
     "label": "Метка"
   },
   "instrument": {
-    "externalSymbol": "Внешний символ",
-    "baseAsset": "База",
-    "quoteAsset": "Котировка",
     "manualPrice": "Ручная цена",
     "manualPriceFor": "Ручная цена для {{symbol}}",
     "pairAlreadyUsed": "Эта пара база/котировка уже используется: {{feeds}}"
@@ -24,11 +21,7 @@
   },
   "actions": {
     "addInstance": "Добавить источник",
-    "addInstrument": "Добавить инструмент",
-    "enable": "Включить",
-    "disable": "Выключить",
     "deleteInstance": "Удалить источник",
-    "deleteInstrument": "Удалить инструмент",
     "editSettings": "Изменить настройки",
     "restart": "Перезапустить фиды",
     "sendPrice": "Отправить цену",
@@ -46,10 +39,6 @@
   "providers": {
     "guideTitle": "Справка по провайдерам",
     "addSource": "Добавить источник рыночных данных",
-    "count": "Провайдеров: {{n}}",
-    "site": "Сайт",
-    "docs": "Документация",
-    "symbols": "Символы",
     "ib": {
       "title": "Interactive Brokers",
       "description": "Живые рыночные данные из Interactive Brokers TWS или IB Gateway. Если простого символа недостаточно, используйте настройки контракта.",
@@ -112,8 +101,6 @@
     "button": "Перезапустить фиды"
   },
   "state": {
-    "enabled": "Включён",
-    "disabled": "Выключен",
     "feedDisabled": "Фид выключен",
     "stale": "Устар.",
     "staleTooltip": "Котировка старше окна свежести",
@@ -183,17 +170,12 @@
     }
   },
   "table": {
-    "external": "Внешний",
-    "instrument": "Инструмент",
     "manualPrice": "Ручная цена",
     "price": "Цена",
     "asOf": "As-of",
-    "updateIntervalTooltip": "Интервал с предыдущего обновления",
-    "state": "Состояние",
-    "actions": "Действия"
+    "updateIntervalTooltip": "Интервал с предыдущего обновления"
   },
   "emptyInstances": "Источники рыночных данных не настроены",
-  "emptyInstruments": "Инструменты не настроены",
   "diagnostics": {
     "title": "Проблемы",
     "summary": "Активно: {{count}}",
@@ -214,19 +196,9 @@
     "actionRemoveTarget": "Удалить {{target}}",
     "actionLogs": "Логи сервиса"
   },
-  "references": {
-    "site": "Сайт провайдера",
-    "docs": "Документация провайдера",
-    "symbols": "Список символов"
-  },
   "verify": {
-    "action": "Проверить символ",
     "unsupported": "Этот провайдер не умеет проверять символы",
-    "exists": "Символ существует",
-    "unavailable": "Нет свежей цены для символа",
-    "notFound": "Символ не найден",
-    "didYouMean": "Возможно, вы имели в виду {{suggestion}}?",
-    "failed": "Не удалось проверить"
+    "unavailable": "Нет свежей цены для символа"
   },
   "search": {
     "action": "Поиск символов",
@@ -239,13 +211,8 @@
   },
   "resolve": {
     "label": "Найти символ в этом фиде",
-    "action": "Найти",
     "placeholder": "Введите EUR, EUR/USD, BTC или AAPL",
-    "filterLabel": "Фильтр найденных символов",
-    "filterPlaceholder": "Фильтр найденных символов",
-    "searching": "Поиск…",
     "noResults": "В этом фиде подходящих символов не найдено",
-    "noFilteredResults": "Под фильтр ничего не подходит",
     "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
   },
   "deleteInstance": {
@@ -255,9 +222,6 @@
     "submit": "Удалить"
   },
   "deleteInstrument": {
-    "title": "Удалить инструмент?",
-    "description": "{{symbol}} будет удалён из этого источника без возможности восстановления.",
-    "cancel": "Отмена",
-    "submit": "Удалить"
+    "description": "{{symbol}} будет удалён из этого источника без возможности восстановления."
   }
 }

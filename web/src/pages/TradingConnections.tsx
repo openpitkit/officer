@@ -15,20 +15,33 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, ExternalLink, Plus, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
 
 import type {
   TradingConnection,
   TradingConnectionCheck,
-  TradingInstrument,
   TradingProvider,
-  TradingSymbolSearch,
   TradingSymbolVerification,
 } from "@/api/types";
 import { useTrading } from "@/api/useTrading";
 import { Autocomplete } from "@/components/Autocomplete";
+import { ClearableInput } from "@/components/ClearableInput";
+import { Segmented } from "@/components/data";
+import {
+  AddProviderButton,
+  ProviderGuideDialog,
+  VenueCardHeader,
+  SymbolSearchPanel,
+  useSymbolSearch,
+  useRowVerification,
+  InstrumentDraftRow,
+  VerifyResult,
+  InstrumentsTable,
+  DeleteInstrumentDialog,
+  type InstrumentDraftFields,
+} from "@/components/venues";
 import { Page } from "@/components/Page";
 import {
   EmptyState,
@@ -49,7 +62,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -164,62 +177,13 @@ export function UnsealedKeysWarning() {
   );
 }
 
-function TradingProviderTile({
-  provider,
-  onSelect,
-}: {
-  provider: TradingProvider;
-  onSelect: (provider: TradingProvider) => void;
-}) {
-  const { t } = useTranslation("trading");
-  const guide = TRADING_PROVIDER_GUIDES[provider.type];
-
-  return (
-    <Card className="overflow-hidden">
-      <button
-        type="button"
-        className="block w-full p-4 text-left transition-colors hover:bg-surface-hover"
-        onClick={() => onSelect(provider)}
-      >
-        <p className="font-semibold text-text">{provider.title}</p>
-      </button>
-      {(guide?.siteUrl || guide?.docsUrl) && (
-        <div className="flex flex-wrap gap-3 border-t border-border px-4 py-2">
-          {guide.siteUrl && (
-            <a
-              href={guide.siteUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-            >
-              <ExternalLink className="h-3 w-3" aria-hidden="true" />
-              {t("create.site")}
-            </a>
-          )}
-          {guide.docsUrl && (
-            <a
-              href={guide.docsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-            >
-              <ExternalLink className="h-3 w-3" aria-hidden="true" />
-              {t("create.docs")}
-            </a>
-          )}
-        </div>
-      )}
-    </Card>
-  );
-}
-
 function AddTradingConnectionDialog({
-  providers,
+  provider,
   credentialsSealed,
   onClose,
   onCreated,
 }: {
-  providers: TradingProvider[];
+  provider: TradingProvider;
   credentialsSealed: boolean;
   onClose: () => void;
   onCreated: (connectionId: string) => void;
@@ -228,22 +192,22 @@ function AddTradingConnectionDialog({
   const { t: tc } = useTranslation();
   const { createTradingConnection } = useOfficerApi();
   const id = useId();
-  const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [provider, setProvider] = useState<TradingProvider | null>(null);
-  const [label, setLabel] = useState("");
+  const [label, setLabel] = useState(provider.title);
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const guide = provider ? TRADING_PROVIDER_GUIDES[provider.type] : undefined;
+  const errorBanner = useRef<HTMLDivElement>(null);
+  const guide = TRADING_PROVIDER_GUIDES[provider.type];
   const ready =
-    provider !== null &&
-    label.trim() !== "" &&
-    apiKey.trim() !== "" &&
-    apiSecret.trim() !== "";
+    label.trim() !== "" && apiKey.trim() !== "" && apiSecret.trim() !== "";
+
+  useEffect(() => {
+    if (error !== "") errorBanner.current?.scrollIntoView({ block: "nearest" });
+  }, [error]);
 
   const submit = async () => {
-    if (busy || !provider || !ready) return;
+    if (busy || !ready) return;
     setBusy(true);
     setError("");
     try {
@@ -273,14 +237,16 @@ function AddTradingConnectionDialog({
         if (!next && !busy) onClose();
       }}
     >
-      <DialogContent className="sm:max-w-2xl" hideClose={busy}>
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+        hideClose={busy}
+        aria-describedby={undefined}
+      >
         <DialogHeader>
-          <DialogTitle>{t("actions.addConnection")}</DialogTitle>
-          <DialogDescription>
-            {t("create.step", { current: step })}
-          </DialogDescription>
+          <DialogTitle>
+            {t("create.title", { provider: provider.title })}
+          </DialogTitle>
         </DialogHeader>
-        {error && <ErrorBanner message={error} />}
         <form
           className="space-y-4"
           onSubmit={(event) => {
@@ -288,126 +254,89 @@ function AddTradingConnectionDialog({
             void submit();
           }}
         >
-          {step === 1 && (
-            <div className="space-y-3">
-              <h2 className="text-sm font-bold">{t("create.chooseVenue")}</h2>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {providers.map((item) => (
-                  <TradingProviderTile
-                    key={item.type}
-                    provider={item}
-                    onSelect={(selected) => {
-                      setProvider(selected);
-                      setStep(2);
-                    }}
-                  />
+          <div className="space-y-2">
+            <Label htmlFor={`${id}-label`}>{t("settings.label")}</Label>
+            <Input
+              id={`${id}-label`}
+              value={label}
+              autoFocus
+              required
+              disabled={busy}
+              onChange={(event) => setLabel(event.target.value)}
+            />
+          </div>
+          <fieldset className="space-y-2" disabled={busy}>
+            <Label asChild>
+              <legend>{t("create.mode")}</legend>
+            </Label>
+            <Segmented
+              value="paper"
+              options={[
+                { value: "paper", label: t("mode.paper") },
+                { value: "live", label: t("mode.live"), disabled: true },
+              ]}
+            />
+            <p className="text-xs text-muted">{t("create.liveNote")}</p>
+          </fieldset>
+          {!credentialsSealed && <UnsealedKeysWarning />}
+          <div className="space-y-3">
+            <h2 className="text-sm font-bold">
+              {t("create.prepareAccount", { provider: provider.title })}
+            </h2>
+            {guide?.steps && (
+              <ol className="list-outside list-decimal space-y-4 pl-5 text-sm">
+                {guide.steps.map((instruction) => (
+                  <li key={instruction.textKey} className="space-y-2 pl-1">
+                    <p>{t(instruction.textKey)}</p>
+                    {instruction.links.length > 0 && (
+                      <div className="flex flex-wrap gap-3">
+                        {instruction.links.map((link) => (
+                          <a
+                            key={link.labelKey}
+                            href={link.href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-accent underline underline-offset-4"
+                          >
+                            {t(link.labelKey)}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </li>
                 ))}
-              </div>
-            </div>
-          )}
-          {step === 2 && provider && (
-            <div className="space-y-3">
-              <h2 className="text-sm font-bold">
-                {t("create.prepareAccount", { provider: provider.title })}
-              </h2>
-              {guide?.steps && (
-                <ol className="list-outside list-decimal space-y-4 pl-5 text-sm">
-                  {guide.steps.map((instruction) => (
-                    <li key={instruction.textKey} className="space-y-2 pl-1">
-                      <p>{t(instruction.textKey)}</p>
-                      {instruction.links.length > 0 && (
-                        <div className="flex flex-wrap gap-3">
-                          {instruction.links.map((link) => (
-                            <a
-                              key={link.labelKey}
-                              href={link.href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-accent underline underline-offset-4"
-                            >
-                              {t(link.labelKey)}
-                            </a>
-                          ))}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
-          )}
-          {step === 3 && provider && (
-            <div className="space-y-4">
-              <h2 className="text-sm font-bold">
-                {t("create.connectionDetails")}
-              </h2>
-              <div className="space-y-2">
-                <Label htmlFor={`${id}-label`}>{t("settings.label")}</Label>
-                <Input
-                  id={`${id}-label`}
-                  value={label}
-                  autoFocus
-                  required
-                  disabled={busy}
-                  onChange={(event) => setLabel(event.target.value)}
-                />
-              </div>
-              <fieldset className="space-y-2" disabled={busy}>
-                <legend className="text-sm font-medium">
-                  {t("create.mode")}
-                </legend>
-                <div className="flex flex-wrap gap-4">
-                  <Label className="flex items-center gap-2">
-                    <input
-                      type="radio"
-                      name={`${id}-mode`}
-                      value="paper"
-                      checked
-                      readOnly
-                    />
-                    {t("mode.paper")}
-                  </Label>
-                  <Label className="flex items-center gap-2 text-muted">
-                    <input
-                      type="radio"
-                      name={`${id}-mode`}
-                      value="live"
-                      disabled
-                    />
-                    {t("mode.live")}
-                  </Label>
-                </div>
-                <p className="text-xs text-muted">{t("create.liveNote")}</p>
-              </fieldset>
-              {!credentialsSealed && <UnsealedKeysWarning />}
-              <div className="space-y-2">
-                <Label htmlFor={`${id}-api-key`}>
-                  {t("connection.apiKey")}
-                </Label>
-                <Input
-                  id={`${id}-api-key`}
-                  type="password"
-                  autoComplete="new-password"
-                  value={apiKey}
-                  required
-                  disabled={busy}
-                  onChange={(event) => setApiKey(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor={`${id}-api-secret`}>
-                  {t("connection.apiSecret")}
-                </Label>
-                <Input
-                  id={`${id}-api-secret`}
-                  type="password"
-                  autoComplete="new-password"
-                  value={apiSecret}
-                  required
-                  disabled={busy}
-                  onChange={(event) => setApiSecret(event.target.value)}
-                />
-              </div>
+              </ol>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`${id}-api-key`}>{t("connection.apiKey")}</Label>
+            <Input
+              id={`${id}-api-key`}
+              type="password"
+              autoComplete="new-password"
+              value={apiKey}
+              required
+              disabled={busy}
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`${id}-api-secret`}>
+              {t("connection.apiSecret")}
+            </Label>
+            <Input
+              id={`${id}-api-secret`}
+              type="password"
+              autoComplete="new-password"
+              value={apiSecret}
+              required
+              disabled={busy}
+              onChange={(event) => setApiSecret(event.target.value)}
+            />
+          </div>
+          {error && (
+            <div ref={errorBanner}>
+              <ErrorBanner message={error} />
             </div>
           )}
           <DialogFooter>
@@ -419,28 +348,9 @@ function AddTradingConnectionDialog({
             >
               {tc("actions.cancel")}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={step === 1 || busy}
-              onClick={() => setStep((current) => (current === 3 ? 2 : 1))}
-            >
-              {t("create.back")}
+            <Button type="submit" disabled={busy || !ready}>
+              {t("create.submit")}
             </Button>
-            {step < 3 ? (
-              <Button
-                key="next"
-                type="button"
-                disabled={(step === 1 && !provider) || busy}
-                onClick={() => setStep((current) => (current === 1 ? 2 : 3))}
-              >
-                {t("create.next")}
-              </Button>
-            ) : (
-              <Button key="submit" type="submit" disabled={busy || !ready}>
-                {t(busy ? "create.creating" : "create.submit")}
-              </Button>
-            )}
           </DialogFooter>
         </form>
       </DialogContent>
@@ -578,6 +488,644 @@ function ConnectionSettingsDialog({
   );
 }
 
+function ConnectionCheckSection({
+  checkSection,
+  busy,
+  checking,
+  checkConnection,
+  check,
+  checkError,
+}: {
+  checkSection: Ref<HTMLElement>;
+  busy: boolean;
+  checking: boolean;
+  checkConnection: () => void;
+  check: TradingConnectionCheck | null;
+  checkError: string;
+}) {
+  const { t } = useTranslation("trading");
+  return (
+    <section
+      ref={checkSection}
+      tabIndex={-1}
+      aria-label={t("actions.check")}
+      className="space-y-2"
+    >
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={busy || checking}
+        onClick={checkConnection}
+      >
+        {t("actions.check")}
+      </Button>
+      {check && (
+        <p role="status" className="text-xs">
+          {t("check.result", {
+            id: check.venueIdentity,
+            status: check.venueStatus,
+          })}
+        </p>
+      )}
+      {checkError && <ErrorBanner message={checkError} />}
+    </section>
+  );
+}
+
+function ConnectionAccessSection({
+  accessSection,
+  id,
+  connection,
+  provider,
+  busy,
+  account,
+  setAccount,
+  accountCode,
+  accountSuggestions,
+  venueAccount,
+  setVenueAccount,
+  feeBlocked,
+  focusFeeAccount,
+  grantAccess,
+  onRevoke,
+}: {
+  accessSection: Ref<HTMLElement>;
+  id: string;
+  connection: TradingConnection;
+  provider: TradingProvider;
+  busy: boolean;
+  account: string;
+  setAccount: (value: string) => void;
+  accountCode: string;
+  accountSuggestions: AccountSuggestionLookup | null;
+  venueAccount: string;
+  setVenueAccount: (value: string) => void;
+  feeBlocked: boolean;
+  focusFeeAccount: () => void;
+  grantAccess: () => Promise<void>;
+  onRevoke: (account: string) => void;
+}) {
+  const { t } = useTranslation("trading");
+  const { t: tc } = useTranslation();
+  return (
+    <section
+      ref={accessSection}
+      tabIndex={-1}
+      aria-labelledby={`${id}-access`}
+      className="space-y-3 border-t border-border pt-4"
+    >
+      <h4 id={`${id}-access`} className="text-sm font-medium">
+        {t("access.title")}
+      </h4>
+      <Table aria-label={t("access.title")}>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t("access.account")}</TableHead>
+            {provider.venueAccounts && (
+              <TableHead>{t("connection.venueAccount")}</TableHead>
+            )}
+            <TableHead>{t("table.actions")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {connection.access.map((grant) => (
+            <TableRow key={grant.account}>
+              <TableCell>{grant.account}</TableCell>
+              {provider.venueAccounts && (
+                <TableCell>{grant.venueAccount}</TableCell>
+              )}
+              <TableCell>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    onRevoke(grant.account);
+                  }}
+                >
+                  {t("actions.revoke")}
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+          {connection.access.length === 0 && (
+            <TableRow>
+              <TableCell
+                colSpan={provider.venueAccounts ? 3 : 2}
+                className="text-muted"
+              >
+                {t("access.empty")}
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      <form
+        aria-label={t("actions.addAccount")}
+        className="space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void grantAccess();
+        }}
+      >
+        <h5 className="text-xs font-medium">{t("actions.addAccount")}</h5>
+        <div className="space-y-2">
+          <Label htmlFor={`${id}-account`}>{t("access.account")}</Label>
+          <Autocomplete
+            id={`${id}-account`}
+            value={account}
+            suggestions={
+              accountSuggestions?.code === accountCode
+                ? accountSuggestions.suggestions
+                : []
+            }
+            disabled={busy}
+            onChange={setAccount}
+            onClear={() => setAccount("")}
+            clearLabel={tc("filters.clearField")}
+          />
+        </div>
+        {provider.venueAccounts && (
+          <div className="space-y-2">
+            <Label htmlFor={`${id}-venue-account`}>
+              {t("connection.venueAccount")}
+            </Label>
+            <ClearableInput
+              id={`${id}-venue-account`}
+              onClear={() => setVenueAccount("")}
+              clearLabel={tc("filters.clearField")}
+              value={venueAccount}
+              disabled={busy}
+              onChange={(event) => setVenueAccount(event.target.value)}
+            />
+          </div>
+        )}
+        {feeBlocked && (
+          <div className="space-y-2 text-xs text-[var(--warn)]">
+            <p>{t("access.feeRequired", { provider: provider.title })}</p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-accent underline underline-offset-4"
+              onClick={focusFeeAccount}
+            >
+              {t("actions.setFeeAccount")}
+            </Button>
+          </div>
+        )}
+        <Button
+          type="submit"
+          disabled={busy || accountCode === "" || feeBlocked}
+        >
+          {t("actions.addAccount")}
+        </Button>
+      </form>
+    </section>
+  );
+}
+
+function ConnectionFeeAccountSection({
+  id,
+  connection,
+  provider,
+  busy,
+  feeCode,
+  setFeeCode,
+  feeAccountCode,
+  feeAccountSuggestions,
+  feeLookup,
+  feeInput,
+  saveFeeAccount,
+  onClearFeeAccount,
+}: {
+  id: string;
+  connection: TradingConnection;
+  provider: TradingProvider;
+  busy: boolean;
+  feeCode: string;
+  setFeeCode: (value: string) => void;
+  feeAccountCode: string;
+  feeAccountSuggestions: AccountSuggestionLookup | null;
+  feeLookup:
+    | { code: string; exists: boolean }
+    | { code: string; error: string }
+    | null;
+  feeInput: Ref<HTMLInputElement>;
+  saveFeeAccount: (create: boolean) => Promise<void>;
+  onClearFeeAccount: () => void;
+}) {
+  const { t } = useTranslation("trading");
+  const { t: tc } = useTranslation();
+  return (
+    <section
+      aria-labelledby={`${id}-fee`}
+      className="space-y-3 border-t border-border pt-4"
+    >
+      <h4 id={`${id}-fee`} className="text-sm font-medium">
+        {t("fee.title")}
+      </h4>
+      <p className="text-xs text-muted">
+        {t("fee.description", { provider: provider.title })}
+      </p>
+      <p className="text-xs">
+        {connection.feeAccount === "" ? t("fee.notSet") : connection.feeAccount}
+      </p>
+      <form
+        aria-label={t("fee.title")}
+        className="space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void saveFeeAccount(false);
+        }}
+      >
+        <div className="space-y-2">
+          <Label htmlFor={`${id}-fee-account`}>{t("fee.title")}</Label>
+          <Autocomplete
+            ref={feeInput}
+            id={`${id}-fee-account`}
+            value={feeCode}
+            suggestions={
+              feeAccountSuggestions?.code === feeAccountCode
+                ? feeAccountSuggestions.suggestions
+                : []
+            }
+            disabled={busy}
+            onChange={setFeeCode}
+            onClear={() => setFeeCode("")}
+            clearLabel={tc("filters.clearField")}
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={busy || feeAccountCode === ""}>
+            {t("actions.save")}
+          </Button>
+          {feeAccountCode !== "" &&
+            feeLookup?.code === feeAccountCode &&
+            "exists" in feeLookup &&
+            !feeLookup.exists && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  void saveFeeAccount(true);
+                }}
+              >
+                {t("fee.createAndUse", { code: feeAccountCode })}
+              </Button>
+            )}
+          {connection.feeAccount !== "" && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                onClearFeeAccount();
+              }}
+            >
+              {tc("actions.clear")}
+            </Button>
+          )}
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function ConnectionInstrumentsSection({
+  connection,
+  provider,
+  id,
+  instrumentSection,
+  busy,
+  run,
+  callVenue,
+  error,
+  setError,
+  deleteSymbol,
+  setDeleteSymbol,
+}: {
+  connection: TradingConnection;
+  provider: TradingProvider;
+  id: string;
+  instrumentSection: Ref<HTMLElement>;
+  busy: boolean;
+  run: (
+    fn: () => Promise<unknown>,
+    handled?: (err: unknown) => boolean,
+  ) => Promise<boolean>;
+  callVenue: (
+    fn: () => Promise<void>,
+    setPending: (pending: boolean) => void,
+    setFailure: (message: string) => void,
+  ) => Promise<void>;
+  error: string;
+  setError: (message: string) => void;
+  deleteSymbol: string | null;
+  setDeleteSymbol: (symbol: string | null) => void;
+}) {
+  const { t } = useTranslation("trading");
+  const api = useOfficerApi();
+  const [verifying, setVerifying] = useState(false);
+  const [missingAsset, setMissingAsset] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState("");
+  const [verifyError, setVerifyError] = useState<{
+    symbol: string;
+    message: string;
+  } | null>(null);
+  const [draft, setDraft] = useState<InstrumentDraftFields>({
+    externalSymbol: "",
+    baseAsset: "",
+    quoteAsset: "",
+  });
+  const [searchSupported, setSearchSupported] = useState<boolean | null>(null);
+  const symbolSearch = useSymbolSearch(async (query) => {
+    setSearchSupported(null);
+    setSearchError("");
+    try {
+      const result = await api.searchTradingSymbols(connection.id, { query });
+      setSearchSupported(result.supported);
+      return result.supported ? result.matches : [];
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  });
+  const [verification, setVerification] = useState<{
+    symbol: string;
+    result: TradingSymbolVerification;
+  } | null>(null);
+  const baseSuggestions = useAssetCodeSuggestions(draft.baseAsset, true);
+  const quoteSuggestions = useAssetCodeSuggestions(draft.quoteAsset, true);
+  const {
+    outcomes: rowVerify,
+    isVerifying,
+    verifyRow,
+    forget,
+  } = useRowVerification((symbol) =>
+    api.verifyTradingSymbol(connection.id, symbol),
+  );
+  const verifySymbol = () => {
+    const symbol = draft.externalSymbol.trim();
+    if (verifying || symbol === "") return;
+    setVerification(null);
+    void callVenue(
+      async () => {
+        setVerification({
+          symbol,
+          result: await api.verifyTradingSymbol(connection.id, symbol),
+        });
+      },
+      setVerifying,
+      (message) => setVerifyError(message === "" ? null : { symbol, message }),
+    );
+  };
+  const verdict =
+    verification?.symbol === draft.externalSymbol.trim()
+      ? verification.result
+      : verifyError?.symbol === draft.externalSymbol.trim()
+        ? { failed: true as const }
+        : null;
+  const currentVerifyError =
+    verifyError?.symbol === draft.externalSymbol.trim()
+      ? verifyError.message
+      : "";
+  const draftComplete =
+    draft.externalSymbol.trim() !== "" &&
+    draft.baseAsset.trim() !== "" &&
+    draft.quoteAsset.trim() !== "";
+  // createAsset names an asset the operator chose to create before the save.
+  const saveInstrument = async (createAsset?: string) => {
+    if (busy || !draftComplete) return;
+    setMissingAsset(null);
+    const existingInstrument = connection.instruments.find(
+      (instrument) => instrument.externalSymbol === draft.externalSymbol.trim(),
+    );
+    const ok = await run(
+      async () => {
+        if (createAsset !== undefined) {
+          await api.createAsset(createAsset, "", "");
+        }
+        await api.upsertTradingInstrument(connection.id, {
+          externalSymbol: draft.externalSymbol.trim(),
+          baseAsset: draft.baseAsset.trim(),
+          quoteAsset: draft.quoteAsset.trim(),
+          enabled: existingInstrument ? existingInstrument.enabled : true,
+        });
+      },
+      // A missing draft asset is answered by the explicit create-and-save offer.
+      (err) => {
+        if (
+          err instanceof ApiError &&
+          err.code === "asset_missing" &&
+          err.asset !== undefined &&
+          (err.asset === draft.baseAsset.trim() ||
+            err.asset === draft.quoteAsset.trim())
+        ) {
+          setMissingAsset(err.asset);
+          return true;
+        }
+        return false;
+      },
+    );
+    if (ok) {
+      setDraft({
+        externalSymbol: "",
+        baseAsset: "",
+        quoteAsset: "",
+      });
+      setVerification(null);
+      setVerifyError(null);
+    }
+  };
+
+  return (
+    <section
+      ref={instrumentSection}
+      tabIndex={-1}
+      aria-labelledby={`${id}-instruments`}
+      className="space-y-3 border-t border-border pt-4"
+    >
+      <h4 id={`${id}-instruments`} className="text-sm font-medium">
+        {t("instruments.title")}
+      </h4>
+      {provider.searchesSymbols && (
+        <>
+          <SymbolSearchPanel
+            {...symbolSearch}
+            id={`${id}-search`}
+            busy={busy}
+            searched={symbolSearch.searched && searchSupported === true}
+            onQueryChange={(value) => {
+              symbolSearch.onQueryChange(value);
+              setSearchSupported(null);
+            }}
+            onSearch={() => {
+              void symbolSearch.onSearch();
+            }}
+            onPick={(match) => {
+              const pair = /^([^/\s]+)\/([^/\s]+)$/.exec(match.symbol);
+              setDraft({
+                externalSymbol: match.symbol,
+                baseAsset: pair ? pair[1] : match.symbol,
+                quoteAsset: pair ? pair[2] : "",
+              });
+              setVerification(null);
+              setVerifyError(null);
+            }}
+            label={t("search.label")}
+            placeholder={t("search.placeholder")}
+            noResultsText={t("search.empty")}
+            notice={
+              searchSupported === false ? t("search.unavailable") : undefined
+            }
+            getKey={(match) => match.symbol}
+            getLabel={(match) => match.symbol}
+            getMetadata={(match) =>
+              [match.exchange, match.class].filter(Boolean).join(" · ")
+            }
+            getWarning={(match) =>
+              match.tradable === false ? t("search.notTradable") : undefined
+            }
+            getName={(match) => match.name}
+            getSearchText={(match) =>
+              [match.symbol, match.name, match.exchange, match.class]
+                .join(" ")
+                .toLowerCase()
+            }
+          />
+          {searchError && <ErrorBanner message={searchError} />}
+        </>
+      )}
+      <InstrumentDraftRow
+        draft={draft}
+        onDraftChange={(patch) => {
+          setDraft((previous) => ({ ...previous, ...patch }));
+          if ("externalSymbol" in patch) {
+            setVerification(null);
+            setVerifyError(null);
+          }
+        }}
+        busy={busy}
+        valid={draftComplete}
+        onSubmit={() => {
+          void saveInstrument();
+        }}
+        verify={
+          provider.verifiesSymbols
+            ? { verifying, onVerify: verifySymbol }
+            : undefined
+        }
+        baseSuggestions={baseSuggestions.codes}
+        quoteSuggestions={quoteSuggestions.codes}
+        baseSuggestionsFailed={baseSuggestions.failed}
+        quoteSuggestionsFailed={quoteSuggestions.failed}
+      />
+      <div role={verdict === null ? undefined : "status"}>
+        <VerifyResult
+          result={verdict}
+          unsupportedLabel={t("verify.unavailable")}
+        />
+      </div>
+      {currentVerifyError && <ErrorBanner message={currentVerifyError} />}
+      {connection.instruments.map(({ externalSymbol }) => {
+        const outcome = Object.hasOwn(rowVerify, externalSymbol)
+          ? rowVerify[externalSymbol]
+          : undefined;
+        return outcome &&
+          "failed" in outcome &&
+          outcome.message &&
+          !isVerifying(externalSymbol) ? (
+          <ErrorBanner
+            key={externalSymbol}
+            message={`${externalSymbol}: ${outcome.message}`}
+          />
+        ) : null;
+      })}
+      {missingAsset !== null &&
+        (draft.baseAsset.trim() === missingAsset ||
+          draft.quoteAsset.trim() === missingAsset) && (
+          <div role="alert" className="space-y-2 text-xs text-[var(--warn)]">
+            <p>{t("instruments.assetMissing", { asset: missingAsset })}</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy || !draftComplete}
+              onClick={() => {
+                void saveInstrument(missingAsset);
+              }}
+            >
+              {t("instruments.createAssetAndSave", {
+                asset: missingAsset,
+              })}
+            </Button>
+          </div>
+        )}
+
+      <InstrumentsTable
+        instruments={connection.instruments}
+        ariaLabel={t("instruments.title")}
+        busy={busy}
+        parentEnabled={connection.enabled}
+        parentDisabledLabel={t("instruments.connectionDisabled")}
+        onToggle={(instrument) => {
+          void run(() =>
+            api.upsertTradingInstrument(connection.id, {
+              ...instrument,
+              enabled: !instrument.enabled,
+            }),
+          );
+        }}
+        onVerify={
+          provider.verifiesSymbols
+            ? (instrument) => {
+                void verifyRow(instrument.externalSymbol);
+              }
+            : undefined
+        }
+        isVerifying={isVerifying}
+        stateAdornment={(instrument) => (
+          <VerifyResult
+            unsupportedLabel={t("verify.unavailable")}
+            result={
+              Object.hasOwn(rowVerify, instrument.externalSymbol)
+                ? rowVerify[instrument.externalSymbol]
+                : null
+            }
+          />
+        )}
+        onDelete={(instrument) => {
+          setError("");
+          setDeleteSymbol(instrument.externalSymbol);
+        }}
+      />
+      <DeleteInstrumentDialog
+        open={deleteSymbol !== null}
+        description={t("instruments.deleteDescription", {
+          symbol: deleteSymbol,
+          label: connection.label,
+        })}
+        busy={busy}
+        error={error}
+        onOpenChange={(open) => {
+          if (!open && !busy) setDeleteSymbol(null);
+        }}
+        onSubmit={() => {
+          if (deleteSymbol === null || busy) return;
+          void run(async () => {
+            await api.deleteTradingInstrument(connection.id, deleteSymbol);
+            forget(deleteSymbol);
+            setDeleteSymbol(null);
+          });
+        }}
+      />
+    </section>
+  );
+}
+
 function ConnectionCard({
   connection,
   provider,
@@ -593,35 +1141,16 @@ function ConnectionCard({
 }) {
   const { t } = useTranslation("trading");
   const { t: tc } = useTranslation();
+  const { t: tv } = useTranslation("venues");
   const api = useOfficerApi();
   const id = useId();
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState("");
   const [feeRequired, setFeeRequired] = useState(false);
-  const [missingAsset, setMissingAsset] = useState<string | null>(null);
   const [checkError, setCheckError] = useState("");
-  const [searchError, setSearchError] = useState("");
-  const [verifyError, setVerifyError] = useState<{
-    symbol: string;
-    message: string;
-  } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [check, setCheck] = useState<TradingConnectionCheck | null>(null);
-  const [draft, setDraft] = useState<TradingInstrument>({
-    externalSymbol: "",
-    baseAsset: "",
-    quoteAsset: "",
-    enabled: true,
-  });
-  const [query, setQuery] = useState("");
-  const [search, setSearch] = useState<TradingSymbolSearch | null>(null);
-  const [verification, setVerification] = useState<{
-    symbol: string;
-    result: TradingSymbolVerification;
-  } | null>(null);
   const [account, setAccount] = useState("");
   const [venueAccount, setVenueAccount] = useState("");
   const [feeCode, setFeeCode] = useState("");
@@ -640,8 +1169,6 @@ function ConnectionCard({
   const enableButton = useRef<HTMLButtonElement>(null);
   const feeInput = useRef<HTMLInputElement>(null);
   const card = useRef<HTMLDivElement>(null);
-  const baseSuggestions = useAssetCodeSuggestions(draft.baseAsset, true);
-  const quoteSuggestions = useAssetCodeSuggestions(draft.quoteAsset, true);
   const accountQuery = useDebouncedValue(
     account.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -809,7 +1336,7 @@ function ConnectionCard({
     },
     {
       key: "enable",
-      label: t("actions.enable"),
+      label: tv("actions.enable"),
       done: connection.enabled,
       target: enableButton,
     },
@@ -826,88 +1353,6 @@ function ConnectionCard({
       setChecking,
       setCheckError,
     );
-  };
-  const searchSymbols = () => {
-    if (searching || query.trim() === "") return;
-    setSearch(null);
-    void callVenue(
-      async () => {
-        setSearch(
-          await api.searchTradingSymbols(connection.id, {
-            query: query.trim(),
-          }),
-        );
-      },
-      setSearching,
-      setSearchError,
-    );
-  };
-  const verifySymbol = () => {
-    const symbol = draft.externalSymbol.trim();
-    if (verifying || symbol === "") return;
-    setVerification(null);
-    void callVenue(
-      async () => {
-        setVerification({
-          symbol,
-          result: await api.verifyTradingSymbol(connection.id, symbol),
-        });
-      },
-      setVerifying,
-      (message) => setVerifyError(message === "" ? null : { symbol, message }),
-    );
-  };
-  const verdict =
-    verification?.symbol === draft.externalSymbol.trim()
-      ? verification.result
-      : null;
-  const currentVerifyError =
-    verifyError?.symbol === draft.externalSymbol.trim()
-      ? verifyError.message
-      : "";
-  const draftComplete =
-    draft.externalSymbol.trim() !== "" &&
-    draft.baseAsset.trim() !== "" &&
-    draft.quoteAsset.trim() !== "";
-  // createAsset names an asset the operator chose to create before the save.
-  const saveInstrument = async (createAsset?: string) => {
-    if (busy || !draftComplete) return;
-    setMissingAsset(null);
-    const ok = await run(
-      async () => {
-        if (createAsset !== undefined) {
-          await api.createAsset(createAsset, "", "");
-        }
-        await api.upsertTradingInstrument(connection.id, {
-          externalSymbol: draft.externalSymbol.trim(),
-          baseAsset: draft.baseAsset.trim(),
-          quoteAsset: draft.quoteAsset.trim(),
-          enabled: draft.enabled,
-        });
-      },
-      // A missing asset is answered in the instrument form, not as raw text.
-      (err) => {
-        if (
-          err instanceof ApiError &&
-          err.code === "asset_missing" &&
-          err.asset !== undefined
-        ) {
-          setMissingAsset(err.asset);
-          return true;
-        }
-        return false;
-      },
-    );
-    if (ok) {
-      setDraft({
-        externalSymbol: "",
-        baseAsset: "",
-        quoteAsset: "",
-        enabled: true,
-      });
-      setVerification(null);
-      setVerifyError(null);
-    }
   };
   const grantAccess = async () => {
     if (busy || accountCode === "" || feeBlocked) return;
@@ -942,13 +1387,13 @@ function ConnectionCard({
       aria-labelledby={`${id}-title`}
       tabIndex={-1}
     >
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-        <div className="space-y-2">
-          <h2 id={`${id}-title`} className="text-sm font-bold text-text">
-            {connection.label}
-          </h2>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-muted">{provider.title}</span>
+      <VenueCardHeader
+        providerType={connection.provider}
+        title={connection.label}
+        titleId={`${id}-title`}
+        badges={
+          <>
+            <Badge variant="neutral">{provider.title}</Badge>
             <Badge>{t(`mode.${connection.mode}`)}</Badge>
             <Badge
               variant={
@@ -961,47 +1406,51 @@ function ConnectionCard({
             >
               {t(`state.${connection.state}`)}
             </Badge>
-            <span>
+            <Badge variant={connection.enabled ? "ok" : "neutral"}>
               {t(
                 connection.enabled
                   ? "connection.enabled"
                   : "connection.disabled",
               )}
-            </span>
-          </div>
-          {connection.state === "unavailable" && connection.error && (
-            <p className="break-words text-xs text-[var(--danger)]">
-              {connection.error}
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => setSettingsOpen(true)}
-          >
-            {t("actions.editSettings")}
-          </Button>
-          <Button
-            ref={enableButton}
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => {
-              void run(() =>
-                api.setTradingConnectionEnabled(
-                  connection.id,
-                  !connection.enabled,
-                ),
-              );
-            }}
-          >
-            {t(connection.enabled ? "actions.disable" : "actions.enable")}
-          </Button>
-        </div>
-      </CardHeader>
+            </Badge>
+          </>
+        }
+        error={
+          connection.state === "unavailable" ? connection.error : undefined
+        }
+        links={TRADING_PROVIDER_GUIDES[connection.provider]}
+        actions={
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={t("actions.editSettings")}
+              title={t("actions.editSettings")}
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings />
+            </Button>
+            <Button
+              ref={enableButton}
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                void run(() =>
+                  api.setTradingConnectionEnabled(
+                    connection.id,
+                    !connection.enabled,
+                  ),
+                );
+              }}
+            >
+              {tv(connection.enabled ? "actions.disable" : "actions.enable")}
+            </Button>
+          </>
+        }
+      />
       <CardContent className="space-y-6">
         <div className="space-y-1 text-xs">
           <dl className="flex flex-wrap gap-2">
@@ -1025,7 +1474,7 @@ function ConnectionCard({
         </div>
         {!connection.enabled && (
           <div className="space-y-2">
-            <h3 className="text-sm font-medium">{t("setup.title")}</h3>
+            <h4 className="text-sm font-medium">{t("setup.title")}</h4>
             <ol
               aria-label={t("setup.title")}
               className="list-inside list-decimal space-y-1 text-xs"
@@ -1069,524 +1518,70 @@ function ConnectionCard({
             )}
           </div>
         )}
-        {(baseSuggestions.failed || quoteSuggestions.failed) && (
-          <ErrorBanner message={tc("suggestions.assetLookupFailed")} />
-        )}
         {accountSuggestionErrors.map((message) => (
           <ErrorBanner key={message} message={message} />
         ))}
         {feeLookup?.code === feeAccountCode && "error" in feeLookup && (
           <ErrorBanner message={feeLookup.error} />
         )}
-        <section
-          ref={checkSection}
-          tabIndex={-1}
-          aria-label={t("actions.check")}
-          className="space-y-2"
-        >
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy || checking}
-            onClick={checkConnection}
-          >
-            {t("actions.check")}
-          </Button>
-          {check && (
-            <p role="status" className="text-xs">
-              {t("check.result", {
-                id: check.venueIdentity,
-                status: check.venueStatus,
-              })}
-            </p>
-          )}
-          {checkError && <ErrorBanner message={checkError} />}
-        </section>
-        <section
-          ref={instrumentSection}
-          tabIndex={-1}
-          aria-labelledby={`${id}-instruments`}
-          className="space-y-3 border-t border-border pt-4"
-        >
-          <h3 id={`${id}-instruments`} className="text-sm font-medium">
-            {t("instruments.title")}
-          </h3>
-          <Table aria-label={t("instruments.title")}>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("instruments.externalSymbol")}</TableHead>
-                <TableHead>{t("instruments.baseAsset")}</TableHead>
-                <TableHead>{t("instruments.quoteAsset")}</TableHead>
-                <TableHead>{t("connection.enabled")}</TableHead>
-                <TableHead>{t("table.actions")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {connection.instruments.map((instrument) => (
-                <TableRow key={instrument.externalSymbol}>
-                  <TableCell>{instrument.externalSymbol}</TableCell>
-                  <TableCell>{instrument.baseAsset}</TableCell>
-                  <TableCell>{instrument.quoteAsset}</TableCell>
-                  <TableCell>
-                    {t(
-                      instrument.enabled
-                        ? "connection.enabled"
-                        : "connection.disabled",
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => {
-                          void run(() =>
-                            api.upsertTradingInstrument(connection.id, {
-                              ...instrument,
-                              enabled: !instrument.enabled,
-                            }),
-                          );
-                        }}
-                      >
-                        {t(
-                          instrument.enabled
-                            ? "actions.disable"
-                            : "actions.enable",
-                        )}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => {
-                          setError("");
-                          setDeleteSymbol(instrument.externalSymbol);
-                        }}
-                      >
-                        {tc("actions.delete")}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {connection.instruments.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-muted">
-                    {t("instruments.empty")}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-          <form
-            aria-label={t("actions.addInstrument")}
-            className="space-y-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void saveInstrument();
-            }}
-          >
-            <h4 className="text-xs font-medium">
-              {t("actions.addInstrument")}
-            </h4>
-            {provider.searchesSymbols && (
-              <div className="space-y-2">
-                <Label htmlFor={`${id}-search`}>{t("search.label")}</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id={`${id}-search`}
-                    value={query}
-                    onChange={(event) => {
-                      setQuery(event.target.value);
-                      setSearch(null);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        searchSymbols();
-                      }
-                    }}
-                    disabled={busy || searching}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={busy || searching || query.trim() === ""}
-                    onClick={searchSymbols}
-                  >
-                    {t("search.action")}
-                  </Button>
-                </div>
-                {searchError && <ErrorBanner message={searchError} />}
-                {search &&
-                  (!search.supported ? (
-                    <p className="text-xs">{t("search.unavailable")}</p>
-                  ) : search.matches.length === 0 ? (
-                    <p className="text-xs">{t("search.empty")}</p>
-                  ) : (
-                    <ul aria-label={t("search.results")} className="space-y-1">
-                      {search.matches.map((match) => (
-                        <li key={match.symbol}>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="h-auto flex-wrap justify-start text-left"
-                            disabled={busy}
-                            aria-label={match.symbol}
-                            onClick={() => {
-                              const pair = /^([^/\s]+)\/([^/\s]+)$/.exec(
-                                match.symbol,
-                              );
-                              setDraft((previous) => ({
-                                ...previous,
-                                externalSymbol: match.symbol,
-                                baseAsset: pair ? pair[1] : match.symbol,
-                                quoteAsset: pair ? pair[2] : "",
-                              }));
-                              setVerification(null);
-                              setVerifyError(null);
-                            }}
-                          >
-                            <span>{match.symbol}</span>
-                            {match.name && (
-                              <span className="text-muted">{match.name}</span>
-                            )}
-                            {match.exchange && (
-                              <span className="text-muted">
-                                {match.exchange}
-                              </span>
-                            )}
-                            {!match.tradable && (
-                              <span className="text-[var(--warn)]">
-                                {t("search.notTradable")}
-                              </span>
-                            )}
-                          </Button>
-                        </li>
-                      ))}
-                    </ul>
-                  ))}
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor={`${id}-symbol`}>
-                {t("instruments.externalSymbol")}
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  id={`${id}-symbol`}
-                  value={draft.externalSymbol}
-                  disabled={busy || verifying}
-                  onChange={(event) => {
-                    setDraft((previous) => ({
-                      ...previous,
-                      externalSymbol: event.target.value,
-                    }));
-                    setVerification(null);
-                    setVerifyError(null);
-                  }}
-                />
-                {provider.verifiesSymbols && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={
-                      busy || verifying || draft.externalSymbol.trim() === ""
-                    }
-                    onClick={verifySymbol}
-                  >
-                    {t("verify.action")}
-                  </Button>
-                )}
-              </div>
-              {verdict && (
-                <div role="status" className="space-y-1 text-xs">
-                  <p>
-                    {t(
-                      !verdict.supported
-                        ? "verify.unavailable"
-                        : !verdict.exists
-                          ? "verify.notFound"
-                          : verdict.tradable
-                            ? "verify.tradable"
-                            : "verify.notTradable",
-                    )}
-                  </p>
-                  {verdict.details && (
-                    <p className="text-muted">{verdict.details}</p>
-                  )}
-                </div>
-              )}
-              {currentVerifyError && (
-                <ErrorBanner message={currentVerifyError} />
-              )}
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor={`${id}-base`}>
-                  {t("instruments.baseAsset")}
-                </Label>
-                <Autocomplete
-                  id={`${id}-base`}
-                  value={draft.baseAsset}
-                  suggestions={baseSuggestions.codes}
-                  disabled={busy}
-                  onChange={(value) => {
-                    setDraft((previous) => ({ ...previous, baseAsset: value }));
-                  }}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor={`${id}-quote`}>
-                  {t("instruments.quoteAsset")}
-                </Label>
-                <Autocomplete
-                  id={`${id}-quote`}
-                  value={draft.quoteAsset}
-                  suggestions={quoteSuggestions.codes}
-                  disabled={busy}
-                  onChange={(value) => {
-                    setDraft((previous) => ({
-                      ...previous,
-                      quoteAsset: value,
-                    }));
-                  }}
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                id={`${id}-instrument-enabled`}
-                type="checkbox"
-                checked={draft.enabled}
-                disabled={busy}
-                onChange={(event) =>
-                  setDraft((previous) => ({
-                    ...previous,
-                    enabled: event.target.checked,
-                  }))
-                }
-              />
-              <Label htmlFor={`${id}-instrument-enabled`}>
-                {t("connection.enabled")}
-              </Label>
-            </div>
-            {missingAsset !== null &&
-              (draft.baseAsset.trim() === missingAsset ||
-                draft.quoteAsset.trim() === missingAsset) && (
-                <div
-                  role="alert"
-                  className="space-y-2 text-xs text-[var(--warn)]"
-                >
-                  <p>
-                    {t("instruments.assetMissing", { asset: missingAsset })}
-                  </p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={busy || !draftComplete}
-                    onClick={() => {
-                      void saveInstrument(missingAsset);
-                    }}
-                  >
-                    {t("instruments.createAssetAndSave", {
-                      asset: missingAsset,
-                    })}
-                  </Button>
-                </div>
-              )}
-            <Button type="submit" disabled={busy || !draftComplete}>
-              {t("actions.save")}
-            </Button>
-          </form>
-        </section>
-        <section
-          ref={accessSection}
-          tabIndex={-1}
-          aria-labelledby={`${id}-access`}
-          className="space-y-3 border-t border-border pt-4"
-        >
-          <h3 id={`${id}-access`} className="text-sm font-medium">
-            {t("access.title")}
-          </h3>
-          <Table aria-label={t("access.title")}>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("access.account")}</TableHead>
-                {provider.venueAccounts && (
-                  <TableHead>{t("connection.venueAccount")}</TableHead>
-                )}
-                <TableHead>{t("table.actions")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {connection.access.map((grant) => (
-                <TableRow key={grant.account}>
-                  <TableCell>{grant.account}</TableCell>
-                  {provider.venueAccounts && (
-                    <TableCell>{grant.venueAccount}</TableCell>
-                  )}
-                  <TableCell>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => {
-                        setError("");
-                        setRevokeAccount(grant.account);
-                      }}
-                    >
-                      {t("actions.revoke")}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {connection.access.length === 0 && (
-                <TableRow>
-                  <TableCell
-                    colSpan={provider.venueAccounts ? 3 : 2}
-                    className="text-muted"
-                  >
-                    {t("access.empty")}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-          <form
-            aria-label={t("actions.addAccount")}
-            className="space-y-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void grantAccess();
-            }}
-          >
-            <h4 className="text-xs font-medium">{t("actions.addAccount")}</h4>
-            <div className="space-y-2">
-              <Label htmlFor={`${id}-account`}>{t("access.account")}</Label>
-              <Autocomplete
-                id={`${id}-account`}
-                value={account}
-                suggestions={
-                  accountSuggestions?.code === accountCode
-                    ? accountSuggestions.suggestions
-                    : []
-                }
-                disabled={busy}
-                onChange={setAccount}
-              />
-            </div>
-            {provider.venueAccounts && (
-              <div className="space-y-2">
-                <Label htmlFor={`${id}-venue-account`}>
-                  {t("connection.venueAccount")}
-                </Label>
-                <Input
-                  id={`${id}-venue-account`}
-                  value={venueAccount}
-                  disabled={busy}
-                  onChange={(event) => setVenueAccount(event.target.value)}
-                />
-              </div>
-            )}
-            {feeBlocked && (
-              <div className="space-y-2 text-xs text-[var(--warn)]">
-                <p>{t("access.feeRequired", { provider: provider.title })}</p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="text-accent underline underline-offset-4"
-                  onClick={focusFeeAccount}
-                >
-                  {t("actions.setFeeAccount")}
-                </Button>
-              </div>
-            )}
-            <Button
-              type="submit"
-              disabled={busy || accountCode === "" || feeBlocked}
-            >
-              {t("actions.addAccount")}
-            </Button>
-          </form>
-        </section>
+        <ConnectionCheckSection
+          checkSection={checkSection}
+          busy={busy}
+          checking={checking}
+          checkConnection={checkConnection}
+          check={check}
+          checkError={checkError}
+        />
+        <ConnectionInstrumentsSection
+          connection={connection}
+          provider={provider}
+          id={id}
+          instrumentSection={instrumentSection}
+          busy={busy}
+          run={run}
+          callVenue={callVenue}
+          error={error}
+          setError={setError}
+          deleteSymbol={deleteSymbol}
+          setDeleteSymbol={setDeleteSymbol}
+        />
+        <ConnectionAccessSection
+          accessSection={accessSection}
+          id={id}
+          connection={connection}
+          provider={provider}
+          busy={busy}
+          account={account}
+          setAccount={setAccount}
+          accountCode={accountCode}
+          accountSuggestions={accountSuggestions}
+          venueAccount={venueAccount}
+          setVenueAccount={setVenueAccount}
+          feeBlocked={feeBlocked}
+          focusFeeAccount={focusFeeAccount}
+          grantAccess={grantAccess}
+          onRevoke={(account) => {
+            setError("");
+            setRevokeAccount(account);
+          }}
+        />
         {provider.unlinkedFees && (
-          <section
-            aria-labelledby={`${id}-fee`}
-            className="space-y-3 border-t border-border pt-4"
-          >
-            <h3 id={`${id}-fee`} className="text-sm font-medium">
-              {t("fee.title")}
-            </h3>
-            <p className="text-xs text-muted">
-              {t("fee.description", { provider: provider.title })}
-            </p>
-            <p className="text-xs">
-              {connection.feeAccount === ""
-                ? t("fee.notSet")
-                : connection.feeAccount}
-            </p>
-            <form
-              aria-label={t("fee.title")}
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void saveFeeAccount(false);
-              }}
-            >
-              <div className="space-y-2">
-                <Label htmlFor={`${id}-fee-account`}>{t("fee.title")}</Label>
-                <Autocomplete
-                  ref={feeInput}
-                  id={`${id}-fee-account`}
-                  value={feeCode}
-                  suggestions={
-                    feeAccountSuggestions?.code === feeAccountCode
-                      ? feeAccountSuggestions.suggestions
-                      : []
-                  }
-                  disabled={busy}
-                  onChange={setFeeCode}
-                />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="submit" disabled={busy || feeAccountCode === ""}>
-                  {t("actions.save")}
-                </Button>
-                {feeAccountCode !== "" &&
-                  feeLookup?.code === feeAccountCode &&
-                  "exists" in feeLookup &&
-                  !feeLookup.exists && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => {
-                        void saveFeeAccount(true);
-                      }}
-                    >
-                      {t("fee.createAndUse", { code: feeAccountCode })}
-                    </Button>
-                  )}
-                {connection.feeAccount !== "" && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => {
-                      void run(() => api.clearTradingFeeAccount(connection.id));
-                    }}
-                  >
-                    {tc("actions.clear")}
-                  </Button>
-                )}
-              </div>
-            </form>
-          </section>
+          <ConnectionFeeAccountSection
+            id={id}
+            connection={connection}
+            provider={provider}
+            busy={busy}
+            feeCode={feeCode}
+            setFeeCode={setFeeCode}
+            feeAccountCode={feeAccountCode}
+            feeAccountSuggestions={feeAccountSuggestions}
+            feeLookup={feeLookup}
+            feeInput={feeInput}
+            saveFeeAccount={saveFeeAccount}
+            onClearFeeAccount={() => {
+              void run(() => api.clearTradingFeeAccount(connection.id));
+            }}
+          />
         )}
       </CardContent>
       {settingsOpen && (
@@ -1597,47 +1592,6 @@ function ConnectionCard({
           reload={reload}
         />
       )}
-      <AlertDialog
-        open={deleteSymbol !== null}
-        onOpenChange={(open) => {
-          if (!open) setDeleteSymbol(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("instruments.deleteTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("instruments.deleteDescription", {
-                symbol: deleteSymbol,
-                label: connection.label,
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {error && <ErrorBanner message={error} />}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>
-              {tc("actions.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="danger"
-              disabled={busy}
-              onClick={(event) => {
-                event.preventDefault();
-                if (deleteSymbol === null) return;
-                void run(async () => {
-                  await api.deleteTradingInstrument(
-                    connection.id,
-                    deleteSymbol,
-                  );
-                  setDeleteSymbol(null);
-                });
-              }}
-            >
-              {tc("actions.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
       <AlertDialog
         open={revokeAccount !== null}
         onOpenChange={(open) => {
@@ -1685,6 +1639,8 @@ export function TradingConnections() {
   const { t: tc } = useTranslation();
   const { load, reload } = useTrading();
   const [addOpen, setAddOpen] = useState(false);
+  const [selectedProvider, setSelectedProvider] =
+    useState<TradingProvider | null>(null);
   const [focusConnectionId, setFocusConnectionId] = useState<string | null>(
     null,
   );
@@ -1693,21 +1649,10 @@ export function TradingConnections() {
     <Page
       title={t("title")}
       actions={
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            disabled={!snapshot}
-            onClick={() => setAddOpen(true)}
-          >
-            <Plus />
-            {t("actions.addConnection")}
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={reload}>
-            <RefreshCw />
-            {tc("actions.refresh")}
-          </Button>
-        </div>
+        <Button type="button" variant="ghost" size="sm" onClick={reload}>
+          <RefreshCw />
+          {tc("actions.refresh")}
+        </Button>
       }
     >
       {load.state === "loading" && <TableSkeleton rows={3} cols={5} />}
@@ -1717,16 +1662,15 @@ export function TradingConnections() {
       )}
       {load.state === "ready" && (
         <div className="space-y-4">
+          <AddProviderButton
+            label={t("actions.addConnection")}
+            providerTypes={load.data.providers.map((provider) => provider.type)}
+            onClick={() => setAddOpen(true)}
+          />
           {load.data.connections.length === 0 && (
             <EmptyState
               title={t("empty.title")}
               hint={t("empty.description")}
-              action={
-                <Button type="button" onClick={() => setAddOpen(true)}>
-                  <Plus />
-                  {t("actions.addConnection")}
-                </Button>
-              }
             />
           )}
           {load.data.connections.map((connection) => {
@@ -1755,11 +1699,35 @@ export function TradingConnections() {
           })}
         </div>
       )}
-      {snapshot && addOpen && (
+      {snapshot && (
+        <ProviderGuideDialog
+          open={addOpen}
+          title={t("actions.addConnection")}
+          description={t("create.chooseVenue")}
+          providers={snapshot.providers.map((provider) => ({
+            type: provider.type,
+            title: provider.title,
+            siteUrl: TRADING_PROVIDER_GUIDES[provider.type]?.siteUrl,
+            docsUrl: TRADING_PROVIDER_GUIDES[provider.type]?.docsUrl,
+          }))}
+          onOpenChange={setAddOpen}
+          onSelect={(entry) => {
+            const provider = snapshot.providers.find(
+              (provider) => provider.type === entry.type,
+            );
+            if (!provider)
+              throw new Error(`Unknown trading provider: ${entry.type}`);
+            setAddOpen(false);
+            setSelectedProvider(provider);
+          }}
+        />
+      )}
+      {snapshot && selectedProvider && (
         <AddTradingConnectionDialog
-          providers={snapshot.providers}
+          key={selectedProvider.type}
+          provider={selectedProvider}
           credentialsSealed={snapshot.credentialsSealed}
-          onClose={() => setAddOpen(false)}
+          onClose={() => setSelectedProvider(null)}
           onCreated={(connectionId) => {
             setFocusConnectionId(connectionId);
             reload();

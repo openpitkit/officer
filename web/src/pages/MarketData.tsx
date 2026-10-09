@@ -16,24 +16,17 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import {
-  BriefcaseBusiness,
-  Check,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
   ExternalLink,
-  FlaskConical,
   Logs,
   Plus,
   RefreshCw,
   RotateCcw,
-  SearchCheck,
   Send,
   Settings,
   Trash2,
   TriangleAlert,
-  Upload,
-  X,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -57,7 +50,20 @@ import {
 } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  AddProviderButton,
+  DeleteInstrumentDialog,
+  InstrumentDraftRow,
+  InstrumentsTable,
+  ProviderGuideDialog,
+  SymbolSearchPanel,
+  useSymbolSearch,
+  useRowVerification,
+  VerifyResult,
+  type FailedVerificationOutcome,
+  VenueCardHeader,
+} from "@/components/venues";
 import {
   Dialog,
   DialogContent,
@@ -544,260 +550,6 @@ function buildProviderCredentials(
   return JSON.stringify(body);
 }
 
-function IBKRIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#050608" />
-      <path
-        d="M2.8 3.2h5.8L4.1 13.4l4.7 7.4H3.1L0 16.4V8.3L2.8 3.2Z"
-        fill="#d10f1f"
-      />
-      <path
-        d="M8.6 3.2h3.8L7.9 12l4.5 8.8H8.6L4 13.4 8.6 3.2Z"
-        fill="#ef1b2d"
-      />
-      <circle cx="15.8" cy="11.4" r="3.6" fill="#ef1b2d" />
-    </svg>
-  );
-}
-
-function BinanceIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#0b0e11" />
-      <g fill="#f0b90b">
-        <path d="M12 3.2 15 6.2 12 9.2 9 6.2 12 3.2Z" />
-        <path d="M6.2 9 9.2 12 6.2 15 3.2 12 6.2 9Z" />
-        <path d="M17.8 9 20.8 12 17.8 15 14.8 12 17.8 9Z" />
-        <path d="M12 14.8 15 17.8 12 20.8 9 17.8 12 14.8Z" />
-        <path d="M12 9.4 14.6 12 12 14.6 9.4 12 12 9.4Z" />
-      </g>
-    </svg>
-  );
-}
-
-function KrakenIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#fff" />
-      <path
-        d="M4.8 15.7v-3.4c0-4.3 3.2-7.4 7.2-7.4s7.2 3.1 7.2 7.4v3.4a1.9 1.9 0 1 1-3.8 0v-3.1a1.5 1.5 0 0 0-3 0v3.1a1.9 1.9 0 1 1-3.8 0v-3.1a1.5 1.5 0 0 0-3 0v3.1a1.9 1.9 0 1 1-3.8 0Z"
-        fill="#5841d8"
-      />
-    </svg>
-  );
-}
-
-function CoinbaseIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#0052ff" />
-      <circle cx="12" cy="12" r="7.2" fill="#fff" />
-      <circle cx="12" cy="12" r="3.35" fill="#0052ff" />
-      <rect x="12" y="10.15" width="6.4" height="3.7" fill="#0052ff" />
-    </svg>
-  );
-}
-
-function AlpacaIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#ffd200" />
-      <path
-        d="M10.1 20V9.8c0-2.8 2.2-5 5-5 2.6 0 4.8 2.1 4.8 4.8V20h-3.2V9.7c0-.9-.7-1.7-1.7-1.7s-1.7.8-1.7 1.7V20h-3.2Z"
-        fill="#fff"
-      />
-      <path d="M4.2 11.8c.5-2.4 2.5-4.1 5.1-4.1h3v4.1H4.2Z" fill="#fff" />
-      <path d="M13.7 4.4 15.1 2l.9 2.8-1.1 1-1.2-1.4Z" fill="#fff" />
-      <path d="M16.1 4.8 17.7 2.8l.5 2.9-1.3.9-.8-1.8Z" fill="#fff" />
-      <rect
-        x="8.9"
-        y="9.4"
-        width="1.8"
-        height="0.75"
-        rx="0.35"
-        fill="#d8d8d8"
-      />
-    </svg>
-  );
-}
-
-function OKXIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#000" />
-      <g fill="#fff">
-        <rect x="5.25" y="5.25" width="4.5" height="4.5" rx="0.8" />
-        <rect x="14.25" y="5.25" width="4.5" height="4.5" rx="0.8" />
-        <rect x="9.75" y="9.75" width="4.5" height="4.5" rx="0.8" />
-        <rect x="5.25" y="14.25" width="4.5" height="4.5" rx="0.8" />
-        <rect x="14.25" y="14.25" width="4.5" height="4.5" rx="0.8" />
-      </g>
-    </svg>
-  );
-}
-
-function BybitIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#151827" />
-      <text
-        x="11.2"
-        y="13.9"
-        textAnchor="middle"
-        fontFamily="Arial, sans-serif"
-        fontSize="6.1"
-        fontWeight="800"
-        fill="#fff"
-      >
-        BYB
-      </text>
-      <rect
-        x="14.8"
-        y="7.25"
-        width="1.35"
-        height="9.5"
-        rx="0.15"
-        fill="#f7a600"
-      />
-      <text
-        x="18.65"
-        y="13.9"
-        textAnchor="middle"
-        fontFamily="Arial, sans-serif"
-        fontSize="6.1"
-        fontWeight="800"
-        fill="#fff"
-      >
-        T
-      </text>
-    </svg>
-  );
-}
-
-function OANDAIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#fff" />
-      <circle cx="6.4" cy="12" r="3.4" stroke="#111" strokeWidth="1.35" />
-      <text
-        x="14.2"
-        y="13.7"
-        textAnchor="middle"
-        fontFamily="Arial, sans-serif"
-        fontSize="5.6"
-        fontWeight="700"
-        fill="#111"
-      >
-        ANDA
-      </text>
-    </svg>
-  );
-}
-
-function FinnhubIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-    >
-      <rect width="24" height="24" rx="4" fill="#fff" />
-      <path
-        d="M8.2 16.7h10.9c1.5 0 2.7-1.2 2.7-2.7 0-1.4-1.1-2.6-2.5-2.7-.5-3.3-3.3-5.8-6.7-5.8-3.8 0-6.8 3-6.8 6.8v.1h2.4v4.3Z"
-        fill="#37b34a"
-      />
-      <rect x="2.2" y="8.9" width="10.3" height="2.1" rx="1.05" fill="#fff" />
-      <rect x="2.2" y="12.1" width="8.3" height="2" rx="1" fill="#fff" />
-      <rect x="2.2" y="15.1" width="5.2" height="1.9" rx="0.95" fill="#fff" />
-    </svg>
-  );
-}
-
-function ProviderIcon({
-  type,
-  className,
-}: {
-  type: string;
-  className?: string;
-}) {
-  if (type === IB_PROVIDER) {
-    return <IBKRIcon className={className} />;
-  }
-  if (type === BINANCE_PROVIDER) {
-    return <BinanceIcon className={className} />;
-  }
-  if (type === KRAKEN_PROVIDER) {
-    return <KrakenIcon className={className} />;
-  }
-  if (type === COINBASE_PROVIDER) {
-    return <CoinbaseIcon className={className} />;
-  }
-  if (type === ALPACA_PROVIDER) {
-    return <AlpacaIcon className={className} />;
-  }
-  if (type === OKX_PROVIDER) {
-    return <OKXIcon className={className} />;
-  }
-  if (type === BYBIT_PROVIDER) {
-    return <BybitIcon className={className} />;
-  }
-  if (type === OANDA_PROVIDER) {
-    return <OANDAIcon className={className} />;
-  }
-  if (type === FINNHUB_PROVIDER) {
-    return <FinnhubIcon className={className} />;
-  }
-  if (type === MOCK_PROVIDER) {
-    return <FlaskConical className={className} />;
-  }
-  if (type === MANUAL_PROVIDER) {
-    return <Upload className={className} />;
-  }
-  return <BriefcaseBusiness className={className} />;
-}
-
 function providerDocsUrl(type: string): string {
   return PROVIDER_LINKS[type]?.docsUrl ?? "";
 }
@@ -1108,121 +860,6 @@ function resolvedSymbolSearchText(match: MarketDataSymbolMatch): string {
     .filter((part): part is string => Boolean(part))
     .join(" ")
     .toLowerCase();
-}
-
-function ProviderTile({
-  provider,
-  onSelect,
-}: {
-  provider: MarketDataProvider;
-  onSelect: (provider: MarketDataProvider) => void;
-}) {
-  const { t } = useTranslation("marketData");
-  const siteUrl = providerSiteUrl(provider.type);
-  const docsUrl = providerDocsUrl(provider.type);
-  const symbolsUrl = providerSymbolsUrl(provider.type);
-
-  return (
-    <Card className="overflow-hidden">
-      <button
-        type="button"
-        className="block w-full p-4 text-left transition-colors hover:bg-surface-hover"
-        onClick={() => onSelect(provider)}
-      >
-        <div className="flex items-start gap-3">
-          <ProviderIcon
-            type={provider.type}
-            className="mt-0.5 h-5 w-5 shrink-0 text-accent"
-          />
-          <div className="min-w-0">
-            <p className="font-semibold text-text">
-              {t(`providers.${provider.type}.title`, {
-                defaultValue: provider.title,
-              })}
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              {t(`providers.${provider.type}.description`, {
-                defaultValue: "",
-              })}
-            </p>
-          </div>
-        </div>
-      </button>
-      {(siteUrl || docsUrl || symbolsUrl) && (
-        <div className="flex flex-wrap gap-3 border-t border-border px-4 py-2">
-          {siteUrl && (
-            <a
-              href={siteUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-            >
-              <ExternalLink className="h-3 w-3" />
-              {t("providers.site")}
-            </a>
-          )}
-          {docsUrl && (
-            <a
-              href={docsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-            >
-              <ExternalLink className="h-3 w-3" />
-              {t("providers.docs")}
-            </a>
-          )}
-          {symbolsUrl && (
-            <a
-              href={symbolsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-            >
-              <ExternalLink className="h-3 w-3" />
-              {t("providers.symbols")}
-            </a>
-          )}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-// ProviderGuideDialog holds the provider catalogue behind a compact trigger so
-// it does not occupy the page once sources are configured. Picking a tile closes
-// the guide and opens that provider's create dialog.
-export function ProviderGuideDialog({
-  open,
-  providers,
-  onSelect,
-  onOpenChange,
-}: {
-  open: boolean;
-  providers: MarketDataProvider[];
-  onSelect: (provider: MarketDataProvider) => void;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const { t } = useTranslation("marketData");
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={MARKET_DATA_DIALOG_CONTENT_CLASS}>
-        <DialogHeader>
-          <DialogTitle>{t("instances.title")}</DialogTitle>
-          <DialogDescription>{t("providers.guideTitle")}</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {providers.map((provider) => (
-            <ProviderTile
-              key={provider.type}
-              provider={provider}
-              onSelect={onSelect}
-            />
-          ))}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 // Builds the patch for a secType switch: the new secType and its matching
@@ -1799,7 +1436,7 @@ function StateToggleField({
   const { t } = useTranslation("marketData");
   return (
     <div className="space-y-2">
-      <Label htmlFor={id}>{t("table.state")}</Label>
+      <Label htmlFor={id}>{t("venues:table.state")}</Label>
       <Button
         id={id}
         type="button"
@@ -1808,7 +1445,7 @@ function StateToggleField({
         onClick={onToggle}
         disabled={busy}
       >
-        {enabled ? t("state.enabled") : t("state.disabled")}
+        {enabled ? t("venues:state.enabled") : t("venues:state.disabled")}
       </Button>
     </div>
   );
@@ -2060,126 +1697,6 @@ function resolvedMatchKey(match: MarketDataSymbolMatch): string {
   ].join("|");
 }
 
-function ResolvePanel({
-  id,
-  busy,
-  resolving,
-  resolved,
-  query,
-  results,
-  filterQuery,
-  onQueryChange,
-  onFilterChange,
-  onResolve,
-  onPick,
-}: {
-  id: string;
-  busy: boolean;
-  resolving: boolean;
-  resolved: boolean;
-  query: string;
-  results: MarketDataSymbolMatch[];
-  filterQuery: string;
-  onQueryChange: (value: string) => void;
-  onFilterChange: (value: string) => void;
-  onResolve: () => void;
-  onPick: (match: MarketDataSymbolMatch) => void;
-}) {
-  const { t } = useTranslation("marketData");
-  const normalizedFilter = filterQuery.trim().toLowerCase();
-  const filteredResults =
-    normalizedFilter === ""
-      ? results
-      : results.filter((match) =>
-          resolvedSymbolSearchText(match).includes(normalizedFilter),
-        );
-
-  return (
-    <div className="space-y-2 rounded-card border border-border bg-bg/50 p-3">
-      <Label htmlFor={id}>{t("resolve.label")}</Label>
-      <div className="flex gap-2">
-        <Input
-          id={id}
-          value={query}
-          placeholder={t("resolve.placeholder")}
-          onChange={(e) => onQueryChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              onResolve();
-            }
-          }}
-          disabled={busy || resolving}
-        />
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onResolve}
-          disabled={busy || resolving || query.trim() === ""}
-        >
-          <SearchCheck />
-          {t("resolve.action")}
-        </Button>
-      </div>
-      {resolving && (
-        <p className="text-xs text-muted">{t("resolve.searching")}</p>
-      )}
-      {!resolving && resolved && results.length === 0 && (
-        <p className="text-xs text-muted">{t("resolve.noResults")}</p>
-      )}
-      {results.length > 0 && (
-        <div className="space-y-2">
-          <Input
-            value={filterQuery}
-            placeholder={t("resolve.filterPlaceholder")}
-            aria-label={t("resolve.filterLabel")}
-            onChange={(e) => onFilterChange(e.target.value)}
-            disabled={busy || resolving}
-          />
-          {filteredResults.length === 0 ? (
-            <p className="text-xs text-muted">
-              {t("resolve.noFilteredResults")}
-            </p>
-          ) : (
-            <ul className="max-h-52 divide-y divide-border overflow-y-auto rounded-card border border-border">
-              {filteredResults.map((match) => {
-                const metadata = resolvedSymbolMetadata(match);
-                return (
-                  <li key={resolvedMatchKey(match)}>
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-surface-hover"
-                      onClick={() => onPick(match)}
-                      disabled={busy}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate text-text">
-                          {symbolPairSource(match.symbol)}
-                          {metadata && (
-                            <span className="text-muted">
-                              {" · "}
-                              {metadata}
-                            </span>
-                          )}
-                        </span>
-                        {match.name && (
-                          <span className="mt-0.5 block truncate text-xs text-muted">
-                            {match.name}
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function diagnosticActionKey(action: DiagnosticAction): string {
   return `${action.type}:${action.target ?? ""}`;
 }
@@ -2395,51 +1912,8 @@ function DiagnosticPanel({
   );
 }
 
-/** Inline outcome of a symbol verification: success, not-found, or not-found
- *  with a case-folded suggestion. Renders nothing until a result is present. */
-// VerifyOutcome is a verification verdict, or a sentinel for a verify call that
-// failed at the transport layer. The failed case guarantees the row always
-// shows a reaction instead of silently clearing when the request errors.
-type VerifyOutcome = MarketDataSymbolVerification | { failed: true };
-
-function VerifyResult({ result }: { result: VerifyOutcome | null }) {
-  const { t } = useTranslation("marketData");
-  if (!result) return null;
-  if ("failed" in result) {
-    return (
-      <span className="inline-flex flex-wrap items-center gap-1 text-xs text-[var(--danger)]">
-        <X className="h-3 w-3" />
-        {t("verify.failed")}
-      </span>
-    );
-  }
-  if (!result.supported) return null;
-  if (result.exists) {
-    return (
-      <span className="inline-flex flex-wrap items-center gap-1 text-xs">
-        <span className="inline-flex items-center gap-1 text-[var(--ok)]">
-          <Check className="h-3 w-3" />
-          {t("verify.exists")}
-        </span>
-        {result.details && (
-          <span className="text-muted">({result.details})</span>
-        )}
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex flex-wrap items-center gap-1 text-xs text-[var(--danger)]">
-      <X className="h-3 w-3" />
-      {result.details ? t("verify.unavailable") : t("verify.notFound")}
-      {result.suggestion && (
-        <span className="text-muted">
-          {t("verify.didYouMean", { suggestion: result.suggestion })}
-        </span>
-      )}
-      {result.details && <span className="text-muted">({result.details})</span>}
-    </span>
-  );
-}
+// Verification verdict or a transport-failure sentinel for an inline outcome.
+type VerifyOutcome = MarketDataSymbolVerification | FailedVerificationOutcome;
 
 function PairUsageWarning({ usages }: { usages: PairUsage[] }) {
   const { t } = useTranslation("marketData");
@@ -2655,23 +2129,28 @@ export function InstanceCard({
 }) {
   const { t } = useTranslation("marketData");
   const [draft, setDraft] = useState<InstrumentDraft>(emptyInstrument);
-  // Verification is presentation-only state local to this card: the draft-row
-  // result, the row currently verifying, and per-row results keyed by symbol.
   const [draftVerify, setDraftVerify] = useState<VerifyOutcome | null>(null);
-  const [verifying, setVerifying] = useState<string | null>(null);
-  const [rowVerify, setRowVerify] = useState<Record<string, VerifyOutcome>>({});
+  const [draftVerifying, setDraftVerifying] = useState(false);
+  const {
+    outcomes: rowVerify,
+    isVerifying,
+    verifyRow,
+  } = useRowVerification((symbol) => onVerifySymbol(instance, symbol));
   const [manualDrafts, setManualDrafts] = useState<Record<string, string>>({});
   // IB-only structured contract for the draft instrument plus the live-search
   // state. Both are presentation-only and reset after a successful add.
   const [contractDraft, setContractDraft] =
     useState<IBContract>(newEmptyIBContract);
-  const [resolveQuery, setResolveQuery] = useState("");
-  const [resolveResults, setResolveResults] = useState<MarketDataSymbolMatch[]>(
-    [],
-  );
-  const [resolveFilterQuery, setResolveFilterQuery] = useState("");
-  const [resolving, setResolving] = useState(false);
-  const [resolved, setResolved] = useState(false);
+  const {
+    query: resolveQuery,
+    results: resolveResults,
+    filterQuery: resolveFilterQuery,
+    searching: resolving,
+    searched: resolved,
+    onQueryChange: handleResolveQueryChange,
+    onFilterChange: setResolveFilterQuery,
+    onSearch: runResolve,
+  } = useSymbolSearch((query) => onSearchSymbols(instance, { query }));
   const [instrumentDialogOpen, setInstrumentDialogOpen] = useState(false);
 
   // Some providers cannot verify symbols, so their verify controls are hidden.
@@ -2707,10 +2186,7 @@ export function InstanceCard({
     setDraft(emptyInstrument);
     setDraftVerify(null);
     setContractDraft(newEmptyIBContract());
-    setResolveQuery("");
-    setResolveResults([]);
-    setResolveFilterQuery("");
-    setResolved(false);
+    handleResolveQueryChange("");
   };
 
   const closeInstrumentDialog = () => {
@@ -2742,23 +2218,6 @@ export function InstanceCard({
     }
   };
 
-  const runResolve = async () => {
-    const query = resolveQuery.trim();
-    if (query === "") {
-      return;
-    }
-    setResolving(true);
-    setResolved(true);
-    setResolveResults([]);
-    setResolveFilterQuery("");
-    try {
-      const matches = await onSearchSymbols(instance, { query });
-      setResolveResults(matches ?? []);
-    } finally {
-      setResolving(false);
-    }
-  };
-
   const pickResolvedMatch = (match: MarketDataSymbolMatch) => {
     const pair = resolvedInstrumentPair(match, resolveQuery);
     setDraft((d) => ({
@@ -2784,9 +2243,8 @@ export function InstanceCard({
     setDraftVerify(null);
   };
 
-  // Draft-row verify: marker key "" tracks the draft slot in `verifying`.
   const verifyDraft = async () => {
-    setVerifying("");
+    setDraftVerifying(true);
     setDraftVerify(null);
     try {
       // A null return means the call failed (the page handler already surfaced
@@ -2795,34 +2253,12 @@ export function InstanceCard({
       const result = await onVerifySymbol(instance, draft.externalSymbol);
       setDraftVerify(result ?? { failed: true });
     } finally {
-      setVerifying(null);
-    }
-  };
-
-  const verifyRow = async (externalSymbol: string) => {
-    setVerifying(externalSymbol);
-    try {
-      // Always record an outcome: a real verdict, or a failed marker when the
-      // request errored, so the row never silently shows nothing after a click.
-      const result = await onVerifySymbol(instance, externalSymbol);
-      setRowVerify((prev) => ({
-        ...prev,
-        [externalSymbol]: result ?? { failed: true },
-      }));
-    } finally {
-      setVerifying(null);
+      setDraftVerifying(false);
     }
   };
 
   const manualPriceValue = (externalSymbol: string, fallback: string): string =>
     manualDrafts[externalSymbol] ?? fallback;
-
-  const handleResolveQueryChange = (value: string) => {
-    setResolveQuery(value);
-    setResolveResults([]);
-    setResolveFilterQuery("");
-    setResolved(false);
-  };
 
   const setManualPriceDraft = (externalSymbol: string, manualPrice: string) => {
     setManualDrafts((prev) => ({ ...prev, [externalSymbol]: manualPrice }));
@@ -2860,131 +2296,100 @@ export function InstanceCard({
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <ProviderIcon
-            type={instance.provider}
-            className="mt-0.5 h-5 w-5 shrink-0 text-accent"
-          />
-          <div className="min-w-0">
-            <CardTitle className="truncate">
-              {providerTitle(instance)}
-            </CardTitle>
-            <p className="mt-1 max-w-3xl text-xs text-muted">
-              {t(`providers.${instance.provider}.description`, {
-                defaultValue: "",
-              })}
-            </p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <Badge variant="neutral">{instance.provider}</Badge>
-              <Badge variant={instance.enabled ? "ok" : "neutral"}>
-                {instance.enabled ? t("state.enabled") : t("state.disabled")}
-              </Badge>
-              {instance.state === "ok" && (
-                <Badge variant="ok">{t("state.live")}</Badge>
-              )}
-              {instance.state === "pending" && (
-                <Badge variant="warn">{t("state.notApplied")}</Badge>
-              )}
-              {instance.state === "error" && (
-                <Badge variant="danger">{t("state.error")}</Badge>
-              )}
-            </div>
-            {instance.state === "error" && instance.error && (
-              <p className="mt-1.5 text-xs text-[var(--danger)]">
-                {t("instanceError", { message: instance.error })}
-              </p>
+      <VenueCardHeader
+        providerType={instance.provider}
+        title={providerTitle(instance)}
+        description={t(`providers.${instance.provider}.description`, {
+          defaultValue: "",
+        })}
+        badges={
+          <>
+            <Badge variant="neutral">{instance.provider}</Badge>
+            <Badge variant={instance.enabled ? "ok" : "neutral"}>
+              {instance.enabled
+                ? t("venues:state.enabled")
+                : t("venues:state.disabled")}
+            </Badge>
+            {instance.state === "ok" && (
+              <Badge variant="ok">{t("state.live")}</Badge>
             )}
-            {(siteUrl || docsUrl || symbolsUrl) && (
-              <div className="mt-1.5 flex flex-wrap gap-3">
-                {siteUrl && (
-                  <a
-                    href={siteUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-muted hover:text-text"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    {t("references.site")}
-                  </a>
-                )}
-                {docsUrl && (
-                  <a
-                    href={docsUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-muted hover:text-text"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    {t("references.docs")}
-                  </a>
-                )}
-                {symbolsUrl && (
-                  <a
-                    href={symbolsUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-muted hover:text-text"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    {t("references.symbols")}
-                  </a>
-                )}
-              </div>
+            {instance.state === "pending" && (
+              <Badge variant="warn">{t("state.notApplied")}</Badge>
             )}
-          </div>
-        </div>
-        <div className="flex shrink-0 gap-2">
-          {providerHasSettings(instance.provider) && (
+            {instance.state === "error" && (
+              <Badge variant="danger">{t("state.error")}</Badge>
+            )}
+          </>
+        }
+        error={
+          instance.state === "error" && instance.error
+            ? t("instanceError", { message: instance.error })
+            : undefined
+        }
+        links={{ siteUrl, docsUrl, symbolsUrl }}
+        actions={
+          <>
+            {providerHasSettings(instance.provider) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t("actions.editSettings")}
+                title={t("actions.editSettings")}
+                onClick={() => onEditSettings(instance)}
+                disabled={busy}
+              >
+                <Settings />
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onToggleInstance(instance)}
+              disabled={busy}
+            >
+              {instance.enabled
+                ? t("venues:actions.disable")
+                : t("venues:actions.enable")}
+            </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={t("actions.editSettings")}
-              title={t("actions.editSettings")}
-              onClick={() => onEditSettings(instance)}
+              aria-label={t("actions.deleteInstance")}
+              onClick={() => onDeleteInstance(instance)}
               disabled={busy}
             >
-              <Settings />
+              <Trash2 />
             </Button>
-          )}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => onToggleInstance(instance)}
-            disabled={busy}
-          >
-            {instance.enabled ? t("actions.disable") : t("actions.enable")}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={t("actions.deleteInstance")}
-            onClick={() => onDeleteInstance(instance)}
-            disabled={busy}
-          >
-            <Trash2 />
-          </Button>
-        </div>
-      </CardHeader>
+          </>
+        }
+      />
       <CardContent className="space-y-4">
         {!usesInstrumentDialog && canSearch && (
-          <ResolvePanel
+          <SymbolSearchPanel
             id={`md-resolve-${instance.id}`}
             busy={busy}
-            resolving={resolving}
-            resolved={resolved}
+            searching={resolving}
+            searched={resolved}
             query={resolveQuery}
             results={resolveResults}
             filterQuery={resolveFilterQuery}
             onQueryChange={handleResolveQueryChange}
             onFilterChange={setResolveFilterQuery}
-            onResolve={() => {
+            onSearch={() => {
               void runResolve();
             }}
             onPick={pickResolvedMatch}
+            label={t("resolve.label")}
+            placeholder={t("resolve.placeholder")}
+            noResultsText={t("resolve.noResults")}
+            getKey={resolvedMatchKey}
+            getLabel={(match) => symbolPairSource(match.symbol)}
+            getMetadata={resolvedSymbolMetadata}
+            getName={(match) => match.name}
+            getSearchText={resolvedSymbolSearchText}
           />
         )}
         {usesInstrumentDialog ? (
@@ -2995,96 +2400,50 @@ export function InstanceCard({
               disabled={busy}
             >
               <Plus />
-              {t("actions.addInstrument")}
+              {t("venues:actions.addInstrument")}
             </Button>
           </div>
         ) : (
-          <div
-            className={
-              isManual
-                ? "grid gap-2 md:grid-cols-[1.1fr_0.8fr_0.8fr_0.8fr_auto_auto]"
-                : "grid gap-2 md:grid-cols-[1.1fr_0.8fr_0.8fr_auto_auto]"
-            }
-          >
-            <div className="flex gap-2">
-              <Input
-                value={draft.externalSymbol}
-                onChange={(e) => {
-                  const externalSymbol = e.target.value;
-                  setDraft((d) => ({ ...d, externalSymbol }));
-                  setDraftVerify(null);
-                }}
-                placeholder={t("instrument.externalSymbol")}
-                disabled={busy}
-              />
-              {canVerify && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  aria-label={t("verify.action")}
-                  disabled={
-                    busy ||
-                    draft.externalSymbol.trim() === "" ||
-                    verifying === ""
+          <InstrumentDraftRow
+            draft={draft}
+            onDraftChange={(patch) => {
+              setDraft((d) => ({ ...d, ...patch }));
+              if ("externalSymbol" in patch) setDraftVerify(null);
+            }}
+            busy={busy}
+            valid={instrumentDraftValid}
+            onSubmit={() => {
+              void (isIB ? submitIBInstrument() : submitInstrument());
+            }}
+            verify={
+              canVerify
+                ? {
+                    verifying: draftVerifying,
+                    onVerify: () => {
+                      void verifyDraft();
+                    },
                   }
-                  onClick={() => {
-                    void verifyDraft();
-                  }}
-                >
-                  <SearchCheck />
-                </Button>
-              )}
-            </div>
-            <Input
-              value={draft.baseAsset}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, baseAsset: e.target.value }))
-              }
-              placeholder={t("instrument.baseAsset")}
-              disabled={busy}
-            />
-            <div className="flex items-center gap-2">
-              <Input
-                value={draft.quoteAsset}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, quoteAsset: e.target.value }))
-                }
-                placeholder={t("instrument.quoteAsset")}
-                disabled={busy}
-              />
-              <PairUsageWarning usages={draftPairUsages} />
-            </div>
-            {isManual && (
-              <Input
-                value={draft.manualPrice}
-                inputMode="decimal"
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, manualPrice: e.target.value }))
-                }
-                placeholder={t("instrument.manualPrice")}
-                disabled={busy}
-              />
-            )}
-            <Button
-              type="button"
-              variant={draft.enabled ? "default" : "outline"}
-              onClick={() => setDraft((d) => ({ ...d, enabled: !d.enabled }))}
-              disabled={busy}
-            >
-              {draft.enabled ? t("state.enabled") : t("state.disabled")}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                void (isIB ? submitIBInstrument() : submitInstrument());
-              }}
-              disabled={busy || !instrumentDraftValid}
-            >
-              <Plus />
-              {t("actions.addInstrument")}
-            </Button>
-          </div>
+                : undefined
+            }
+            enabled={{
+              value: draft.enabled,
+              onToggle: () => setDraft((d) => ({ ...d, enabled: !d.enabled })),
+            }}
+            quoteAdornment={<PairUsageWarning usages={draftPairUsages} />}
+            extraField={
+              isManual ? (
+                <Input
+                  value={draft.manualPrice}
+                  inputMode="decimal"
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, manualPrice: e.target.value }))
+                  }
+                  placeholder={t("instrument.manualPrice")}
+                  disabled={busy}
+                />
+              ) : undefined
+            }
+          />
         )}
 
         {isIB && (
@@ -3107,26 +2466,34 @@ export function InstanceCard({
               </DialogHeader>
               <div className="space-y-4">
                 {canSearch && (
-                  <ResolvePanel
+                  <SymbolSearchPanel
                     id={`md-resolve-dialog-${instance.id}`}
                     busy={busy}
-                    resolving={resolving}
-                    resolved={resolved}
+                    searching={resolving}
+                    searched={resolved}
                     query={resolveQuery}
                     results={resolveResults}
                     filterQuery={resolveFilterQuery}
                     onQueryChange={handleResolveQueryChange}
                     onFilterChange={setResolveFilterQuery}
-                    onResolve={() => {
+                    onSearch={() => {
                       void runResolve();
                     }}
                     onPick={pickResolvedMatch}
+                    label={t("resolve.label")}
+                    placeholder={t("resolve.placeholder")}
+                    noResultsText={t("resolve.noResults")}
+                    getKey={resolvedMatchKey}
+                    getLabel={(match) => symbolPairSource(match.symbol)}
+                    getMetadata={resolvedSymbolMetadata}
+                    getName={(match) => match.name}
+                    getSearchText={resolvedSymbolSearchText}
                   />
                 )}
                 <div className="grid items-end gap-3 md:grid-cols-[1fr_0.7fr_0.7fr_0.5fr]">
                   <div className="space-y-2">
                     <Label htmlFor={`md-add-${instance.id}-external`}>
-                      {t("instrument.externalSymbol")}
+                      {t("venues:instrument.externalSymbol")}
                     </Label>
                     <Input
                       id={`md-add-${instance.id}-external`}
@@ -3141,7 +2508,7 @@ export function InstanceCard({
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor={`md-add-${instance.id}-base`}>
-                      {t("instrument.baseAsset")}
+                      {t("venues:instrument.baseAsset")}
                     </Label>
                     <Input
                       id={`md-add-${instance.id}-base`}
@@ -3155,7 +2522,7 @@ export function InstanceCard({
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Label htmlFor={`md-add-${instance.id}-quote`}>
-                        {t("instrument.quoteAsset")}
+                        {t("venues:instrument.quoteAsset")}
                       </Label>
                       <PairUsageWarning usages={draftPairUsages} />
                     </div>
@@ -3208,7 +2575,7 @@ export function InstanceCard({
                   disabled={busy || !instrumentDraftValid || !ibContractValid}
                 >
                   <Plus />
-                  {t("actions.addInstrument")}
+                  {t("venues:actions.addInstrument")}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -3217,231 +2584,157 @@ export function InstanceCard({
 
         {draftVerify && (
           <div className="-mt-2">
-            <VerifyResult result={draftVerify} />
+            <VerifyResult
+              result={draftVerify}
+              unavailableLabel={t("verify.unavailable")}
+            />
           </div>
         )}
 
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[840px] text-left text-sm">
-            <thead className="border-b border-border text-xs uppercase text-muted">
-              <tr>
-                <th className="py-2 pr-3">{t("table.external")}</th>
-                <th className="py-2 pr-3">{t("table.instrument")}</th>
-                {isManual && (
-                  <th className="py-2 pr-3">{t("table.manualPrice")}</th>
-                )}
-                <th className="py-2 pr-3">{t("table.price")}</th>
-                <th className="py-2 pr-3">{t("table.asOf")}</th>
-                <th className="py-2 pr-3">{t("table.state")}</th>
-                <th className="py-2 pr-0 text-right">{t("table.actions")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {instance.instruments.length === 0 && (
-                <tr>
-                  <td
-                    className="py-5 text-center text-muted"
-                    colSpan={isManual ? 7 : 6}
-                  >
-                    {t("emptyInstruments")}
-                  </td>
-                </tr>
+        <InstrumentsTable
+          instruments={instance.instruments}
+          busy={busy}
+          displaySymbol={(instrument) =>
+            instrumentDisplaySymbol(instance, instrument.externalSymbol)
+          }
+          metadata={(instrument) =>
+            instrumentMetadata(instance, instrument.externalSymbol)
+          }
+          pairAdornment={(instrument) => (
+            <PairUsageWarning
+              usages={pairUsages(
+                pairUsageMap,
+                instrument.baseAsset,
+                instrument.quoteAsset,
+                {
+                  instanceExternalId: instance.id,
+                  externalSymbol: instrument.externalSymbol,
+                },
               )}
-              {instance.instruments.map((instrument) => {
-                const metadata = instrumentMetadata(
-                  instance,
-                  instrument.externalSymbol,
-                );
-                const duplicatePairUsages = pairUsages(
-                  pairUsageMap,
-                  instrument.baseAsset,
-                  instrument.quoteAsset,
+            />
+          )}
+          extraColumns={[
+            ...(isManual
+              ? [
                   {
-                    instanceExternalId: instance.id,
-                    externalSymbol: instrument.externalSymbol,
-                  },
-                );
-                return (
-                  <tr
-                    key={instrument.externalSymbol}
-                    className="border-b border-border"
-                  >
-                    <td className="py-2 pr-3 font-medium text-text">
-                      <div>
-                        {instrumentDisplaySymbol(
-                          instance,
-                          instrument.externalSymbol,
-                        )}
-                      </div>
-                      {metadata && (
-                        <div className="mt-0.5 text-xs font-normal text-muted">
-                          {metadata}
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-2 pr-3 text-muted">
-                      <div className="flex items-center gap-1.5">
-                        <span>
-                          {instrument.baseAsset}/{instrument.quoteAsset}
-                        </span>
-                        <PairUsageWarning usages={duplicatePairUsages} />
-                      </div>
-                    </td>
-                    {isManual && (
-                      <td className="py-2 pr-3">
-                        <div className="flex min-w-40 gap-2">
-                          <Input
-                            value={manualPriceValue(
+                    id: "manualPrice",
+                    header: t("table.manualPrice"),
+                    renderCell: (
+                      instrument: MarketDataInstance["instruments"][number],
+                    ) => (
+                      <div className="flex min-w-40 gap-2">
+                        <Input
+                          value={manualPriceValue(
+                            instrument.externalSymbol,
+                            instrument.manualPrice,
+                          )}
+                          inputMode="decimal"
+                          aria-label={t("instrument.manualPriceFor", {
+                            symbol: instrument.externalSymbol,
+                          })}
+                          onChange={(e) =>
+                            setManualPriceDraft(
                               instrument.externalSymbol,
-                              instrument.manualPrice,
-                            )}
-                            inputMode="decimal"
-                            aria-label={t("instrument.manualPriceFor", {
-                              symbol: instrument.externalSymbol,
-                            })}
-                            onChange={(e) =>
-                              setManualPriceDraft(
-                                instrument.externalSymbol,
-                                e.target.value,
-                              )
-                            }
-                            disabled={busy}
-                            className="nums h-8"
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon"
-                            aria-label={t("actions.sendPrice")}
-                            title={t("actions.sendPrice")}
-                            disabled={
-                              busy ||
-                              !isOptionalDecimal(
-                                manualPriceValue(
-                                  instrument.externalSymbol,
-                                  instrument.manualPrice,
-                                ),
-                              )
-                            }
-                            onClick={() => {
-                              void submitManualPrice(instrument);
-                            }}
-                          >
-                            <Send />
-                          </Button>
-                        </div>
-                      </td>
-                    )}
-                    <td className="nums py-2 pr-3 text-text">
-                      {displayedPriceLabel(instrument) || "-"}
-                    </td>
-                    <td className="nums py-2 pr-3 text-muted">
-                      {instrument.quote ? (
-                        <span>
-                          {formatDateTime(instrument.quote.asOf)}{" "}
-                          {instrument.updateIntervalMs ? (
-                            <span
-                              className="text-xs"
-                              title={t("table.updateIntervalTooltip")}
-                            >
-                              {formatCompactDuration(
-                                instrument.updateIntervalMs,
-                              )}
-                            </span>
-                          ) : null}
-                        </span>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                    <td className="py-2 pr-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge
-                          variant={
-                            instrument.enabled && instance.enabled
-                              ? "ok"
-                              : "neutral"
-                          }
-                        >
-                          {!instrument.enabled
-                            ? t("state.disabled")
-                            : instance.enabled
-                              ? t("state.enabled")
-                              : t("state.feedDisabled")}
-                        </Badge>
-                        {instance.enabled && instrument.stale && !isManual && (
-                          <Badge variant="warn" title={t("state.staleTooltip")}>
-                            {t("state.stale")}
-                          </Badge>
-                        )}
-                        <VerifyResult
-                          result={rowVerify[instrument.externalSymbol] ?? null}
-                        />
-                      </div>
-                    </td>
-                    <td className="py-2 pr-0">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            onToggleInstrument(
-                              instance,
-                              instrument.externalSymbol,
-                              !instrument.enabled,
+                              e.target.value,
                             )
                           }
                           disabled={busy}
-                        >
-                          {instrument.enabled
-                            ? t("actions.disable")
-                            : t("actions.enable")}
-                        </Button>
-                        {canVerify && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            aria-label={t("verify.action")}
-                            onClick={() => {
-                              void verifyRow(instrument.externalSymbol);
-                            }}
-                            disabled={
-                              busy || verifying === instrument.externalSymbol
-                            }
-                          >
-                            <SearchCheck />
-                          </Button>
-                        )}
+                          className="nums h-8"
+                        />
                         <Button
                           type="button"
-                          variant="ghost"
+                          variant="outline"
                           size="icon"
-                          aria-label={t("actions.deleteInstrument")}
-                          onClick={() =>
-                            isIB
-                              ? onDeleteIBInstrument(
-                                  instance,
-                                  instrument.externalSymbol,
-                                )
-                              : onDeleteInstrument(
-                                  instance,
-                                  instrument.externalSymbol,
-                                )
+                          aria-label={t("actions.sendPrice")}
+                          title={t("actions.sendPrice")}
+                          disabled={
+                            busy ||
+                            !isOptionalDecimal(
+                              manualPriceValue(
+                                instrument.externalSymbol,
+                                instrument.manualPrice,
+                              ),
+                            )
                           }
-                          disabled={busy}
+                          onClick={() => {
+                            void submitManualPrice(instrument);
+                          }}
                         >
-                          <Trash2 />
+                          <Send />
                         </Button>
                       </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    ),
+                  },
+                ]
+              : []),
+            {
+              id: "price",
+              header: t("table.price"),
+              cellClassName: "nums text-text",
+              renderCell: (instrument) =>
+                displayedPriceLabel(instrument) || "-",
+            },
+            {
+              id: "asOf",
+              header: t("table.asOf"),
+              cellClassName: "nums text-muted",
+              renderCell: (instrument) => (
+                <>
+                  {instrument.quote ? (
+                    <span>
+                      {formatDateTime(instrument.quote.asOf)}{" "}
+                      {instrument.updateIntervalMs ? (
+                        <span
+                          className="text-xs"
+                          title={t("table.updateIntervalTooltip")}
+                        >
+                          {formatCompactDuration(instrument.updateIntervalMs)}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    "-"
+                  )}
+                </>
+              ),
+            },
+          ]}
+          parentEnabled={instance.enabled}
+          parentDisabledLabel={t("state.feedDisabled")}
+          stateAdornment={(instrument) => (
+            <>
+              {instance.enabled && instrument.stale && !isManual && (
+                <Badge variant="warn" title={t("state.staleTooltip")}>
+                  {t("state.stale")}
+                </Badge>
+              )}
+              <VerifyResult
+                result={rowVerify[instrument.externalSymbol] ?? null}
+                unavailableLabel={t("verify.unavailable")}
+              />
+            </>
+          )}
+          onToggle={(instrument) =>
+            onToggleInstrument(
+              instance,
+              instrument.externalSymbol,
+              !instrument.enabled,
+            )
+          }
+          onVerify={
+            canVerify
+              ? (instrument) => {
+                  void verifyRow(instrument.externalSymbol);
+                }
+              : undefined
+          }
+          isVerifying={isVerifying}
+          onDelete={(instrument) =>
+            isIB
+              ? onDeleteIBInstrument(instance, instrument.externalSymbol)
+              : onDeleteInstrument(instance, instrument.externalSymbol)
+          }
+        />
 
         {instance.diagnostics.length > 0 &&
           (() => {
@@ -3513,51 +2806,6 @@ function DeleteInstanceDialog({
           >
             <Trash2 />
             {t("deleteInstance.submit")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function DeleteInstrumentDialog({
-  target,
-  busy,
-  onOpenChange,
-  onSubmit,
-}: {
-  target: DeleteInstrumentTarget | null;
-  busy: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSubmit: () => void;
-}) {
-  const { t } = useTranslation("marketData");
-  return (
-    <Dialog open={target !== null} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("deleteInstrument.title")}</DialogTitle>
-          <DialogDescription>
-            {t("deleteInstrument.description", {
-              symbol: target?.externalSymbol ?? "",
-            })}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            {t("deleteInstrument.cancel")}
-          </Button>
-          <Button
-            onClick={onSubmit}
-            disabled={busy}
-            className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
-          >
-            <Trash2 />
-            {t("deleteInstrument.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3781,33 +3029,34 @@ export function MarketData() {
         </>
       }
     >
-      <button
-        type="button"
+      <AddProviderButton
+        label={t("providers.addSource")}
+        providerTypes={providerOptions.map((provider) => provider.type)}
         onClick={() => setGuideOpen(true)}
-        className="flex w-full items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3 text-left transition-colors hover:bg-surface-hover"
-      >
-        <span className="flex items-center gap-2 text-sm font-medium text-text">
-          <Plus className="h-4 w-4 shrink-0 text-accent" />
-          {t("providers.addSource")}
-          <span className="ml-1 flex items-center gap-1.5">
-            {providerOptions.map((provider) => (
-              <ProviderIcon
-                key={provider.type}
-                type={provider.type}
-                className="h-4 w-4 shrink-0"
-              />
-            ))}
-          </span>
-        </span>
-        <span className="flex items-center gap-1.5 text-xs text-muted">
-          {t("providers.count", { n: providerOptions.length })}
-          <ChevronRight className="h-3.5 w-3.5" />
-        </span>
-      </button>
+      />
       <ProviderGuideDialog
         open={guideOpen}
-        providers={providerOptions}
-        onSelect={(provider) => {
+        title={t("instances.title")}
+        description={t("providers.guideTitle")}
+        providers={providerOptions.map((provider) => ({
+          type: provider.type,
+          title: t(`providers.${provider.type}.title`, {
+            defaultValue: provider.title,
+          }),
+          description: t(`providers.${provider.type}.description`, {
+            defaultValue: "",
+          }),
+          siteUrl: providerSiteUrl(provider.type),
+          docsUrl: providerDocsUrl(provider.type),
+          symbolsUrl: providerSymbolsUrl(provider.type),
+        }))}
+        onSelect={(entry) => {
+          const provider = providerOptions.find(
+            (provider) => provider.type === entry.type,
+          );
+          if (!provider) {
+            throw new Error(`Unknown market-data provider: ${entry.type}`);
+          }
           setGuideOpen(false);
           setSelectedProvider(provider);
         }}
@@ -3918,7 +3167,10 @@ export function MarketData() {
             }}
           />
           <DeleteInstrumentDialog
-            target={deleteInstrumentTarget}
+            open={deleteInstrumentTarget !== null}
+            description={t("deleteInstrument.description", {
+              symbol: deleteInstrumentTarget?.externalSymbol ?? "",
+            })}
             busy={busy}
             onOpenChange={(open) => {
               if (!open) setDeleteInstrumentTarget(null);

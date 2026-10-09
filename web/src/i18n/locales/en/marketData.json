@@ -9,9 +9,6 @@
     "label": "Label"
   },
   "instrument": {
-    "externalSymbol": "External symbol",
-    "baseAsset": "Base",
-    "quoteAsset": "Quote",
     "manualPrice": "Manual price",
     "manualPriceFor": "Manual price for {{symbol}}",
     "pairAlreadyUsed": "This base/quote pair is already used by {{feeds}}"
@@ -24,11 +21,7 @@
   },
   "actions": {
     "addInstance": "Add source",
-    "addInstrument": "Add instrument",
-    "enable": "Enable",
-    "disable": "Disable",
     "deleteInstance": "Delete source",
-    "deleteInstrument": "Delete instrument",
     "editSettings": "Edit settings",
     "restart": "Restart feeds",
     "sendPrice": "Send price",
@@ -46,10 +39,6 @@
   "providers": {
     "guideTitle": "Provider guide",
     "addSource": "Add a market-data source",
-    "count": "{{n}} providers",
-    "site": "Site",
-    "docs": "Docs",
-    "symbols": "Symbols",
     "ib": {
       "title": "Interactive Brokers",
       "description": "Live market data from Interactive Brokers TWS or IB Gateway. Use contract settings when a plain symbol is ambiguous.",
@@ -112,8 +101,6 @@
     "button": "Restart feeds"
   },
   "state": {
-    "enabled": "Enabled",
-    "disabled": "Disabled",
     "feedDisabled": "Feed disabled",
     "stale": "Stale",
     "staleTooltip": "Quote older than the freshness window",
@@ -183,17 +170,12 @@
     }
   },
   "table": {
-    "external": "External",
-    "instrument": "Instrument",
     "manualPrice": "Manual price",
     "price": "Price",
     "asOf": "As-of",
-    "updateIntervalTooltip": "Interval since the previous update",
-    "state": "State",
-    "actions": "Actions"
+    "updateIntervalTooltip": "Interval since the previous update"
   },
   "emptyInstances": "No market-data sources configured",
-  "emptyInstruments": "No instruments configured",
   "diagnostics": {
     "title": "Problems",
     "summary": "{{count}} active",
@@ -214,19 +196,9 @@
     "actionRemoveTarget": "Remove {{target}}",
     "actionLogs": "Service logs"
   },
-  "references": {
-    "site": "Provider site",
-    "docs": "Provider docs",
-    "symbols": "Valid symbols"
-  },
   "verify": {
-    "action": "Verify symbol",
     "unsupported": "This provider can't verify symbols",
-    "exists": "Symbol exists",
-    "unavailable": "No fresh price for symbol",
-    "notFound": "Symbol not found",
-    "didYouMean": "Did you mean {{suggestion}}?",
-    "failed": "Verification failed"
+    "unavailable": "No fresh price for symbol"
   },
   "search": {
     "action": "Search symbols",
@@ -239,13 +211,8 @@
   },
   "resolve": {
     "label": "Resolve symbol in this feed",
-    "action": "Resolve",
     "placeholder": "Type EUR, EUR/USD, BTC, or AAPL",
-    "filterLabel": "Filter resolved symbols",
-    "filterPlaceholder": "Filter resolved symbols",
-    "searching": "Resolving…",
     "noResults": "No matching symbols in this feed",
-    "noFilteredResults": "No results match the filter",
     "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
   },
   "deleteInstance": {
@@ -255,9 +222,6 @@
     "submit": "Delete"
   },
   "deleteInstrument": {
-    "title": "Delete instrument?",
-    "description": "{{symbol}} will be permanently removed from this source.",
-    "cancel": "Cancel",
-    "submit": "Delete"
+    "description": "{{symbol}} will be permanently removed from this source."
   }
 }

@@ -37,7 +37,6 @@ import {
   InstanceCard,
   InstanceSettingsDialog,
   MarketData,
-  ProviderGuideDialog,
 } from "@/pages/MarketData";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -169,6 +168,115 @@ beforeEach(async () => {
   searchMock.mockResolvedValue({ supported: true, matches: [] });
 });
 
+describe("MD instrument block texts", () => {
+  const instrument = {
+    instanceId: "bn-1",
+    externalSymbol: "BTCUSDT",
+    baseAsset: "BTC",
+    quoteAsset: "USDT",
+    manualPrice: "",
+    enabled: true,
+    syntheticInverse: false,
+    stale: false,
+  };
+  const instance = ibInstance({
+    id: "bn-1",
+    provider: "binance",
+    label: "Binance",
+    instruments: [instrument],
+  });
+  const unavailable = {
+    supported: true,
+    exists: false,
+    details: "Quote expired",
+  };
+
+  it("uses the MD unavailable wording for the draft verdict", async () => {
+    const user = userEvent.setup();
+    const onVerifySymbol = vi.fn().mockResolvedValue(unavailable);
+    renderCard({ ...instance, instruments: [] }, { onVerifySymbol });
+
+    await user.type(screen.getByPlaceholderText("External symbol"), "BTCUSDT");
+    await user.click(screen.getByRole("button", { name: "Verify symbol" }));
+
+    expect(
+      await screen.findByText("No fresh price for symbol"),
+    ).toBeInTheDocument();
+    expect(onVerifySymbol).toHaveBeenCalledWith(
+      { ...instance, instruments: [] },
+      "BTCUSDT",
+    );
+  });
+
+  it("uses the MD unavailable wording for a table-row verdict", async () => {
+    const user = userEvent.setup();
+    const onVerifySymbol = vi.fn().mockResolvedValue(unavailable);
+    renderCard(instance, { onVerifySymbol });
+    const row = screen.getByText("BTCUSDT").closest("tr")!;
+
+    await user.click(
+      within(row).getByRole("button", { name: "Verify symbol" }),
+    );
+
+    expect(
+      await within(row).findByText("No fresh price for symbol"),
+    ).toBeInTheDocument();
+    expect(onVerifySymbol).toHaveBeenCalledWith(instance, "BTCUSDT");
+  });
+
+  it("names the disabled feed on an enabled instrument row", () => {
+    renderCard({ ...instance, enabled: false });
+    const row = screen.getByText("BTCUSDT").closest("tr")!;
+
+    expect(within(row).getByText("Feed disabled")).toBeInTheDocument();
+  });
+
+  it("names the symbol and source in the instrument delete description", async () => {
+    const user = userEvent.setup();
+    fetchMarketDataMock.mockResolvedValue(status(instance));
+    renderMarketDataPage();
+    const row = (await screen.findByText("BTCUSDT")).closest("tr")!;
+
+    await user.click(
+      within(row).getByRole("button", { name: "Delete instrument" }),
+    );
+
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Delete instrument?",
+    });
+    expect(
+      within(dialog).getByText(
+        "BTCUSDT will be permanently removed from this source.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it.each(["binance", "ib"])(
+    "uses the MD empty resolve text for %s",
+    async (provider) => {
+      const user = userEvent.setup();
+      const onSearchSymbols = vi.fn().mockResolvedValue([]);
+      renderCard(ibInstance({ provider }), { onSearchSymbols });
+      if (provider === "ib") {
+        await user.click(
+          screen.getByRole("button", { name: "Add instrument" }),
+        );
+      }
+
+      await user.type(
+        screen.getByLabelText("Resolve symbol in this feed"),
+        "UNKNOWN",
+      );
+      await user.click(screen.getByRole("button", { name: "Resolve" }));
+
+      expect(
+        await screen.findByText("No matching symbols in this feed"),
+      ).toBeInTheDocument();
+      expect(onSearchSymbols).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
 describe("IB secType matrix (pure)", () => {
   it("maps each secType to its exchange default", () => {
     expect(ibSecTypePatch("STK")).toMatchObject({
@@ -206,6 +314,62 @@ describe("IB secType matrix (pure)", () => {
 });
 
 describe("provider references", () => {
+  it("opens the provider guide and selects a translated provider to create", async () => {
+    const user = userEvent.setup();
+    fetchMarketDataMock.mockResolvedValue({
+      ...status(ibInstance()),
+      providers: [
+        { type: "ib", title: "Interactive Brokers" },
+        { type: "alpaca", title: "API Alpaca title" },
+      ],
+    });
+    renderMarketDataPage();
+    await screen.findByRole("heading", { name: "IB Gateway" });
+
+    const add = screen.getByRole("button", {
+      name: /Add a market-data source/,
+    });
+    expect(within(add).getByText("2 providers")).toBeInTheDocument();
+    expect(add.querySelectorAll("span.ml-1 > svg")).toHaveLength(2);
+    const providerIcons = add.querySelectorAll("span.ml-1 > svg");
+    expect(providerIcons[0].querySelector("rect")).toHaveAttribute(
+      "fill",
+      "#050608",
+    );
+    expect(providerIcons[1].querySelector("rect")).toHaveAttribute(
+      "fill",
+      "#ffd200",
+    );
+    await user.click(add);
+    const guide = screen.getByRole("dialog", { name: "Sources" });
+    expect(guide).toHaveAccessibleDescription("Provider guide");
+    const tile = within(guide).getByRole("button", { name: /^Alpaca/ });
+    expect(within(tile).getByText("Alpaca")).toBeInTheDocument();
+    expect(
+      within(tile).getByText(
+        "Live US equity prices from Alpaca IEX. Requires API key credentials; external symbols use stock tickers such as AAPL.",
+      ),
+    ).toBeInTheDocument();
+    const card = tile.parentElement!;
+    for (const [name, href] of [
+      ["Site", "https://alpaca.markets"],
+      ["Docs", "https://docs.alpaca.markets/docs/real-time-stock-pricing-data"],
+      ["Symbols", "https://docs.alpaca.markets/us/docs/working-with-assets"],
+    ]) {
+      expect(within(card).getByRole("link", { name })).toHaveAttribute(
+        "href",
+        href,
+      );
+    }
+
+    await user.click(tile);
+    expect(
+      screen.queryByRole("dialog", { name: "Sources" }),
+    ).not.toBeInTheDocument();
+    const create = screen.getByRole("dialog", { name: "Add Alpaca source" });
+    expect(within(create).getByLabelText("Label")).toHaveValue("Alpaca");
+  });
+
   it("links Alpaca symbols to the current assets documentation", () => {
     renderCard(
       ibInstance({
@@ -1271,36 +1435,6 @@ describe("synthetic inverse price rendering", () => {
     const row = screen.getByText("EURUSD").closest("tr") as HTMLElement;
     expect(within(row).getByText("2")).toBeInTheDocument();
     expect(within(row).queryByText(/->/u)).not.toBeInTheDocument();
-  });
-});
-
-describe("provider guide", () => {
-  it("renders the provider tiles behind the dialog and selects one", async () => {
-    const user = userEvent.setup();
-    const onSelect = vi.fn();
-    render(
-      <I18nextProvider i18n={i18n}>
-        <ProviderGuideDialog
-          open
-          providers={[
-            { type: "finnhub", title: "Finnhub" },
-            { type: "binance", title: "Binance" },
-          ]}
-          onSelect={onSelect}
-          onOpenChange={vi.fn()}
-        />
-      </I18nextProvider>,
-    );
-
-    const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText("Finnhub")).toBeInTheDocument();
-    expect(within(dialog).getByText("Binance")).toBeInTheDocument();
-
-    await user.click(within(dialog).getByRole("button", { name: /Finnhub/ }));
-    expect(onSelect).toHaveBeenCalledWith({
-      type: "finnhub",
-      title: "Finnhub",
-    });
   });
 });
 

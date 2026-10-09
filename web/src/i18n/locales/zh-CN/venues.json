@@ -1,0 +1,54 @@
+{
+  "providers": {
+    "count_one": "{{count}} 个提供方",
+    "count_other": "{{count}} 个提供方",
+    "site": "网站",
+    "docs": "文档",
+    "symbols": "代码"
+  },
+  "references": {
+    "site": "提供方网站",
+    "docs": "提供方文档",
+    "symbols": "有效代码列表"
+  },
+  "instrument": {
+    "externalSymbol": "外部代码",
+    "baseAsset": "基础资产",
+    "quoteAsset": "计价资产"
+  },
+  "actions": {
+    "addInstrument": "添加工具",
+    "enable": "启用",
+    "disable": "停用",
+    "deleteInstrument": "删除工具"
+  },
+  "state": {
+    "enabled": "已启用",
+    "disabled": "已停用"
+  },
+  "table": {
+    "external": "外部",
+    "instrument": "工具",
+    "state": "状态",
+    "actions": "操作"
+  },
+  "verify": {
+    "action": "校验代码",
+    "exists": "代码存在",
+    "notFound": "未找到代码",
+    "didYouMean": "您是否想输入 {{suggestion}}？",
+    "failed": "校验失败",
+    "notTradable": "代码存在但不可交易"
+  },
+  "resolve": {
+    "action": "解析",
+    "searching": "解析中…",
+    "filterLabel": "筛选解析结果",
+    "filterPlaceholder": "筛选解析结果",
+    "noFilteredResults": "没有结果匹配筛选条件"
+  },
+  "deleteInstrument": {
+    "title": "删除工具？"
+  },
+  "emptyInstruments": "未配置工具"
+}

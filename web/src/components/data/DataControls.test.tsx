@@ -32,6 +32,7 @@ import {
   OnlineFilterField,
   OPERATORS,
   NumberRangeFilter,
+  Segmented,
   ShareLinkButton,
   SortableHeader,
   TimeRangeFilter,
@@ -102,6 +103,27 @@ function UrlFilterHarness() {
 describe("data controls", () => {
   beforeEach(() => {
     document.documentElement.removeAttribute("data-density");
+  });
+
+  it("disables a segmented option without dispatching its value", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Segmented
+        value="paper"
+        options={[
+          { value: "paper", label: "Paper" },
+          { value: "live", label: "Live", disabled: true },
+        ]}
+        onChange={onChange}
+      />,
+    );
+    const live = screen.getByRole("button", { name: "Live" });
+    expect(live).toBeDisabled();
+    await user.click(live);
+    expect(onChange).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Paper" }));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("paper");
   });
 
   it("exposes the canonical operator sets", () => {

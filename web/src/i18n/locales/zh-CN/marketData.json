@@ -9,9 +9,6 @@
     "label": "标签"
   },
   "instrument": {
-    "externalSymbol": "外部代码",
-    "baseAsset": "基础资产",
-    "quoteAsset": "计价资产",
     "manualPrice": "手动价格",
     "manualPriceFor": "{{symbol}} 的手动价格",
     "pairAlreadyUsed": "此 基础/计价 组合已被使用：{{feeds}}"
@@ -24,11 +21,7 @@
   },
   "actions": {
     "addInstance": "添加来源",
-    "addInstrument": "添加工具",
-    "enable": "启用",
-    "disable": "停用",
     "deleteInstance": "删除来源",
-    "deleteInstrument": "删除工具",
     "editSettings": "编辑设置",
     "restart": "重启数据源",
     "sendPrice": "发送价格",
@@ -46,10 +39,6 @@
   "providers": {
     "guideTitle": "提供方说明",
     "addSource": "添加行情数据源",
-    "count": "{{n}} 个提供方",
-    "site": "网站",
-    "docs": "文档",
-    "symbols": "代码",
     "ib": {
       "title": "Interactive Brokers",
       "description": "来自 Interactive Brokers TWS 或 IB Gateway 的实时行情。普通代码不明确时，请使用合约设置。",
@@ -112,8 +101,6 @@
     "button": "重启数据源"
   },
   "state": {
-    "enabled": "已启用",
-    "disabled": "已停用",
     "feedDisabled": "数据源已停用",
     "stale": "过期",
     "staleTooltip": "报价已超出新鲜度窗口",
@@ -183,17 +170,12 @@
     }
   },
   "table": {
-    "external": "外部",
-    "instrument": "工具",
     "manualPrice": "手动价格",
     "price": "价格",
     "asOf": "截至",
-    "updateIntervalTooltip": "距上次更新的间隔",
-    "state": "状态",
-    "actions": "操作"
+    "updateIntervalTooltip": "距上次更新的间隔"
   },
   "emptyInstances": "未配置行情数据来源",
-  "emptyInstruments": "未配置工具",
   "diagnostics": {
     "title": "问题",
     "summary": "当前：{{count}}",
@@ -214,19 +196,9 @@
     "actionRemoveTarget": "删除 {{target}}",
     "actionLogs": "服务日志"
   },
-  "references": {
-    "site": "提供方网站",
-    "docs": "提供方文档",
-    "symbols": "有效代码列表"
-  },
   "verify": {
-    "action": "校验代码",
     "unsupported": "此提供方无法校验代码",
-    "exists": "代码存在",
-    "unavailable": "该代码没有新鲜价格",
-    "notFound": "未找到代码",
-    "didYouMean": "您是否想输入 {{suggestion}}？",
-    "failed": "校验失败"
+    "unavailable": "该代码没有新鲜价格"
   },
   "search": {
     "action": "搜索代码",
@@ -239,13 +211,8 @@
   },
   "resolve": {
     "label": "在此数据源中解析代码",
-    "action": "解析",
     "placeholder": "输入 EUR、EUR/USD、BTC 或 AAPL",
-    "filterLabel": "筛选解析结果",
-    "filterPlaceholder": "筛选解析结果",
-    "searching": "解析中…",
     "noResults": "此数据源中没有匹配代码",
-    "noFilteredResults": "没有结果匹配筛选条件",
     "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
   },
   "deleteInstance": {
@@ -255,9 +222,6 @@
     "submit": "删除"
   },
   "deleteInstrument": {
-    "title": "删除工具？",
-    "description": "{{symbol}} 将从此来源中永久删除。",
-    "cancel": "取消",
-    "submit": "删除"
+    "description": "{{symbol}} 将从此来源中永久删除。"
   }
 }

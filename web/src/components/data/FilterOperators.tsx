@@ -96,6 +96,7 @@ export function FilterOperatorSelect({
 export interface SegmentedOption {
   value: string;
   label: string;
+  disabled?: boolean;
 }
 
 export interface SegmentedProps {
@@ -128,6 +129,7 @@ export function Segmented({ options, value, onChange, style }: SegmentedProps) {
                 ? "bg-accent-dim text-accent hover:bg-accent-dim hover:text-accent"
                 : "text-muted-lt",
             )}
+            disabled={option.disabled}
             onClick={() => onChange?.(option.value)}
             aria-pressed={active}
           >

@@ -29,27 +29,18 @@
     "addConnection": "Add trading connection",
     "check": "Check connection",
     "editSettings": "Edit settings",
-    "enable": "Enable",
-    "disable": "Disable",
     "save": "Save",
-    "addInstrument": "Add instrument",
     "addAccount": "Add account",
     "revoke": "Revoke",
     "setFeeAccount": "Set fee account"
   },
   "create": {
-    "step": "Step {{current}} of 3",
+    "title": "Add {{provider}} connection",
     "chooseVenue": "Choose venue",
     "prepareAccount": "Prepare your {{provider}} account",
-    "connectionDetails": "Connection details",
-    "site": "Site",
-    "docs": "Docs",
-    "back": "Back",
-    "next": "Next",
     "mode": "Mode",
     "liveNote": "Live trading is not available yet: it arrives together with the live connection token.",
     "submit": "Create connection",
-    "creating": "Creating…",
     "alpaca": {
       "createAccount": "Create an Alpaca account.",
       "signUp": "Sign up at Alpaca",
@@ -58,7 +49,7 @@
       "openDashboard": "Open the Alpaca dashboard",
       "aboutPaperTrading": "About paper trading",
       "generateKeys": "Generate paper API keys: with Paper Trading selected, find the API Keys panel on the dashboard and click Generate New Key. Copy the API key and the secret - Alpaca shows the secret only once. Paper keys work only for the paper account.",
-      "keepDashboardOpen": "Keep the dashboard open - the next step asks for both values."
+      "keepDashboardOpen": "Keep the dashboard open - the fields below ask for both values."
     }
   },
   "setup": {
@@ -83,31 +74,22 @@
   },
   "instruments": {
     "title": "Instruments",
-    "empty": "No instruments configured",
-    "externalSymbol": "External symbol",
-    "baseAsset": "Base asset",
-    "quoteAsset": "Quote asset",
-    "deleteTitle": "Delete instrument?",
     "deleteDescription": "{{symbol}} will be removed from {{label}}.",
     "assetMissing": "Asset {{asset}} does not exist in Officer. Officer does not create assets implicitly; create it to save the instrument.",
-    "createAssetAndSave": "Create asset {{asset}} and save"
+    "createAssetAndSave": "Create asset {{asset}} and save",
+    "connectionDisabled": "Connection disabled"
   },
   "table": {
     "actions": "Actions"
   },
   "search": {
-    "label": "Search symbol",
-    "action": "Search",
-    "results": "Symbol matches",
-    "empty": "No matching symbols",
-    "unavailable": "Symbol search unavailable",
-    "notTradable": "Not tradable"
+    "label": "Resolve symbol at this venue",
+    "empty": "No matching symbols at this venue",
+    "unavailable": "This venue cannot resolve symbols",
+    "notTradable": "Not tradable",
+    "placeholder": "Type BTC, BTC/USD or AAPL"
   },
   "verify": {
-    "action": "Verify symbol",
-    "tradable": "Symbol exists and is tradable",
-    "notTradable": "Symbol exists but is not tradable",
-    "notFound": "Symbol not found",
     "unavailable": "Verification unavailable"
   },
   "access": {

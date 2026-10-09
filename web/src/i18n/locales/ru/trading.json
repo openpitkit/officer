@@ -29,27 +29,18 @@
     "addConnection": "Добавить торговое подключение",
     "check": "Проверить подключение",
     "editSettings": "Изменить настройки",
-    "enable": "Включить",
-    "disable": "Выключить",
     "save": "Сохранить",
-    "addInstrument": "Добавить инструмент",
     "addAccount": "Добавить счёт",
     "revoke": "Отозвать",
     "setFeeAccount": "Задать счёт для комиссий"
   },
   "create": {
-    "step": "Шаг {{current}} из 3",
+    "title": "Добавить подключение {{provider}}",
     "chooseVenue": "Выберите торговую площадку",
     "prepareAccount": "Подготовьте учётную запись {{provider}}",
-    "connectionDetails": "Параметры подключения",
-    "site": "Сайт",
-    "docs": "Документация",
-    "back": "Назад",
-    "next": "Далее",
     "mode": "Режим",
     "liveNote": "Торговля в режиме Live пока недоступна: она появится вместе с токеном подключения в режиме Live.",
     "submit": "Создать подключение",
-    "creating": "Создание…",
     "alpaca": {
       "createAccount": "Создайте учётную запись Alpaca.",
       "signUp": "Зарегистрироваться в Alpaca",
@@ -58,7 +49,7 @@
       "openDashboard": "Открыть панель Alpaca",
       "aboutPaperTrading": "О Paper Trading",
       "generateKeys": "Создайте ключи API для Paper Trading: выбрав Paper Trading, найдите панель API Keys на панели управления и нажмите Generate New Key. Скопируйте API key и API secret - Alpaca показывает API secret только один раз. Ключи Paper работают только со счётом Paper.",
-      "keepDashboardOpen": "Оставьте панель управления открытой - на следующем шаге потребуются оба значения."
+      "keepDashboardOpen": "Не закрывайте панель Alpaca: поля ниже запрашивают оба значения."
     }
   },
   "setup": {
@@ -83,31 +74,22 @@
   },
   "instruments": {
     "title": "Инструменты",
-    "empty": "Инструменты не настроены",
-    "externalSymbol": "Внешний символ",
-    "baseAsset": "Базовый актив",
-    "quoteAsset": "Котируемый актив",
-    "deleteTitle": "Удалить инструмент?",
     "deleteDescription": "{{symbol}} будет удалён из подключения {{label}}.",
     "assetMissing": "Актив {{asset}} не существует в Officer. Officer не создаёт активы неявно; создайте его, чтобы сохранить инструмент.",
-    "createAssetAndSave": "Создать актив {{asset}} и сохранить"
+    "createAssetAndSave": "Создать актив {{asset}} и сохранить",
+    "connectionDisabled": "Подключение выключено"
   },
   "table": {
     "actions": "Действия"
   },
   "search": {
-    "label": "Поиск символа",
-    "action": "Найти",
-    "results": "Найденные символы",
-    "empty": "Подходящие символы не найдены",
+    "label": "Найти символ на этой площадке",
+    "empty": "На этой площадке подходящих символов не найдено",
     "unavailable": "Поиск символов недоступен",
-    "notTradable": "Недоступен для торговли"
+    "notTradable": "Недоступен для торговли",
+    "placeholder": "Введите BTC, BTC/USD или AAPL"
   },
   "verify": {
-    "action": "Проверить символ",
-    "tradable": "Символ существует и доступен для торговли",
-    "notTradable": "Символ существует, но недоступен для торговли",
-    "notFound": "Символ не найден",
     "unavailable": "Проверка недоступна"
   },
   "access": {
