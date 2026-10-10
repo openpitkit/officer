@@ -480,8 +480,9 @@ CREATE INDEX idx_market_data_instruments_quote_asset
 -- a sealed binary value according to store state. venue_identity identifies the
 -- venue-side account, unique per provider. enabled gates new sends only.
 -- fee_account_id is the Officer account receiving order-unlinked venue fees
--- whole; NULL means none (fees go to the single bound account, or are skipped
--- and audited); ON DELETE RESTRICT stops deletion from silently rerouting fees.
+-- whole; NULL means none (fees go to the single account that can send through
+-- the connection, or are skipped and audited); ON DELETE RESTRICT stops
+-- deletion from silently rerouting fees.
 CREATE TABLE trading_connection (
     id          {{PK}},
     external_id {{XID}} UNIQUE,
@@ -513,17 +514,32 @@ CREATE INDEX idx_trading_instruments_base_asset
 CREATE INDEX idx_trading_instruments_quote_asset
     ON trading_instrument (quote_asset_id);
 
--- One binding per Officer account and connection. venue_account is the
--- optional bound venue-side account; an empty string means none.
+-- Grants of a connection to one subject: an Officer account or an account
+-- group, exactly one of account_id and account_group_id. One grant per
+-- connection and subject; the unique index leads with connection_id, so it is
+-- also the connection index. A group grant reaches the group's current members;
+-- an account's own grant wins over its group's on the same connection.
+-- venue_account is the optional bound venue-side account; an empty string means
+-- none. Deleting the account, the group or the connection removes the grant.
 CREATE TABLE trading_access (
-    account_id    INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    connection_id INTEGER NOT NULL REFERENCES trading_connection(id) ON DELETE CASCADE,
-    venue_account TEXT    NOT NULL,
-    PRIMARY KEY (account_id, connection_id)
+    id               {{PK}},
+    account_id       INTEGER REFERENCES account(id)       ON DELETE CASCADE,
+    account_group_id INTEGER REFERENCES account_group(id) ON DELETE CASCADE,
+    connection_id    INTEGER NOT NULL REFERENCES trading_connection(id) ON DELETE CASCADE,
+    venue_account    TEXT    NOT NULL,
+    CHECK ((account_id IS NULL) <> (account_group_id IS NULL))
 );
 
-CREATE INDEX idx_trading_access_connection
-    ON trading_access (connection_id);
+CREATE INDEX idx_trading_access_account
+    ON trading_access (account_id);
+CREATE INDEX idx_trading_access_account_group
+    ON trading_access (account_group_id);
+CREATE UNIQUE INDEX uq_trading_access
+    ON trading_access (
+        connection_id,
+        COALESCE(account_id, 0),
+        COALESCE(account_group_id, 0)
+    );
 
 -- Durable link from an Officer order to its venue order. The link is created,
 -- marked send-attempted immediately before the venue call, then acknowledged

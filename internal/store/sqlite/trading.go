@@ -15,8 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Trading group of the SQLite store: connections, instrument mappings, account
-// access and durable venue-order links. Public entities carry external ids and
+// Trading group of the SQLite store: connections, instrument mappings, access
+// grants and durable venue-order links. Public entities carry external ids and
 // asset or account codes; surrogate keys are resolved only for internal joins
 // and never cross the store boundary. SQLite uniqueness violations are mapped
 // to the domain conflict sentinels at the write boundary.
@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 const tradingConnectionSelect = `
@@ -304,20 +305,35 @@ func (r *realmStore) DeleteTradingInstrument(
 }
 
 func (r *realmStore) RemoveTradingAccess(
-	ctx context.Context, account domain.AccountID, connection domain.ExternalID,
+	ctx context.Context, connection domain.ExternalID,
+	account domain.AccountID, accountGroup string,
 ) error {
+	if err := domain.ValidateTradingAccess(domain.TradingAccess{
+		Account: account, AccountGroup: accountGroup, Connection: connection,
+	}); err != nil {
+		return err
+	}
 	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	// An unknown subject holds no grant, so it reads as an absent grant.
+	accountID, groupID, err := resolveSubjectIDs(ctx, db, account, accountGroup)
+	if errors.Is(err, domain.ErrInvalid) {
+		return fmt.Errorf("trading access %q: %w", connection.String(), domain.ErrNotFound)
+	}
 	if err != nil {
 		return err
 	}
 	res, err := db.ExecContext(
 		ctx,
 		`DELETE FROM trading_access
-		 WHERE account_id = (SELECT id FROM account WHERE code = ?)
-		 AND connection_id = (
+		 WHERE connection_id = (
 		   SELECT id FROM trading_connection WHERE external_id = ?
-		 )`,
-		string(account), connection.Bytes(),
+		 )
+		 AND account_id IS ?
+		 AND account_group_id IS ?`,
+		connection.Bytes(), accountID, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("store: remove trading access: %w", err)
@@ -505,8 +521,13 @@ func (r *realmStore) PutTradingAccess(
 	if err != nil {
 		return err
 	}
-	accountID, err := resolveAccountID(ctx, db, access.Account)
+	accountID, groupID, err := resolveSubjectIDs(
+		ctx, db, access.Account, access.AccountGroup,
+	)
 	if errors.Is(err, domain.ErrInvalid) {
+		if access.AccountGroup != "" {
+			return fmt.Errorf("account group %q: %w", access.AccountGroup, domain.ErrNotFound)
+		}
 		return fmt.Errorf("account %q: %w", access.Account, domain.ErrNotFound)
 	}
 	if err != nil {
@@ -516,13 +537,17 @@ func (r *realmStore) PutTradingAccess(
 	if err != nil {
 		return err
 	}
+	// The conflict target repeats the uq_trading_access expressions verbatim;
+	// SQLite matches an upsert to a unique index only on identical expressions.
 	_, err = db.ExecContext(
 		ctx,
-		`INSERT INTO trading_access (account_id, connection_id, venue_account)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT (account_id, connection_id)
-		 DO UPDATE SET venue_account = excluded.venue_account`,
-		accountID, connectionID, access.VenueAccount,
+		`INSERT INTO trading_access
+		 (account_id, account_group_id, connection_id, venue_account)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT (
+		   connection_id, COALESCE(account_id, 0), COALESCE(account_group_id, 0)
+		 ) DO UPDATE SET venue_account = excluded.venue_account`,
+		accountID, groupID, connectionID, access.VenueAccount,
 	)
 	if err != nil {
 		return fmt.Errorf("store: put trading access: %w", err)
@@ -537,14 +562,26 @@ func (r *realmStore) ListTradingAccess(
 	if err != nil {
 		return nil, err
 	}
+	// The account's own grant on a connection wins whole, so the group branch
+	// fills only the connections the account holds no grant of its own on.
 	rows, err := db.QueryContext(
 		ctx,
-		`SELECT a.code, c.external_id, ta.venue_account
-		 FROM trading_access ta
-		 JOIN account a ON a.id = ta.account_id
+		`WITH member AS (SELECT id, code, group_id FROM account WHERE code = ?)
+		 SELECT m.code, '', c.external_id, ta.venue_account
+		 FROM member m
+		 JOIN trading_access ta ON ta.account_id = m.id
 		 JOIN trading_connection c ON c.id = ta.connection_id
-		 WHERE a.code = ?
-		 ORDER BY c.external_id, ta.venue_account`,
+		 UNION ALL
+		 SELECT '', g.code, c.external_id, ta.venue_account
+		 FROM member m
+		 JOIN trading_access ta ON ta.account_group_id = m.group_id
+		 JOIN account_group g ON g.id = ta.account_group_id
+		 JOIN trading_connection c ON c.id = ta.connection_id
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM trading_access own
+		   WHERE own.account_id = m.id AND own.connection_id = ta.connection_id
+		 )
+		 ORDER BY 3`,
 		account,
 	)
 	if err != nil {
@@ -557,7 +594,7 @@ func (r *realmStore) ListTradingAccess(
 		var access domain.TradingAccess
 		var rawID []byte
 		if err := rows.Scan(
-			&access.Account, &rawID, &access.VenueAccount,
+			&access.Account, &access.AccountGroup, &rawID, &access.VenueAccount,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan trading access: %w", err)
 		}
@@ -583,12 +620,15 @@ func (r *realmStore) GetTradingFeeAccounts(
 	if err != nil {
 		return "", nil, err
 	}
+	// A grant reaches its account or its group's current members; DISTINCT
+	// folds a member that also holds a grant of its own.
 	rows, err := db.QueryContext(ctx,
-		`SELECT DISTINCT COALESCE(fee.code, ''), COALESCE(bound.code, '')
+		`SELECT DISTINCT COALESCE(fee.code, ''), COALESCE(sender.code, '')
 		 FROM trading_connection c
 		 LEFT JOIN account fee ON fee.id = c.fee_account_id
 		 LEFT JOIN trading_access ta ON ta.connection_id = c.id
-		 LEFT JOIN account bound ON bound.id = ta.account_id
+		 LEFT JOIN account sender
+		   ON sender.id = ta.account_id OR sender.group_id = ta.account_group_id
 		 WHERE c.external_id = ?
 		 ORDER BY 2`, connection.Bytes(),
 	)
@@ -620,35 +660,44 @@ func (r *realmStore) GetTradingFeeAccounts(
 
 func (r *realmStore) ListTradingAccessForConnection(
 	ctx context.Context, connection domain.ExternalID,
-) ([]domain.TradingAccess, error) {
+) ([]fwstore.TradingAccessListRow, error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
 	}
 	rows, err := db.QueryContext(ctx,
-		`SELECT a.code, ta.venue_account
+		`SELECT COALESCE(a.code, ''), COALESCE(g.code, ''),
+		        COALESCE(member_of.code, ''), ta.venue_account
 		 FROM trading_access ta
-		 JOIN account a ON a.id = ta.account_id
 		 JOIN trading_connection c ON c.id = ta.connection_id
+		 LEFT JOIN account a ON a.id = ta.account_id
+		 LEFT JOIN account_group member_of ON member_of.id = a.group_id
+		 LEFT JOIN account_group g ON g.id = ta.account_group_id
 		 WHERE c.external_id = ?
-		 ORDER BY a.code, ta.venue_account`, connection.Bytes(),
+		 ORDER BY ta.account_id IS NOT NULL, COALESCE(g.code, a.code),
+		          ta.venue_account`, connection.Bytes(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: list trading access for connection: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	accesses := make([]domain.TradingAccess, 0)
+	grants := make([]fwstore.TradingAccessListRow, 0)
 	for rows.Next() {
-		access := domain.TradingAccess{Connection: connection}
-		if err := rows.Scan(&access.Account, &access.VenueAccount); err != nil {
+		grant := fwstore.TradingAccessListRow{
+			Access: domain.TradingAccess{Connection: connection},
+		}
+		if err := rows.Scan(
+			&grant.Access.Account, &grant.Access.AccountGroup, &grant.Group,
+			&grant.Access.VenueAccount,
+		); err != nil {
 			return nil, fmt.Errorf("store: scan trading access for connection: %w", err)
 		}
-		accesses = append(accesses, access)
+		grants = append(grants, grant)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: iterate trading access for connection: %w", err)
 	}
-	return accesses, nil
+	return grants, nil
 }
 
 func (r *realmStore) EarliestVenueOrderTime(

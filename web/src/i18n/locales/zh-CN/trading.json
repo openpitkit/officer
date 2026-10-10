@@ -29,10 +29,7 @@
     "addConnection": "添加交易连接",
     "check": "检查连接",
     "editSettings": "编辑设置",
-    "save": "保存",
-    "addAccount": "添加账户",
-    "revoke": "撤销",
-    "setFeeAccount": "设置手续费账户"
+    "save": "保存"
   },
   "create": {
     "title": "添加 {{provider}} 连接",
@@ -79,9 +76,6 @@
     "createAssetAndSave": "创建资产 {{asset}} 并保存",
     "connectionDisabled": "连接已停用"
   },
-  "table": {
-    "actions": "操作"
-  },
   "search": {
     "label": "在此交易场所解析代码",
     "empty": "此交易场所中没有匹配代码",
@@ -94,11 +88,9 @@
   },
   "access": {
     "title": "账户访问权限",
+    "grantTo": "授权给",
     "account": "账户",
-    "empty": "没有账户拥有访问权限",
-    "feeRequired": "请先设置手续费账户。{{provider}} 收取不与订单关联的费用；多个账户共用一个连接时，Officer 需要指定一个账户记账。",
-    "revokeTitle": "撤销访问权限？",
-    "revokeDescription": "撤销账户 {{account}} 对 {{label}} 的访问权限？"
+    "group": "账户组"
   },
   "fee": {
     "title": "手续费账户",

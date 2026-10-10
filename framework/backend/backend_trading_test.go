@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 )
 
@@ -77,9 +78,12 @@ func (rt *tradingTestRuntime) SearchSymbols(_ context.Context, connection domain
 
 type tradingTestNode struct {
 	node.Node
-	connections    []domain.TradingConnection
-	instruments    []domain.TradingInstrument
-	access         []domain.TradingAccess
+	connections []domain.TradingConnection
+	instruments []domain.TradingInstrument
+	access      []domain.TradingAccess
+	// groups maps an account to its current group; ListTradingAccess hands a
+	// member its group's grants whole, as the store does.
+	groups         map[domain.AccountID]string
 	sealed         bool
 	writes         []string
 	callers        []domain.Caller
@@ -177,11 +181,11 @@ func (n *tradingTestNode) DeleteTradingInstrument(_ context.Context, id domain.E
 	}
 	return domain.ErrNotFound
 }
-func (n *tradingTestNode) ListTradingAccessForConnection(_ context.Context, id domain.ExternalID) ([]domain.TradingAccess, error) {
-	var result []domain.TradingAccess
+func (n *tradingTestNode) ListTradingAccessForConnection(_ context.Context, id domain.ExternalID) ([]store.TradingAccessListRow, error) {
+	var result []store.TradingAccessListRow
 	for _, access := range n.access {
 		if access.Connection == id {
-			result = append(result, access)
+			result = append(result, store.TradingAccessListRow{Access: access, Group: n.groups[access.Account]})
 		}
 	}
 	return result, nil
@@ -189,7 +193,7 @@ func (n *tradingTestNode) ListTradingAccessForConnection(_ context.Context, id d
 func (n *tradingTestNode) ListTradingAccess(_ context.Context, account domain.AccountID) ([]domain.TradingAccess, error) {
 	var result []domain.TradingAccess
 	for _, access := range n.access {
-		if access.Account == account {
+		if access.Account == account || (access.AccountGroup != "" && access.AccountGroup == n.groups[account]) {
 			result = append(result, access)
 		}
 	}
@@ -203,12 +207,13 @@ func (n *tradingTestNode) PutTradingAccess(_ context.Context, access domain.Trad
 	n.access = append(n.access, access)
 	return nil
 }
-func (n *tradingTestNode) RemoveTradingAccess(_ context.Context, account domain.AccountID, id domain.ExternalID, caller domain.Caller) error {
+func (n *tradingTestNode) RemoveTradingAccess(_ context.Context, id domain.ExternalID, account domain.AccountID, accountGroup string, caller domain.Caller) error {
 	if err := n.write("remove-access", caller); err != nil {
 		return err
 	}
+	subject := domain.TradingAccess{Account: account, AccountGroup: accountGroup}
 	for i, access := range n.access {
-		if access.Account == account && access.Connection == id {
+		if access.Connection == id && access.SameSubject(subject) {
 			n.access = append(n.access[:i], n.access[i+1:]...)
 			return nil
 		}
@@ -590,7 +595,9 @@ func TestTradingStatus(t *testing.T) {
 	n.connections[2].Enabled = false
 	n.connections[0].FeeAccount = "fee-account"
 	n.instruments = []domain.TradingInstrument{{Connection: c.ExternalID, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}}
-	n.access = []domain.TradingAccess{{Account: "acct-1", Connection: c.ExternalID}}
+	n.access = []domain.TradingAccess{{Account: "acct-1", Connection: c.ExternalID}, {AccountGroup: "desk", Connection: c.ExternalID, VenueAccount: "remote-1"}}
+	n.groups = map[domain.AccountID]string{"acct-1": "desk"}
+	wantAccess := []store.TradingAccessListRow{{Access: n.access[0], Group: "desk"}, {Access: n.access[1]}}
 	rt.states = map[domain.ExternalID]trading.ConnectionState{c.ExternalID: {}, "connection-2": {Unavailable: "denied test-secret-value nested-secret"}}
 	for _, sealed := range []bool{true, false} {
 		n.sealed = sealed
@@ -616,8 +623,11 @@ func TestTradingStatus(t *testing.T) {
 		if !reflect.DeepEqual(got.Connections[0].Secrets, map[string]bool{"apiKey": true, "apiSecret": true, "nested": true}) {
 			t.Fatal("secret key presence is wrong")
 		}
-		if got.Connections[0].FeeAccount != "fee-account" || !reflect.DeepEqual(got.Connections[0].Instruments, n.instruments) || !reflect.DeepEqual(got.Connections[0].Access, n.access) {
+		if got.Connections[0].FeeAccount != "fee-account" || !reflect.DeepEqual(got.Connections[0].Instruments, n.instruments) {
 			t.Fatal("status lost configuration")
+		}
+		if !reflect.DeepEqual(got.Connections[0].Access, wantAccess) {
+			t.Fatalf("status access = %+v, want every grant with the granted account's group %+v", got.Connections[0].Access, wantAccess)
 		}
 		if len(got.Providers) != 1 || got.Providers[0] != (TradingProvider{Type: "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}) {
 			t.Fatal("provider capabilities were not mapped")
@@ -656,13 +666,65 @@ func TestTradingAccessAndFeeAccount(t *testing.T) {
 	}
 }
 
+func TestTradingGroupAccess(t *testing.T) {
+	for _, unlinked := range []bool{true, false} {
+		t.Run(fmt.Sprint(unlinked), func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			n.connections = []domain.TradingConnection{tradingTestConnection()}
+			rt.providers[0].UnlinkedFees = unlinked
+			group := domain.TradingAccess{AccountGroup: "desk", Connection: "connection-1", VenueAccount: "remote-1"}
+			if err := s.PutTradingAccess(systemCtx(), group); err != nil {
+				t.Fatal(err)
+			}
+			if n.requireFees != unlinked || !reflect.DeepEqual(n.access, []domain.TradingAccess{group}) {
+				t.Fatalf("group grant reached the node as %+v with requireFeeAccount=%t, want it unchanged with %t", n.access, n.requireFees, unlinked)
+			}
+			n.writeErr = domain.ErrFeeAccountRequired
+			if err := s.PutTradingAccess(systemCtx(), group); !errors.Is(err, domain.ErrFeeAccountRequired) {
+				t.Fatalf("node fee refusal of a group grant = %v, want its sentinel", err)
+			}
+		})
+	}
+}
+
+func TestTradingRemoveAccessSubject(t *testing.T) {
+	s, n, _ := newTradingTestService(t)
+	n.connections = []domain.TradingConnection{tradingTestConnection()}
+	account := domain.TradingAccess{Account: "desk", Connection: "connection-1"}
+	group := domain.TradingAccess{AccountGroup: "desk", Connection: "connection-1"}
+	n.access = []domain.TradingAccess{account, group}
+	for _, tc := range []struct {
+		name, account, accountGroup, pointer string
+	}{
+		{"neither", "", "", "/account"},
+		{"both", "desk", "desk", "/accountGroup"},
+	} {
+		err := s.RemoveTradingAccess(systemCtx(), "connection-1", domain.AccountID(tc.account), tc.accountGroup)
+		if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != tc.pointer {
+			t.Fatalf("%s subject = %v at %q, want invalid at %s", tc.name, err, domain.ValidationPointer(err), tc.pointer)
+		}
+	}
+	if len(n.writes) != 0 {
+		t.Fatalf("malformed subject reached the node: %v", n.writes)
+	}
+	if err := s.RemoveTradingAccess(systemCtx(), "connection-1", "", "desk"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(n.access, []domain.TradingAccess{account}) {
+		t.Fatalf("group revoke left %+v, want only the same-code account grant", n.access)
+	}
+}
+
 func TestTradingDestinations(t *testing.T) {
 	s, n, rt := newTradingTestService(t)
 	n.connections = []domain.TradingConnection{tradingTestConnection(), tradingTestConnection(), tradingTestConnection()}
 	n.connections[0].Label = "Zebra"
 	n.connections[1].ExternalID, n.connections[1].Label, n.connections[1].Mode = "connection-2", "Alpha", domain.TradingModeLive
 	n.connections[2].ExternalID, n.connections[2].Label, n.connections[2].Enabled = "connection-3", "Beta", false
-	n.access = []domain.TradingAccess{{Account: "acct-1", Connection: "connection-1", VenueAccount: "remote-1"}, {Account: "acct-1", Connection: "connection-2", VenueAccount: "remote-2"}, {Account: "acct-1", Connection: "connection-3"}}
+	// connection-2 reaches acct-1 through its group's grant, which the store
+	// returns whole: AccountGroup set, Account empty.
+	n.groups = map[domain.AccountID]string{"acct-1": "desk"}
+	n.access = []domain.TradingAccess{{Account: "acct-1", Connection: "connection-1", VenueAccount: "remote-1"}, {AccountGroup: "desk", Connection: "connection-2", VenueAccount: "remote-2"}, {Account: "acct-1", Connection: "connection-3"}}
 	rt.states = map[domain.ExternalID]trading.ConnectionState{"connection-1": {}, "connection-2": {Unavailable: "offline"}}
 	for _, tc := range []struct {
 		mode domain.TradingMode
@@ -775,7 +837,7 @@ func TestTradingMutations(t *testing.T) {
 	if err := s.PutTradingAccess(ctx, access); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RemoveTradingAccess(ctx, access.Account, access.Connection); err != nil || len(n.access) != 0 {
+	if err := s.RemoveTradingAccess(ctx, access.Connection, access.Account, ""); err != nil || len(n.access) != 0 {
 		t.Fatal("access removal failed")
 	}
 	if err := s.SetTradingConnectionEnabled(ctx, " connection-1 ", false); err != nil || n.connections[0].Enabled || rt.restarts != 0 {
@@ -811,7 +873,7 @@ func tradingTestCalls(s *Service, ctx context.Context) map[string]func() error {
 		"access": func() error {
 			return s.PutTradingAccess(ctx, domain.TradingAccess{Account: "acct-1", Connection: "connection-1"})
 		},
-		"remove-access": func() error { return s.RemoveTradingAccess(ctx, "acct-1", "connection-1") },
+		"remove-access": func() error { return s.RemoveTradingAccess(ctx, "connection-1", "acct-1", "") },
 		"fee-account":   func() error { return s.SetTradingFeeAccount(ctx, "connection-1", "fees") },
 		"destinations":  func() error { _, err := s.ListTradingDestinations(ctx, "acct-1", ""); return err },
 	}

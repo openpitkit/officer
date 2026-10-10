@@ -42,7 +42,7 @@ func TestTradingCredentialsSealed(t *testing.T) {
 func TestTradingMutationsAuditAndGate(t *testing.T) {
 	const credentials = `{"key":"do-not-audit-trading-secret"}`
 	ctx := context.Background()
-	for _, operation := range []string{"create", "settings", "enable", "fee account", "clear fee account", "upsert", "delete", "grant", "grant without venue account", "remove"} {
+	for _, operation := range []string{"create", "settings", "enable", "fee account", "clear fee account", "upsert", "delete", "grant", "grant without venue account", "remove", "grant group", "remove group"} {
 		t.Run(operation, func(t *testing.T) {
 			n, realm := newTestNode(t, newFakeEngine())
 			connection := domain.TradingConnection{
@@ -57,10 +57,15 @@ func TestTradingMutationsAuditAndGate(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := realm.CreateAccount(ctx, domain.Account{Code: "account"}); err != nil {
+			// The account is a member of the group, so its effective grants
+			// below also witness group grant writes.
+			if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
 				t.Fatal(err)
 			}
-			if operation == "clear fee account" {
+			if _, err := realm.CreateAccount(ctx, domain.Account{Code: "account", GroupCode: "desk"}); err != nil {
+				t.Fatal(err)
+			}
+			if operation == "clear fee account" || operation == "grant group" {
 				if err := realm.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "account"); err != nil {
 					t.Fatal(err)
 				}
@@ -70,12 +75,16 @@ func TestTradingMutationsAuditAndGate(t *testing.T) {
 			if operation == "grant without venue account" {
 				access.VenueAccount = ""
 			}
+			groupOperation := operation == "grant group" || operation == "remove group"
+			if groupOperation {
+				access.Account, access.AccountGroup = "", "desk"
+			}
 			if operation == "delete" {
 				if err := realm.UpsertTradingInstrument(ctx, instrument); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if operation == "remove" {
+			if operation == "remove" || operation == "remove group" {
 				if err := realm.PutTradingAccess(ctx, access); err != nil {
 					t.Fatal(err)
 				}
@@ -115,8 +124,16 @@ func TestTradingMutationsAuditAndGate(t *testing.T) {
 				mutate = func() error { return n.PutTradingAccess(ctx, access, true, testCaller) }
 				detail = "put trading access connection/account"
 			case "remove":
-				mutate = func() error { return n.RemoveTradingAccess(ctx, access.Account, access.Connection, testCaller) }
+				mutate = func() error { return n.RemoveTradingAccess(ctx, access.Connection, access.Account, "", testCaller) }
 				detail = "remove trading access connection/account"
+			case "grant group":
+				mutate = func() error { return n.PutTradingAccess(ctx, access, true, testCaller) }
+				detail = "put trading access connection/group:desk/venue-subaccount"
+			case "remove group":
+				mutate = func() error {
+					return n.RemoveTradingAccess(ctx, access.Connection, "", access.AccountGroup, testCaller)
+				}
+				detail = "remove trading access connection/group:desk"
 			}
 			beforeConnections, err := realm.ListTradingConnections(ctx)
 			if err != nil {
@@ -163,9 +180,12 @@ func TestTradingMutationsAuditAndGate(t *testing.T) {
 				t.Fatalf("set_trading rows = %d, want exactly one; err=%v", len(rows), err)
 			}
 			if operation == "grant" || operation == "grant without venue account" || operation == "remove" || operation == "fee account" || operation == "clear fee account" {
-				if rows[0].Account != access.Account {
-					t.Errorf("audit account = %q, want %q", rows[0].Account, access.Account)
+				if rows[0].Account != access.Account || rows[0].Group != "" {
+					t.Errorf("audit subject = %q/%q, want account %q", rows[0].Account, rows[0].Group, access.Account)
 				}
+			}
+			if groupOperation && (rows[0].Account != "" || rows[0].Group != "desk") {
+				t.Errorf("audit subject = %q/%q, want group desk", rows[0].Account, rows[0].Group)
 			}
 			if rows[0].Detail != detail {
 				t.Fatalf("detail = %q, want %q", rows[0].Detail, detail)
@@ -215,6 +235,9 @@ func TestTradingFeeAccountBindingRules(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		bound       []domain.AccountID
+		boundGroups []string
+		// group, when set, makes the requested grant a grant to that group.
+		group       string
 		feeAccount  domain.AccountID
 		require     bool
 		wantRefusal bool
@@ -225,12 +248,27 @@ func TestTradingFeeAccountBindingRules(t *testing.T) {
 		{name: "fee account allows second binding", bound: []domain.AccountID{"second"}, feeAccount: "fees", require: true},
 		{name: "re-put single binding", bound: []domain.AccountID{"first"}, require: true},
 		{name: "re-put always allowed", bound: []domain.AccountID{"first", "second"}, require: true},
+		{name: "account refused beside a group grant", boundGroups: []string{"team"}, require: true, wantRefusal: true},
+		{name: "account re-put beside a group grant", bound: []domain.AccountID{"first"}, boundGroups: []string{"team"}, require: true},
+		{name: "first group grant refused", group: "team", require: true, wantRefusal: true},
+		{name: "later group grant refused", bound: []domain.AccountID{"first"}, group: "team", require: true, wantRefusal: true},
+		{name: "group re-put refused", boundGroups: []string{"team"}, group: "team", require: true, wantRefusal: true},
+		{name: "fee account allows group grant", bound: []domain.AccountID{"second"}, group: "team", feeAccount: "fees", require: true},
+		{name: "linked fees allow group grant", bound: []domain.AccountID{"second"}, group: "team"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			n, realm, connection := newTradingFeeAccountNode(t)
+			if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "team"}); err != nil {
+				t.Fatal(err)
+			}
 			for _, account := range tc.bound {
 				if err := realm.PutTradingAccess(ctx, domain.TradingAccess{Connection: connection.ExternalID, Account: account}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, group := range tc.boundGroups {
+				if err := realm.PutTradingAccess(ctx, domain.TradingAccess{Connection: connection.ExternalID, AccountGroup: group}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -238,21 +276,26 @@ func TestTradingFeeAccountBindingRules(t *testing.T) {
 				t.Fatal(err)
 			}
 			access := domain.TradingAccess{Connection: connection.ExternalID, Account: "first", VenueAccount: "changed"}
+			wantDetail := "put trading access connection/first/changed"
+			if tc.group != "" {
+				access.Account, access.AccountGroup = "", tc.group
+				wantDetail = "put trading access connection/group:team/changed"
+			}
 			err := n.PutTradingAccess(ctx, access, tc.require, testCaller)
 			if tc.wantRefusal {
 				if !errors.Is(err, domain.ErrFeeAccountRequired) {
-					t.Fatalf("second binding error = %v, want ErrFeeAccountRequired", err)
+					t.Fatalf("binding error = %v, want ErrFeeAccountRequired", err)
 				}
 			} else if err != nil {
 				t.Fatal(err)
 			}
-			accesses, err := realm.ListTradingAccessForConnection(ctx, connection.ExternalID)
+			grants, err := realm.ListTradingAccessForConnection(ctx, connection.ExternalID)
 			if err != nil {
 				t.Fatal(err)
 			}
 			written := false
-			for _, got := range accesses {
-				if got == access {
+			for _, got := range grants {
+				if got.Access == access {
 					written = true
 				}
 			}
@@ -267,10 +310,34 @@ func TestTradingFeeAccountBindingRules(t *testing.T) {
 				if len(rows) != 0 {
 					t.Fatal("refused binding was audited as a mutation")
 				}
-			} else if len(rows) != 1 || rows[0].Account != "first" || rows[0].Detail != "put trading access connection/first/changed" || rows[0].Actor != testCaller.Principal || rows[0].Source != testCaller.Source {
+			} else if len(rows) != 1 || rows[0].Account != access.Account || rows[0].Group != access.AccountGroup || rows[0].Detail != wantDetail || rows[0].Actor != testCaller.Principal || rows[0].Source != testCaller.Source {
 				t.Fatalf("binding audit = %+v", rows)
 			}
 		})
+	}
+}
+
+func TestTradingAccessRejectsInvalidSubjectBeforeFeeRule(t *testing.T) {
+	ctx := context.Background()
+	n, realm, connection := newTradingFeeAccountNode(t)
+	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "team"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, access := range []domain.TradingAccess{
+		{Connection: connection.ExternalID},
+		{Connection: connection.ExternalID, Account: "first", AccountGroup: "team"},
+		{Connection: connection.ExternalID, AccountGroup: domain.ReservedGroupCode},
+	} {
+		if err := n.PutTradingAccess(ctx, access, true, testCaller); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("put %+v error = %v, want ErrInvalid", access, err)
+		}
+		if err := n.RemoveTradingAccess(ctx, access.Connection, access.Account, access.AccountGroup, testCaller); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("remove %+v error = %v, want ErrInvalid", access, err)
+		}
+	}
+	rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionSetTrading}}, 10)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("refused subjects were audited: %+v, err=%v", rows, err)
 	}
 }
 
@@ -278,18 +345,33 @@ func TestTradingFeeAccountClearingRules(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		bound       []domain.AccountID
+		groups      []string
 		wantRefusal bool
+		// revoke is the grant whose removal lets a refused clear through.
+		revoke domain.TradingAccess
 	}{
 		{name: "no bindings"},
 		{name: "one binding", bound: []domain.AccountID{"first"}},
 		{name: "duplicate same account", bound: []domain.AccountID{"first", "first"}},
-		{name: "two distinct bindings", bound: []domain.AccountID{"first", "second"}, wantRefusal: true},
+		{name: "two distinct bindings", bound: []domain.AccountID{"first", "second"}, wantRefusal: true, revoke: domain.TradingAccess{Account: "second"}},
+		{name: "group grant with one member", groups: []string{"team"}, wantRefusal: true, revoke: domain.TradingAccess{AccountGroup: "team"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			n, realm, connection := newTradingFeeAccountNode(t)
+			// One member keeps the sender count at one, so only the group
+			// grant itself can refuse the clear.
+			if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "team"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := realm.SetAccountGroup(ctx, "first", "team"); err != nil {
+				t.Fatal(err)
+			}
 			for _, account := range tc.bound {
 				realm.(*memoryRealm).tradingAccess = append(realm.(*memoryRealm).tradingAccess, domain.TradingAccess{Connection: connection.ExternalID, Account: account})
+			}
+			for _, group := range tc.groups {
+				realm.(*memoryRealm).tradingAccess = append(realm.(*memoryRealm).tradingAccess, domain.TradingAccess{Connection: connection.ExternalID, AccountGroup: group})
 			}
 			if err := n.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "fees", testCaller); err != nil {
 				t.Fatalf("set fee account with bindings: %v", err)
@@ -325,7 +407,7 @@ func TestTradingFeeAccountClearingRules(t *testing.T) {
 				t.Fatalf("clear audit = %+v, want previous account and clear detail", rows[0])
 			}
 			if tc.wantRefusal {
-				if err := n.RemoveTradingAccess(ctx, "second", connection.ExternalID, testCaller); err != nil {
+				if err := n.RemoveTradingAccess(ctx, connection.ExternalID, tc.revoke.Account, tc.revoke.AccountGroup, testCaller); err != nil {
 					t.Fatal(err)
 				}
 				if err := n.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "", testCaller); err != nil {
@@ -457,6 +539,167 @@ func TestMemoryGetTradingFeeAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("", []domain.AccountID{"first", "second"})
+
+	// A granted group adds its current members; first also holds a grant of
+	// its own and is counted once. An empty group adds nobody, not "".
+	for _, group := range []string{"team", "empty"} {
+		if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: group}); err != nil {
+			t.Fatal(err)
+		}
+		realm.(*memoryRealm).tradingAccess = append(realm.(*memoryRealm).tradingAccess,
+			domain.TradingAccess{Connection: connection.ExternalID, AccountGroup: group})
+	}
+	for _, account := range []domain.AccountID{"first", "fees"} {
+		if err := realm.SetAccountGroup(ctx, account, "team"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("", []domain.AccountID{"fees", "first", "second"})
+}
+
+// TestMemoryTradingGroupAccess holds the memory realm to the SQLite contract
+// for group grants: replacement and removal by subject, the effective list
+// with the own grant winning whole, connection rows with membership, and a
+// group delete cascading to the group's grants.
+func TestMemoryTradingGroupAccess(t *testing.T) {
+	ctx := context.Background()
+	n, realm, first := newTradingFeeAccountNode(t)
+	second, err := realm.CreateTradingConnection(ctx, domain.TradingConnection{
+		ExternalID: "second", Provider: domain.TradingProviderAlpaca,
+		Label: "second", Mode: domain.TradingModePaper, VenueIdentity: "second-account",
+		Credentials: `{}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range []string{"desk", "other"} {
+		if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: group}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := realm.SetAccountGroup(ctx, "first", "desk"); err != nil {
+		t.Fatal(err)
+	}
+	put := func(access domain.TradingAccess) {
+		t.Helper()
+		if err := realm.PutTradingAccess(ctx, access); err != nil {
+			t.Fatal(err)
+		}
+	}
+	effective := func(step string, want ...domain.TradingAccess) {
+		t.Helper()
+		got, err := realm.ListTradingAccess(ctx, "first")
+		if err != nil || !reflect.DeepEqual(got, append([]domain.TradingAccess{}, want...)) {
+			t.Fatalf("%s: effective grants = %+v, want %+v; err=%v", step, got, want, err)
+		}
+	}
+
+	deskFirst := domain.TradingAccess{AccountGroup: "desk", Connection: first.ExternalID, VenueAccount: "stale"}
+	otherFirst := domain.TradingAccess{AccountGroup: "other", Connection: first.ExternalID, VenueAccount: "other-venue"}
+	put(deskFirst)
+	put(otherFirst)
+	deskFirst.VenueAccount = "desk-venue"
+	put(deskFirst)
+	effective("group grant replaced in place, other group untouched", deskFirst)
+	own := domain.TradingAccess{Account: "first", Connection: first.ExternalID}
+	put(own)
+	effective("own grant without venue account wins whole", own)
+	deskSecond := domain.TradingAccess{AccountGroup: "desk", Connection: second.ExternalID, VenueAccount: "b"}
+	put(deskSecond)
+	effective("own and group grants on different connections", own, deskSecond)
+	rows, err := realm.ListTradingAccessForConnection(ctx, first.ExternalID)
+	want := []store.TradingAccessListRow{{Access: deskFirst}, {Access: otherFirst}, {Access: own, Group: "desk"}}
+	if err != nil || !reflect.DeepEqual(rows, want) {
+		t.Fatalf("connection rows = %+v, want %+v; err=%v", rows, want, err)
+	}
+
+	if err := realm.RemoveTradingAccess(ctx, first.ExternalID, "first", ""); err != nil {
+		t.Fatal(err)
+	}
+	effective("own grant removed falls back to the group's", deskFirst, deskSecond)
+	if err := realm.RemoveTradingAccess(ctx, first.ExternalID, "", "other"); err != nil {
+		t.Fatal(err)
+	}
+	effective("removing another group's grant keeps this one", deskFirst, deskSecond)
+	if err := realm.RemoveTradingAccess(ctx, first.ExternalID, "", "other"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("absent group grant error = %v, want ErrNotFound", err)
+	}
+	if err := realm.SetAccountGroup(ctx, "first", ""); err != nil {
+		t.Fatal(err)
+	}
+	effective("outside any group")
+
+	if err := realm.PutTradingAccess(ctx, domain.TradingAccess{AccountGroup: "missing", Connection: first.ExternalID}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unknown group error = %v, want ErrNotFound", err)
+	}
+	// A default currency materialises the default group with an empty code;
+	// the test node already holds the USD asset.
+	if err := realm.SetGroupCurrency(ctx, "", "USD"); err != nil {
+		t.Fatal(err)
+	}
+	if err := realm.PutTradingAccess(ctx, domain.TradingAccess{AccountGroup: "", Connection: first.ExternalID}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("default group grant error = %v, want ErrInvalid", err)
+	}
+
+	// Deleting desk drops its grants on both connections, as SQLite's ON
+	// DELETE CASCADE does, and keeps every other subject's grant; the clear
+	// rule refused for desk's grant then lets the clear through.
+	otherSecond := domain.TradingAccess{AccountGroup: "other", Connection: second.ExternalID}
+	put(own)
+	put(otherSecond)
+	if err := realm.SetTradingConnectionFeeAccount(ctx, first.ExternalID, "fees"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.SetTradingConnectionFeeAccount(ctx, first.ExternalID, "", testCaller); !errors.Is(err, domain.ErrFeeAccountRequired) {
+		t.Fatalf("clear beside a group grant error = %v, want ErrFeeAccountRequired", err)
+	}
+	if err := realm.DeleteGroup(ctx, "desk", false); err != nil {
+		t.Fatal(err)
+	}
+	for connection, want := range map[domain.ExternalID]store.TradingAccessListRow{
+		first.ExternalID:  {Access: own},
+		second.ExternalID: {Access: otherSecond},
+	} {
+		rows, err := realm.ListTradingAccessForConnection(ctx, connection)
+		if err != nil || !reflect.DeepEqual(rows, []store.TradingAccessListRow{want}) {
+			t.Fatalf("%s rows after group delete = %+v, want only %+v; err=%v", connection, rows, want, err)
+		}
+	}
+	if err := n.SetTradingConnectionFeeAccount(ctx, first.ExternalID, "", testCaller); err != nil {
+		t.Fatalf("clear after group delete: %v", err)
+	}
+
+	// Renaming desk to ops keeps its grants, as SQLite's grants follow the
+	// group row the rename keeps: the member keeps access, the grant is
+	// revoked by the new code, and a new desk inherits nothing.
+	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := realm.SetAccountGroup(ctx, "first", "desk"); err != nil {
+		t.Fatal(err)
+	}
+	if err := realm.RemoveTradingAccess(ctx, first.ExternalID, "first", ""); err != nil {
+		t.Fatal(err)
+	}
+	put(deskFirst)
+	put(deskSecond)
+	if _, err := realm.UpdateGroup(ctx, "desk", domain.AccountGroup{Code: "ops"}); err != nil {
+		t.Fatal(err)
+	}
+	opsFirst, opsSecond := deskFirst, deskSecond
+	opsFirst.AccountGroup, opsSecond.AccountGroup = "ops", "ops"
+	effective("renamed group keeps its grants", opsFirst, opsSecond)
+	if err := realm.RemoveTradingAccess(ctx, first.ExternalID, "", "ops"); err != nil {
+		t.Fatalf("revoke by the new code: %v", err)
+	}
+	effective("revoked by the new code", opsSecond)
+	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := realm.SetAccountGroup(ctx, "first", "desk"); err != nil {
+		t.Fatal(err)
+	}
+	effective("a new desk inherits nothing")
 }
 
 func (r *rejectTradingRealm) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {
@@ -483,6 +726,6 @@ func (r *rejectTradingRealm) PutTradingAccess(ctx context.Context, access domain
 	return fmt.Errorf("rejected trading write: %w", domain.ErrInvalid)
 }
 
-func (r *rejectTradingRealm) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
+func (r *rejectTradingRealm) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	return fmt.Errorf("rejected trading write: %w", domain.ErrInvalid)
 }

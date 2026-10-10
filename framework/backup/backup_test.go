@@ -351,6 +351,7 @@ func TestTradingScopeCarriesRequiredParentsAndIsAllOrNothing(t *testing.T) {
 		TradingAccess: []TradingAccess{
 			{Account: "acc-1", Connection: connectionA},
 			{Account: "acc-2", Connection: connectionB},
+			{AccountGroup: "grp-2", Connection: connectionB},
 		},
 	}
 	scope := Scope{
@@ -374,6 +375,32 @@ func TestTradingScopeCarriesRequiredParentsAndIsAllOrNothing(t *testing.T) {
 	activity := Scope{Sections: []Section{SectionActivityHistory}}.Normalize()
 	if !activity.Included(SectionTrading) {
 		t.Fatalf("activity scope omitted trading: %+v", activity.Sections)
+	}
+}
+
+func TestTradingAccessWireCarriesOneSubject(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		access TradingAccess
+		want   string
+	}{
+		{TradingAccess{Account: "acc-1", Connection: "c"}, `{"account":"acc-1","connection":"c"}`},
+		{
+			TradingAccess{AccountGroup: "grp-1", Connection: "c", VenueAccount: "v"},
+			`{"accountGroup":"grp-1","connection":"c","venueAccount":"v"}`,
+		},
+	} {
+		raw, err := json.Marshal(test.access)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) != test.want {
+			t.Fatalf("wire = %s, want %s", raw, test.want)
+		}
+		var decoded TradingAccess
+		if err := json.Unmarshal(raw, &decoded); err != nil || decoded != test.access {
+			t.Fatalf("decoded = %+v, want %+v; err=%v", decoded, test.access, err)
+		}
 	}
 }
 

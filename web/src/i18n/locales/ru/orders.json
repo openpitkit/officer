@@ -207,7 +207,6 @@
         "disabled": "Отключено",
         "unavailable": "Недоступно: {{error}}",
         "noTargets": "Для счёта {{account}} нет целей в режиме {{mode}}.",
-        "setupConnection": "Настроить торговое подключение",
         "timeInForce": "Срок действия",
         "chooseTimeInForce": "Выберите срок действия",
         "timeInForceOptions": {

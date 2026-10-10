@@ -17,9 +17,14 @@
 
 import { useCallback, useMemo } from "react";
 
-import type { Account, AccountListFilters, PagedResult } from "@/api/types";
+import type {
+  Account,
+  AccountListFilters,
+  Limit,
+  PagedResult,
+} from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
-import { useOfficerApi } from "@/framework";
+import { ApiError, useOfficerApi } from "@/framework";
 
 /** Poll GET /accounts. */
 export function useAccounts(
@@ -45,4 +50,24 @@ export function useAccountsPage(
     [api, filters],
   );
   return usePolling(fetcher, 5000, filterKey);
+}
+
+/** Poll GET /accounts/{code}. The data is null once the API answers that the
+ *  account does not exist (`not_found`); any other error is a failed poll. */
+export function useAccountState(
+  code: string,
+): PollingResult<{ account: Account; limits: Limit[] } | null> {
+  const api = useOfficerApi();
+  const fetcher = useCallback(
+    async (signal: AbortSignal) => {
+      try {
+        return await api.fetchAccountState(code, signal);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "not_found") return null;
+        throw err;
+      }
+    },
+    [api, code],
+  );
+  return usePolling(fetcher, 5000, code);
 }

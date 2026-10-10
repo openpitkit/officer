@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1032,6 +1033,137 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 			tradingE2ENoSecrets(t, "fee logs", []byte(f.logs.String()))
 		})
 	}
+}
+
+// group creates an account group and moves members into it.
+func (f *tradingE2E) group(code string, members ...string) {
+	f.t.Helper()
+	f.rest(http.MethodPost, "/groups", map[string]any{"code": code}, http.StatusCreated)
+	for _, member := range members {
+		f.rest(http.MethodPut, "/accounts/"+member+"/group?missingAccount=reject",
+			map[string]any{"group": code}, http.StatusOK)
+	}
+}
+
+func TestTradingGroupAccessEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, true)
+	f.rest(http.MethodPost, "/accounts", map[string]any{"code": "outside", "currency": "USD"}, http.StatusCreated)
+	f.group("team", "desk", "other")
+	f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject",
+		map[string]any{"asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+			"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
+	id := f.createREST()
+	path := "/trading/connections/" + id
+	f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "AAPL",
+		"baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, http.StatusOK)
+	type refusal struct{ Error struct{ Code string } }
+	group := map[string]any{"accountGroup": "team"}
+	refused := tradingE2EDecode[refusal](t, f.rest(http.MethodPut, path+"/access", group, http.StatusConflict))
+	if refused.Error.Code != "fee_account_required" {
+		t.Fatalf("group grant without a fee account: %s", refused.Error.Code)
+	}
+	f.rest(http.MethodPut, path+"/fee-account", map[string]any{"account": "fees"}, http.StatusOK)
+	f.rest(http.MethodPut, path+"/access", group, http.StatusOK)
+	f.rest(http.MethodPut, path+"/access", map[string]any{"account": "other"}, http.StatusOK)
+	// desk holds no grant of its own, so it sends through its group's grant.
+	raw := f.sendPaper("REST", tradingE2ESendInput(id), http.StatusCreated, "")
+	sent := tradingE2EDecode[struct {
+		Verdict   string
+		VenueSend struct {
+			Status     string
+			VenueOrder struct{ Connection string }
+		}
+	}](t, raw)
+	if sent.Verdict != "accept" || sent.VenueSend.Status != "acknowledged" || sent.VenueSend.VenueOrder.Connection != id {
+		t.Fatalf("member send through the group grant = %s", raw)
+	}
+	tradingE2EAssertDestinations(t, tradingE2EDecode[tradingE2EDestinations](t,
+		f.rest(http.MethodGet, "/accounts/desk/trading-destinations?mode=paper", nil, http.StatusOK)), id)
+	outside := tradingE2ESendInput(id)
+	outside["id"], outside["account"] = "outside-group", "outside"
+	f.sendPaper("REST", outside, http.StatusForbidden, "forbidden")
+	snapshot := tradingE2EDecode[struct {
+		Trading struct {
+			Connections []struct{ Access []map[string]string }
+		}
+	}](t, f.rest(http.MethodGet, "/trading", nil, http.StatusOK)).Trading
+	want := []map[string]string{
+		{"account": "", "accountGroup": "team", "venueAccount": "", "group": ""},
+		{"account": "other", "accountGroup": "", "venueAccount": "", "group": "team"},
+	}
+	if len(snapshot.Connections) != 1 || !reflect.DeepEqual(snapshot.Connections[0].Access, want) {
+		t.Fatalf("connection access = %+v", snapshot.Connections)
+	}
+	refused = tradingE2EDecode[refusal](t, f.rest(http.MethodDelete, path+"/fee-account", nil, http.StatusConflict))
+	if refused.Error.Code != "fee_account_required" {
+		t.Fatalf("fee account clear with several accounts able to send: %s", refused.Error.Code)
+	}
+	f.rest(http.MethodDelete, path+"/access?accountGroup=team", nil, http.StatusNoContent)
+	revoked := tradingE2ESendInput(id)
+	revoked["id"] = "group-revoked"
+	f.sendPaper("REST", revoked, http.StatusForbidden, "forbidden")
+	// The own grant of other leaves a single account that can send.
+	f.rest(http.MethodDelete, path+"/fee-account", nil, http.StatusNoContent)
+	for _, orderID := range []string{"outside-group", "group-revoked"} {
+		if _, err := f.realm.GetOrder(f.ctx, domain.ExternalID(orderID)); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("refused send created order %s: %v", orderID, err)
+		}
+	}
+	f.venueMu.Lock()
+	posts := len(f.posts)
+	f.venueMu.Unlock()
+	if posts != 1 {
+		t.Fatalf("venue orders = %d, want 1", posts)
+	}
+}
+
+func TestTradingGroupAccessMCPEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, true)
+	f.group("team", "desk")
+	id := f.createREST()
+	for _, name := range []string{"grant_trading_access", "revoke_trading_access"} {
+		f.rest(http.MethodPut, "/mcp-access/"+name, map[string]any{"enabled": true}, http.StatusOK)
+	}
+	group := map[string]any{"connection": id, "accountGroup": "team"}
+	refused := f.mcp("grant_trading_access", group, true)
+	if text, ok := refused.Content[0].(*sdkmcp.TextContent); !ok || !strings.HasPrefix(text.Text, "fee_account_required: ") {
+		t.Fatalf("group grant without a fee account = %v", refused.Content)
+	}
+	feeAccount := "/trading/connections/" + id + "/fee-account"
+	f.rest(http.MethodPut, feeAccount, map[string]any{"account": "fees"}, http.StatusOK)
+	if granted := tradingE2EStructured[map[string]any](t, f.mcp("grant_trading_access", group, false)); !reflect.DeepEqual(granted, group) {
+		t.Fatalf("group grant output = %v", granted)
+	}
+	// team has a single member, so only the group grant refuses the clear.
+	type refusal struct{ Error struct{ Code string } }
+	if code := tradingE2EDecode[refusal](t, f.rest(http.MethodDelete, feeAccount, nil, http.StatusConflict)).Error.Code; code != "fee_account_required" {
+		t.Fatalf("fee account clear under a group grant: %s", code)
+	}
+	access := func() []map[string]string {
+		t.Helper()
+		snapshot := tradingE2EStructured[struct {
+			Connections []struct{ Access []map[string]string }
+		}](t, f.mcp("get_trading", map[string]any{}, false))
+		if len(snapshot.Connections) != 1 {
+			t.Fatalf("connections = %+v", snapshot.Connections)
+		}
+		return snapshot.Connections[0].Access
+	}
+	if got, want := access(), []map[string]string{{"account": "", "accountGroup": "team", "venueAccount": "", "group": ""}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("group grant access = %v", got)
+	}
+	member := map[string]any{"account": "desk", "mode": "paper"}
+	tradingE2EAssertDestinations(t, tradingE2EStructured[tradingE2EDestinations](t, f.mcp("list_trading_destinations", member, false)), id)
+	if revoked := tradingE2EStructured[map[string]any](t, f.mcp("revoke_trading_access", group, false)); !reflect.DeepEqual(revoked, group) {
+		t.Fatalf("group revoke output = %v", revoked)
+	}
+	if got := access(); len(got) != 0 {
+		t.Fatalf("access after the group revoke = %v", got)
+	}
+	if left := tradingE2EStructured[tradingE2EDestinations](t, f.mcp("list_trading_destinations", member, false)); len(left.Destinations) != 0 {
+		t.Fatalf("member destinations after the group revoke = %+v", left)
+	}
+	f.rest(http.MethodDelete, feeAccount, nil, http.StatusNoContent)
 }
 
 func TestTradingSecretsEndToEnd(t *testing.T) {

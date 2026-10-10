@@ -231,7 +231,7 @@ func TestFeeAccountTargets(t *testing.T) {
 			f.start()
 			f.send(f.submit("1"))
 			if scenario == "no bindings" {
-				must(t, f.n.RemoveTradingAccess(testCtx, "desk", f.connection.ExternalID, testCaller))
+				must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
 			}
 			if scenario == "two bindings" || scenario == "bound fee account" {
 				must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{Connection: f.connection.ExternalID, Account: "other"}, true, testCaller))
@@ -255,6 +255,43 @@ func TestFeeAccountTargets(t *testing.T) {
 			feeAccountBalance(t, f, "desk", "USD", wantDesk)
 			feeAccountBalance(t, f, "fees", "USD", wantFees)
 			feeAccountBalance(t, f, "other", "USD", "1000")
+		})
+	}
+}
+
+// TestFeeAccountThroughGroup sends through a group grant alone, with no fee
+// account: an unlinked fee is booked to the group's only member, and skipped
+// as ambiguous once the group has two members.
+func TestFeeAccountThroughGroup(t *testing.T) {
+	for _, members := range [][]domain.AccountID{{"desk"}, {"desk", "other"}} {
+		t.Run(fmt.Sprintf("%d members", len(members)), func(t *testing.T) {
+			f, v := newFeeFixture(t)
+			f.fund("other", "1000")
+			_, err := f.n.CreateGroup(testCtx, domain.AccountGroup{Code: "team"}, testCaller)
+			must(t, err)
+			for _, account := range members {
+				must(t, f.n.SetAccountGroup(testCtx, account, "team", domain.MissingAccountReject, testCaller))
+			}
+			must(t, f.st.PutTradingAccess(testCtx, domain.TradingAccess{AccountGroup: "team", Connection: f.connection.ExternalID}))
+			must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
+			f.start()
+			f.send(f.submit("1"))
+			v.mu.Lock()
+			v.fees = []trading.Fee{postedFee("group-fee", "USD", "-0.125")}
+			v.mu.Unlock()
+			f.venue.push(trading.Event{Kind: trading.EventConnected})
+			f.flush()
+			feeAccountBalance(t, f, "other", "USD", "1000")
+			if len(members) == 1 {
+				feeAccountBalance(t, f, "desk", "USD", "997.875")
+				feeSkipRows(t, f, 0)
+				return
+			}
+			feeAccountBalance(t, f, "desk", "USD", "998")
+			rows := feeSkipRows(t, f, 1)
+			if !strings.Contains(rows[0].Detail, "connection is used by 2 accounts") {
+				t.Fatalf("group fee skip reason = %+v", rows)
+			}
 		})
 	}
 }
@@ -326,7 +363,7 @@ func TestFeeAccountSnapshotPreventsMixedTarget(t *testing.T) {
 	st := &feeAccountChangeStore{Store: f.st}
 	st.change = func() {
 		must(t, f.n.SetTradingConnectionFeeAccount(testCtx, f.connection.ExternalID, "fees", testCaller))
-		must(t, f.n.RemoveTradingAccess(testCtx, "desk", f.connection.ExternalID, testCaller))
+		must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
 		must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{Account: "other", Connection: f.connection.ExternalID}, true, testCaller))
 	}
 	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
@@ -373,7 +410,7 @@ func TestAppliedFeeReplayAfterTargetOrMappingRemoval(t *testing.T) {
 			feeBalance(t, f, "USD", "997")
 			r.Stop()
 			if change == "revoke binding" {
-				must(t, f.n.RemoveTradingAccess(testCtx, "desk", f.connection.ExternalID, testCaller))
+				must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
 			} else {
 				must(t, f.n.DeleteTradingInstrument(testCtx, f.connection.ExternalID, "AAPL", testCaller))
 			}

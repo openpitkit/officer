@@ -31,6 +31,7 @@ import (
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/node"
 	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/framework/trading"
 )
 
 const (
@@ -45,10 +46,12 @@ type backupRestoreTestNode struct {
 	instruments        []domain.MarketDataInstrument
 	removeAfterRestore bool
 
-	// restoreCalls and restoredArchive record what RestoreBackup actually
-	// received, so tests can assert the routed call rather than infer it.
+	// restoreCalls, restoredArchive and restoredOpts record what RestoreBackup
+	// actually received, so tests can assert the routed call rather than infer
+	// it.
 	restoreCalls    int
 	restoredArchive backup.Archive
+	restoredOpts    backup.RestoreOptions
 	operationCalls  *[]string
 	restoreSummary  backup.RestoreSummary
 	restoreErr      error
@@ -102,6 +105,7 @@ func (n *backupRestoreTestNode) RestoreBackup(
 	}
 	n.restoreCalls++
 	n.restoredArchive = archive
+	n.restoredOpts = opts
 	if n.removeAfterRestore {
 		n.instruments = nil
 		return backup.RestoreSummary{}, nil, nil
@@ -144,6 +148,11 @@ type backupTradingRuntime struct {
 
 	calls      *[]string
 	restartErr error
+	providers  []trading.Provider
+}
+
+func (r *backupTradingRuntime) Providers() []trading.Provider {
+	return r.providers
 }
 
 func (r *backupTradingRuntime) Stop() {
@@ -340,6 +349,48 @@ func TestRestoreBackupStopsAndRestartsTradingRuntime(t *testing.T) {
 				t.Fatalf("calls = %v, want %v", calls, test.wantCalls)
 			}
 		})
+	}
+}
+
+func TestRestoreBackupInstallsTradingProviderFeeAccountLookup(t *testing.T) {
+	t.Parallel()
+
+	lookupFor := func(runtime TradingRuntime) func(string) (bool, error) {
+		t.Helper()
+		n := &backupRestoreTestNode{}
+		svc := newBackupTradingLifecycleService(n, runtime)
+		if _, err := svc.RestoreBackup(
+			systemCtx(), backupRestoreSourceArchive("fee lookup test"),
+			backup.RestoreOptions{Mode: backup.RestoreModeOverwrite},
+		); err != nil {
+			t.Fatalf("RestoreBackup: %v", err)
+		}
+		if n.restoredOpts.TradingProviderRequiresFeeAccount == nil {
+			t.Fatal("restore reached the node without the provider fee-account lookup")
+		}
+		return n.restoredOpts.TradingProviderRequiresFeeAccount
+	}
+
+	var calls []string
+	lookup := lookupFor(&backupTradingRuntime{
+		calls: &calls,
+		providers: []trading.Provider{
+			{Type: "fees", Title: "Fees", UnlinkedFees: true},
+			{Type: "linked", Title: "Linked"},
+		},
+	})
+	for provider, want := range map[string]bool{"fees": true, "linked": false} {
+		if got, err := lookup(provider); err != nil || got != want {
+			t.Fatalf("lookup(%q) = %v, %v; want %v", provider, got, err, want)
+		}
+	}
+	if _, err := lookup("unknown"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("lookup(unknown) error = %v, want ErrInvalid", err)
+	}
+
+	lookup = lookupFor(nil)
+	if _, err := lookup("fees"); !errors.Is(err, domain.ErrNotImplemented) {
+		t.Fatalf("lookup without trading runtime error = %v, want ErrNotImplemented", err)
 	}
 }
 

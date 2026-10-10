@@ -21,7 +21,7 @@ import { useTranslation } from "react-i18next";
 import { Autocomplete } from "@/components/Autocomplete";
 import { Button } from "@/components/ui/button";
 import { ClearableInput } from "@/components/ClearableInput";
-import { AssetCodeSuggestionFailure } from "@/components/AssetCodeSuggestionFailure";
+import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 
 /** Instrument identity fields edited by the add row. */
 export interface InstrumentDraftFields {
@@ -122,7 +122,10 @@ export function InstrumentDraftRow({
             disabled={busy}
           />
         )}
-        <AssetCodeSuggestionFailure failed={baseSuggestionsFailed === true} />
+        <CodeSuggestionFailure
+          kind="asset"
+          failed={baseSuggestionsFailed === true}
+        />
       </div>
       <div className="space-y-1">
         <div className="flex items-center gap-2">
@@ -150,7 +153,10 @@ export function InstrumentDraftRow({
           </div>
           {quoteAdornment}
         </div>
-        <AssetCodeSuggestionFailure failed={quoteSuggestionsFailed === true} />
+        <CodeSuggestionFailure
+          kind="asset"
+          failed={quoteSuggestionsFailed === true}
+        />
       </div>
       {extraField}
       {enabled && (

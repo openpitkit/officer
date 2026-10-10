@@ -726,11 +726,27 @@ export interface TradingInstrument {
   enabled: boolean;
 }
 
-/** Binding that grants an Officer account access to a venue account. */
+/** Grant of connection access to an Officer account or account group.
+ *  Exactly one of `account` and `accountGroup` names the grantee; the other is
+ *  empty.
+ */
 export interface TradingAccessGrant {
+  /** Granted account code; empty for a group grant. */
   account: string;
+  /** Granted account group code; empty for an account grant. */
+  accountGroup: string;
+  /** Bound venue-side account; empty when none. */
   venueAccount: string;
+  /** Current group of the granted account; empty for a group grant and for
+   *  an account outside any group. */
+  group: string;
 }
+
+/** Grantee named by a connection access grant or revoke: exactly one account
+ *  or exactly one account group, never both and never neither. */
+export type TradingAccessSubject =
+  | { account: string; accountGroup?: never }
+  | { accountGroup: string; account?: never };
 
 /** Configured venue connection with instrument mappings and access bindings. */
 export interface TradingConnection {

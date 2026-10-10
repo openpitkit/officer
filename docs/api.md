@@ -69,6 +69,14 @@ A venue-linked order is managed by its venue connection. Manual execution
 reports, confirm and cancel refuse it with `venue_order_managed`. Trading MCP
 tools follow the catalog rule above: mutating tools ship disabled.
 
+Access to a connection is granted to an Officer account or an account group:
+`PUT` and `DELETE /trading/connections/{id}/access` take `account` or
+`accountGroup`, as do the MCP tools `grant_trading_access` and
+`revoke_trading_access`. A member account sends through its group's grant; the
+account's own grant on the same connection wins. On providers with unlinked fees
+a group grant needs the connection's fee account and is refused with
+`fee_account_required` without one.
+
 Paper sends use `POST /orders/send-paper` or `send_paper_order`; live counterparts
 `POST /orders/send-live` and `send_live_order` come with the live-trading token.
 `acknowledged` means the venue accepted. `refused` means a definitive refusal by

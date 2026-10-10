@@ -1246,7 +1246,7 @@ function SubmitOrderDialog({
                         to="/trading-connections"
                         className="font-medium text-accent underline-offset-2 hover:underline"
                       >
-                        {t("addOrder.dialog.venue.setupConnection")}
+                        {tc("actions.setUpTradingConnection")}
                       </Link>
                     </div>
                   )}

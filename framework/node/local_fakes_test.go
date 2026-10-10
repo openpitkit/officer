@@ -1071,13 +1071,14 @@ func (s *failRestoreAuditRealm) AppendAudit(
 	return s.RealmStore.AppendAudit(ctx, entry)
 }
 
-// restoreScopeProbeRealm records the exact export and restore scopes used by
-// LocalNode recovery. It also fails the final restore audit so tests can drive
-// the rollback path without changing the wrapped store's backup semantics.
+// restoreScopeProbeRealm records the exact export scopes and restore options
+// used by LocalNode recovery. It also fails the final restore audit so tests
+// can drive the rollback path without changing the wrapped store's backup
+// semantics.
 type restoreScopeProbeRealm struct {
 	store.RealmStore
-	exportScopes  []backup.Scope
-	restoreScopes []backup.Scope
+	exportScopes   []backup.Scope
+	restoreOptions []backup.RestoreOptions
 }
 
 func (s *restoreScopeProbeRealm) ExportBackup(
@@ -1092,7 +1093,7 @@ func (s *restoreScopeProbeRealm) RestoreBackup(
 	archive backup.Archive,
 	opts backup.RestoreOptions,
 ) (backup.RestoreSummary, error) {
-	s.restoreScopes = append(s.restoreScopes, opts.Scope)
+	s.restoreOptions = append(s.restoreOptions, opts)
 	return s.RealmStore.RestoreBackup(ctx, archive, opts)
 }
 

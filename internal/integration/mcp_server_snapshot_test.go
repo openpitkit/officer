@@ -189,11 +189,11 @@ func TestServerToolSnapshot(t *testing.T) {
 		struct {
 			name        string
 			description string
-		}{name: "grant_trading_access", description: "Grant an Officer account access to a trading connection. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "grant_trading_access", description: "Grant an Officer account or an account group access to a trading connection. A group grant needs the connection's fee account on providers with unlinked fees. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
-		}{name: "revoke_trading_access", description: "Revoke an Officer account access to a trading connection. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "revoke_trading_access", description: "Revoke the access of an Officer account or an account group to a trading connection. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
@@ -303,6 +303,10 @@ func TestServerToolSnapshot(t *testing.T) {
 				}
 				if field == "id" && !strings.Contains(property.Description, "store assign") {
 					t.Errorf("%s.id must describe store assignment", name)
+				}
+				if strings.HasSuffix(name, "_trading_access") && (field == "account" || field == "accountGroup") &&
+					!strings.Contains(property.Description, "exactly one of account or accountGroup") {
+					t.Errorf("%s.%s must describe the one-subject rule", name, field)
 				}
 			}
 		}

@@ -15,18 +15,18 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { useTranslation } from "react-i18next";
+import { LinkButton, type LinkButtonProps } from "./LinkButton";
 
-export function AssetCodeSuggestionFailure({ failed }: { failed: boolean }) {
-  const { t } = useTranslation();
+/** A warning `reason` plus the LinkButton that acts on it; `children` label
+ *  the action. */
+export type WarnHintProps = { reason: string } & LinkButtonProps;
 
-  if (!failed) {
-    return null;
-  }
-
+/** States a warning, then offers the one way to act on it. */
+export function WarnHint({ reason, ...action }: WarnHintProps) {
   return (
-    <p role="status" className="text-[0.6875rem] text-[var(--danger)]">
-      {t("suggestions.assetLookupFailed")}
-    </p>
+    <div className="space-y-2 text-xs text-[var(--warn)]">
+      <p>{reason}</p>
+      <LinkButton {...action} />
+    </div>
   );
 }

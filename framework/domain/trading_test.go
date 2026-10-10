@@ -199,22 +199,86 @@ func TestValidateTradingInstrument(t *testing.T) {
 func TestValidateTradingAccess(t *testing.T) {
 	t.Parallel()
 	valid := TradingAccess{Account: "acc-1", Connection: "connection"}
-	if err := ValidateTradingAccess(valid); err != nil {
-		t.Fatalf("valid access: %v", err)
+	for _, subject := range []TradingAccess{
+		valid,
+		{AccountGroup: "desk", Connection: "connection", VenueAccount: "venue"},
+	} {
+		if err := ValidateTradingAccess(subject); err != nil {
+			t.Fatalf("valid access %+v: %v", subject, err)
+		}
 	}
 	for _, test := range []struct {
-		name   string
-		mutate func(*TradingAccess)
+		name    string
+		mutate  func(*TradingAccess)
+		pointer string
 	}{
-		{"invalid account", func(v *TradingAccess) { v.Account = " account" }},
-		{"zero connection", func(v *TradingAccess) { v.Connection = "" }},
-		{"venue account whitespace", func(v *TradingAccess) { v.VenueAccount = " venue" }},
+		{"invalid account", func(v *TradingAccess) { v.Account = " account" }, "/account"},
+		{"neither subject", func(v *TradingAccess) { v.Account = "" }, "/account"},
+		{"both subjects", func(v *TradingAccess) { v.AccountGroup = "desk" }, "/accountGroup"},
+		{"reserved group", func(v *TradingAccess) {
+			v.Account, v.AccountGroup = "", ReservedGroupCode
+		}, "/accountGroup"},
+		{"group whitespace", func(v *TradingAccess) {
+			v.Account, v.AccountGroup = "", " desk"
+		}, "/accountGroup"},
+		{"zero connection", func(v *TradingAccess) { v.Connection = "" }, ""},
+		{"venue account whitespace", func(v *TradingAccess) { v.VenueAccount = " venue" }, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			value := valid
 			test.mutate(&value)
-			assertTradingInvalid(t, ValidateTradingAccess(value))
+			err := ValidateTradingAccess(value)
+			assertTradingInvalid(t, err)
+			if test.pointer != "" && ValidationPointer(err) != test.pointer {
+				t.Fatalf("pointer = %q, want %q", ValidationPointer(err), test.pointer)
+			}
+		})
+	}
+}
+
+func TestTradingAccessSameSubject(t *testing.T) {
+	t.Parallel()
+	account := TradingAccess{Account: "desk", Connection: "a", VenueAccount: "x"}
+	group := TradingAccess{AccountGroup: "desk", Connection: "a"}
+	for _, test := range []struct {
+		name        string
+		left, right TradingAccess
+		want        bool
+	}{
+		{"same account elsewhere", account, TradingAccess{Account: "desk", Connection: "b"}, true},
+		{"other account", account, TradingAccess{Account: "other", Connection: "a"}, false},
+		{"same group elsewhere", group, TradingAccess{AccountGroup: "desk", Connection: "b", VenueAccount: "y"}, true},
+		{"other group", group, TradingAccess{AccountGroup: "other", Connection: "a"}, false},
+		{"account and group of one code", account, group, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := test.left.SameSubject(test.right); got != test.want {
+				t.Fatalf("SameSubject = %v, want %v", got, test.want)
+			}
+			if got := test.right.SameSubject(test.left); got != test.want {
+				t.Fatalf("reversed SameSubject = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTradingAccessSubjectLabel(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		access TradingAccess
+		want   string
+	}{
+		{"account", TradingAccess{Account: "desk", Connection: "a", VenueAccount: "x"}, "desk"},
+		{"group of the same code", TradingAccess{AccountGroup: "desk", Connection: "a"}, "group:desk"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := test.access.SubjectLabel(); got != test.want {
+				t.Fatalf("SubjectLabel = %q, want %q", got, test.want)
+			}
 		})
 	}
 }

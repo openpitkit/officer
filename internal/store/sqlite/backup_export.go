@@ -509,11 +509,14 @@ func (r *realmStore) exportTradingAccess(
 	}
 	rows, err := db.QueryContext(
 		ctx,
-		`SELECT a.code, c.external_id, ta.venue_account
+		`SELECT COALESCE(a.code, ''), COALESCE(g.code, ''), c.external_id,
+		        ta.venue_account
 		 FROM trading_access ta
-		 JOIN account a ON a.id = ta.account_id
+		 LEFT JOIN account a ON a.id = ta.account_id
+		 LEFT JOIN account_group g ON g.id = ta.account_group_id
 		 JOIN trading_connection c ON c.id = ta.connection_id
-		 ORDER BY a.code, c.external_id`,
+		 ORDER BY ta.account_id IS NOT NULL, COALESCE(g.code, a.code),
+		          c.external_id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: export trading access: %w", err)
@@ -526,7 +529,9 @@ func (r *realmStore) exportTradingAccess(
 			access backup.TradingAccess
 			rawID  []byte
 		)
-		if err := rows.Scan(&access.Account, &rawID, &access.VenueAccount); err != nil {
+		if err := rows.Scan(
+			&access.Account, &access.AccountGroup, &rawID, &access.VenueAccount,
+		); err != nil {
 			return nil, fmt.Errorf("store: scan trading access for export: %w", err)
 		}
 		access.Connection, err = domain.ExternalIDFromBytes(rawID)

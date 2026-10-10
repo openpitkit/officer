@@ -25,6 +25,7 @@ import {
   ActionButton,
   CloneButton,
   CopyIdButton,
+  DeleteButton,
   FilterBar,
   FilterChip,
   FilterByButton,
@@ -36,6 +37,8 @@ import {
   ShareLinkButton,
   SortableHeader,
   TimeRangeFilter,
+  TradingButton,
+  VenueAccessButton,
   type SortDirection,
 } from "@/components/data";
 
@@ -377,6 +380,45 @@ describe("data controls", () => {
       "title",
       "Clone order",
     );
+  });
+
+  it("opens venue access on a click and a glyph distinct from trading", async () => {
+    const onVenueAccess = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <>
+        <TradingButton href="/trading?account=ACC-001" />
+        <VenueAccessButton onClick={onVenueAccess} />
+      </>,
+    );
+    const [tradingSvg, accessSvg] = Array.from(
+      container.querySelectorAll("svg"),
+    );
+
+    expect(accessSvg.innerHTML).not.toEqual(tradingSvg.innerHTML);
+    const button = screen.getByRole("button", {
+      name: "Trading connection access",
+    });
+    expect(button).toHaveAttribute("title", "Trading connection access");
+    await user.click(button);
+    expect(onVenueAccess).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a disabled delete from firing", async () => {
+    const onDelete = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <DeleteButton title="Delete ACC-001" disabled onClick={onDelete} />,
+    );
+    const button = screen.getByRole("button", { name: "Delete ACC-001" });
+
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(onDelete).not.toHaveBeenCalled();
+    rerender(<DeleteButton title="Delete ACC-001" onClick={onDelete} />);
+    expect(button).toBeEnabled();
+    await user.click(button);
+    expect(onDelete).toHaveBeenCalledOnce();
   });
 
   it("cycles sortable headers by click and keyboard", async () => {

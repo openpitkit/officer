@@ -694,18 +694,22 @@ type Node interface {
 		ctx context.Context, connection domain.ExternalID, externalSymbol string, caller domain.Caller,
 	) error
 
-	// PutTradingAccess inserts or replaces an account/connection binding and
-	// its optional bound venue account.
-	// It audits the action after the store write succeeds.
-	// When requireFeeAccount is true, a second distinct account requires the
-	// connection's fee account; re-putting the same account remains allowed.
+	// PutTradingAccess inserts or replaces the grant of a connection to one
+	// subject, an account or an account group, and its optional bound venue
+	// account. It audits the action after the store write succeeds, naming the
+	// subject in the entry's Account or Group.
+	// When requireFeeAccount is true and the connection has no fee account, a
+	// group grant is refused with domain.ErrFeeAccountRequired, and so is an
+	// account grant while the connection holds any grant but that account's
+	// own; re-putting the same account remains allowed.
 	PutTradingAccess(
 		ctx context.Context, access domain.TradingAccess, requireFeeAccount bool,
 		caller domain.Caller,
 	) error
 
 	// SetTradingConnectionFeeAccount assigns unlinked fees to the given account.
-	// Clearing is refused while more than one distinct Officer account is bound.
+	// Clearing is refused while the connection has a group grant or more than
+	// one distinct Officer account can send through it.
 	SetTradingConnectionFeeAccount(
 		ctx context.Context, connection domain.ExternalID, account domain.AccountID,
 		caller domain.Caller,
@@ -717,10 +721,12 @@ type Node interface {
 		caller domain.Caller,
 	) error
 
-	// RemoveTradingAccess removes one account/connection binding.
+	// RemoveTradingAccess removes the grant of a connection to exactly one
+	// subject, account or accountGroup with the other empty.
 	// It audits the action after the store write succeeds.
 	RemoveTradingAccess(
-		ctx context.Context, account domain.AccountID, connection domain.ExternalID, caller domain.Caller,
+		ctx context.Context, connection domain.ExternalID,
+		account domain.AccountID, accountGroup string, caller domain.Caller,
 	) error
 
 	// GetTradingConnection returns one connection. The bool is false when absent.
@@ -738,17 +744,19 @@ type Node interface {
 		ctx context.Context, connection domain.ExternalID,
 	) ([]domain.TradingInstrument, error)
 
-	// ListTradingAccess returns an account's grants ordered by connection and
-	// venue account.
+	// ListTradingAccess returns an account's effective grants, one per
+	// connection ordered by connection: its own grant, else its current
+	// group's.
 	ListTradingAccess(
 		ctx context.Context, account domain.AccountID,
 	) ([]domain.TradingAccess, error)
 
-	// ListTradingAccessForConnection returns a connection's grants ordered by
-	// account and venue account.
+	// ListTradingAccessForConnection returns a connection's grants with each
+	// granted account's current group: group grants first, then account
+	// grants, each ordered by code.
 	ListTradingAccessForConnection(
 		ctx context.Context, connection domain.ExternalID,
-	) ([]domain.TradingAccess, error)
+	) ([]store.TradingAccessListRow, error)
 
 	// GetVenueOrder returns the venue link for an order. The bool is false when
 	// absent.

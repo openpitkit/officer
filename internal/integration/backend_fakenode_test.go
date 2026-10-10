@@ -1527,7 +1527,7 @@ func (n *fakeNode) RecordVenueFeeSkipped(ctx context.Context, connection domain.
 	return domain.ErrNotImplemented
 }
 
-func (n *fakeNode) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID, caller domain.Caller) error {
+func (n *fakeNode) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string, caller domain.Caller) error {
 	return domain.ErrNotImplemented
 }
 
@@ -1547,7 +1547,7 @@ func (n *fakeNode) ListTradingAccess(ctx context.Context, account domain.Account
 	return nil, nil
 }
 
-func (n *fakeNode) ListTradingAccessForConnection(ctx context.Context, connection domain.ExternalID) ([]domain.TradingAccess, error) {
+func (n *fakeNode) ListTradingAccessForConnection(ctx context.Context, connection domain.ExternalID) ([]store.TradingAccessListRow, error) {
 	return nil, nil
 }
 

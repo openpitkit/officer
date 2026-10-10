@@ -682,7 +682,7 @@ func (s *guardSource) PutTradingAccess(ctx context.Context, access domain.Tradin
 	return domain.ErrNotImplemented
 }
 
-func (s *guardSource) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
+func (s *guardSource) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	return domain.ErrNotImplemented
 }
 

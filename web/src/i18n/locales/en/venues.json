@@ -20,7 +20,12 @@
     "addInstrument": "Add instrument",
     "enable": "Enable",
     "disable": "Disable",
-    "deleteInstrument": "Delete instrument"
+    "deleteInstrument": "Delete instrument",
+    "setFeeAccount": "Set fee account",
+    "grantAccess": "Grant access",
+    "revokeAccess": "Revoke access",
+    "revokeAccountAccessFor": "Revoke access for account {{code}}",
+    "revokeGroupAccessFor": "Revoke access for group {{code}}"
   },
   "state": {
     "enabled": "Enabled",
@@ -49,6 +54,72 @@
   },
   "deleteInstrument": {
     "title": "Delete instrument?"
+  },
+  "revokeAccess": {
+    "accountTitle": "Revoke account access?",
+    "groupTitle": "Revoke group access?",
+    "accountDescription": "Revoke access of account {{account}} to {{label}}?",
+    "groupDescription": "Revoke access of group {{group}} to {{label}}? Accounts in the group keep access only if it is granted to them directly."
+  },
+  "accessBlocked": {
+    "groupNeedsFeeAccount": "Set a fee account first. A group can hold several accounts, and {{provider}} charges fees that are not tied to orders; Officer needs one account to book them on.",
+    "secondAccountNeedsFeeAccount": "Set a fee account first. {{provider}} charges fees that are not tied to orders; with several accounts on one connection Officer needs one account to book them on."
+  },
+  "access": {
+    "tableLabel": "Access grants",
+    "accountCount_one": "{{count}} account",
+    "accountCount_other": "{{count}} accounts",
+    "groupCount_one": "{{count}} group",
+    "groupCount_other": "{{count}} groups",
+    "kindFilter": "Type",
+    "kind": {
+      "all": "All",
+      "accounts": "Accounts",
+      "groups": "Groups"
+    },
+    "codeFilter": "Code",
+    "codePlaceholder": "Account or group code",
+    "columns": {
+      "subject": "Account or group",
+      "group": "Account group",
+      "venueAccount": "Venue account"
+    },
+    "groupBadge": "Group",
+    "empty": "No accounts or groups have access",
+    "noMatches": "No grants match the filters"
+  },
+  "accessDialog": {
+    "accountTitle": "Trading connection access - {{code}}",
+    "groupTitle": "Trading connection access - group {{code}}",
+    "accountDescription": "Granting and revoking here changes only this account's own access. Access through its group is managed on the group.",
+    "groupDescription": "Accounts in this group can send orders through any connection granted to the group.",
+    "tableLabel": "Trading connections",
+    "columns": {
+      "connection": "Trading connection",
+      "access": "Access"
+    },
+    "state": {
+      "own": "Own grant",
+      "group": "Through group {{group}}",
+      "ownAndGroup": "Own grant, also through group {{group}}",
+      "granted": "Granted",
+      "none": "No access",
+      "noOwn": "No own grant"
+    },
+    "venueAccount": "Venue account: {{venueAccount}}",
+    "venueAccountBound": "Revoking here would drop the venue account. Change this grant on the trading connections page.",
+    "groupVenueAccount": "An own grant would replace the group's venue account {{venueAccount}}. Grant it on the trading connections page.",
+    "openConnections": "Open trading connections",
+    "empty": {
+      "title": "No trading connections",
+      "hint": "Set up a trading connection first, then grant access to it."
+    }
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Page size",
+      "rowCount": "{{count}} rows per page"
+    }
   },
   "emptyInstruments": "No instruments configured"
 }

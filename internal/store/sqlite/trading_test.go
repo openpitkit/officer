@@ -273,22 +273,25 @@ func TestRemoveTradingAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := rs.RemoveTradingAccess(ctx, access.Account, access.Connection); err != nil {
+	if err := rs.RemoveTradingAccess(ctx, access.Connection, access.Account, ""); err != nil {
 		t.Fatal(err)
 	}
 	bindings, err := rs.ListTradingAccessForConnection(ctx, connection.ExternalID)
-	if err != nil || !reflect.DeepEqual(bindings, []domain.TradingAccess{other}) {
+	if err != nil || !reflect.DeepEqual(bindings, []store.TradingAccessListRow{{Access: other}}) {
 		t.Fatal("remove did not delete exactly the account/connection binding")
 	}
-	if err := rs.RemoveTradingAccess(ctx, access.Account, access.Connection); !errors.Is(err, domain.ErrNotFound) {
+	if err := rs.RemoveTradingAccess(ctx, access.Connection, access.Account, ""); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("missing binding error = %v, want ErrNotFound", err)
 	}
+	// An unknown account reads exactly as an absent grant.
 	for _, missing := range []domain.TradingAccess{
 		{Account: access.Account, Connection: "absent"},
 		{Account: "absent", Connection: access.Connection},
 	} {
-		if err := rs.RemoveTradingAccess(ctx, missing.Account, missing.Connection); !errors.Is(err, domain.ErrNotFound) {
-			t.Fatalf("missing account/connection error = %v, want ErrNotFound", err)
+		err := rs.RemoveTradingAccess(ctx, missing.Connection, missing.Account, "")
+		want := fmt.Sprintf("trading access %q: %v", missing.Connection.String(), domain.ErrNotFound)
+		if !errors.Is(err, domain.ErrNotFound) || err.Error() != want {
+			t.Fatalf("missing account/connection error = %v, want %q", err, want)
 		}
 	}
 }
@@ -409,15 +412,22 @@ func TestListTradingAccessForConnection(t *testing.T) {
 			t.Fatalf("empty connection: rows=%v err=%v", rows, err)
 		}
 	}
-	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+	for _, group := range []string{"desk", "other"} {
+		if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: group}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2", GroupCode: "desk"}); err != nil {
 		t.Fatal(err)
 	}
-	want := []domain.TradingAccess{
-		{Account: "acc-1", Connection: first.ExternalID},
-		{Account: "acc-2", Connection: first.ExternalID, VenueAccount: "a"},
+	want := []store.TradingAccessListRow{
+		{Access: domain.TradingAccess{AccountGroup: "desk", Connection: first.ExternalID, VenueAccount: "z"}},
+		{Access: domain.TradingAccess{AccountGroup: "other", Connection: first.ExternalID}},
+		{Access: domain.TradingAccess{Account: "acc-1", Connection: first.ExternalID}},
+		{Access: domain.TradingAccess{Account: "acc-2", Connection: first.ExternalID, VenueAccount: "a"}, Group: "desk"},
 	}
 	other := domain.TradingAccess{Account: "acc-2", Connection: second.ExternalID}
-	for _, row := range []domain.TradingAccess{want[1], other, want[0]} {
+	for _, row := range []domain.TradingAccess{want[3].Access, other, want[1].Access, want[2].Access, want[0].Access} {
 		if err := rs.PutTradingAccess(ctx, row); err != nil {
 			t.Fatal(err)
 		}
@@ -427,8 +437,15 @@ func TestListTradingAccessForConnection(t *testing.T) {
 		t.Fatalf("connection access ordering/isolation: got=%v want=%v err=%v", rows, want, err)
 	}
 	rows, err = rs.ListTradingAccessForConnection(ctx, second.ExternalID)
-	if err != nil || !reflect.DeepEqual(rows, []domain.TradingAccess{other}) {
+	if err != nil || !reflect.DeepEqual(rows, []store.TradingAccessListRow{{Access: other, Group: "desk"}}) {
 		t.Fatalf("other connection access: got=%v err=%v", rows, err)
+	}
+	if err := rs.SetAccountGroup(ctx, "acc-2", "other"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = rs.ListTradingAccessForConnection(ctx, second.ExternalID)
+	if err != nil || !reflect.DeepEqual(rows, []store.TradingAccessListRow{{Access: other, Group: "other"}}) {
+		t.Fatalf("membership is not read at list time: got=%v err=%v", rows, err)
 	}
 }
 
@@ -521,10 +538,40 @@ func TestGetTradingFeeAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("", []domain.AccountID{"acc-1", "acc-2"})
-	if err := rs.RemoveTradingAccess(ctx, "acc-2", connection.ExternalID); err != nil {
+	if err := rs.RemoveTradingAccess(ctx, connection.ExternalID, "acc-2", ""); err != nil {
 		t.Fatal(err)
 	}
 	check("", []domain.AccountID{"acc-1"})
+
+	// A granted group adds its current members; acc-1 holds a grant of its own
+	// as well and is counted once. An empty group adds nobody.
+	for _, group := range []string{"desk", "empty"} {
+		if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: group}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rs.PutTradingAccess(ctx, domain.TradingAccess{Connection: connection.ExternalID, AccountGroup: group}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-3", GroupCode: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.SetAccountGroup(ctx, "acc-1", "desk"); err != nil {
+		t.Fatal(err)
+	}
+	check("", []domain.AccountID{"acc-1", "acc-3"})
+	if err := rs.SetAccountGroup(ctx, "acc-3", ""); err != nil {
+		t.Fatal(err)
+	}
+	check("", []domain.AccountID{"acc-1"})
+	if err := rs.RemoveTradingAccess(ctx, connection.ExternalID, "acc-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	check("", []domain.AccountID{"acc-1"})
+	if err := rs.RemoveTradingAccess(ctx, connection.ExternalID, "", "desk"); err != nil {
+		t.Fatal(err)
+	}
+	check("", []domain.AccountID{})
 }
 
 func TestDeleteTradingFeeAccountRefused(t *testing.T) {
@@ -555,7 +602,7 @@ func TestDeleteTradingFeeAccountRefused(t *testing.T) {
 			if err := rs.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, ""); err != nil {
 				t.Fatal(err)
 			}
-			if err := rs.RemoveTradingAccess(ctx, "acc-1", connection.ExternalID); err != nil {
+			if err := rs.RemoveTradingAccess(ctx, connection.ExternalID, "acc-1", ""); err != nil {
 				t.Fatal(err)
 			}
 			if err := rs.DeleteAccount(ctx, "acc-1", force); err != nil {
@@ -840,6 +887,195 @@ func TestTradingAccessPutListReplaceAndUnknown(t *testing.T) {
 		if err := rs.PutTradingAccess(ctx, missing); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("unknown account/connection error = %v, want ErrNotFound", err)
 		}
+	}
+}
+
+func TestTradingGroupAccessPutReplaceRemove(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	for _, group := range []string{"desk", "other"} {
+		if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: group}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A default currency materialises the default group as a row with an
+	// empty code; no grant may ever reach it.
+	if err := rs.SetGroupCurrency(ctx, "", "USD"); err != nil {
+		t.Fatal(err)
+	}
+	check := func(step string, want ...domain.TradingAccess) {
+		t.Helper()
+		rows, err := rs.ListTradingAccessForConnection(ctx, connection.ExternalID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]domain.TradingAccess, 0, len(rows))
+		for _, row := range rows {
+			got = append(got, row.Access)
+		}
+		if !reflect.DeepEqual(got, append([]domain.TradingAccess{}, want...)) {
+			t.Fatalf("%s: grants = %+v, want %+v", step, got, want)
+		}
+	}
+	desk := domain.TradingAccess{AccountGroup: "desk", Connection: connection.ExternalID, VenueAccount: "a"}
+	other := domain.TradingAccess{AccountGroup: "other", Connection: connection.ExternalID}
+	for _, grant := range []domain.TradingAccess{other, desk} {
+		if err := rs.PutTradingAccess(ctx, grant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("put", desk, other)
+	desk.VenueAccount = ""
+	if err := rs.PutTradingAccess(ctx, desk); err != nil {
+		t.Fatalf("replace group grant: %v", err)
+	}
+	check("replace", desk, other)
+	if err := rs.RemoveTradingAccess(ctx, connection.ExternalID, "", "desk"); err != nil {
+		t.Fatal(err)
+	}
+	check("remove", other)
+	if err := rs.RemoveTradingAccess(ctx, connection.ExternalID, "", "desk"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("absent group grant error = %v, want ErrNotFound", err)
+	}
+
+	for _, missing := range []domain.TradingAccess{
+		{AccountGroup: "missing", Connection: connection.ExternalID},
+		{AccountGroup: "desk", Connection: "missing"},
+	} {
+		if err := rs.PutTradingAccess(ctx, missing); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("put %+v error = %v, want ErrNotFound", missing, err)
+		}
+		if err := rs.RemoveTradingAccess(ctx, missing.Connection, "", missing.AccountGroup); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("remove %+v error = %v, want ErrNotFound", missing, err)
+		}
+	}
+	for _, invalid := range []domain.TradingAccess{
+		{Connection: connection.ExternalID},
+		{Account: "acc-1", AccountGroup: "other", Connection: connection.ExternalID},
+		{AccountGroup: domain.ReservedGroupCode, Connection: connection.ExternalID},
+	} {
+		if err := rs.PutTradingAccess(ctx, invalid); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("put %+v error = %v, want ErrInvalid", invalid, err)
+		}
+		if err := rs.RemoveTradingAccess(ctx, invalid.Connection, invalid.Account, invalid.AccountGroup); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("remove %+v error = %v, want ErrInvalid", invalid, err)
+		}
+	}
+	check("refused writes", other)
+}
+
+func TestListTradingAccessEffectiveGrants(t *testing.T) {
+	ctx, rs, first := seedTradingFixtures(t)
+	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider: domain.TradingProviderAlpaca, Label: "Other", Mode: domain.TradingModePaper, VenueIdentity: "other-account",
+		Credentials: `{}`, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range []string{"desk", "other"} {
+		if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: group}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rs.SetAccountGroup(ctx, "acc-1", "desk"); err != nil {
+		t.Fatal(err)
+	}
+	check := func(step string, want ...domain.TradingAccess) {
+		t.Helper()
+		want = append([]domain.TradingAccess{}, want...)
+		sort.Slice(want, func(i, j int) bool { return want[i].Connection < want[j].Connection })
+		got, err := rs.ListTradingAccess(ctx, "acc-1")
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: effective grants = %+v, want %+v; err=%v", step, got, want, err)
+		}
+	}
+	put := func(access domain.TradingAccess) {
+		t.Helper()
+		if err := rs.PutTradingAccess(ctx, access); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deskFirst := domain.TradingAccess{AccountGroup: "desk", Connection: first.ExternalID, VenueAccount: "desk-venue"}
+	put(deskFirst)
+	check("group grant only", deskFirst)
+	own := domain.TradingAccess{Account: "acc-1", Connection: first.ExternalID}
+	put(own)
+	check("own grant without venue account wins whole", own)
+	own.VenueAccount = "own-venue"
+	put(own)
+	check("own grant with another venue account wins whole", own)
+	deskSecond := domain.TradingAccess{AccountGroup: "desk", Connection: second.ExternalID, VenueAccount: "b"}
+	put(deskSecond)
+	otherFirst := domain.TradingAccess{AccountGroup: "other", Connection: first.ExternalID, VenueAccount: "other-venue"}
+	put(otherFirst)
+	check("own and group grants on different connections", own, deskSecond)
+	if err := rs.RemoveTradingAccess(ctx, first.ExternalID, "acc-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	check("own grant removed falls back to the group's", deskFirst, deskSecond)
+	if err := rs.SetAccountGroup(ctx, "acc-1", "other"); err != nil {
+		t.Fatal(err)
+	}
+	check("moved to another group", otherFirst)
+	if err := rs.SetAccountGroup(ctx, "acc-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	check("outside any group")
+	if got, err := rs.ListTradingAccess(ctx, "missing"); err != nil || len(got) != 0 {
+		t.Fatalf("unknown account grants = %+v, err=%v", got, err)
+	}
+}
+
+func TestTradingAccessSchemaConstraints(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	db := rs.(*realmStore).rawDB()
+	var accountRow, groupRow, connectionRow int64
+	for _, lookup := range []struct {
+		query string
+		arg   any
+		dest  *int64
+	}{
+		{`SELECT id FROM account WHERE code = ?`, "acc-1", &accountRow},
+		{`SELECT id FROM account_group WHERE code = ?`, "desk", &groupRow},
+		{`SELECT id FROM trading_connection WHERE external_id = ?`, connection.ExternalID.Bytes(), &connectionRow},
+	} {
+		if err := db.QueryRowContext(ctx, lookup.query, lookup.arg).Scan(lookup.dest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert := func(account, group any) error {
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO trading_access
+			 (account_id, account_group_id, connection_id, venue_account)
+			 VALUES (?, ?, ?, '')`,
+			account, group, connectionRow,
+		)
+		return err
+	}
+	if insert(nil, nil) == nil {
+		t.Fatal("schema accepted a grant without a subject")
+	}
+	if insert(accountRow, groupRow) == nil {
+		t.Fatal("schema accepted a grant with two subjects")
+	}
+	for _, subject := range [][2]any{{accountRow, nil}, {nil, groupRow}} {
+		if err := insert(subject[0], subject[1]); err != nil {
+			t.Fatal(err)
+		}
+		if insert(subject[0], subject[1]) == nil {
+			t.Fatalf("schema accepted a second grant of one connection to %v", subject)
+		}
+	}
+	if err := rs.DeleteGroup(ctx, "desk", false); err != nil {
+		t.Fatalf("delete granted group: %v", err)
+	}
+	rows, err := rs.ListTradingAccessForConnection(ctx, connection.ExternalID)
+	want := []store.TradingAccessListRow{{Access: domain.TradingAccess{Account: "acc-1", Connection: connection.ExternalID}}}
+	if err != nil || !reflect.DeepEqual(rows, want) {
+		t.Fatalf("grants after group delete = %+v, want only the account grant; err=%v", rows, err)
 	}
 }
 

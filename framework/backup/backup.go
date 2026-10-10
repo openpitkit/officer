@@ -155,6 +155,13 @@ type RestoreOptions struct {
 	// the store has opened archived credentials and before it commits an enabled
 	// instance. It is an in-process restore seam and never part of the wire form.
 	ValidateMarketDataInstance func(domain.MarketDataInstance) error `json:"-"`
+	// TradingProviderRequiresFeeAccount reports whether a trading provider
+	// needs a connection fee account (its unlinked-fees capability) and fails
+	// for an unknown provider. The store asks it for every connection that
+	// ends the restore holding a group grant without a fee account, and fails
+	// closed when it is nil. It is an in-process restore seam and never part
+	// of the wire form.
+	TradingProviderRequiresFeeAccount func(provider string) (bool, error) `json:"-"`
 }
 
 // RestoreSummary reports the restore outcome per section. RestartRequired is
@@ -444,10 +451,15 @@ type TradingInstrument struct {
 	Enabled bool `json:"enabled"`
 }
 
-// TradingAccess is one portable account-to-connection binding.
+// TradingAccess is one portable grant of a connection to an account or an
+// account group; exactly one of Account and AccountGroup is set.
 type TradingAccess struct {
-	// Account is the Officer account code receiving access.
-	Account domain.AccountID `json:"account"`
+	// Account is the Officer account code receiving access; empty for a group
+	// grant.
+	Account domain.AccountID `json:"account,omitempty"`
+	// AccountGroup is the account group code receiving access; empty for an
+	// account grant.
+	AccountGroup string `json:"accountGroup,omitempty"`
 	// Connection is the trading connection's opaque public handle.
 	Connection domain.ExternalID `json:"connection"`
 	// VenueAccount is the optional bound venue-side account.
@@ -576,7 +588,7 @@ type Data struct {
 	TradingConnections []TradingConnection `json:"tradingConnections,omitempty"`
 	// TradingInstruments are per-connection venue symbol mappings.
 	TradingInstruments []TradingInstrument `json:"tradingInstruments,omitempty"`
-	// TradingAccess is the account-to-connection binding set.
+	// TradingAccess is the set of account and group grants of connections.
 	TradingAccess []TradingAccess `json:"tradingAccess,omitempty"`
 	// VenueOrders link Officer orders to the venue orders sent for them.
 	VenueOrders []VenueOrder `json:"venueOrders,omitempty"`

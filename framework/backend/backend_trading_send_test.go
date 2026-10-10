@@ -311,6 +311,28 @@ func TestSendPaperOrderAutomaticDestination(t *testing.T) {
 	}
 }
 
+// TestSendPaperOrderThroughGroupGrant sends through a connection the account
+// reaches only by its group's grant, which the store returns whole: the
+// AccountGroup set, the Account empty, the group's venue account bound.
+func TestSendPaperOrderThroughGroupGrant(t *testing.T) {
+	for _, path := range []string{"named", "automatic"} {
+		t.Run(path, func(t *testing.T) {
+			s, n, rt, _ := newPaperSendTestService(t)
+			n.groups = map[domain.AccountID]string{"acct-1": "desk"}
+			n.access = []domain.TradingAccess{{AccountGroup: "desk", Connection: "connection-1", VenueAccount: "remote-group"}}
+			dest := SendDestination{Route: "{}"}
+			if path == "named" {
+				dest.Connection = "connection-1"
+			}
+			got, err := s.SendPaperOrder(systemCtx(), paperSendTestOrder(), dest)
+			want := domain.TradingDestination{Connection: "connection-1", VenueAccount: "remote-group", Route: "{}"}
+			if err != nil || got.Send == nil || !reflect.DeepEqual(rt.preChecks, []domain.TradingDestination{want}) || !reflect.DeepEqual(rt.sends, []domain.TradingDestination{want}) {
+				t.Fatalf("group grant send = %+v, err=%v, prechecks=%v sends=%v", got, err, rt.preChecks, rt.sends)
+			}
+		})
+	}
+}
+
 func TestSendPaperOrderVenueAccount(t *testing.T) {
 	for _, venueAccount := range []string{"", "remote-1", "other"} {
 		t.Run("venue_"+venueAccount, func(t *testing.T) {

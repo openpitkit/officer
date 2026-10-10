@@ -20,6 +20,7 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
 
 import type {
+  TradingAccessSubject,
   TradingConnection,
   TradingConnectionCheck,
   TradingProvider,
@@ -28,8 +29,11 @@ import type {
 import { useTrading } from "@/api/useTrading";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ClearableInput } from "@/components/ClearableInput";
+import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import { Segmented } from "@/components/data";
 import {
+  AccessBlockedHint,
+  accessGrantBlock,
   AddProviderButton,
   ProviderGuideDialog,
   VenueCardHeader,
@@ -40,6 +44,10 @@ import {
   VerifyResult,
   InstrumentsTable,
   DeleteInstrumentDialog,
+  LinkButton,
+  RevokeAccessDialog,
+  VenueAccessList,
+  type AccessGrantBlock,
   type InstrumentDraftFields,
 } from "@/components/venues";
 import { Page } from "@/components/Page";
@@ -50,16 +58,6 @@ import {
   StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -74,19 +72,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   ApiError,
   AUTOCOMPLETE_SUGGESTION_LIMIT,
   useOfficerApi,
 } from "@/framework";
+import { useAccountCodeSuggestions } from "@/lib/useAccountCodeSuggestions";
 import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
+import { useGroupCodeSuggestions } from "@/lib/useGroupCodeSuggestions";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
@@ -150,6 +142,8 @@ type AccountSuggestionLookup = {
   suggestions: string[];
   error: string;
 };
+
+type AccessSubjectKind = "account" | "group";
 
 /** Warns about unsealed credentials without restricting key entry. */
 export function UnsealedKeysWarning() {
@@ -539,13 +533,14 @@ function ConnectionAccessSection({
   connection,
   provider,
   busy,
-  account,
-  setAccount,
-  accountCode,
-  accountSuggestions,
+  subjectKind,
+  setSubjectKind,
+  subjectInput,
+  setSubjectInput,
+  subjectCode,
   venueAccount,
   setVenueAccount,
-  feeBlocked,
+  feeBlock,
   focusFeeAccount,
   grantAccess,
   onRevoke,
@@ -555,19 +550,31 @@ function ConnectionAccessSection({
   connection: TradingConnection;
   provider: TradingProvider;
   busy: boolean;
-  account: string;
-  setAccount: (value: string) => void;
-  accountCode: string;
-  accountSuggestions: AccountSuggestionLookup | null;
+  subjectKind: AccessSubjectKind;
+  setSubjectKind: (value: AccessSubjectKind) => void;
+  subjectInput: string;
+  setSubjectInput: (value: string) => void;
+  subjectCode: string;
   venueAccount: string;
   setVenueAccount: (value: string) => void;
-  feeBlocked: boolean;
+  feeBlock: AccessGrantBlock | null;
   focusFeeAccount: () => void;
   grantAccess: () => Promise<void>;
-  onRevoke: (account: string) => void;
+  onRevoke: (subject: TradingAccessSubject) => void;
 }) {
   const { t } = useTranslation("trading");
   const { t: tc } = useTranslation();
+  const { t: tv } = useTranslation("venues");
+  const accountSuggestions = useAccountCodeSuggestions(
+    subjectInput,
+    subjectKind === "account",
+  );
+  const groupSuggestions = useGroupCodeSuggestions(
+    subjectInput,
+    subjectKind === "group",
+  );
+  const suggestions =
+    subjectKind === "account" ? accountSuggestions : groupSuggestions;
   return (
     <section
       ref={accessSection}
@@ -578,72 +585,50 @@ function ConnectionAccessSection({
       <h4 id={`${id}-access`} className="text-sm font-medium">
         {t("access.title")}
       </h4>
-      <Table aria-label={t("access.title")}>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t("access.account")}</TableHead>
-            {provider.venueAccounts && (
-              <TableHead>{t("connection.venueAccount")}</TableHead>
-            )}
-            <TableHead>{t("table.actions")}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {connection.access.map((grant) => (
-            <TableRow key={grant.account}>
-              <TableCell>{grant.account}</TableCell>
-              {provider.venueAccounts && (
-                <TableCell>{grant.venueAccount}</TableCell>
-              )}
-              <TableCell>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => {
-                    onRevoke(grant.account);
-                  }}
-                >
-                  {t("actions.revoke")}
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-          {connection.access.length === 0 && (
-            <TableRow>
-              <TableCell
-                colSpan={provider.venueAccounts ? 3 : 2}
-                className="text-muted"
-              >
-                {t("access.empty")}
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+      <VenueAccessList
+        grants={connection.access}
+        showVenueAccount={provider.venueAccounts}
+        busy={busy}
+        onRevoke={onRevoke}
+      />
       <form
-        aria-label={t("actions.addAccount")}
+        aria-label={tv("actions.grantAccess")}
         className="space-y-3"
         onSubmit={(event) => {
           event.preventDefault();
           void grantAccess();
         }}
       >
-        <h5 className="text-xs font-medium">{t("actions.addAccount")}</h5>
+        <h5 className="text-xs font-medium">{tv("actions.grantAccess")}</h5>
+        <fieldset className="space-y-2" disabled={busy}>
+          <Label asChild>
+            <legend>{t("access.grantTo")}</legend>
+          </Label>
+          <Segmented
+            value={subjectKind}
+            options={[
+              { value: "account", label: t("access.account") },
+              { value: "group", label: t("access.group") },
+            ]}
+            onChange={(value) => setSubjectKind(value as AccessSubjectKind)}
+          />
+        </fieldset>
         <div className="space-y-2">
-          <Label htmlFor={`${id}-account`}>{t("access.account")}</Label>
+          <Label htmlFor={`${id}-subject`}>
+            {t(subjectKind === "account" ? "access.account" : "access.group")}
+          </Label>
           <Autocomplete
-            id={`${id}-account`}
-            value={account}
-            suggestions={
-              accountSuggestions?.code === accountCode
-                ? accountSuggestions.suggestions
-                : []
-            }
+            id={`${id}-subject`}
+            value={subjectInput}
+            suggestions={suggestions.codes}
             disabled={busy}
-            onChange={setAccount}
-            onClear={() => setAccount("")}
+            onChange={setSubjectInput}
+            onClear={() => setSubjectInput("")}
             clearLabel={tc("filters.clearField")}
+          />
+          <CodeSuggestionFailure
+            failed={suggestions.failed}
+            kind={subjectKind}
           />
         </div>
         {provider.venueAccounts && (
@@ -661,25 +646,18 @@ function ConnectionAccessSection({
             />
           </div>
         )}
-        {feeBlocked && (
-          <div className="space-y-2 text-xs text-[var(--warn)]">
-            <p>{t("access.feeRequired", { provider: provider.title })}</p>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="text-accent underline underline-offset-4"
-              onClick={focusFeeAccount}
-            >
-              {t("actions.setFeeAccount")}
-            </Button>
-          </div>
+        {feeBlock !== null && (
+          <AccessBlockedHint
+            reason={feeBlock}
+            providerTitle={provider.title}
+            onSetFeeAccount={focusFeeAccount}
+          />
         )}
         <Button
           type="submit"
-          disabled={busy || accountCode === "" || feeBlocked}
+          disabled={busy || subjectCode === "" || feeBlock !== null}
         >
-          {t("actions.addAccount")}
+          {tv("actions.grantAccess")}
         </Button>
       </form>
     </section>
@@ -1140,7 +1118,6 @@ function ConnectionCard({
   reload: () => void;
 }) {
   const { t } = useTranslation("trading");
-  const { t: tc } = useTranslation();
   const { t: tv } = useTranslation("venues");
   const api = useOfficerApi();
   const id = useId();
@@ -1151,13 +1128,13 @@ function ConnectionCard({
   const [checkError, setCheckError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [check, setCheck] = useState<TradingConnectionCheck | null>(null);
-  const [account, setAccount] = useState("");
+  const [subjectKind, setSubjectKind] = useState<AccessSubjectKind>("account");
+  const [subjectInput, setSubjectInput] = useState("");
   const [venueAccount, setVenueAccount] = useState("");
   const [feeCode, setFeeCode] = useState("");
   const [deleteSymbol, setDeleteSymbol] = useState<string | null>(null);
-  const [revokeAccount, setRevokeAccount] = useState<string | null>(null);
-  const [accountSuggestions, setAccountSuggestions] =
-    useState<AccountSuggestionLookup | null>(null);
+  const [revokeSubject, setRevokeSubject] =
+    useState<TradingAccessSubject | null>(null);
   const [feeAccountSuggestions, setFeeAccountSuggestions] =
     useState<AccountSuggestionLookup | null>(null);
   const [feeLookup, setFeeLookup] = useState<
@@ -1169,10 +1146,6 @@ function ConnectionCard({
   const enableButton = useRef<HTMLButtonElement>(null);
   const feeInput = useRef<HTMLInputElement>(null);
   const card = useRef<HTMLDivElement>(null);
-  const accountQuery = useDebouncedValue(
-    account.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
   const feeQuery = useDebouncedValue(
     feeCode.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -1186,47 +1159,38 @@ function ConnectionCard({
   }, [focusOnMount]);
 
   useEffect(() => {
-    const queries = Array.from(
-      new Set([accountQuery, feeQuery].filter((code) => code !== "")),
-    );
-    if (queries.length === 0) return;
+    if (feeQuery === "") return;
     const controller = new AbortController();
-    for (const code of queries) {
-      void fetchAccounts(
-        {
-          code,
-          codeMatch: "starts_with",
-          limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-          sort: "code",
-        },
-        controller.signal,
-      )
-        .then((accounts) => {
-          if (controller.signal.aborted) return;
-          const lookup = {
-            code,
-            suggestions: Array.from(
-              new Set(accounts.map((item) => item.code)),
-            ).sort(),
-            error: "",
-          };
-          if (accountQuery === code) setAccountSuggestions(lookup);
-          if (feeQuery === code) setFeeAccountSuggestions(lookup);
-        })
-        .catch((err: unknown) => {
-          if (!controller.signal.aborted) {
-            const lookup = {
-              code,
-              suggestions: [],
-              error: err instanceof Error ? err.message : String(err),
-            };
-            if (accountQuery === code) setAccountSuggestions(lookup);
-            if (feeQuery === code) setFeeAccountSuggestions(lookup);
-          }
+    void fetchAccounts(
+      {
+        code: feeQuery,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
+      controller.signal,
+    )
+      .then((accounts) => {
+        if (controller.signal.aborted) return;
+        setFeeAccountSuggestions({
+          code: feeQuery,
+          suggestions: Array.from(
+            new Set(accounts.map((item) => item.code)),
+          ).sort(),
+          error: "",
         });
-    }
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          setFeeAccountSuggestions({
+            code: feeQuery,
+            suggestions: [],
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
     return () => controller.abort();
-  }, [accountQuery, feeQuery, fetchAccounts]);
+  }, [feeQuery, fetchAccounts]);
 
   useEffect(() => {
     if (feeQuery === "") return;
@@ -1295,26 +1259,15 @@ function ConnectionCard({
     feeInput.current?.scrollIntoView({ block: "nearest" });
     feeInput.current?.focus();
   };
-  const accountCode = account.trim();
+  const subjectCode = subjectInput.trim();
   const feeAccountCode = feeCode.trim();
-  const accountSuggestionErrors = Array.from(
-    new Set(
-      [
-        accountSuggestions?.code === accountCode
-          ? accountSuggestions.error
-          : "",
-        feeAccountSuggestions?.code === feeAccountCode
-          ? feeAccountSuggestions.error
-          : "",
-      ].filter((message) => message !== ""),
-    ),
-  );
-  const feeBlocked =
-    provider.unlinkedFees &&
-    connection.feeAccount === "" &&
-    connection.access.length > 0 &&
-    accountCode !== "" &&
-    !connection.access.some((grant) => grant.account === accountCode);
+  // A group is refused whatever its code, so its reason shows before typing.
+  const feeBlock =
+    subjectKind === "group"
+      ? accessGrantBlock(provider, connection, { accountGroup: subjectCode })
+      : subjectCode === ""
+        ? null
+        : accessGrantBlock(provider, connection, { account: subjectCode });
   const steps = [
     {
       key: "check",
@@ -1355,15 +1308,19 @@ function ConnectionCard({
     );
   };
   const grantAccess = async () => {
-    if (busy || accountCode === "" || feeBlocked) return;
-    const body: { account: string; venueAccount?: string } = {
-      account: accountCode,
-    };
-    if (provider.venueAccounts && venueAccount.trim() !== "")
-      body.venueAccount = venueAccount.trim();
+    if (busy || subjectCode === "" || feeBlock !== null) return;
+    const subject: TradingAccessSubject =
+      subjectKind === "account"
+        ? { account: subjectCode }
+        : { accountGroup: subjectCode };
+    const venueAccountCode = venueAccount.trim();
+    const body =
+      provider.venueAccounts && venueAccountCode !== ""
+        ? { ...subject, venueAccount: venueAccountCode }
+        : subject;
     const ok = await run(() => api.grantTradingAccess(connection.id, body));
     if (ok) {
-      setAccount("");
+      setSubjectInput("");
       setVenueAccount("");
     }
   };
@@ -1503,24 +1460,20 @@ function ConnectionCard({
             </ol>
           </div>
         )}
-        {error && deleteSymbol === null && revokeAccount === null && (
+        {error && deleteSymbol === null && revokeSubject === null && (
           <div className="space-y-2">
             <ErrorBanner message={error} />
             {feeRequired && provider.unlinkedFees && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-accent underline underline-offset-4"
-                onClick={focusFeeAccount}
-              >
-                {t("actions.setFeeAccount")}
-              </Button>
+              <LinkButton onClick={focusFeeAccount}>
+                {tv("actions.setFeeAccount")}
+              </LinkButton>
             )}
           </div>
         )}
-        {accountSuggestionErrors.map((message) => (
-          <ErrorBanner key={message} message={message} />
-        ))}
+        {feeAccountSuggestions?.code === feeAccountCode &&
+          feeAccountSuggestions.error !== "" && (
+            <ErrorBanner message={feeAccountSuggestions.error} />
+          )}
         {feeLookup?.code === feeAccountCode && "error" in feeLookup && (
           <ErrorBanner message={feeLookup.error} />
         )}
@@ -1551,18 +1504,19 @@ function ConnectionCard({
           connection={connection}
           provider={provider}
           busy={busy}
-          account={account}
-          setAccount={setAccount}
-          accountCode={accountCode}
-          accountSuggestions={accountSuggestions}
+          subjectKind={subjectKind}
+          setSubjectKind={setSubjectKind}
+          subjectInput={subjectInput}
+          setSubjectInput={setSubjectInput}
+          subjectCode={subjectCode}
           venueAccount={venueAccount}
           setVenueAccount={setVenueAccount}
-          feeBlocked={feeBlocked}
+          feeBlock={feeBlock}
           focusFeeAccount={focusFeeAccount}
           grantAccess={grantAccess}
-          onRevoke={(account) => {
+          onRevoke={(subject) => {
             setError("");
-            setRevokeAccount(account);
+            setRevokeSubject(subject);
           }}
         />
         {provider.unlinkedFees && (
@@ -1592,44 +1546,23 @@ function ConnectionCard({
           reload={reload}
         />
       )}
-      <AlertDialog
-        open={revokeAccount !== null}
+      <RevokeAccessDialog
+        open={revokeSubject !== null}
+        subject={revokeSubject}
+        connectionLabel={connection.label}
+        busy={busy}
+        error={error}
         onOpenChange={(open) => {
-          if (!open) setRevokeAccount(null);
+          if (!open) setRevokeSubject(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("access.revokeTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("access.revokeDescription", {
-                account: revokeAccount,
-                label: connection.label,
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {error && <ErrorBanner message={error} />}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>
-              {tc("actions.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="danger"
-              disabled={busy}
-              onClick={(event) => {
-                event.preventDefault();
-                if (revokeAccount === null) return;
-                void run(async () => {
-                  await api.revokeTradingAccess(connection.id, revokeAccount);
-                  setRevokeAccount(null);
-                });
-              }}
-            >
-              {t("actions.revoke")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onConfirm={() => {
+          if (revokeSubject === null) return;
+          void run(async () => {
+            await api.revokeTradingAccess(connection.id, revokeSubject);
+            setRevokeSubject(null);
+          });
+        }}
+      />
     </Card>
   );
 }

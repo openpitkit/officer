@@ -431,14 +431,15 @@ func (r *realmStore) RestoreBackup(
 
 	summary = backup.NewSummary()
 	rt := &restoreTx{
-		store:                      r.store,
-		tx:                         tx,
-		dictionaries:               dictionaries,
-		mode:                       mode,
-		sourceRealm:                archive.Manifest.Realm.Code,
-		credentialForm:             archive.CredentialForm,
-		validateMarketDataInstance: opts.ValidateMarketDataInstance,
-		summary:                    &summary,
+		store:                             r.store,
+		tx:                                tx,
+		dictionaries:                      dictionaries,
+		mode:                              mode,
+		sourceRealm:                       archive.Manifest.Realm.Code,
+		credentialForm:                    archive.CredentialForm,
+		validateMarketDataInstance:        opts.ValidateMarketDataInstance,
+		tradingProviderRequiresFeeAccount: opts.TradingProviderRequiresFeeAccount,
+		summary:                           &summary,
 	}
 
 	if err := rt.run(ctx, scope, data); err != nil {
@@ -466,14 +467,15 @@ func validateRestoreMode(mode backup.RestoreMode) (backup.RestoreMode, error) {
 // restoreTx carries the in-flight restore transaction, the mode and the running
 // per-section summary so the per-table insert helpers stay small.
 type restoreTx struct {
-	store                      *sqliteStore
-	tx                         *sql.Tx
-	dictionaries               *enumDictionaries
-	mode                       backup.RestoreMode
-	sourceRealm                string
-	credentialForm             string
-	validateMarketDataInstance func(domain.MarketDataInstance) error
-	summary                    *backup.RestoreSummary
+	store                             *sqliteStore
+	tx                                *sql.Tx
+	dictionaries                      *enumDictionaries
+	mode                              backup.RestoreMode
+	sourceRealm                       string
+	credentialForm                    string
+	validateMarketDataInstance        func(domain.MarketDataInstance) error
+	tradingProviderRequiresFeeAccount func(provider string) (bool, error)
+	summary                           *backup.RestoreSummary
 }
 
 // applyRuntime records n runtime rows written to section. The node classifies

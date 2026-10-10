@@ -65,7 +65,8 @@ type TradingConnection struct {
 	// Enabled reports whether new orders may be sent through the connection.
 	Enabled bool
 	// FeeAccount receives unlinked venue fees whole. Empty uses the single
-	// bound Officer account, when there is exactly one.
+	// Officer account that can send through the connection, directly or
+	// through a granted group, when there is exactly one.
 	FeeAccount AccountID
 }
 
@@ -84,16 +85,41 @@ type TradingInstrument struct {
 	Enabled bool
 }
 
-// TradingAccess binds one Officer account to one trading connection. There is
-// one binding per account and connection. VenueAccount is the optional bound
-// venue-side account, empty when none.
+// TradingAccess grants one trading connection to one subject: an Officer
+// account or an account group, exactly one of Account and AccountGroup. There
+// is one grant per connection and subject. A group grant reaches every current
+// member of the group; on one connection an account's own grant wins over its
+// group's. VenueAccount is the optional bound venue-side account, empty when
+// none.
 type TradingAccess struct {
-	// Account is the Officer account receiving access.
+	// Account is the code of the Officer account receiving access; empty for
+	// a group grant.
 	Account AccountID
-	// Connection is the trading connection the account may use.
+	// AccountGroup is the code of the account group receiving access; empty
+	// for an account grant. The default group is never a subject.
+	AccountGroup string
+	// Connection is the trading connection the subject may use.
 	Connection ExternalID
 	// VenueAccount is the optional bound venue-side account, empty when none.
 	VenueAccount string
+}
+
+// SameSubject reports whether a and other grant to the same subject: the same
+// account or the same account group. It is the one comparison of grant
+// subjects; comparing Account alone would equate any two group grants, since
+// both carry an empty Account.
+func (a TradingAccess) SameSubject(other TradingAccess) bool {
+	return a.Account == other.Account && a.AccountGroup == other.AccountGroup
+}
+
+// SubjectLabel renders the grant's subject for audit details and error
+// messages: the account code, or "group:<code>" for a group grant, so a group
+// never reads as an account with the same code.
+func (a TradingAccess) SubjectLabel() string {
+	if a.AccountGroup != "" {
+		return "group:" + a.AccountGroup
+	}
+	return a.Account.String()
 }
 
 // TradingDestination identifies where one Officer order is sent.
@@ -202,10 +228,36 @@ func ValidateTradingInstrument(instrument TradingInstrument) error {
 	return nil
 }
 
-// ValidateTradingAccess validates account access to a trading connection.
+// ValidateTradingAccess validates a grant before any lookup. Exactly one of
+// Account and AccountGroup must be set; the account code must pass
+// ValidateAccountID and the group code ValidateGroupID, which refuses the
+// reserved "-", so the default group never becomes a subject.
 func ValidateTradingAccess(access TradingAccess) error {
-	if err := ValidateAccountID(access.Account); err != nil {
-		return err
+	switch {
+	case access.Account == "" && access.AccountGroup == "":
+		return invalidField(
+			"/account", "required",
+			fmt.Errorf(
+				"trading access requires an account or an account group: %w",
+				ErrInvalid,
+			),
+		)
+	case access.Account != "" && access.AccountGroup != "":
+		return invalidField(
+			"/accountGroup", "unsupported_value",
+			fmt.Errorf(
+				"trading access must not have both an account and an account group: %w",
+				ErrInvalid,
+			),
+		)
+	case access.AccountGroup != "":
+		if err := ValidateGroupID(access.AccountGroup); err != nil {
+			return WithValidationPointer("/accountGroup", err)
+		}
+	default:
+		if err := ValidateAccountID(access.Account); err != nil {
+			return err
+		}
 	}
 	if access.Connection.IsZero() {
 		return fmt.Errorf("trading access connection: %w", ErrInvalid)

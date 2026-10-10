@@ -59,6 +59,7 @@ import type {
   TradingProvider,
   TradingInstrument,
   TradingAccessGrant,
+  TradingAccessSubject,
   TradingConnection,
   TradingSnapshot,
   TradingConnectionCheck,
@@ -1268,9 +1269,21 @@ function normalizeTradingInstrument(v: unknown): TradingInstrument {
 
 function normalizeTradingAccessGrant(v: unknown): TradingAccessGrant {
   const o = isObject(v) ? v : {};
+  // Every field is required: a missing one would silently change the grantee
+  // or its membership.
   return {
-    account: asString(o.account),
-    venueAccount: asString(o.venueAccount),
+    account: requireStringField(o, "Trading access account", "account"),
+    accountGroup: requireStringField(
+      o,
+      "Trading access accountGroup",
+      "accountGroup",
+    ),
+    venueAccount: requireStringField(
+      o,
+      "Trading access venueAccount",
+      "venueAccount",
+    ),
+    group: requireStringField(o, "Trading access group", "group"),
   };
 }
 
@@ -2040,14 +2053,29 @@ async function searchTradingSymbols(
   return normalizeTradingSymbolSearch(v);
 }
 
+/** The subject's one wire key; no other field of the argument is sent. */
+function tradingAccessSubjectField(
+  subject: TradingAccessSubject,
+): Record<string, string> {
+  return subject.account !== undefined
+    ? { account: subject.account }
+    : { accountGroup: subject.accountGroup };
+}
+
 async function grantTradingAccess(
   client: ApiClient,
   id: string,
-  body: { account: string; venueAccount?: string },
+  body: TradingAccessSubject & { venueAccount?: string },
 ): Promise<TradingSnapshot> {
   const v = await client.request(
     `${client.baseUrl}/trading/connections/${encode(id)}/access`,
-    { method: "PUT", body },
+    {
+      method: "PUT",
+      body: {
+        ...tradingAccessSubjectField(body),
+        venueAccount: body.venueAccount,
+      },
+    },
   );
   return normalizeTradingSnapshot(v);
 }
@@ -2055,9 +2083,9 @@ async function grantTradingAccess(
 async function revokeTradingAccess(
   client: ApiClient,
   id: string,
-  account: string,
+  subject: TradingAccessSubject,
 ): Promise<void> {
-  const params = new URLSearchParams({ account });
+  const params = new URLSearchParams(tradingAccessSubjectField(subject));
   await client.request(
     `${client.baseUrl}/trading/connections/${encode(id)}/access?${params.toString()}`,
     { method: "DELETE" },

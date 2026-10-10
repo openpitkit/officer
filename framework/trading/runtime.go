@@ -54,7 +54,9 @@ type FeeSkipSink func(ctx context.Context, connection domain.ExternalID, feeID, 
 // that interface's not-found, conflict and already-exists contracts.
 type Store interface {
 	GetTradingConnection(context.Context, domain.ExternalID) (domain.TradingConnection, bool, error)
-	// GetTradingFeeAccounts reads the fee account and distinct bindings atomically.
+	// GetTradingFeeAccounts atomically reads the fee account and the distinct
+	// accounts that can send through the connection: direct grantees and the
+	// current members of granted groups.
 	GetTradingFeeAccounts(context.Context, domain.ExternalID) (domain.AccountID, []domain.AccountID, error)
 	ListTradingConnections(context.Context) ([]domain.TradingConnection, error)
 	FindTradingInstrument(context.Context, domain.ExternalID, string, string) (domain.TradingInstrument, bool, error)

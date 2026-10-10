@@ -3922,6 +3922,223 @@ func TestBackupTradingReplaceAllPrunesDependenciesFirst(t *testing.T) {
 	}
 }
 
+func TestBackupTradingGroupAccessRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStore(t, "trading-group-source")
+	connection, _ := seedTradingBackupState(t, ctx, source)
+	if err := source.PutTradingAccess(ctx, domain.TradingAccess{
+		AccountGroup: "grp-1", Connection: connection.ExternalID, VenueAccount: "group-venue",
+	}); err != nil {
+		t.Fatalf("PutTradingAccess(group): %v", err)
+	}
+	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	wantArchive := []backup.TradingAccess{
+		{AccountGroup: "grp-1", Connection: connection.ExternalID, VenueAccount: "group-venue"},
+		{Account: "acc-1", Connection: connection.ExternalID, VenueAccount: "venue-subaccount-1"},
+	}
+	if !reflect.DeepEqual(archive.Data.TradingAccess, wantArchive) {
+		t.Fatalf("archived grants = %+v, want %+v", archive.Data.TradingAccess, wantArchive)
+	}
+	checkGrants := func(target fwstore.RealmStore, groupVenue string) {
+		t.Helper()
+		rows, err := target.ListTradingAccessForConnection(ctx, connection.ExternalID)
+		want := []fwstore.TradingAccessListRow{
+			{Access: domain.TradingAccess{AccountGroup: "grp-1", Connection: connection.ExternalID, VenueAccount: groupVenue}},
+			{Access: domain.TradingAccess{Account: "acc-1", Connection: connection.ExternalID, VenueAccount: "venue-subaccount-1"}, Group: "grp-1"},
+		}
+		if err != nil || !reflect.DeepEqual(rows, want) {
+			t.Fatalf("restored grants = %+v, want %+v; err=%v", rows, want, err)
+		}
+	}
+
+	_, target := newRealmStore(t, "trading-group-target")
+	if _, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup(replace_all): %v", err)
+	}
+	checkGrants(target, "group-venue")
+
+	overwrite := cloneBackupArchive(t, archive)
+	overwrite.Data.TradingAccess[0].VenueAccount = "overwritten-group-venue"
+	if _, err := target.RestoreBackup(ctx, overwrite, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}); err != nil {
+		t.Fatalf("RestoreBackup(overwrite): %v", err)
+	}
+	checkGrants(target, "overwritten-group-venue")
+
+	insertMissing := cloneBackupArchive(t, archive)
+	insertMissing.Data.TradingAccess[0].VenueAccount = "must-be-skipped"
+	summary, err := target.RestoreBackup(ctx, insertMissing, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeInsertMissing,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup(insert_missing): %v", err)
+	}
+	if summary.Skipped[backup.SectionTrading] != 5 {
+		t.Fatalf("skipped trading rows = %d, want 5", summary.Skipped[backup.SectionTrading])
+	}
+	checkGrants(target, "overwritten-group-venue")
+
+	if _, err := target.CreateGroup(ctx, domain.AccountGroup{Code: "grp-target-only"}); err != nil {
+		t.Fatalf("CreateGroup(target only): %v", err)
+	}
+	if err := target.PutTradingAccess(ctx, domain.TradingAccess{
+		AccountGroup: "grp-target-only", Connection: connection.ExternalID,
+	}); err != nil {
+		t.Fatalf("PutTradingAccess(target only group): %v", err)
+	}
+	if _, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup(replace_all again): %v", err)
+	}
+	checkGrants(target, "group-venue")
+
+	missing := cloneBackupArchive(t, archive)
+	missing.Data.TradingAccess[0].AccountGroup = "missing-group"
+	_, fresh := newRealmStore(t, "trading-group-missing")
+	_, err = fresh.RestoreBackup(ctx, missing, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	})
+	assertTradingBackupInvalid(t, err, "missing-group")
+	if !strings.Contains(err.Error(), "include that group") {
+		t.Fatalf("RestoreBackup error = %q, want the group section hint", err)
+	}
+}
+
+// TestBackupRestoreGroupGrantNeedsFeeAccount keeps the node's group grant rule
+// on restore. The archive is taken while the connection has a fee account and a
+// group grant; the grant is then revoked and, in most cases, the fee account
+// cleared. Restoring with insert_missing keeps the existing connection and
+// re-inserts the group grant, so the provider lookup decides the outcome.
+func TestBackupRestoreGroupGrantNeedsFeeAccount(t *testing.T) {
+	ctx := context.Background()
+	errLookup := errors.New("test provider lookup failure")
+	lookup := func(required bool, err error) func(string) (bool, error) {
+		return func(provider string) (bool, error) {
+			if provider != domain.TradingProviderAlpaca {
+				return false, errors.New("lookup asked about provider " + provider)
+			}
+			return required, err
+		}
+	}
+	for _, test := range []struct {
+		name     string
+		clearFee bool
+		lookup   func(string) (bool, error)
+		// wantErr is the error context; empty means the restore succeeds.
+		wantErr string
+		wantIs  error
+	}{
+		{
+			name:     "refused when the provider needs a fee account",
+			clearFee: true,
+			lookup:   lookup(true, nil),
+			wantErr:  "a group grant needs the connection's fee account",
+			wantIs:   domain.ErrFeeAccountRequired,
+		},
+		{
+			name:   "allowed while the connection keeps its fee account",
+			lookup: lookup(true, nil),
+		},
+		{
+			name:     "allowed without a fee account the provider does not need",
+			clearFee: true,
+			lookup:   lookup(false, nil),
+		},
+		{
+			name:     "no lookup fails closed",
+			clearFee: true,
+			wantErr:  "cannot check whether provider",
+		},
+		{
+			name:     "lookup failure fails the restore",
+			clearFee: true,
+			lookup:   lookup(false, errLookup),
+			wantErr:  `provider "alpaca"`,
+			wantIs:   errLookup,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, rs := newRealmStore(t, "trading-group-fee")
+			connection, _ := seedTradingBackupState(t, ctx, rs)
+			desk := domain.TradingAccess{
+				AccountGroup: "grp-1", Connection: connection.ExternalID,
+				VenueAccount: "group-venue",
+			}
+			if err := rs.PutTradingAccess(ctx, desk); err != nil {
+				t.Fatalf("PutTradingAccess(group): %v", err)
+			}
+			archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
+			if err != nil {
+				t.Fatalf("ExportBackup: %v", err)
+			}
+			if err := rs.RemoveTradingAccess(
+				ctx, connection.ExternalID, "", "grp-1",
+			); err != nil {
+				t.Fatalf("RemoveTradingAccess(group): %v", err)
+			}
+			wantFee := connection.FeeAccount
+			if test.clearFee {
+				if err := rs.SetTradingConnectionFeeAccount(
+					ctx, connection.ExternalID, "",
+				); err != nil {
+					t.Fatalf("SetTradingConnectionFeeAccount(clear): %v", err)
+				}
+				wantFee = ""
+			}
+			before := snapshotBackupData(t, ctx, rs)
+
+			_, err = rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope:                             backup.Scope{All: true},
+				Mode:                              backup.RestoreModeInsertMissing,
+				TradingProviderRequiresFeeAccount: test.lookup,
+			})
+			if test.wantErr != "" {
+				if err == nil {
+					t.Fatalf("RestoreBackup error = nil, want %q", test.wantErr)
+				}
+				if test.wantIs != nil && !errors.Is(err, test.wantIs) {
+					t.Fatalf("RestoreBackup error = %v, want %v", err, test.wantIs)
+				}
+				for _, want := range []string{connection.Label, test.wantErr} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+					}
+				}
+				if after := snapshotBackupData(t, ctx, rs); !reflect.DeepEqual(after, before) {
+					t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RestoreBackup: %v", err)
+			}
+			rows, err := rs.ListTradingAccessForConnection(ctx, connection.ExternalID)
+			want := []fwstore.TradingAccessListRow{
+				{Access: desk},
+				{Access: domain.TradingAccess{
+					Account: "acc-1", Connection: connection.ExternalID,
+					VenueAccount: "venue-subaccount-1",
+				}, Group: "grp-1"},
+			}
+			if err != nil || !reflect.DeepEqual(rows, want) {
+				t.Fatalf("restored grants = %+v, want %+v; err=%v", rows, want, err)
+			}
+			restored, found, err := rs.GetTradingConnection(ctx, connection.ExternalID)
+			if err != nil || !found || restored.FeeAccount != wantFee {
+				t.Fatalf("restored fee account = %q (found=%v, err=%v), want %q",
+					restored.FeeAccount, found, err, wantFee)
+			}
+		})
+	}
+}
+
 func TestResetClearsTradingState(t *testing.T) {
 	ctx := context.Background()
 	store, realm := newRealmStore(t, "trading-reset")

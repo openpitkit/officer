@@ -585,6 +585,15 @@ type AuditListPage struct {
 	Total int
 }
 
+// TradingAccessListRow is a connection grant plus the granted account's group
+// membership.
+type TradingAccessListRow struct {
+	Access domain.TradingAccess
+	// Group is the granted account's current group code; empty for a group
+	// grant and for an account outside any group.
+	Group string
+}
+
 // StoreHealth reports the observable condition of the store.
 type StoreHealth struct {
 	// Path is the on-disk location of the database.
@@ -1237,8 +1246,10 @@ type RealmStore interface {
 		ctx context.Context, id domain.ExternalID,
 	) (domain.TradingConnection, bool, error)
 
-	// GetTradingFeeAccounts reads the fee account and distinct bindings atomically.
-	// An unknown connection returns domain.ErrNotFound.
+	// GetTradingFeeAccounts atomically reads the connection's fee account and
+	// the distinct accounts that can send through it - direct grantees and the
+	// current members of granted groups - ordered by code. An unknown
+	// connection returns domain.ErrNotFound.
 	GetTradingFeeAccounts(
 		ctx context.Context, connection domain.ExternalID,
 	) (domain.AccountID, []domain.AccountID, error)
@@ -1295,15 +1306,20 @@ type RealmStore interface {
 		quoteAsset string,
 	) (domain.TradingInstrument, bool, error)
 
-	// PutTradingAccess inserts an account/connection binding or replaces its
-	// optional bound venue account. Unknown accounts or connections return
-	// domain.ErrNotFound.
+	// PutTradingAccess inserts the grant of a connection to one subject - an
+	// account or an account group, resolved by code - or replaces its optional
+	// bound venue account. An invalid grant returns domain.ErrInvalid before
+	// any lookup, so no group code resolves to the default group; an unknown
+	// account, group or connection returns domain.ErrNotFound.
 	PutTradingAccess(ctx context.Context, access domain.TradingAccess) error
 
-	// RemoveTradingAccess removes one account/connection binding. Returns
-	// domain.ErrNotFound when the binding is absent.
+	// RemoveTradingAccess removes the grant of a connection to exactly one
+	// subject, account or accountGroup with the other empty; anything else
+	// returns domain.ErrInvalid. Returns domain.ErrNotFound when the grant is
+	// absent.
 	RemoveTradingAccess(
-		ctx context.Context, account domain.AccountID, connection domain.ExternalID,
+		ctx context.Context, connection domain.ExternalID,
+		account domain.AccountID, accountGroup string,
 	) error
 
 	// DeleteTradingInstrument removes one mapping. Returns domain.ErrNotFound
@@ -1312,17 +1328,21 @@ type RealmStore interface {
 		ctx context.Context, connection domain.ExternalID, externalSymbol string,
 	) error
 
-	// ListTradingAccess returns an account's grants ordered by connection
-	// external id and then venue-side account.
+	// ListTradingAccess returns an account's effective grants, at most one per
+	// connection, ordered by connection external id: the account's own grant
+	// whole when it has one, otherwise its current group's grant whole, which
+	// carries AccountGroup and an empty Account. The own grant wins even when
+	// only the group's grant binds a venue account.
 	ListTradingAccess(
 		ctx context.Context, account domain.AccountID,
 	) ([]domain.TradingAccess, error)
 
-	// ListTradingAccessForConnection returns every grant of a connection,
-	// ordered by account code and then venue-side account.
+	// ListTradingAccessForConnection returns every grant of a connection with
+	// the granted account's current group: group grants first, then account
+	// grants, each ordered by code and then venue-side account.
 	ListTradingAccessForConnection(
 		ctx context.Context, connection domain.ExternalID,
-	) ([]domain.TradingAccess, error)
+	) ([]TradingAccessListRow, error)
 
 	// EarliestVenueOrderTime returns the creation time of the connection's first
 	// venue-order link, including terminal orders. The bool is false when the

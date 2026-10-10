@@ -43,13 +43,16 @@ import type {
   SortOrder,
   StatusListFilter,
   TextMatchMode,
+  TradingAccessSubject,
+  TradingSnapshot,
 } from "@/api/types";
 import { useAccountsPage } from "@/api/useAccounts";
 import { useGroupsPage } from "@/api/useGroups";
+import type { PollingResult } from "@/api/usePolling";
 import { useTrading } from "@/api/useTrading";
 import { validateAccountID } from "@/api/validate";
 import { Autocomplete } from "@/components/Autocomplete";
-import { AssetCodeSuggestionFailure } from "@/components/AssetCodeSuggestionFailure";
+import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import {
   EmptyState,
   ErrorBanner,
@@ -104,6 +107,7 @@ import {
   TextFilter,
   TradingButton,
   useOfficerApi,
+  VenueAccessButton,
 } from "@/framework";
 import {
   Dialog,
@@ -142,6 +146,7 @@ import {
 } from "@/lib/useDebounce";
 import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { cn } from "@/lib/utils";
+import { VenueAccessDialogContainer } from "@/pages/VenueAccessDialogContainer";
 
 type AccountsTab = "accounts" | "groups";
 
@@ -1192,7 +1197,10 @@ export function CreateAccountDialog({
             <p className="text-[0.6875rem] text-muted">
               {ta("createAccount.currencyHint")}
             </p>
-            <AssetCodeSuggestionFailure failed={assetSuggestionResult.failed} />
+            <CodeSuggestionFailure
+              kind="asset"
+              failed={assetSuggestionResult.failed}
+            />
           </div>
         </div>
         {error && (
@@ -1345,7 +1353,10 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
             <p className="text-[0.6875rem] text-muted">
               {t("createGroup.currencyHint")}
             </p>
-            <AssetCodeSuggestionFailure failed={assetSuggestionResult.failed} />
+            <CodeSuggestionFailure
+              kind="asset"
+              failed={assetSuggestionResult.failed}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="group-notes">{t("createGroup.notesLabel")}</Label>
@@ -1719,13 +1730,37 @@ function UnblockGroupConfirm({
 // Delete group confirm
 // ---------------------------------------------------------------------------
 
+/** Whether the trading snapshot a delete warning is read from is known: a
+ *  line while it loads, the error when its first load failed, the stale
+ *  notice when a refresh failed. Unknown connections are not no connections:
+ *  the warning shows only with the snapshot, stale or not. */
+function TradingSnapshotState({
+  trading,
+}: {
+  trading: PollingResult<TradingSnapshot>;
+}) {
+  const { t } = useTranslation("accounts");
+  const { load } = trading;
+  if (load.state === "loading") {
+    return <p className="text-xs text-muted">{t("tradingCheck.checking")}</p>;
+  }
+  if (load.state === "error") {
+    return (
+      <ErrorBanner message={t("tradingCheck.failed", { error: load.error })} />
+    );
+  }
+  return <StaleState load={load} reload={trading.reload} />;
+}
+
 function DeleteGroupConfirm({
   group,
+  trading,
   open,
   onOpenChange,
   onDone,
 }: {
   group: Group | null;
+  trading: PollingResult<TradingSnapshot>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
@@ -1734,6 +1769,15 @@ function DeleteGroupConfirm({
   const { deleteGroup } = useOfficerApi();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { load: tradingLoad } = trading;
+  // Deleting the group cascades its grants away. Null while the snapshot is
+  // not ready: an unknown count is not zero.
+  const grantedConnections =
+    tradingLoad.state === "ready" && group !== null
+      ? tradingLoad.data.connections.filter((connection) =>
+          connection.access.some((grant) => grant.accountGroup === group.code),
+        ).length
+      : null;
 
   const submit = async () => {
     if (!group) return;
@@ -1760,6 +1804,12 @@ function DeleteGroupConfirm({
             <span className="nums text-accent">{group?.code}</span>{" "}
             {t("deleteGroup.descriptionSuffix")}
           </AlertDialogDescription>
+          <TradingSnapshotState trading={trading} />
+          {grantedConnections !== null && grantedConnections > 0 && (
+            <p className="text-xs text-[var(--danger)]">
+              {t("deleteGroup.tradingWarning", { count: grantedConnections })}
+            </p>
+          )}
         </AlertDialogHeader>
         {error && (
           <ErrorBanner message={error} onDismiss={() => setError(null)} />
@@ -1791,18 +1841,19 @@ function DeleteGroupConfirm({
 
 function DeleteAccountConfirm({
   account,
+  trading,
   open,
   onOpenChange,
   onDone,
 }: {
   account: Account | null;
+  trading: PollingResult<TradingSnapshot>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
   const { t } = useTranslation("accounts");
   const { deleteAccount } = useOfficerApi();
-  const { load: tradingLoad } = useTrading();
   const [error, setError] = useState<string | null>(null);
   const [dependents, setDependents] = useState<ApiErrorDependent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -1845,8 +1896,9 @@ function DeleteAccountConfirm({
             <span className="nums text-accent">{account?.code}</span>{" "}
             {t("deleteAccount.descriptionSuffix")}
           </AlertDialogDescription>
-          {tradingLoad.state === "ready" &&
-            tradingLoad.data.connections.length > 0 && (
+          <TradingSnapshotState trading={trading} />
+          {trading.load.state === "ready" &&
+            trading.load.data.connections.length > 0 && (
               <p className="text-xs text-[var(--danger)]">
                 {t("deleteAccount.tradingWarning")}
               </p>
@@ -2469,7 +2521,10 @@ function AccountCurrencyDialog({
             <p className="text-[0.6875rem] text-muted">
               {t("editCurrency.currencyHint")}
             </p>
-            <AssetCodeSuggestionFailure failed={assetSuggestionResult.failed} />
+            <CodeSuggestionFailure
+              kind="asset"
+              failed={assetSuggestionResult.failed}
+            />
           </div>
         </div>
         {error && (
@@ -2560,7 +2615,10 @@ function GroupCurrencyDialog({
               onClear={() => setCurrency("")}
               clearLabel={t("filters.clearField")}
             />
-            <AssetCodeSuggestionFailure failed={assetSuggestionResult.failed} />
+            <CodeSuggestionFailure
+              kind="asset"
+              failed={assetSuggestionResult.failed}
+            />
           </div>
         </div>
         {error && (
@@ -3128,6 +3186,7 @@ function GroupsPanel({
   onBlock,
   onUnblock,
   onShowBlockDetails,
+  onVenueAccess,
   onDelete,
 }: {
   groupRows: GroupRow[];
@@ -3142,6 +3201,7 @@ function GroupsPanel({
   onBlock: (group: Group) => void;
   onUnblock: (group: Group) => void;
   onShowBlockDetails: (group: Group) => void;
+  onVenueAccess: (group: Group) => void;
   onDelete: (group: Group) => void;
 }) {
   const { t } = useTranslation("accounts");
@@ -3155,7 +3215,7 @@ function GroupsPanel({
         <col className="w-[7rem]" />
         <col className={STATUS_COLUMN_CLASS} />
         <col />
-        <col className="w-[8.5rem]" />
+        <col className="w-[10.75rem]" />
       </colgroup>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
@@ -3209,7 +3269,7 @@ function GroupsPanel({
               {t("groups.columns.notes")}
             </ColumnHeader>
           </TableHead>
-          <TableHead className="w-[8.5rem] text-right">
+          <TableHead className="w-[10.75rem] text-right">
             <ColumnHeader
               align="right"
               description={t("groups.columnDescriptions.actions")}
@@ -3371,7 +3431,7 @@ function GroupsPanel({
                 )}
               </TableCell>
 
-              <TableCell className="w-[8.5rem] text-right">
+              <TableCell className="w-[10.75rem] text-right">
                 {row.kind === "default" ? (
                   <RowActions>
                     <FilterByButton
@@ -3408,6 +3468,10 @@ function GroupsPanel({
                         entity: row.group.code,
                       })}
                       copiedTitle={tc("rowActions.copiedLink")}
+                    />
+                    <VenueAccessButton
+                      title={t("venueAccessTitle")}
+                      onClick={() => onVenueAccess(row.group)}
                     />
                     <DeleteButton
                       title={tc("rowActions.deleteTitle", {
@@ -3449,6 +3513,7 @@ function AccountsTable({
   onOpenPolicies,
   onOpenHistory,
   onFilterGroup,
+  onVenueAccess,
   onDelete,
 }: {
   accounts: Account[];
@@ -3469,6 +3534,7 @@ function AccountsTable({
   onOpenPolicies: (account: Account) => void;
   onOpenHistory: (account: Account) => void;
   onFilterGroup: (group: string) => void;
+  onVenueAccess: (account: Account) => void;
   onDelete: (account: Account) => void;
 }) {
   const { t } = useTranslation("accounts");
@@ -3495,7 +3561,7 @@ function AccountsTable({
         <col className="w-[2.5rem]" />
         <col className={STATUS_COLUMN_CLASS} />
         <col />
-        <col className="w-[12.5rem]" />
+        <col className="w-[14.75rem]" />
       </colgroup>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
@@ -3579,7 +3645,7 @@ function AccountsTable({
               {t("accounts.columns.notes")}
             </ColumnHeader>
           </TableHead>
-          <TableHead className="w-[12.5rem] text-right">
+          <TableHead className="w-[14.75rem] text-right">
             <ColumnHeader
               align="right"
               description={t("accounts.columnDescriptions.actions")}
@@ -3779,7 +3845,7 @@ function AccountsTable({
                 </div>
               </TableCell>
 
-              <TableCell className="w-[12.5rem] text-right">
+              <TableCell className="w-[14.75rem] text-right">
                 <RowActions>
                   <PositionsButton
                     title={t("accounts.links.positions")}
@@ -3808,6 +3874,10 @@ function AccountsTable({
                       `/audit?account=${encodeURIComponent(account.code)}`,
                     )}
                     onClick={() => onOpenHistory(account)}
+                  />
+                  <VenueAccessButton
+                    title={t("venueAccessTitle")}
+                    onClick={() => onVenueAccess(account)}
                   />
                   <DeleteButton
                     title={tc("rowActions.deleteTitle", {
@@ -4324,6 +4394,12 @@ export function Accounts() {
     null,
   );
 
+  // One trading snapshot for the delete warnings and the access dialog.
+  const trading = useTrading();
+  // Identity only: the dialog polls an account's current group itself.
+  const [venueAccessTarget, setVenueAccessTarget] =
+    useState<TradingAccessSubject | null>(null);
+
   function removeAccount(code: string) {
     setLocalAccounts((prev) => {
       const base =
@@ -4562,6 +4638,9 @@ export function Accounts() {
                 onShowBlockDetails={(group) =>
                   setBlockedDetailsTarget({ kind: "group", group })
                 }
+                onVenueAccess={(group) =>
+                  setVenueAccessTarget({ accountGroup: group.code })
+                }
                 onDelete={setDeleteGroupTarget}
               />
               {groupPager}
@@ -4707,6 +4786,9 @@ export function Accounts() {
                   setAccountGroupSearch("");
                   setAccountPage(0);
                 }}
+                onVenueAccess={(account) =>
+                  setVenueAccessTarget({ account: account.code })
+                }
                 onDelete={setDeleteAccountTarget}
               />
               {accountPager}
@@ -4832,6 +4914,7 @@ export function Accounts() {
       />
       <DeleteAccountConfirm
         account={deleteAccountTarget}
+        trading={trading}
         open={deleteAccountTarget !== null}
         onOpenChange={(next) => {
           if (!next) setDeleteAccountTarget(null);
@@ -4948,6 +5031,7 @@ export function Accounts() {
       />
       <DeleteGroupConfirm
         group={deleteGroupTarget}
+        trading={trading}
         open={deleteGroupTarget !== null}
         onOpenChange={(next) => {
           if (!next) setDeleteGroupTarget(null);
@@ -4966,8 +5050,17 @@ export function Accounts() {
           reloadGroups();
           setLocalAccounts(null);
           reloadAccounts();
+          // The group's grants went with it.
+          trading.reload();
         }}
       />
+      {venueAccessTarget !== null && (
+        <VenueAccessDialogContainer
+          subject={venueAccessTarget}
+          trading={trading}
+          onClose={() => setVenueAccessTarget(null)}
+        />
+      )}
     </Page>
   );
 }

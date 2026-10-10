@@ -44,7 +44,7 @@ import {
   type MissingAccountPolicy,
 } from "@/framework";
 import { Autocomplete } from "@/components/Autocomplete";
-import { AssetCodeSuggestionFailure } from "@/components/AssetCodeSuggestionFailure";
+import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import { ErrorBanner } from "@/components/PageStates";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -677,7 +677,8 @@ export function LimitDialog({
                       }
                       clearLabel={tc("filters.clearField")}
                     />
-                    <AssetCodeSuggestionFailure
+                    <CodeSuggestionFailure
+                      kind="asset"
                       failed={dialogAssetSuggestionResult.failed}
                     />
                   </div>
@@ -731,7 +732,8 @@ export function LimitDialog({
                           onClear={() => setValue(kind, "")}
                           clearLabel={tc("filters.clearField")}
                         />
-                        <AssetCodeSuggestionFailure
+                        <CodeSuggestionFailure
+                          kind="asset"
                           failed={currencySuggestionResult.failed}
                         />
                         <p className="text-[0.6875rem] text-muted">

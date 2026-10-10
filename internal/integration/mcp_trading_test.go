@@ -31,6 +31,7 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
@@ -91,8 +92,8 @@ func (s *tradingSource) SearchTradingSymbols(_ context.Context, id, query string
 func (s *tradingSource) PutTradingAccess(_ context.Context, access domain.TradingAccess) error {
 	return s.record("grant", access)
 }
-func (s *tradingSource) RemoveTradingAccess(_ context.Context, account domain.AccountID, connection domain.ExternalID) error {
-	return s.record("revoke", account, connection)
+func (s *tradingSource) RemoveTradingAccess(_ context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
+	return s.record("revoke", connection, account, accountGroup)
 }
 func (s *tradingSource) SetTradingFeeAccount(_ context.Context, connection domain.ExternalID, account domain.AccountID) error {
 	return s.record("fee", connection, account)
@@ -154,7 +155,9 @@ func TestTradingToolsSuccess(t *testing.T) {
 		{"verify_trading_symbol", map[string]any{"connection": "conn", "externalSymbol": "AAPL"}, `{"supported":true,"exists":true,"tradable":true}`, []string{"verify"}, []any{"conn", "AAPL"}},
 		{"search_trading_symbols", map[string]any{"connection": "conn", "query": "AAPL"}, `{"supported":true,"matches":[{"symbol":"AAPL","tradable":true}]}`, []string{"search"}, []any{"conn", "AAPL"}},
 		{"grant_trading_access", map[string]any{"connection": "conn", "account": "acc", "venueAccount": "remote"}, `{"connection":"conn","account":"acc","venueAccount":"remote"}`, []string{"grant"}, []any{domain.TradingAccess{Connection: domain.ExternalID("conn"), Account: domain.AccountID("acc"), VenueAccount: "remote"}}},
-		{"revoke_trading_access", map[string]any{"connection": "conn", "account": "acc"}, `{"connection":"conn","account":"acc"}`, []string{"revoke"}, []any{domain.AccountID("acc"), domain.ExternalID("conn")}},
+		{"revoke_trading_access", map[string]any{"connection": "conn", "account": "acc"}, `{"connection":"conn","account":"acc"}`, []string{"revoke"}, []any{domain.ExternalID("conn"), domain.AccountID("acc"), ""}},
+		{"grant_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"}, `{"connection":"conn","accountGroup":"desks"}`, []string{"grant"}, []any{domain.TradingAccess{Connection: domain.ExternalID("conn"), AccountGroup: "desks"}}},
+		{"revoke_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"}, `{"connection":"conn","accountGroup":"desks"}`, []string{"revoke"}, []any{domain.ExternalID("conn"), domain.AccountID(""), "desks"}},
 		{"set_trading_fee_account", map[string]any{"connection": "conn", "account": "acc"}, `{"connection":"conn","account":"acc"}`, []string{"fee"}, []any{domain.ExternalID("conn"), domain.AccountID("acc")}},
 		{"clear_trading_fee_account", map[string]any{"connection": "conn"}, `{"connection":"conn"}`, []string{"fee"}, []any{domain.ExternalID("conn"), domain.AccountID("")}},
 		{"list_trading_destinations", map[string]any{"account": "acc", "mode": "paper"}, `{"destinations":[{"connection":"conn","label":"Paper","provider":"alpaca","mode":"paper","enabled":true,"venueAccount":"","state":"running"}]}`, []string{"destinations"}, []any{domain.AccountID("acc"), domain.TradingModePaper}},
@@ -185,11 +188,18 @@ func TestTradingOptionalAndEmptyShapes(t *testing.T) {
 		c.Unavailable = "offline"
 		c.FeeAccount = domain.AccountID("fees")
 		c.Instruments = []domain.TradingInstrument{{ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}}
-		c.Access = []domain.TradingAccess{{Account: domain.AccountID("acc"), VenueAccount: "remote"}}
+		c.Access = []store.TradingAccessListRow{
+			{Access: domain.TradingAccess{AccountGroup: "desks"}},
+			{Access: domain.TradingAccess{Account: domain.AccountID("acc"), VenueAccount: "remote"}, Group: "desks"},
+			{Access: domain.TradingAccess{Account: domain.AccountID("solo")}},
+		}
 		src.status.CredentialsSealed = true
 		res := callTool[map[string]any](t, src, "get_trading", map[string]any{})
 		requireNotToolError(t, res.IsError)
-		assertTradingWire(t, res.Wire, `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"fees","state":"unavailable","error":"offline","secrets":{"key":true},"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[{"account":"acc","venueAccount":"remote"}]}],"credentialsSealed":true}`)
+		assertTradingWire(t, res.Wire, `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"fees","state":"unavailable","error":"offline","secrets":{"key":true},"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[`+
+			`{"account":"","accountGroup":"desks","venueAccount":"","group":""},`+
+			`{"account":"acc","accountGroup":"","venueAccount":"remote","group":"desks"},`+
+			`{"account":"solo","accountGroup":"","venueAccount":"","group":""}]}],"credentialsSealed":true}`)
 	})
 	t.Run("verification-details", func(t *testing.T) {
 		src := tradingFixture()
@@ -257,8 +267,8 @@ func TestTradingRequiredFields(t *testing.T) {
 		{"delete_trading_instrument", map[string]any{"connection": "conn", "externalSymbol": "AAPL"}, []string{"connection", "externalSymbol"}},
 		{"verify_trading_symbol", map[string]any{"connection": "conn", "externalSymbol": "AAPL"}, []string{"connection", "externalSymbol"}},
 		{"search_trading_symbols", map[string]any{"connection": "conn", "query": "AAPL"}, []string{"connection", "query"}},
-		{"grant_trading_access", map[string]any{"connection": "conn", "account": "acc"}, []string{"connection", "account"}},
-		{"revoke_trading_access", map[string]any{"connection": "conn", "account": "acc"}, []string{"connection", "account"}},
+		{"grant_trading_access", map[string]any{"connection": "conn", "account": "acc"}, []string{"connection"}},
+		{"revoke_trading_access", map[string]any{"connection": "conn", "account": "acc"}, []string{"connection"}},
 		{"set_trading_fee_account", map[string]any{"connection": "conn", "account": "acc"}, []string{"connection", "account"}},
 		{"clear_trading_fee_account", map[string]any{"connection": "conn"}, []string{"connection"}},
 		{"list_trading_destinations", map[string]any{"account": "acc"}, []string{"account"}},
@@ -283,6 +293,53 @@ func TestTradingRequiredFields(t *testing.T) {
 			})
 		}
 	}
+	absent := []struct {
+		name  string
+		input map[string]any
+	}{
+		{"neither", map[string]any{"connection": "conn"}},
+		{"blank", map[string]any{"connection": "conn", "account": " \t ", "accountGroup": " "}},
+	}
+	accessTools := []struct {
+		name string
+		call string
+		args []any
+	}{
+		{"grant_trading_access", "grant", []any{domain.TradingAccess{Connection: domain.ExternalID("conn"), Account: domain.AccountID("acc"), AccountGroup: "desks"}}},
+		{"revoke_trading_access", "revoke", []any{domain.ExternalID("conn"), domain.AccountID("acc"), "desks"}},
+	}
+	for _, tool := range accessTools {
+		for _, subject := range absent {
+			t.Run(tool.name+"/"+subject.name, func(t *testing.T) {
+				src := tradingFixture()
+				res := callTool[map[string]any](t, src, tool.name, subject.input)
+				requireToolError(t, res.IsError)
+				if got := textContent(res.Content); got != "account or accountGroup is required" {
+					t.Fatalf("refusal: %q", got)
+				}
+				if len(src.calls) != 0 {
+					t.Fatalf("Source called: %v", src.calls)
+				}
+			})
+		}
+		// Both subjects are the Source's to refuse, as over REST; the
+		// handler must not hold a second copy of the domain rule.
+		t.Run(tool.name+"/both", func(t *testing.T) {
+			src := tradingFixture()
+			src.err = domain.ValidateTradingAccess(domain.TradingAccess{Connection: domain.ExternalID("conn"), Account: domain.AccountID("acc"), AccountGroup: "desks"})
+			if src.err == nil {
+				t.Fatal("domain accepted both subjects")
+			}
+			res := callTool[map[string]any](t, src, tool.name, map[string]any{"connection": "conn", "account": "acc", "accountGroup": "desks"})
+			requireToolError(t, res.IsError)
+			if got, want := textContent(res.Content), strings.ReplaceAll(tool.name, "_", " ")+" failed: "+src.err.Error(); got != want {
+				t.Fatalf("refusal: %q, want %q", got, want)
+			}
+			if !reflect.DeepEqual(src.calls, []string{tool.call}) || !reflect.DeepEqual(src.arguments, tool.args) {
+				t.Fatalf("delegation mismatch: calls %v args %#v", src.calls, src.arguments)
+			}
+		})
+	}
 }
 
 func TestTradingCredentialsStayWriteOnly(t *testing.T) {
@@ -303,6 +360,10 @@ func TestTradingCredentialsStayWriteOnly(t *testing.T) {
 				}
 				src.status.Connections[0].State = "unavailable"
 				src.status.Connections[0].Unavailable = "venue rejected " + secret + "-long"
+				src.status.Connections[0].Access = []store.TradingAccessListRow{
+					{Access: domain.TradingAccess{AccountGroup: secret}},
+					{Access: domain.TradingAccess{Account: domain.AccountID(secret), VenueAccount: secret}, Group: secret},
+				}
 				res := callTool[map[string]any](t, src, name, input)
 				wire, err := json.Marshal(res)
 				if err != nil {
@@ -578,6 +639,15 @@ func TestTradingTypedRefusals(t *testing.T) {
 			}
 		})
 	}
+	t.Run("group-grant-without-fee-account", func(t *testing.T) {
+		src := tradingFixture()
+		src.err = fmt.Errorf("group grant: %w", domain.ErrFeeAccountRequired)
+		res := callTool[map[string]any](t, src, "grant_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"})
+		requireToolError(t, res.IsError)
+		if textContent(res.Content) != "fee_account_required: "+src.err.Error() {
+			t.Fatalf("group grant refusal: %q", textContent(res.Content))
+		}
+	})
 	for _, name := range []string{"confirm_execution", "cancel"} {
 		t.Run(name, func(t *testing.T) {
 			err := fmt.Errorf("linked: %w", domain.ErrVenueOrderManaged)
@@ -607,6 +677,8 @@ func TestTradingSourceFailures(t *testing.T) {
 		{"search_trading_symbols", map[string]any{"connection": "conn", "query": "AAPL"}},
 		{"grant_trading_access", map[string]any{"connection": "conn", "account": "acc"}},
 		{"revoke_trading_access", map[string]any{"connection": "conn", "account": "acc"}},
+		{"grant_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"}},
+		{"revoke_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"}},
 		{"set_trading_fee_account", map[string]any{"connection": "conn", "account": "acc"}},
 		{"clear_trading_fee_account", map[string]any{"connection": "conn"}},
 		{"list_trading_destinations", map[string]any{"account": "acc"}},

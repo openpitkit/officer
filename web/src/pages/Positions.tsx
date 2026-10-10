@@ -79,7 +79,7 @@ import type {
 import { useAdjustmentsPage } from "@/api/useAdjustments";
 import { useBalancesPage } from "@/api/useBalances";
 import { Autocomplete } from "@/components/Autocomplete";
-import { AssetCodeSuggestionFailure } from "@/components/AssetCodeSuggestionFailure";
+import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import { sortDirection } from "@/lib/sortDirection";
 import {
   EmptyState,
@@ -140,6 +140,7 @@ import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
 } from "@/lib/useDebounce";
+import { useAccountCodeSuggestions } from "@/lib/useAccountCodeSuggestions";
 import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { operatorOptions } from "@/lib/dataControlLabels";
@@ -427,44 +428,6 @@ function mergeCodeSuggestions(...groups: string[][]): string[] {
     }
   }
   return merged;
-}
-
-function useAccountCodeSuggestions(query: string, enabled: boolean): string[] {
-  const { fetchAccounts } = useOfficerApi();
-  const debouncedQuery = useDebouncedValue(
-    query.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (!enabled || debouncedQuery === "") {
-      return;
-    }
-    const controller = new AbortController();
-    void fetchAccounts(
-      {
-        code: debouncedQuery,
-        codeMatch: "starts_with",
-        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-        sort: "code",
-      },
-      controller.signal,
-    )
-      .then((accounts) => {
-        const next = accounts.map((account) => account.code);
-        setSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
-      })
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) {
-          console.error(err);
-          setSuggestions((prev) => (prev.length === 0 ? prev : []));
-        }
-      });
-    return () => controller.abort();
-  }, [debouncedQuery, enabled, fetchAccounts]);
-
-  return enabled && debouncedQuery !== "" ? suggestions : [];
 }
 
 /** The distinct account currencies in use, offered as the units a denominated
@@ -1440,7 +1403,7 @@ function AdjustmentPanel({
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
   const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
     useState(false);
-  const localAccountSuggestions = useAccountCodeSuggestions(
+  const localAccountSuggestionResult = useAccountCodeSuggestions(
     account,
     !lockIdentity,
   );
@@ -1449,8 +1412,12 @@ function AdjustmentPanel({
     !lockIdentity,
   );
   const mergedAccountSuggestions = useMemo(
-    () => mergeCodeSuggestions(accountSuggestions, localAccountSuggestions),
-    [accountSuggestions, localAccountSuggestions],
+    () =>
+      mergeCodeSuggestions(
+        accountSuggestions,
+        localAccountSuggestionResult.codes,
+      ),
+    [accountSuggestions, localAccountSuggestionResult.codes],
   );
   const mergedAssetSuggestions = useMemo(
     () =>
@@ -1704,7 +1671,8 @@ function AdjustmentPanel({
               onClear={() => setAsset("")}
               clearLabel={t("common:filters.clearField")}
             />
-            <AssetCodeSuggestionFailure
+            <CodeSuggestionFailure
+              kind="asset"
               failed={localAssetSuggestionResult.failed}
             />
           </div>
@@ -2686,11 +2654,15 @@ function AdjustDialog({
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
   const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
     useState(false);
-  const localAccountSuggestions = useAccountCodeSuggestions(account, open);
+  const localAccountSuggestionResult = useAccountCodeSuggestions(account, open);
   const localAssetSuggestionResult = useAssetCodeSuggestions(asset, open);
   const mergedAccountSuggestions = useMemo(
-    () => mergeCodeSuggestions(accountSuggestions, localAccountSuggestions),
-    [accountSuggestions, localAccountSuggestions],
+    () =>
+      mergeCodeSuggestions(
+        accountSuggestions,
+        localAccountSuggestionResult.codes,
+      ),
+    [accountSuggestions, localAccountSuggestionResult.codes],
   );
   const mergedAssetSuggestions = useMemo(
     () =>
@@ -2915,7 +2887,8 @@ function AdjustDialog({
                   onClear={() => setAsset("")}
                   clearLabel={t("common:filters.clearField")}
                 />
-                <AssetCodeSuggestionFailure
+                <CodeSuggestionFailure
+                  kind="asset"
                   failed={localAssetSuggestionResult.failed}
                 />
               </div>

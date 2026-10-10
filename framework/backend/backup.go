@@ -127,6 +127,16 @@ func (s *Service) RestoreBackup(
 	restoreOpts.ValidateMarketDataInstance = func(instance domain.MarketDataInstance) error {
 		return validateMarketDataProvider(s.registry, instance)
 	}
+	restoreOpts.TradingProviderRequiresFeeAccount = func(provider string) (bool, error) {
+		if err := s.requireTradingRuntime(); err != nil {
+			return false, err
+		}
+		p, err := s.tradingProvider(provider)
+		if err != nil {
+			return false, err
+		}
+		return p.UnlinkedFees, nil
+	}
 	summary, sink, err := n.RestoreBackup(
 		ctx, archive, restoreOpts, caller,
 	)

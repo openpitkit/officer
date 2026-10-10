@@ -29,6 +29,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   Account,
+  Group,
   TradingConnection,
   TradingProvider,
   TradingSnapshot,
@@ -51,6 +52,7 @@ const venueWiring = vi.hoisted(() => ({
   verdict: vi.fn(),
   table: vi.fn(),
   deletion: vi.fn(),
+  access: vi.fn(),
 }));
 
 vi.mock("@/components/venues", async (importOriginal) => {
@@ -103,6 +105,10 @@ vi.mock("@/components/venues", async (importOriginal) => {
       venueWiring.header(props);
       return <actual.VenueCardHeader {...props} />;
     },
+    VenueAccessList(props: import("@/components/venues").VenueAccessListProps) {
+      venueWiring.access(props);
+      return <actual.VenueAccessList {...props} />;
+    },
   };
 });
 
@@ -117,6 +123,7 @@ const provider: TradingProvider = {
 const api = {
   fetchTrading: vi.fn(),
   fetchAccounts: vi.fn(),
+  fetchGroups: vi.fn(),
   fetchAccountState: vi.fn(),
   fetchAssets: vi.fn(),
   fetchMarketData: vi.fn(),
@@ -137,6 +144,7 @@ const api = {
 };
 let snapshot: TradingSnapshot;
 let accounts: string[];
+let groups: string[];
 
 function connection(
   overrides: Partial<TradingConnection> = {},
@@ -172,6 +180,10 @@ function account(code: string): Account {
     notes: "",
     pnlHaltReason: "",
   };
+}
+
+function group(code: string): Group {
+  return { code, title: "", notes: "", blocked: false, blockReason: "" };
 }
 
 function updateConnection(id: string, patch: Partial<TradingConnection>) {
@@ -243,6 +255,10 @@ beforeEach(async () => {
   });
   api.fetchAccounts.mockImplementation(async ({ code }: { code: string }) =>
     accounts.filter((item) => item.startsWith(code)).map(account),
+  );
+  groups = ["desk", "ops"];
+  api.fetchGroups.mockImplementation(async ({ code }: { code: string }) =>
+    groups.filter((item) => item.startsWith(code)).map(group),
   );
   api.fetchAccountState.mockImplementation(async (code: string) => {
     if (!accounts.includes(code))
@@ -477,7 +493,7 @@ describe("Trading connections", () => {
   });
 
   it.each([
-    { field: "Account", form: "Add account" },
+    { field: "Account", form: "Grant access" },
     { field: "Fee account", form: "Fee account" },
   ])(
     "clears the $field draft through its standard clear button",
@@ -494,7 +510,7 @@ describe("Trading connections", () => {
       ).not.toBeInTheDocument();
       expect(
         scope.getByRole("button", {
-          name: form === "Add account" ? "Add account" : "Save",
+          name: form === "Grant access" ? "Grant access" : "Save",
         }),
       ).toBeDisabled();
       expect(api.grantTradingAccess).not.toHaveBeenCalled();
@@ -556,7 +572,7 @@ describe("Trading connections", () => {
       ).toBeInTheDocument();
     }
     expect(
-      paper.getByRole("heading", { name: "Add account", level: 5 }),
+      paper.getByRole("heading", { name: "Grant access", level: 5 }),
     ).toBeInTheDocument();
     expect(
       paper.queryByRole("heading", { name: "Add instrument" }),
@@ -724,7 +740,9 @@ describe("Trading connections", () => {
         connection({
           enabled: true,
           state: "running",
-          access: [{ account: "alpha", venueAccount: "" }],
+          access: [
+            { account: "alpha", accountGroup: "", venueAccount: "", group: "" },
+          ],
         }),
       ];
       api[method].mockReturnValue(new Promise(() => {}));
@@ -743,7 +761,9 @@ describe("Trading connections", () => {
       await user.click(venueButton);
       expect(api[method]).toHaveBeenCalledTimes(1);
       expect(scope.getByRole("button", { name: "Disable" })).toBeEnabled();
-      expect(scope.getByRole("button", { name: "Revoke" })).toBeEnabled();
+      expect(
+        scope.getByRole("button", { name: "Revoke access for account alpha" }),
+      ).toBeEnabled();
       await user.click(scope.getByRole("button", { name: "Disable" }));
       expect(api.setTradingConnectionEnabled).toHaveBeenCalledExactlyOnceWith(
         "alpaca-1",
@@ -752,16 +772,18 @@ describe("Trading connections", () => {
       expect(
         await scope.findByRole("button", { name: "Enable" }),
       ).toBeEnabled();
-      await user.click(scope.getByRole("button", { name: "Revoke" }));
+      await user.click(
+        scope.getByRole("button", { name: "Revoke access for account alpha" }),
+      );
       expect(api.revokeTradingAccess).not.toHaveBeenCalled();
       await user.click(
         within(
-          screen.getByRole("alertdialog", { name: "Revoke access?" }),
-        ).getByRole("button", { name: "Revoke" }),
+          screen.getByRole("alertdialog", { name: "Revoke account access?" }),
+        ).getByRole("button", { name: "Revoke access" }),
       );
       expect(api.revokeTradingAccess).toHaveBeenCalledExactlyOnceWith(
         "alpaca-1",
-        "alpha",
+        { account: "alpha" },
       );
       await waitFor(() =>
         expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
@@ -2621,47 +2643,188 @@ describe("Trading connections", () => {
     },
   );
 
-  it.each(["Account", "Fee account"])(
+  it.each([
+    ["Account", "status", "Account suggestions could not be loaded."],
+    ["Fee account", "alert", "Account suggestions offline"],
+  ] as const)(
     "shows an account suggestion failure and clears it when %s empties",
-    async (field) => {
+    async (field, role, message) => {
       const user = userEvent.setup();
-      api.fetchAccounts.mockRejectedValue(
-        new ApiError("Account suggestions offline", "upstream", 502),
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        api.fetchAccounts.mockRejectedValue(
+          new ApiError("Account suggestions offline", "upstream", 502),
+        );
+        renderTrading();
+        const scope = await card();
+        const input = scope.getByRole("combobox", { name: field });
+        await user.type(input, "al");
+        expect(await scope.findByRole(role)).toHaveTextContent(message);
+        await user.type(input, " ");
+        expect(input).toHaveValue("al ");
+        expect(scope.getByRole(role)).toHaveTextContent(message);
+        await user.clear(input);
+        await waitFor(() =>
+          expect(scope.queryByRole(role)).not.toBeInTheDocument(),
+        );
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+  );
+
+  it("shows a group suggestion failure and clears it when the field empties", async () => {
+    const user = userEvent.setup();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      api.fetchGroups.mockRejectedValue(
+        new ApiError("Group suggestions offline", "upstream", 502),
       );
       renderTrading();
       const scope = await card();
-      const input = scope.getByRole("combobox", { name: field });
-      await user.type(input, "al");
-      expect(await scope.findByRole("alert")).toHaveTextContent(
-        "Account suggestions offline",
+      const form = within(scope.getByRole("form", { name: "Grant access" }));
+      await user.click(form.getByRole("button", { name: "Group" }));
+      const input = form.getByRole("combobox", { name: "Group" });
+      await user.type(input, "de");
+      expect(await form.findByRole("status")).toHaveTextContent(
+        "Group suggestions could not be loaded.",
       );
-      await user.type(input, " ");
-      expect(input).toHaveValue("al ");
-      expect(scope.getByRole("alert")).toHaveTextContent(
-        "Account suggestions offline",
-      );
+      expect(api.fetchAccounts).not.toHaveBeenCalled();
       await user.clear(input);
       await waitFor(() =>
-        expect(scope.queryByRole("alert")).not.toBeInTheDocument(),
+        expect(scope.queryByRole("status")).not.toBeInTheDocument(),
       );
-    },
-  );
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("takes access suggestions from accounts or groups by the chosen kind", async () => {
+    const user = userEvent.setup();
+    accounts = ["desk-trader"];
+    renderTrading();
+    const scope = await card();
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
+    expect(form.getByRole("button", { name: "Account" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.type(form.getByRole("combobox", { name: "Account" }), "de");
+    expect(
+      await form.findByRole("option", { name: "desk-trader" }),
+    ).toBeInTheDocument();
+    expect(api.fetchGroups).not.toHaveBeenCalled();
+    await user.click(form.getByRole("button", { name: "Group" }));
+    const input = form.getByRole("combobox", { name: "Group" });
+    expect(input).toHaveValue("de");
+    await user.click(input);
+    expect(
+      await form.findByRole("option", { name: "desk" }),
+    ).toBeInTheDocument();
+    expect(
+      form.queryByRole("option", { name: "desk-trader" }),
+    ).not.toBeInTheDocument();
+    expect(api.fetchGroups).toHaveBeenCalledExactlyOnceWith(
+      {
+        code: "de",
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(api.fetchAccounts).toHaveBeenCalledExactlyOnceWith(
+      {
+        code: "de",
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("passes the connection's grants and capabilities to the access list", async () => {
+    const access = [
+      { account: "", accountGroup: "desk", venueAccount: "", group: "" },
+      { account: "alpha", accountGroup: "", venueAccount: "", group: "desk" },
+    ];
+    snapshot.connections = [connection({ access })];
+    renderTrading();
+    await card();
+    expect(venueWiring.access.mock.lastCall![0]).toEqual(
+      expect.objectContaining({
+        grants: access,
+        showVenueAccount: false,
+        busy: false,
+      }),
+    );
+  });
+
+  it("grants access to a group by its code", async () => {
+    const user = userEvent.setup();
+    snapshot.connections = [connection({ feeAccount: "fees" })];
+    renderTrading();
+    const scope = await card();
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
+    await user.click(form.getByRole("button", { name: "Group" }));
+    expect(
+      form.queryByRole("button", { name: "Set fee account" }),
+    ).not.toBeInTheDocument();
+    expect(form.getByRole("button", { name: "Grant access" })).toBeDisabled();
+    await user.type(form.getByRole("combobox", { name: "Group" }), " desk ");
+    const callsBeforeGrant = api.fetchTrading.mock.calls.length;
+    await user.click(form.getByRole("button", { name: "Grant access" }));
+    expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
+      accountGroup: "desk",
+    });
+    await waitFor(() =>
+      expect(api.fetchTrading.mock.calls.length).toBeGreaterThan(
+        callsBeforeGrant,
+      ),
+    );
+    expect(form.getByRole("combobox", { name: "Group" })).toHaveValue("");
+  });
+
+  it("states the group reason before a code is typed and focuses that card's fee field", async () => {
+    const user = userEvent.setup();
+    snapshot.connections = [
+      connection(),
+      connection({ id: "alpaca-2", label: "Other paper" }),
+    ];
+    renderTrading();
+    const scope = await card();
+    const other = await card("Other paper");
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
+    const reason =
+      "Set a fee account first. A group can hold several accounts, and Alpaca charges fees that are not tied to orders; Officer needs one account to book them on.";
+    expect(form.queryByText(reason)).not.toBeInTheDocument();
+    await user.click(form.getByRole("button", { name: "Group" }));
+    expect(form.getByRole("combobox", { name: "Group" })).toHaveValue("");
+    expect(form.getByText(reason)).toBeInTheDocument();
+    await user.type(form.getByRole("combobox", { name: "Group" }), "desk");
+    expect(form.getByRole("button", { name: "Grant access" })).toBeDisabled();
+    await user.click(form.getByRole("button", { name: "Set fee account" }));
+    expect(scope.getByRole("combobox", { name: "Fee account" })).toHaveFocus();
+    expect(
+      other.getByRole("combobox", { name: "Fee account" }),
+    ).not.toHaveFocus();
+    await user.click(form.getByRole("button", { name: "Account" }));
+    expect(form.queryByText(reason)).not.toBeInTheDocument();
+    expect(api.grantTradingAccess).not.toHaveBeenCalled();
+  });
 
   it("grants access without an Alpaca venue-account field and reloads", async () => {
     const user = userEvent.setup();
     renderTrading();
     const scope = await card();
-    const form = within(scope.getByRole("form", { name: "Add account" }));
-    const table = within(scope.getByRole("table", { name: "Account access" }));
-    expect(
-      table.getAllByRole("columnheader").map((header) => header.textContent),
-    ).toEqual(["Account", "Actions"]);
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
     expect(
       form.queryByRole("textbox", { name: "Venue account" }),
     ).not.toBeInTheDocument();
     await user.type(form.getByRole("combobox", { name: "Account" }), "alpha");
     const callsBeforeGrant = api.fetchTrading.mock.calls.length;
-    await user.click(form.getByRole("button", { name: "Add account" }));
+    await user.click(form.getByRole("button", { name: "Grant access" }));
     expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
       account: "alpha",
     });
@@ -2675,21 +2838,25 @@ describe("Trading connections", () => {
   it("blocks a second distinct account until a fee account is set and focuses that card's field", async () => {
     const user = userEvent.setup();
     snapshot.connections = [
-      connection({ access: [{ account: "alpha", venueAccount: "" }] }),
+      connection({
+        access: [
+          { account: "alpha", accountGroup: "", venueAccount: "", group: "" },
+        ],
+      }),
       connection({ id: "alpaca-2", label: "Other paper" }),
     ];
     renderTrading();
     const scope = await card();
     const other = await card("Other paper");
-    const form = within(scope.getByRole("form", { name: "Add account" }));
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
     await user.type(form.getByRole("combobox", { name: "Account" }), "beta");
-    expect(form.getByRole("button", { name: "Add account" })).toBeDisabled();
+    expect(form.getByRole("button", { name: "Grant access" })).toBeDisabled();
     expect(
       form.getByText(
         "Set a fee account first. Alpaca charges fees that are not tied to orders; with several accounts on one connection Officer needs one account to book them on.",
       ),
     ).toBeInTheDocument();
-    await user.click(form.getByRole("button", { name: "Add account" }));
+    await user.click(form.getByRole("button", { name: "Grant access" }));
     expect(api.grantTradingAccess).not.toHaveBeenCalled();
     await user.click(form.getByRole("button", { name: "Set fee account" }));
     expect(scope.getByRole("combobox", { name: "Fee account" })).toHaveFocus();
@@ -2701,9 +2868,9 @@ describe("Trading connections", () => {
     await user.type(fee.getByRole("combobox", { name: "Fee account" }), "fees");
     await user.click(fee.getByRole("button", { name: "Save" }));
     await waitFor(() =>
-      expect(form.getByRole("button", { name: "Add account" })).toBeEnabled(),
+      expect(form.getByRole("button", { name: "Grant access" })).toBeEnabled(),
     );
-    await user.click(form.getByRole("button", { name: "Add account" }));
+    await user.click(form.getByRole("button", { name: "Grant access" }));
     expect(api.setTradingFeeAccount).toHaveBeenCalledExactlyOnceWith(
       "alpaca-1",
       "fees",
@@ -2717,16 +2884,20 @@ describe("Trading connections", () => {
   it("allows replacing an existing binding without a fee account", async () => {
     const user = userEvent.setup();
     snapshot.connections = [
-      connection({ access: [{ account: "alpha", venueAccount: "" }] }),
+      connection({
+        access: [
+          { account: "alpha", accountGroup: "", venueAccount: "", group: "" },
+        ],
+      }),
     ];
     renderTrading();
     const scope = await card();
-    const form = within(scope.getByRole("form", { name: "Add account" }));
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
     await user.type(form.getByRole("combobox", { name: "Account" }), "alpha");
     expect(
       form.queryByRole("button", { name: "Set fee account" }),
     ).not.toBeInTheDocument();
-    await user.click(form.getByRole("button", { name: "Add account" }));
+    await user.click(form.getByRole("button", { name: "Grant access" }));
     expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
       account: "alpha",
     });
@@ -2739,10 +2910,10 @@ describe("Trading connections", () => {
     );
     renderTrading();
     const scope = await card();
-    const form = within(scope.getByRole("form", { name: "Add account" }));
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
     await user.type(form.getByRole("combobox", { name: "Account" }), "beta");
     const callsBeforeGrant = api.fetchTrading.mock.calls.length;
-    await user.click(form.getByRole("button", { name: "Add account" }));
+    await user.click(form.getByRole("button", { name: "Grant access" }));
     expect(await scope.findByText("Choose a fee ledger")).toBeInTheDocument();
     await user.click(scope.getByRole("button", { name: "Set fee account" }));
     expect(scope.getByRole("combobox", { name: "Fee account" })).toHaveFocus();
@@ -2760,9 +2931,9 @@ describe("Trading connections", () => {
     );
     renderTrading();
     const scope = await card();
-    const form = within(scope.getByRole("form", { name: "Add account" }));
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
     await user.type(form.getByRole("combobox", { name: "Account" }), "alpha");
-    await user.click(form.getByRole("button", { name: "Add account" }));
+    await user.click(form.getByRole("button", { name: "Grant access" }));
     expect(await scope.findByText("fee_account_required")).toBeInTheDocument();
     expect(
       scope.queryByRole("button", { name: "Set fee account" }),
@@ -2962,8 +3133,8 @@ describe("Trading connections", () => {
       connection({
         feeAccount: "fees",
         access: [
-          { account: "alpha", venueAccount: "" },
-          { account: "beta", venueAccount: "" },
+          { account: "alpha", accountGroup: "", venueAccount: "", group: "" },
+          { account: "beta", accountGroup: "", venueAccount: "", group: "" },
         ],
       }),
     ];
@@ -2992,36 +3163,79 @@ describe("Trading connections", () => {
   it("confirms revoke and does not revoke on cancel", async () => {
     const user = userEvent.setup();
     snapshot.connections = [
-      connection({ access: [{ account: "alpha", venueAccount: "" }] }),
+      connection({
+        access: [
+          { account: "alpha", accountGroup: "", venueAccount: "", group: "" },
+        ],
+      }),
     ];
     renderTrading();
     const scope = await card();
-    const table = within(scope.getByRole("table", { name: "Account access" }));
-    await user.click(table.getByRole("button", { name: "Revoke" }));
+    const table = within(scope.getByRole("table", { name: "Access grants" }));
+    await user.click(
+      table.getByRole("button", { name: "Revoke access for account alpha" }),
+    );
     expect(api.revokeTradingAccess).not.toHaveBeenCalled();
     let dialog = within(
-      screen.getByRole("alertdialog", { name: "Revoke access?" }),
+      screen.getByRole("alertdialog", { name: "Revoke account access?" }),
     );
     expect(
-      dialog.getByText("Revoke access of alpha to Alpaca paper?"),
+      dialog.getByText("Revoke access of account alpha to Alpaca paper?"),
     ).toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: "Cancel" }));
     expect(api.revokeTradingAccess).not.toHaveBeenCalled();
-    await user.click(table.getByRole("button", { name: "Revoke" }));
+    await user.click(
+      table.getByRole("button", { name: "Revoke access for account alpha" }),
+    );
     dialog = within(
-      screen.getByRole("alertdialog", { name: "Revoke access?" }),
+      screen.getByRole("alertdialog", { name: "Revoke account access?" }),
     );
     const callsBeforeRevoke = api.fetchTrading.mock.calls.length;
-    await user.click(dialog.getByRole("button", { name: "Revoke" }));
+    await user.click(dialog.getByRole("button", { name: "Revoke access" }));
     expect(api.revokeTradingAccess).toHaveBeenCalledExactlyOnceWith(
       "alpaca-1",
-      "alpha",
+      { account: "alpha" },
     );
     await waitFor(() =>
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
     );
     expect(api.fetchTrading.mock.calls.length).toBeGreaterThan(
       callsBeforeRevoke,
+    );
+  });
+
+  it("confirms a group revoke and revokes the group, not a same-coded account", async () => {
+    const user = userEvent.setup();
+    snapshot.connections = [
+      connection({
+        feeAccount: "fees",
+        access: [
+          { account: "", accountGroup: "desk", venueAccount: "", group: "" },
+          { account: "desk", accountGroup: "", venueAccount: "", group: "" },
+        ],
+      }),
+    ];
+    renderTrading();
+    const scope = await card();
+    const table = within(scope.getByRole("table", { name: "Access grants" }));
+    await user.click(
+      table.getByRole("button", { name: "Revoke access for group desk" }),
+    );
+    const dialog = within(
+      screen.getByRole("alertdialog", { name: "Revoke group access?" }),
+    );
+    expect(
+      dialog.getByText(
+        "Revoke access of group desk to Alpaca paper? Accounts in the group keep access only if it is granted to them directly.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Revoke access" }));
+    expect(api.revokeTradingAccess).toHaveBeenCalledExactlyOnceWith(
+      "alpaca-1",
+      { accountGroup: "desk" },
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
     );
   });
 
@@ -3068,7 +3282,11 @@ describe("Trading connections", () => {
   it("keeps a check failure out of an open revoke confirmation", async () => {
     const user = userEvent.setup();
     snapshot.connections = [
-      connection({ access: [{ account: "alpha", venueAccount: "" }] }),
+      connection({
+        access: [
+          { account: "alpha", accountGroup: "", venueAccount: "", group: "" },
+        ],
+      }),
     ];
     let failCheck!: (error: Error) => void;
     api.checkTradingConnection.mockImplementationOnce(
@@ -3080,9 +3298,11 @@ describe("Trading connections", () => {
     renderTrading();
     const scope = await card();
     await user.click(scope.getByRole("button", { name: "Check connection" }));
-    await user.click(scope.getByRole("button", { name: "Revoke" }));
+    await user.click(
+      scope.getByRole("button", { name: "Revoke access for account alpha" }),
+    );
     const dialog = within(
-      screen.getByRole("alertdialog", { name: "Revoke access?" }),
+      screen.getByRole("alertdialog", { name: "Revoke account access?" }),
     );
     await act(async () => {
       failCheck(new ApiError("Venue is offline", "upstream", 502));
@@ -3112,13 +3332,13 @@ describe("Trading connections", () => {
     renderTrading();
     const scope = await card();
     const accountForm = within(
-      scope.getByRole("form", { name: "Add account" }),
+      scope.getByRole("form", { name: "Grant access" }),
     );
     await user.type(
       accountForm.getByRole("combobox", { name: "Account" }),
       "beta",
     );
-    await user.click(accountForm.getByRole("button", { name: "Add account" }));
+    await user.click(accountForm.getByRole("button", { name: "Grant access" }));
     expect(await scope.findByText("Choose a fee ledger")).toBeInTheDocument();
     const instrumentForm = within(
       scope.getByRole("region", { name: "Instruments" }),
@@ -3150,7 +3370,9 @@ describe("Trading connections", () => {
             enabled: true,
           },
         ],
-        access: [{ account: "alpha", venueAccount: "" }],
+        access: [
+          { account: "alpha", accountGroup: "", venueAccount: "", group: "" },
+        ],
       }),
     ];
     renderTrading();
@@ -3271,18 +3493,24 @@ describe("Trading connections", () => {
     ];
     snapshot.connections = [
       connection({
-        access: [{ account: "alpha", venueAccount: "venue-subaccount" }],
+        access: [
+          {
+            account: "alpha",
+            accountGroup: "",
+            venueAccount: "venue-subaccount",
+            group: "",
+          },
+        ],
       }),
     ];
     renderTrading();
     const scope = await card();
-    const table = within(scope.getByRole("table", { name: "Account access" }));
-    expect(
-      table.getAllByRole("columnheader").map((header) => header.textContent),
-    ).toEqual(["Account", "Venue account", "Actions"]);
-    expect(
-      table.getByText("venue-subaccount", { exact: true }),
-    ).toBeInTheDocument();
+    expect(venueWiring.access.mock.lastCall![0]).toEqual(
+      expect.objectContaining({
+        grants: snapshot.connections[0].access,
+        showVenueAccount: true,
+      }),
+    );
     expect(
       scope.queryByRole("heading", { name: "Fee account" }),
     ).not.toBeInTheDocument();
@@ -3292,7 +3520,7 @@ describe("Trading connections", () => {
     expect(
       scope.queryByRole("button", { name: "Verify symbol" }),
     ).not.toBeInTheDocument();
-    const form = within(scope.getByRole("form", { name: "Add account" }));
+    const form = within(scope.getByRole("form", { name: "Grant access" }));
     await user.type(form.getByRole("combobox", { name: "Account" }), "beta");
     await user.type(
       form.getByRole("textbox", { name: "Venue account" }),
@@ -3306,7 +3534,7 @@ describe("Trading connections", () => {
       form.getByRole("textbox", { name: "Venue account" }),
       "venue-target",
     );
-    await user.click(form.getByRole("button", { name: "Add account" }));
+    await user.click(form.getByRole("button", { name: "Grant access" }));
     expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
       account: "beta",
       venueAccount: "venue-target",

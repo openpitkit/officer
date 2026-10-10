@@ -592,7 +592,8 @@ func (n *localNode) RestoreBackup(
 			return n.fatalReconciliation(operation, cause)
 		}
 		return n.rollbackStore(
-			durableCtx, rollback, normalizedScope, cause,
+			durableCtx, rollback, normalizedScope,
+			opts.TradingProviderRequiresFeeAccount, cause,
 		)
 	}
 
@@ -958,6 +959,7 @@ func (n *localNode) rollbackStore(
 	ctx context.Context,
 	rollback backup.Archive,
 	scope backup.Scope,
+	tradingProviderRequiresFeeAccount func(provider string) (bool, error),
 	err error,
 ) error {
 	currentSigningKeys, listErr := n.realm.ListSigningKeys(ctx)
@@ -997,9 +999,12 @@ func (n *localNode) rollbackStore(
 		)
 	}
 
+	// The rollback restores the prior state through the same trading checks,
+	// so it needs the caller's provider capability lookup too.
 	_, restoreErr := n.realm.RestoreBackup(ctx, rollback, backup.RestoreOptions{
-		Scope: scope,
-		Mode:  backup.RestoreModeReplaceAll,
+		Scope:                             scope,
+		Mode:                              backup.RestoreModeReplaceAll,
+		TradingProviderRequiresFeeAccount: tradingProviderRequiresFeeAccount,
 	})
 	if restoreErr != nil {
 		return n.fatalReconciliation(

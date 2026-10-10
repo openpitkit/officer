@@ -30,7 +30,8 @@
     "close": "Закрыть",
     "dismissError": "Скрыть ошибку",
     "increment": "Увеличить",
-    "decrement": "Уменьшить"
+    "decrement": "Уменьшить",
+    "setUpTradingConnection": "Настроить торговое подключение"
   },
   "filters": {
     "venueLabel": "Торговая площадка",
@@ -475,7 +476,9 @@
     "copyableSnippet": "Копируемый фрагмент"
   },
   "suggestions": {
-    "assetLookupFailed": "Не удалось загрузить подсказки по активам."
+    "assetLookupFailed": "Не удалось загрузить подсказки по активам.",
+    "accountLookupFailed": "Не удалось загрузить подсказки по счетам.",
+    "groupLookupFailed": "Не удалось загрузить подсказки по группам."
   },
   "topBar": {
     "toggleNav": "Переключить навигацию"

@@ -1215,7 +1215,7 @@ func (s *fakeSource) PutTradingAccess(ctx context.Context, access domain.Trading
 	return domain.ErrNotImplemented
 }
 
-func (s *fakeSource) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
+func (s *fakeSource) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	return domain.ErrNotImplemented
 }
 
@@ -1267,7 +1267,7 @@ func (s *captureNSource) PutTradingAccess(ctx context.Context, access domain.Tra
 	return domain.ErrNotImplemented
 }
 
-func (s *captureNSource) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
+func (s *captureNSource) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	return domain.ErrNotImplemented
 }
 

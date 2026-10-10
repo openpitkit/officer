@@ -496,6 +496,20 @@ var clientDataAllowlist = []clientDataAllow{
 		Kind:    "optional-sentinel",
 		Why:     "account and group scopes populate their own identity axis",
 	},
+	{
+		Surface: driftBackup,
+		Entity:  "trading-access",
+		Field:   "trading-access.Account",
+		Kind:    "optional-sentinel",
+		Why:     "account and group grants populate their own subject; separate sentinel rows cover both",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "trading-access",
+		Field:   "trading-access.AccountGroup",
+		Kind:    "optional-sentinel",
+		Why:     "account and group grants populate their own subject; separate sentinel rows cover both",
+	},
 }
 
 type paritySpec struct {
@@ -1160,9 +1174,10 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"trading_access": {
 		backup: map[string]string{
-			"account_id":    "Account",
-			"connection_id": "Connection",
-			"venue_account": "VenueAccount",
+			"account_id":       "Account",
+			"account_group_id": "AccountGroup",
+			"connection_id":    "Connection",
+			"venue_account":    "VenueAccount",
 		},
 	},
 	"venue_order": {
@@ -1873,6 +1888,11 @@ func seedClientDataDriftRealm(
 		Account:      "acc-1",
 		Connection:   connection.ExternalID,
 		VenueAccount: "venue-account-sentinel",
+	}))
+	must(t, "PutTradingAccess group", rs.PutTradingAccess(ctx, domain.TradingAccess{
+		AccountGroup: "grp-1",
+		Connection:   connection.ExternalID,
+		VenueAccount: "venue-group-sentinel",
 	}))
 	if _, err := rs.CreateVenueOrder(ctx, domain.VenueOrder{
 		Order:         order.ExternalID,

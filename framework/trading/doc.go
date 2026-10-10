@@ -51,9 +51,11 @@
 // through AdjustmentSink with a deterministic activity id when the fee asset
 // maps unambiguously. A connection's fee account receives every unlinked fee
 // whole, as posted, and may be any Officer account. Without a fee account, the
-// single bound Officer account receives fees. Binding a second distinct account
-// is refused until a fee account is set; clearing it requires at most one bound
-// account. Skipped fees are audited, including missing targets, unresolved
+// single Officer account that can send through the connection, directly or
+// through a granted group, receives fees. A group grant always needs the fee
+// account, and granting a second distinct account is refused until it is set;
+// clearing it is refused while a group grant exists or several accounts can
+// send. Skipped fees are audited, including missing targets, unresolved
 // assets, venue shapes needing attention and core rejections. Each fee id is
 // successfully reported at most once per Runtime, including across Restart;
 // a new process may report it again during replay. An audit sink error is
@@ -99,8 +101,11 @@
 // several connections of one provider with distinct venue identities. A send
 // without a connection uses the account's only enabled destination in the send
 // method's mode; several produce a routing error listing the candidates, and
-// zero is also an error. A named connection must be bound to the Officer
-// account.
+// zero is also an error. A named connection must be granted to the Officer
+// account or to its account group. An account has at most one effective grant
+// per connection: its own grant, whole, before its group's, even when the own
+// grant binds no venue account. This own-before-group precedence is the grant
+// access rule; it is separate from the venue-account override model below.
 //
 // Venues with venue accounts, such as IB, need an explicit policy on the
 // connection: no default venue account, or a default with one of three override

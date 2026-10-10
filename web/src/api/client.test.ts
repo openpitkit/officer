@@ -18,7 +18,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { normalizeSigningKeysStatus } from "@/api/client";
-import type { BackupArchive, TradingSnapshot, VenueOrder } from "@/api/types";
+import type {
+  BackupArchive,
+  TradingAccessSubject,
+  TradingSnapshot,
+  VenueOrder,
+} from "@/api/types";
 import { ApiError, createApiClient, createOfficerApi } from "@/framework";
 
 function api() {
@@ -124,6 +129,16 @@ function jsonResponse(body: unknown): Response {
 }
 
 describe("trading client", () => {
+  it("types an access subject as exactly one grantee", () => {
+    // @ts-expect-error -- a subject cannot name both an account and a group
+    const both: TradingAccessSubject = { account: "a", accountGroup: "g" };
+    // @ts-expect-error -- a subject must name a grantee
+    const neither: TradingAccessSubject = {};
+    // Reading both bindings keeps noUnusedLocals from satisfying the two
+    // directives above; only the subject type error may satisfy them.
+    expect([both, neither]).toHaveLength(2);
+  });
+
   const connection = {
     id: "paper/desk #1",
     provider: "alpaca",
@@ -141,7 +156,14 @@ describe("trading client", () => {
         enabled: true,
       },
     ],
-    access: [{ account: "desk/1 #paper", venueAccount: "" }],
+    access: [
+      {
+        account: "desk/1 #paper",
+        accountGroup: "",
+        venueAccount: "",
+        group: "",
+      },
+    ],
     feeAccount: "",
   };
   const trading: TradingSnapshot = {
@@ -367,6 +389,62 @@ describe("trading client", () => {
     },
   );
 
+  it("normalizes account and group access grants with all four fields", async () => {
+    const access = [
+      {
+        account: "desk/1 #paper",
+        accountGroup: "",
+        venueAccount: "venue-1",
+        group: "desks",
+      },
+      { account: "", accountGroup: "desks", venueAccount: "", group: "" },
+    ];
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        trading: {
+          ...trading,
+          connections: [
+            {
+              ...connection,
+              access: access.map((grant) => ({ ...grant, extra: "ignored" })),
+            },
+          ],
+        },
+      }),
+    );
+
+    const snapshot = await api().fetchTrading();
+
+    expect(snapshot.connections[0].access).toEqual(access);
+  });
+
+  it.each(["account", "accountGroup", "venueAccount", "group"] as const)(
+    "rejects an access grant without %s",
+    async (field) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          trading: {
+            ...trading,
+            connections: [
+              {
+                ...connection,
+                access: [{ ...connection.access[0], [field]: undefined }],
+              },
+            ],
+          },
+        }),
+      );
+
+      const result = api().fetchTrading();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message: `Trading access ${field} is missing from the API response`,
+      });
+    },
+  );
+
   it("creates a connection with credentials as an object", async () => {
     const body = {
       id: connection.id,
@@ -517,12 +595,24 @@ describe("trading client", () => {
   });
 
   it.each([
-    { account: "desk/1 #paper", venueAccount: "" },
-    { account: "desk/1 #paper" },
-  ])("grants access with the supplied body %j", async (body) => {
+    [
+      { account: "desk/1 #paper", venueAccount: "" },
+      { account: "desk/1 #paper", venueAccount: "" },
+    ],
+    [{ account: "desk/1 #paper" }, { account: "desk/1 #paper" }],
+    [
+      { accountGroup: "desks/1 #paper", venueAccount: "venue-1" },
+      { accountGroup: "desks/1 #paper", venueAccount: "venue-1" },
+    ],
+    [{ accountGroup: "desks/1 #paper" }, { accountGroup: "desks/1 #paper" }],
+    [
+      { account: "desk/1 #paper", venueAccount: "", group: "desks" },
+      { account: "desk/1 #paper", venueAccount: "" },
+    ],
+  ])("grants access with %j as the body %j", async (input, body) => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading }));
 
-    expect(await api().grantTradingAccess(connection.id, body)).toEqual(
+    expect(await api().grantTradingAccess(connection.id, input)).toEqual(
       trading,
     );
     expect(fetch).toHaveBeenCalledWith(
@@ -531,17 +621,27 @@ describe("trading client", () => {
     );
   });
 
-  it("revokes access with only an encoded account and accepts 204", async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+  it.each([
+    [{ account: "desk/1 #paper" }, "account=desk%2F1+%23paper"],
+    [{ accountGroup: "desks/1 #paper" }, "accountGroup=desks%2F1+%23paper"],
+    [
+      { account: "desk/1 #paper", venueAccount: "venue-1" },
+      "account=desk%2F1+%23paper",
+    ],
+  ])(
+    "revokes access for %j with only the query %s and accepts 204",
+    async (subject, query) => {
+      vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
 
-    expect(
-      await api().revokeTradingAccess(connection.id, "desk/1 #paper"),
-    ).toBeUndefined();
-    expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/access?account=desk%2F1+%23paper",
-      expect.objectContaining({ method: "DELETE", body: undefined }),
-    );
-  });
+      expect(
+        await api().revokeTradingAccess(connection.id, subject),
+      ).toBeUndefined();
+      expect(fetch).toHaveBeenCalledWith(
+        `/app/api/v1/trading/connections/paper%2Fdesk%20%231/access?${query}`,
+        expect.objectContaining({ method: "DELETE", body: undefined }),
+      );
+    },
+  );
 
   it("sets the fee account and unwraps the trading snapshot", async () => {
     const account = "desk/1 #paper";
@@ -634,7 +734,10 @@ describe("trading client", () => {
         ),
       );
 
-      const result = api()[method](connection.id, "missing");
+      const result =
+        method === "revokeTradingAccess"
+          ? api().revokeTradingAccess(connection.id, { account: "missing" })
+          : api().setTradingFeeAccount(connection.id, "missing");
 
       await expect(result).rejects.toBeInstanceOf(ApiError);
       await expect(result).rejects.toMatchObject({

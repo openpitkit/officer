@@ -20,7 +20,12 @@
     "addInstrument": "添加工具",
     "enable": "启用",
     "disable": "停用",
-    "deleteInstrument": "删除工具"
+    "deleteInstrument": "删除工具",
+    "setFeeAccount": "设置手续费账户",
+    "grantAccess": "授予访问权限",
+    "revokeAccess": "撤销访问权限",
+    "revokeAccountAccessFor": "撤销账户 {{code}} 的访问权限",
+    "revokeGroupAccessFor": "撤销账户组 {{code}} 的访问权限"
   },
   "state": {
     "enabled": "已启用",
@@ -49,6 +54,72 @@
   },
   "deleteInstrument": {
     "title": "删除工具？"
+  },
+  "revokeAccess": {
+    "accountTitle": "撤销账户访问权限？",
+    "groupTitle": "撤销账户组访问权限？",
+    "accountDescription": "撤销账户 {{account}} 对 {{label}} 的访问权限？",
+    "groupDescription": "撤销账户组 {{group}} 对 {{label}} 的访问权限？组内账户仅在被直接授权时保留访问权限。"
+  },
+  "accessBlocked": {
+    "groupNeedsFeeAccount": "请先设置手续费账户。账户组可包含多个账户，而 {{provider}} 收取不与订单关联的费用；Officer 需要指定一个账户记账。",
+    "secondAccountNeedsFeeAccount": "请先设置手续费账户。{{provider}} 收取不与订单关联的费用；多个账户共用一个连接时，Officer 需要指定一个账户记账。"
+  },
+  "access": {
+    "tableLabel": "访问授权",
+    "accountCount_one": "{{count}} 个账户",
+    "accountCount_other": "{{count}} 个账户",
+    "groupCount_one": "{{count}} 个账户组",
+    "groupCount_other": "{{count}} 个账户组",
+    "kindFilter": "类型",
+    "kind": {
+      "all": "全部",
+      "accounts": "账户",
+      "groups": "账户组"
+    },
+    "codeFilter": "代码",
+    "codePlaceholder": "账户或账户组代码",
+    "columns": {
+      "subject": "账户或账户组",
+      "group": "所属账户组",
+      "venueAccount": "交易场所账户"
+    },
+    "groupBadge": "账户组",
+    "empty": "没有账户或账户组拥有访问权限",
+    "noMatches": "没有访问授权匹配筛选条件"
+  },
+  "accessDialog": {
+    "accountTitle": "交易连接访问权限 - {{code}}",
+    "groupTitle": "交易连接访问权限 - 账户组 {{code}}",
+    "accountDescription": "此处仅授予或撤销该账户自身的访问权限。通过账户组获得的访问权限需在账户组中管理。",
+    "groupDescription": "该账户组中的账户可通过授予该账户组的任一连接发送订单。",
+    "tableLabel": "交易连接",
+    "columns": {
+      "connection": "交易连接",
+      "access": "访问权限"
+    },
+    "state": {
+      "own": "自身授权",
+      "group": "通过账户组 {{group}}",
+      "ownAndGroup": "自身授权，同时通过账户组 {{group}}",
+      "granted": "已授权",
+      "none": "无访问权限",
+      "noOwn": "无自身授权"
+    },
+    "venueAccount": "交易场所账户：{{venueAccount}}",
+    "venueAccountBound": "在此撤销将移除交易场所账户绑定。请在交易连接页面修改此授权。",
+    "groupVenueAccount": "自身授权将替换账户组的交易场所账户 {{venueAccount}}。请在交易连接页面授予访问权限。",
+    "openConnections": "打开交易连接",
+    "empty": {
+      "title": "没有交易连接",
+      "hint": "请先设置交易连接，再授予访问权限。"
+    }
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "分页大小",
+      "rowCount": "每页 {{count}} 行"
+    }
   },
   "emptyInstruments": "未配置工具"
 }

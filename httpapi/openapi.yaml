@@ -218,6 +218,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
         "503":
           $ref: "#/components/responses/EngineRestartingError"
         "500":
@@ -968,7 +970,8 @@ paths:
         alter the account's effective currency while the account has any
         non-zero balance, position, cost-basis, or P&L value. An account with a
         currency of its own resolves through no group tier, so its membership
-        moves freely.
+        moves freely. The move changes the account's trading access inherited
+        through a group grant; an own grant of the account is unaffected.
       tags: [accounts]
       parameters:
         - $ref: "#/components/parameters/MissingAccount"
@@ -1378,7 +1381,9 @@ paths:
         request is rejected when detaching members would alter their effective
         currency while they carry protected state. A group-scoped Spot Funds
         P&L bound is a dependent row: deletion returns `has_dependents` until
-        the caller explicitly passes `force=true`.
+        the caller explicitly passes `force=true`. The group's trading access
+        grants are deleted with it and never return `has_dependents`; its
+        former members keep only their own grants.
       tags: [groups]
       parameters:
         - $ref: "#/components/parameters/ForceCascade"
@@ -3309,7 +3314,8 @@ paths:
         send nothing. The route must be an explicit JSON object. Omitting the
         connection requires exactly one enabled paper destination; ambiguity
         returns destination_ambiguous with candidates. A supplied venueAccount
-        must match the account binding. A live connection returns
+        must match the venue account of the grant the account sends through,
+        its own or its group's. A live connection returns
         trading_mode_mismatch. A venue pre-check refusal returns 422 with the
         venue's reason. A pre-trade reject returns 201 without venueSend and
         sends nothing. GET /orders/{id} is authoritative; the runtime reconciles
@@ -3813,7 +3819,15 @@ paths:
       - $ref: "#/components/parameters/TradingConnectionId"
     put:
       operationId: putTradingAccess
-      summary: Grant an Officer account access to a connection
+      summary: Grant an Officer account or account group access to a connection
+      description: >
+        Exactly one of `account` and `accountGroup` names the grantee; a
+        validation error points at `/account` when neither is named and at
+        `/accountGroup` when both are. A group grant reaches every current
+        member of the group; on one connection an account's own grant wins
+        over its group's. On a provider with unlinked fees, a connection
+        without a fee account refuses a group grant, and an account grant
+        while it holds any other grant, with fee_account_required.
       tags: [trading]
       requestBody:
         required: true
@@ -3847,15 +3861,23 @@ paths:
 
     delete:
       operationId: removeTradingAccess
-      summary: Remove an Officer account's connection access
+      summary: Remove an Officer account's or account group's connection access
+      description: >
+        Exactly one of `account` and `accountGroup` names the grant to remove;
+        a validation error points at `/account` when neither is named and at
+        `/accountGroup` when both are.
       tags: [trading]
       parameters:
         - name: account
           in: query
-          required: true
+          description: Account code whose grant is removed, or omit for a group grant.
           schema:
             type: string
-            minLength: 1
+        - name: accountGroup
+          in: query
+          description: Account group code whose grant is removed, or omit for an account grant.
+          schema:
+            type: string
       responses:
         "204":
           description: Request completed.
@@ -5263,6 +5285,12 @@ components:
         accounts_groups into the normalized scope. Applying a live-mode
         connection is refused with 403 live_trading_unavailable before writing;
         insert_missing skips a live connection whose external id already exists.
+        A restore that leaves an account-group trading access grant on a
+        connection without a fee account whose provider has unlinked fees is
+        refused with 409 fee_account_required; the archived connection must
+        carry the fee account, or an insert_missing restore must keep an
+        existing connection that has one (overwrite and replace_all take the
+        fee account from the archive).
       properties:
         all:
           type: boolean
@@ -6850,13 +6878,25 @@ components:
     TradingAccess:
       type: object
       additionalProperties: false
-      required: [account, venueAccount]
+      description: >
+        One grant of the connection. Exactly one of `account` and
+        `accountGroup` names the grantee; the other is empty.
+      required: [account, accountGroup, venueAccount, group]
       properties:
         account:
           type: string
-          minLength: 1
+          description: Account code this grant applies to, or empty for a group grant.
+        accountGroup:
+          type: string
+          description: Account group code this grant applies to, or empty for an account grant.
         venueAccount:
           type: string
+          description: Bound venue-side account, or empty when none.
+        group:
+          type: string
+          description: >
+            Current group code of the granted account; empty for a group grant
+            and for an account outside any group.
 
     TradingConnection:
       type: object
@@ -7085,11 +7125,17 @@ components:
     TradingAccessRequest:
       type: object
       additionalProperties: false
-      required: [account]
+      description: >
+        Exactly one of `account` and `accountGroup` names the grantee; a
+        validation error points at `/account` when neither is named and at
+        `/accountGroup` when both are.
       properties:
         account:
           type: string
-          minLength: 1
+          description: Account code to grant access to, or empty for a group grant.
+        accountGroup:
+          type: string
+          description: Account group code to grant access to, or empty for an account grant.
         venueAccount:
           type: string
 
@@ -7188,13 +7234,21 @@ components:
     BackupTradingAccess:
       type: object
       additionalProperties: false
-      required: [connection, account]
+      description: >
+        Exactly one of `account` and `accountGroup` names the grantee; the
+        other is omitted.
+      required: [connection]
       properties:
         connection:
           $ref: "#/components/schemas/Id"
         account:
           type: string
           minLength: 1
+          description: Account code this grant applies to; omitted for a group grant.
+        accountGroup:
+          type: string
+          minLength: 1
+          description: Account group code this grant applies to; omitted for an account grant.
         venueAccount:
           type: string
 

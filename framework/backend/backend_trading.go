@@ -28,6 +28,7 @@ import (
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 )
 
@@ -52,7 +53,9 @@ type TradingConnectionStatus struct {
 	Unavailable string
 	Secrets     map[string]bool
 	Instruments []domain.TradingInstrument
-	Access      []domain.TradingAccess
+	// Access lists every grant of the connection, each with the granted
+	// account's current group.
+	Access []store.TradingAccessListRow
 }
 
 // TradingStatus is the credential-free control-plane view of trading.
@@ -62,7 +65,8 @@ type TradingStatus struct {
 	CredentialsSealed bool
 }
 
-// TradingDestinationStatus joins an account binding with its connection state.
+// TradingDestinationStatus joins an account's effective grant, its own or its
+// group's, with the granted connection's state.
 type TradingDestinationStatus struct {
 	Connection   domain.ExternalID
 	Label        string
@@ -435,9 +439,10 @@ func (s *Service) SearchTradingSymbols(ctx context.Context, id, query string) (T
 	return TradingSymbolSearch{Supported: true, Matches: matches}, nil
 }
 
-// PutTradingAccess grants an account access to a connection and venue account.
-// Providers with unlinked fees require a fee account before a second distinct
-// Officer account is bound.
+// PutTradingAccess grants an Officer account or an account group access to a
+// connection and venue account. On a provider with unlinked fees, a connection
+// without a fee account refuses a group grant, and an account grant while it
+// holds any other grant, with domain.ErrFeeAccountRequired.
 func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAccess) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -462,9 +467,11 @@ func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAcc
 	return s.node.PutTradingAccess(ctx, access, p.UnlinkedFees, caller)
 }
 
-// RemoveTradingAccess revokes an account's access to a trading connection.
-// Existing venue-managed orders continue through their stored venue links.
-func (s *Service) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
+// RemoveTradingAccess revokes the grant of a trading connection to exactly one
+// subject: account or accountGroup, the other empty. A malformed subject
+// returns domain.ErrInvalid before any lookup. Existing venue-managed orders
+// continue through their stored venue links.
+func (s *Service) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
 	if err := s.requireTradingRuntime(); err != nil {
@@ -474,7 +481,12 @@ func (s *Service) RemoveTradingAccess(ctx context.Context, account domain.Accoun
 	if err != nil {
 		return err
 	}
-	return s.node.RemoveTradingAccess(ctx, account, connection, caller)
+	if err := domain.ValidateTradingAccess(domain.TradingAccess{
+		Account: account, AccountGroup: accountGroup, Connection: connection,
+	}); err != nil {
+		return err
+	}
+	return s.node.RemoveTradingAccess(ctx, connection, account, accountGroup, caller)
 }
 
 // SetTradingFeeAccount accepts an empty account to clear the fee target.
@@ -503,8 +515,9 @@ func (s *Service) SetTradingFeeAccount(ctx context.Context, connection domain.Ex
 	return s.node.SetTradingConnectionFeeAccount(ctx, connection, account, caller)
 }
 
-// ListTradingDestinations includes disabled and unavailable account bindings.
-// Empty mode lists both paper and live connections, ordered by label.
+// ListTradingDestinations includes disabled and unavailable connections among
+// the account's effective grants, its own or its group's. Empty mode lists both
+// paper and live connections, ordered by label.
 func (s *Service) ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]TradingDestinationStatus, error) {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()

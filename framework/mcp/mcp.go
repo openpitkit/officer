@@ -84,10 +84,12 @@ type Source interface {
 	VerifyTradingSymbol(ctx context.Context, id, external string) (backend.TradingSymbolVerification, error)
 	// SearchTradingSymbols queries venue symbols and reports search support.
 	SearchTradingSymbols(ctx context.Context, id, query string) (backend.TradingSymbolSearch, error)
-	// PutTradingAccess grants an Officer account access to a venue connection.
+	// PutTradingAccess grants an Officer account or an account group access to
+	// a venue connection.
 	PutTradingAccess(ctx context.Context, access domain.TradingAccess) error
-	// RemoveTradingAccess revokes an account's access to a connection.
-	RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error
+	// RemoveTradingAccess revokes the access of exactly one subject, account or
+	// accountGroup with the other empty, to a connection.
+	RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error
 	// SetTradingFeeAccount assigns the unlinked-fee account; empty clears it.
 	SetTradingFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID) error
 	// ListTradingDestinations returns account destinations; empty mode lists all.
@@ -782,8 +784,8 @@ func (s controlPlaneSource) PutTradingAccess(ctx context.Context, access domain.
 	return s.cp.PutTradingAccess(ctx, access)
 }
 
-func (s controlPlaneSource) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
-	return s.cp.RemoveTradingAccess(ctx, account, connection)
+func (s controlPlaneSource) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
+	return s.cp.RemoveTradingAccess(ctx, connection, account, accountGroup)
 }
 
 func (s controlPlaneSource) SetTradingFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID) error {

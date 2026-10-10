@@ -359,13 +359,16 @@ func handlePutTradingAccess(svc backend.ControlPlane) http.HandlerFunc {
 		}
 		var req struct {
 			Account      string `json:"account"`
+			AccountGroup string `json:"accountGroup"`
 			VenueAccount string `json:"venueAccount"`
 		}
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if strings.TrimSpace(req.Account) == "" {
-			httpx.WriteValidationProblem(w, "account is required", "/account", "required")
+		// Both subjects reach the service, whose validation refuses them at
+		// /accountGroup; a second mapping here would drift from it.
+		if strings.TrimSpace(req.Account) == "" && strings.TrimSpace(req.AccountGroup) == "" {
+			httpx.WriteValidationProblem(w, "account or accountGroup is required", "/account", "required")
 			return
 		}
 		connection, err := domain.ParseExternalID(id)
@@ -373,7 +376,10 @@ func handlePutTradingAccess(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.PutTradingAccess(r.Context(), domain.TradingAccess{Account: domain.AccountID(req.Account), Connection: connection, VenueAccount: req.VenueAccount}); err != nil {
+		if err := svc.PutTradingAccess(r.Context(), domain.TradingAccess{
+			Account: domain.AccountID(req.Account), AccountGroup: req.AccountGroup,
+			Connection: connection, VenueAccount: req.VenueAccount,
+		}); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -398,12 +404,15 @@ func handleRemoveTradingAccess(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		account := r.URL.Query().Get("account")
-		if strings.TrimSpace(account) == "" {
-			httpx.WriteValidationProblem(w, "account is required", "/account", "required")
+		query := r.URL.Query()
+		account, accountGroup := query.Get("account"), query.Get("accountGroup")
+		// Both subjects reach the service, whose validation refuses them at
+		// /accountGroup; a second mapping here would drift from it.
+		if strings.TrimSpace(account) == "" && strings.TrimSpace(accountGroup) == "" {
+			httpx.WriteValidationProblem(w, "account or accountGroup is required", "/account", "required")
 			return
 		}
-		if err := svc.RemoveTradingAccess(r.Context(), domain.AccountID(account), connection); err != nil {
+		if err := svc.RemoveTradingAccess(r.Context(), connection, domain.AccountID(account), accountGroup); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}

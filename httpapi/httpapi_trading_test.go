@@ -22,12 +22,15 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 )
 
@@ -107,7 +110,9 @@ func TestTradingRoutesSuccess(t *testing.T) {
 		{"verify", "POST", tradingPath + "/verify-symbol", `{"externalSymbol":"AAPL"}`, `{"verification":{"supported":true,"exists":true,"tradable":true}}`, "verify", 200},
 		{"search", "POST", tradingPath + "/search-symbols", `{"query":"apple"}`, `{"supported":true,"matches":[{"symbol":"AAPL","tradable":true}]}`, "search", 200},
 		{"access", "PUT", tradingPath + "/access", `{"account":"acc-1","venueAccount":"sub-1"}`, snapshot, "access", 200},
+		{"access-group", "PUT", tradingPath + "/access", `{"accountGroup":"desk","venueAccount":"sub-1"}`, snapshot, "access", 200},
 		{"delete-access", "DELETE", tradingPath + "/access?account=acc-1", "", "", "delete-access", 204},
+		{"delete-access-group", "DELETE", tradingPath + "/access?accountGroup=desk", "", "", "delete-access", 204},
 		{"fee-account", "PUT", tradingPath + "/fee-account", `{"account":"acc-1"}`, snapshot, "fee-account", 200},
 		{"delete-fee-account", "DELETE", tradingPath + "/fee-account", "", "", "fee-account", 204},
 		{"destinations", "GET", "/accounts/acc-1/trading-destinations?mode=paper", "", `{"destinations":[{"connection":"connection-1","label":"Paper","provider":"alpaca","mode":"paper","enabled":false,"venueAccount":"","state":"stopped"}]}`, "destinations", 200},
@@ -141,8 +146,16 @@ func TestTradingRoutesSuccess(t *testing.T) {
 					if svc.tradingAccess != (domain.TradingAccess{Connection: svc.tradingCreateResult.ExternalID, Account: "acc-1", VenueAccount: "sub-1"}) {
 						t.Fatal("access input differs from request")
 					}
+				case "access-group":
+					if svc.tradingAccess != (domain.TradingAccess{Connection: svc.tradingCreateResult.ExternalID, AccountGroup: "desk", VenueAccount: "sub-1"}) {
+						t.Fatalf("group access input = %+v, differs from request", svc.tradingAccess)
+					}
+				case "delete-access-group":
+					if svc.tradingAccount != "" || svc.tradingAccountGroup != "desk" {
+						t.Fatalf("revoked subject = %q/%q, want group desk", svc.tradingAccount, svc.tradingAccountGroup)
+					}
 				case "delete-access", "fee-account", "destinations":
-					if svc.tradingAccount != "acc-1" {
+					if svc.tradingAccount != "acc-1" || svc.tradingAccountGroup != "" {
 						t.Fatal("account was not forwarded")
 					}
 				case "delete-fee-account":
@@ -159,7 +172,7 @@ func TestTradingRoutesSuccess(t *testing.T) {
 				if tc.name == "destinations" && svc.tradingMode != domain.TradingModePaper {
 					t.Fatal("mode was not forwarded")
 				}
-				if tc.name != "get" && tc.name != "create" && tc.name != "instrument" && tc.name != "access" && tc.name != "destinations" && svc.tradingID != "connection-1" {
+				if tc.name != "get" && tc.name != "create" && tc.name != "instrument" && tc.name != "access" && tc.name != "access-group" && tc.name != "destinations" && svc.tradingID != "connection-1" {
 					t.Fatal("connection id was not forwarded")
 				}
 			})
@@ -233,6 +246,57 @@ func TestTradingRequiredFields(t *testing.T) {
 	}
 }
 
+// TestTradingAccessSubject pins the grant subject rules of PUT and DELETE
+// access: naming neither subject is refused at /account before the service is
+// called, and naming both reaches the service whole, whose domain validation
+// error - set on the fake here - answers at /accountGroup.
+func TestTradingAccessSubject(t *testing.T) {
+	id, err := domain.ParseExternalID("connection-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	both := domain.ValidateTradingAccess(domain.TradingAccess{Account: "acc-1", AccountGroup: "desk", Connection: id})
+	for _, tc := range []struct {
+		name, method, path, body, pointer, constraint string
+		serviceErr                                    error
+	}{
+		{"put-neither", "PUT", tradingPath + "/access", `{"account":" ","accountGroup":"  "}`, "/account", "required", nil},
+		{"delete-neither", "DELETE", tradingPath + "/access?account=&accountGroup=%20", "", "/account", "required", nil},
+		{"put-both", "PUT", tradingPath + "/access", `{"account":"acc-1","accountGroup":"desk"}`, "/accountGroup", "unsupported_value", both},
+		{"delete-both", "DELETE", tradingPath + "/access?account=acc-1&accountGroup=desk", "", "/accountGroup", "unsupported_value", both},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := tradingFixture(t)
+			svc.tradingErr = tc.serviceErr
+			rec := callTrading(t, svc, "/api/v1", tc.method, tc.path, tc.body)
+			if rec.Code != 422 {
+				t.Fatalf("status=%d, want 422: %s", rec.Code, rec.Body)
+			}
+			problems, _ := bodyMap(t, rec.Result())["errors"].([]any)
+			if len(problems) != 1 {
+				t.Fatalf("problems = %v, want one", problems)
+			}
+			if problem := problems[0].(map[string]any); problem["pointer"] != tc.pointer || problem["constraint"] != tc.constraint {
+				t.Fatalf("problem = %v, want %s at %s", problem, tc.constraint, tc.pointer)
+			}
+			switch {
+			case tc.serviceErr == nil:
+				if len(svc.tradingCalls) != 0 {
+					t.Fatalf("request without a subject reached the service: %v", svc.tradingCalls)
+				}
+			case tc.method == "PUT":
+				if svc.tradingAccess.Account != "acc-1" || svc.tradingAccess.AccountGroup != "desk" {
+					t.Fatalf("service got %+v, want both subjects", svc.tradingAccess)
+				}
+			default:
+				if svc.tradingAccount != "acc-1" || svc.tradingAccountGroup != "desk" {
+					t.Fatalf("service got %q/%q, want both subjects", svc.tradingAccount, svc.tradingAccountGroup)
+				}
+			}
+		})
+	}
+}
+
 func TestTradingCredentialsObject(t *testing.T) {
 	for _, raw := range []string{`"` + tradingSecret + `"`, `[]`, `42`, `null`} {
 		for _, path := range []string{"/trading/connections", tradingPath + "/settings"} {
@@ -280,10 +344,17 @@ func TestTradingOptionalFieldsAndEmptyCollections(t *testing.T) {
 	c.Unavailable = "keys unavailable"
 	c.FeeAccount = "fees"
 	c.Instruments = []domain.TradingInstrument{{ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}}
-	c.Access = []domain.TradingAccess{{Account: "acc-1", VenueAccount: "sub-1"}}
+	c.Access = []store.TradingAccessListRow{
+		{Access: domain.TradingAccess{AccountGroup: "desk", VenueAccount: "sub-g"}},
+		{Access: domain.TradingAccess{Account: "acc-1", VenueAccount: "sub-1"}, Group: "desk"},
+		{Access: domain.TradingAccess{Account: "acc-2"}},
+	}
 	rec := callTrading(t, svc, "/api/v1", "GET", "/trading", "")
 	expected := strings.Replace(freshTradingJSON, `"feeAccount":"","state":"stopped"`, `"feeAccount":"fees","state":"unavailable","error":"keys unavailable"`, 1)
-	expected = strings.Replace(expected, `"instruments":[],"access":[]`, `"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[{"account":"acc-1","venueAccount":"sub-1"}]`, 1)
+	expected = strings.Replace(expected, `"instruments":[],"access":[]`, `"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[`+
+		`{"account":"","accountGroup":"desk","venueAccount":"sub-g","group":""},`+
+		`{"account":"acc-1","accountGroup":"","venueAccount":"sub-1","group":"desk"},`+
+		`{"account":"acc-2","accountGroup":"","venueAccount":"","group":""}]`, 1)
 	assertTradingJSON(t, rec, 200, `{"trading":{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[`+expected+`],"credentialsSealed":true}}`)
 	svc.tradingDestinations[0].State = "unavailable"
 	svc.tradingDestinations[0].Unavailable = "keys unavailable"
@@ -333,6 +404,7 @@ func TestTradingHandlerErrors(t *testing.T) {
 	}{
 		{"live", "POST", "/trading/connections", `{"provider":"alpaca","label":"Live","mode":"live","credentials":{"key":"` + tradingSecret + `"},"enabled":true}`, "live_trading_unavailable", domain.ErrLiveTradingUnavailable, 403},
 		{"fee", "PUT", tradingPath + "/access", `{"account":"acc-1"}`, "fee_account_required", domain.ErrFeeAccountRequired, 409},
+		{"fee-group", "PUT", tradingPath + "/access", `{"accountGroup":"desk"}`, "fee_account_required", domain.ErrFeeAccountRequired, 409},
 		{"report", "POST", "/orders/order-1/execution-reports", `{"status":"cancelled"}`, "venue_order_managed", domain.ErrVenueOrderManaged, 409},
 		{"confirm", "POST", "/orders/order-1/confirm", "", "venue_order_managed", domain.ErrVenueOrderManaged, 409},
 		{"cancel", "POST", "/orders/order-1/cancel", `{}`, "venue_order_managed", domain.ErrVenueOrderManaged, 409},
@@ -528,6 +600,12 @@ func TestOpenAPITradingContract(t *testing.T) {
 	if !strings.Contains(sendPaper, "        \"501\":\n          $ref: \"#/components/responses/NotImplementedError\"") {
 		t.Fatal("send-paper must document 501 when trading runtime is absent")
 	}
+	restore := strings.SplitN(strings.SplitN(spec, "  /backup/restore:", 2)[1],
+		"  /business-csv/export:", 2)[0]
+	if !strings.Contains(restore, "        \"409\":\n          $ref: \"#/components/responses/TradingConflictError\"") ||
+		!strings.Contains(spec, "\n    TradingConflictError:\n") {
+		t.Fatal("backup restore must document 409 fee_account_required for a group grant without a fee account")
+	}
 	for _, snippet := range []string{
 		"required: [providers, connections, credentialsSealed]",
 		"required: [id, provider, label, mode, enabled, venueIdentity, feeAccount, state, secrets, instruments, access]",
@@ -546,9 +624,82 @@ func TestOpenAPITradingContract(t *testing.T) {
 		"restored disabled with no keys", "existing venue-order links",
 		"force. Force-deleting an account removes its venue-fee adjustments",
 		"leavesQuantity 0", "after both success and failure",
+		"409 fee_account_required; the archived connection must",
+		"fee account from the archive).",
+		"grants are deleted with it and never return `has_dependents`",
+		"former members keep only their own grants.",
+		"through a group grant; an own grant of the account is unaffected.",
 	} {
 		if !strings.Contains(spec, snippet) {
 			t.Fatalf("OpenAPI contract missing %q", snippet)
 		}
 	}
+	for _, schema := range []struct {
+		name  string
+		value any
+	}{
+		{"TradingAccess", tradingAccessDTO{}},
+		{"BackupTradingAccess", backup.TradingAccess{}},
+	} {
+		wantRequired, wantProperties := jsonMembers(reflect.TypeOf(schema.value))
+		gotRequired, gotProperties := openAPISchemaMembers(t, spec, schema.name)
+		if !reflect.DeepEqual(gotRequired, wantRequired) || !reflect.DeepEqual(gotProperties, wantProperties) {
+			t.Fatalf("OpenAPI %s = required %v properties %v, want required %v properties %v as its Go type encodes",
+				schema.name, gotRequired, gotProperties, wantRequired, wantProperties)
+		}
+	}
+	if _, properties := openAPISchemaMembers(t, spec, "TradingAccessRequest"); !reflect.DeepEqual(properties, []string{"account", "accountGroup", "venueAccount"}) {
+		t.Fatalf("OpenAPI TradingAccessRequest properties = %v, want the PUT access body members", properties)
+	}
+	access := strings.SplitN(strings.SplitN(spec, "  /trading/connections/{id}/access:", 2)[1],
+		"  /trading/connections/{id}/fee-account:", 2)[0]
+	for _, parameter := range []string{"- name: account\n", "- name: accountGroup\n"} {
+		if !strings.Contains(access, parameter) {
+			t.Fatalf("DELETE access query parameter %q is undocumented", parameter)
+		}
+	}
+}
+
+// jsonMembers lists the JSON member names of a struct type, sorted: the ones
+// encoded always, without omitempty, and all of them.
+func jsonMembers(typ reflect.Type) (required, properties []string) {
+	for i := 0; i < typ.NumField(); i++ {
+		name, options, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		properties = append(properties, name)
+		if options != "omitempty" {
+			required = append(required, name)
+		}
+	}
+	slices.Sort(required)
+	slices.Sort(properties)
+	return required, properties
+}
+
+// openAPISchemaMembers reads one components schema's required list and
+// property names from the spec text, sorted.
+func openAPISchemaMembers(t *testing.T, spec, name string) (required, properties []string) {
+	t.Helper()
+	_, schema, found := strings.Cut(spec, "\n    "+name+":\n")
+	if !found {
+		t.Fatalf("OpenAPI schema %s is missing", name)
+	}
+	inProperties := false
+	for _, line := range strings.Split(schema, "\n") {
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if strings.TrimSpace(line) != "" && indent < 6 {
+			break
+		}
+		switch {
+		case indent == 6:
+			inProperties = line == "      properties:"
+			if list, ok := strings.CutPrefix(line, "      required: ["); ok {
+				required = strings.Split(strings.TrimSuffix(list, "]"), ", ")
+			}
+		case indent == 8 && inProperties:
+			properties = append(properties, strings.TrimSuffix(strings.TrimSpace(line), ":"))
+		}
+	}
+	slices.Sort(required)
+	slices.Sort(properties)
+	return required, properties
 }

@@ -153,7 +153,7 @@ type ControlPlane interface {
 	VerifyTradingSymbol(ctx context.Context, id, external string) (TradingSymbolVerification, error)
 	SearchTradingSymbols(ctx context.Context, id, query string) (TradingSymbolSearch, error)
 	PutTradingAccess(ctx context.Context, access domain.TradingAccess) error
-	RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error
+	RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error
 	SetTradingFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID) error
 	ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]TradingDestinationStatus, error)
 	// SendPaperOrder pre-checks, holds, and sends through a paper connection.

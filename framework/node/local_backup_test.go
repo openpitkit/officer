@@ -1221,8 +1221,8 @@ func TestLocalNode_RestoreBackupRollbackPreservesExactSelectors(t *testing.T) {
 	if len(probe.exportScopes) != 1 {
 		t.Fatalf("rollback export scopes = %+v, want one", probe.exportScopes)
 	}
-	if len(probe.restoreScopes) != 2 {
-		t.Fatalf("restore scopes = %+v, want restore plus rollback", probe.restoreScopes)
+	if len(probe.restoreOptions) != 2 {
+		t.Fatalf("restore options = %+v, want restore plus rollback", probe.restoreOptions)
 	}
 	want := scope.Normalize()
 	wantExport := want
@@ -1231,8 +1231,62 @@ func TestLocalNode_RestoreBackupRollbackPreservesExactSelectors(t *testing.T) {
 	if !reflect.DeepEqual(probe.exportScopes[0], wantExport) {
 		t.Fatalf("rollback export scope = %+v, want %+v", probe.exportScopes[0], wantExport)
 	}
-	if !reflect.DeepEqual(probe.restoreScopes[1], want) {
-		t.Fatalf("rollback restore scope = %+v, want %+v", probe.restoreScopes[1], want)
+	if !reflect.DeepEqual(probe.restoreOptions[1].Scope, want) {
+		t.Fatalf("rollback restore scope = %+v, want %+v", probe.restoreOptions[1].Scope, want)
+	}
+}
+
+// TestLocalNode_RestoreBackupRollbackKeepsTradingFeeSeam pins that the
+// post-commit rollback of a non-runtime restore carrying trading hands the
+// caller's TradingProviderRequiresFeeAccount seam to its replace-all restore,
+// so the rollback re-checks group grants with the same provider capabilities.
+func TestLocalNode_RestoreBackupRollbackKeepsTradingFeeSeam(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	real := newMemoryStore("restore-trading-fee-seam.db")
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+
+	var probe *restoreScopeProbeRealm
+	st := newRealmWrapStore(real, func(r store.RealmStore) store.RealmStore {
+		probe = &restoreScopeProbeRealm{RealmStore: r}
+		return probe
+	})
+	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
+	scope := backup.Scope{Sections: []backup.Section{backup.SectionTrading}}
+	archive := testArchive(scope, backup.Data{})
+	// Normalizing a trading scope adds the accounts and groups parent, a
+	// runtime section; an archive that carries trading alone keeps the restore
+	// non-runtime, the only path that rolls the store back.
+	archive.Manifest.Sections = []backup.Section{backup.SectionTrading}
+	errSeam := errors.New("caller trading fee seam")
+	var asked []string
+	seam := func(provider string) (bool, error) {
+		asked = append(asked, provider)
+		return false, errSeam
+	}
+
+	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope:                             scope,
+		Mode:                              backup.RestoreModeReplaceAll,
+		TradingProviderRequiresFeeAccount: seam,
+	}, testCaller); !errors.Is(err, errRestoreAuditFailed) {
+		t.Fatalf("RestoreBackup error = %v, want audit failure", err)
+	}
+	if len(probe.restoreOptions) != 2 {
+		t.Fatalf("restore options = %+v, want restore plus rollback", probe.restoreOptions)
+	}
+	rollback := probe.restoreOptions[1]
+	if !rollback.Scope.Included(backup.SectionTrading) || rollback.Mode != backup.RestoreModeReplaceAll {
+		t.Fatalf("rollback restore options = %+v, want a replace-all trading restore", rollback)
+	}
+	if rollback.TradingProviderRequiresFeeAccount == nil {
+		t.Fatal("rollback restore dropped the caller's trading fee-account seam")
+	}
+	if _, err := rollback.TradingProviderRequiresFeeAccount("probe-provider"); !errors.Is(err, errSeam) || !reflect.DeepEqual(asked, []string{"probe-provider"}) {
+		t.Fatalf("rollback seam answered %v after asking %q, want the caller's seam", err, asked)
 	}
 }
 

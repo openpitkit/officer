@@ -30,7 +30,8 @@
     "close": "Close",
     "dismissError": "Dismiss error",
     "increment": "Increase",
-    "decrement": "Decrease"
+    "decrement": "Decrease",
+    "setUpTradingConnection": "Set up a trading connection"
   },
   "filters": {
     "venueLabel": "Venue",
@@ -475,7 +476,9 @@
     "copyableSnippet": "Copyable snippet"
   },
   "suggestions": {
-    "assetLookupFailed": "Asset suggestions could not be loaded."
+    "assetLookupFailed": "Asset suggestions could not be loaded.",
+    "accountLookupFailed": "Account suggestions could not be loaded.",
+    "groupLookupFailed": "Group suggestions could not be loaded."
   },
   "topBar": {
     "toggleNav": "Toggle navigation"

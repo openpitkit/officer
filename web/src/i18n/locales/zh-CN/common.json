@@ -30,7 +30,8 @@
     "close": "关闭",
     "dismissError": "关闭错误",
     "increment": "增加",
-    "decrement": "减少"
+    "decrement": "减少",
+    "setUpTradingConnection": "设置交易连接"
   },
   "filters": {
     "venueLabel": "交易场所",
@@ -475,7 +476,9 @@
     "copyableSnippet": "可复制片段"
   },
   "suggestions": {
-    "assetLookupFailed": "无法加载资产建议。"
+    "assetLookupFailed": "无法加载资产建议。",
+    "accountLookupFailed": "无法加载账户建议。",
+    "groupLookupFailed": "无法加载账户组建议。"
   },
   "topBar": {
     "toggleNav": "切换导航"

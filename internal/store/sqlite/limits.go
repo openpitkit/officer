@@ -579,7 +579,7 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 	if err != nil {
 		return err
 	}
-	accountID, groupID, err := resolveSpotFundsPnlBoundsAxes(
+	accountID, groupID, err := resolveSubjectIDs(
 		ctx, db, limit.Account, limit.AccountGroup,
 	)
 	if err != nil {
@@ -618,7 +618,7 @@ func (r *realmStore) DeleteSpotFundsPnlBoundsLimit(
 	if err != nil {
 		return err
 	}
-	accountID, groupID, err := resolveSpotFundsPnlBoundsAxes(ctx, db, account, accountGroup)
+	accountID, groupID, err := resolveSubjectIDs(ctx, db, account, accountGroup)
 	if err != nil {
 		return err
 	}
@@ -762,7 +762,7 @@ func putSpotFundsPnlBoundsRow(
 	return nil
 }
 
-func resolveSpotFundsPnlBoundsAxes(
+func resolveSubjectIDs(
 	ctx context.Context,
 	q sqlQueryer,
 	account domain.AccountID,

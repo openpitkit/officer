@@ -24,6 +24,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
+import { useState } from "react";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,7 +48,12 @@ import { Accounts, CreateAccountDialog } from "@/pages/Accounts";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
-vi.mock("@/api/useAccounts", () => ({ useAccountsPage: vi.fn() }));
+vi.mock("@/api/useAccounts", async () => ({
+  ...(await vi.importActual<typeof import("@/api/useAccounts")>(
+    "@/api/useAccounts",
+  )),
+  useAccountsPage: vi.fn(),
+}));
 vi.mock("@/api/useGroups", () => ({ useGroupsPage: vi.fn() }));
 vi.mock("@/api/useTrading", () => ({ useTrading: vi.fn() }));
 vi.mock("@/api/useMarketData", () => ({
@@ -108,6 +114,10 @@ const unblockAccountMock = vi.fn();
 const unblockGroupMock = vi.fn();
 const useTradingMock = vi.mocked(useTrading);
 const deleteAccountMock = vi.fn();
+const deleteGroupMock = vi.fn();
+const grantTradingAccessMock = vi.fn();
+const revokeTradingAccessMock = vi.fn();
+const fetchAccountStateMock = vi.fn();
 const tradingSnapshot: TradingSnapshot = {
   providers: [],
   credentialsSealed: true,
@@ -275,6 +285,10 @@ function renderAccounts(initialEntry = "/accounts") {
         unblockAccount: unblockAccountMock,
         unblockGroup: unblockGroupMock,
         deleteAccount: deleteAccountMock,
+        deleteGroup: deleteGroupMock,
+        grantTradingAccess: grantTradingAccessMock,
+        revokeTradingAccess: revokeTradingAccessMock,
+        fetchAccountState: fetchAccountStateMock,
       },
     },
   );
@@ -331,6 +345,13 @@ beforeEach(async () => {
   fetchAssetsMock.mockResolvedValue([]);
   fetchAccountsMock.mockResolvedValue(accounts);
   fetchGroupsMock.mockResolvedValue(groups);
+  fetchAccountStateMock.mockImplementation(async (code: string) => {
+    const account = accounts.find((item) => item.code === code);
+    if (account === undefined) {
+      throw new ApiError("Account not found", "not_found", 404);
+    }
+    return { account, limits: [] };
+  });
   blockAccountMock.mockResolvedValue({
     code: "desk-alpha",
     title: "Desk alpha",
@@ -391,30 +412,64 @@ describe("DeleteAccountConfirm", () => {
     ).not.toBeInTheDocument();
   });
 
-  it.each(["loading", "error"])(
-    "does not warn when trading is %s",
-    async (state) => {
-      if (state === "loading") {
-        useTradingMock.mockReturnValue({
-          load: { state: "loading", data: null, error: null },
-          reload: vi.fn(),
-        });
-      } else {
-        useTradingMock.mockReturnValue({
-          load: { state: "error", data: null, error: "trading unavailable" },
-          reload: vi.fn(),
-        });
-      }
+  it.each([
+    {
+      state: "loading",
+      load: { state: "loading", data: null, error: null },
+      notice: "Trading connections are still being checked.",
+      alert: false,
+    },
+    {
+      state: "error",
+      load: { state: "error", data: null, error: "trading unavailable" },
+      notice: "Trading connections could not be checked: trading unavailable",
+      alert: true,
+    },
+  ] as const)(
+    "says trading connections are unknown while trading is $state",
+    async ({ load, notice, alert }) => {
+      useTradingMock.mockReturnValue({ load, reload: vi.fn() });
       const user = userEvent.setup();
       renderAccounts();
       await user.click(
         screen.getByRole("button", { name: "Delete desk-alpha" }),
       );
+      const dialog = screen.getByRole("alertdialog");
+      expect(within(dialog).getByText(notice)).toBeInTheDocument();
+      if (alert) {
+        expect(within(dialog).getByRole("alert")).toHaveTextContent(notice);
+      } else {
+        expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+      }
+      // Unknown connections are never shown as no connections.
       expect(
-        within(screen.getByRole("alertdialog")).queryByText(tradingWarning),
+        within(dialog).queryByText(tradingWarning),
       ).not.toBeInTheDocument();
+      expect(
+        within(dialog).getByRole("button", { name: "Delete" }),
+      ).toBeEnabled();
     },
   );
+
+  it("keeps the warning of a stale snapshot, says it is stale and reloads it", async () => {
+    const trading: PollingResult<TradingSnapshot> = {
+      load: { state: "ready", data: tradingSnapshot, error: "poll failed" },
+      reload: vi.fn(),
+    };
+    useTradingMock.mockReturnValue(trading);
+    const user = userEvent.setup();
+    renderAccounts();
+    await user.click(screen.getByRole("button", { name: "Delete desk-alpha" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete account?" });
+    const stale = within(dialog).getByRole("status", { name: "Stale data" });
+    expect(stale).toHaveTextContent("poll failed");
+    expect(within(dialog).getByText(tradingWarning)).toBeInTheDocument();
+    await user.click(within(stale).getByRole("button", { name: "Retry" }));
+    expect(trading.reload).toHaveBeenCalledTimes(1);
+    expect(
+      within(dialog).getByRole("button", { name: "Delete" }),
+    ).toBeEnabled();
+  });
 
   it("labels trading access dependents after a refused delete", async () => {
     const user = userEvent.setup();
@@ -435,6 +490,787 @@ describe("DeleteAccountConfirm", () => {
     expect(
       within(dialog).getByRole("button", { name: "Force delete" }),
     ).toBeEnabled();
+  });
+});
+
+// Alpaca books unlinked fees and has no fee account; the mock venues do not.
+// desk-alpha holds its own Alpaca grant; equity-desks, its group, holds the
+// first mock venue.
+const accessSnapshot: TradingSnapshot = {
+  providers: [
+    {
+      type: "alpaca",
+      title: "Alpaca",
+      venueAccounts: true,
+      verifiesSymbols: true,
+      searchesSymbols: true,
+      unlinkedFees: true,
+    },
+    {
+      type: "mock",
+      title: "Mock",
+      venueAccounts: false,
+      verifiesSymbols: false,
+      searchesSymbols: false,
+      unlinkedFees: false,
+    },
+  ],
+  credentialsSealed: true,
+  connections: [
+    {
+      ...tradingSnapshot.connections[0],
+      access: [
+        {
+          account: "desk-alpha",
+          accountGroup: "",
+          venueAccount: "sub-1",
+          group: "equity-desks",
+        },
+      ],
+    },
+    {
+      ...tradingSnapshot.connections[0],
+      id: "mock-1",
+      provider: "mock",
+      label: "Mock primary",
+      access: [
+        {
+          account: "",
+          accountGroup: "equity-desks",
+          venueAccount: "",
+          group: "",
+        },
+      ],
+    },
+    {
+      ...tradingSnapshot.connections[0],
+      id: "mock-2",
+      provider: "mock",
+      label: "Mock backup",
+      access: [],
+    },
+  ],
+};
+
+const VENUE_ACCESS = "Trading connection access";
+
+/** The list row holding the given delete button, e.g. "Delete desk-alpha". */
+function listRow(deleteName: string) {
+  return within(
+    screen.getByRole("button", { name: deleteName }).closest("tr")!,
+  );
+}
+
+/** The dialog row of the connection with the given label. */
+function accessRow(dialog: HTMLElement, label: string) {
+  return within(within(dialog).getByText(label).closest("tr")!);
+}
+
+async function openAccess(
+  user: ReturnType<typeof userEvent.setup>,
+  deleteName: string,
+  dialogName: string,
+) {
+  await user.click(
+    listRow(deleteName).getByRole("button", { name: VENUE_ACCESS }),
+  );
+  // Let an account's first membership poll land.
+  await act(async () => {});
+  return screen.getByRole("dialog", { name: dialogName });
+}
+
+/** Run the dialog's next membership poll; the test runs on fake timers. */
+async function nextMembershipPoll() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000);
+  });
+}
+
+describe("Trading connection access", () => {
+  it("sits before delete on every account row", () => {
+    renderAccounts();
+    for (const code of ["desk-default", "desk-alpha"]) {
+      const remove = screen.getByRole("button", { name: `Delete ${code}` });
+      expect(remove.previousElementSibling).toHaveAccessibleName(VENUE_ACCESS);
+    }
+  });
+
+  it("sits before delete on real group rows, not on the default group", () => {
+    renderAccounts("/accounts?tab=groups");
+    const remove = screen.getByRole("button", { name: "Delete equity-desks" });
+    expect(remove.previousElementSibling).toHaveAccessibleName(VENUE_ACCESS);
+    expect(screen.getAllByRole("button", { name: VENUE_ACCESS })).toHaveLength(
+      1,
+    );
+    const defaultRow = within(screen.getByText("Default group").closest("tr")!);
+    expect(
+      defaultRow.queryByRole("button", { name: VENUE_ACCESS }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows an account its own access and its group's", async () => {
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    const user = userEvent.setup();
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    const alpaca = accessRow(dialog, "Alpaca paper");
+    expect(alpaca.getByText("Own grant")).toBeInTheDocument();
+    expect(alpaca.getByText("Venue account: sub-1")).toBeInTheDocument();
+    expect(alpaca.getByText("Paper")).toBeInTheDocument();
+    // Revoking would drop the venue account; it is changed on its page.
+    expect(alpaca.queryByRole("button")).not.toBeInTheDocument();
+    expect(
+      alpaca.getByRole("link", { name: "Open trading connections" }),
+    ).toHaveAttribute("href", "/trading-connections");
+    expect(
+      accessRow(dialog, "Mock primary").getByText("Through group equity-desks"),
+    ).toBeInTheDocument();
+    expect(
+      accessRow(dialog, "Mock backup").getByText("No access"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a group its grants and why Alpaca refuses it", async () => {
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+    const dialog = await openAccess(
+      user,
+      "Delete equity-desks",
+      "Trading connection access - group equity-desks",
+    );
+    const alpaca = accessRow(dialog, "Alpaca paper");
+    expect(alpaca.getByText("No access")).toBeInTheDocument();
+    expect(alpaca.getByRole("button", { name: "Grant access" })).toBeDisabled();
+    expect(
+      alpaca.getByText(
+        "Set a fee account first. A group can hold several accounts, and Alpaca charges fees that are not tied to orders; Officer needs one account to book them on.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      alpaca.getByRole("link", { name: "Set fee account" }),
+    ).toHaveAttribute("href", "/trading-connections");
+    expect(
+      accessRow(dialog, "Mock primary").getByText("Granted"),
+    ).toBeInTheDocument();
+    expect(
+      accessRow(dialog, "Mock backup").getByRole("button", {
+        name: "Grant access",
+      }),
+    ).toBeEnabled();
+  });
+
+  it("grants and revokes an account's own access and reloads", async () => {
+    // An own grant without a venue account is revocable from the dialog.
+    const trading = ready({
+      ...accessSnapshot,
+      connections: accessSnapshot.connections.map((connection) => ({
+        ...connection,
+        access: connection.access.map((grant) => ({
+          ...grant,
+          venueAccount: "",
+        })),
+      })),
+    });
+    useTradingMock.mockReturnValue(trading);
+    grantTradingAccessMock.mockResolvedValue(accessSnapshot);
+    revokeTradingAccessMock.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    await user.click(
+      accessRow(dialog, "Mock backup").getByRole("button", {
+        name: "Grant access",
+      }),
+    );
+    expect(grantTradingAccessMock).toHaveBeenCalledExactlyOnceWith("mock-2", {
+      account: "desk-alpha",
+    });
+    await waitFor(() => expect(trading.reload).toHaveBeenCalledTimes(1));
+    const revoke = () =>
+      user.click(
+        accessRow(dialog, "Alpaca paper").getByRole("button", {
+          name: "Revoke access",
+        }),
+      );
+    // A revoke waits for its confirmation; cancelling it revokes nothing.
+    await revoke();
+    let confirm = screen.getByRole("alertdialog", {
+      name: "Revoke account access?",
+    });
+    expect(
+      within(confirm).getByText(
+        "Revoke access of account desk-alpha to Alpaca paper?",
+      ),
+    ).toBeInTheDocument();
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(revokeTradingAccessMock).not.toHaveBeenCalled();
+    await revoke();
+    confirm = screen.getByRole("alertdialog", {
+      name: "Revoke account access?",
+    });
+    await user.click(
+      within(confirm).getByRole("button", { name: "Revoke access" }),
+    );
+    expect(revokeTradingAccessMock).toHaveBeenCalledExactlyOnceWith(
+      "alpaca-1",
+      { account: "desk-alpha" },
+    );
+    await waitFor(() => expect(trading.reload).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("dialog", {
+        name: "Trading connection access - desk-alpha",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("grants and revokes a group's access and reloads", async () => {
+    const trading = ready(accessSnapshot);
+    useTradingMock.mockReturnValue(trading);
+    grantTradingAccessMock.mockResolvedValue(accessSnapshot);
+    revokeTradingAccessMock.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+    const dialog = await openAccess(
+      user,
+      "Delete equity-desks",
+      "Trading connection access - group equity-desks",
+    );
+    await user.click(
+      accessRow(dialog, "Mock backup").getByRole("button", {
+        name: "Grant access",
+      }),
+    );
+    expect(grantTradingAccessMock).toHaveBeenCalledExactlyOnceWith("mock-2", {
+      accountGroup: "equity-desks",
+    });
+    await waitFor(() => expect(trading.reload).toHaveBeenCalledTimes(1));
+    await user.click(
+      accessRow(dialog, "Mock primary").getByRole("button", {
+        name: "Revoke access",
+      }),
+    );
+    const confirm = screen.getByRole("alertdialog", {
+      name: "Revoke group access?",
+    });
+    expect(
+      within(confirm).getByText(
+        "Revoke access of group equity-desks to Mock primary? Accounts in the group keep access only if it is granted to them directly.",
+      ),
+    ).toBeInTheDocument();
+    expect(revokeTradingAccessMock).not.toHaveBeenCalled();
+    await user.click(
+      within(confirm).getByRole("button", { name: "Revoke access" }),
+    );
+    expect(revokeTradingAccessMock).toHaveBeenCalledExactlyOnceWith("mock-1", {
+      accountGroup: "equity-desks",
+    });
+    await waitFor(() => expect(trading.reload).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("drops a revoke confirmation once a poll binds the grant to a venue account", async () => {
+    // desk-alpha's own grant on Alpaca paper, bound to sub-1 or not.
+    const bound = accessSnapshot;
+    const unbound: TradingSnapshot = {
+      ...accessSnapshot,
+      connections: accessSnapshot.connections.map((connection) => ({
+        ...connection,
+        access: connection.access.map((grant) => ({
+          ...grant,
+          venueAccount: "",
+        })),
+      })),
+    };
+    // The snapshot as polled by every reader: a later poll may change the
+    // grant.
+    const readers = new Set<(next: PollingResult<TradingSnapshot>) => void>();
+    useTradingMock.mockImplementation(function useLiveTrading() {
+      const [result, setResult] = useState(() => ready(unbound));
+      readers.add(setResult);
+      return result;
+    });
+    const publish = (snapshot: TradingSnapshot) => {
+      const next = ready(snapshot);
+      for (const read of readers) read(next);
+    };
+    const user = userEvent.setup();
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    await user.click(
+      accessRow(dialog, "Alpaca paper").getByRole("button", {
+        name: "Revoke access",
+      }),
+    );
+    expect(
+      screen.getByRole("alertdialog", { name: "Revoke account access?" }),
+    ).toBeInTheDocument();
+    act(() => publish(bound));
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    // Closed for good: a poll that unbinds the grant again does not reopen it.
+    act(() => publish(unbound));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(revokeTradingAccessMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a refused revoke in its confirmation without reloading", async () => {
+    const trading = ready(accessSnapshot);
+    useTradingMock.mockReturnValue(trading);
+    revokeTradingAccessMock.mockRejectedValue(
+      new ApiError("revoke refused", "forbidden", 403),
+    );
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+    const name = "Trading connection access - group equity-desks";
+    const dialog = await openAccess(user, "Delete equity-desks", name);
+    await user.click(
+      accessRow(dialog, "Mock primary").getByRole("button", {
+        name: "Revoke access",
+      }),
+    );
+    const confirm = screen.getByRole("alertdialog", {
+      name: "Revoke group access?",
+    });
+    await user.click(
+      within(confirm).getByRole("button", { name: "Revoke access" }),
+    );
+    expect(await within(confirm).findByRole("alert")).toHaveTextContent(
+      "revoke refused",
+    );
+    expect(trading.reload).not.toHaveBeenCalled();
+    // Shown once: the dialog under the confirmation does not repeat it.
+    expect(
+      within(dialog).queryByText("revoke refused"),
+    ).not.toBeInTheDocument();
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(
+      within(screen.getByRole("dialog", { name })).getByRole("alert"),
+    ).toHaveTextContent("revoke refused");
+  });
+
+  it("keeps a refused change in the dialog without reloading", async () => {
+    const trading = ready(accessSnapshot);
+    useTradingMock.mockReturnValue(trading);
+    grantTradingAccessMock.mockRejectedValue(
+      new ApiError("fee account required", "fee_account_required", 409),
+    );
+    const user = userEvent.setup();
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    await user.click(
+      accessRow(dialog, "Mock backup").getByRole("button", {
+        name: "Grant access",
+      }),
+    );
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "fee account required",
+    );
+    expect(trading.reload).not.toHaveBeenCalled();
+  });
+
+  it("lists no connections when the trading load failed", async () => {
+    useTradingMock.mockReturnValue({
+      load: { state: "error", data: null, error: "trading unavailable" },
+      reload: vi.fn(),
+    });
+    const user = userEvent.setup();
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "trading unavailable",
+    );
+    expect(within(dialog).queryByRole("table")).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByText("No trading connections"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("marks only the connection whose provider is missing", async () => {
+    useTradingMock.mockReturnValue(
+      ready({
+        ...accessSnapshot,
+        providers: accessSnapshot.providers.filter(
+          (provider) => provider.type !== "alpaca",
+        ),
+      }),
+    );
+    const user = userEvent.setup();
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    const alpaca = accessRow(dialog, "Alpaca paper");
+    expect(alpaca.getByRole("alert")).toHaveTextContent(
+      "Provider alpaca is missing from the trading snapshot.",
+    );
+    expect(alpaca.queryByRole("button")).not.toBeInTheDocument();
+    expect(
+      accessRow(dialog, "Mock primary").getByText("Through group equity-desks"),
+    ).toBeInTheDocument();
+    expect(
+      accessRow(dialog, "Mock backup").getByRole("button", {
+        name: "Grant access",
+      }),
+    ).toBeEnabled();
+  });
+
+  it("keeps the rows of a stale snapshot and says they are stale", async () => {
+    const trading: PollingResult<TradingSnapshot> = {
+      load: { state: "ready", data: accessSnapshot, error: "poll failed" },
+      reload: vi.fn(),
+    };
+    useTradingMock.mockReturnValue(trading);
+    const user = userEvent.setup();
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    const stale = within(dialog).getByRole("status", { name: "Stale data" });
+    expect(stale).toHaveTextContent(
+      "Refresh failed. Showing the last received data.",
+    );
+    expect(stale).toHaveTextContent("poll failed");
+    expect(
+      accessRow(dialog, "Mock backup").getByText("No access"),
+    ).toBeInTheDocument();
+    await user.click(within(stale).getByRole("button", { name: "Retry" }));
+    expect(trading.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows the account's group while open", async () => {
+    // Real time still flows for user events; polls wait for nextMembershipPoll.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    expect(
+      accessRow(dialog, "Mock primary").getByText("Through group equity-desks"),
+    ).toBeInTheDocument();
+    fetchAccountStateMock.mockResolvedValue({
+      account: { ...accounts[1], group: "" },
+      limits: [],
+    });
+    await nextMembershipPoll();
+    expect(fetchAccountStateMock).toHaveBeenLastCalledWith(
+      "desk-alpha",
+      expect.any(AbortSignal),
+    );
+    expect(
+      accessRow(dialog, "Mock primary").getByText("No access"),
+    ).toBeInTheDocument();
+  });
+
+  it("stays open when the account leaves the listed page", async () => {
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    // The list as polled: a later poll pages, sorts or filters it away.
+    const feed: { publish?: (items: Account[]) => void } = {};
+    useAccountsMock.mockImplementation(function useLiveAccountsPage() {
+      const [page, setPage] = useState(() => readyPage(accounts));
+      feed.publish = (items) => setPage(readyPage(items));
+      return page;
+    });
+    const user = userEvent.setup();
+    renderAccounts();
+    const name = "Trading connection access - desk-alpha";
+    await openAccess(user, "Delete desk-alpha", name);
+    act(() =>
+      feed.publish!(
+        accounts.filter((account) => account.code !== "desk-alpha"),
+      ),
+    );
+    // The modal hides the list from the accessibility tree; look past it.
+    expect(
+      screen.queryByRole("button", { name: "Delete desk-alpha", hidden: true }),
+    ).not.toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name });
+    expect(
+      accessRow(dialog, "Mock primary").getByText("Through group equity-desks"),
+    ).toBeInTheDocument();
+  });
+
+  it("closes when the account is gone", async () => {
+    // Real time still flows for user events; polls wait for nextMembershipPoll.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderAccounts();
+    const name = "Trading connection access - desk-alpha";
+    await openAccess(user, "Delete desk-alpha", name);
+    fetchAccountStateMock.mockRejectedValue(
+      new ApiError("Account not found", "not_found", 404),
+    );
+    await nextMembershipPoll();
+    expect(screen.queryByRole("dialog", { name })).not.toBeInTheDocument();
+  });
+
+  it("lets a pending grant settle and show its error before closing for a gone account", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const trading = ready(accessSnapshot);
+    useTradingMock.mockReturnValue(trading);
+    let failGrant: (err: Error) => void = () => {};
+    grantTradingAccessMock.mockReturnValue(
+      new Promise((_, reject) => {
+        failGrant = reject;
+      }),
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderAccounts();
+    const name = "Trading connection access - desk-alpha";
+    const dialog = await openAccess(user, "Delete desk-alpha", name);
+    await user.click(
+      accessRow(dialog, "Mock backup").getByRole("button", {
+        name: "Grant access",
+      }),
+    );
+    fetchAccountStateMock.mockRejectedValue(
+      new ApiError("Account not found", "not_found", 404),
+    );
+    await nextMembershipPoll();
+    expect(screen.getByRole("dialog", { name })).toBeInTheDocument();
+    await act(async () => {
+      failGrant(new ApiError("account desk-alpha is gone", "not_found", 404));
+    });
+    expect(
+      within(screen.getByRole("dialog", { name })).getByRole("alert"),
+    ).toHaveTextContent("account desk-alpha is gone");
+    expect(trading.reload).not.toHaveBeenCalled();
+    // Read, then closed by the operator.
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name })).not.toBeInTheDocument();
+  });
+
+  it("keeps the account's last group and says it is stale when its poll fails", async () => {
+    // Real time still flows for user events; polls wait for nextMembershipPoll.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderAccounts();
+    const dialog = await openAccess(
+      user,
+      "Delete desk-alpha",
+      "Trading connection access - desk-alpha",
+    );
+    fetchAccountStateMock.mockRejectedValue(new Error("account poll failed"));
+    await nextMembershipPoll();
+    const stale = within(dialog).getByRole("status", { name: "Stale data" });
+    expect(stale).toHaveTextContent("account poll failed");
+    expect(
+      accessRow(dialog, "Mock primary").getByText("Through group equity-desks"),
+    ).toBeInTheDocument();
+    const polls = fetchAccountStateMock.mock.calls.length;
+    await user.click(within(stale).getByRole("button", { name: "Retry" }));
+    await act(async () => {});
+    expect(fetchAccountStateMock).toHaveBeenCalledTimes(polls + 1);
+  });
+
+  it.each([
+    { state: "loading", alert: null },
+    {
+      state: "error",
+      alert: "This account's group could not be checked: accounts unavailable",
+    },
+  ] as const)(
+    "claims no group access while the account's group is $state",
+    async ({ state, alert }) => {
+      useTradingMock.mockReturnValue(ready(accessSnapshot));
+      if (state === "loading") {
+        fetchAccountStateMock.mockReturnValue(new Promise(() => {}));
+      } else {
+        fetchAccountStateMock.mockRejectedValue(
+          new Error("accounts unavailable"),
+        );
+      }
+      const user = userEvent.setup();
+      renderAccounts();
+      const dialog = await openAccess(
+        user,
+        "Delete desk-alpha",
+        "Trading connection access - desk-alpha",
+      );
+      expect(
+        accessRow(dialog, "Alpaca paper").getByText("Own grant"),
+      ).toBeInTheDocument();
+      expect(
+        within(dialog).queryByText(/through group/i),
+      ).not.toBeInTheDocument();
+      expect(
+        accessRow(dialog, "Mock primary").getByText("No own grant"),
+      ).toBeInTheDocument();
+      expect(
+        accessRow(dialog, "Mock backup").getByRole("button", {
+          name: "Grant access",
+        }),
+      ).toBeDisabled();
+      if (alert === null) {
+        expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+      } else {
+        expect(within(dialog).getByRole("alert")).toHaveTextContent(alert);
+      }
+    },
+  );
+
+  it("closes on the close button and on Escape", async () => {
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    const user = userEvent.setup();
+    renderAccounts();
+    const name = "Trading connection access - desk-alpha";
+    const dialog = await openAccess(user, "Delete desk-alpha", name);
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name })).not.toBeInTheDocument(),
+    );
+    await openAccess(user, "Delete desk-alpha", name);
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name })).not.toBeInTheDocument(),
+    );
+  });
+});
+
+describe("DeleteGroupConfirm", () => {
+  const groupWarning =
+    "This group has access to 1 trading connection. Deleting the group revokes that access; accounts in the group keep access only if it is granted to them directly.";
+
+  it("warns that the group's grants go with it", async () => {
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+    await user.click(
+      screen.getByRole("button", { name: "Delete equity-desks" }),
+    );
+    const dialog = screen.getByRole("alertdialog", { name: "Delete group?" });
+    expect(within(dialog).getByText(groupWarning)).toBeInTheDocument();
+  });
+
+  it("does not warn when the group holds no grants", async () => {
+    useTradingMock.mockReturnValue(ready(tradingSnapshot));
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+    await user.click(
+      screen.getByRole("button", { name: "Delete equity-desks" }),
+    );
+    const dialog = screen.getByRole("alertdialog", { name: "Delete group?" });
+    expect(
+      within(dialog).queryByText(/This group has access to/),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      state: "loading",
+      load: { state: "loading", data: null, error: null },
+      notice: "Trading connections are still being checked.",
+      alert: false,
+    },
+    {
+      state: "error",
+      load: { state: "error", data: null, error: "trading unavailable" },
+      notice: "Trading connections could not be checked: trading unavailable",
+      alert: true,
+    },
+  ] as const)(
+    "says the group's access is unknown while trading is $state",
+    async ({ load, notice, alert }) => {
+      useTradingMock.mockReturnValue({ load, reload: vi.fn() });
+      const user = userEvent.setup();
+      renderAccounts("/accounts?tab=groups");
+      await user.click(
+        screen.getByRole("button", { name: "Delete equity-desks" }),
+      );
+      const dialog = screen.getByRole("alertdialog", { name: "Delete group?" });
+      expect(within(dialog).getByText(notice)).toBeInTheDocument();
+      if (alert) {
+        expect(within(dialog).getByRole("alert")).toHaveTextContent(notice);
+      } else {
+        expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+      }
+      // An unknown grant count is never shown as no grants.
+      expect(
+        within(dialog).queryByText(/This group has access to/),
+      ).not.toBeInTheDocument();
+      expect(
+        within(dialog).getByRole("button", { name: "Delete" }),
+      ).toBeEnabled();
+    },
+  );
+
+  it("keeps the warning of a stale snapshot, says it is stale and reloads it", async () => {
+    const trading: PollingResult<TradingSnapshot> = {
+      load: { state: "ready", data: accessSnapshot, error: "poll failed" },
+      reload: vi.fn(),
+    };
+    useTradingMock.mockReturnValue(trading);
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+    await user.click(
+      screen.getByRole("button", { name: "Delete equity-desks" }),
+    );
+    const dialog = screen.getByRole("alertdialog", { name: "Delete group?" });
+    const stale = within(dialog).getByRole("status", { name: "Stale data" });
+    expect(stale).toHaveTextContent("poll failed");
+    expect(within(dialog).getByText(groupWarning)).toBeInTheDocument();
+    await user.click(within(stale).getByRole("button", { name: "Retry" }));
+    expect(trading.reload).toHaveBeenCalledTimes(1);
+    expect(
+      within(dialog).getByRole("button", { name: "Delete" }),
+    ).toBeEnabled();
+  });
+
+  it("reloads trading access after deleting the group", async () => {
+    const trading = ready(accessSnapshot);
+    useTradingMock.mockReturnValue(trading);
+    deleteGroupMock.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+    await user.click(
+      screen.getByRole("button", { name: "Delete equity-desks" }),
+    );
+    const dialog = screen.getByRole("alertdialog", { name: "Delete group?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(deleteGroupMock).toHaveBeenCalledExactlyOnceWith("equity-desks");
+    await waitFor(() => expect(trading.reload).toHaveBeenCalledTimes(1));
   });
 });
 

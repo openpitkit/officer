@@ -49,6 +49,7 @@ type fakeService struct {
 	tradingInstrument     domain.TradingInstrument
 	tradingAccess         domain.TradingAccess
 	tradingAccount        domain.AccountID
+	tradingAccountGroup   string
 	tradingMode           domain.TradingMode
 	tradingSymbol         string
 	tradingQuery          string
@@ -269,9 +270,9 @@ func (f *fakeService) PutTradingAccess(_ context.Context, access domain.TradingA
 	return f.tradingErr
 }
 
-func (f *fakeService) RemoveTradingAccess(_ context.Context, account domain.AccountID, id domain.ExternalID) error {
+func (f *fakeService) RemoveTradingAccess(_ context.Context, id domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	f.tradingCalls = append(f.tradingCalls, "delete-access")
-	f.tradingAccount, f.tradingID = account, id.String()
+	f.tradingID, f.tradingAccount, f.tradingAccountGroup = id.String(), account, accountGroup
 	return f.tradingErr
 }
 

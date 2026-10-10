@@ -670,7 +670,7 @@ func (s *customHostSource) PutTradingAccess(ctx context.Context, access domain.T
 	return domain.ErrNotImplemented
 }
 
-func (s *customHostSource) RemoveTradingAccess(ctx context.Context, account domain.AccountID, connection domain.ExternalID) error {
+func (s *customHostSource) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	return domain.ErrNotImplemented
 }
 

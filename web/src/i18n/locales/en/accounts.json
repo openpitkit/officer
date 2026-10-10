@@ -91,7 +91,7 @@
       "currency": "Default currency for group accounts.",
       "status": "This column shows whether the group is active or blocked.",
       "notes": "This column shows the operator notes stored on the group.",
-      "actions": "This column contains row actions for filtering, sharing, and deleting the group."
+      "actions": "This column contains row actions for filtering, sharing, trading connection access, and deleting the group."
     },
     "status": {
       "blocked": "blocked",
@@ -152,7 +152,7 @@
       "positions": "This column shows how many position rows are stored for the account.",
       "status": "This column shows whether the account is active or blocked.",
       "notes": "This column shows the operator notes stored on the account.",
-      "actions": "This column contains row actions for positions, trading, policies, audit, and deletion."
+      "actions": "This column contains row actions for positions, trading, policies, audit, trading connection access, and deletion."
     },
     "status": {
       "blocked": "blocked",
@@ -320,6 +320,8 @@
     "title": "Delete group?",
     "descriptionPrefix": "Group",
     "descriptionSuffix": "will be permanently removed. Accounts currently assigned to this group will have their group assignment cleared.",
+    "tradingWarning_one": "This group has access to {{count}} trading connection. Deleting the group revokes that access; accounts in the group keep access only if it is granted to them directly.",
+    "tradingWarning_other": "This group has access to {{count}} trading connections. Deleting the group revokes that access; accounts in the group keep access only if it is granted to them directly.",
     "cancel": "Cancel",
     "submit": "Delete"
   },
@@ -382,5 +384,11 @@
     "assign": "Assign",
     "clear": "Clear"
   },
-  "reservedGroupCode": "The code “-” is reserved for addressing the default group. Choose a different code."
+  "reservedGroupCode": "The code “-” is reserved for addressing the default group. Choose a different code.",
+  "venueAccessTitle": "Trading connection access",
+  "venueAccessGroupCheckFailed": "This account's group could not be checked: {{error}}",
+  "tradingCheck": {
+    "checking": "Trading connections are still being checked.",
+    "failed": "Trading connections could not be checked: {{error}}"
+  }
 }

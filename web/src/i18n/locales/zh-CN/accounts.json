@@ -91,7 +91,7 @@
       "currency": "组内账户默认货币。",
       "status": "此列显示该分组处于活跃还是封锁状态。",
       "notes": "此列显示为该分组保存的操作员备注。",
-      "actions": "此列包含用于筛选、分享链接和删除分组的行操作。"
+      "actions": "此列包含用于筛选、分享链接、交易连接访问权限和删除分组的行操作。"
     },
     "status": {
       "blocked": "已封锁",
@@ -152,7 +152,7 @@
       "positions": "此列显示为该账户存储的持仓行数量。",
       "status": "此列显示该账户处于活跃还是封锁状态。",
       "notes": "此列显示为该账户保存的操作员备注。",
-      "actions": "此列包含用于持仓、交易、策略、审计和删除的行操作。"
+      "actions": "此列包含用于持仓、交易、策略、审计、交易连接访问权限和删除的行操作。"
     },
     "status": {
       "blocked": "已封锁",
@@ -320,6 +320,8 @@
     "title": "删除分组？",
     "descriptionPrefix": "分组",
     "descriptionSuffix": "将被永久删除。当前分配至该分组的账户，其分组分配将被清除。",
+    "tradingWarning_one": "该分组拥有 {{count}} 个交易连接的访问权限。删除分组将撤销这些访问权限；组内账户仅在被直接授权时保留访问权限。",
+    "tradingWarning_other": "该分组拥有 {{count}} 个交易连接的访问权限。删除分组将撤销这些访问权限；组内账户仅在被直接授权时保留访问权限。",
     "cancel": "取消",
     "submit": "删除"
   },
@@ -382,5 +384,11 @@
     "assign": "分配",
     "clear": "清除"
   },
-  "reservedGroupCode": "代码“-”已保留用于寻址默认分组。请改用其他代码。"
+  "reservedGroupCode": "代码“-”已保留用于寻址默认分组。请改用其他代码。",
+  "venueAccessTitle": "交易连接访问权限",
+  "venueAccessGroupCheckFailed": "无法检查该账户的分组：{{error}}",
+  "tradingCheck": {
+    "checking": "仍在检查交易连接。",
+    "failed": "无法检查交易连接：{{error}}"
+  }
 }

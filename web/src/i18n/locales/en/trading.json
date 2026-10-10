@@ -29,10 +29,7 @@
     "addConnection": "Add trading connection",
     "check": "Check connection",
     "editSettings": "Edit settings",
-    "save": "Save",
-    "addAccount": "Add account",
-    "revoke": "Revoke",
-    "setFeeAccount": "Set fee account"
+    "save": "Save"
   },
   "create": {
     "title": "Add {{provider}} connection",
@@ -79,9 +76,6 @@
     "createAssetAndSave": "Create asset {{asset}} and save",
     "connectionDisabled": "Connection disabled"
   },
-  "table": {
-    "actions": "Actions"
-  },
   "search": {
     "label": "Resolve symbol at this venue",
     "empty": "No matching symbols at this venue",
@@ -94,11 +88,9 @@
   },
   "access": {
     "title": "Account access",
+    "grantTo": "Grant to",
     "account": "Account",
-    "empty": "No accounts have access",
-    "feeRequired": "Set a fee account first. {{provider}} charges fees that are not tied to orders; with several accounts on one connection Officer needs one account to book them on.",
-    "revokeTitle": "Revoke access?",
-    "revokeDescription": "Revoke access of {{account}} to {{label}}?"
+    "group": "Group"
   },
   "fee": {
     "title": "Fee account",

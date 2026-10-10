@@ -488,7 +488,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 				err,
 			)
 		}
-		accountID, groupID, err := resolveSpotFundsPnlBoundsAxes(
+		accountID, groupID, err := resolveSubjectIDs(
 			ctx,
 			rt.tx,
 			l.Account,
@@ -955,6 +955,9 @@ func (rt *restoreTx) restoreTrading(ctx context.Context, data backup.Data) error
 	if err := rt.restoreTradingAccess(ctx, data.TradingAccess); err != nil {
 		return err
 	}
+	if err := rt.validateGroupGrantFeeAccounts(ctx); err != nil {
+		return err
+	}
 	return rt.restoreVenueOrders(ctx, data.VenueOrders)
 }
 
@@ -1041,26 +1044,37 @@ func (rt *restoreTx) restoreTradingAccess(
 	for _, archived := range accesses {
 		access := domain.TradingAccess{
 			Account:      archived.Account,
+			AccountGroup: archived.AccountGroup,
 			Connection:   archived.Connection,
 			VenueAccount: archived.VenueAccount,
 		}
 		if err := restoreValidationError(domain.ValidateTradingAccess(access)); err != nil {
 			return fmt.Errorf(
 				"store: restore trading access %q/%q: %w",
-				access.Account, access.Connection, err,
+				access.SubjectLabel(), access.Connection, err,
 			)
 		}
-		accountID, err := resolveAccountID(ctx, rt.tx, access.Account)
+		accountID, groupID, err := resolveSubjectIDs(
+			ctx, rt.tx, access.Account, access.AccountGroup,
+		)
 		if err != nil {
-			if errors.Is(err, domain.ErrInvalid) {
+			if !errors.Is(err, domain.ErrInvalid) {
+				return err
+			}
+			if access.AccountGroup != "" {
 				return fmt.Errorf(
-					"store: restore trading access %q/%q account is missing; "+
-						"include that account in the %q section: %w",
-					access.Account, access.Connection,
+					"store: restore trading access %q/%q account group is "+
+						"missing; include that group in the %q section: %w",
+					access.AccountGroup, access.Connection,
 					backup.SectionAccountsGroups, domain.ErrInvalid,
 				)
 			}
-			return err
+			return fmt.Errorf(
+				"store: restore trading access %q/%q account is missing; "+
+					"include that account in the %q section: %w",
+				access.Account, access.Connection,
+				backup.SectionAccountsGroups, domain.ErrInvalid,
+			)
 		}
 		connectionID, err := rt.restoreTradingConnectionID(
 			ctx, access.Connection, "trading access",
@@ -1071,8 +1085,8 @@ func (rt *restoreTx) restoreTradingAccess(
 		exists, err := rowExists(
 			ctx, rt.tx,
 			`SELECT 1 FROM trading_access
-			 WHERE account_id = ? AND connection_id = ?`,
-			accountID, connectionID,
+			 WHERE connection_id = ? AND account_id IS ? AND account_group_id IS ?`,
+			connectionID, accountID, groupID,
 		)
 		if err != nil {
 			return err
@@ -1082,18 +1096,73 @@ func (rt *restoreTx) restoreTradingAccess(
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT INTO trading_access (account_id, connection_id, venue_account)
-			 VALUES (?, ?, ?)
-			 ON CONFLICT(account_id, connection_id) DO UPDATE SET
-			   venue_account = excluded.venue_account`,
-			accountID, connectionID, access.VenueAccount,
+			`INSERT INTO trading_access
+			 (account_id, account_group_id, connection_id, venue_account)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT (
+			   connection_id, COALESCE(account_id, 0), COALESCE(account_group_id, 0)
+			 ) DO UPDATE SET venue_account = excluded.venue_account`,
+			accountID, groupID, connectionID, access.VenueAccount,
 		); err != nil {
 			return fmt.Errorf(
 				"store: restore trading access %q/%q: %w",
-				access.Account, access.Connection, err,
+				access.SubjectLabel(), access.Connection, err,
 			)
 		}
 		rt.applyRuntime(backup.SectionTrading, 1)
+	}
+	return nil
+}
+
+// validateGroupGrantFeeAccounts keeps the node's group grant rule on restore:
+// a connection whose provider needs a fee account must not hold a group grant
+// without one. It reads the final table state, so a target connection or grant
+// the restore kept counts like an archived one in every mode.
+func (rt *restoreTx) validateGroupGrantFeeAccounts(ctx context.Context) error {
+	rows, err := rt.tx.QueryContext(
+		ctx,
+		`SELECT c.label, c.provider
+		 FROM trading_connection c
+		 WHERE c.fee_account_id IS NULL
+		   AND EXISTS (
+		     SELECT 1 FROM trading_access a
+		     WHERE a.connection_id = c.id AND a.account_group_id IS NOT NULL
+		   )
+		 ORDER BY c.label`,
+	)
+	if err != nil {
+		return fmt.Errorf("store: restore trading group grants scan: %w", err)
+	}
+	connections, err := scanCodePairs(rows)
+	if err != nil {
+		return err
+	}
+	for _, connection := range connections {
+		label, provider := connection.a, connection.b
+		if rt.tradingProviderRequiresFeeAccount == nil {
+			return fmt.Errorf(
+				"store: restore trading connection %q holds a group grant "+
+					"without a fee account, and the restore cannot check "+
+					"whether provider %q needs one",
+				label, provider,
+			)
+		}
+		required, err := rt.tradingProviderRequiresFeeAccount(provider)
+		if err != nil {
+			return fmt.Errorf(
+				"store: restore trading connection %q provider %q: %w",
+				label, provider, err,
+			)
+		}
+		if required {
+			return fmt.Errorf(
+				"store: restore trading connection %q: a group grant needs "+
+					"the connection's fee account; the archived connection must "+
+					"carry it, or an insert_missing restore must keep an existing "+
+					"connection that has one: %w",
+				label, domain.ErrFeeAccountRequired,
+			)
+		}
 	}
 	return nil
 }

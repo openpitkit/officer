@@ -19,6 +19,7 @@ import {
   ArrowLeftRight,
   Ban,
   BriefcaseBusiness,
+  Cable,
   Check,
   Copy,
   Eye,
@@ -41,7 +42,7 @@ import { useOpenInNewTabHint } from "./openInNewTabHint";
 type ActionButtonClick = (event: MouseEvent<HTMLButtonElement>) => void;
 
 export interface ActionButtonProps {
-  /** Glyph key: copy-id | share | view | filter-by | clone | edit | block | trash | history | check | positions | trading | trades | policies | orders. */
+  /** Glyph key: copy-id | share | view | filter-by | clone | edit | block | trash | history | check | positions | trading | trades | policies | orders | venue-access. */
   icon: string;
   /** Tooltip + aria-label (required for accessibility). */
   title: string;
@@ -75,6 +76,7 @@ const ICONS = {
   trades: Receipt,
   policies: ShieldCheck,
   orders: ArrowLeftRight,
+  "venue-access": Cable,
 };
 
 function shouldOpenInNewTab(event: MouseEvent): boolean {
@@ -334,13 +336,18 @@ export function DeleteButton({
   onClick,
   title = "Delete",
   size = 30,
-}: RowActionClickProps) {
+  disabled = false,
+}: RowActionClickProps & {
+  /** Render the action as unavailable, e.g. while a change is in flight. */
+  disabled?: boolean;
+}) {
   return (
     <ActionButton
       icon="trash"
       title={title}
       onClick={onClick}
       size={size}
+      disabled={disabled}
       danger
     />
   );
@@ -461,6 +468,24 @@ export function PoliciesButton({
       newTabHint={newTabHint}
       onClick={onClick}
       size={size}
+    />
+  );
+}
+
+/** Open the entity's access to trading connections. */
+export function VenueAccessButton({
+  onClick,
+  title = "Trading connection access",
+  size = 30,
+  style,
+}: RowActionClickProps) {
+  return (
+    <ActionButton
+      icon="venue-access"
+      title={title}
+      onClick={onClick}
+      size={size}
+      style={style}
     />
   );
 }

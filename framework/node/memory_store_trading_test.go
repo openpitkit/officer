@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 )
 
 func TestMemoryUpdateTradingConnectionSettingsRejectsInvalid(t *testing.T) {
@@ -101,11 +102,15 @@ func (m *memoryRealm) DeleteTradingInstrument(_ context.Context, connection doma
 	return nil
 }
 
-func (m *memoryRealm) RemoveTradingAccess(_ context.Context, account domain.AccountID, connection domain.ExternalID) error {
+func (m *memoryRealm) RemoveTradingAccess(_ context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
+	subject := domain.TradingAccess{Account: account, AccountGroup: accountGroup, Connection: connection}
+	if err := domain.ValidateTradingAccess(subject); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, existing := range m.tradingAccess {
-		if existing.Account == account && existing.Connection == connection {
+		if existing.Connection == connection && existing.SameSubject(subject) {
 			m.tradingAccess = append(m.tradingAccess[:i], m.tradingAccess[i+1:]...)
 			return nil
 		}
@@ -121,20 +126,32 @@ func (m *memoryRealm) EarliestVenueOrderTime(
 	)
 }
 
-func (m *memoryRealm) ListTradingAccessForConnection(_ context.Context, connection domain.ExternalID) ([]domain.TradingAccess, error) {
+func (m *memoryRealm) ListTradingAccessForConnection(_ context.Context, connection domain.ExternalID) ([]store.TradingAccessListRow, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var grants []domain.TradingAccess
+	grants := make([]store.TradingAccessListRow, 0)
 	for _, access := range m.tradingAccess {
-		if access.Connection == connection {
-			grants = append(grants, access)
+		if access.Connection != connection {
+			continue
 		}
+		grant := store.TradingAccessListRow{Access: access}
+		if access.Account != "" {
+			grant.Group = m.accounts[access.Account].GroupCode
+		}
+		grants = append(grants, grant)
 	}
+	// Group grants first, then account grants; exactly one code is non-empty.
 	sort.Slice(grants, func(i, j int) bool {
-		if grants[i].Account == grants[j].Account {
-			return grants[i].VenueAccount < grants[j].VenueAccount
+		left, right := grants[i].Access, grants[j].Access
+		if (left.AccountGroup == "") != (right.AccountGroup == "") {
+			return left.AccountGroup != ""
 		}
-		return grants[i].Account < grants[j].Account
+		leftCode := left.AccountGroup + left.Account.String()
+		rightCode := right.AccountGroup + right.Account.String()
+		if leftCode != rightCode {
+			return leftCode < rightCode
+		}
+		return left.VenueAccount < right.VenueAccount
 	})
 	return grants, nil
 }
@@ -146,14 +163,23 @@ func (m *memoryRealm) GetTradingFeeAccounts(_ context.Context, id domain.Externa
 	if !found {
 		return "", nil, domain.ErrNotFound
 	}
-	bound := make(map[domain.AccountID]struct{})
+	senders := make(map[domain.AccountID]struct{})
 	for _, access := range m.tradingAccess {
-		if access.Connection == id {
-			bound[access.Account] = struct{}{}
+		if access.Connection != id {
+			continue
+		}
+		if access.AccountGroup == "" {
+			senders[access.Account] = struct{}{}
+			continue
+		}
+		for code, account := range m.accounts {
+			if account.GroupCode == access.AccountGroup {
+				senders[code] = struct{}{}
+			}
 		}
 	}
-	accounts := make([]domain.AccountID, 0, len(bound))
-	for account := range bound {
+	accounts := make([]domain.AccountID, 0, len(senders))
+	for account := range senders {
 		accounts = append(accounts, account)
 	}
 	sort.Slice(accounts, func(i, j int) bool { return accounts[i] < accounts[j] })
@@ -282,11 +308,15 @@ func (m *memoryRealm) PutTradingAccess(_ context.Context, access domain.TradingA
 	if _, ok := m.tradingConnections[access.Connection]; !ok {
 		return domain.ErrNotFound
 	}
-	if _, ok := m.accounts[access.Account]; !ok {
+	if access.AccountGroup != "" {
+		if _, ok := m.groups[access.AccountGroup]; !ok {
+			return domain.ErrNotFound
+		}
+	} else if _, ok := m.accounts[access.Account]; !ok {
 		return domain.ErrNotFound
 	}
 	for i, existing := range m.tradingAccess {
-		if existing.Account == access.Account && existing.Connection == access.Connection {
+		if existing.Connection == access.Connection && existing.SameSubject(access) {
 			m.tradingAccess[i] = access
 			return nil
 		}
@@ -298,18 +328,27 @@ func (m *memoryRealm) PutTradingAccess(_ context.Context, access domain.TradingA
 func (m *memoryRealm) ListTradingAccess(_ context.Context, account domain.AccountID) ([]domain.TradingAccess, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var grants []domain.TradingAccess
+	effective := make(map[domain.ExternalID]domain.TradingAccess)
+	own := domain.TradingAccess{Account: account}
 	for _, access := range m.tradingAccess {
-		if access.Account == account {
-			grants = append(grants, access)
+		if access.SameSubject(own) {
+			effective[access.Connection] = access
 		}
 	}
-	sort.Slice(grants, func(i, j int) bool {
-		if grants[i].Connection == grants[j].Connection {
-			return grants[i].VenueAccount < grants[j].VenueAccount
+	// The group's grant fills only connections without an own grant.
+	if code := m.accounts[account].GroupCode; code != "" {
+		group := domain.TradingAccess{AccountGroup: code}
+		for _, access := range m.tradingAccess {
+			if _, granted := effective[access.Connection]; !granted && access.SameSubject(group) {
+				effective[access.Connection] = access
+			}
 		}
-		return grants[i].Connection < grants[j].Connection
-	})
+	}
+	grants := make([]domain.TradingAccess, 0, len(effective))
+	for _, access := range effective {
+		grants = append(grants, access)
+	}
+	sort.Slice(grants, func(i, j int) bool { return grants[i].Connection < grants[j].Connection })
 	return grants, nil
 }
 

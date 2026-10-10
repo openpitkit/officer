@@ -152,6 +152,10 @@ func (n *localNode) PutTradingAccess(
 	}
 	defer n.endMutation()
 
+	// The fee rule below reads the subject, so an invalid one is refused first.
+	if err := domain.ValidateTradingAccess(access); err != nil {
+		return fmt.Errorf("put trading access: %w", err)
+	}
 	if requireFeeAccount {
 		connection, found, err := n.realm.GetTradingConnection(ctx, access.Connection)
 		if err != nil {
@@ -161,18 +165,23 @@ func (n *localNode) PutTradingAccess(
 			return fmt.Errorf("trading connection %s: %w", access.Connection, domain.ErrNotFound)
 		}
 		if connection.FeeAccount == "" {
-			accesses, err := n.realm.ListTradingAccessForConnection(ctx, access.Connection)
+			// A group can hold several senders at any time, so without a fee
+			// account its grant is refused even as the first one.
+			if access.AccountGroup != "" {
+				return domain.ErrFeeAccountRequired
+			}
+			grants, err := n.realm.ListTradingAccessForConnection(ctx, access.Connection)
 			if err != nil {
 				return fmt.Errorf("read trading access: %w", err)
 			}
-			alreadyBound := false
-			for _, existing := range accesses {
-				if existing.Account == access.Account {
-					alreadyBound = true
+			alreadyGranted := false
+			for _, existing := range grants {
+				if existing.Access.SameSubject(access) {
+					alreadyGranted = true
 					break
 				}
 			}
-			if !alreadyBound && len(accesses) > 0 {
+			if !alreadyGranted && len(grants) > 0 {
 				return domain.ErrFeeAccountRequired
 			}
 		}
@@ -180,15 +189,7 @@ func (n *localNode) PutTradingAccess(
 	if err := n.realm.PutTradingAccess(ctx, access); err != nil {
 		return fmt.Errorf("put trading access: %w", err)
 	}
-	detail := fmt.Sprintf("put trading access %s/%s", access.Connection, access.Account)
-	if access.VenueAccount != "" {
-		detail += "/" + access.VenueAccount
-	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionSetTrading,
-		Account: access.Account,
-		Detail:  detail,
-	}); err != nil {
+	if err := n.audit(ctx, caller, tradingAccessAudit("put", access)); err != nil {
 		return fmt.Errorf("audit put trading access: %w", err)
 	}
 	return nil
@@ -214,6 +215,15 @@ func (n *localNode) SetTradingConnectionFeeAccount(
 		detail = fmt.Sprintf("clear trading connection fee account %s", connection)
 		if len(accounts) > 1 {
 			return domain.ErrFeeAccountRequired
+		}
+		grants, err := n.realm.ListTradingAccessForConnection(ctx, connection)
+		if err != nil {
+			return fmt.Errorf("read trading access: %w", err)
+		}
+		for _, grant := range grants {
+			if grant.Access.AccountGroup != "" {
+				return domain.ErrFeeAccountRequired
+			}
 		}
 	}
 	if err := n.realm.SetTradingConnectionFeeAccount(ctx, connection, account); err != nil {
@@ -248,24 +258,41 @@ func (n *localNode) RecordVenueFeeSkipped(
 }
 
 func (n *localNode) RemoveTradingAccess(
-	ctx context.Context, account domain.AccountID, connection domain.ExternalID, caller domain.Caller,
+	ctx context.Context, connection domain.ExternalID,
+	account domain.AccountID, accountGroup string, caller domain.Caller,
 ) error {
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
 
-	if err := n.realm.RemoveTradingAccess(ctx, account, connection); err != nil {
+	if err := n.realm.RemoveTradingAccess(ctx, connection, account, accountGroup); err != nil {
 		return fmt.Errorf("remove trading access: %w", err)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionSetTrading,
-		Account: account,
-		Detail:  fmt.Sprintf("remove trading access %s/%s", connection, account),
-	}); err != nil {
+	if err := n.audit(ctx, caller, tradingAccessAudit("remove", domain.TradingAccess{
+		Account: account, AccountGroup: accountGroup, Connection: connection,
+	})); err != nil {
 		return fmt.Errorf("audit remove trading access: %w", err)
 	}
 	return nil
+}
+
+// tradingAccessAudit describes a grant change. The entry's Account or Group is
+// the structured subject; the detail names it by its subject label, so a group
+// grant does not read as an account grant.
+func tradingAccessAudit(verb string, access domain.TradingAccess) store.AuditEntry {
+	detail := fmt.Sprintf(
+		"%s trading access %s/%s", verb, access.Connection, access.SubjectLabel(),
+	)
+	if access.VenueAccount != "" {
+		detail += "/" + access.VenueAccount
+	}
+	return store.AuditEntry{
+		Action:  domain.AuditActionSetTrading,
+		Account: access.Account,
+		Group:   access.AccountGroup,
+		Detail:  detail,
+	}
 }
 
 func (n *localNode) GetTradingConnection(
@@ -310,7 +337,7 @@ func (n *localNode) ListTradingAccess(
 
 func (n *localNode) ListTradingAccessForConnection(
 	ctx context.Context, connection domain.ExternalID,
-) ([]domain.TradingAccess, error) {
+) ([]store.TradingAccessListRow, error) {
 	value, err := n.realm.ListTradingAccessForConnection(ctx, connection)
 	if err != nil {
 		return nil, fmt.Errorf("list trading access for connection: %w", err)

@@ -73,9 +73,14 @@ type tradingInstrumentDTO struct {
 	Enabled        bool   `json:"enabled"`
 }
 
+// tradingAccessDTO is one grant of a connection. Exactly one of Account and
+// AccountGroup names the subject; Group is the granted account's current group
+// membership, empty for a group grant and for an account outside any group.
 type tradingAccessDTO struct {
 	Account      string `json:"account"`
+	AccountGroup string `json:"accountGroup"`
 	VenueAccount string `json:"venueAccount"`
+	Group        string `json:"group"`
 }
 
 type venueOrderDTO struct {
@@ -128,8 +133,11 @@ func toTradingConnectionDTO(c backend.TradingConnectionStatus) tradingConnection
 			QuoteAsset: i.QuoteAsset, Enabled: i.Enabled,
 		})
 	}
-	for _, a := range c.Access {
-		out.Access = append(out.Access, tradingAccessDTO{Account: a.Account.String(), VenueAccount: a.VenueAccount})
+	for _, row := range c.Access {
+		out.Access = append(out.Access, tradingAccessDTO{
+			Account: row.Access.Account.String(), AccountGroup: row.Access.AccountGroup,
+			VenueAccount: row.Access.VenueAccount, Group: row.Group,
+		})
 	}
 	return out
 }

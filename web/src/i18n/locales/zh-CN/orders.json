@@ -207,7 +207,6 @@
         "disabled": "已禁用",
         "unavailable": "不可用：{{error}}",
         "noTargets": "账户 {{account}} 没有可用的{{mode}}目标。",
-        "setupConnection": "设置交易连接",
         "timeInForce": "有效期",
         "chooseTimeInForce": "选择有效期",
         "timeInForceOptions": {

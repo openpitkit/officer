@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"slices"
 	"sort"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -145,6 +146,17 @@ func (r *memoryRealm) UpdateGroup(
 				r.accounts[id] = account
 			}
 		}
+		// The group's trading grants follow the rename, as SQLite's grants
+		// reference the group row the rename keeps; tradingAccess is guarded
+		// by mu like every trading method.
+		r.mu.Lock()
+		renamed := domain.TradingAccess{AccountGroup: oldCode}
+		for i, access := range r.tradingAccess {
+			if access.SameSubject(renamed) {
+				r.tradingAccess[i].AccountGroup = group.Code
+			}
+		}
+		r.mu.Unlock()
 	}
 	current.Code = group.Code
 	current.Title = group.Title
@@ -196,6 +208,14 @@ func (r *memoryRealm) DeleteGroup(
 			delete(r.spotFundsPnlBoundsLimits, key)
 		}
 	}
+	// The group's trading grants go with it, as SQLite's ON DELETE CASCADE
+	// drops them; tradingAccess is guarded by mu like every trading method.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	group := domain.TradingAccess{AccountGroup: code}
+	r.tradingAccess = slices.DeleteFunc(r.tradingAccess, func(access domain.TradingAccess) bool {
+		return access.SameSubject(group)
+	})
 	return nil
 }
 

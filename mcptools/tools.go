@@ -274,11 +274,11 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		"Search venue symbols for a trading connection. Read-only - credentials are never exposed.",
 		"Search venue symbols for a trading connection.", false, false, true, true), searchTradingSymbolsHandler)
 	registerTool(reg, descriptor("grant_trading_access", "Grant trading access",
-		"Grant an Officer account access to a trading connection. Mutates Officer control-plane config; protected and disabled by default.",
-		"Grant an Officer account access to a trading connection.", true, true, true, false), grantTradingAccessHandler)
+		"Grant an Officer account or an account group access to a trading connection. A group grant needs the connection's fee account on providers with unlinked fees. Mutates Officer control-plane config; protected and disabled by default.",
+		"Grant an Officer account or an account group access to a trading connection; a group grant needs the connection's fee account on providers with unlinked fees.", true, true, true, false), grantTradingAccessHandler)
 	registerTool(reg, descriptor("revoke_trading_access", "Revoke trading access",
-		"Revoke an Officer account access to a trading connection. Mutates Officer control-plane config; protected and disabled by default.",
-		"Revoke an Officer account access to a trading connection.", true, true, true, false), revokeTradingAccessHandler)
+		"Revoke the access of an Officer account or an account group to a trading connection. Mutates Officer control-plane config; protected and disabled by default.",
+		"Revoke the access of an Officer account or an account group to a trading connection.", true, true, true, false), revokeTradingAccessHandler)
 	registerTool(reg, descriptor("set_trading_fee_account", "Set trading fee account",
 		"Set the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default.",
 		"Set the Officer account receiving unlinked venue fees.", true, true, true, false), setTradingFeeAccountHandler)
@@ -1310,9 +1310,14 @@ type tradingInstrumentDTO struct {
 	Enabled        bool   `json:"enabled"`
 }
 
+// tradingAccessDTO is one grant of a connection. Exactly one of Account and
+// AccountGroup names the subject; Group is the granted account's current group
+// membership, empty for a group grant and for an account outside any group.
 type tradingAccessDTO struct {
 	Account      string `json:"account"`
+	AccountGroup string `json:"accountGroup"`
 	VenueAccount string `json:"venueAccount"`
+	Group        string `json:"group"`
 }
 
 type venueOrderDTO struct {
@@ -1365,8 +1370,11 @@ func toTradingConnectionDTO(c backend.TradingConnectionStatus) tradingConnection
 			QuoteAsset: i.QuoteAsset, Enabled: i.Enabled,
 		})
 	}
-	for _, a := range c.Access {
-		out.Access = append(out.Access, tradingAccessDTO{Account: a.Account.String(), VenueAccount: a.VenueAccount})
+	for _, row := range c.Access {
+		out.Access = append(out.Access, tradingAccessDTO{
+			Account: row.Access.Account.String(), AccountGroup: row.Access.AccountGroup,
+			VenueAccount: row.Access.VenueAccount, Group: row.Group,
+		})
 	}
 	return out
 }
@@ -1478,8 +1486,14 @@ type searchTradingSymbolsOutput struct {
 }
 type grantTradingAccessInput struct {
 	Connection   string `json:"connection" jsonschema:"Trading connection id"`
-	Account      string `json:"account" jsonschema:"Officer account code"`
+	Account      string `json:"account,omitempty" jsonschema:"Officer account code; set exactly one of account or accountGroup"`
+	AccountGroup string `json:"accountGroup,omitempty" jsonschema:"Account group code; set exactly one of account or accountGroup"`
 	VenueAccount string `json:"venueAccount,omitempty" jsonschema:"Optional provider venue account id"`
+}
+type revokeTradingAccessInput struct {
+	Connection   string `json:"connection" jsonschema:"Trading connection id"`
+	Account      string `json:"account,omitempty" jsonschema:"Officer account code; set exactly one of account or accountGroup"`
+	AccountGroup string `json:"accountGroup,omitempty" jsonschema:"Account group code; set exactly one of account or accountGroup"`
 }
 type tradingAccountInput struct {
 	Connection string `json:"connection" jsonschema:"Trading connection id"`
@@ -1594,7 +1608,9 @@ func redactTradingConnection(c tradingConnectionDTO, redact func(string) string)
 	}
 	for i := range c.Access {
 		c.Access[i].Account = redact(c.Access[i].Account)
+		c.Access[i].AccountGroup = redact(c.Access[i].AccountGroup)
 		c.Access[i].VenueAccount = redact(c.Access[i].VenueAccount)
+		c.Access[i].Group = redact(c.Access[i].Group)
 	}
 	return c
 }
@@ -1748,25 +1764,29 @@ func grantTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[gr
 		if strings.TrimSpace(in.Connection) == "" {
 			return "", grantTradingAccessInput{}, fmt.Errorf("connection is required")
 		}
-		if strings.TrimSpace(in.Account) == "" {
-			return "", grantTradingAccessInput{}, fmt.Errorf("account is required")
+		// Both subjects reach the Source, whose validation refuses them; a
+		// second rule here would drift from it, as in the REST handler.
+		if strings.TrimSpace(in.Account) == "" && strings.TrimSpace(in.AccountGroup) == "" {
+			return "", grantTradingAccessInput{}, fmt.Errorf("account or accountGroup is required")
 		}
-		if err := src.PutTradingAccess(ctx, domain.TradingAccess{Connection: domain.ExternalID(in.Connection), Account: domain.AccountID(in.Account), VenueAccount: in.VenueAccount}); err != nil {
+		if err := src.PutTradingAccess(ctx, domain.TradingAccess{Connection: domain.ExternalID(in.Connection), Account: domain.AccountID(in.Account), AccountGroup: in.AccountGroup, VenueAccount: in.VenueAccount}); err != nil {
 			return "", grantTradingAccessInput{}, tradingToolError("grant trading access", err, nil)
 		}
 		return "grant trading access", in, nil
 	}
 }
-func revokeTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[tradingAccountInput, tradingAccountInput] {
-	return func(ctx context.Context, _ *sdkmcp.ServerSession, in tradingAccountInput) (string, tradingAccountInput, error) {
+func revokeTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[revokeTradingAccessInput, revokeTradingAccessInput] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in revokeTradingAccessInput) (string, revokeTradingAccessInput, error) {
 		if strings.TrimSpace(in.Connection) == "" {
-			return "", tradingAccountInput{}, fmt.Errorf("connection is required")
+			return "", revokeTradingAccessInput{}, fmt.Errorf("connection is required")
 		}
-		if strings.TrimSpace(in.Account) == "" {
-			return "", tradingAccountInput{}, fmt.Errorf("account is required")
+		// Both subjects reach the Source, whose validation refuses them; a
+		// second rule here would drift from it, as in the REST handler.
+		if strings.TrimSpace(in.Account) == "" && strings.TrimSpace(in.AccountGroup) == "" {
+			return "", revokeTradingAccessInput{}, fmt.Errorf("account or accountGroup is required")
 		}
-		if err := src.RemoveTradingAccess(ctx, domain.AccountID(in.Account), domain.ExternalID(in.Connection)); err != nil {
-			return "", tradingAccountInput{}, tradingToolError("revoke trading access", err, nil)
+		if err := src.RemoveTradingAccess(ctx, domain.ExternalID(in.Connection), domain.AccountID(in.Account), in.AccountGroup); err != nil {
+			return "", revokeTradingAccessInput{}, tradingToolError("revoke trading access", err, nil)
 		}
 		return "revoke trading access", in, nil
 	}

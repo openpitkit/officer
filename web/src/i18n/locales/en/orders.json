@@ -207,7 +207,6 @@
         "disabled": "Disabled",
         "unavailable": "Unavailable: {{error}}",
         "noTargets": "No {{mode}} targets for account {{account}}.",
-        "setupConnection": "Set up a trading connection",
         "timeInForce": "Time in force",
         "chooseTimeInForce": "Choose time in force",
         "timeInForceOptions": {
