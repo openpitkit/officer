@@ -19,21 +19,41 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
-import { MemoryRouter } from "react-router-dom";
+import { useState } from "react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import type { TradingSnapshot } from "@/api/types";
+import { SidebarProvider } from "@/components/SidebarContext";
+import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
+import { ThemeProvider } from "@/theme/ThemeProvider";
+import type { ServiceInfo, TradingSnapshot } from "@/api/types";
 import {
   BackupCard,
   DatabaseCard,
+  Service,
+  ServiceCard,
   ServiceLifecycleCard,
 } from "@/pages/Service";
+
+vi.mock("@/api/useMarketData", () => ({
+  useMarketData: () => ({
+    load: { state: "ready", data: { restartRequired: false }, error: null },
+    reload: () => {},
+  }),
+}));
 
 const exportBackupMock = vi.fn();
 const resetDatabaseMock = vi.fn();
 const restoreBackupMock = vi.fn();
 const fetchTradingMock = vi.fn<() => Promise<TradingSnapshot>>();
+const serviceInfo: ServiceInfo = {
+  name: "Pit Officer",
+  engineVersion: "0.9.0",
+  engineBuildProfile: "",
+  release: true,
+  database: { path: "/tmp/officer.db", reachable: true },
+};
 const tradingSnapshot: TradingSnapshot = {
   providers: [],
   credentialsSealed: false,
@@ -129,6 +149,156 @@ beforeEach(async () => {
   });
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   await i18n.changeLanguage("en");
+});
+
+describe("ServiceCard", () => {
+  it("switches each service tab to its matching panel and reports its id", async () => {
+    const user = userEvent.setup();
+    const onTabChange = vi.fn();
+
+    function ControlledServiceCard() {
+      const [activeTab, setActiveTab] = useState<
+        "application" | "api" | "database" | "logs"
+      >("application");
+      return (
+        <ServiceCard
+          info={serviceInfo}
+          activeTab={activeTab}
+          onTabChange={(tab) => {
+            onTabChange(tab);
+            setActiveTab(tab);
+          }}
+          onDatabaseReset={vi.fn()}
+          lifecycleBusyAction={null}
+          lifecycleError={null}
+          onLifecycleAction={vi.fn().mockResolvedValue(undefined)}
+        />
+      );
+    }
+
+    render(
+      <I18nextProvider i18n={i18n}>
+        <MemoryRouter>
+          <ControlledServiceCard />
+        </MemoryRouter>
+      </I18nextProvider>,
+      {
+        api: {
+          getMcpCommands: vi.fn().mockResolvedValue([]),
+          fetchServiceLogs: vi
+            .fn()
+            .mockResolvedValue({ lines: ["Service log"] }),
+          fetchTrading: fetchTradingMock,
+        },
+      },
+    );
+
+    for (const [id, name] of [
+      ["api", "API"],
+      ["database", "Database"],
+      ["logs", "Logs"],
+      ["application", "Application"],
+    ]) {
+      onTabChange.mockClear();
+      const tab = screen.getByRole("tab", { name });
+      await user.click(tab);
+      expect(onTabChange).toHaveBeenLastCalledWith(id);
+      expect(onTabChange.mock.calls.every(([tab]) => tab === id)).toBe(true);
+      expect(tab).toHaveAttribute("aria-selected", "true");
+      const panel = screen.getByRole("tabpanel", { name });
+      expect(tab).toHaveAttribute("aria-controls", panel.id);
+      expect(
+        within(panel).getByText(name, { exact: true }),
+      ).toBeInTheDocument();
+    }
+  });
+});
+
+describe("Service", () => {
+  function LocationProbe() {
+    const location = useLocation();
+    return (
+      <output aria-label="Current location">
+        {location.pathname + location.hash}
+      </output>
+    );
+  }
+
+  async function renderAtLogsHash() {
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+          <DisplayPreferencesProvider
+            densityStorageKey="pit-officer-test-density"
+            tradeStyleStorageKey="pit-officer-test-trade-style"
+          >
+            <MemoryRouter initialEntries={["/service#logs"]}>
+              <SidebarProvider>
+                <Service />
+              </SidebarProvider>
+              <LocationProbe />
+            </MemoryRouter>
+          </DisplayPreferencesProvider>
+        </ThemeProvider>
+      </I18nextProvider>,
+      {
+        api: {
+          fetchServiceInfo: vi.fn().mockResolvedValue(serviceInfo),
+          fetchTrading: fetchTradingMock,
+          getMcpCommands: vi.fn().mockResolvedValue([]),
+          fetchServiceLogs: vi
+            .fn()
+            .mockResolvedValue({ lines: ["Service log"] }),
+        },
+      },
+    );
+
+    const logsTab = await screen.findByRole("tab", { name: "Logs" });
+    expect(logsTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Logs" })).toBeInTheDocument();
+    expect(await screen.findByText("Service log")).toBeInTheDocument();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(
+      "/service#logs",
+    );
+    return logsTab;
+  }
+
+  function expectHashClearedOn(name: string) {
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(
+      /^\/service$/,
+    );
+    expect(screen.getByRole("tab", { name })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("tabpanel", { name })).toBeInTheDocument();
+  }
+
+  it.each(["Application", "Logs"])(
+    "shows Logs from the hash and clears it when clicking %s",
+    async (name) => {
+      const user = userEvent.setup();
+      await renderAtLogsHash();
+
+      await user.click(screen.getByRole("tab", { name }));
+
+      expectHashClearedOn(name);
+    },
+  );
+
+  it.each(["{Enter}", " "])(
+    "clears the hash when %s activates the Logs tab selected by it",
+    async (key) => {
+      const user = userEvent.setup();
+      const logsTab = await renderAtLogsHash();
+      act(() => logsTab.focus());
+
+      await user.keyboard(key);
+
+      expectHashClearedOn("Logs");
+    },
+  );
 });
 
 describe("BackupCard", () => {
@@ -562,7 +732,7 @@ describe("BackupCard", () => {
     },
   );
 
-  it("links backup workflow tabs to panels and supports arrow navigation", async () => {
+  it("links backup workflow tabs to their matching panels and switches workflows", async () => {
     const user = userEvent.setup();
     renderBackupCard();
 
@@ -570,18 +740,13 @@ describe("BackupCard", () => {
     const restoreTab = screen.getByRole("tab", { name: /^restore$/i });
     expect(exportTab).toHaveAttribute(
       "aria-controls",
-      "backup-workflow-panel-export",
-    );
-    expect(restoreTab).toHaveAttribute(
-      "aria-controls",
-      "backup-workflow-panel-restore",
+      screen.getByRole("tabpanel", { name: /^export$/i }).id,
     );
     expect(
       screen.getByRole("tabpanel", { name: /^export$/i }),
     ).toBeInTheDocument();
 
-    exportTab.focus();
-    await user.keyboard("{ArrowRight}");
+    await user.click(restoreTab);
 
     await waitFor(() => {
       expect(restoreTab).toHaveAttribute("aria-selected", "true");
@@ -589,12 +754,25 @@ describe("BackupCard", () => {
     expect(
       screen.getByRole("tabpanel", { name: /^restore$/i }),
     ).toBeInTheDocument();
+    expect(restoreTab).toHaveAttribute(
+      "aria-controls",
+      screen.getByRole("tabpanel", { name: /^restore$/i }).id,
+    );
+    expect(
+      screen.queryByRole("tabpanel", { name: /^export$/i }),
+    ).not.toBeInTheDocument();
 
-    await user.keyboard("{Home}");
+    await user.click(exportTab);
 
     await waitFor(() => {
       expect(exportTab).toHaveAttribute("aria-selected", "true");
     });
+    expect(
+      screen.getByRole("tabpanel", { name: /^export$/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("tabpanel", { name: /^restore$/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps restore disabled until a mode and file are selected", async () => {

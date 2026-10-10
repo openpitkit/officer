@@ -149,6 +149,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { NumberStepper } from "@/components/ui/number-stepper";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -167,7 +168,14 @@ import {
 import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 
-const SEND_TO_VENUE_PREFERENCE = "pit-officer-orders-send-to-venue";
+const SUBMIT_TAB_PREFERENCE = "pit-officer-orders-submit-tab";
+const SUBMIT_TABS = ["immediate", "drop_copy", "hold", "venue"] as const;
+type SubmitTab = (typeof SUBMIT_TABS)[number];
+
+function isSubmitTab(value: unknown): value is SubmitTab {
+  return SUBMIT_TABS.some((tab) => tab === value);
+}
+
 const VENUE_MODE_PREFERENCE = "pit-officer-orders-venue-mode";
 
 const ALPACA_TIME_IN_FORCE = ["day", "gtc", "opg", "cls", "ioc", "fok"];
@@ -459,7 +467,7 @@ function SubmitOrderDialog({
     initialValues?.amountValue ?? "",
   );
   const [price, setPrice] = useState(initialValues?.price ?? "");
-  const [sendToVenue, setSendToVenue] = useState(false);
+  const [tab, setTab] = useState<SubmitTab | "">("");
   const [venueMode, setVenueMode] = useState<TradingMode | "">("");
   const [destinations, setDestinations] = useState<TradingDestination[]>([]);
   const [destinationsKey, setDestinationsKey] = useState("");
@@ -469,9 +477,6 @@ function SubmitOrderDialog({
   );
   const [selectedConnection, setSelectedConnection] = useState("");
   const [timeInForce, setTimeInForce] = useState("");
-  const [submitMode, setSubmitMode] = useState<
-    "immediate" | "drop_copy" | "hold" | null
-  >(null);
   const [dropCopyConfirmOpen, setDropCopyConfirmOpen] = useState(false);
   const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
     useState(false);
@@ -500,6 +505,7 @@ function SubmitOrderDialog({
   const destinationsAbortRef = useRef<AbortController | null>(null);
   const submitAbortRef = useRef<AbortController | null>(null);
   const accountFieldRef = useRef<HTMLInputElement | null>(null);
+  const firstTabRef = useRef<HTMLButtonElement | null>(null);
 
   const currentDestinationsKey =
     account.trim() !== "" && venueMode !== ""
@@ -608,7 +614,12 @@ function SubmitOrderDialog({
   }, [debouncedBaseAsset, debouncedQuoteAsset, fetchAssets]);
 
   useEffect(() => {
-    if (!open || !sendToVenue || debouncedAccount === "" || venueMode === "") {
+    if (
+      !open ||
+      tab !== "venue" ||
+      debouncedAccount === "" ||
+      venueMode === ""
+    ) {
       return;
     }
     destinationsAbortRef.current?.abort();
@@ -652,17 +663,11 @@ function SubmitOrderDialog({
         destinationsAbortRef.current = null;
       }
     };
-  }, [
-    debouncedAccount,
-    fetchTradingDestinations,
-    open,
-    sendToVenue,
-    venueMode,
-  ]);
+  }, [debouncedAccount, fetchTradingDestinations, open, tab, venueMode]);
 
   // Debounced live check: fires after the shared search interval.
   useEffect(() => {
-    if (!sendToVenue && submitMode === "drop_copy") {
+    if (tab === "" || tab === "drop_copy") {
       checkAbortRef.current?.abort();
       checkAbortRef.current = null;
       // Drop-copy still runs policies, but their rejects are intentionally not
@@ -735,15 +740,14 @@ function SubmitOrderDialog({
     amountKind,
     amountValue,
     price,
-    sendToVenue,
-    submitMode,
+    tab,
   ]);
 
   // Reseed from initialValues whenever the dialog opens (clone path).
   useEffect(() => {
     if (open) {
-      const storedSendToVenue =
-        readStoredPreference(SEND_TO_VENUE_PREFERENCE) === "true";
+      const storedTab = readStoredPreference(SUBMIT_TAB_PREFERENCE);
+      const restoredTab = isSubmitTab(storedTab) ? storedTab : "";
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccount(initialValues?.account ?? "");
       setBaseAsset(initialValues?.baseAsset ?? "");
@@ -751,18 +755,17 @@ function SubmitOrderDialog({
       setExternalId("");
       setSide(initialValues?.side ?? "");
       setAmountKind(
-        storedSendToVenue && initialValues?.amountKind === "volume"
+        restoredTab === "venue" && initialValues?.amountKind === "volume"
           ? ""
           : (initialValues?.amountKind ?? ""),
       );
       setAmountValue(initialValues?.amountValue ?? "");
       setPrice(initialValues?.price ?? "");
-      setSendToVenue(storedSendToVenue);
+      setTab(restoredTab);
       const storedMode = readStoredPreference(VENUE_MODE_PREFERENCE);
       setVenueMode(
         storedMode === "paper" || storedMode === "live" ? storedMode : "",
       );
-      setSubmitMode(null);
       setDropCopyConfirmOpen(false);
       setBusy(false);
       setError(null);
@@ -790,7 +793,6 @@ function SubmitOrderDialog({
     setDestinationsError(null);
     setSelectedConnection("");
     setTimeInForce("");
-    setSubmitMode(null);
     setDropCopyConfirmOpen(false);
     setMissingAccountConfirmOpen(false);
     setBusy(false);
@@ -816,10 +818,13 @@ function SubmitOrderDialog({
     writeStoredPreference(VENUE_MODE_PREFERENCE, mode);
   }
 
-  function changeSendToVenue(next: boolean) {
-    setSendToVenue(next);
-    writeStoredPreference(SEND_TO_VENUE_PREFERENCE, String(next));
-    if (next && amountKind === "volume") {
+  function changeTab(next: string) {
+    if (!isSubmitTab(next)) {
+      throw new Error(`Unknown submit tab: ${next}`);
+    }
+    setTab(next);
+    writeStoredPreference(SUBMIT_TAB_PREFERENCE, next);
+    if (next === "venue" && amountKind === "volume") {
       setAmountKind("");
     }
   }
@@ -950,17 +955,17 @@ function SubmitOrderDialog({
       setError(t("addOrder.dialog.sideRequired"));
       return;
     }
-    if (submitMode === null) {
+    if (tab !== "immediate" && tab !== "drop_copy" && tab !== "hold") {
       setError(t("addOrder.dialog.submitModeRequired"));
       return;
     }
     if (
       !isOptionalPositiveDecimalString(price) ||
-      (submitMode === "drop_copy" && !isPositiveDecimalString(price))
+      (tab === "drop_copy" && !isPositiveDecimalString(price))
     ) {
       setError(
         t(
-          submitMode === "drop_copy"
+          tab === "drop_copy"
             ? "addOrder.dialog.dropCopyPriceRequired"
             : "addOrder.dialog.validationError",
         ),
@@ -986,12 +991,12 @@ function SubmitOrderDialog({
       const body: Parameters<typeof createOrder>[0] = {
         ...commonBody,
         ...(submissionID ? { id: submissionID } : {}),
-        mode: submitMode,
+        mode: tab,
       };
       // Drop-copy reports a fact that already happened, so its endpoint only
       // accepts "create" for an unknown account; "reject" is a 400 there.
       const effectiveMissingAccount: MissingAccountPolicy =
-        submitMode === "drop_copy" ? "create" : missingAccount;
+        tab === "drop_copy" ? "create" : missingAccount;
       const result = await createOrder(
         body,
         effectiveMissingAccount,
@@ -1013,7 +1018,7 @@ function SubmitOrderDialog({
       }
       if (
         missingAccount === "reject" &&
-        submitMode !== "drop_copy" &&
+        tab !== "drop_copy" &&
         err instanceof ApiError &&
         err.code === "account_missing"
       ) {
@@ -1030,11 +1035,11 @@ function SubmitOrderDialog({
   }
 
   function requestSubmit() {
-    if (sendToVenue) {
+    if (tab === "venue") {
       void sendToSelectedVenue();
       return;
     }
-    if (submitMode === "drop_copy") {
+    if (tab === "drop_copy") {
       setDropCopyConfirmOpen(true);
       return;
     }
@@ -1043,7 +1048,7 @@ function SubmitOrderDialog({
 
   // Every required choice must be made before the order can be submitted; the
   // button stays disabled until then so nothing slips through without a mode.
-  const dropCopyPriceRequired = !sendToVenue && submitMode === "drop_copy";
+  const dropCopyPriceRequired = tab === "drop_copy";
   const commonFieldsValid =
     account.trim() !== "" &&
     baseAsset.trim() !== "" &&
@@ -1053,527 +1058,425 @@ function SubmitOrderDialog({
     isOptionalPositiveDecimalString(price) &&
     (!dropCopyPriceRequired || isPositiveDecimalString(price)) &&
     side !== "";
-  const canSubmit = sendToVenue
-    ? commonFieldsValid &&
-      amountKind === "quantity" &&
-      venueMode === "paper" &&
-      selectedDestinationIsSelectable &&
-      selectedDestination?.provider === "alpaca" &&
-      timeInForce !== ""
-    : commonFieldsValid && amountKind !== "" && submitMode !== null;
+  const canSubmit =
+    tab === "venue"
+      ? commonFieldsValid &&
+        amountKind === "quantity" &&
+        venueMode === "paper" &&
+        selectedDestinationIsSelectable &&
+        selectedDestination?.provider === "alpaca" &&
+        timeInForce !== ""
+      : commonFieldsValid && amountKind !== "" && tab !== "";
+
+  const fields = (
+    <div className="space-y-4">
+      {tab !== "venue" && (
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-[0.6875rem] text-muted">
+            {tab === "immediate"
+              ? t("addOrder.dialog.submitModeImmediateHelp")
+              : tab === "drop_copy"
+                ? t("addOrder.dialog.submitModeDropCopyHelp")
+                : t("addOrder.dialog.submitModeHoldHelp")}
+          </p>
+          <a
+            href="/docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
+          >
+            {t("addOrder.dialog.openApi")}
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      )}
+      <div className="space-y-1.5">
+        <Label htmlFor="so-external-id">
+          {t("addOrder.dialog.externalId")}
+        </Label>
+        <ClearableInput
+          id="so-external-id"
+          value={externalId}
+          spellCheck={false}
+          placeholder={t("addOrder.dialog.externalIdPlaceholder")}
+          onChange={(e) => setExternalId(e.target.value)}
+          disabled={busy}
+          onClear={() => setExternalId("")}
+          clearLabel={tc("filters.clearField")}
+        />
+        <p className="text-[0.6875rem] text-muted">
+          {t("addOrder.dialog.externalIdHint")}
+        </p>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="so-account">{t("addOrder.dialog.account")}</Label>
+        <Autocomplete
+          ref={accountFieldRef}
+          id="so-account"
+          value={account}
+          onChange={changeAccount}
+          suggestions={
+            debouncedAccount === ""
+              ? []
+              : dialogAccountSuggestions.length > 0
+                ? dialogAccountSuggestions
+                : accountSuggestions
+          }
+          placeholder={t("addOrder.dialog.accountPlaceholder")}
+          disabled={busy}
+          onClear={() => changeAccount("")}
+          clearLabel={tc("filters.clearField")}
+        />
+      </div>
+      {tab === "venue" && (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="block">{t("addOrder.dialog.venue.mode")}</Label>
+            <Segmented
+              options={[
+                { value: "paper", label: tt("mode.paper") },
+                { value: "live", label: tt("mode.live") },
+              ]}
+              value={venueMode}
+              onChange={(value) => changeVenueMode(value as TradingMode)}
+              ariaLabel={t("addOrder.dialog.venue.mode")}
+              disabled={busy}
+            />
+          </div>
+
+          {venueMode === "live" && (
+            <p className="text-xs text-muted-lt">{tt("create.liveNote")}</p>
+          )}
+
+          {debouncedAccount !== "" &&
+            debouncedAccount === account.trim() &&
+            venueMode !== "" && (
+              <div className="space-y-2">
+                <Label htmlFor="so-target">
+                  {t("addOrder.dialog.venue.target")}
+                </Label>
+                {destinationsAreCurrent && destinationsLoading && (
+                  <p className="text-xs text-muted-lt">
+                    {t("addOrder.dialog.venue.loadingTargets")}
+                  </p>
+                )}
+                {destinationsAreCurrent && destinationsError && (
+                  <p className="text-xs text-[var(--danger)]">
+                    {destinationsError}
+                  </p>
+                )}
+                {destinationsAreCurrent &&
+                  !destinationsLoading &&
+                  !destinationsError &&
+                  destinations.length > 0 && (
+                    <Select
+                      value={selectedConnection}
+                      onValueChange={(value) => {
+                        setSelectedConnection(value);
+                        setTimeInForce("");
+                      }}
+                      disabled={busy}
+                    >
+                      <SelectTrigger
+                        id="so-target"
+                        className="h-9 w-full text-sm"
+                      >
+                        <SelectValue
+                          placeholder={t("addOrder.dialog.venue.chooseTarget")}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {destinations.map((destination) => {
+                          const selectable =
+                            destination.enabled &&
+                            destination.state !== "unavailable";
+                          const providerTitle =
+                            tradingSnapshot?.providers.find(
+                              (provider) =>
+                                provider.type === destination.provider,
+                            )?.title ?? destination.provider;
+                          return (
+                            <SelectItem
+                              key={destination.connection}
+                              value={destination.connection}
+                              disabled={!selectable}
+                            >
+                              {destination.label} · {providerTitle}
+                              {destination.venueAccount !== "" && (
+                                <> · {destination.venueAccount}</>
+                              )}
+                              {!selectable && (
+                                <>
+                                  {" "}
+                                  -{" "}
+                                  {!destination.enabled
+                                    ? t("addOrder.dialog.venue.disabled")
+                                    : t("addOrder.dialog.venue.unavailable", {
+                                        error: destination.error,
+                                      })}
+                                </>
+                              )}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  )}
+                {destinationsAreCurrent &&
+                  !destinationsLoading &&
+                  !destinationsError &&
+                  selectableDestinations.length === 0 && (
+                    <div className="space-y-1 text-xs text-muted-lt">
+                      <p>
+                        {t("addOrder.dialog.venue.noTargets", {
+                          mode: t(
+                            `addOrder.dialog.venue.modeValues.${venueMode}`,
+                          ),
+                          account: account.trim(),
+                        })}
+                      </p>
+                      <Link
+                        to="/trading-connections"
+                        className="font-medium text-accent underline-offset-2 hover:underline"
+                      >
+                        {t("addOrder.dialog.venue.setupConnection")}
+                      </Link>
+                    </div>
+                  )}
+              </div>
+            )}
+
+          {selectedDestinationIsSelectable &&
+            selectedDestination.provider === "alpaca" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="so-time-in-force">
+                  {t("addOrder.dialog.venue.timeInForce")}
+                </Label>
+                <Select
+                  value={timeInForce}
+                  onValueChange={setTimeInForce}
+                  required
+                  disabled={busy}
+                >
+                  <SelectTrigger
+                    id="so-time-in-force"
+                    className="h-9 w-full text-sm"
+                  >
+                    <SelectValue
+                      placeholder={t("addOrder.dialog.venue.chooseTimeInForce")}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ALPACA_TIME_IN_FORCE.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {t(`addOrder.dialog.venue.timeInForceOptions.${value}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <a
+                  href="https://docs.alpaca.markets/us/docs/orders-at-alpaca#time-in-force"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
+                >
+                  {t("addOrder.dialog.venue.aboutTimeInForce")}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            )}
+
+          {selectedDestinationIsSelectable &&
+            selectedDestination?.provider !== "alpaca" && (
+              <p className="text-xs text-[var(--danger)]">
+                {t("addOrder.dialog.venue.unsupportedProvider", {
+                  provider: selectedDestination?.provider,
+                })}
+              </p>
+            )}
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="so-base">{t("addOrder.dialog.baseAsset")}</Label>
+          <Autocomplete
+            id="so-base"
+            value={baseAsset}
+            onChange={setBaseAsset}
+            suggestions={
+              debouncedBaseAsset === ""
+                ? []
+                : dialogAssetSuggestions.length > 0
+                  ? dialogAssetSuggestions
+                  : assetSuggestions
+            }
+            placeholder={t("addOrder.dialog.baseAssetPlaceholder")}
+            disabled={busy}
+            onClear={() => setBaseAsset("")}
+            clearLabel={tc("filters.clearField")}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="so-quote">{t("addOrder.dialog.quoteAsset")}</Label>
+          <Autocomplete
+            id="so-quote"
+            value={quoteAsset}
+            onChange={setQuoteAsset}
+            suggestions={
+              debouncedQuoteAsset === ""
+                ? []
+                : dialogAssetSuggestions.length > 0
+                  ? dialogAssetSuggestions
+                  : assetSuggestions
+            }
+            placeholder={t("addOrder.dialog.quoteAssetPlaceholder")}
+            disabled={busy}
+            onClear={() => setQuoteAsset("")}
+            clearLabel={tc("filters.clearField")}
+          />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label className="block">{t("addOrder.dialog.side")}</Label>
+        <Segmented
+          options={[
+            { value: "buy", label: t("addOrder.dialog.sideOptions.buy") },
+            { value: "sell", label: t("addOrder.dialog.sideOptions.sell") },
+          ]}
+          value={side}
+          onChange={setSide}
+          ariaLabel={t("addOrder.dialog.side")}
+          disabled={busy}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="so-amount">{t("addOrder.dialog.amount")}</Label>
+        <div className="flex gap-2">
+          <Segmented
+            options={[
+              {
+                value: "quantity",
+                label: t("addOrder.dialog.amountKindOptions.quantity"),
+              },
+              {
+                value: "volume",
+                label: t("addOrder.dialog.amountKindOptions.volume"),
+                disabled: tab === "venue",
+              },
+            ]}
+            value={amountKind}
+            onChange={setAmountKind}
+            ariaLabel={t("addOrder.dialog.amountKind")}
+            disabled={busy}
+          />
+          <NumberStepper
+            id="so-amount"
+            value={amountValue}
+            onChange={setAmountValue}
+            placeholder={t("addOrder.dialog.amountPlaceholder")}
+            disabled={busy}
+            allowSignedInput={false}
+            className="flex-1"
+            onClear={() => setAmountValue("")}
+            clearLabel={tc("filters.clearField")}
+          />
+        </div>
+        {tab === "venue" && (
+          <p className="text-[0.6875rem] text-muted">
+            {t("addOrder.dialog.venue.quantityHint")}
+          </p>
+        )}
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="so-price">
+          {t(
+            dropCopyPriceRequired
+              ? "addOrder.dialog.limitPriceDropCopy"
+              : "addOrder.dialog.limitPrice",
+          )}
+        </Label>
+        <NumberStepper
+          id="so-price"
+          value={price}
+          onChange={setPrice}
+          placeholder={t(
+            dropCopyPriceRequired
+              ? "addOrder.dialog.limitPriceDropCopyPlaceholder"
+              : "addOrder.dialog.limitPricePlaceholder",
+          )}
+          disabled={busy}
+          allowSignedInput={false}
+          onClear={() => setPrice("")}
+          clearLabel={tc("filters.clearField")}
+        />
+        {dropCopyPriceRequired && (
+          <p className="text-xs text-muted">
+            {t("addOrder.dialog.limitPriceDropCopyHint")}
+          </p>
+        )}
+      </div>
+
+      {tab !== "drop_copy" && <CheckPreview state={checkState} />}
+    </div>
+  );
 
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
-        if (!v && !(sendToVenue && busy)) handleClose();
+        if (!v && !(tab === "venue" && busy)) handleClose();
       }}
     >
       <DialogContent
-        className="max-w-md"
+        className="max-w-3xl"
         onOpenAutoFocus={(e) => {
           e.preventDefault();
-          accountFieldRef.current?.focus();
+          if (tab !== "") {
+            accountFieldRef.current?.focus();
+          } else {
+            firstTabRef.current?.focus();
+          }
         }}
       >
         <DialogHeader>
           <DialogTitle>{t("addOrder.dialog.title")}</DialogTitle>
           <DialogDescription>
             {t(
-              sendToVenue
+              tab === "venue"
                 ? "addOrder.dialog.venue.description"
                 : "addOrder.dialog.description",
             )}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="so-external-id">
-              {t("addOrder.dialog.externalId")}
-            </Label>
-            <ClearableInput
-              id="so-external-id"
-              value={externalId}
-              spellCheck={false}
-              placeholder={t("addOrder.dialog.externalIdPlaceholder")}
-              onChange={(e) => setExternalId(e.target.value)}
-              disabled={busy}
-              onClear={() => setExternalId("")}
-              clearLabel={tc("filters.clearField")}
-            />
-            <p className="text-[0.6875rem] text-muted">
-              {t("addOrder.dialog.externalIdHint")}
+        <Tabs value={tab} onValueChange={changeTab} activationMode="manual">
+          <TabsList aria-label={t("addOrder.dialog.submitMode")}>
+            <TabsTrigger ref={firstTabRef} value="immediate" disabled={busy}>
+              {t("addOrder.dialog.submitModeImmediate")}
+            </TabsTrigger>
+            <TabsTrigger value="drop_copy" disabled={busy}>
+              <AlertTriangle className="h-3.5 w-3.5 text-[var(--danger)]" />
+              {t("addOrder.dialog.submitModeDropCopy")}
+            </TabsTrigger>
+            <TabsTrigger value="hold" disabled={busy}>
+              {t("addOrder.dialog.submitModeHold")}
+            </TabsTrigger>
+            <TabsTrigger value="venue" disabled={busy}>
+              {t("addOrder.dialog.venue.sendToVenue")}
+            </TabsTrigger>
+          </TabsList>
+          {tab === "" && (
+            <p className="mt-4 text-xs text-muted">
+              {t("addOrder.dialog.submitModeRequired")}
             </p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="so-account">{t("addOrder.dialog.account")}</Label>
-            <Autocomplete
-              ref={accountFieldRef}
-              id="so-account"
-              value={account}
-              onChange={changeAccount}
-              suggestions={
-                debouncedAccount === ""
-                  ? []
-                  : dialogAccountSuggestions.length > 0
-                    ? dialogAccountSuggestions
-                    : accountSuggestions
-              }
-              placeholder={t("addOrder.dialog.accountPlaceholder")}
-              disabled={busy}
-              onClear={() => changeAccount("")}
-              clearLabel={tc("filters.clearField")}
-            />
-          </div>
-          <div className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
-            <div className="flex items-center gap-2">
-              <input
-                id="so-send-to-venue"
-                type="checkbox"
-                checked={sendToVenue}
-                onChange={(event) =>
-                  changeSendToVenue(event.currentTarget.checked)
-                }
-                disabled={busy}
-                className="h-4 w-4 accent-[var(--accent)]"
-              />
-              <Label htmlFor="so-send-to-venue">
-                {t("addOrder.dialog.venue.sendToVenue")}
-              </Label>
-            </div>
-
-            {sendToVenue && (
-              <div className="space-y-4 border-t border-border pt-3">
-                <div className="space-y-1.5">
-                  <Label id="so-venue-mode-label">
-                    {t("addOrder.dialog.venue.mode")}
-                  </Label>
-                  <div
-                    role="radiogroup"
-                    aria-labelledby="so-venue-mode-label"
-                    className="grid grid-cols-2 gap-2"
-                  >
-                    {(["paper", "live"] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        aria-checked={venueMode === mode}
-                        onClick={() => changeVenueMode(mode)}
-                        disabled={busy}
-                        className={[
-                          "h-9 rounded-card border px-3 text-sm font-semibold transition-colors",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                          venueMode === mode
-                            ? "border-accent bg-accent-dim text-text"
-                            : "border-border bg-surface text-muted-lt hover:bg-surface-hover hover:text-text",
-                        ].join(" ")}
-                      >
-                        {tt(`mode.${mode}`)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {venueMode === "live" && (
-                  <p className="text-xs text-muted-lt">
-                    {tt("create.liveNote")}
-                  </p>
-                )}
-
-                {debouncedAccount !== "" &&
-                  debouncedAccount === account.trim() &&
-                  venueMode !== "" && (
-                    <div className="space-y-2">
-                      <Label id="so-target-label">
-                        {t("addOrder.dialog.venue.target")}
-                      </Label>
-                      {destinationsAreCurrent && destinationsLoading && (
-                        <p className="text-xs text-muted-lt">
-                          {t("addOrder.dialog.venue.loadingTargets")}
-                        </p>
-                      )}
-                      {destinationsAreCurrent && destinationsError && (
-                        <p className="text-xs text-[var(--danger)]">
-                          {destinationsError}
-                        </p>
-                      )}
-                      {destinationsAreCurrent &&
-                        !destinationsLoading &&
-                        !destinationsError &&
-                        destinations.length > 0 && (
-                          <div
-                            role="radiogroup"
-                            aria-labelledby="so-target-label"
-                            className="space-y-2"
-                          >
-                            {destinations.map((destination) => {
-                              const selectable =
-                                destination.enabled &&
-                                destination.state !== "unavailable";
-                              const providerTitle =
-                                tradingSnapshot?.providers.find(
-                                  (provider) =>
-                                    provider.type === destination.provider,
-                                )?.title ?? destination.provider;
-                              return (
-                                <button
-                                  key={destination.connection}
-                                  type="button"
-                                  role="radio"
-                                  aria-checked={
-                                    selectedConnection ===
-                                    destination.connection
-                                  }
-                                  onClick={() => {
-                                    setSelectedConnection(
-                                      destination.connection,
-                                    );
-                                    setTimeInForce("");
-                                  }}
-                                  disabled={busy || !selectable}
-                                  className={[
-                                    "w-full rounded-card border px-3 py-2 text-left text-xs transition-colors",
-                                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                                    selectedConnection ===
-                                    destination.connection
-                                      ? "border-accent bg-accent-dim text-text"
-                                      : "border-border bg-surface text-muted-lt hover:bg-surface-hover hover:text-text",
-                                    !selectable &&
-                                      "cursor-not-allowed opacity-50 hover:bg-surface",
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" ")}
-                                >
-                                  <span className="block font-semibold text-text">
-                                    {destination.label}
-                                  </span>
-                                  <span className="block">
-                                    {providerTitle}
-                                    {destination.venueAccount !== "" && (
-                                      <> · {destination.venueAccount}</>
-                                    )}
-                                  </span>
-                                  {!destination.enabled && (
-                                    <span className="block text-[var(--danger)]">
-                                      {t("addOrder.dialog.venue.disabled")}
-                                    </span>
-                                  )}
-                                  {destination.enabled &&
-                                    destination.state === "unavailable" && (
-                                      <span className="block text-[var(--danger)]">
-                                        {t(
-                                          "addOrder.dialog.venue.unavailable",
-                                          { error: destination.error },
-                                        )}
-                                      </span>
-                                    )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      {destinationsAreCurrent &&
-                        !destinationsLoading &&
-                        !destinationsError &&
-                        selectableDestinations.length === 0 && (
-                          <div className="space-y-1 text-xs text-muted-lt">
-                            <p>
-                              {t("addOrder.dialog.venue.noTargets", {
-                                mode: t(
-                                  `addOrder.dialog.venue.modeValues.${venueMode}`,
-                                ),
-                                account: account.trim(),
-                              })}
-                            </p>
-                            <Link
-                              to="/trading-connections"
-                              className="font-medium text-accent underline-offset-2 hover:underline"
-                            >
-                              {t("addOrder.dialog.venue.setupConnection")}
-                            </Link>
-                          </div>
-                        )}
-                    </div>
-                  )}
-
-                {selectedDestinationIsSelectable &&
-                  selectedDestination.provider === "alpaca" && (
-                    <div className="space-y-1.5">
-                      <Label htmlFor="so-time-in-force">
-                        {t("addOrder.dialog.venue.timeInForce")}
-                      </Label>
-                      <Select
-                        value={timeInForce}
-                        onValueChange={setTimeInForce}
-                        required
-                        disabled={busy}
-                      >
-                        <SelectTrigger
-                          id="so-time-in-force"
-                          className="h-9 w-full text-sm"
-                        >
-                          <SelectValue
-                            placeholder={t(
-                              "addOrder.dialog.venue.chooseTimeInForce",
-                            )}
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ALPACA_TIME_IN_FORCE.map((value) => (
-                            <SelectItem key={value} value={value}>
-                              {t(
-                                `addOrder.dialog.venue.timeInForceOptions.${value}`,
-                              )}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <a
-                        href="https://docs.alpaca.markets/us/docs/orders-at-alpaca#time-in-force"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
-                      >
-                        {t("addOrder.dialog.venue.aboutTimeInForce")}
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </div>
-                  )}
-
-                {selectedDestinationIsSelectable &&
-                  selectedDestination?.provider !== "alpaca" && (
-                    <p className="text-xs text-[var(--danger)]">
-                      {t("addOrder.dialog.venue.unsupportedProvider", {
-                        provider: selectedDestination?.provider,
-                      })}
-                    </p>
-                  )}
-              </div>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="so-base">{t("addOrder.dialog.baseAsset")}</Label>
-              <Autocomplete
-                id="so-base"
-                value={baseAsset}
-                onChange={setBaseAsset}
-                suggestions={
-                  debouncedBaseAsset === ""
-                    ? []
-                    : dialogAssetSuggestions.length > 0
-                      ? dialogAssetSuggestions
-                      : assetSuggestions
-                }
-                placeholder={t("addOrder.dialog.baseAssetPlaceholder")}
-                disabled={busy}
-                onClear={() => setBaseAsset("")}
-                clearLabel={tc("filters.clearField")}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="so-quote">
-                {t("addOrder.dialog.quoteAsset")}
-              </Label>
-              <Autocomplete
-                id="so-quote"
-                value={quoteAsset}
-                onChange={setQuoteAsset}
-                suggestions={
-                  debouncedQuoteAsset === ""
-                    ? []
-                    : dialogAssetSuggestions.length > 0
-                      ? dialogAssetSuggestions
-                      : assetSuggestions
-                }
-                placeholder={t("addOrder.dialog.quoteAssetPlaceholder")}
-                disabled={busy}
-                onClear={() => setQuoteAsset("")}
-                clearLabel={tc("filters.clearField")}
-              />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label id="so-side-label">{t("addOrder.dialog.side")}</Label>
-            <div
-              role="radiogroup"
-              aria-labelledby="so-side-label"
-              className="grid grid-cols-2 gap-2"
-            >
-              {(["buy", "sell"] as const).map((value) => {
-                const selected = side === value;
-                const selectedClass =
-                  value === "buy"
-                    ? "border-[var(--buy)] bg-[var(--buy-dim)] text-[var(--buy)]"
-                    : "border-[var(--sell)] bg-[var(--sell-dim)] text-[var(--sell)]";
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    onClick={() => setSide(value)}
-                    disabled={busy}
-                    className={[
-                      "h-9 rounded-card border px-3 text-sm font-semibold transition-colors",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      selected
-                        ? selectedClass
-                        : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
-                    ].join(" ")}
-                  >
-                    {t(`addOrder.dialog.sideOptions.${value}`)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          {!sendToVenue && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <Label id="so-mode-label">
-                  {t("addOrder.dialog.submitMode")}
-                </Label>
-                <a
-                  href="/docs"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
-                >
-                  {t("addOrder.dialog.openApi")}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              </div>
-              <div
-                role="radiogroup"
-                aria-labelledby="so-mode-label"
-                className="grid grid-cols-3 gap-2"
-              >
-                {(["immediate", "drop_copy", "hold"] as const).map((mode) => {
-                  const selected = submitMode === mode;
-                  return (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => setSubmitMode(mode)}
-                      disabled={busy}
-                      className={[
-                        "min-h-[4.5rem] rounded-card border px-3 py-2 text-left transition-colors",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        selected
-                          ? "border-accent bg-accent-dim text-text"
-                          : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
-                      ].join(" ")}
-                    >
-                      <span className="flex items-center gap-1.5 text-xs font-semibold text-text">
-                        {mode === "drop_copy" && (
-                          <AlertTriangle className="h-3.5 w-3.5 text-[var(--danger)]" />
-                        )}
-                        {mode === "immediate"
-                          ? t("addOrder.dialog.submitModeImmediate")
-                          : mode === "drop_copy"
-                            ? t("addOrder.dialog.submitModeDropCopy")
-                            : t("addOrder.dialog.submitModeHold")}
-                      </span>
-                      <span className="mt-1 block text-[0.6875rem] leading-snug">
-                        {mode === "immediate"
-                          ? t("addOrder.dialog.submitModeImmediateHelp")
-                          : mode === "drop_copy"
-                            ? t("addOrder.dialog.submitModeDropCopyHelp")
-                            : t("addOrder.dialog.submitModeHoldHelp")}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
           )}
-          <div className="space-y-1.5">
-            <Label htmlFor="so-amount">{t("addOrder.dialog.amount")}</Label>
-            <div className="flex gap-2">
-              <div
-                role="radiogroup"
-                aria-label={t("addOrder.dialog.amountKind")}
-                className="flex shrink-0 gap-1"
-              >
-                {(["quantity", "volume"] as const).map((value) => {
-                  const selected = amountKind === value;
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => setAmountKind(value)}
-                      disabled={busy || (sendToVenue && value === "volume")}
-                      className={[
-                        "h-9 rounded-card border px-2.5 text-xs font-medium transition-colors",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        selected
-                          ? "border-accent bg-accent-dim text-text"
-                          : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
-                      ].join(" ")}
-                    >
-                      {t(`addOrder.dialog.amountKindOptions.${value}`)}
-                    </button>
-                  );
-                })}
-              </div>
-              <NumberStepper
-                id="so-amount"
-                value={amountValue}
-                onChange={setAmountValue}
-                placeholder={t("addOrder.dialog.amountPlaceholder")}
-                disabled={busy}
-                allowSignedInput={false}
-                className="flex-1"
-                onClear={() => setAmountValue("")}
-                clearLabel={tc("filters.clearField")}
-              />
-            </div>
-            {sendToVenue && (
-              <p className="text-[0.6875rem] text-muted">
-                {t("addOrder.dialog.venue.quantityHint")}
-              </p>
-            )}
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="so-price">
-              {t(
-                dropCopyPriceRequired
-                  ? "addOrder.dialog.limitPriceDropCopy"
-                  : "addOrder.dialog.limitPrice",
-              )}
-            </Label>
-            <NumberStepper
-              id="so-price"
-              value={price}
-              onChange={setPrice}
-              placeholder={t(
-                dropCopyPriceRequired
-                  ? "addOrder.dialog.limitPriceDropCopyPlaceholder"
-                  : "addOrder.dialog.limitPricePlaceholder",
-              )}
-              disabled={busy}
-              allowSignedInput={false}
-              onClear={() => setPrice("")}
-              clearLabel={tc("filters.clearField")}
-            />
-            {dropCopyPriceRequired && (
-              <p className="text-xs text-muted">
-                {t("addOrder.dialog.limitPriceDropCopyHint")}
-              </p>
-            )}
-          </div>
-
-          {(sendToVenue || submitMode !== "drop_copy") && (
-            <CheckPreview state={checkState} />
-          )}
-
+          {SUBMIT_TABS.map((value) => (
+            <TabsContent key={value} value={value} className="mt-4">
+              {fields}
+            </TabsContent>
+          ))}
+        </Tabs>
+        <div className="space-y-4">
           {error && (
             <ErrorBanner message={error} onDismiss={() => setError(null)} />
           )}
@@ -1588,23 +1491,24 @@ function SubmitOrderDialog({
               {tc("actions.cancel")}
             </Button>
             <Button
+              variant={
+                tab === "venue" && venueMode === "live" ? "danger" : "default"
+              }
               size="sm"
               onClick={requestSubmit}
               disabled={busy || !canSubmit}
             >
-              {sendToVenue
-                ? selectedDestinationIsSelectable
-                  ? t("addOrder.dialog.venue.sendButton", {
-                      venue: selectedProviderTitle,
-                      mode:
-                        venueMode === ""
-                          ? ""
-                          : t(`addOrder.dialog.venue.modeValues.${venueMode}`),
-                    })
-                  : t("addOrder.dialog.venue.sendToVenue")
+              {tab === "venue"
+                ? t(
+                    venueMode === "paper"
+                      ? "addOrder.dialog.venue.submitPaper"
+                      : venueMode === "live"
+                        ? "addOrder.dialog.venue.submitLive"
+                        : "addOrder.dialog.venue.submit",
+                  )
                 : busy
                   ? t("addOrder.dialog.submitBusy")
-                  : submitMode === "drop_copy"
+                  : tab === "drop_copy"
                     ? t("addOrder.dialog.submitDropCopy")
                     : t("addOrder.dialog.submit")}
             </Button>
@@ -5910,662 +5814,659 @@ export function Orders() {
       <p className="text-xs text-muted-lt">{t("subtitle")}</p>
 
       {/* Tab toggle */}
-      <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
-        {(["orders", "trades"] as TabId[]).map((tabId) => (
-          <button
-            key={tabId}
-            type="button"
-            onClick={() => setTab(tabId)}
-            className={[
-              "rounded-badge px-3 py-1 text-xs font-medium capitalize transition-colors duration-[180ms]",
-              tab === tabId
-                ? "bg-accent-dim text-accent"
-                : "text-muted-lt hover:bg-surface-hover hover:text-text",
-            ].join(" ")}
-          >
-            {t(`tab.${tabId}`)}
-          </button>
-        ))}
-      </div>
-
-      {/* Filters */}
-      <div ref={filterRegionRef}>
-        <FilterBar
-          active={activeFilterChips.length > 0}
-          activeLabel={tc("filters.active")}
-          onClearActive={clearActiveFilters}
-          clearActiveLabel={tc("filters.clearAll")}
-          chips={
-            visibleFilterChips.length > 0 ? (
-              <>
-                {visibleFilterChips.map((entry) => (
-                  <FilterChip
-                    key={entry.key}
-                    label={entry.label}
-                    removeLabel={tc("filters.removeAdvanced")}
-                    onRemove={entry.onRemove}
-                  />
-                ))}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 text-[0.6875rem]"
-                  onClick={() => {
-                    for (const entry of visibleFilterChips) {
-                      entry.onRemove();
-                    }
-                  }}
-                >
-                  {tc("filters.removeAdvanced")}
-                </Button>
-              </>
-            ) : undefined
-          }
-          trailing={
-            <>
-              <MoreFiltersButton
-                count={advancedFilterCount}
-                label={tc("filters.more")}
-                onClick={() => {
-                  syncAdvancedDrafts();
-                  setMoreFiltersOpen(true);
-                }}
-              />
-              <div className="flex items-end">
-                <ShareLinkButton
-                  href={shareHref}
-                  title={tc("rowActions.shareFilters")}
-                  copiedTitle={tc("rowActions.copiedLink")}
-                  size={32}
-                />
-              </div>
-            </>
-          }
-          bottom={
-            tab === "orders" ? (
-              <ExactIdField
-                label={tc("exactLookup.label")}
-                value={lookupId}
-                placeholder={t("lookup.placeholder")}
-                openLabel={
-                  lookupBusy ? t("lookup.searching") : tc("exactLookup.open")
-                }
-                onChange={setLookupId}
-                onOpen={(value) => void openOrderById(value)}
-                style={{ width: "100%" }}
-                width={360}
-              />
-            ) : (
-              <ExactIdField
-                label={tc("exactLookup.label")}
-                value={tradeExternalId}
-                placeholder={tc("exactLookup.placeholder", {
-                  entity: tc("entities.trade"),
-                })}
-                openLabel={tc("exactLookup.open")}
-                onChange={setTradeExternalId}
-                onOpen={(value) => {
-                  setAppliedTradeExternalId(value.trim());
-                  resetTradePage();
-                }}
-                style={{ width: "100%" }}
-                width={360}
-              />
-            )
-          }
-        >
-          {tab === "orders" ? (
-            <>
-              <AutocompleteFilterField
-                label={t("table.account")}
-                value={orderAccountDraft}
-                placeholder={t("filter.accountPlaceholder")}
-                suggestions={visibleAccountSuggestions}
-                onChange={(value) => {
-                  if (
-                    orderAccount.trim() === globalAccountFilter.account &&
-                    value.trim() === ""
-                  ) {
-                    globalAccountFilter.clear();
-                  }
-                  setOrderAccountDraft(value);
-                }}
-                onSuggestionSelect={(value) =>
-                  applyOrderIdentityField("account", value)
-                }
-                onKeyDown={applyOrderIdentityFiltersOnEnter}
-                onClear={() => {
-                  if (orderAccount.trim() === globalAccountFilter.account) {
-                    globalAccountFilter.clear();
-                  }
-                  setOrderAccountDraft("");
-                  setOrderAccount("");
-                  setOrderPage(0);
-                }}
-                clearLabel={tc("filters.clearField")}
-                globalToggle={accountGlobalToggle(
-                  orderAccountDraft,
-                  (account) => {
-                    setOrderAccountDraft(account);
-                    setOrderAccount(account);
-                    setOrderPage(0);
-                  },
-                )}
-              />
-              <AutocompleteFilterField
-                label={t("filter.baseAssetLabel")}
-                value={orderBaseAssetDraft}
-                placeholder={t("filter.baseAssetPlaceholder")}
-                suggestions={visibleAssetSuggestions}
-                onChange={setOrderBaseAssetDraft}
-                onSuggestionSelect={(value) =>
-                  applyOrderIdentityField("baseAsset", value)
-                }
-                onKeyDown={applyOrderIdentityFiltersOnEnter}
-                onClear={() => {
-                  setOrderBaseAssetDraft("");
-                  setOrderBaseAsset("");
-                  setOrderPage(0);
-                }}
-                clearLabel={tc("filters.clearField")}
-              />
-              <AutocompleteFilterField
-                label={t("filter.quoteAssetLabel")}
-                value={orderQuoteAssetDraft}
-                placeholder={t("filter.quoteAssetPlaceholder")}
-                suggestions={visibleAssetSuggestions}
-                onChange={setOrderQuoteAssetDraft}
-                onSuggestionSelect={(value) =>
-                  applyOrderIdentityField("quoteAsset", value)
-                }
-                onKeyDown={applyOrderIdentityFiltersOnEnter}
-                onClear={() => {
-                  setOrderQuoteAssetDraft("");
-                  setOrderQuoteAsset("");
-                  setOrderPage(0);
-                }}
-                clearLabel={tc("filters.clearField")}
-              />
-              <div className="flex items-end">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={applyOrderIdentityFilters}
-                  disabled={!orderIdentityDraftChanged}
-                >
-                  {tc("filters.apply")}
-                </Button>
-              </div>
-              <div className="grid gap-1">
-                <FieldLabel>{t("filter.quickStatusLabel")}</FieldLabel>
-                <Segmented
-                  value={statusIsAll ? "all" : statusIsActive ? "active" : ""}
-                  options={[
-                    { value: "all", label: t("filter.quickStatus.all") },
-                    { value: "active", label: t("filter.quickStatus.active") },
-                  ]}
-                  onChange={(next) => {
-                    if (next === "active") {
-                      applyActiveStatuses();
-                    } else {
-                      applyAllStatuses();
-                    }
-                  }}
-                />
-              </div>
-              <div className="grid gap-1">
-                <FieldLabel>{t("filter.sideLabel")}</FieldLabel>
-                <Segmented
-                  value={orderSide}
-                  options={[
-                    { value: "all", label: t("filter.side.all") },
-                    { value: "buy", label: t("filter.side.buy") },
-                    { value: "sell", label: t("filter.side.sell") },
-                  ]}
-                  onChange={(next) => {
-                    setOrderSide(next as "all" | OrderSide);
-                    setOrderPage(0);
-                  }}
-                />
-              </div>
-              <div className="grid gap-1">
-                <FieldLabel>{t("filter.sourceAriaLabel")}</FieldLabel>
-                <Select
-                  value={orderSource || "_all"}
-                  onValueChange={(value) => {
-                    setOrderSource(value === "_all" ? "" : value);
-                    setOrderPage(0);
-                  }}
-                >
-                  <SelectTrigger
-                    className="h-8 w-44 text-xs"
-                    aria-label={t("filter.sourceAriaLabel")}
-                  >
-                    <SelectValue placeholder={t("filter.sourceAll")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="_all">
-                      {t("filter.sourceAll")}
-                    </SelectItem>
-                    {SOURCES.filter(Boolean).map((source) => (
-                      <SelectItem key={source} value={source}>
-                        {source}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </>
-          ) : (
-            <>
-              <AutocompleteFilterField
-                label={t("table.account")}
-                value={tradeAccountDraft}
-                placeholder={t("filter.accountPlaceholder")}
-                suggestions={visibleAccountSuggestions}
-                onChange={(value) => {
-                  if (
-                    tradeAccount.trim() === globalAccountFilter.account &&
-                    value.trim() === ""
-                  ) {
-                    globalAccountFilter.clear();
-                  }
-                  setTradeAccountDraft(value);
-                }}
-                onSuggestionSelect={(value) =>
-                  applyTradeIdentityField("account", value)
-                }
-                onKeyDown={applyTradeIdentityFiltersOnEnter}
-                onClear={() => {
-                  if (tradeAccount.trim() === globalAccountFilter.account) {
-                    globalAccountFilter.clear();
-                  }
-                  setTradeAccountDraft("");
-                  setTradeAccount("");
-                  resetTradePage();
-                }}
-                clearLabel={tc("filters.clearField")}
-                globalToggle={accountGlobalToggle(
-                  tradeAccountDraft,
-                  (account) => {
-                    setTradeAccountDraft(account);
-                    setTradeAccount(account);
-                    resetTradePage();
-                  },
-                )}
-              />
-              <AutocompleteFilterField
-                label={t("filter.baseAssetLabel")}
-                value={tradeBaseAssetDraft}
-                placeholder={t("filter.baseAssetPlaceholder")}
-                suggestions={visibleAssetSuggestions}
-                onChange={setTradeBaseAssetDraft}
-                onSuggestionSelect={(value) =>
-                  applyTradeIdentityField("baseAsset", value)
-                }
-                onKeyDown={applyTradeIdentityFiltersOnEnter}
-                onClear={() => {
-                  setTradeBaseAssetDraft("");
-                  setTradeBaseAsset("");
-                  resetTradePage();
-                }}
-                clearLabel={tc("filters.clearField")}
-              />
-              <AutocompleteFilterField
-                label={t("filter.quoteAssetLabel")}
-                value={tradeQuoteAssetDraft}
-                placeholder={t("filter.quoteAssetPlaceholder")}
-                suggestions={visibleAssetSuggestions}
-                onChange={setTradeQuoteAssetDraft}
-                onSuggestionSelect={(value) =>
-                  applyTradeIdentityField("quoteAsset", value)
-                }
-                onKeyDown={applyTradeIdentityFiltersOnEnter}
-                onClear={() => {
-                  setTradeQuoteAssetDraft("");
-                  setTradeQuoteAsset("");
-                  resetTradePage();
-                }}
-                clearLabel={tc("filters.clearField")}
-              />
-              <div className="flex items-end">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={applyTradeIdentityFilters}
-                  disabled={!tradeIdentityDraftChanged}
-                >
-                  {tc("filters.apply")}
-                </Button>
-              </div>
-              <div className="grid gap-1">
-                <FieldLabel>{t("filter.sideLabel")}</FieldLabel>
-                <Segmented
-                  value={tradeSide}
-                  options={[
-                    { value: "all", label: t("filter.side.all") },
-                    { value: "buy", label: t("filter.side.buy") },
-                    { value: "sell", label: t("filter.side.sell") },
-                  ]}
-                  onChange={(next) => {
-                    setTradeSide(next as "all" | OrderSide);
-                    resetTradePage();
-                  }}
-                />
-              </div>
-              <div className="grid gap-1">
-                <FieldLabel>{t("filter.sourceAriaLabel")}</FieldLabel>
-                <Select
-                  value={tradeSource || "_all"}
-                  onValueChange={(value) => {
-                    setTradeSource(value === "_all" ? "" : value);
-                    resetTradePage();
-                  }}
-                >
-                  <SelectTrigger
-                    className="h-8 w-44 text-xs"
-                    aria-label={t("filter.sourceAriaLabel")}
-                  >
-                    <SelectValue placeholder={t("filter.sourceAll")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="_all">
-                      {t("filter.sourceAll")}
-                    </SelectItem>
-                    {SOURCES.filter(Boolean).map((source) => (
-                      <SelectItem key={source} value={source}>
-                        {source}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </>
-          )}
-        </FilterBar>
-      </div>
-
-      <Dialog
-        open={moreFiltersOpen}
-        onOpenChange={(next) => {
-          if (next) {
-            syncAdvancedDrafts();
-          }
-          setMoreFiltersOpen(next);
-        }}
+      <Tabs
+        value={tab}
+        onValueChange={(value) => setTab(value as TabId)}
+        className="space-y-[var(--dens-row-gap)]"
       >
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{tc("filters.more")}</DialogTitle>
-            <DialogDescription>
-              {t("filter.advancedDescription")}
-            </DialogDescription>
-          </DialogHeader>
-          {tab === "orders" ? (
-            <div ref={advancedFilterDialogRef} className="grid gap-3">
-              <OrderStatusFilterGroup
-                selected={orderStatusesDraft}
-                onChange={setOrderStatusesDraft}
-              />
-              <div className="mt-2 grid gap-3 border-t border-border pt-3">
-                <RangeFilterControls
-                  label={t("filter.amountLabel")}
-                  mode={orderAdvancedDraft.amountMode}
-                  min={orderAdvancedDraft.amountMin}
-                  max={orderAdvancedDraft.amountMax}
-                  onMode={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      amountMode: value,
-                    }))
-                  }
-                  onMin={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      amountMin: value,
-                    }))
-                  }
-                  onMax={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      amountMax: value,
-                    }))
-                  }
+        <TabsList aria-label={t("title")}>
+          {(["orders", "trades"] as TabId[]).map((tabId) => (
+            <TabsTrigger key={tabId} value={tabId}>
+              {t(`tab.${tabId}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        {/* Filters */}
+        <div ref={filterRegionRef}>
+          <FilterBar
+            active={activeFilterChips.length > 0}
+            activeLabel={tc("filters.active")}
+            onClearActive={clearActiveFilters}
+            clearActiveLabel={tc("filters.clearAll")}
+            chips={
+              visibleFilterChips.length > 0 ? (
+                <>
+                  {visibleFilterChips.map((entry) => (
+                    <FilterChip
+                      key={entry.key}
+                      label={entry.label}
+                      removeLabel={tc("filters.removeAdvanced")}
+                      onRemove={entry.onRemove}
+                    />
+                  ))}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-[0.6875rem]"
+                    onClick={() => {
+                      for (const entry of visibleFilterChips) {
+                        entry.onRemove();
+                      }
+                    }}
+                  >
+                    {tc("filters.removeAdvanced")}
+                  </Button>
+                </>
+              ) : undefined
+            }
+            trailing={
+              <>
+                <MoreFiltersButton
+                  count={advancedFilterCount}
+                  label={tc("filters.more")}
+                  onClick={() => {
+                    syncAdvancedDrafts();
+                    setMoreFiltersOpen(true);
+                  }}
                 />
-                <RangeFilterControls
-                  label={t("filter.priceLabel")}
-                  mode={orderAdvancedDraft.priceMode}
-                  min={orderAdvancedDraft.priceMin}
-                  max={orderAdvancedDraft.priceMax}
-                  onMode={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      priceMode: value,
-                    }))
+                <div className="flex items-end">
+                  <ShareLinkButton
+                    href={shareHref}
+                    title={tc("rowActions.shareFilters")}
+                    copiedTitle={tc("rowActions.copiedLink")}
+                    size={32}
+                  />
+                </div>
+              </>
+            }
+            bottom={
+              tab === "orders" ? (
+                <ExactIdField
+                  label={tc("exactLookup.label")}
+                  value={lookupId}
+                  placeholder={t("lookup.placeholder")}
+                  openLabel={
+                    lookupBusy ? t("lookup.searching") : tc("exactLookup.open")
                   }
-                  onMin={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      priceMin: value,
-                    }))
-                  }
-                  onMax={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      priceMax: value,
-                    }))
-                  }
+                  onChange={setLookupId}
+                  onOpen={(value) => void openOrderById(value)}
+                  style={{ width: "100%" }}
+                  width={360}
                 />
-                <RangeFilterControls
-                  label={t("filter.timeLabel")}
-                  mode={orderAdvancedDraft.atMode}
-                  min={orderAdvancedDraft.atMin}
-                  max={orderAdvancedDraft.atMax}
-                  inputType="datetime-local"
-                  onMode={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      atMode: value,
-                    }))
-                  }
-                  onMin={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      atMin: value,
-                    }))
-                  }
-                  onMax={(value) =>
-                    setOrderAdvancedDraft((current) => ({
-                      ...current,
-                      atMax: value,
-                    }))
-                  }
+              ) : (
+                <ExactIdField
+                  label={tc("exactLookup.label")}
+                  value={tradeExternalId}
+                  placeholder={tc("exactLookup.placeholder", {
+                    entity: tc("entities.trade"),
+                  })}
+                  openLabel={tc("exactLookup.open")}
+                  onChange={setTradeExternalId}
+                  onOpen={(value) => {
+                    setAppliedTradeExternalId(value.trim());
+                    resetTradePage();
+                  }}
+                  style={{ width: "100%" }}
+                  width={360}
                 />
-              </div>
-            </div>
-          ) : (
-            <div ref={advancedFilterDialogRef} className="grid gap-3">
-              <div className="grid gap-3">
+              )
+            }
+          >
+            {tab === "orders" ? (
+              <>
+                <AutocompleteFilterField
+                  label={t("table.account")}
+                  value={orderAccountDraft}
+                  placeholder={t("filter.accountPlaceholder")}
+                  suggestions={visibleAccountSuggestions}
+                  onChange={(value) => {
+                    if (
+                      orderAccount.trim() === globalAccountFilter.account &&
+                      value.trim() === ""
+                    ) {
+                      globalAccountFilter.clear();
+                    }
+                    setOrderAccountDraft(value);
+                  }}
+                  onSuggestionSelect={(value) =>
+                    applyOrderIdentityField("account", value)
+                  }
+                  onKeyDown={applyOrderIdentityFiltersOnEnter}
+                  onClear={() => {
+                    if (orderAccount.trim() === globalAccountFilter.account) {
+                      globalAccountFilter.clear();
+                    }
+                    setOrderAccountDraft("");
+                    setOrderAccount("");
+                    setOrderPage(0);
+                  }}
+                  clearLabel={tc("filters.clearField")}
+                  globalToggle={accountGlobalToggle(
+                    orderAccountDraft,
+                    (account) => {
+                      setOrderAccountDraft(account);
+                      setOrderAccount(account);
+                      setOrderPage(0);
+                    },
+                  )}
+                />
+                <AutocompleteFilterField
+                  label={t("filter.baseAssetLabel")}
+                  value={orderBaseAssetDraft}
+                  placeholder={t("filter.baseAssetPlaceholder")}
+                  suggestions={visibleAssetSuggestions}
+                  onChange={setOrderBaseAssetDraft}
+                  onSuggestionSelect={(value) =>
+                    applyOrderIdentityField("baseAsset", value)
+                  }
+                  onKeyDown={applyOrderIdentityFiltersOnEnter}
+                  onClear={() => {
+                    setOrderBaseAssetDraft("");
+                    setOrderBaseAsset("");
+                    setOrderPage(0);
+                  }}
+                  clearLabel={tc("filters.clearField")}
+                />
+                <AutocompleteFilterField
+                  label={t("filter.quoteAssetLabel")}
+                  value={orderQuoteAssetDraft}
+                  placeholder={t("filter.quoteAssetPlaceholder")}
+                  suggestions={visibleAssetSuggestions}
+                  onChange={setOrderQuoteAssetDraft}
+                  onSuggestionSelect={(value) =>
+                    applyOrderIdentityField("quoteAsset", value)
+                  }
+                  onKeyDown={applyOrderIdentityFiltersOnEnter}
+                  onClear={() => {
+                    setOrderQuoteAssetDraft("");
+                    setOrderQuoteAsset("");
+                    setOrderPage(0);
+                  }}
+                  clearLabel={tc("filters.clearField")}
+                />
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={applyOrderIdentityFilters}
+                    disabled={!orderIdentityDraftChanged}
+                  >
+                    {tc("filters.apply")}
+                  </Button>
+                </div>
                 <div className="grid gap-1">
-                  <FieldLabel>{t("filter.timeLabel")}</FieldLabel>
-                  <TimeRangeFilter
-                    operator={tradeAdvancedDraft.atMode}
-                    operators={operatorOptions(t, "time")}
-                    operatorAriaLabel={t("table.time")}
-                    from={tradeAdvancedDraft.atMin}
-                    to={tradeAdvancedDraft.atMax}
-                    showPresets={false}
-                    clearLabel={tc("filters.clearField")}
-                    onOperatorChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
+                  <FieldLabel>{t("filter.quickStatusLabel")}</FieldLabel>
+                  <Segmented
+                    value={statusIsAll ? "all" : statusIsActive ? "active" : ""}
+                    options={[
+                      { value: "all", label: t("filter.quickStatus.all") },
+                      {
+                        value: "active",
+                        label: t("filter.quickStatus.active"),
+                      },
+                    ]}
+                    onChange={(next) => {
+                      if (next === "active") {
+                        applyActiveStatuses();
+                      } else {
+                        applyAllStatuses();
+                      }
+                    }}
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <FieldLabel>{t("filter.sideLabel")}</FieldLabel>
+                  <Segmented
+                    value={orderSide}
+                    options={[
+                      { value: "all", label: t("filter.side.all") },
+                      { value: "buy", label: t("filter.side.buy") },
+                      { value: "sell", label: t("filter.side.sell") },
+                    ]}
+                    onChange={(next) => {
+                      setOrderSide(next as "all" | OrderSide);
+                      setOrderPage(0);
+                    }}
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <FieldLabel>{t("filter.sourceAriaLabel")}</FieldLabel>
+                  <Select
+                    value={orderSource || "_all"}
+                    onValueChange={(value) => {
+                      setOrderSource(value === "_all" ? "" : value);
+                      setOrderPage(0);
+                    }}
+                  >
+                    <SelectTrigger
+                      className="h-8 w-44 text-xs"
+                      aria-label={t("filter.sourceAriaLabel")}
+                    >
+                      <SelectValue placeholder={t("filter.sourceAll")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_all">
+                        {t("filter.sourceAll")}
+                      </SelectItem>
+                      {SOURCES.filter(Boolean).map((source) => (
+                        <SelectItem key={source} value={source}>
+                          {source}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            ) : (
+              <>
+                <AutocompleteFilterField
+                  label={t("table.account")}
+                  value={tradeAccountDraft}
+                  placeholder={t("filter.accountPlaceholder")}
+                  suggestions={visibleAccountSuggestions}
+                  onChange={(value) => {
+                    if (
+                      tradeAccount.trim() === globalAccountFilter.account &&
+                      value.trim() === ""
+                    ) {
+                      globalAccountFilter.clear();
+                    }
+                    setTradeAccountDraft(value);
+                  }}
+                  onSuggestionSelect={(value) =>
+                    applyTradeIdentityField("account", value)
+                  }
+                  onKeyDown={applyTradeIdentityFiltersOnEnter}
+                  onClear={() => {
+                    if (tradeAccount.trim() === globalAccountFilter.account) {
+                      globalAccountFilter.clear();
+                    }
+                    setTradeAccountDraft("");
+                    setTradeAccount("");
+                    resetTradePage();
+                  }}
+                  clearLabel={tc("filters.clearField")}
+                  globalToggle={accountGlobalToggle(
+                    tradeAccountDraft,
+                    (account) => {
+                      setTradeAccountDraft(account);
+                      setTradeAccount(account);
+                      resetTradePage();
+                    },
+                  )}
+                />
+                <AutocompleteFilterField
+                  label={t("filter.baseAssetLabel")}
+                  value={tradeBaseAssetDraft}
+                  placeholder={t("filter.baseAssetPlaceholder")}
+                  suggestions={visibleAssetSuggestions}
+                  onChange={setTradeBaseAssetDraft}
+                  onSuggestionSelect={(value) =>
+                    applyTradeIdentityField("baseAsset", value)
+                  }
+                  onKeyDown={applyTradeIdentityFiltersOnEnter}
+                  onClear={() => {
+                    setTradeBaseAssetDraft("");
+                    setTradeBaseAsset("");
+                    resetTradePage();
+                  }}
+                  clearLabel={tc("filters.clearField")}
+                />
+                <AutocompleteFilterField
+                  label={t("filter.quoteAssetLabel")}
+                  value={tradeQuoteAssetDraft}
+                  placeholder={t("filter.quoteAssetPlaceholder")}
+                  suggestions={visibleAssetSuggestions}
+                  onChange={setTradeQuoteAssetDraft}
+                  onSuggestionSelect={(value) =>
+                    applyTradeIdentityField("quoteAsset", value)
+                  }
+                  onKeyDown={applyTradeIdentityFiltersOnEnter}
+                  onClear={() => {
+                    setTradeQuoteAssetDraft("");
+                    setTradeQuoteAsset("");
+                    resetTradePage();
+                  }}
+                  clearLabel={tc("filters.clearField")}
+                />
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={applyTradeIdentityFilters}
+                    disabled={!tradeIdentityDraftChanged}
+                  >
+                    {tc("filters.apply")}
+                  </Button>
+                </div>
+                <div className="grid gap-1">
+                  <FieldLabel>{t("filter.sideLabel")}</FieldLabel>
+                  <Segmented
+                    value={tradeSide}
+                    options={[
+                      { value: "all", label: t("filter.side.all") },
+                      { value: "buy", label: t("filter.side.buy") },
+                      { value: "sell", label: t("filter.side.sell") },
+                    ]}
+                    onChange={(next) => {
+                      setTradeSide(next as "all" | OrderSide);
+                      resetTradePage();
+                    }}
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <FieldLabel>{t("filter.sourceAriaLabel")}</FieldLabel>
+                  <Select
+                    value={tradeSource || "_all"}
+                    onValueChange={(value) => {
+                      setTradeSource(value === "_all" ? "" : value);
+                      resetTradePage();
+                    }}
+                  >
+                    <SelectTrigger
+                      className="h-8 w-44 text-xs"
+                      aria-label={t("filter.sourceAriaLabel")}
+                    >
+                      <SelectValue placeholder={t("filter.sourceAll")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_all">
+                        {t("filter.sourceAll")}
+                      </SelectItem>
+                      {SOURCES.filter(Boolean).map((source) => (
+                        <SelectItem key={source} value={source}>
+                          {source}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+          </FilterBar>
+        </div>
+
+        <Dialog
+          open={moreFiltersOpen}
+          onOpenChange={(next) => {
+            if (next) {
+              syncAdvancedDrafts();
+            }
+            setMoreFiltersOpen(next);
+          }}
+        >
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>{tc("filters.more")}</DialogTitle>
+              <DialogDescription>
+                {t("filter.advancedDescription")}
+              </DialogDescription>
+            </DialogHeader>
+            {tab === "orders" ? (
+              <div ref={advancedFilterDialogRef} className="grid gap-3">
+                <OrderStatusFilterGroup
+                  selected={orderStatusesDraft}
+                  onChange={setOrderStatusesDraft}
+                />
+                <div className="mt-2 grid gap-3 border-t border-border pt-3">
+                  <RangeFilterControls
+                    label={t("filter.amountLabel")}
+                    mode={orderAdvancedDraft.amountMode}
+                    min={orderAdvancedDraft.amountMin}
+                    max={orderAdvancedDraft.amountMax}
+                    onMode={(value) =>
+                      setOrderAdvancedDraft((current) => ({
                         ...current,
-                        atMode: value as RangeFilterMode,
+                        amountMode: value,
                       }))
                     }
-                    onFromChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
+                    onMin={(value) =>
+                      setOrderAdvancedDraft((current) => ({
+                        ...current,
+                        amountMin: value,
+                      }))
+                    }
+                    onMax={(value) =>
+                      setOrderAdvancedDraft((current) => ({
+                        ...current,
+                        amountMax: value,
+                      }))
+                    }
+                  />
+                  <RangeFilterControls
+                    label={t("filter.priceLabel")}
+                    mode={orderAdvancedDraft.priceMode}
+                    min={orderAdvancedDraft.priceMin}
+                    max={orderAdvancedDraft.priceMax}
+                    onMode={(value) =>
+                      setOrderAdvancedDraft((current) => ({
+                        ...current,
+                        priceMode: value,
+                      }))
+                    }
+                    onMin={(value) =>
+                      setOrderAdvancedDraft((current) => ({
+                        ...current,
+                        priceMin: value,
+                      }))
+                    }
+                    onMax={(value) =>
+                      setOrderAdvancedDraft((current) => ({
+                        ...current,
+                        priceMax: value,
+                      }))
+                    }
+                  />
+                  <RangeFilterControls
+                    label={t("filter.timeLabel")}
+                    mode={orderAdvancedDraft.atMode}
+                    min={orderAdvancedDraft.atMin}
+                    max={orderAdvancedDraft.atMax}
+                    inputType="datetime-local"
+                    onMode={(value) =>
+                      setOrderAdvancedDraft((current) => ({
+                        ...current,
+                        atMode: value,
+                      }))
+                    }
+                    onMin={(value) =>
+                      setOrderAdvancedDraft((current) => ({
                         ...current,
                         atMin: value,
                       }))
                     }
-                    onToChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
+                    onMax={(value) =>
+                      setOrderAdvancedDraft((current) => ({
                         ...current,
                         atMax: value,
                       }))
                     }
                   />
                 </div>
-                <div className="grid gap-1">
-                  <FieldLabel>{t("table.qty")}</FieldLabel>
-                  <NumberRangeFilter
-                    operator={tradeAdvancedDraft.quantityMode}
-                    operators={operatorOptions(t, "number")}
-                    operatorAriaLabel={t("table.qty")}
-                    min={tradeAdvancedDraft.quantityMin}
-                    max={tradeAdvancedDraft.quantityMax}
-                    clearLabel={tc("filters.clearField")}
-                    onOperatorChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        quantityMode: value as RangeFilterMode,
-                      }))
-                    }
-                    onMinChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        quantityMin: value,
-                      }))
-                    }
-                    onMaxChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        quantityMax: value,
-                      }))
-                    }
-                  />
-                </div>
-                <div className="grid gap-1">
-                  <FieldLabel>{t("table.price")}</FieldLabel>
-                  <NumberRangeFilter
-                    operator={tradeAdvancedDraft.priceMode}
-                    operators={operatorOptions(t, "number")}
-                    operatorAriaLabel={t("table.price")}
-                    min={tradeAdvancedDraft.priceMin}
-                    max={tradeAdvancedDraft.priceMax}
-                    clearLabel={tc("filters.clearField")}
-                    onOperatorChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        priceMode: value as RangeFilterMode,
-                      }))
-                    }
-                    onMinChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        priceMin: value,
-                      }))
-                    }
-                    onMaxChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        priceMax: value,
-                      }))
-                    }
-                  />
-                </div>
-                <div className="grid gap-1">
-                  <FieldLabel>{t("table.lockPrice")}</FieldLabel>
-                  <NumberRangeFilter
-                    operator={tradeAdvancedDraft.lockPriceMode}
-                    operators={operatorOptions(t, "number")}
-                    operatorAriaLabel={t("table.lockPrice")}
-                    min={tradeAdvancedDraft.lockPriceMin}
-                    max={tradeAdvancedDraft.lockPriceMax}
-                    clearLabel={tc("filters.clearField")}
-                    onOperatorChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        lockPriceMode: value as RangeFilterMode,
-                      }))
-                    }
-                    onMinChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        lockPriceMin: value,
-                      }))
-                    }
-                    onMaxChange={(value) =>
-                      setTradeAdvancedDraft((current) => ({
-                        ...current,
-                        lockPriceMax: value,
-                      }))
-                    }
-                  />
+              </div>
+            ) : (
+              <div ref={advancedFilterDialogRef} className="grid gap-3">
+                <div className="grid gap-3">
+                  <div className="grid gap-1">
+                    <FieldLabel>{t("filter.timeLabel")}</FieldLabel>
+                    <TimeRangeFilter
+                      operator={tradeAdvancedDraft.atMode}
+                      operators={operatorOptions(t, "time")}
+                      operatorAriaLabel={t("table.time")}
+                      from={tradeAdvancedDraft.atMin}
+                      to={tradeAdvancedDraft.atMax}
+                      showPresets={false}
+                      clearLabel={tc("filters.clearField")}
+                      onOperatorChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          atMode: value as RangeFilterMode,
+                        }))
+                      }
+                      onFromChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          atMin: value,
+                        }))
+                      }
+                      onToChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          atMax: value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-1">
+                    <FieldLabel>{t("table.qty")}</FieldLabel>
+                    <NumberRangeFilter
+                      operator={tradeAdvancedDraft.quantityMode}
+                      operators={operatorOptions(t, "number")}
+                      operatorAriaLabel={t("table.qty")}
+                      min={tradeAdvancedDraft.quantityMin}
+                      max={tradeAdvancedDraft.quantityMax}
+                      clearLabel={tc("filters.clearField")}
+                      onOperatorChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          quantityMode: value as RangeFilterMode,
+                        }))
+                      }
+                      onMinChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          quantityMin: value,
+                        }))
+                      }
+                      onMaxChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          quantityMax: value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-1">
+                    <FieldLabel>{t("table.price")}</FieldLabel>
+                    <NumberRangeFilter
+                      operator={tradeAdvancedDraft.priceMode}
+                      operators={operatorOptions(t, "number")}
+                      operatorAriaLabel={t("table.price")}
+                      min={tradeAdvancedDraft.priceMin}
+                      max={tradeAdvancedDraft.priceMax}
+                      clearLabel={tc("filters.clearField")}
+                      onOperatorChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          priceMode: value as RangeFilterMode,
+                        }))
+                      }
+                      onMinChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          priceMin: value,
+                        }))
+                      }
+                      onMaxChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          priceMax: value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-1">
+                    <FieldLabel>{t("table.lockPrice")}</FieldLabel>
+                    <NumberRangeFilter
+                      operator={tradeAdvancedDraft.lockPriceMode}
+                      operators={operatorOptions(t, "number")}
+                      operatorAriaLabel={t("table.lockPrice")}
+                      min={tradeAdvancedDraft.lockPriceMin}
+                      max={tradeAdvancedDraft.lockPriceMax}
+                      clearLabel={tc("filters.clearField")}
+                      onOperatorChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          lockPriceMode: value as RangeFilterMode,
+                        }))
+                      }
+                      onMinChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          lockPriceMin: value,
+                        }))
+                      }
+                      onMaxChange={(value) =>
+                        setTradeAdvancedDraft((current) => ({
+                          ...current,
+                          lockPriceMax: value,
+                        }))
+                      }
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (tab === "orders") {
-                  setOrderStatusesDraft([]);
-                  setOrderAdvancedDraft({
-                    amountMode: "all",
-                    amountMin: "",
-                    amountMax: "",
-                    priceMode: "all",
-                    priceMin: "",
-                    priceMax: "",
-                    atMode: "all",
-                    atMin: "",
-                    atMax: "",
-                  });
-                } else {
-                  setTradeAdvancedDraft({
-                    atMode: "after",
-                    atMin: "",
-                    atMax: "",
-                    quantityMode: "eq",
-                    quantityMin: "",
-                    quantityMax: "",
-                    priceMode: "eq",
-                    priceMin: "",
-                    priceMax: "",
-                    lockPriceMode: "eq",
-                    lockPriceMin: "",
-                    lockPriceMax: "",
-                  });
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  if (tab === "orders") {
+                    setOrderStatusesDraft([]);
+                    setOrderAdvancedDraft({
+                      amountMode: "all",
+                      amountMin: "",
+                      amountMax: "",
+                      priceMode: "all",
+                      priceMin: "",
+                      priceMax: "",
+                      atMode: "all",
+                      atMin: "",
+                      atMax: "",
+                    });
+                  } else {
+                    setTradeAdvancedDraft({
+                      atMode: "after",
+                      atMin: "",
+                      atMax: "",
+                      quantityMode: "eq",
+                      quantityMin: "",
+                      quantityMax: "",
+                      priceMode: "eq",
+                      priceMin: "",
+                      priceMax: "",
+                      lockPriceMode: "eq",
+                      lockPriceMin: "",
+                      lockPriceMax: "",
+                    });
+                  }
+                }}
+              >
+                {tc("filters.removeAdvanced")}
+              </Button>
+              <Button
+                type="button"
+                onClick={applyAdvancedFilters}
+                disabled={
+                  (tab === "orders" &&
+                    (orderStatusesDraft.length === 0 ||
+                      !orderAdvancedNumericValid)) ||
+                  (tab === "trades" && !tradeAdvancedNumericValid)
                 }
-              }}
-            >
-              {tc("filters.removeAdvanced")}
-            </Button>
-            <Button
-              type="button"
-              onClick={applyAdvancedFilters}
-              disabled={
-                (tab === "orders" &&
-                  (orderStatusesDraft.length === 0 ||
-                    !orderAdvancedNumericValid)) ||
-                (tab === "trades" && !tradeAdvancedNumericValid)
-              }
-            >
-              {tc("filters.applyAdvanced")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              >
+                {tc("filters.applyAdvanced")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-      {/* Orders view */}
-      {tab === "orders" && (
-        <>
+        {/* Orders view */}
+        <TabsContent value="orders" className="space-y-[var(--dens-row-gap)]">
           {ordersResult.load.state === "loading" && <TableSkeleton cols={10} />}
           <StaleState {...ordersResult} />
           {ordersResult.load.state === "error" && (
@@ -6605,12 +6506,10 @@ export function Orders() {
                 {orderPager}
               </>
             ))}
-        </>
-      )}
+        </TabsContent>
 
-      {/* Trades view */}
-      {tab === "trades" && (
-        <>
+        {/* Trades view */}
+        <TabsContent value="trades" className="space-y-[var(--dens-row-gap)]">
           {tradesResult.load.state === "loading" && <TableSkeleton cols={10} />}
           <StaleState {...tradesResult} />
           {tradesResult.load.state === "error" && (
@@ -6644,8 +6543,8 @@ export function Orders() {
                 {tradePager}
               </>
             ))}
-        </>
-      )}
+        </TabsContent>
+      </Tabs>
 
       {/* Dialogs */}
       <SubmitOrderDialog

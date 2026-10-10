@@ -32,7 +32,7 @@ import {
   Upload,
   type LucideIcon,
 } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
@@ -70,7 +70,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   serviceLogsDownloadUrl,
   useApiClient,
@@ -142,62 +142,6 @@ const tradingSections: BackupSection[] = [
   "activity_history",
   "trading",
 ];
-
-const serviceTabIDs = serviceTabs.map(({ id }) => id);
-const backupWorkflowTabIDs = backupWorkflowTabs.map(({ id }) => id);
-
-function serviceTabID(tab: ServiceTab) {
-  return `service-tab-${tab}`;
-}
-
-function servicePanelID(tab: ServiceTab) {
-  return `service-panel-${tab}`;
-}
-
-function backupWorkflowTabID(tab: BackupWorkflow) {
-  return `backup-workflow-tab-${tab}`;
-}
-
-function backupWorkflowPanelID(tab: BackupWorkflow) {
-  return `backup-workflow-panel-${tab}`;
-}
-
-function moveTabFocus<T extends string>(
-  event: KeyboardEvent<HTMLButtonElement>,
-  tabs: readonly T[],
-  current: T,
-  select: (tab: T) => void,
-  tabID: (tab: T) => string,
-) {
-  const index = tabs.indexOf(current);
-  if (index < 0) {
-    return;
-  }
-  let next: T | null = null;
-  switch (event.key) {
-    case "ArrowRight":
-    case "ArrowDown":
-      next = tabs[(index + 1) % tabs.length];
-      break;
-    case "ArrowLeft":
-    case "ArrowUp":
-      next = tabs[(index + tabs.length - 1) % tabs.length];
-      break;
-    case "Home":
-      next = tabs[0];
-      break;
-    case "End":
-      next = tabs[tabs.length - 1];
-      break;
-    default:
-      return;
-  }
-  event.preventDefault();
-  select(next);
-  window.requestAnimationFrame(() => {
-    document.getElementById(tabID(next))?.focus();
-  });
-}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -494,50 +438,21 @@ export function BackupCard() {
         <CardTitle>{t("backup.title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div
-          role="tablist"
-          aria-label={t("backup.tabs.ariaLabel")}
-          className="inline-flex w-fit overflow-hidden rounded-card border border-border bg-bg/70"
+        <Tabs
+          value={workflow}
+          onValueChange={(value) => setWorkflow(value as BackupWorkflow)}
+          className="space-y-4"
         >
-          {backupWorkflowTabs.map(({ id, labelKey, icon: Icon }) => (
-            <button
-              id={backupWorkflowTabID(id)}
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={workflow === id}
-              aria-controls={backupWorkflowPanelID(id)}
-              tabIndex={workflow === id ? 0 : -1}
-              className={cn(
-                "inline-flex h-8 items-center gap-2 border-l border-border px-3 text-xs font-medium transition-colors first:border-l-0",
-                workflow === id
-                  ? "bg-accent text-bg"
-                  : "text-muted-lt hover:bg-surface-hover hover:text-accent",
-              )}
-              onClick={() => setWorkflow(id)}
-              onKeyDown={(event) =>
-                moveTabFocus(
-                  event,
-                  backupWorkflowTabIDs,
-                  id,
-                  setWorkflow,
-                  backupWorkflowTabID,
-                )
-              }
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {t(labelKey)}
-            </button>
-          ))}
-        </div>
+          <TabsList aria-label={t("backup.tabs.ariaLabel")}>
+            {backupWorkflowTabs.map(({ id, labelKey, icon: Icon }) => (
+              <TabsTrigger key={id} value={id}>
+                <Icon className="h-3.5 w-3.5" />
+                {t(labelKey)}
+              </TabsTrigger>
+            ))}
+          </TabsList>
 
-        {workflow === "export" ? (
-          <div
-            id={backupWorkflowPanelID("export")}
-            role="tabpanel"
-            aria-labelledby={backupWorkflowTabID("export")}
-            className="space-y-4"
-          >
+          <TabsContent value="export" className="space-y-4">
             {scopeControls}
             <div className="space-y-2">
               <label className="flex w-fit items-center gap-2 text-xs text-muted">
@@ -581,14 +496,8 @@ export function BackupCard() {
                 <p className="break-all text-xs text-muted-lt">{downloaded}</p>
               )}
             </div>
-          </div>
-        ) : (
-          <div
-            id={backupWorkflowPanelID("restore")}
-            role="tabpanel"
-            aria-labelledby={backupWorkflowTabID("restore")}
-            className="space-y-4"
-          >
+          </TabsContent>
+          <TabsContent value="restore" className="space-y-4">
             {scopeControls}
             <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-xs text-[var(--danger)]">
               <div className="flex items-start gap-2">
@@ -638,8 +547,8 @@ export function BackupCard() {
                 {t("backup.restore")}
               </Button>
             </div>
-          </div>
-        )}
+          </TabsContent>
+        </Tabs>
 
         {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
         {summary && (
@@ -1057,265 +966,224 @@ export function ServiceCard({
   const { t: tmcp } = useTranslation("mcp");
   const { load: mcpLoad } = useMcpAccess();
   const mcpCommands = mcpLoad.state === "ready" ? mcpLoad.data : null;
-
   return (
-    <div className="space-y-4 animate-fade-in">
-      <div
-        role="tablist"
-        aria-label={t("tabs.ariaLabel")}
-        className="flex w-fit flex-wrap overflow-hidden rounded-card border border-border bg-bg/70"
-      >
+    <Tabs
+      value={activeTab}
+      onValueChange={(value) => onTabChange(value as ServiceTab)}
+      className="space-y-4 animate-fade-in"
+    >
+      <TabsList aria-label={t("tabs.ariaLabel")}>
         {serviceTabs.map(({ id, labelKey, icon: Icon }) => (
-          <button
-            id={serviceTabID(id)}
+          <TabsTrigger
             key={id}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === id}
-            aria-controls={servicePanelID(id)}
-            tabIndex={activeTab === id ? 0 : -1}
-            className={cn(
-              "inline-flex h-8 items-center gap-2 border-l border-border px-3 text-xs font-medium transition-colors first:border-l-0",
-              activeTab === id
-                ? "bg-accent text-bg"
-                : "text-muted-lt hover:bg-surface-hover hover:text-accent",
-            )}
+            value={id}
+            // Radix reports only a changed value; the click also re-commits
+            // the selected tab, which drops a #logs hash.
             onClick={() => onTabChange(id)}
-            onKeyDown={(event) =>
-              moveTabFocus(event, serviceTabIDs, id, onTabChange, serviceTabID)
-            }
           >
             <Icon className="h-3.5 w-3.5" />
             {t(labelKey)}
-          </button>
+          </TabsTrigger>
         ))}
-      </div>
+      </TabsList>
 
-      {activeTab === "application" && (
-        <div
-          id={servicePanelID("application")}
-          role="tabpanel"
-          aria-labelledby={serviceTabID("application")}
-          className="space-y-4"
-        >
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("application.title")}</CardTitle>
-            </CardHeader>
-            <CardContent>
+      <TabsContent value="application" className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("application.title")}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <StatRow
+              label={t("application.name")}
+              value={info.name || t("application.defaultName")}
+              mono={false}
+            />
+            {!info.release && (
               <StatRow
-                label={t("application.name")}
-                value={info.name || t("application.defaultName")}
-                mono={false}
-              />
-              {!info.release && (
-                <StatRow
-                  label={t("application.build")}
-                  value={
-                    <Badge variant="warn">{t("application.nonRelease")}</Badge>
-                  }
-                />
-              )}
-            </CardContent>
-          </Card>
-
-          <ServiceLifecycleCard
-            busyAction={lifecycleBusyAction}
-            error={lifecycleError}
-            onAction={onLifecycleAction}
-          />
-
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("engine.title")}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <StatRow
-                label={t("engine.version")}
-                mono={false}
+                label={t("application.build")}
                 value={
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="nums font-mono">
-                      {info.engineVersion || tc("value.none")}
-                    </span>
-                    <a
-                      href="https://openpit.dev?officer"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-                    >
-                      {t("engine.sdk")}
-                      <ExternalLink className="h-3 w-3 opacity-70" />
-                    </a>
-                  </span>
+                  <Badge variant="warn">{t("application.nonRelease")}</Badge>
                 }
               />
-              <StatRow
-                label={t("engine.buildPosture")}
-                mono={false}
-                value={
-                  <span className="flex items-center gap-1.5">
-                    <Badge variant={info.release ? "ok" : "warn"}>
-                      {info.release
-                        ? t("engine.stableRelease")
-                        : t("engine.developmentBuild")}
-                    </Badge>
-                    {/* buildClean is absent until the SDK exposes a precise
-                        dirty-sources flag; when it arrives and is false, surface it. */}
-                    {info.buildClean === false && (
-                      <Badge variant="warn">
-                        {t("engine.modifiedSources")}
-                      </Badge>
-                    )}
-                  </span>
-                }
-              />
-              {info.engineBuildProfile ? (
-                <>
-                  <div className="pb-1 pt-3">
-                    <p className="text-xs font-medium text-muted">
-                      {t("engine.profile")}
-                    </p>
-                  </div>
-                  {parseProfileRows(info.engineBuildProfile).map((row) => (
-                    <StatRow
-                      key={row.param}
-                      label={t(`engine.profileParams.${row.param}`, {
-                        defaultValue: row.param,
-                      })}
-                      value={row.value || tc("value.none")}
-                      mono={false}
-                    />
-                  ))}
-                </>
-              ) : (
-                <StatRow
-                  label={t("engine.profile")}
-                  value={tc("value.none")}
-                  mono={false}
-                />
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
+            )}
+          </CardContent>
+        </Card>
 
-      {activeTab === "database" && (
-        <div
-          id={servicePanelID("database")}
-          role="tabpanel"
-          aria-labelledby={serviceTabID("database")}
-          className="space-y-4"
-        >
-          <DatabaseCard database={info.database} onReset={onDatabaseReset} />
-          <BackupCard />
-        </div>
-      )}
+        <ServiceLifecycleCard
+          busyAction={lifecycleBusyAction}
+          error={lifecycleError}
+          onAction={onLifecycleAction}
+        />
 
-      {activeTab === "api" && (
-        <div
-          id={servicePanelID("api")}
-          role="tabpanel"
-          aria-labelledby={serviceTabID("api")}
-        >
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("api.title")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <p className="mb-1.5 text-xs font-medium text-muted">
-                  {t("api.rest")}
-                </p>
-                <div className="flex items-center justify-between gap-4 py-1">
-                  <span className="text-xs text-muted-lt">
-                    {t("api.openApiDocs")}
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("engine.title")}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <StatRow
+              label={t("engine.version")}
+              mono={false}
+              value={
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="nums font-mono">
+                    {info.engineVersion || tc("value.none")}
                   </span>
                   <a
-                    href="/docs"
+                    href="https://openpit.dev?officer"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-sm text-accent hover:underline"
+                    className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
                   >
-                    /docs
+                    {t("engine.sdk")}
                     <ExternalLink className="h-3 w-3 opacity-70" />
                   </a>
+                </span>
+              }
+            />
+            <StatRow
+              label={t("engine.buildPosture")}
+              mono={false}
+              value={
+                <span className="flex items-center gap-1.5">
+                  <Badge variant={info.release ? "ok" : "warn"}>
+                    {info.release
+                      ? t("engine.stableRelease")
+                      : t("engine.developmentBuild")}
+                  </Badge>
+                  {/* buildClean is absent until the SDK exposes a precise
+                        dirty-sources flag; when it arrives and is false, surface it. */}
+                  {info.buildClean === false && (
+                    <Badge variant="warn">{t("engine.modifiedSources")}</Badge>
+                  )}
+                </span>
+              }
+            />
+            {info.engineBuildProfile ? (
+              <>
+                <div className="pb-1 pt-3">
+                  <p className="text-xs font-medium text-muted">
+                    {t("engine.profile")}
+                  </p>
+                </div>
+                {parseProfileRows(info.engineBuildProfile).map((row) => (
+                  <StatRow
+                    key={row.param}
+                    label={t(`engine.profileParams.${row.param}`, {
+                      defaultValue: row.param,
+                    })}
+                    value={row.value || tc("value.none")}
+                    mono={false}
+                  />
+                ))}
+              </>
+            ) : (
+              <StatRow
+                label={t("engine.profile")}
+                value={tc("value.none")}
+                mono={false}
+              />
+            )}
+          </CardContent>
+        </Card>
+      </TabsContent>
+
+      <TabsContent value="database" className="space-y-4">
+        <DatabaseCard database={info.database} onReset={onDatabaseReset} />
+        <BackupCard />
+      </TabsContent>
+
+      <TabsContent value="api">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("api.title")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-muted">
+                {t("api.rest")}
+              </p>
+              <div className="flex items-center justify-between gap-4 py-1">
+                <span className="text-xs text-muted-lt">
+                  {t("api.openApiDocs")}
+                </span>
+                <a
+                  href="/docs"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-accent hover:underline"
+                >
+                  /docs
+                  <ExternalLink className="h-3 w-3 opacity-70" />
+                </a>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-medium text-muted">
+                    {t("api.mcp")}
+                  </p>
+                  <CompactStaleState load={mcpLoad} />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="nums text-[0.6875rem] text-muted-lt">
+                    /mcp
+                  </span>
+                  <Link
+                    to="/mcp-access"
+                    className="text-[0.6875rem] text-accent hover:underline"
+                  >
+                    {t("api.configureAccess")}
+                  </Link>
                 </div>
               </div>
-
-              <div>
-                <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-medium text-muted">
-                      {t("api.mcp")}
-                    </p>
-                    <CompactStaleState load={mcpLoad} />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="nums text-[0.6875rem] text-muted-lt">
-                      /mcp
-                    </span>
-                    <Link
-                      to="/mcp-access"
-                      className="text-[0.6875rem] text-accent hover:underline"
-                    >
-                      {t("api.configureAccess")}
-                    </Link>
-                  </div>
-                </div>
-                {mcpCommands === null ? (
-                  <p className="text-xs text-muted-lt italic">
-                    {t("api.loadingCommands")}
-                  </p>
-                ) : mcpCommands.length === 0 ? (
-                  <p className="text-xs text-muted-lt italic">
-                    {t("api.noCommands")}
-                  </p>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      {mcpCommands.map((cmd) => (
-                        <div
-                          key={cmd.name}
-                          className="flex items-start gap-2 text-xs"
+              {mcpCommands === null ? (
+                <p className="text-xs text-muted-lt italic">
+                  {t("api.loadingCommands")}
+                </p>
+              ) : mcpCommands.length === 0 ? (
+                <p className="text-xs text-muted-lt italic">
+                  {t("api.noCommands")}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    {mcpCommands.map((cmd) => (
+                      <div
+                        key={cmd.name}
+                        className="flex items-start gap-2 text-xs"
+                      >
+                        <span
+                          className={
+                            cmd.protective
+                              ? "nums shrink-0 font-medium text-[var(--danger)]"
+                              : "nums shrink-0 font-medium text-text"
+                          }
                         >
-                          <span
-                            className={
-                              cmd.protective
-                                ? "nums shrink-0 font-medium text-[var(--danger)]"
-                                : "nums shrink-0 font-medium text-text"
-                            }
-                          >
-                            {cmd.name}
-                          </span>
-                          <span className="text-muted-lt">
-                            {tmcp(`command.${cmd.name}.description`, {
-                              defaultValue:
-                                cmd.agentDescription || tc("value.none"),
-                            })}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    <ConnectAgent />
+                          {cmd.name}
+                        </span>
+                        <span className="text-muted-lt">
+                          {tmcp(`command.${cmd.name}.description`, {
+                            defaultValue:
+                              cmd.agentDescription || tc("value.none"),
+                          })}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+                  <ConnectAgent />
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </TabsContent>
 
-      {activeTab === "logs" && (
-        <div
-          id={servicePanelID("logs")}
-          role="tabpanel"
-          aria-labelledby={serviceTabID("logs")}
-        >
-          <LogsCard />
-        </div>
-      )}
-    </div>
+      <TabsContent value="logs">
+        <LogsCard />
+      </TabsContent>
+    </Tabs>
   );
 }
 

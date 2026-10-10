@@ -96,10 +96,15 @@ export function FilterOperatorSelect({
 export interface SegmentedOption {
   value: string;
   label: string;
+  /** Disable this option. */
   disabled?: boolean;
 }
 
 export interface SegmentedProps {
+  /** Disable every option. */
+  disabled?: boolean;
+  /** Accessible name for the group of options. */
+  ariaLabel?: string;
   options: SegmentedOption[];
   value?: string;
   onChange?: (value: string) => void;
@@ -107,11 +112,20 @@ export interface SegmentedProps {
 }
 
 /** Inline segmented control for short facets. */
-export function Segmented({ options, value, onChange, style }: SegmentedProps) {
+export function Segmented({
+  options,
+  value,
+  onChange,
+  style,
+  disabled,
+  ariaLabel,
+}: SegmentedProps) {
   return (
     <div
       className="inline-flex h-8 overflow-hidden rounded-card border border-border bg-bg"
       style={style}
+      role={ariaLabel !== undefined ? "group" : undefined}
+      aria-label={ariaLabel}
     >
       {options.map((option, index) => {
         const active = option.value === value;
@@ -129,9 +143,9 @@ export function Segmented({ options, value, onChange, style }: SegmentedProps) {
                 ? "bg-accent-dim text-accent hover:bg-accent-dim hover:text-accent"
                 : "text-muted-lt",
             )}
-            disabled={option.disabled}
             onClick={() => onChange?.(option.value)}
             aria-pressed={active}
+            disabled={disabled || option.disabled}
           >
             {option.label}
           </Button>

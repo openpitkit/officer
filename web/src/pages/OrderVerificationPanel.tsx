@@ -36,7 +36,6 @@ import {
   type ParsedApproval,
   type ParsedApprovalCommission,
 } from "@/lib/approvalEnvelope";
-import { cn } from "@/lib/utils";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyableSnippet } from "@/components/CopyableSnippet";
@@ -48,6 +47,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // ---------------------------------------------------------------------------
 // Panel state + verify UI. Envelope decode / Ed25519 verify live in
@@ -1047,63 +1047,38 @@ export function OrderVerificationPanel({
           <DialogDescription>{t("panel.description")}</DialogDescription>
         </DialogHeader>
 
-        <div
-          className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1"
-          role="tablist"
-          aria-label={t("panel.title")}
+        <Tabs
+          value={mode}
+          onValueChange={(value) => setMode(value as typeof mode)}
+          className="space-y-4"
         >
+          <TabsList aria-label={t("panel.title")}>
+            {hasEvent ? (
+              <TabsTrigger value="reproduction">
+                {t("panel.tabReproduction")}
+              </TabsTrigger>
+            ) : null}
+            <TabsTrigger value="verify">{t("panel.tabVerify")}</TabsTrigger>
+          </TabsList>
           {hasEvent ? (
-            <ModeTab
-              active={mode === "reproduction"}
-              label={t("panel.tabReproduction")}
-              onClick={() => setMode("reproduction")}
-            />
+            <TabsContent
+              value="reproduction"
+              className="max-h-[62vh] overflow-y-auto pr-1"
+            >
+              <ReproductionMode
+                orderExternalId={orderExternalId}
+                eventId={eventId}
+              />
+            </TabsContent>
           ) : null}
-          <ModeTab
-            active={mode === "verify"}
-            label={t("panel.tabVerify")}
-            onClick={() => setMode("verify")}
-          />
-        </div>
-
-        <div className="max-h-[62vh] overflow-y-auto pr-1">
-          {mode === "reproduction" && hasEvent ? (
-            <ReproductionMode
-              orderExternalId={orderExternalId}
-              eventId={eventId}
-            />
-          ) : (
+          <TabsContent
+            value="verify"
+            className="max-h-[62vh] overflow-y-auto pr-1"
+          >
             <VerifyEnvelopeMode />
-          )}
-        </div>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function ModeTab({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={cn(
-        "rounded-badge px-3 py-1 text-xs font-medium transition-colors duration-[180ms]",
-        active
-          ? "bg-accent-dim text-accent"
-          : "text-muted-lt hover:bg-surface-hover hover:text-text",
-      )}
-    >
-      {label}
-    </button>
   );
 }

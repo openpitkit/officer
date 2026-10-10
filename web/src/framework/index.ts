@@ -62,6 +62,12 @@ export { Sidebar } from "./Sidebar";
 export { SidebarProvider } from "../components/SidebarContext";
 export { useSidebar, type SidebarState } from "../components/sidebar-context";
 export {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "../components/ui/tabs";
+export {
   ActionButton,
   BlockButton,
   CloneButton,

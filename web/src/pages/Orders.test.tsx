@@ -303,7 +303,7 @@ beforeEach(async () => {
   useTradesMock.mockReturnValue(readyPage<Trade>([]));
   useBalancesMock.mockReturnValue(readyEmpty<Balance[]>([]));
   setGlobalAccountFilter("");
-  removeStoredPreference("pit-officer-orders-send-to-venue");
+  removeStoredPreference("pit-officer-orders-submit-tab");
   removeStoredPreference("pit-officer-orders-venue-mode");
   fetchAccountsMock.mockResolvedValue([]);
   fetchAssetsMock.mockResolvedValue([]);
@@ -377,6 +377,36 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("Orders page tabs", () => {
+  it("switches from orders to trades and back by clicking tabs", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    expect(
+      screen.getByRole("tabpanel", { name: /^orders$/i }),
+    ).toHaveTextContent(i18n.t("orders:empty.orders.title"));
+    expect(
+      screen.queryByRole("tabpanel", { name: /^trades$/i }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /^trades$/i }));
+    expect(
+      screen.getByRole("tabpanel", { name: /^trades$/i }),
+    ).toHaveTextContent(i18n.t("orders:empty.trades.title"));
+    expect(
+      screen.queryByRole("tabpanel", { name: /^orders$/i }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /^orders$/i }));
+    expect(
+      screen.getByRole("tabpanel", { name: /^orders$/i }),
+    ).toHaveTextContent(i18n.t("orders:empty.orders.title"));
+    expect(
+      screen.queryByRole("tabpanel", { name: /^trades$/i }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("Orders account pre-fill", () => {
@@ -494,6 +524,9 @@ describe("Orders account pre-fill", () => {
     await user.click(screen.getAllByRole("button", { name: /add order/i })[0]);
 
     const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Submit and settle" }),
+    );
     expect(within(dialog).getByLabelText("Account")).toHaveValue("desk-alpha");
   });
 
@@ -504,6 +537,9 @@ describe("Orders account pre-fill", () => {
     await user.click(screen.getAllByRole("button", { name: /add order/i })[0]);
 
     const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Submit and settle" }),
+    );
     expect(within(dialog).getByLabelText("Account")).toHaveValue("");
   });
 
@@ -521,13 +557,28 @@ describe("Orders account pre-fill", () => {
     await user.click(screen.getAllByRole("button", { name: /add order/i })[0]);
 
     const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Submit and settle" }),
+    );
     expect(within(dialog).getByLabelText("Account")).toHaveValue("");
   });
 });
 
-async function openDialog(user: ReturnType<typeof userEvent.setup>) {
+async function openDialog(
+  user: ReturnType<typeof userEvent.setup>,
+  pickTab = true,
+) {
   await user.click(screen.getAllByRole("button", { name: /add order/i })[0]);
-  return screen.findByRole("dialog");
+  const dialog = await screen.findByRole("dialog");
+  if (
+    pickTab &&
+    within(dialog).queryByRole("tab", { selected: true }) === null
+  ) {
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Submit and settle" }),
+    );
+  }
+  return dialog;
 }
 
 async function fillOrderFields(
@@ -537,9 +588,9 @@ async function fillOrderFields(
   await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
   await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
   await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
-  await user.click(within(dialog).getByRole("radio", { name: "Buy" }));
+  await user.click(within(dialog).getByRole("button", { name: "Buy" }));
   await user.click(
-    within(dialog).getByRole("radio", { name: "Quantity (base)" }),
+    within(dialog).getByRole("button", { name: "Quantity (base)" }),
   );
   await user.type(within(dialog).getByLabelText("Amount"), "10");
 }
@@ -548,10 +599,8 @@ async function enablePaperSending(
   user: ReturnType<typeof userEvent.setup>,
   dialog: HTMLElement,
 ) {
-  await user.click(
-    within(dialog).getByRole("checkbox", { name: "Send to venue" }),
-  );
-  await user.click(within(dialog).getByRole("radio", { name: "Paper" }));
+  await user.click(within(dialog).getByRole("tab", { name: "Send to venue" }));
+  await user.click(within(dialog).getByRole("button", { name: "Paper" }));
 }
 
 async function chooseTimeInForce(
@@ -726,18 +775,18 @@ describe("Orders status filter", () => {
 });
 
 describe("Orders side & amount-kind toggles", () => {
-  it("renders side as buy/sell radio buttons without a default selection", async () => {
+  it("renders side as buy/sell segmented buttons without a default selection", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
     const dialog = await openDialog(user);
 
-    const sideGroup = within(dialog).getByRole("radiogroup", { name: "Side" });
+    const sideGroup = within(dialog).getByRole("group", { name: "Side" });
     expect(
-      within(sideGroup).getByRole("radio", { name: "Buy" }),
-    ).toHaveAttribute("aria-checked", "false");
+      within(sideGroup).getByRole("button", { name: "Buy" }),
+    ).toHaveAttribute("aria-pressed", "false");
     expect(
-      within(sideGroup).getByRole("radio", { name: "Sell" }),
-    ).toHaveAttribute("aria-checked", "false");
+      within(sideGroup).getByRole("button", { name: "Sell" }),
+    ).toHaveAttribute("aria-pressed", "false");
   });
 
   it("does not pre-select an amount kind", async () => {
@@ -745,11 +794,11 @@ describe("Orders side & amount-kind toggles", () => {
     renderOrders("/orders");
     const dialog = await openDialog(user);
 
-    const kindGroup = within(dialog).getByRole("radiogroup", {
+    const kindGroup = within(dialog).getByRole("group", {
       name: "Amount kind",
     });
-    for (const radio of within(kindGroup).getAllByRole("radio")) {
-      expect(radio).toHaveAttribute("aria-checked", "false");
+    for (const button of within(kindGroup).getAllByRole("button")) {
+      expect(button).toHaveAttribute("aria-pressed", "false");
     }
   });
 
@@ -760,19 +809,19 @@ describe("Orders side & amount-kind toggles", () => {
 
     expect(within(dialog).getByLabelText("Account")).toHaveValue("desk-alpha");
 
-    const sideGroup = within(dialog).getByRole("radiogroup", { name: "Side" });
+    const sideGroup = within(dialog).getByRole("group", { name: "Side" });
     expect(
-      within(sideGroup).getByRole("radio", { name: "Buy" }),
-    ).toHaveAttribute("aria-checked", "false");
+      within(sideGroup).getByRole("button", { name: "Buy" }),
+    ).toHaveAttribute("aria-pressed", "false");
     expect(
-      within(sideGroup).getByRole("radio", { name: "Sell" }),
-    ).toHaveAttribute("aria-checked", "false");
+      within(sideGroup).getByRole("button", { name: "Sell" }),
+    ).toHaveAttribute("aria-pressed", "false");
 
-    const kindGroup = within(dialog).getByRole("radiogroup", {
+    const kindGroup = within(dialog).getByRole("group", {
       name: "Amount kind",
     });
-    for (const radio of within(kindGroup).getAllByRole("radio")) {
-      expect(radio).toHaveAttribute("aria-checked", "false");
+    for (const button of within(kindGroup).getAllByRole("button")) {
+      expect(button).toHaveAttribute("aria-pressed", "false");
     }
   });
 
@@ -804,20 +853,240 @@ describe("Orders side & amount-kind toggles", () => {
 });
 
 describe("Orders submit mode", () => {
-  it("does not pre-select a submit mode", async () => {
+  it.each([
+    ["immediate", "Submit and settle"],
+    ["drop_copy", "Drop copy"],
+    ["hold", "Submit and wait"],
+    ["venue", "Send to venue"],
+  ])(
+    "restores %s and focuses Account on the first open",
+    async (value, label) => {
+      const user = userEvent.setup();
+      setStoredPreference("pit-officer-orders-submit-tab", value);
+      renderOrders("/orders");
+      const dialog = await openDialog(user, false);
+
+      expect(within(dialog).getByRole("tab", { name: label })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(within(dialog).getByLabelText("Account")).toHaveFocus();
+    },
+  );
+
+  it("treats an unknown stored submit tab as no selection", async () => {
+    const user = userEvent.setup();
+    setStoredPreference("pit-officer-orders-submit-tab", "unknown");
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+
+    expect(
+      within(dialog).queryByRole("tab", { selected: true }),
+    ).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("tabpanel")).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Select a submit mode."),
+    ).toBeInTheDocument();
+  });
+
+  it("persists an Officer tab across close, reopen, and a successful send", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    let dialog = await openDialog(user, false);
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Submit and wait" }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    dialog = await openDialog(user, false);
+    expect(
+      within(dialog).getByRole("tab", { name: "Submit and wait" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(within(dialog).getByLabelText("Account")).toHaveFocus();
+    await fillOrderFields(user, dialog);
+    await user.click(within(dialog).getByRole("button", { name: "Add Order" }));
+    await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(1));
+    const detail = await screen.findByRole("dialog", {
+      name: `Order ${sampleOrder.id}`,
+    });
+    await within(detail).findByText("Account");
+    await user.click(
+      within(detail).getAllByRole("button", { name: "Close" })[0],
+    );
+    dialog = await openDialog(user, false);
+    expect(
+      within(dialog).getByRole("tab", { name: "Submit and wait" }),
+    ).toHaveAttribute("aria-selected", "true");
+  });
+
+  it.each([
+    [
+      "Submit and settle",
+      "Run pre-trade, reserve, and settle at the lock price now.",
+    ],
+    [
+      "Submit and wait",
+      "Run pre-trade, record the lock, and wait for execution reports.",
+    ],
+  ])("shows the own fields and help for %s", async (label, help) => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+    await user.click(within(dialog).getByRole("tab", { name: label }));
+    const content = within(dialog).getByRole("tabpanel", { name: label });
+    expect(within(content).getByText(help)).toBeInTheDocument();
+    expect(
+      within(content).getByRole("link", { name: "OpenAPI" }),
+    ).toHaveAttribute("href", "/docs");
+    expect(
+      within(content).queryByRole("group", { name: "Mode" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(content).getByLabelText("Limit price (optional)"),
+    ).toBeInTheDocument();
+    await fillOrderFields(user, dialog);
+    expect(
+      await within(content).findByText("Preview: would pass"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the own drop-copy fields without a live check preview", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
     const dialog = await openDialog(user);
-
-    const modeGroup = within(dialog).getByRole("radiogroup", {
-      name: "Submit mode",
+    await fillOrderFields(user, dialog);
+    await within(dialog).findByText("Preview: would pass");
+    await user.click(within(dialog).getByRole("tab", { name: "Drop copy" }));
+    checkOrderMock.mockClear();
+    const content = within(dialog).getByRole("tabpanel", { name: "Drop copy" });
+    expect(
+      within(content).getByText(
+        "Run every policy but enforce no rejects or account and group blocks. A positive limit price is required.",
+      ),
+    ).toBeInTheDocument();
+    const price = within(content).getByLabelText(
+      "Limit price (required for drop-copy)",
+    );
+    expect(price).toHaveAttribute("placeholder", "required");
+    expect(
+      within(content).getByText(
+        "Market orders cannot be submitted as drop-copy.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(content).getByLabelText("Account")).toHaveValue("desk-alpha");
+    await user.type(price, "100");
+    await act(async () => {
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, DEFAULT_SEARCH_DEBOUNCE_MS + 50),
+      );
     });
-    for (const radio of within(modeGroup).getAllByRole("radio")) {
-      expect(radio).toHaveAttribute("aria-checked", "false");
-    }
+    expect(checkOrderMock).not.toHaveBeenCalled();
+    expect(
+      within(content).queryByText("Preview: would pass"),
+    ).not.toBeInTheDocument();
   });
 
-  it("keeps submit disabled until side, amount kind, and submit mode are chosen", async () => {
+  it("moves keyboard focus without selecting a tab until Enter or Space", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+    const first = within(dialog).getByRole("tab", {
+      name: "Submit and settle",
+    });
+    expect(first).toHaveFocus();
+    expect(first).toHaveAttribute("aria-selected", "false");
+    await user.keyboard("{ArrowRight}");
+    const dropCopy = within(dialog).getByRole("tab", { name: "Drop copy" });
+    await waitFor(() => expect(dropCopy).toHaveFocus());
+    expect(dropCopy).toHaveAttribute("aria-selected", "false");
+    expect(within(dialog).queryByLabelText("Account")).not.toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(dropCopy).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{ArrowRight}");
+    const hold = within(dialog).getByRole("tab", { name: "Submit and wait" });
+    await waitFor(() => expect(hold).toHaveFocus());
+    expect(hold).toHaveAttribute("aria-selected", "false");
+    expect(dropCopy).toHaveAttribute("aria-selected", "true");
+    await user.keyboard(" ");
+    expect(hold).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("does not pre-select a submit tab or mount fields", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+    const tabs = within(dialog).getAllByRole("tab");
+    expect(tabs).toHaveLength(4);
+    for (const tab of tabs) {
+      expect(tab).toHaveAttribute("aria-selected", "false");
+    }
+    expect(within(dialog).queryByRole("tabpanel")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Account")).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Select a submit mode."),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Add Order" }),
+    ).toBeDisabled();
+  });
+
+  it("keeps a fully seeded clone disabled and skips checks until a submit tab is chosen", async () => {
+    const user = userEvent.setup();
+    const detail = await openSampleOrderDetail(user, {
+      order: { ...sampleOrder, price: "123" },
+      events: [],
+      trades: [],
+    });
+    await user.click(
+      await within(detail).findByRole("button", {
+        name: `Clone order ${sampleOrder.id}`,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add order" });
+
+    for (const tab of within(dialog).getAllByRole("tab")) {
+      expect(tab).toHaveAttribute("aria-selected", "false");
+    }
+    expect(within(dialog).queryByRole("tabpanel")).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Select a submit mode."),
+    ).toBeInTheDocument();
+    const submitButton = within(dialog).getByRole("button", {
+      name: "Add Order",
+    });
+    expect(submitButton).toBeDisabled();
+    await act(async () => {
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, DEFAULT_SEARCH_DEBOUNCE_MS + 50),
+      );
+    });
+    expect(checkOrderMock).not.toHaveBeenCalled();
+
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Submit and settle" }),
+    );
+    expect(submitButton).toBeEnabled();
+    expect(
+      within(dialog).queryByText("Select a submit mode."),
+    ).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Account")).toHaveValue("desk-alpha");
+    expect(within(dialog).getByLabelText("Base asset")).toHaveValue("AAPL");
+    expect(within(dialog).getByLabelText("Quote asset")).toHaveValue("USD");
+    expect(within(dialog).getByLabelText("Amount")).toHaveValue("100");
+    expect(within(dialog).getByLabelText("Limit price (optional)")).toHaveValue(
+      "123",
+    );
+    expect(within(dialog).getByRole("button", { name: "Buy" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Quantity (base)" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await within(dialog).findByText("Preview: would pass");
+    expect(checkOrderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps submit disabled until side and amount kind are chosen on the active tab", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
     const dialog = await openDialog(user);
@@ -835,30 +1104,21 @@ describe("Orders submit mode", () => {
       name: /add order/i,
     });
 
-    // Text fields filled, but no required choices have been made yet.
+    // Text fields filled on the active tab, but side and amount kind are missing.
     expect(submitButton).toBeDisabled();
 
-    const sideGroup = within(dialog).getByRole("radiogroup", { name: "Side" });
-    await user.click(within(sideGroup).getByRole("radio", { name: /buy/i }));
-    // Side chosen, amount kind and mode still missing.
+    const sideGroup = within(dialog).getByRole("group", { name: "Side" });
+    await user.click(within(sideGroup).getByRole("button", { name: /buy/i }));
+    // Side chosen, amount kind still missing.
     expect(submitButton).toBeDisabled();
 
-    const kindGroup = within(dialog).getByRole("radiogroup", {
+    const kindGroup = within(dialog).getByRole("group", {
       name: "Amount kind",
     });
     await user.click(
-      within(kindGroup).getByRole("radio", { name: /quantity/i }),
+      within(kindGroup).getByRole("button", { name: /quantity/i }),
     );
-    // Amount kind chosen, mode still missing.
-    expect(submitButton).toBeDisabled();
-
-    const modeGroup = within(dialog).getByRole("radiogroup", {
-      name: "Submit mode",
-    });
-    await user.click(
-      within(modeGroup).getByRole("radio", { name: /submit and settle/i }),
-    );
-    // Everything chosen - submission is unblocked.
+    // Amount kind chosen on the active tab.
     expect(submitButton).toBeEnabled();
 
     await user.click(submitButton);
@@ -890,10 +1150,10 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "1000");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /volume/i }));
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /volume/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+      within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
 
     expect(
@@ -901,9 +1161,7 @@ describe("Orders submit mode", () => {
     ).toBeEnabled();
     expect(createOrderMock).not.toHaveBeenCalled();
 
-    await user.click(
-      within(dialog).getByRole("radio", { name: /^drop copy/i }),
-    );
+    await user.click(within(dialog).getByRole("tab", { name: /^drop copy/i }));
     await user.type(
       within(dialog).getByLabelText("Limit price (required for drop-copy)"),
       "10",
@@ -930,22 +1188,20 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
-    await user.click(
-      within(dialog).getByRole("radio", { name: /^drop copy/i }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("tab", { name: /^drop copy/i }));
 
-    const modeGroup = within(dialog).getByRole("radiogroup", {
+    const modeGroup = within(dialog).getByRole("tablist", {
       name: "Submit mode",
     });
-    expect(within(modeGroup).getAllByRole("radio")).toHaveLength(3);
+    expect(within(modeGroup).getAllByRole("tab")).toHaveLength(4);
     expect(
-      within(modeGroup).getByRole("radio", { name: /^drop copy/i }),
-    ).toHaveAttribute("aria-checked", "true");
+      within(modeGroup).getByRole("tab", { name: /^drop copy/i }),
+    ).toHaveAttribute("aria-selected", "true");
     expect(
-      within(modeGroup).getByRole("radio", { name: /submit and wait/i }),
-    ).toHaveAttribute("aria-checked", "false");
+      within(modeGroup).getByRole("tab", { name: /submit and wait/i }),
+    ).toHaveAttribute("aria-selected", "false");
     expect(within(dialog).getByLabelText("ID (optional)")).toHaveAttribute(
       "placeholder",
       "server generated when blank",
@@ -1028,10 +1284,10 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+      within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
     await user.click(
       within(dialog).getByRole("button", { name: /add order/i }),
@@ -1070,11 +1326,9 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
-    await user.click(
-      within(dialog).getByRole("radio", { name: /^drop copy/i }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("tab", { name: /^drop copy/i }));
     await user.type(
       within(dialog).getByLabelText("Limit price (required for drop-copy)"),
       "10",
@@ -1101,10 +1355,10 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100x");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+      within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
 
     expect(within(dialog).getByLabelText("Amount")).toHaveValue("100x");
@@ -1123,10 +1377,10 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "0");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+      within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
 
     const submit = within(dialog).getByRole("button", { name: /add order/i });
@@ -1163,10 +1417,10 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+      within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
     await user.click(
       within(dialog).getByRole("button", { name: /add order/i }),
@@ -1196,10 +1450,10 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+      within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
     await user.click(
       within(dialog).getByRole("button", { name: /add order/i }),
@@ -1216,10 +1470,10 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+      within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
 
     expect(
@@ -1256,10 +1510,10 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /submit and wait/i }),
+      within(dialog).getByRole("tab", { name: /submit and wait/i }),
     );
     await user.click(
       within(dialog).getByRole("button", { name: /add order/i }),
@@ -1608,11 +1862,9 @@ describe("Orders drop-copy submission id", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
-    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
-    await user.click(
-      within(dialog).getByRole("radio", { name: /^drop copy/i }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("tab", { name: /^drop copy/i }));
     await user.type(
       within(dialog).getByLabelText("Limit price (required for drop-copy)"),
       "10",
@@ -1696,7 +1948,7 @@ describe("Orders row filters", () => {
     );
     renderOrders("/orders?tab=trades");
 
-    await user.click(screen.getByRole("button", { name: /^trades$/i }));
+    await user.click(screen.getByRole("tab", { name: /^trades$/i }));
     const link = screen.getByRole("link", { name: "ord-alpha-1" });
     expect(link).toHaveAttribute(
       "href",
@@ -1950,7 +2202,7 @@ describe("Orders business CSV export", () => {
     const user = userEvent.setup();
     renderOrders("/orders?account=desk-alpha&source=api");
 
-    await user.click(screen.getByRole("button", { name: /^trades$/i }));
+    await user.click(screen.getByRole("tab", { name: /^trades$/i }));
     await user.click(
       screen.getByRole("button", { name: /export trades csv/i }),
     );
@@ -2881,7 +3133,7 @@ describe("Orders filter, debounce, sort and pagination", () => {
     const user = userEvent.setup();
     fetchAssetsMock.mockResolvedValueOnce([{ code: "AAPL" }]);
     renderOrders("/orders?tab=trades");
-    await user.click(screen.getByRole("button", { name: /^trades$/i }));
+    await user.click(screen.getByRole("tab", { name: /^trades$/i }));
 
     await user.type(screen.getByPlaceholderText("Base"), "AA");
     await user.click(await screen.findByRole("option", { name: "AAPL" }));
@@ -3000,6 +3252,54 @@ describe("Orders verify envelope toolbar", () => {
 });
 
 describe("Orders venue sending", () => {
+  it("shows the own venue fields and mode-specific submit button", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Send to venue" }),
+    );
+    const content = within(dialog).getByRole("tabpanel", {
+      name: "Send to venue",
+    });
+    expect(
+      within(content).getByRole("group", { name: "Mode" }),
+    ).toBeInTheDocument();
+    expect(
+      within(content).getByRole("button", { name: "Volume (quote)" }),
+    ).toBeDisabled();
+    expect(
+      within(content).getByText("Orders are sent to the venue by quantity."),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Submit order" }),
+    ).toBeDisabled();
+    await fillOrderFields(user, dialog);
+    await user.click(within(content).getByRole("button", { name: "Paper" }));
+    expect(
+      await within(content).findByRole("combobox", { name: "Target" }),
+    ).toHaveTextContent(/Primary Alpaca.*Alpaca.*PA-1/);
+    expect(
+      within(content).getByRole("combobox", { name: "Time in force" }),
+    ).toHaveTextContent("Choose time in force");
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+    expect(
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+    ).toBeEnabled();
+    expect(
+      await within(content).findByText("Preview: would pass"),
+    ).toBeInTheDocument();
+    await user.click(within(content).getByRole("button", { name: "Live" }));
+    const live = within(dialog).getByRole("button", {
+      name: "Submit LIVE order",
+    });
+    expect(live).toHaveClass("bg-[var(--danger)]");
+    expect(live).toBeDisabled();
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+    expect(live).toBeDisabled();
+  });
+
   it("keeps the existing submit request unchanged while sending is off", async () => {
     const user = userEvent.setup();
     createOrderMock.mockRejectedValue(
@@ -3009,7 +3309,7 @@ describe("Orders venue sending", () => {
     const dialog = await openDialog(user);
     await fillOrderFields(user, dialog);
     await user.click(
-      within(dialog).getByRole("radio", { name: /Submit and wait/ }),
+      within(dialog).getByRole("tab", { name: /Submit and wait/ }),
     );
 
     await user.click(within(dialog).getByRole("button", { name: "Add Order" }));
@@ -3041,34 +3341,33 @@ describe("Orders venue sending", () => {
     const dialog = await openDialog(user);
 
     await user.click(
-      within(dialog).getByRole("checkbox", { name: "Send to venue" }),
+      within(dialog).getByRole("tab", { name: "Send to venue" }),
     );
 
     expect(
-      within(dialog).getByRole("radio", { name: "Paper" }),
-    ).toHaveAttribute("aria-checked", "false");
-    expect(within(dialog).getByRole("radio", { name: "Live" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+      within(dialog).getByRole("button", { name: "Paper" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      within(dialog).getByRole("button", { name: "Live" }),
+    ).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("persists sending and mode across close, reopen, and a successful send", async () => {
+  it("persists the venue tab and mode across close, reopen, and a successful send", async () => {
     const user = userEvent.setup();
     fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
     renderOrders("/orders");
-    let dialog = await openDialog(user);
+    let dialog = await openDialog(user, false);
 
     await enablePaperSending(user, dialog);
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    dialog = await openDialog(user);
+    dialog = await openDialog(user, false);
 
     expect(
-      within(dialog).getByRole("checkbox", { name: "Send to venue" }),
-    ).toBeChecked();
+      within(dialog).getByRole("tab", { name: "Send to venue" }),
+    ).toHaveAttribute("aria-selected", "true");
     expect(
-      within(dialog).getByRole("radio", { name: "Paper" }),
-    ).toHaveAttribute("aria-checked", "true");
+      within(dialog).getByRole("button", { name: "Paper" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
     await fillOrderFields(user, dialog);
     await waitFor(() =>
@@ -3078,13 +3377,13 @@ describe("Orders venue sending", () => {
         expect.any(AbortSignal),
       ),
     );
-    await within(dialog).findByRole("radio", {
-      name: /Primary Alpaca.*Alpaca.*PA-1/,
+    await within(dialog).findByRole("combobox", {
+      name: "Target",
     });
     await chooseTimeInForce(user, dialog, "DAY - Day");
     await user.click(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     );
 
@@ -3095,13 +3394,13 @@ describe("Orders venue sending", () => {
     await user.click(
       within(detail).getAllByRole("button", { name: "Close" })[0],
     );
-    dialog = await openDialog(user);
+    dialog = await openDialog(user, false);
     expect(
-      within(dialog).getByRole("checkbox", { name: "Send to venue" }),
-    ).toBeChecked();
+      within(dialog).getByRole("tab", { name: "Send to venue" }),
+    ).toHaveAttribute("aria-selected", "true");
     expect(
-      within(dialog).getByRole("radio", { name: "Paper" }),
-    ).toHaveAttribute("aria-checked", "true");
+      within(dialog).getByRole("button", { name: "Paper" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   it("starts a cloned order with no inherited target or TIF", async () => {
@@ -3122,7 +3421,7 @@ describe("Orders venue sending", () => {
     await chooseTimeInForce(user, dialog, "GTC - Good till cancelled");
     await user.click(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     );
 
@@ -3146,7 +3445,7 @@ describe("Orders venue sending", () => {
       within(clone).queryByRole("combobox", { name: "Time in force" }),
     ).not.toBeInTheDocument();
     expect(
-      within(clone).getByRole("button", { name: "Send to venue" }),
+      within(clone).getByRole("button", { name: "Submit PAPER order" }),
     ).toBeDisabled();
 
     await waitFor(() =>
@@ -3158,16 +3457,16 @@ describe("Orders venue sending", () => {
     });
 
     expect(
-      await within(clone).findByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      await within(clone).findByRole("combobox", {
+        name: "Target",
       }),
-    ).toHaveAttribute("aria-checked", "true");
+    ).toHaveTextContent(/Primary Alpaca.*Alpaca.*PA-1/);
     expect(
       within(clone).getByRole("combobox", { name: "Time in force" }),
     ).toHaveTextContent("Choose time in force");
     expect(
       within(clone).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     ).toBeDisabled();
   });
@@ -3188,10 +3487,10 @@ describe("Orders venue sending", () => {
       ),
     );
     expect(
-      await within(dialog).findByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      await within(dialog).findByRole("combobox", {
+        name: "Target",
       }),
-    ).toHaveAttribute("aria-checked", "true");
+    ).toHaveTextContent(/Primary Alpaca.*Alpaca.*PA-1/);
     const timeInForce = within(dialog).getByRole("combobox", {
       name: "Time in force",
     });
@@ -3199,14 +3498,14 @@ describe("Orders venue sending", () => {
     expect(timeInForce).toBeRequired();
     expect(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     ).toBeDisabled();
 
     await chooseTimeInForce(user, dialog, "DAY - Day");
     expect(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     ).toBeEnabled();
   });
@@ -3220,15 +3519,15 @@ describe("Orders venue sending", () => {
     await enablePaperSending(user, dialog);
 
     expect(
-      await within(dialog).findByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      await within(dialog).findByRole("combobox", {
+        name: "Target",
       }),
     ).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("radio", { name: "Paper" }));
+    await user.click(within(dialog).getByRole("button", { name: "Paper" }));
 
     expect(
-      within(dialog).getByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      within(dialog).getByRole("combobox", {
+        name: "Target",
       }),
     ).toBeInTheDocument();
     expect(fetchTradingDestinationsMock).toHaveBeenCalledTimes(1);
@@ -3244,8 +3543,8 @@ describe("Orders venue sending", () => {
     await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
     await enablePaperSending(user, dialog);
     expect(
-      await within(dialog).findByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      await within(dialog).findByRole("combobox", {
+        name: "Target",
       }),
     ).toBeInTheDocument();
 
@@ -3255,8 +3554,8 @@ describe("Orders venue sending", () => {
     );
 
     expect(
-      within(dialog).getByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      within(dialog).getByRole("combobox", {
+        name: "Target",
       }),
     ).toBeInTheDocument();
     expect(fetchTradingDestinationsMock).toHaveBeenCalledTimes(1);
@@ -3264,23 +3563,23 @@ describe("Orders venue sending", () => {
 
   it("refetches targets on reopen with a pre-filled account and stored preferences", async () => {
     const user = userEvent.setup();
-    setStoredPreference("pit-officer-orders-send-to-venue", "true");
+    setStoredPreference("pit-officer-orders-submit-tab", "venue");
     setStoredPreference("pit-officer-orders-venue-mode", "paper");
     fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
     renderOrders("/orders?account=desk-alpha");
 
     let dialog = await openDialog(user);
     expect(
-      await within(dialog).findByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      await within(dialog).findByRole("combobox", {
+        name: "Target",
       }),
     ).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     dialog = await openDialog(user);
     expect(
-      await within(dialog).findByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      await within(dialog).findByRole("combobox", {
+        name: "Target",
       }),
     ).toBeInTheDocument();
     expect(fetchTradingDestinationsMock).toHaveBeenCalledTimes(2);
@@ -3320,14 +3619,16 @@ describe("Orders venue sending", () => {
     });
 
     expect(
-      within(dialog).queryByRole("radio", {
-        name: /Primary Alpaca.*Alpaca.*PA-1/,
+      within(dialog).queryByRole("combobox", {
+        name: "Target",
       }),
     ).not.toBeInTheDocument();
     expect(
       within(dialog).queryByRole("combobox", { name: "Time in force" }),
     ).not.toBeInTheDocument();
-    const send = within(dialog).getByRole("button", { name: "Send to venue" });
+    const send = within(dialog).getByRole("button", {
+      name: "Submit PAPER order",
+    });
     expect(send).toBeDisabled();
     await user.click(send);
     expect(sendPaperOrderMock).not.toHaveBeenCalled();
@@ -3355,16 +3656,16 @@ describe("Orders venue sending", () => {
     });
 
     expect(
-      await within(dialog).findByRole("radio", {
-        name: /Beta Alpaca.*Alpaca.*PB-1/,
+      await within(dialog).findByRole("combobox", {
+        name: "Target",
       }),
-    ).toHaveAttribute("aria-checked", "true");
+    ).toHaveTextContent(/Beta Alpaca.*Alpaca.*PB-1/);
     expect(
       within(dialog).getByRole("combobox", { name: "Time in force" }),
     ).toHaveTextContent("Choose time in force");
     expect(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     ).toBeDisabled();
   });
@@ -3385,23 +3686,37 @@ describe("Orders venue sending", () => {
     await fillOrderFields(user, dialog);
     await enablePaperSending(user, dialog);
 
-    const primary = await within(dialog).findByRole("radio", {
-      name: /Primary Alpaca.*PA-1/,
+    const target = await within(dialog).findByRole("combobox", {
+      name: "Target",
     });
-    const secondary = within(dialog).getByRole("radio", {
-      name: /Secondary Alpaca.*PA-2/,
-    });
-    expect(primary).toHaveAttribute("aria-checked", "false");
-    expect(secondary).toHaveAttribute("aria-checked", "false");
+    expect(target).toHaveTextContent("Choose a target");
     expect(
-      within(dialog).getByRole("button", { name: "Send to venue" }),
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
     ).toBeDisabled();
 
-    await user.click(secondary);
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    try {
+      await user.click(target);
+      const targets = await screen.findByRole("listbox");
+      const primary = within(targets).getByRole("option", {
+        name: /Primary Alpaca.*PA-1/,
+      });
+      const secondary = within(targets).getByRole("option", {
+        name: /Secondary Alpaca.*PA-2/,
+      });
+      expect(primary).toHaveAttribute("data-state", "unchecked");
+      expect(secondary).toHaveAttribute("data-state", "unchecked");
+      await user.click(secondary);
+    } finally {
+      focusSpy.mockRestore();
+    }
+    expect(target).toHaveTextContent(/Secondary Alpaca.*PA-2/);
     await chooseTimeInForce(user, dialog, "GTC - Good till cancelled");
     expect(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     ).toBeEnabled();
   });
@@ -3424,18 +3739,32 @@ describe("Orders venue sending", () => {
     await enablePaperSending(user, dialog);
 
     expect(
-      await within(dialog).findByRole("radio", {
-        name: /Disabled Alpaca.*Disabled/,
-      }),
-    ).toBeDisabled();
-    expect(
-      within(dialog).getByRole("radio", {
-        name: /Unavailable Alpaca.*Unavailable: Invalid API key/,
-      }),
-    ).toBeDisabled();
-    expect(
-      within(dialog).getByText("No paper targets for account desk-alpha."),
+      await within(dialog).findByText(
+        "No paper targets for account desk-alpha.",
+      ),
     ).toBeInTheDocument();
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    try {
+      await user.click(
+        within(dialog).getByRole("combobox", { name: "Target" }),
+      );
+      const targets = await screen.findByRole("listbox");
+      expect(
+        within(targets).getByRole("option", {
+          name: /Disabled Alpaca.*Disabled/,
+        }),
+      ).toHaveAttribute("data-disabled");
+      expect(
+        within(targets).getByRole("option", {
+          name: /Unavailable Alpaca.*Unavailable: Invalid API key/,
+        }),
+      ).toHaveAttribute("data-disabled");
+      await user.keyboard("{Escape}");
+    } finally {
+      focusSpy.mockRestore();
+    }
   });
 
   it("explains missing paper and live targets and links to setup", async () => {
@@ -3457,7 +3786,7 @@ describe("Orders venue sending", () => {
       }),
     ).toHaveAttribute("href", "/trading-connections");
 
-    await user.click(within(dialog).getByRole("radio", { name: "Live" }));
+    await user.click(within(dialog).getByRole("button", { name: "Live" }));
     expect(
       within(dialog).getByText(
         "Live trading is not available yet: it arrives together with the live connection token.",
@@ -3492,28 +3821,29 @@ describe("Orders venue sending", () => {
     const user = userEvent.setup();
     renderOrders("/orders");
     const dialog = await openDialog(user);
-    const volume = within(dialog).getByRole("radio", {
+    let volume = within(dialog).getByRole("button", {
       name: "Volume (quote)",
     });
-    const quantity = within(dialog).getByRole("radio", {
-      name: "Quantity (base)",
-    });
     await user.click(volume);
-    expect(volume).toHaveAttribute("aria-checked", "true");
+    expect(volume).toHaveAttribute("aria-pressed", "true");
 
     await user.click(
-      within(dialog).getByRole("checkbox", { name: "Send to venue" }),
+      within(dialog).getByRole("tab", { name: "Send to venue" }),
     );
 
+    volume = within(dialog).getByRole("button", { name: "Volume (quote)" });
+    const quantity = within(dialog).getByRole("button", {
+      name: "Quantity (base)",
+    });
     expect(volume).toBeDisabled();
-    expect(volume).toHaveAttribute("aria-checked", "false");
-    expect(quantity).toHaveAttribute("aria-checked", "false");
+    expect(volume).toHaveAttribute("aria-pressed", "false");
+    expect(quantity).toHaveAttribute("aria-pressed", "false");
     expect(
       within(dialog).getByText("Orders are sent to the venue by quantity."),
     ).toBeInTheDocument();
     expect(
-      within(dialog).queryByRole("radiogroup", { name: "Submit mode" }),
-    ).not.toBeInTheDocument();
+      within(dialog).getByRole("tab", { name: "Send to venue" }),
+    ).toHaveAttribute("aria-selected", "true");
   });
 
   it("ignores the hidden drop-copy price rules while sending to a venue", async () => {
@@ -3522,14 +3852,14 @@ describe("Orders venue sending", () => {
     renderOrders("/orders");
     const dialog = await openDialog(user);
     await fillOrderFields(user, dialog);
-    await user.click(within(dialog).getByRole("radio", { name: /Drop copy/ }));
+    await user.click(within(dialog).getByRole("tab", { name: /Drop copy/ }));
     expect(
       within(dialog).getByLabelText("Limit price (required for drop-copy)"),
     ).toBeInTheDocument();
 
     await enablePaperSending(user, dialog);
-    await within(dialog).findByRole("radio", {
-      name: /Primary Alpaca.*Alpaca.*PA-1/,
+    await within(dialog).findByRole("combobox", {
+      name: "Target",
     });
     await chooseTimeInForce(user, dialog, "DAY - Day");
 
@@ -3543,7 +3873,7 @@ describe("Orders venue sending", () => {
     ).not.toBeInTheDocument();
     expect(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     ).toBeEnabled();
   });
@@ -3567,7 +3897,7 @@ describe("Orders venue sending", () => {
 
     await user.click(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     );
 
@@ -3659,7 +3989,7 @@ describe("Orders venue sending", () => {
 
       await user.click(
         within(dialog).getByRole("button", {
-          name: "Send to Alpaca · paper",
+          name: "Submit PAPER order",
         }),
       );
 
@@ -3690,7 +4020,7 @@ describe("Orders venue sending", () => {
 
     await user.click(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     );
 
@@ -3715,7 +4045,7 @@ describe("Orders venue sending", () => {
 
       await user.click(
         within(dialog).getByRole("button", {
-          name: "Send to Alpaca · paper",
+          name: "Submit PAPER order",
         }),
       );
 
@@ -3770,7 +4100,7 @@ describe("Orders venue sending", () => {
 
     await user.click(
       within(dialog).getByRole("button", {
-        name: "Send to Alpaca · paper",
+        name: "Submit PAPER order",
       }),
     );
 
@@ -4084,13 +4414,19 @@ describe("Order detail venue section", () => {
       new Error("Verification fixture intentionally unavailable"),
     );
     let poll: (() => void) | undefined;
+    const originalSetInterval = window.setInterval.bind(window);
     const setIntervalSpy = vi
       .spyOn(window, "setInterval")
-      .mockImplementationOnce((handler) => {
-        if (typeof handler === "function") {
+      .mockImplementation((handler, delay, ...args) => {
+        if (delay === 5000 && typeof handler === "function") {
           poll = () => handler();
+          return 1 as unknown as ReturnType<typeof setInterval>;
         }
-        return 1 as unknown as ReturnType<typeof setInterval>;
+        return originalSetInterval(
+          handler,
+          delay,
+          ...args,
+        ) as unknown as ReturnType<typeof setInterval>;
       });
     const clearIntervalSpy = vi.spyOn(window, "clearInterval");
 

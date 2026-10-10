@@ -39,6 +39,65 @@ import {
   type SortDirection,
 } from "@/components/data";
 
+describe("Segmented", () => {
+  const options = [
+    { value: "buy", label: "Buy" },
+    { value: "sell", label: "Sell" },
+  ];
+
+  it("disables an individual option", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <Segmented
+        options={[options[0], { ...options[1], disabled: true }]}
+        onChange={onChange}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Sell" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Buy" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Sell" }));
+    expect(onChange).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Buy" }));
+    expect(onChange).toHaveBeenCalledWith("buy");
+  });
+
+  it("disables every option when the control is disabled", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(<Segmented options={options} disabled onChange={onChange} />);
+
+    for (const button of screen.getAllByRole("button")) {
+      expect(button).toBeDisabled();
+      await user.click(button);
+    }
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("provides a named group when ariaLabel is set", () => {
+    render(<Segmented options={options} ariaLabel="Side" />);
+
+    expect(screen.getByRole("group", { name: "Side" })).toBeInTheDocument();
+  });
+
+  it("does not add a group role without ariaLabel", () => {
+    render(<Segmented options={options} />);
+
+    expect(screen.queryByRole("group")).not.toBeInTheDocument();
+  });
+
+  it("leaves every option unpressed when the value matches none", () => {
+    render(<Segmented options={options} value="" />);
+
+    for (const button of screen.getAllByRole("button")) {
+      expect(button).toHaveAttribute("aria-pressed", "false");
+    }
+  });
+});
+
 function UrlFilterHarness() {
   const [params, setParams] = useSearchParams();
   const account = params.get("account") ?? "";
