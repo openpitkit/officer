@@ -139,6 +139,12 @@ def _get(base: str, path: str) -> dict[str, Any]:
     return data
 
 
+# Every write that names an account says what to do when the account is
+# unknown. The seed creates its accounts first, so an unknown one is a seed
+# defect and must fail rather than be created with default settings.
+_REJECT_MISSING_ACCOUNT = "?missingAccount=reject"
+
+
 # ---------------------------------------------------------------------------
 # Seed data
 # ---------------------------------------------------------------------------
@@ -897,7 +903,11 @@ def seed(base: str) -> None:
 
         # Group
         if acct.get("group"):
-            _put(base, f"/accounts/{url_id}/group", {"group": acct["group"]})
+            _put(
+                base,
+                f"/accounts/{url_id}/group{_REJECT_MISSING_ACCOUNT}",
+                {"group": acct["group"]},
+            )
 
         # Notes
         if acct.get("notes"):
@@ -910,7 +920,12 @@ def seed(base: str) -> None:
                 body["balance"] = adj["balance"]
             if "held" in adj:
                 body["held"] = adj["held"]
-            adj_resp = _post(base, f"/accounts/{url_id}/adjustments", body, conflict_ok=False)
+            adj_resp = _post(
+                base,
+                f"/accounts/{url_id}/adjustments{_REJECT_MISSING_ACCOUNT}",
+                body,
+                conflict_ok=False,
+            )
             adj_record = adj_resp.get("adjustment", {})
             status = adj_record.get("status", "?")
             print(f"    adjustment {adj['asset']}: {status}")
@@ -918,7 +933,12 @@ def seed(base: str) -> None:
         # Block (after balance so the block is the last state)
         if acct.get("blocked"):
             reason: str = acct.get("block_reason", "Demo block.")
-            _post(base, f"/accounts/{url_id}/block", {"reason": reason}, conflict_ok=False)
+            _post(
+                base,
+                f"/accounts/{url_id}/block{_REJECT_MISSING_ACCOUNT}",
+                {"reason": reason},
+                conflict_ok=False,
+            )
             print(f"    blocked: {reason}")
 
     # --- Limits ---------------------------------------------------------------
@@ -936,8 +956,14 @@ def seed(base: str) -> None:
             print(f"  [=] {label} already exists")
             continue
         resp_key = _LIMIT_RESP_KEYS[limit["kind"]]
+        # Only an account-scoped limit names an account.
+        query = _REJECT_MISSING_ACCOUNT if limit["account"] else ""
         try:
-            resp = _put(base, _LIMIT_ENDPOINTS[limit["kind"]], _limit_body(limit))
+            resp = _put(
+                base,
+                f"{_LIMIT_ENDPOINTS[limit['kind']]}{query}",
+                _limit_body(limit),
+            )
             if resp_key in resp:
                 print(f"  [+] {label}")
                 limits_created += 1
@@ -973,11 +999,18 @@ def seed(base: str) -> None:
             "side": order_def["side"],
             "amountKind": order_def["amountKind"],
             "amountValue": order_def["amountValue"],
+            # Held, so the fills below arrive as execution reports.
+            "mode": "hold",
         }
         if "price" in order_def:
             body["price"] = order_def["price"]
 
-        token = _post(base, "/orders/submit", body, conflict_ok=False)
+        token = _post(
+            base,
+            f"/orders/submit{_REJECT_MISSING_ACCOUNT}",
+            body,
+            conflict_ok=False,
+        )
         order_id = token.get("id")
         if not isinstance(order_id, str) or not order_id:
             msg = f"submit order {instrument} for '{acct_id}': {token}"
