@@ -24,7 +24,10 @@
 package engine
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,6 +250,53 @@ func TestMarketDataSink_SourceAgeExpiresOldQuoteImmediately(t *testing.T) {
 	}
 	if got := readMark(t, service, instrument); got != "102" {
 		t.Fatalf("fresh quote after stale mark = %q, want 102", got)
+	}
+}
+
+// Not parallel: it swaps the process-wide slog default to capture the warning.
+func TestMarketDataSink_WarnsOnlyBeyondFutureSkew(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	tests := []struct {
+		name     string
+		skew     time.Duration
+		wantWarn bool
+	}{
+		{name: "drift", skew: time.Second},
+		{name: "at threshold", skew: futureQuoteWarnSkew},
+		{name: "beyond threshold", skew: futureQuoteWarnSkew + time.Millisecond, wantWarn: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logs.Reset()
+			sink, service := newTestSink(t)
+			now := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+			sink.now = func() time.Time { return now }
+
+			if err := sink.Push(marketdata.QuoteUpdate{
+				AsOf: now.Add(test.skew),
+				Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100",
+			}); err != nil {
+				t.Fatalf("Push: %v", err)
+			}
+			instrument, err := instrumentFrom(
+				testMarketDataAssetID("AAPL"), testMarketDataAssetID("USD"), testResolver(),
+			)
+			if err != nil {
+				t.Fatalf("instrumentFrom: %v", err)
+			}
+			if got := readMark(t, service, instrument); got != "100" {
+				t.Fatalf("future quote mark = %q, want 100", got)
+			}
+			if got := strings.Contains(
+				logs.String(), "clamp future source quote timestamp",
+			); got != test.wantWarn {
+				t.Fatalf("warned = %t, want %t; logs: %s", got, test.wantWarn, logs.String())
+			}
+		})
 	}
 }
 

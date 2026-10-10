@@ -31,6 +31,11 @@ import (
 	"go.openpit.dev/officer/framework/marketdata"
 )
 
+// futureQuoteWarnSkew is how far a source AsOf may run ahead of the local clock
+// before Push warns. Smaller skew is ordinary clock drift: its source age is
+// still clamped to zero, only the warning is skipped.
+const futureQuoteWarnSkew = 15 * time.Second
+
 // instrumentKey identifies one instrument by its (base, quote) pair, the cache
 // key for the first-sight register.
 type instrumentKey struct {
@@ -83,7 +88,7 @@ func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
 		return err
 	}
 	now := s.now()
-	if update.AsOf.After(now) {
+	if update.AsOf.Sub(now) > futureQuoteWarnSkew {
 		slog.Warn(
 			"clamp future source quote timestamp",
 			"base", update.Base,
