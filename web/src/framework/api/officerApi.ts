@@ -325,7 +325,28 @@ function normalizeAccount(v: unknown): Account {
       pick(o, "pnlHaltReason", "PnlHaltReason", "pnl_halt_reason"),
     ),
     positionCount: asInt(pick(o, "positionCount", "PositionCount")),
+    ...listVenueAccess(o, "account"),
   };
+}
+
+/**
+ * The list-only venueAccess flag: absent outside list rows, and a present
+ * non-boolean is a contract violation rather than a missing flag.
+ */
+function listVenueAccess(
+  o: Record<string, unknown>,
+  entity: "account" | "group",
+): { venueAccess?: boolean } {
+  if (!("venueAccess" in o)) {
+    return {};
+  }
+  if (typeof o.venueAccess !== "boolean") {
+    throw new ApiError(
+      `Invalid ${entity} venueAccess in the API response`,
+      "internal",
+    );
+  }
+  return { venueAccess: o.venueAccess };
 }
 
 function normalizeGroup(v: unknown): Group {
@@ -343,6 +364,7 @@ function normalizeGroup(v: unknown): Group {
     ),
     accountCount: asInt(pick(o, "accountCount", "AccountCount")),
     positionCount: asInt(pick(o, "positionCount", "PositionCount")),
+    ...listVenueAccess(o, "group"),
   };
 }
 
@@ -2525,6 +2547,7 @@ function accountListQuery(filters?: AccountListFilters): string {
   if (filters.group !== undefined) {
     params.set("group", filters.group);
   }
+  appendListFilter(params, "venue", filters.venue);
   appendListFilter(params, "sort", filters.sort);
   appendListFilter(params, "order", filters.order);
   appendListFilter(params, "limit", filters.limit);
@@ -2559,6 +2582,7 @@ function groupListQuery(filters?: GroupListFilters): string {
     filters.blockReasonMatch,
     "contains",
   );
+  appendListFilter(params, "venue", filters.venue);
   appendListFilter(params, "sort", filters.sort);
   appendListFilter(params, "order", filters.order);
   appendListFilter(params, "limit", filters.limit);

@@ -90,6 +90,11 @@ export interface Account {
   pnl?: string;
   pnlHaltReason: string;
   positionCount?: number;
+  /**
+   * Access to at least one trading connection, the account's own or its
+   * group's, on GET /accounts list rows only.
+   */
+  venueAccess?: boolean;
 }
 
 /** Text pattern anchoring used by account/group list filters. */
@@ -147,6 +152,8 @@ export interface AccountListFilters extends PageRequest, SortSpec {
   blockReasonMatch?: TextMatchMode;
   /** Exact group selection (empty string = accounts with no group). */
   group?: string;
+  /** REST venue value: `any`, `none`, or `connection:<id>`. */
+  venue?: string;
 }
 
 // --- Assets ---
@@ -196,6 +203,11 @@ export interface Group {
   blockReason: string;
   accountCount?: number;
   positionCount?: number;
+  /**
+   * Access of the group itself to at least one trading connection, on
+   * GET /groups list rows only.
+   */
+  venueAccess?: boolean;
 }
 
 /** Filter options accepted by GET /groups. */
@@ -213,6 +225,8 @@ export interface GroupListFilters extends PageRequest, SortSpec {
   notesMatch?: TextMatchMode;
   blockReason?: string;
   blockReasonMatch?: TextMatchMode;
+  /** REST venue value: `any`, `none`, or `connection:<id>`. */
+  venue?: string;
 }
 
 // --- Limits / Policies ---

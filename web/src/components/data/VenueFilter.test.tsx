@@ -23,7 +23,9 @@ import {
   normalizeVenueFilterValue,
   VenueFilter,
   venueConnectionFilterValue,
+  venueConnectionLabel,
   venueFilterConnectionId,
+  venueFilterValueLabel,
 } from "@/components/data";
 
 const labels = {
@@ -174,4 +176,35 @@ describe("venue filter encoding", () => {
       expect(venueFilterConnectionId(value)).toBeUndefined();
     },
   );
+});
+
+describe("venue filter labels", () => {
+  const venueLabels = new Map([["desk:primary", "Alpaca · Paper · Primary"]]);
+  const options = {
+    labels: venueLabels,
+    anyLabel: "Any venue",
+    noneLabel: "No venue",
+  };
+
+  it.each([
+    ["any", "Any venue"],
+    ["none", "No venue"],
+    ["connection:desk:primary", "Alpaca · Paper · Primary"],
+    ["connection:deleted:desk", "deleted:desk"],
+    ["bogus", "bogus"],
+  ])("labels %s as %s", (value, label) => {
+    expect(venueFilterValueLabel(value, options)).toBe(label);
+  });
+
+  it("labels a connection by its raw ID without known labels", () => {
+    expect(venueConnectionLabel(undefined, "desk:primary")).toBe(
+      "desk:primary",
+    );
+    expect(
+      venueFilterValueLabel("connection:desk:primary", {
+        ...options,
+        labels: undefined,
+      }),
+    ).toBe("desk:primary");
+  });
 });

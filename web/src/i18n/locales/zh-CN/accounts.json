@@ -79,6 +79,7 @@
       "group": "分组",
       "accounts": "账户",
       "positions": "持仓",
+      "venueAccess": "交易场所",
       "currency": "货币",
       "status": "状态",
       "notes": "备注",
@@ -88,6 +89,7 @@
       "group": "此列显示账户组代码及其显示名称。",
       "accounts": "此列显示属于该分组的账户数量。",
       "positions": "此列显示属于该分组的持仓行数量。",
+      "venueAccess": "此列显示该分组本身是否拥有至少一个交易连接的访问权限；组内账户通过分组获得该访问权限。",
       "currency": "组内账户默认货币。",
       "status": "此列显示该分组处于活跃还是封锁状态。",
       "notes": "此列显示为该分组保存的操作员备注。",
@@ -103,7 +105,7 @@
       "notesLabel": "搜索分组备注",
       "notesPlaceholder": "搜索分组备注",
       "blockReasonPlaceholder": "搜索分组封锁原因",
-      "advancedDescription": "搜索分组备注、封锁原因和持仓数量。这些筛选会与代码、状态和账户数量一起生效。"
+      "advancedDescription": "按更多字段搜索分组。这些筛选会与代码、状态和账户数量一起生效。"
     },
     "actions": {
       "notes": "备注",
@@ -140,6 +142,7 @@
       "currency": "货币",
       "pnl": "PnL",
       "positions": "持仓",
+      "venueAccess": "交易场所",
       "status": "状态",
       "notes": "备注",
       "actions": "操作"
@@ -150,6 +153,7 @@
       "currency": "账户货币。",
       "pnl": "此列显示 Spot Funds 报告的账户精确盈亏。",
       "positions": "此列显示为该账户存储的持仓行数量。",
+      "venueAccess": "此列显示该账户是否拥有至少一个交易连接的访问权限，无论是自身权限还是通过其分组获得的权限。",
       "status": "此列显示该账户处于活跃还是封锁状态。",
       "notes": "此列显示为该账户保存的操作员备注。",
       "actions": "此列包含用于持仓、交易、策略、审计、交易连接访问权限和删除的行操作。"
@@ -166,7 +170,7 @@
       "notesLabel": "搜索账户备注",
       "notesPlaceholder": "搜索账户备注",
       "blockReasonPlaceholder": "搜索账户封锁原因",
-      "advancedDescription": "搜索账户封锁原因和持仓数量。这些筛选会与代码、状态和选中分组一起生效。"
+      "advancedDescription": "按更多字段搜索账户。这些筛选会与代码、状态和选中分组一起生效。"
     },
     "groupCell": {
       "editTitle": "编辑分组分配",

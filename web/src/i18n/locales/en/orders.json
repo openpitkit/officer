@@ -1,5 +1,4 @@
 {
-  "unknownVenue": "Unknown venue {{provider}}",
   "tradingLoadFailed": "Trading connections could not be loaded: {{error}}",
   "title": "Orders",
   "subtitle": "Data-plane view: orders flowing through Officer, their lifecycle events, and the resulting trades. Select an order row to see its event timeline and fills.",

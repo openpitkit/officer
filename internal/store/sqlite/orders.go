@@ -578,7 +578,7 @@ func orderListWhere(
 	appendDecimalRangeFilter(&clauses, &args, "o.amount_value", filter.Amount)
 	appendDecimalRangeFilter(&clauses, &args, "o.price", filter.Price)
 	appendTimeRangeFilter(&clauses, &args, "o.at", filter.At)
-	if err := appendVenueFilter(&clauses, &args, "o.id", filter.Venue); err != nil {
+	if err := appendVenueFilter(&clauses, &args, orderVenueLinks("o.id"), filter.Venue); err != nil {
 		return "", nil, err
 	}
 	if len(clauses) == 0 {
@@ -1249,14 +1249,38 @@ func tradeListClauses(
 	appendDecimalRangeFilter(&clauses, &args, "t.quantity COLLATE DECIMAL", filter.Quantity)
 	appendDecimalRangeFilter(&clauses, &args, "t.price COLLATE DECIMAL", filter.Price)
 	appendDecimalRangeFilter(&clauses, &args, "t.lock_price COLLATE DECIMAL", filter.LockPrice)
-	if err := appendVenueFilter(&clauses, &args, "t.order_id", filter.Venue); err != nil {
+	if err := appendVenueFilter(&clauses, &args, orderVenueLinks("t.order_id"), filter.Venue); err != nil {
 		return nil, nil, err
 	}
 	return clauses, args, nil
 }
 
+// venueLinks names the rows that link one listed row to trading connections:
+// a link table aliased venue_link, carrying connection_id, and the condition
+// tying venue_link to the listed row. One value per list keeps the venue
+// filter, and any flag or sort key over the same links, on one definition.
+type venueLinks struct {
+	// from is the link table with the venue_link alias.
+	from string
+	// match ties venue_link rows to the listed row.
+	match string
+}
+
+// orderVenueLinks links an order, by its id column, to its venue order.
+func orderVenueLinks(orderID string) venueLinks {
+	return venueLinks{
+		from:  "venue_order venue_link",
+		match: "venue_link.order_id = " + orderID,
+	}
+}
+
+// exists is true when the listed row has at least one link.
+func (l venueLinks) exists() string {
+	return "EXISTS (SELECT 1 FROM " + l.from + " WHERE " + l.match + ")"
+}
+
 func appendVenueFilter(
-	clauses *[]string, args *[]any, orderID string, filter fwstore.VenueFilter,
+	clauses *[]string, args *[]any, links venueLinks, filter fwstore.VenueFilter,
 ) error {
 	if filter.Mode != fwstore.VenueFilterConnection && !filter.ConnectionID.IsZero() {
 		return fmt.Errorf("store: venue connection id requires connection mode: %w", domain.ErrInvalid)
@@ -1265,22 +1289,18 @@ func appendVenueFilter(
 	case fwstore.VenueFilterAll:
 		return nil
 	case fwstore.VenueFilterAny:
-		*clauses = append(*clauses,
-			"EXISTS (SELECT 1 FROM venue_order venue_filter_order "+
-				"WHERE venue_filter_order.order_id = "+orderID+")")
+		*clauses = append(*clauses, links.exists())
 	case fwstore.VenueFilterNone:
-		*clauses = append(*clauses,
-			"NOT EXISTS (SELECT 1 FROM venue_order venue_filter_order "+
-				"WHERE venue_filter_order.order_id = "+orderID+")")
+		*clauses = append(*clauses, "NOT "+links.exists())
 	case fwstore.VenueFilterConnection:
 		if filter.ConnectionID.IsZero() {
 			return fmt.Errorf("store: venue connection mode requires a connection id: %w", domain.ErrInvalid)
 		}
 		*clauses = append(*clauses,
-			"EXISTS (SELECT 1 FROM venue_order venue_filter_order "+
+			"EXISTS (SELECT 1 FROM "+links.from+" "+
 				"JOIN trading_connection venue_filter_connection "+
-				"ON venue_filter_connection.id = venue_filter_order.connection_id "+
-				"WHERE venue_filter_order.order_id = "+orderID+
+				"ON venue_filter_connection.id = venue_link.connection_id "+
+				"WHERE "+links.match+
 				" AND venue_filter_connection.external_id = ?)")
 		*args = append(*args, filter.ConnectionID.Bytes())
 	default:

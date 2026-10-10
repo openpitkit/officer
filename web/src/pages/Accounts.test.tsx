@@ -56,6 +56,13 @@ vi.mock("@/api/useAccounts", async () => ({
 }));
 vi.mock("@/api/useGroups", () => ({ useGroupsPage: vi.fn() }));
 vi.mock("@/api/useTrading", () => ({ useTrading: vi.fn() }));
+// The venue select is the library widget, tested on its own.
+vi.mock("@/framework", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/framework")>("@/framework");
+  const { VenueFilterStandIn } = await import("@/test/venueFilterStandIn");
+  return { ...actual, VenueFilter: VenueFilterStandIn };
+});
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
     load: { state: "ready", data: { restartRequired: false }, error: null },
@@ -1166,6 +1173,213 @@ describe("Trading connection access", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name })).not.toBeInTheDocument(),
     );
+  });
+});
+
+describe("Venue access column and filter", () => {
+  const venueAccounts: Account[] = [
+    { ...accounts[0], venueAccess: false },
+    { ...accounts[1], venueAccess: true },
+  ];
+  const venueGroups: Group[] = [
+    { ...groups[0], venueAccess: false },
+    { ...groups[1], venueAccess: true },
+  ];
+
+  beforeEach(() => {
+    useTradingMock.mockReturnValue(ready(accessSnapshot));
+    useAccountsMock.mockReturnValue(readyPage(venueAccounts));
+    useGroupsMock.mockReturnValue(readyPage(venueGroups));
+  });
+
+  async function chooseVenue(
+    user: ReturnType<typeof userEvent.setup>,
+    option: string,
+  ) {
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /find by fields/i });
+    const venue = within(within(dialog).getByRole("group", { name: "Venue" }));
+    await user.click(venue.getByRole("button", { name: option }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /apply advanced filter/i }),
+    );
+  }
+
+  it("shows account venue access, an access through the group included", () => {
+    renderAccounts();
+    expect(
+      screen.getByRole("columnheader", { name: /venues/i }),
+    ).toBeInTheDocument();
+    // desk-alpha has access only through equity-desks; the list row says so.
+    expect(listRow("Delete desk-alpha").getByText("yes")).toBeInTheDocument();
+    expect(listRow("Delete desk-default").getByText("no")).toBeInTheDocument();
+  });
+
+  it("shows group venue access, the default group without it", () => {
+    renderAccounts("/accounts?tab=groups");
+    expect(
+      screen.getByRole("columnheader", { name: /venues/i }),
+    ).toBeInTheDocument();
+    expect(listRow("Delete equity-desks").getByText("yes")).toBeInTheDocument();
+    const defaultRow = within(screen.getByText("Default group").closest("tr")!);
+    expect(defaultRow.getByText("no")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["accounts", "/accounts", () => lastAccountFilters()],
+    ["groups", "/accounts?tab=groups", () => lastGroupFilters()],
+  ] as const)("sorts %s by venue access", async (_list, entry, lastFilters) => {
+    const user = userEvent.setup();
+    renderAccounts(entry);
+    await user.click(screen.getByRole("button", { name: /sort by venues/i }));
+    await waitFor(() =>
+      expect(lastFilters()).toEqual(
+        expect.objectContaining({ sort: "venueAccess", order: "asc" }),
+      ),
+    );
+  });
+
+  it.each([
+    ["Any venue", "any"],
+    ["Not through a venue", "none"],
+    ["Mock · Paper · Mock primary", "connection:mock-1"],
+  ])("filters accounts by %s", async (option, venue) => {
+    const user = userEvent.setup();
+    renderAccounts();
+    await chooseVenue(user, option);
+    expect(lastAccountFilters()).toEqual(expect.objectContaining({ venue }));
+    expect(screen.getByText(`Venue: ${option}`)).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: /clear all filters/i }),
+    );
+    expect(lastAccountFilters()).not.toHaveProperty("venue");
+  });
+
+  it("filters groups by a connection", async () => {
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+    await chooseVenue(user, "Alpaca · Paper · Alpaca paper");
+    expect(lastGroupFilters()).toEqual(
+      expect.objectContaining({ venue: "connection:alpaca-1" }),
+    );
+    expect(
+      screen.getByText("Venue: Alpaca · Paper · Alpaca paper"),
+    ).toBeInTheDocument();
+  });
+
+  it("seeds the venue filter from a deep link and shares it", async () => {
+    // Stub the clipboard before rendering; the click uses fireEvent so no
+    // user-event clipboard stub shadows it.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderAccounts("/accounts?tab=groups&venue=none");
+    expect(lastGroupFilters()).toEqual(
+      expect.objectContaining({ venue: "none" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /copy a link to the current filter set/i,
+      }),
+    );
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const url = new URL(writeText.mock.calls[0][0]);
+    expect(url.searchParams.get("tab")).toBe("groups");
+    expect(url.searchParams.get("venue")).toBe("none");
+  });
+
+  it("hides the column and field without connections but keeps an applied filter and its chip", async () => {
+    useTradingMock.mockReturnValue(
+      ready({ ...tradingSnapshot, connections: [] }),
+    );
+    const user = userEvent.setup();
+    renderAccounts("/accounts?venue=connection:deleted");
+    expect(
+      screen.queryByRole("columnheader", { name: /venues/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("yes")).not.toBeInTheDocument();
+    expect(lastAccountFilters()).toEqual(
+      expect.objectContaining({ venue: "connection:deleted" }),
+    );
+    expect(screen.getByText("Venue: deleted")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    expect(
+      within(
+        screen.getByRole("dialog", { name: /find by fields/i }),
+      ).queryByRole("group", { name: "Venue" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says why the column and field are missing when trading fails to load", async () => {
+    useTradingMock.mockReturnValue({
+      load: { state: "error", data: null, error: "trading unavailable" },
+      reload: vi.fn(),
+    });
+    const user = userEvent.setup();
+    renderAccounts();
+    expect(
+      screen.getByText(
+        "Trading connections could not be checked: trading unavailable",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: /venues/i }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    expect(
+      within(
+        screen.getByRole("dialog", { name: /find by fields/i }),
+      ).queryByRole("group", { name: "Venue" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["accounts", "/accounts?", () => lastAccountFilters()],
+    ["groups", "/accounts?tab=groups&", () => lastGroupFilters()],
+  ] as const)(
+    "drops a hidden venue access sort from the %s request and share link",
+    async (_list, entry, lastFilters) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      useTradingMock.mockReturnValue(
+        ready({ ...tradingSnapshot, connections: [] }),
+      );
+      renderAccounts(`${entry}sort=venueAccess&order=desc`);
+      expect(lastFilters()?.sort).toBeUndefined();
+      expect(lastFilters()?.order).toBeUndefined();
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: /copy a link to the current filter set/i,
+        }),
+      );
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      const url = new URL(writeText.mock.calls[0][0]);
+      expect(url.searchParams.get("sort")).toBeNull();
+      expect(url.searchParams.get("order")).toBeNull();
+    },
+  );
+
+  it("reloads both lists once the access dialog closes", async () => {
+    const accountsPage = readyPage(venueAccounts);
+    const groupsPage = readyPage(venueGroups);
+    useAccountsMock.mockReturnValue(accountsPage);
+    useGroupsMock.mockReturnValue(groupsPage);
+    const user = userEvent.setup();
+    renderAccounts();
+    const name = "Trading connection access - desk-alpha";
+    await openAccess(user, "Delete desk-alpha", name);
+    expect(accountsPage.reload).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name })).not.toBeInTheDocument(),
+    );
+    expect(accountsPage.reload).toHaveBeenCalledTimes(1);
+    expect(groupsPage.reload).toHaveBeenCalledTimes(1);
   });
 });
 

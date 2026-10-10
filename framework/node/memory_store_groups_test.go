@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 
@@ -58,8 +59,12 @@ func (r *memoryRealm) ListGroups(context.Context) ([]domain.AccountGroup, error)
 }
 
 func (r *memoryRealm) ListGroupRows(
-	ctx context.Context, _ store.GroupListFilter,
+	ctx context.Context, filter store.GroupListFilter,
 ) (store.GroupListPage, error) {
+	if filter.Venue != (store.VenueFilter{}) {
+		return store.GroupListPage{}, fmt.Errorf(
+			"memory store: venue filter is not supported: %w", domain.ErrNotImplemented)
+	}
 	groups, err := r.ListGroups(ctx)
 	if err != nil {
 		return store.GroupListPage{}, err
@@ -81,7 +86,9 @@ func (r *memoryRealm) ListGroupRows(
 	}
 	out = append(out, defaultRow)
 	for _, group := range groups {
-		row := store.GroupListRow{Group: group}
+		row := store.GroupListRow{
+			Group: group, VenueAccess: r.venueAccess("", group.Code),
+		}
 		for _, account := range r.accounts {
 			if account.GroupCode != group.Code {
 				continue

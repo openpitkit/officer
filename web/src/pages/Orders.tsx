@@ -79,11 +79,12 @@ import type {
 import { useOrdersPage } from "@/api/useOrders";
 import {
   normalizeVenueFilterValue,
-  VENUE_FILTER_ANY,
-  VENUE_FILTER_NONE,
-  venueFilterConnectionId,
+  VENUE_FILTER_WIDTH,
+  venueConnectionLabel,
+  venueFilterValueLabel,
 } from "@/components/data";
 import { useTrading } from "@/api/useTrading";
+import { useVenueConnectionLabels } from "@/lib/useVenueConnectionLabels";
 import { useTradesPage } from "@/api/useTrades";
 import { operatorOptions } from "@/lib/dataControlLabels";
 import {
@@ -4371,15 +4372,6 @@ function OrderStatusFilterGroup({
   );
 }
 
-const VENUE_FILTER_WIDTH = 320;
-
-function venueConnectionLabel(
-  labels: ReadonlyMap<string, string> | undefined,
-  connectionId: string,
-): string {
-  return labels?.get(connectionId) ?? connectionId;
-}
-
 export function Orders() {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation("common");
@@ -4393,32 +4385,8 @@ export function Orders() {
   const tradingResult = useTrading();
   const tradingSnapshot =
     tradingResult.load.state === "ready" ? tradingResult.load.data : null;
-  const venueLabels = useMemo(() => {
-    if (!tradingSnapshot || tradingSnapshot.connections.length === 0) {
-      return undefined;
-    }
-    return new Map(
-      tradingSnapshot.connections.map((connection) => {
-        const provider = tradingSnapshot.providers.find(
-          (candidate) => candidate.type === connection.provider,
-        );
-        const venue = provider
-          ? provider.title
-          : t("unknownVenue", { provider: connection.provider });
-        return [
-          connection.id,
-          `${venue} · ${t(`trading:mode.${connection.mode}`)} · ${connection.label}`,
-        ];
-      }),
-    );
-  }, [tradingSnapshot, t]);
-  const venueConnections = useMemo(
-    () =>
-      venueLabels
-        ? Array.from(venueLabels, ([id, label]) => ({ id, label }))
-        : [],
-    [venueLabels],
-  );
+  const { labels: venueLabels, connections: venueConnections } =
+    useVenueConnectionLabels(tradingSnapshot);
   // A deep link from the Assets screen lands on the trades tab when asked
   // (?tab=trades) and seeds the matching base-asset filter on both tabs.
   const [tab, setTab] = useState<TabId>(
@@ -5468,15 +5436,11 @@ export function Orders() {
     };
     const venue = tab === "orders" ? orderVenue : tradeVenue;
     if (venue !== "") {
-      const connectionId = venueFilterConnectionId(venue);
-      const optionLabel =
-        venue === VENUE_FILTER_ANY
-          ? tc("filters.venueAny")
-          : venue === VENUE_FILTER_NONE
-            ? tc("filters.venueNone")
-            : connectionId !== undefined
-              ? venueConnectionLabel(venueLabels, connectionId)
-              : venue;
+      const optionLabel = venueFilterValueLabel(venue, {
+        labels: venueLabels,
+        anyLabel: tc("filters.venueAny"),
+        noneLabel: tc("filters.venueNone"),
+      });
       add("venue", `${tc("filters.venueLabel")}: ${optionLabel}`, () => {
         if (tab === "orders") {
           setOrderVenue("");

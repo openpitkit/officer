@@ -19,9 +19,11 @@ package httpapi
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"testing"
 	"time"
@@ -74,6 +76,150 @@ func TestListAccounts(t *testing.T) {
 	}
 	if a["positionCount"] != float64(2) {
 		t.Fatalf("positionCount = %v, want 2", a["positionCount"])
+	}
+}
+
+// TestListAccountsAndGroups_VenueFilter checks that both lists parse venue
+// exactly as the order lists do and accept the venueAccess sort key.
+func TestListAccountsAndGroups_VenueFilter(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  store.VenueFilter
+	}{
+		{name: "absent"},
+		{name: "empty", query: "?venue="},
+		{name: "all", query: "?venue=all"},
+		{name: "any", query: "?venue=any", want: store.VenueFilter{Mode: store.VenueFilterAny}},
+		{name: "none", query: "?venue=none", want: store.VenueFilter{Mode: store.VenueFilterNone}},
+		{
+			name: "opaque_connection", query: "?venue=" + url.QueryEscape("connection:connection:any / α"),
+			want: store.VenueFilter{Mode: store.VenueFilterConnection, ConnectionID: domain.ExternalID("connection:any / α")},
+		},
+	}
+	for _, endpoint := range []string{"accounts", "groups"} {
+		for _, tc := range tests {
+			t.Run(endpoint+"/"+tc.name, func(t *testing.T) {
+				svc := &fakeService{}
+				r, err := newRouter(svc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/"+endpoint+tc.query, nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("want 200, got %d", rec.Code)
+				}
+				got := svc.accountFilter.Venue
+				if endpoint == "groups" {
+					got = svc.groupFilter.Venue
+				}
+				if got != tc.want {
+					t.Fatalf("venue filter = %+v, want %+v", got, tc.want)
+				}
+			})
+		}
+		t.Run(endpoint+"/sort", func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/api/v1/"+endpoint+"?sort=venueAccess&order=desc", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d", rec.Code)
+			}
+			got := svc.accountFilter.Sort
+			if endpoint == "groups" {
+				got = svc.groupFilter.Sort
+			}
+			if got != (store.SortSpec{Column: "venueAccess", Descending: true}) {
+				t.Fatalf("sort = %+v, want venueAccess descending", got)
+			}
+		})
+		for _, value := range []string{"bogus", "connection:", "connection"} {
+			t.Run(endpoint+"/invalid/"+value, func(t *testing.T) {
+				svc := &fakeService{}
+				r, err := newRouter(svc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+					"/api/v1/"+endpoint+"?venue="+url.QueryEscape(value), nil))
+				if rec.Code != http.StatusUnprocessableEntity {
+					t.Fatalf("want 422, got %d", rec.Code)
+				}
+				m := bodyMap(t, rec.Result())
+				errObj, _ := m["error"].(map[string]any)
+				if errObj["code"] != "validation" {
+					t.Fatalf("want code=validation, got %v", errObj["code"])
+				}
+			})
+		}
+	}
+}
+
+// TestListAccountsAndGroups_VenueAccessJSON checks that venueAccess is a list
+// row field, false included, and absent from the single-entity DTOs.
+func TestListAccountsAndGroups_VenueAccessJSON(t *testing.T) {
+	svc := &fakeService{
+		accountRows: []store.AccountListRow{
+			{Account: domain.Account{Code: "acc-granted"}, VenueAccess: true},
+			{Account: domain.Account{Code: "acc-plain"}},
+		},
+		groupRows: []store.GroupListRow{
+			{Group: domain.AccountGroup{Code: ""}},
+			{Group: domain.AccountGroup{Code: "desk-granted"}, VenueAccess: true},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"accounts", "groups"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/"+endpoint, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: want 200, got %d", endpoint, rec.Code)
+		}
+		rows, ok := bodyMap(t, rec.Result())[endpoint].([]any)
+		if !ok || len(rows) != 2 {
+			t.Fatalf("%s: want 2 rows, got %v", endpoint, rows)
+		}
+		var got []any
+		for _, row := range rows {
+			value, present := row.(map[string]any)["venueAccess"]
+			if !present {
+				t.Fatalf("%s row %v carries no venueAccess", endpoint, row)
+			}
+			got = append(got, value)
+		}
+		want := []any{true, false}
+		if endpoint == "groups" {
+			want = []any{false, true}
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s venueAccess = %v, want %v", endpoint, got, want)
+		}
+	}
+	for name, dto := range map[string]any{
+		"account": toAccountDTO(domain.Account{Code: "acc-granted"}, domain.AccountBlockState{}),
+		"group":   toGroupDTO(domain.AccountGroup{Code: "desk-granted"}),
+	} {
+		data, err := json.Marshal(dto)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(data, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := fields["venueAccess"]; present {
+			t.Fatalf("single %s DTO carries venueAccess: %v", name, fields)
+		}
 	}
 }
 

@@ -1,4 +1,5 @@
 {
+  "unknownVenue": "Unknown venue {{provider}}",
   "title": "Trading connections",
   "empty": {
     "title": "No trading connections",

@@ -79,6 +79,7 @@
       "group": "Group",
       "accounts": "Accounts",
       "positions": "Pos",
+      "venueAccess": "Venues",
       "currency": "Currency",
       "status": "Status",
       "notes": "Notes",
@@ -88,6 +89,7 @@
       "group": "This column shows the account group code and display title.",
       "accounts": "This column shows how many accounts belong to the group.",
       "positions": "This column shows how many open position rows belong to the group.",
+      "venueAccess": "This column shows whether the group itself has access to at least one trading connection; its accounts get that access through the group.",
       "currency": "Default currency for group accounts.",
       "status": "This column shows whether the group is active or blocked.",
       "notes": "This column shows the operator notes stored on the group.",
@@ -103,7 +105,7 @@
       "notesLabel": "Group notes search",
       "notesPlaceholder": "Search group notes",
       "blockReasonPlaceholder": "Search group block reason",
-      "advancedDescription": "Search group notes, block reason, and position counts. These filters apply together with code, status, and account count."
+      "advancedDescription": "Search groups by more fields. These filters apply together with code, status, and account count."
     },
     "actions": {
       "notes": "Notes",
@@ -140,6 +142,7 @@
       "currency": "Currency",
       "pnl": "PnL",
       "positions": "Pos",
+      "venueAccess": "Venues",
       "status": "Status",
       "notes": "Notes",
       "actions": "Actions"
@@ -150,6 +153,7 @@
       "currency": "Account currency.",
       "pnl": "This column shows the exact account PnL reported by Spot Funds.",
       "positions": "This column shows how many position rows are stored for the account.",
+      "venueAccess": "This column shows whether the account has access to at least one trading connection, its own or through its group.",
       "status": "This column shows whether the account is active or blocked.",
       "notes": "This column shows the operator notes stored on the account.",
       "actions": "This column contains row actions for positions, trading, policies, audit, trading connection access, and deletion."
@@ -166,7 +170,7 @@
       "notesLabel": "Account notes search",
       "notesPlaceholder": "Search account notes",
       "blockReasonPlaceholder": "Search account block reason",
-      "advancedDescription": "Search account block reason and position counts. These filters apply together with code, status, and selected group."
+      "advancedDescription": "Search accounts by more fields. These filters apply together with code, status, and selected group."
     },
     "groupCell": {
       "editTitle": "Edit group assignment",

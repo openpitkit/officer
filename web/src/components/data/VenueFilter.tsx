@@ -27,6 +27,9 @@ import {
 
 const ALL_VALUE = "_all";
 
+/** Width in pixels that fits a "venue · mode · name" connection label. */
+export const VENUE_FILTER_WIDTH = 320;
+
 /** Caller-labelled choices in the REST venue filter encoding. */
 export interface VenueFilterProps {
   /** Field label and accessible name of the select. */
@@ -37,9 +40,9 @@ export interface VenueFilterProps {
   connections: { id: string; label: string }[];
   /** Label for the unrestricted option. */
   allLabel: string;
-  /** Label for orders linked to any connection. */
+  /** Label for rows linked to at least one connection. */
   anyLabel: string;
-  /** Label for orders without a connection link. */
+  /** Label for rows linked to no connection. */
   noneLabel: string;
   /** Receives the selected REST value, including empty for all rows. */
   onChange: (value: string) => void;

@@ -17,9 +17,9 @@
 
 const CONNECTION_PREFIX = "connection:";
 
-/** Selects rows whose order is linked to any trading connection. */
+/** Selects rows linked to at least one trading connection. */
 export const VENUE_FILTER_ANY = "any";
-/** Selects rows whose order has no trading connection link. */
+/** Selects rows linked to no trading connection. */
 export const VENUE_FILTER_NONE = "none";
 
 /** Normalizes `all` to the empty unrestricted value, preserving other values. */
@@ -37,4 +37,40 @@ export function venueFilterConnectionId(value: string): string | undefined {
   return value.startsWith(CONNECTION_PREFIX)
     ? value.slice(CONNECTION_PREFIX.length)
     : undefined;
+}
+
+/** Labels a trading connection, falling back to its raw ID when unknown. */
+export function venueConnectionLabel(
+  labels: ReadonlyMap<string, string> | undefined,
+  connectionId: string,
+): string {
+  return labels?.get(connectionId) ?? connectionId;
+}
+
+/**
+ * Labels a non-empty venue filter value: the caller's `any` or `none` label,
+ * the connection's label, or the raw value when it is neither.
+ */
+export function venueFilterValueLabel(
+  value: string,
+  {
+    labels,
+    anyLabel,
+    noneLabel,
+  }: {
+    labels: ReadonlyMap<string, string> | undefined;
+    anyLabel: string;
+    noneLabel: string;
+  },
+): string {
+  if (value === VENUE_FILTER_ANY) {
+    return anyLabel;
+  }
+  if (value === VENUE_FILTER_NONE) {
+    return noneLabel;
+  }
+  const connectionId = venueFilterConnectionId(value);
+  return connectionId !== undefined
+    ? venueConnectionLabel(labels, connectionId)
+    : value;
 }

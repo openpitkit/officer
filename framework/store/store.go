@@ -156,22 +156,25 @@ const (
 	CountFilterNone CountFilter = "none"
 )
 
-// VenueFilterMode selects how rows are narrowed by their order's venue link.
+// VenueFilterMode selects how rows are narrowed by their trading connection
+// link: an order's or a trade's order's venue link, or an account's or a
+// group's access grant.
 type VenueFilterMode string
 
 const (
-	// VenueFilterAll leaves the venue link unrestricted.
+	// VenueFilterAll leaves the connection link unrestricted.
 	VenueFilterAll VenueFilterMode = ""
-	// VenueFilterAny selects rows whose order is linked to a connection.
+	// VenueFilterAny selects rows linked to at least one connection.
 	VenueFilterAny VenueFilterMode = "any"
-	// VenueFilterNone selects rows whose order has no venue link.
+	// VenueFilterNone selects rows linked to no connection.
 	VenueFilterNone VenueFilterMode = "none"
 	// VenueFilterConnection selects rows linked to the given connection.
 	VenueFilterConnection VenueFilterMode = "connection"
 )
 
-// VenueFilter narrows list rows by the connection their order is linked to.
-// Connection mode requires ConnectionID; other modes require it to be zero.
+// VenueFilter narrows list rows by the trading connections they are linked to;
+// each list defines its link. Connection mode requires ConnectionID; other
+// modes require it to be zero.
 type VenueFilter struct {
 	Mode VenueFilterMode
 	// ConnectionID is the connection's external id, set only in connection mode.
@@ -287,8 +290,11 @@ type AccountListFilter struct {
 	Pnl              DenominatedDecimalRangeFilter
 	IncludeUnsetPnl  bool
 	IncludeHaltedPnl bool
-	Sort             SortSpec
-	Page             PageSpec
+	// Venue narrows accounts by the trading connections they can use, through
+	// their own grant or their current group's.
+	Venue VenueFilter
+	Sort  SortSpec
+	Page  PageSpec
 }
 
 // Validate rejects P&L selection without an explicit denomination.
@@ -306,6 +312,9 @@ func (f AccountListFilter) Validate() error {
 type AccountListRow struct {
 	Account       domain.Account
 	PositionCount int
+	// VenueAccess reports a grant on at least one trading connection, the
+	// account's own or its current group's.
+	VenueAccess bool
 }
 
 // AccountListPage is a paged account-list result.
@@ -429,8 +438,12 @@ type GroupListFilter struct {
 	Status      StatusFilter
 	Position    CountRangeFilter
 	Account     CountRangeFilter
-	Sort        SortSpec
-	Page        PageSpec
+	// Venue narrows groups by the trading connections granted to the group
+	// itself. The default group is never granted, so only all and none
+	// select it.
+	Venue VenueFilter
+	Sort  SortSpec
+	Page  PageSpec
 }
 
 // GroupListRow is a group row plus list-only aggregates.
@@ -438,6 +451,9 @@ type GroupListRow struct {
 	Group         domain.AccountGroup
 	AccountCount  int
 	PositionCount int
+	// VenueAccess reports a grant on at least one trading connection to the
+	// group itself; always false for the default group.
+	VenueAccess bool
 }
 
 // GroupListPage is a paged group-list result. Total counts the real groups
@@ -749,7 +765,8 @@ type RealmStore interface {
 	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 
 	// ListGroupRows returns groups matching filter, with aggregate account and
-	// position counts and the total count of real groups before paging. The list
+	// position counts, the venue access flag, and the total count of real groups
+	// before paging. The list
 	// surface includes the synthetic default group (code empty) for accounts
 	// without a group; persisted dictionary reads through ListGroups do not. The
 	// default group is pinned first on the first page (offset zero) and excluded
@@ -803,7 +820,7 @@ type RealmStore interface {
 	ListAccounts(ctx context.Context) ([]domain.Account, error)
 
 	// ListAccountRows returns accounts matching filter, with aggregate position
-	// counts and total count before paging.
+	// counts, the venue access flag, and total count before paging.
 	ListAccountRows(ctx context.Context, filter AccountListFilter) (AccountListPage, error)
 
 	// SetAccountBlocked applies an operator-authored reason-only block or clears

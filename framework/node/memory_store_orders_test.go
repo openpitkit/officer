@@ -48,6 +48,14 @@ func TestMemoryRealmListRowsRejectVenueFilter(t *testing.T) {
 		if !errors.Is(err, domain.ErrNotImplemented) {
 			t.Fatalf("ListTradeRows(%+v) error = %v, want ErrNotImplemented", filter, err)
 		}
+		_, err = r.ListAccountRows(ctx, store.AccountListFilter{Venue: filter})
+		if !errors.Is(err, domain.ErrNotImplemented) {
+			t.Fatalf("ListAccountRows(%+v) error = %v, want ErrNotImplemented", filter, err)
+		}
+		_, err = r.ListGroupRows(ctx, store.GroupListFilter{Venue: filter})
+		if !errors.Is(err, domain.ErrNotImplemented) {
+			t.Fatalf("ListGroupRows(%+v) error = %v, want ErrNotImplemented", filter, err)
+		}
 	}
 }
 

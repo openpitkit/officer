@@ -1211,6 +1211,63 @@ describe("accounts and groups client", () => {
     expect(result[0]).toMatchObject({ code: "acc-alpha", positionCount: 2 });
   });
 
+  describe.each(["accounts", "groups"] as const)("%s venue access", (list) => {
+    const fetchList = (filters?: { venue?: string }) =>
+      list === "accounts" ? fetchAccounts(filters) : fetchGroups(filters);
+
+    it.each(["any", "none", "connection:desk:primary"])(
+      "sends the venue filter %s",
+      async (venue) => {
+        vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ [list]: [] }));
+        await fetchList({ venue });
+
+        const url = new URL(
+          String(vi.mocked(fetch).mock.calls[0][0]),
+          "http://test",
+        );
+        expect(url.pathname).toBe(`/app/api/v1/${list}`);
+        expect(url.searchParams.get("venue")).toBe(venue);
+      },
+    );
+
+    it("sends no venue filter when it is empty", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ [list]: [] }));
+      await fetchList({ venue: "" });
+
+      expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe(
+        `/app/api/v1/${list}`,
+      );
+    });
+
+    it("keeps venueAccess of list rows and omits it when absent", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          [list]: [
+            { code: "granted", venueAccess: true },
+            { code: "plain", venueAccess: false },
+            { code: "single" },
+          ],
+        }),
+      );
+      const result = await fetchList();
+
+      expect(result[0]).toHaveProperty("venueAccess", true);
+      expect(result[1]).toHaveProperty("venueAccess", false);
+      expect(result[2]).not.toHaveProperty("venueAccess");
+    });
+
+    it.each(["yes", null, 1])("rejects a venueAccess of %s", async (value) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({ [list]: [{ code: "malformed", venueAccess: value }] }),
+      );
+
+      await expect(fetchList()).rejects.toMatchObject({
+        code: "internal",
+        message: `Invalid ${list === "accounts" ? "account" : "group"} venueAccess in the API response`,
+      });
+    });
+  });
+
   it("normalizes account currency fields across response casings", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({

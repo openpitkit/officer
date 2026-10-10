@@ -768,7 +768,10 @@ func (r *realmStore) ListGroups(ctx context.Context) ([]domain.AccountGroup, err
 func (r *realmStore) ListGroupRows(
 	ctx context.Context, filter fwstore.GroupListFilter,
 ) (fwstore.GroupListPage, error) {
-	where, args := groupListWhere(filter, "g")
+	where, args, err := groupListWhere(filter, "g")
+	if err != nil {
+		return fwstore.GroupListPage{}, err
+	}
 	having, havingArgs := countHaving(
 		"COUNT(DISTINCT a.id)", filter.Account, "COUNT(b.asset_id)", filter.Position,
 	)
@@ -809,7 +812,9 @@ GROUP BY g.id` + having
 	query := `
 SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked, g.block_reason,
        COUNT(DISTINCT a.id) AS account_count,
-       COUNT(b.asset_id) AS position_count` + from + groupListOrderBy(filter.Sort)
+       COUNT(b.asset_id) AS position_count,
+       ` + groupVenueLinks("g").exists() + ` AS venue_access` + from +
+		groupListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
@@ -839,7 +844,10 @@ SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked, g.block_reason,
 func (r *realmStore) defaultGroupRow(
 	ctx context.Context, filter fwstore.GroupListFilter,
 ) (fwstore.GroupListRow, bool, error) {
-	where, args := groupListWhere(filter, "dg")
+	where, args, err := groupListWhere(filter, "dg")
+	if err != nil {
+		return fwstore.GroupListRow{}, false, err
+	}
 	having, havingArgs := countHaving(
 		"COUNT(DISTINCT a.id)", filter.Account, "COUNT(b.asset_id)", filter.Position,
 	)
@@ -848,7 +856,8 @@ func (r *realmStore) defaultGroupRow(
 SELECT dg.id, dg.code, dg.title, dca.code, dg.notes, dg.blocked,
        dg.block_reason,
        COUNT(DISTINCT a.id) AS account_count,
-       COUNT(b.asset_id) AS position_count
+       COUNT(b.asset_id) AS position_count,
+       ` + groupVenueLinks("dg").exists() + ` AS venue_access
 FROM (
     SELECT 0 AS id, '' AS code, '' AS title, '' AS notes,
            0 AS blocked, '' AS block_reason
@@ -1059,11 +1068,12 @@ func scanGroupListRow(rows *sql.Rows) (fwstore.GroupListRow, error) {
 		currency      sql.NullString
 		accountCount  int
 		positionCount int
+		venueAccess   bool
 	)
 	if err := rows.Scan(
 		&engineID, &group.Code, &group.Title, &currency,
 		&group.Notes, &group.Blocked, &group.BlockReason,
-		&accountCount, &positionCount,
+		&accountCount, &positionCount, &venueAccess,
 	); err != nil {
 		return fwstore.GroupListRow{}, fmt.Errorf("store: scan group row: %w", err)
 	}
@@ -1073,6 +1083,7 @@ func scanGroupListRow(rows *sql.Rows) (fwstore.GroupListRow, error) {
 		Group:         group,
 		AccountCount:  accountCount,
 		PositionCount: positionCount,
+		VenueAccess:   venueAccess,
 	}, nil
 }
 
@@ -1244,7 +1255,10 @@ func (r *realmStore) ListAccountRows(
 	if err := filter.Validate(); err != nil {
 		return fwstore.AccountListPage{}, err
 	}
-	where, args := accountListWhere(filter)
+	where, args, err := accountListWhere(filter)
+	if err != nil {
+		return fwstore.AccountListPage{}, err
+	}
 	having, havingArgs := countHaving(
 		"", fwstore.CountRangeFilter{}, "COUNT(b.asset_id)", filter.Position,
 	)
@@ -1272,7 +1286,8 @@ GROUP BY a.id` + having
 	query := `
 SELECT a.id, a.code, a.title, a.pnl, a.pnl_halt_reason, ac.code, g.code, gc.code, dc.code,
        a.notes, a.blocked, a.block_reason, a.block_policy, a.block_code, a.block_details,
-       COUNT(b.asset_id) AS position_count
+       COUNT(b.asset_id) AS position_count,
+       ` + accountVenueLinks.exists() + ` AS venue_access
 ` + from + accountListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
@@ -1636,13 +1651,14 @@ func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
 		groupCurrency   sql.NullString
 		defaultCurrency sql.NullString
 		positionCount   int
+		venueAccess     bool
 	)
 	if err := rows.Scan(
 		&engineID, &account.Code, &account.Title, &pnl, &account.PnlHaltReason, &currency,
 		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
 		&account.BlockPolicy, &account.BlockCode, &account.BlockDetails,
-		&positionCount,
+		&positionCount, &venueAccess,
 	); err != nil {
 		return fwstore.AccountListRow{}, fmt.Errorf("store: scan account row: %w", err)
 	}
@@ -1650,7 +1666,9 @@ func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
 	account.Pnl = pnl.String
 	account.GroupCode = groupCode.String
 	setAccountCurrencyFields(&account, currency, groupCurrency, defaultCurrency)
-	return fwstore.AccountListRow{Account: account, PositionCount: positionCount}, nil
+	return fwstore.AccountListRow{
+		Account: account, PositionCount: positionCount, VenueAccess: venueAccess,
+	}, nil
 }
 
 func scanAccount(rows *sql.Rows) (domain.Account, error) {
@@ -1696,7 +1714,24 @@ const accountEffectiveBlockReasonExpr = `(CASE
     WHEN COALESCE(g.blocked, 0) = 1 THEN COALESCE(g.block_reason, '')
     ELSE '' END)`
 
-func accountListWhere(filter fwstore.AccountListFilter) (string, []any) {
+// accountVenueLinks are an account's grants: its own and its current group's.
+// A NULL group_id matches no group grant. It relies on the account alias a
+// present in every account list query.
+var accountVenueLinks = venueLinks{
+	from:  "trading_access venue_link",
+	match: "(venue_link.account_id = a.id OR venue_link.account_group_id = a.group_id)",
+}
+
+// groupVenueLinks are the grants made to the group behind tableAlias itself.
+// The synthetic default group's id 0 matches no grant.
+func groupVenueLinks(tableAlias string) venueLinks {
+	return venueLinks{
+		from:  "trading_access venue_link",
+		match: "venue_link.account_group_id = " + tableAlias + ".id",
+	}
+}
+
+func accountListWhere(filter fwstore.AccountListFilter) (string, []any, error) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
 	appendMatcherAny(&clauses, &args, []string{"a.code", "a.title"}, filter.Code)
@@ -1714,10 +1749,13 @@ func accountListWhere(filter fwstore.AccountListFilter) (string, []any) {
 		&clauses, &args, "a.pnl", "a.pnl_halt_reason", balanceAccountCurrency,
 		filter.Pnl, filter.IncludeUnsetPnl, filter.IncludeHaltedPnl,
 	)
-	if len(clauses) == 0 {
-		return "", args
+	if err := appendVenueFilter(&clauses, &args, accountVenueLinks, filter.Venue); err != nil {
+		return "", nil, err
 	}
-	return "\nWHERE " + strings.Join(clauses, " AND "), args
+	if len(clauses) == 0 {
+		return "", args, nil
+	}
+	return "\nWHERE " + strings.Join(clauses, " AND "), args, nil
 }
 
 func accountListOrderBy(sort fwstore.SortSpec) string {
@@ -1730,6 +1768,7 @@ func accountListOrderBy(sort fwstore.SortSpec) string {
 		"positionCount": "position_count",
 		"status":        accountEffectiveBlockedExpr,
 		"title":         "a.title",
+		"venueAccess":   "venue_access",
 	}
 	column := columns[sort.Column]
 	if column == "" {
@@ -1753,6 +1792,7 @@ func groupListOrderBy(sort fwstore.SortSpec) string {
 		"positionCount": "position_count",
 		"status":        "g.blocked",
 		"title":         "g.title",
+		"venueAccess":   "venue_access",
 	}
 	column := columns[sort.Column]
 	if column == "" {
@@ -1767,7 +1807,9 @@ func groupListOrderBy(sort fwstore.SortSpec) string {
 	return "\nORDER BY " + column + " " + direction + ", g.code " + tieDirection
 }
 
-func groupListWhere(filter fwstore.GroupListFilter, tableAlias string) (string, []any) {
+func groupListWhere(
+	filter fwstore.GroupListFilter, tableAlias string,
+) (string, []any, error) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
 	appendMatcherAny(
@@ -1777,10 +1819,15 @@ func groupListWhere(filter fwstore.GroupListFilter, tableAlias string) (string, 
 	appendMatcher(&clauses, &args, tableAlias+".notes", filter.Notes)
 	appendMatcher(&clauses, &args, tableAlias+".block_reason", filter.BlockReason)
 	appendStatusFilter(&clauses, filter.Status, tableAlias+".blocked")
-	if len(clauses) == 0 {
-		return "", args
+	if err := appendVenueFilter(
+		&clauses, &args, groupVenueLinks(tableAlias), filter.Venue,
+	); err != nil {
+		return "", nil, err
 	}
-	return "\nWHERE " + strings.Join(clauses, " AND "), args
+	if len(clauses) == 0 {
+		return "", args, nil
+	}
+	return "\nWHERE " + strings.Join(clauses, " AND "), args, nil
 }
 
 func realGroupWhere(where string) string {

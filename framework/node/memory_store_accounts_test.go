@@ -107,16 +107,40 @@ func (r *memoryRealm) ListAccounts(context.Context) ([]domain.Account, error) {
 	return out, nil
 }
 
+// venueAccess mirrors the SQLite list flag: a grant to the account itself, or
+// to the group when one is given. Pass an empty account for a group row; the
+// default group's empty code matches no grant.
+func (r *memoryRealm) venueAccess(account domain.AccountID, group string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, access := range r.tradingAccess {
+		if account != "" && access.Account == account {
+			return true
+		}
+		if group != "" && access.AccountGroup == group {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *memoryRealm) ListAccountRows(
 	ctx context.Context, filter store.AccountListFilter,
 ) (store.AccountListPage, error) {
+	if filter.Venue != (store.VenueFilter{}) {
+		return store.AccountListPage{}, fmt.Errorf(
+			"memory store: venue filter is not supported: %w", domain.ErrNotImplemented)
+	}
 	accounts, err := r.ListAccounts(ctx)
 	if err != nil {
 		return store.AccountListPage{}, err
 	}
 	out := make([]store.AccountListRow, 0, len(accounts))
 	for _, account := range accounts {
-		row := store.AccountListRow{Account: account}
+		row := store.AccountListRow{
+			Account:     account,
+			VenueAccess: r.venueAccess(account.Code, account.GroupCode),
+		}
 		for _, balance := range r.balances {
 			if balance.Account == account.Code {
 				row.PositionCount++
@@ -415,6 +439,8 @@ func sortAccountRows(rows []store.AccountListRow, spec store.SortSpec) {
 			cmp = compareBools(left.Account.Blocked, right.Account.Blocked)
 		case "title":
 			cmp = compareStrings(left.Account.Title, right.Account.Title)
+		case "venueAccess":
+			cmp = compareBools(left.VenueAccess, right.VenueAccess)
 		default:
 			cmp = compareStrings(string(left.Account.Code), string(right.Account.Code))
 		}

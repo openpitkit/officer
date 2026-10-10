@@ -108,6 +108,10 @@ import {
   TradingButton,
   useOfficerApi,
   VenueAccessButton,
+  VenueFilter,
+  VENUE_FILTER_WIDTH,
+  normalizeVenueFilterValue,
+  venueFilterValueLabel,
 } from "@/framework";
 import {
   Dialog,
@@ -146,6 +150,7 @@ import {
 } from "@/lib/useDebounce";
 import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { cn } from "@/lib/utils";
+import { useVenueConnectionLabels } from "@/lib/useVenueConnectionLabels";
 import { VenueAccessDialogContainer } from "@/pages/VenueAccessDialogContainer";
 
 type AccountsTab = "accounts" | "groups";
@@ -157,6 +162,7 @@ const ACCOUNT_SORT_KEYS = new Set([
   "positionCount",
   "status",
   "title",
+  "venueAccess",
 ]);
 const GROUP_SORT_KEYS = new Set([
   "accountCount",
@@ -166,9 +172,29 @@ const GROUP_SORT_KEYS = new Set([
   "positionCount",
   "status",
   "title",
+  "venueAccess",
 ]);
 
+/**
+ * Whether a list sort applies: a known key, and venueAccess only while its
+ * column shows. Hidden, it would order the list by a key nothing on the page
+ * displays or clears.
+ */
+function sortApplies(
+  keys: Set<string>,
+  sort: string | undefined,
+  showVenueAccess: boolean,
+): sort is string {
+  return (
+    sort !== undefined &&
+    keys.has(sort) &&
+    (sort !== "venueAccess" || showVenueAccess)
+  );
+}
+
 type AdvancedListFilters = {
+  /** REST venue value; empty for all rows. */
+  venue: string;
   positionMode: PositionCountFilterMode;
   positionMin: string;
   positionMax: string;
@@ -182,6 +208,7 @@ type AdvancedListFilters = {
 };
 
 const DEFAULT_ADVANCED_FILTERS: AdvancedListFilters = {
+  venue: "",
   positionMode: "all",
   positionMin: "",
   positionMax: "",
@@ -283,6 +310,7 @@ function advancedFromParams(params: URLSearchParams): AdvancedListFilters {
   const notes = params.get("notes") ?? "";
   const blockReason = params.get("blockReason") ?? "";
   return {
+    venue: normalizeVenueFilterValue(params.get("venue") ?? ""),
     positionMode,
     positionMin: params.get("positionCountMin") ?? "",
     positionMax: params.get("positionCountMax") ?? "",
@@ -309,6 +337,9 @@ function appendAdvancedParams(
   filters: AdvancedListFilters,
   entity: "accounts" | "groups",
 ): void {
+  if (filters.venue !== "") {
+    query.set("venue", filters.venue);
+  }
   const positionMin = trimmedOrUndefined(filters.positionMin);
   const positionMax = trimmedOrUndefined(filters.positionMax);
   if (countModeNeedsMin(filters.positionMode) && positionMin !== undefined) {
@@ -508,16 +539,30 @@ function numberOperatorFromCountMode(
 
 /** A single applied advanced-filter chip, tagged by which field it clears. */
 type AdvancedSummaryEntry = {
-  field: "position" | "account" | "notes" | "blockReason";
+  field: "venue" | "position" | "account" | "notes" | "blockReason";
   text: string;
 };
 
 function advancedFilterSummary(
   filters: AdvancedListFilters,
   t: TFunction<"accounts">,
+  venueLabels: ReadonlyMap<string, string> | undefined,
   includeNotes = true,
 ): AdvancedSummaryEntry[] {
   const out: AdvancedSummaryEntry[] = [];
+  // An applied venue filter stays visible even with no connections left, as
+  // on the order lists, so a stale deep link never filters silently.
+  if (filters.venue !== "") {
+    const option = venueFilterValueLabel(filters.venue, {
+      labels: venueLabels,
+      anyLabel: t("common:filters.venueAny"),
+      noneLabel: t("common:filters.venueNone"),
+    });
+    out.push({
+      field: "venue",
+      text: `${t("common:filters.venueLabel")}: ${option}`,
+    });
+  }
   const min = trimmedOrUndefined(filters.positionMin);
   const max = trimmedOrUndefined(filters.positionMax);
   if (
@@ -651,6 +696,8 @@ function clearAdvancedField(
   field: AdvancedSummaryEntry["field"],
 ): AdvancedListFilters {
   switch (field) {
+    case "venue":
+      return { ...filters, venue: DEFAULT_ADVANCED_FILTERS.venue };
     case "position":
       return {
         ...filters,
@@ -863,6 +910,7 @@ function AdvancedFilterDialog({
   entity,
   open,
   draft,
+  venueConnections,
   onDraftChange,
   onApply,
   onCancel,
@@ -870,6 +918,8 @@ function AdvancedFilterDialog({
   entity: "accounts" | "groups";
   open: boolean;
   draft: AdvancedListFilters;
+  /** Trading connections for the venue field; undefined hides the field. */
+  venueConnections: { id: string; label: string }[] | undefined;
   onDraftChange: (next: AdvancedListFilters) => void;
   onApply: () => void;
   onCancel: () => void;
@@ -946,6 +996,19 @@ function AdvancedFilterDialog({
               {t("filters.maskHelp")}
             </p>
           </DialogHeader>
+
+          {venueConnections !== undefined && (
+            <VenueFilter
+              width={VENUE_FILTER_WIDTH}
+              label={t("common:filters.venueLabel")}
+              value={draft.venue}
+              connections={venueConnections}
+              allLabel={t("common:filters.all")}
+              anyLabel={t("common:filters.venueAny")}
+              noneLabel={t("common:filters.venueNone")}
+              onChange={(value) => update("venue", value)}
+            />
+          )}
 
           <div className="grid gap-2">
             <Label>{t("filters.advanced.positionLabel")}</Label>
@@ -3033,6 +3096,20 @@ function BlockedDetailsDialog({
 // Sentinel code used internally to represent the "Default group" row.
 const DEFAULT_GROUP_CODE = "";
 const STATUS_COLUMN_CLASS = "accounts-status-cell w-px whitespace-nowrap";
+const VENUE_ACCESS_COLUMN_CLASS = "w-[6rem]";
+
+/** A list row's venue access as yes or no; a dash when the row carries none. */
+function VenueAccessText({ access }: { access: boolean | undefined }) {
+  const { t: tc } = useTranslation("common");
+  if (access === undefined) {
+    return <span className="text-xs text-muted-lt">{tc("value.none")}</span>;
+  }
+  return (
+    <span className={cn("text-xs", access ? "text-text" : "text-muted-lt")}>
+      {access ? tc("value.yes") : tc("value.no")}
+    </span>
+  );
+}
 
 // Notes wrap to a few lines when the density mode leaves vertical room, and
 // stay single-line (truncated) in the terminal/dense mode.
@@ -3188,11 +3265,14 @@ function GroupsPanel({
   onShowBlockDetails,
   onVenueAccess,
   onDelete,
+  showVenueAccess,
 }: {
   groupRows: GroupRow[];
   selectedGroupCode: string | null;
   activeSort?: string;
   activeOrder?: SortOrder;
+  /** Shows the venue access column; true once a trading connection exists. */
+  showVenueAccess: boolean;
   onSelect: (code: string | null) => void;
   onSortChange: (sort?: string, order?: SortOrder) => void;
   onEdit: (group: Group) => void;
@@ -3207,12 +3287,13 @@ function GroupsPanel({
   const { t } = useTranslation("accounts");
   const { t: tc } = useTranslation("common");
   return (
-    <Table className="min-w-[58rem]">
+    <Table className={showVenueAccess ? "min-w-[63rem]" : "min-w-[58rem]"}>
       <colgroup>
         <col className="w-[14rem]" />
         <col className="w-[5rem]" />
         <col className="w-[2.5rem]" />
         <col className="w-[7rem]" />
+        {showVenueAccess && <col className={VENUE_ACCESS_COLUMN_CLASS} />}
         <col className={STATUS_COLUMN_CLASS} />
         <col />
         <col className="w-[10.75rem]" />
@@ -3250,6 +3331,26 @@ function GroupsPanel({
               {t("groups.columns.currency")}
             </ColumnHeader>
           </TableHead>
+          {showVenueAccess && (
+            <TableHead className={VENUE_ACCESS_COLUMN_CLASS}>
+              <SortableHeader
+                field="venueAccess"
+                label={t("groups.columns.venueAccess")}
+                description={t("groups.columnDescriptions.venueAccess")}
+                direction={sortDirection(
+                  activeSort,
+                  activeOrder,
+                  "venueAccess",
+                )}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+          )}
           <TableHead className={STATUS_COLUMN_CLASS}>
             <SortableHeader
               field="status"
@@ -3357,6 +3458,12 @@ function GroupsPanel({
                   onEdit={() => onEditCurrency(row.group)}
                 />
               </TableCell>
+
+              {showVenueAccess && (
+                <TableCell className={VENUE_ACCESS_COLUMN_CLASS}>
+                  <VenueAccessText access={row.group.venueAccess} />
+                </TableCell>
+              )}
 
               <TableCell
                 className={STATUS_COLUMN_CLASS}
@@ -3515,10 +3622,13 @@ function AccountsTable({
   onFilterGroup,
   onVenueAccess,
   onDelete,
+  showVenueAccess,
 }: {
   accounts: Account[];
   activeSort?: string;
   activeOrder?: SortOrder;
+  /** Shows the venue access column; true once a trading connection exists. */
+  showVenueAccess: boolean;
   selectedGroupCode: string | null;
   groupsByCode: Map<string, Group>;
   onSortChange: (sort?: string, order?: SortOrder) => void;
@@ -3552,13 +3662,18 @@ function AccountsTable({
   };
 
   return (
-    <Table className="min-w-[68rem]">
+    // Page content is capped at 72rem. Just under that viewport width the
+    // comfortable density's extra page padding and a classic scrollbar take
+    // about 25px more, so the venue column's floor sits 2rem below the cap.
+    // The columns' own minimum widths can still exceed it.
+    <Table className={showVenueAccess ? "min-w-[70rem]" : "min-w-[68rem]"}>
       <colgroup>
         <col className="w-[13rem]" />
         <col className="w-[9rem]" />
         <col className="w-[7rem]" />
         <col className="w-[6rem]" />
         <col className="w-[2.5rem]" />
+        {showVenueAccess && <col className={VENUE_ACCESS_COLUMN_CLASS} />}
         <col className={STATUS_COLUMN_CLASS} />
         <col />
         <col className="w-[14.75rem]" />
@@ -3626,6 +3741,26 @@ function AccountsTable({
               }
             />
           </TableHead>
+          {showVenueAccess && (
+            <TableHead className={VENUE_ACCESS_COLUMN_CLASS}>
+              <SortableHeader
+                field="venueAccess"
+                label={t("accounts.columns.venueAccess")}
+                description={t("accounts.columnDescriptions.venueAccess")}
+                direction={sortDirection(
+                  activeSort,
+                  activeOrder,
+                  "venueAccess",
+                )}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+          )}
           <TableHead className={STATUS_COLUMN_CLASS}>
             <SortableHeader
               field="status"
@@ -3780,6 +3915,12 @@ function AccountsTable({
                 <span className="nums">{account.positionCount ?? 0}</span>
               </TableCell>
 
+              {showVenueAccess && (
+                <TableCell className={VENUE_ACCESS_COLUMN_CLASS}>
+                  <VenueAccessText access={account.venueAccess} />
+                </TableCell>
+              )}
+
               <TableCell
                 className={STATUS_COLUMN_CLASS}
                 title={account.blockReason || undefined}
@@ -3905,6 +4046,15 @@ export function Accounts() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
+  // One trading snapshot for the venue column and filter field, the delete
+  // warnings and the access dialog. Both venue controls show only once a
+  // trading connection exists.
+  const trading = useTrading();
+  const { labels: venueLabels, connections: venueConnections } =
+    useVenueConnectionLabels(
+      trading.load.state === "ready" ? trading.load.data : null,
+    );
+  const showVenueAccess = venueLabels !== undefined;
   // A shared deep link seeds the initial filter set for the active tab (defaults
   // to accounts); the operator owns it thereafter.
   const initialTab: AccountsTab =
@@ -4106,6 +4256,9 @@ export function Accounts() {
     if (selectedGroupCode !== null) {
       filters.group = selectedGroupCode;
     }
+    if (accountAdvanced.venue !== "") {
+      filters.venue = accountAdvanced.venue;
+    }
     return filters;
   }, [
     accountAdvanced,
@@ -4131,6 +4284,9 @@ export function Accounts() {
     if (blockReason !== undefined) {
       filters.blockReason = blockReason;
       filters.blockReasonMatch = groupAdvanced.blockReasonMatch;
+    }
+    if (groupAdvanced.venue !== "") {
+      filters.venue = groupAdvanced.venue;
     }
     return filters;
   }, [debouncedGroupCode, groupAdvanced, groupCodeMatch, groupStatus]);
@@ -4182,16 +4338,12 @@ export function Accounts() {
   const accountListFilters = useMemo<AccountListFilters>(
     () => ({
       ...accountFilters,
-      sort:
-        accountSort.sort !== undefined &&
-        ACCOUNT_SORT_KEYS.has(accountSort.sort)
-          ? accountSort.sort
-          : undefined,
-      order:
-        accountSort.sort !== undefined &&
-        ACCOUNT_SORT_KEYS.has(accountSort.sort)
-          ? accountSort.order
-          : undefined,
+      sort: sortApplies(ACCOUNT_SORT_KEYS, accountSort.sort, showVenueAccess)
+        ? accountSort.sort
+        : undefined,
+      order: sortApplies(ACCOUNT_SORT_KEYS, accountSort.sort, showVenueAccess)
+        ? accountSort.order
+        : undefined,
       limit: accountSize,
       offset: accountPage * accountSize,
     }),
@@ -4201,23 +4353,29 @@ export function Accounts() {
       accountSize,
       accountSort.order,
       accountSort.sort,
+      showVenueAccess,
     ],
   );
   const groupListFilters = useMemo<GroupListFilters>(
     () => ({
       ...groupFilters,
-      sort:
-        groupSort.sort !== undefined && GROUP_SORT_KEYS.has(groupSort.sort)
-          ? groupSort.sort
-          : undefined,
-      order:
-        groupSort.sort !== undefined && GROUP_SORT_KEYS.has(groupSort.sort)
-          ? groupSort.order
-          : undefined,
+      sort: sortApplies(GROUP_SORT_KEYS, groupSort.sort, showVenueAccess)
+        ? groupSort.sort
+        : undefined,
+      order: sortApplies(GROUP_SORT_KEYS, groupSort.sort, showVenueAccess)
+        ? groupSort.order
+        : undefined,
       limit: groupSize,
       offset: groupPage * groupSize,
     }),
-    [groupFilters, groupPage, groupSize, groupSort.order, groupSort.sort],
+    [
+      groupFilters,
+      groupPage,
+      groupSize,
+      groupSort.order,
+      groupSort.sort,
+      showVenueAccess,
+    ],
   );
   const { load: accountsLoad, reload: reloadAccounts } =
     useAccountsPage(accountListFilters);
@@ -4232,12 +4390,12 @@ export function Accounts() {
     [groupListFilters],
   );
   const accountAdvancedSummary = useMemo(
-    () => advancedFilterSummary(accountAdvanced, t, false),
-    [accountAdvanced, t],
+    () => advancedFilterSummary(accountAdvanced, t, venueLabels, false),
+    [accountAdvanced, t, venueLabels],
   );
   const groupAdvancedSummary = useMemo(
-    () => advancedFilterSummary(groupAdvanced, t),
-    [groupAdvanced, t],
+    () => advancedFilterSummary(groupAdvanced, t, venueLabels),
+    [groupAdvanced, t, venueLabels],
   );
 
   // Encode each tab's active filter set as a shareable deep link. Only
@@ -4259,10 +4417,7 @@ export function Accounts() {
       query.set("group", selectedGroupCode);
     }
     appendAdvancedParams(query, accountAdvanced, "accounts");
-    if (
-      accountSort.sort !== undefined &&
-      ACCOUNT_SORT_KEYS.has(accountSort.sort)
-    ) {
+    if (sortApplies(ACCOUNT_SORT_KEYS, accountSort.sort, showVenueAccess)) {
       query.set("sort", accountSort.sort);
       if (accountSort.order !== undefined) {
         query.set("order", accountSort.order);
@@ -4277,6 +4432,7 @@ export function Accounts() {
     accountSort.sort,
     accountStatus,
     selectedGroupCode,
+    showVenueAccess,
   ]);
   const clearGroupFilters = () => {
     setGroupCode("");
@@ -4313,7 +4469,7 @@ export function Accounts() {
       query.set("status", groupStatus);
     }
     appendAdvancedParams(query, groupAdvanced, "groups");
-    if (groupSort.sort !== undefined && GROUP_SORT_KEYS.has(groupSort.sort)) {
+    if (sortApplies(GROUP_SORT_KEYS, groupSort.sort, showVenueAccess)) {
       query.set("sort", groupSort.sort);
       if (groupSort.order !== undefined) {
         query.set("order", groupSort.order);
@@ -4327,6 +4483,7 @@ export function Accounts() {
     groupSort.order,
     groupSort.sort,
     groupStatus,
+    showVenueAccess,
   ]);
 
   // Local snapshots so individual rows update immediately from server responses.
@@ -4394,8 +4551,6 @@ export function Accounts() {
     null,
   );
 
-  // One trading snapshot for the delete warnings and the access dialog.
-  const trading = useTrading();
   // Identity only: the dialog polls an account's current group itself.
   const [venueAccessTarget, setVenueAccessTarget] =
     useState<TradingAccessSubject | null>(null);
@@ -4545,6 +4700,13 @@ export function Accounts() {
       }
     >
       <p className="text-xs text-muted-lt">{t("page.description")}</p>
+      {/* Without the snapshot the venue column and field are hidden; say why
+          rather than look like an install with no trading connections. */}
+      {trading.load.state === "error" && (
+        <ErrorBanner
+          message={t("tradingCheck.failed", { error: trading.load.error })}
+        />
+      )}
       {blockNotice !== null && (
         <p role="status" className="text-xs text-text">
           {blockNotice}
@@ -4610,7 +4772,7 @@ export function Accounts() {
           {groupLoadError !== null && groups === null ? (
             <ErrorState message={groupLoadError} onRetry={reloadAll} />
           ) : groups === null ? (
-            <TableSkeleton cols={6} />
+            <TableSkeleton cols={showVenueAccess ? 7 : 6} />
           ) : (
             <>
               {groupPager}
@@ -4619,6 +4781,7 @@ export function Accounts() {
                 selectedGroupCode={selectedGroupCode}
                 activeSort={groupSort.sort}
                 activeOrder={groupSort.order}
+                showVenueAccess={showVenueAccess}
                 onSelect={(code) => {
                   setSelectedGroupCode(code);
                   accountGroupSearchRef.current = "";
@@ -4719,7 +4882,7 @@ export function Accounts() {
           {accountLoadError !== null && accounts === null ? (
             <ErrorState message={accountLoadError} onRetry={reloadAll} />
           ) : pagedAccounts === null ? (
-            <TableSkeleton cols={6} />
+            <TableSkeleton cols={showVenueAccess ? 7 : 6} />
           ) : visibleAccountCount === 0 ? (
             <EmptyState
               title={t("accounts.empty.title")}
@@ -4747,6 +4910,7 @@ export function Accounts() {
                 accounts={pagedAccounts}
                 activeSort={accountSort.sort}
                 activeOrder={accountSort.order}
+                showVenueAccess={showVenueAccess}
                 selectedGroupCode={selectedGroupCode}
                 groupsByCode={groupsByCode}
                 onSortChange={(sort, order) => {
@@ -4801,6 +4965,7 @@ export function Accounts() {
         entity="accounts"
         open={accountAdvancedOpen}
         draft={accountAdvancedDraft}
+        venueConnections={showVenueAccess ? venueConnections : undefined}
         onDraftChange={setAccountAdvancedDraft}
         onCancel={() => setAccountAdvancedOpen(false)}
         onApply={() => {
@@ -4813,6 +4978,7 @@ export function Accounts() {
         entity="groups"
         open={groupAdvancedOpen}
         draft={groupAdvancedDraft}
+        venueConnections={showVenueAccess ? venueConnections : undefined}
         onDraftChange={setGroupAdvancedDraft}
         onCancel={() => setGroupAdvancedOpen(false)}
         onApply={() => {
@@ -5058,7 +5224,12 @@ export function Accounts() {
         <VenueAccessDialogContainer
           subject={venueAccessTarget}
           trading={trading}
-          onClose={() => setVenueAccessTarget(null)}
+          onClose={() => {
+            setVenueAccessTarget(null);
+            // A changed grant moves the venue access flag of this account or
+            // group and, for a group, of every member account.
+            reloadAll();
+          }}
         />
       )}
     </Page>

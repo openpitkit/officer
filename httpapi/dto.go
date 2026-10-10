@@ -194,24 +194,27 @@ type storeHealthDTO struct {
 // reads only blocked gets the answer to "can this account trade right now".
 // The per-tier fields carry the two independent underlying blocks.
 type accountDTO struct {
-	Code               string             `json:"code"`
-	Title              string             `json:"title"`
-	Pnl                string             `json:"pnl"`
-	PnlHaltReason      string             `json:"pnlHaltReason"`
-	Group              string             `json:"group"`
-	Currency           string             `json:"currency"`
-	EffectiveCurrency  string             `json:"effectiveCurrency"`
-	CurrencyOrigin     string             `json:"currencyOrigin"`
-	CurrencyCascade    currencyCascadeDTO `json:"currencyCascade"`
-	Notes              string             `json:"notes"`
-	PositionCount      int                `json:"positionCount"`
-	BlockReason        string             `json:"blockReason"`
-	BlockSource        string             `json:"blockSource"`
-	AccountBlockReason string             `json:"accountBlockReason"`
-	GroupBlockReason   string             `json:"groupBlockReason"`
-	Blocked            bool               `json:"blocked"`
-	AccountBlocked     bool               `json:"accountBlocked"`
-	GroupBlocked       bool               `json:"groupBlocked"`
+	Code              string             `json:"code"`
+	Title             string             `json:"title"`
+	Pnl               string             `json:"pnl"`
+	PnlHaltReason     string             `json:"pnlHaltReason"`
+	Group             string             `json:"group"`
+	Currency          string             `json:"currency"`
+	EffectiveCurrency string             `json:"effectiveCurrency"`
+	CurrencyOrigin    string             `json:"currencyOrigin"`
+	CurrencyCascade   currencyCascadeDTO `json:"currencyCascade"`
+	Notes             string             `json:"notes"`
+	PositionCount     int                `json:"positionCount"`
+	// VenueAccess is set on GET /accounts list rows only: a grant on at least
+	// one trading connection, the account's own or its group's.
+	VenueAccess        *bool  `json:"venueAccess,omitempty"`
+	BlockReason        string `json:"blockReason"`
+	BlockSource        string `json:"blockSource"`
+	AccountBlockReason string `json:"accountBlockReason"`
+	GroupBlockReason   string `json:"groupBlockReason"`
+	Blocked            bool   `json:"blocked"`
+	AccountBlocked     bool   `json:"accountBlocked"`
+	GroupBlocked       bool   `json:"groupBlocked"`
 }
 
 type currencyCascadeDTO struct {
@@ -397,6 +400,7 @@ func toAccountRowDTO(
 ) accountDTO {
 	dto := toAccountDTO(row.Account, block)
 	dto.PositionCount = row.PositionCount
+	dto.VenueAccess = &row.VenueAccess
 	return dto
 }
 
@@ -969,8 +973,11 @@ type groupDTO struct {
 	Notes         string `json:"notes"`
 	AccountCount  int    `json:"accountCount"`
 	PositionCount int    `json:"positionCount"`
-	BlockReason   string `json:"blockReason"`
-	Blocked       bool   `json:"blocked"`
+	// VenueAccess is set on GET /groups list rows only: a grant on at least one
+	// trading connection to the group itself.
+	VenueAccess *bool  `json:"venueAccess,omitempty"`
+	BlockReason string `json:"blockReason"`
+	Blocked     bool   `json:"blocked"`
 }
 
 // toGroupDTO maps a domain.AccountGroup onto the wire DTO. The group's public
@@ -991,6 +998,7 @@ func toGroupRowDTO(row store.GroupListRow) groupDTO {
 	dto := toGroupDTO(row.Group)
 	dto.AccountCount = row.AccountCount
 	dto.PositionCount = row.PositionCount
+	dto.VenueAccess = &row.VenueAccess
 	return dto
 }
 

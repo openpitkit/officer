@@ -1,4 +1,5 @@
 {
+  "unknownVenue": "未知交易场所 {{provider}}",
   "title": "交易连接",
   "empty": {
     "title": "没有交易连接",

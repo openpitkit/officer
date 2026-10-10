@@ -707,14 +707,29 @@ paths:
           schema:
             type: string
           description: Group code. Present with an empty value selects ungrouped accounts.
+        - name: venue
+          in: query
+          schema:
+            type: string
+          description: >-
+            Filter by trading connection access, the account's own grant or its
+            current group's: `any` selects accounts with access to at least one
+            connection, `none` selects accounts with access to none, and
+            `connection:<id>` selects accounts with access to that trading
+            connection id from GET /trading. The id is an opaque string and may
+            contain colons; everything after the first `connection:` prefix is
+            the id. Absent, empty or `all` means no restriction. Any other
+            value, including an empty connection id, returns a 422 validation
+            error.
         - name: sort
           in: query
           schema:
             type: string
-            enum: [code, title, group, status, blockReason, positionCount]
+            enum: [code, title, group, status, blockReason, positionCount, venueAccess]
           description: >-
             Account list sort key. Unknown keys are rejected. `blockReason`
             orders by the effective reason, the same value the filter searches.
+            `venueAccess` orders by the `venueAccess` flag.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -1206,12 +1221,28 @@ paths:
             type: string
           description: Search group block reason.
         - $ref: "#/components/parameters/BlockReasonMatch"
+        - name: venue
+          in: query
+          schema:
+            type: string
+          description: >-
+            Filter by trading connection access granted to the group itself:
+            `any` selects groups with access to at least one connection, `none`
+            selects groups with access to none, and `connection:<id>` selects
+            groups with access to that trading connection id from GET /trading.
+            The default group is never granted access, so only `none` and no
+            restriction select it. The id is an opaque string and may contain
+            colons; everything after the first `connection:` prefix is the id.
+            Absent, empty or `all` means no restriction. Any other value,
+            including an empty connection id, returns a 422 validation error.
         - name: sort
           in: query
           schema:
             type: string
-            enum: [code, title, accountCount, positionCount, status, notes, blockReason]
-          description: Group list sort key. Unknown keys are rejected.
+            enum: [code, title, accountCount, positionCount, status, notes, blockReason, venueAccess]
+          description: >-
+            Group list sort key. Unknown keys are rejected. `venueAccess`
+            orders by the `venueAccess` flag.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -5685,6 +5716,13 @@ components:
           type: integer
           minimum: 0
           description: Number of stored position/balance rows for the account.
+        venueAccess:
+          type: boolean
+          description: >-
+            Whether the account has access to at least one trading connection,
+            through its own grant or its current group's; a grant counts whether
+            or not its connection is enabled. Present only in GET /accounts list
+            rows; omitted in other responses.
         blocked:
           type: boolean
           description: >-
@@ -5747,6 +5785,13 @@ components:
           type: integer
           minimum: 0
           description: Total stored position/balance rows across group accounts.
+        venueAccess:
+          type: boolean
+          description: >-
+            Whether the group itself has access to at least one trading
+            connection; a grant counts whether or not its connection is enabled.
+            Always false for the default group, which is never granted. Present
+            only in GET /groups list rows; omitted in other responses.
         blocked:
           type: boolean
         blockReason:

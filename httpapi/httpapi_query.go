@@ -421,6 +421,7 @@ var accountSortKeys = map[string]struct{}{
 	"positionCount": {},
 	"status":        {},
 	"title":         {},
+	"venueAccess":   {},
 }
 
 var assetSortKeys = map[string]struct{}{
@@ -449,6 +450,7 @@ var groupSortKeys = map[string]struct{}{
 	"positionCount": {},
 	"status":        {},
 	"title":         {},
+	"venueAccess":   {},
 }
 
 var assetClassSortKeys = map[string]struct{}{
@@ -534,6 +536,10 @@ func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 	if err != nil {
 		return store.AccountListFilter{}, err
 	}
+	venue, err := venueFilterFromQuery(q)
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
 	filter := store.AccountListFilter{
 		Code:        code,
 		BlockReason: blockReason,
@@ -541,6 +547,7 @@ func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 		Position:    position,
 		Pnl:         pnl, IncludeUnsetPnl: includeUnset, IncludeHaltedPnl: includeHalted,
 		GroupCode: nil,
+		Venue:     venue,
 		Sort:      sortSpec,
 		Page:      page,
 	}
@@ -814,6 +821,10 @@ func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
+	venue, err := venueFilterFromQuery(q)
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
 	return store.GroupListFilter{
 		Code:        code,
 		Notes:       notes,
@@ -821,6 +832,7 @@ func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
 		Status:      status,
 		Position:    position,
 		Account:     account,
+		Venue:       venue,
 		Sort:        sortSpec,
 		Page:        page,
 	}, nil

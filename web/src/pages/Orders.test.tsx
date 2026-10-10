@@ -59,6 +59,7 @@ vi.mock("@/api/useBalances", () => ({ useBalances: vi.fn() }));
 vi.mock("@/framework", async () => {
   const actual =
     await vi.importActual<typeof import("@/framework")>("@/framework");
+  const { VenueFilterStandIn } = await import("@/test/venueFilterStandIn");
   return {
     ...actual,
     ShareLinkButton: ({ href, title }: { href: string; title?: string }) => (
@@ -66,39 +67,7 @@ vi.mock("@/framework", async () => {
         {title}
       </a>
     ),
-    VenueFilter: ({
-      label,
-      value,
-      connections,
-      allLabel,
-      anyLabel,
-      noneLabel,
-      width,
-      onChange,
-    }: import("@/components/data/VenueFilter").VenueFilterProps) => (
-      <fieldset aria-label={label} style={{ width }}>
-        <legend>{label}</legend>
-        <output aria-label="Applied venue draft">{value}</output>
-        <button type="button" onClick={() => onChange("")}>
-          {allLabel}
-        </button>
-        <button type="button" onClick={() => onChange(VENUE_FILTER_ANY)}>
-          {anyLabel}
-        </button>
-        <button type="button" onClick={() => onChange(VENUE_FILTER_NONE)}>
-          {noneLabel}
-        </button>
-        {connections.map((connection) => (
-          <button
-            key={connection.id}
-            type="button"
-            onClick={() => onChange(venueConnectionFilterValue(connection.id))}
-          >
-            {connection.label}
-          </button>
-        ))}
-      </fieldset>
-    ),
+    VenueFilter: VenueFilterStandIn,
   };
 });
 // The page chrome renders PendingRestartBanner, which polls market data on

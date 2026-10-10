@@ -1760,6 +1760,225 @@ func TestListGroupRowsSortAndPage(t *testing.T) {
 	}
 }
 
+// TestListRowsVenueAccess pins the account and group list venue access flag,
+// its sort key and the venue filter to one definition: an account's own grant
+// or its current group's, and a group's own grant. A grant on a disabled
+// connection still counts.
+func TestListRowsVenueAccess(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	for _, code := range []string{"desk-granted", "desk-plain"} {
+		if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: code}); err != nil {
+			t.Fatalf("CreateGroup %s: %v", code, err)
+		}
+	}
+	for _, account := range []domain.Account{
+		{Code: "acc-own"},
+		{Code: "acc-via-group", GroupCode: "desk-granted"},
+		{Code: "acc-both", GroupCode: "desk-granted"},
+		{Code: "acc-plain", GroupCode: "desk-plain"},
+		{Code: "acc-ungrouped"},
+	} {
+		if _, err := rs.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount %s: %v", account.Code, err)
+		}
+	}
+	connections := make(map[string]domain.ExternalID)
+	for _, tc := range []struct {
+		label   string
+		enabled bool
+	}{
+		{label: "enabled", enabled: true},
+		{label: "disabled", enabled: false},
+		{label: "ungranted", enabled: true},
+	} {
+		connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+			Provider:      domain.TradingProviderAlpaca,
+			Label:         tc.label,
+			VenueIdentity: tc.label,
+			Mode:          domain.TradingModePaper,
+			Credentials:   `{}`,
+			Enabled:       tc.enabled,
+		})
+		if err != nil {
+			t.Fatalf("CreateTradingConnection(%s): %v", tc.label, err)
+		}
+		connections[tc.label] = connection.ExternalID
+	}
+	for _, access := range []domain.TradingAccess{
+		{Account: "acc-own", Connection: connections["enabled"]},
+		{Account: "acc-both", Connection: connections["enabled"]},
+		{AccountGroup: "desk-granted", Connection: connections["disabled"]},
+	} {
+		if err := rs.PutTradingAccess(ctx, access); err != nil {
+			t.Fatalf("PutTradingAccess(%s): %v", access.SubjectLabel(), err)
+		}
+	}
+
+	all, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{})
+	if err != nil {
+		t.Fatalf("ListAccountRows: %v", err)
+	}
+	wantAccess := map[string]bool{
+		"acc-own": true, "acc-via-group": true, "acc-both": true,
+		"acc-plain": false, "acc-ungrouped": false,
+	}
+	for _, row := range all.Rows {
+		code := row.Account.Code.String()
+		if row.VenueAccess != wantAccess[code] {
+			t.Fatalf("%s VenueAccess = %v, want %v", code, row.VenueAccess, wantAccess[code])
+		}
+		grants, err := rs.ListTradingAccess(ctx, row.Account.Code)
+		if err != nil {
+			t.Fatalf("ListTradingAccess(%s): %v", code, err)
+		}
+		if row.VenueAccess != (len(grants) > 0) {
+			t.Fatalf("%s VenueAccess = %v, ListTradingAccess has %d grants",
+				code, row.VenueAccess, len(grants))
+		}
+	}
+
+	connectionFilter := func(label string) fwstore.VenueFilter {
+		return fwstore.VenueFilter{
+			Mode: fwstore.VenueFilterConnection, ConnectionID: connections[label],
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		filter fwstore.VenueFilter
+		want   string
+	}{
+		{name: "any", filter: fwstore.VenueFilter{Mode: fwstore.VenueFilterAny},
+			want: "acc-both,acc-own,acc-via-group"},
+		{name: "none", filter: fwstore.VenueFilter{Mode: fwstore.VenueFilterNone},
+			want: "acc-plain,acc-ungrouped"},
+		{name: "own grants", filter: connectionFilter("enabled"),
+			want: "acc-both,acc-own"},
+		{name: "group grant", filter: connectionFilter("disabled"),
+			want: "acc-both,acc-via-group"},
+		{name: "ungranted", filter: connectionFilter("ungranted"), want: ""},
+		{name: "unknown connection", filter: fwstore.VenueFilter{
+			Mode: fwstore.VenueFilterConnection, ConnectionID: "unknown",
+		}, want: ""},
+	} {
+		page, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{Venue: tc.filter})
+		if err != nil {
+			t.Fatalf("ListAccountRows(%s): %v", tc.name, err)
+		}
+		if got := strings.Join(accountRowCodes(page.Rows), ","); got != tc.want {
+			t.Fatalf("ListAccountRows(%s) = %q, want %q", tc.name, got, tc.want)
+		}
+		if page.Total != len(page.Rows) {
+			t.Fatalf("ListAccountRows(%s) total = %d, want %d", tc.name, page.Total, len(page.Rows))
+		}
+	}
+	paged, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+		Venue: fwstore.VenueFilter{Mode: fwstore.VenueFilterAny},
+		Page:  fwstore.PageSpec{Limit: 1, Offset: 1},
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows(any, paged): %v", err)
+	}
+	if got := strings.Join(accountRowCodes(paged.Rows), ","); got != "acc-own" || paged.Total != 3 {
+		t.Fatalf("ListAccountRows(any, paged) = %q total %d, want acc-own total 3", got, paged.Total)
+	}
+
+	for _, tc := range []struct {
+		descending bool
+		want       string
+	}{
+		{want: "acc-plain,acc-ungrouped,acc-both,acc-own,acc-via-group"},
+		{descending: true, want: "acc-via-group,acc-own,acc-both,acc-ungrouped,acc-plain"},
+	} {
+		page, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+			Sort: fwstore.SortSpec{Column: "venueAccess", Descending: tc.descending},
+		})
+		if err != nil {
+			t.Fatalf("ListAccountRows(sort venueAccess, desc=%v): %v", tc.descending, err)
+		}
+		if got := strings.Join(accountRowCodes(page.Rows), ","); got != tc.want {
+			t.Fatalf("sort venueAccess desc=%v = %q, want %q", tc.descending, got, tc.want)
+		}
+	}
+
+	groups, err := rs.ListGroupRows(ctx, fwstore.GroupListFilter{})
+	if err != nil {
+		t.Fatalf("ListGroupRows: %v", err)
+	}
+	wantGroupAccess := map[string]bool{"": false, "desk-granted": true, "desk-plain": false}
+	if len(groups.Rows) != len(wantGroupAccess) {
+		t.Fatalf("ListGroupRows codes = %v", groupRowCodes(groups.Rows))
+	}
+	for _, row := range groups.Rows {
+		if row.VenueAccess != wantGroupAccess[row.Group.Code] {
+			t.Fatalf("group %q VenueAccess = %v, want %v",
+				row.Group.Code, row.VenueAccess, wantGroupAccess[row.Group.Code])
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		filter    fwstore.VenueFilter
+		want      string
+		wantTotal int
+	}{
+		{name: "any", filter: fwstore.VenueFilter{Mode: fwstore.VenueFilterAny},
+			want: "desk-granted", wantTotal: 1},
+		// The default group is never granted, so none selects it; it stays out
+		// of Total, which counts real groups.
+		{name: "none", filter: fwstore.VenueFilter{Mode: fwstore.VenueFilterNone},
+			want: ",desk-plain", wantTotal: 1},
+		{name: "group grant", filter: connectionFilter("disabled"),
+			want: "desk-granted", wantTotal: 1},
+		// Account grants do not make a group's own access.
+		{name: "account grants only", filter: connectionFilter("enabled"),
+			want: "", wantTotal: 0},
+	} {
+		page, err := rs.ListGroupRows(ctx, fwstore.GroupListFilter{Venue: tc.filter})
+		if err != nil {
+			t.Fatalf("ListGroupRows(%s): %v", tc.name, err)
+		}
+		if got := strings.Join(groupRowCodes(page.Rows), ","); got != tc.want {
+			t.Fatalf("ListGroupRows(%s) = %q, want %q", tc.name, got, tc.want)
+		}
+		if page.Total != tc.wantTotal {
+			t.Fatalf("ListGroupRows(%s) total = %d, want %d", tc.name, page.Total, tc.wantTotal)
+		}
+	}
+	sorted, err := rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Sort: fwstore.SortSpec{Column: "venueAccess", Descending: true},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows(sort venueAccess): %v", err)
+	}
+	// The default group stays pinned first, outside the real-group sort.
+	if got := strings.Join(groupRowCodes(sorted.Rows), ","); got != ",desk-granted,desk-plain" {
+		t.Fatalf("group sort venueAccess desc = %q", got)
+	}
+	sorted, err = rs.ListGroupRows(ctx, fwstore.GroupListFilter{
+		Sort: fwstore.SortSpec{Column: "venueAccess"},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows(sort venueAccess asc): %v", err)
+	}
+	if got := strings.Join(groupRowCodes(sorted.Rows), ","); got != ",desk-plain,desk-granted" {
+		t.Fatalf("group sort venueAccess asc = %q", got)
+	}
+
+	for _, filter := range []fwstore.VenueFilter{
+		{Mode: fwstore.VenueFilterConnection},
+		{ConnectionID: connections["enabled"]},
+		{Mode: "bogus"},
+	} {
+		if _, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{Venue: filter}); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("ListAccountRows(%+v) error = %v, want ErrInvalid", filter, err)
+		}
+		if _, err := rs.ListGroupRows(ctx, fwstore.GroupListFilter{Venue: filter}); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("ListGroupRows(%+v) error = %v, want ErrInvalid", filter, err)
+		}
+	}
+}
+
 func accountRowCodes(rows []fwstore.AccountListRow) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
