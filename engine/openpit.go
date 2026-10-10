@@ -257,10 +257,10 @@ func (e *openPitEngine) RestoredAccountBlockCause(
 	return accountBlockCauseFrom(block)
 }
 
-// NewOpenPitEngineBuildFunc returns the stage-2 OpenPit builder for one local
-// node. Its engine handles share one market-data service generation. A closed
-// wrapper is treated as absent and replaced by the next build; later builds
-// share that replacement. Service lifetime follows the sharedMarketDataService
+// NewOpenPitEngineBuildFunc returns the OpenPit builder for one local node. Its
+// engine handles share one market-data service generation. A closed wrapper is
+// treated as absent and replaced by the next build; later builds share that
+// replacement. Service lifetime follows the sharedMarketDataService
 // contract. Each engine uses AccountSync; Officer routes account and group work
 // through asyncengine lanes. The builder always registers the built-in
 // order-validation policy, and registers each risk policy that has at least one

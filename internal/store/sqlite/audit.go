@@ -151,8 +151,8 @@ func appendAudit(
 	return nil
 }
 
-// ListAudit returns the most recent n audit rows, newest first by (at, id) per
-// the §9 index. A non-positive n returns an empty slice.
+// ListAudit returns the most recent n audit rows, newest first by the (at, id)
+// index. A non-positive n returns an empty slice.
 func (r *realmStore) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error) {
 	return r.ListAuditFiltered(ctx, domain.AuditFilter{}, n)
 }

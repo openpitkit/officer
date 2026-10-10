@@ -77,7 +77,7 @@ import {
   useOfficerApi,
 } from "@/framework";
 
-// This page is the canonical i18n pattern (phase 1 pilot): user-facing text
+// This page is the canonical i18n pattern: user-facing text
 // goes through useTranslation with a per-area "service" namespace; shared
 // chrome (placeholders, generic verbs) comes from "common". Subsequent pages
 // copy this shape. Domain identifiers and route paths stay literal.

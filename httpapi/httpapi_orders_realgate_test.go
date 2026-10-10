@@ -264,9 +264,9 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 	}
 }
 
-// TestApplyExecutionReport_RealWorkflowCarriesRecordedReservation proves an R3
-// report records caller leaves while sending the recorded reservation remainder
-// to the engine.
+// TestApplyExecutionReport_RealWorkflowCarriesRecordedReservation proves an
+// execution report records caller leaves while sending the recorded reservation
+// remainder to the engine.
 func TestApplyExecutionReport_RealWorkflowCarriesRecordedReservation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

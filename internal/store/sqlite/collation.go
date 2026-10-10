@@ -53,8 +53,8 @@ func init() {
 //     another non-decimal, falls back to byte order, so the relation stays a
 //     total order as the collation contract requires.
 //
-// The empty-string ordering here must match decimalStringCompare in the backend
-// merge so single-node and multi-node listings agree.
+// The empty-string ordering is part of the collation contract: any code that
+// merges or re-sorts listed rows must order them the same way.
 func compareDecimalStrings(left, right string) int {
 	leftEmpty, rightEmpty := left == "", right == ""
 	switch {

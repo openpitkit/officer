@@ -624,7 +624,7 @@ type StoreHealth struct {
 // connection lifecycle and the schema; all data access goes through a
 // realm-scoped RealmStore from ForRealm.
 //
-// The OSS SQLite connector is single-realm: it serves one fixed realm and
+// The bundled SQLite connector is single-realm: it serves one fixed realm and
 // rejects a non-matching realm id with an error wrapping domain.ErrInvalid.
 type Store interface {
 	// ForRealm returns the data-access handle bound to realm. The single-realm

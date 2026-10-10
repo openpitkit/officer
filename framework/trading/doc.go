@@ -114,7 +114,7 @@
 // forbids overriding in both the order and the Officer account. The Officer
 // account's binding to a connection may set a bound venue account and whether
 // the order may override it. The exact permission matrix of these modes must
-// be fixed by the design ticket before venue-account routing is built.
+// be settled before venue-account routing is built.
 //
 // An order without a venue account takes the most specific configured default:
 // the account binding before the connection default. With neither configured,

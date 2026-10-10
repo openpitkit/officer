@@ -201,7 +201,7 @@ func NewLocalNode(
 // operator-facing code, never the DB/engine surrogate: the audit row itself
 // stores code and title only, so resolving or emitting an engine id adds no
 // recovery value. The engine mutation already committed, so a failed store
-// write leaves engine and store divergent; the P7 cascade is intentionally
+// write leaves engine and store divergent; this cascade is intentionally
 // straight-to-fatal (it does not block the account first) because there is no
 // safe in-process state to fall back to
 // once the durable record is lost.
@@ -250,7 +250,7 @@ func (n *localNode) fatalPostCommitAudit(
 // engine surrogate. The admin block, group, asset, and limit paths use it so
 // the diagnostic never resolves or emits the DB/engine account id; the audit row
 // itself already stores code and title only. Like fatalPostEnginePersistence
-// this is the straight-to-fatal P7 cascade: the engine mutation committed and
+// this is the straight-to-fatal cascade: the engine mutation committed and
 // its audit trail is now lost.
 func (n *localNode) fatalPostEngineAuditByCode(
 	operation, subjectKind, code string, err error,

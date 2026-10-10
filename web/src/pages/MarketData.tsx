@@ -205,7 +205,7 @@ interface PairUsage {
 type PairUsageMap = Record<string, PairUsage[]>;
 type DiagnosticAction = MarketDataDiagnostic["actions"][number];
 
-// secType set surfaced in the IB contract editor (Locked decision 4).
+// secType set surfaced in the IB contract editor.
 const IB_SEC_TYPES = ["STK", "CASH", "CRYPTO", "FUT", "IND", "OPT"] as const;
 
 // Exchange/contract defaults applied when the operator switches secType. Keys
@@ -883,7 +883,7 @@ export function ibSecTypePatch(
   };
 }
 
-// The set of conditional fields each secType reveals (Locked decision 4).
+// The set of conditional fields each secType reveals.
 // eslint-disable-next-line react-refresh/only-export-components
 export function ibSecTypeFields(secType: string | undefined): {
   primaryExchange: boolean;

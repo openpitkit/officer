@@ -515,8 +515,8 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 }
 
 // listOrders is the shared order-list query: it filters by the non-empty
-// account and source, orders newest first by (at, id) per the §9 index, and
-// applies the optional positive limit.
+// account and source, orders newest first by the (at, id) index, and applies
+// the optional positive limit.
 func (r *realmStore) listOrders(
 	ctx context.Context, account domain.AccountID, source domain.Source, limit int,
 ) ([]domain.Order, error) {
@@ -1341,7 +1341,7 @@ func tradeListOrderBy(sortColumn string, sort fwstore.SortSpec) string {
 }
 
 // listTrades is the shared trade-list query: it filters by the non-empty account
-// and source, orders newest first by (at, id) per the §9 index, and applies the
+// and source, orders newest first by the (at, id) index, and applies the
 // optional positive limit.
 func (r *realmStore) listTrades(
 	ctx context.Context, account domain.AccountID, source domain.Source, limit int,

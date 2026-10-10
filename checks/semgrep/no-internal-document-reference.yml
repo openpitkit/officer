@@ -18,6 +18,12 @@
 # This public repository uses self-contained documentation. References to
 # unpublished internal material disclose information that readers cannot
 # inspect, so the relevant contract belongs in this repository instead.
+#
+# Published documentation lives under docs/, so a path through a bare doc/
+# directory points outside the repository. Matching the directory rather than
+# its sections keeps unpublished section names out of this rule. A doc/ segment
+# inside a URL is a public page, not a path, and is left alone. A relative path
+# into a design subtree is matched on its own, without the doc/ prefix.
 
 rules:
   - id: no-internal-document-reference
@@ -27,7 +33,7 @@ rules:
       State the relevant contract in this repository instead.
     severity: ERROR
     languages: [generic]
-    pattern-regex: 'doc[/]design'
+    pattern-regex: '(?:(?<![A-Za-z0-9_./-])|(?<=\./))doc/[A-Za-z_]|design/[a-z_]+/'
     paths:
       exclude:
         - /web/node_modules

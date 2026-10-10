@@ -1263,11 +1263,11 @@ func mustWorkflow(t *testing.T, svc *backend.Service) backend.ApprovalToken {
 	return tok
 }
 
-// TestService_SubmitOrderApprovalReadBack covers the C2 read-back path: a signed
-// submit stamps the attestation onto the order's verdict event, and GetOrder
-// returns it via OrderEvent.Attestation addressed by the event's external id -
-// never a surrogate or engine id. The payload also carries the order's external
-// id.
+// TestService_SubmitOrderApprovalReadBack covers the approval read-back path: a
+// signed submit stamps the attestation onto the order's verdict event, and
+// GetOrder returns it via OrderEvent.Attestation addressed by the event's
+// external id - never a surrogate or engine id. The payload also carries the
+// order's external id.
 func TestService_SubmitOrderApprovalReadBack(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{

@@ -510,7 +510,7 @@ type SigningConfigEntry struct {
 	Value string `json:"value"`
 }
 
-// OrderRecord is a portable order row. It is the Phase A domain order, already
+// OrderRecord is a portable order row. It is the domain order, already
 // portable (external id, code/external-id links and the opaque SDK lock blob; no
 // surrogate or engine id). Signed attestations travel per-event: each portable
 // OrderEvent carries its own 1:1 attestation, so they restore with the event

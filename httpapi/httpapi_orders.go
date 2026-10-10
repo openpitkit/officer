@@ -184,10 +184,9 @@ func handleGetOrderEventReproduction(svc backend.ControlPlane) http.HandlerFunc 
 			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
-		// Reproduction-permission seam: a future controller/reproduction capability
-		// check slots in here, gating this endpoint by capability without
-		// restructuring. It is intentionally the single guard point; the RBAC system
-		// itself is out of scope for this change.
+		// Reproduction-permission seam: a controller/reproduction capability check
+		// belongs here, gating this endpoint by capability without restructuring.
+		// It is intentionally the single guard point.
 		detail, err := svc.GetOrder(r.Context(), orderID)
 		if err != nil {
 			httpx.WriteErr(w, err)

@@ -130,7 +130,7 @@ so it never enters the embedded `web/dist` SPA bundle.
 ## Develop
 
 ```bash
-npm install      # package.json gained react-router-dom + Radix dialog/select
+npm install      # install dependencies from package.json
 npm run dev      # Vite dev server on :5173, proxies /api -> 127.0.0.1:8787
 ```
 

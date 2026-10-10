@@ -15,9 +15,9 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// All RealmStore methods are now implemented in their own table-group files.
-// This file is retained as a placeholder so the package compiles cleanly when
-// a future phase adds a new method to the RealmStore interface before its
-// implementation lands.
+// All RealmStore methods are implemented in their own table-group files. This
+// file is the place for a temporary stub when a new method is added to the
+// RealmStore interface before its implementation lands, so the package keeps
+// compiling.
 
 package sqlite

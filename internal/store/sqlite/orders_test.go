@@ -40,11 +40,10 @@ import (
 // seedOrderFixtures creates the dictionary rows the orders group references: an
 // asset pair, a principal and an account. It returns the realm handle.
 //
-// Balances and signing keys belong to store groups that other sub-agents still
-// stub; their public methods return ErrNotImplemented. So these tests seed and
+// Balances and signing keys belong to other store groups. These tests seed and
 // read those two tables directly with SQL through the shared connection (see
-// seedBalance/getBalanceRow/seedSigningKey) rather than the stubbed public
-// methods, which keeps the orders-group coverage self-contained.
+// seedBalance/getBalanceRow/seedSigningKey) rather than through those groups'
+// public methods, which keeps the orders-group coverage self-contained.
 func seedOrderFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
@@ -65,7 +64,7 @@ func seedOrderFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 }
 
 // seedBalance inserts a balance row directly, resolving the account and asset to
-// their surrogate ids; the public UpsertBalance is another sub-agent's stub.
+// their surrogate ids, without going through the public UpsertBalance.
 func seedBalance(
 	t *testing.T, ctx context.Context, rs fwstore.RealmStore,
 	account domain.AccountID, asset, available, held, incoming, realized string,
@@ -97,8 +96,8 @@ type balanceRow struct {
 	available, held, incoming, realized string
 }
 
-// getBalanceRow reads a balance row directly; the public GetBalance is another
-// sub-agent's stub. The bool is false when no row exists.
+// getBalanceRow reads a balance row directly, without going through the public
+// GetBalance. The bool is false when no row exists.
 func getBalanceRow(
 	t *testing.T, ctx context.Context, rs fwstore.RealmStore, account domain.AccountID, asset string,
 ) (balanceRow, bool) {
@@ -129,8 +128,8 @@ func getBalanceRow(
 }
 
 // seedSigningKey inserts a signing key row directly so an event_attestation row
-// can satisfy its ON DELETE RESTRICT FK; the public UpsertSigningKey is another
-// sub-agent's stub.
+// can satisfy its ON DELETE RESTRICT FK, without going through the public
+// UpsertSigningKey.
 func seedSigningKey(t *testing.T, ctx context.Context, rs fwstore.RealmStore, keyID string) {
 	t.Helper()
 	seed := []byte("00000000000000000000000000000001")

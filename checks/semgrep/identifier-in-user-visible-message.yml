@@ -17,6 +17,9 @@
 
 # Operator-facing reject, block, and administration messages keep account and
 # group identifiers in structural fields rather than rendered text.
+#
+# The identifier matches as a bare variable and as the last field of a selector,
+# so req.AccountID is caught as well as accountID.
 
 rules:
   - id: identifier-in-user-visible-message
@@ -32,7 +35,7 @@ rules:
           - pattern: fmt.Sprintf($FORMAT, ..., $IDENTIFIER, ...)
       - metavariable-regex:
           metavariable: $IDENTIFIER
-          regex: (?i)^(account_?id|group_?id)$
+          regex: (?i)^(.*\.)?(account_?id|group_?id)$
     paths:
       # No include list: the formatting calls named in the pattern are what
       # scopes this rule, not a file extension. Tests are deliberately in

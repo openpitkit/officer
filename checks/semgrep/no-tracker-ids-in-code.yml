@@ -17,16 +17,21 @@
 
 # This rule scans its own directory. Source and comments describe pending work
 # in words so they remain useful without access to a separate tracking system.
+#
+# Prefixes are listed explicitly: a generic [A-Z]+-<digits> pattern would match
+# UTF-8, SHA-256, ISO-8601 and every similar spelling. Links into a hosted
+# tracker are matched by host, whatever issue they point at.
 
 rules:
   - id: no-tracker-ids-in-code
     message: >-
-      Issue identifiers do not belong in source. They rot when the tracker
-      changes and mean nothing to a reader without access. Describe the
-      pending work in words.
+      Issue identifiers and links into an issue tracker do not belong in
+      source. They rot when the tracker changes and mean nothing to a reader
+      without access. Describe the pending work in words.
     severity: ERROR
     languages: [generic]
-    pattern-regex: '\bOF-\d+\b|\bOPENPIT-\d+\b|\bSDK-\d+\b'
+    pattern-regex: >-
+      \b(OPENPIT|PIT|SDK|OF|OFS|CLD|CLW|JMW)-\d+\b|TODO\([^)]*-\d+\)|\b[a-z0-9-]+\.atlassian\.net\b|\bapp\.plane\.so\b|\blinear\.app/
     paths:
       exclude:
         - /web/node_modules

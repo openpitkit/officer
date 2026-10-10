@@ -22,8 +22,7 @@
 *.test
 *.out
 
-# Native runtime library dropped here for Docker Strategy B builds (see
-# justfile docker-build-local recipe and Dockerfile DYLIB_PATH comment).
+# Native runtime library a local Docker build may place in the repository root.
 /libopenpit_ffi.so
 /libopenpit_ffi.dylib
 

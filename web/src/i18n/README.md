@@ -38,7 +38,7 @@ The frontend auth predicate is intentionally rendering-only. It mirrors the
 backend authorizer conceptually, but only hides navigation, routes, pages, and
 actions in the browser; backend execution remains guarded server-side.
 
-## Conventions for the extraction phases
+## Conventions
 
 ### Namespaces
 
@@ -73,8 +73,8 @@ REST/MCP JSON. **They MUST NEVER be translated, re-cased, or renamed.**
 
 Only their *display labels* become translation keys: `POLICY_LABELS`,
 `SCOPE_LABELS`, and the `label` / `description` / `hint` fields of
-`POLICY_CATALOG`. The suggested approach for a later phase is a `domain`
-namespace keyed **by identifier**, e.g.
+`POLICY_CATALOG`. The intended approach is a `domain` namespace keyed **by
+identifier**, e.g.
 
 ```jsonc
 // locales/en/domain.json
@@ -87,13 +87,12 @@ namespace keyed **by identifier**, e.g.
 looked up as `t("domain:policy.rate_limit.label")` with the raw `rate_limit`
 identifier still flowing unchanged through the wire and the catalog maps.
 
-Do **not** migrate `vocabulary.ts` or its consumers in phase 1 - this section
-only records the intended approach.
+`vocabulary.ts` and its consumers are not migrated yet; this section records
+the intended approach.
 
 ## Lint guardrail
 
-`web/eslint.config.js` enables `i18next/no-literal-string` at **"warn"** for
-this phase. Un-migrated files are expected to warn; a later phase drains the
-warnings to zero and flips the rule to **"error"**. The migrated pilot
-(`Service.tsx`) produces no `no-literal-string` warnings and is the template to
-copy.
+`web/eslint.config.js` enables `i18next/no-literal-string` at **"warn"** while
+pages are being migrated. Un-migrated files are expected to warn; once the
+warnings reach zero the rule becomes **"error"**. `Service.tsx` produces no
+`no-literal-string` warnings and is the template to copy.

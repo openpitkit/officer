@@ -175,7 +175,7 @@ install-semgrep:
 
 # Run the Semgrep invariant rule set over the whole tree.
 check-semgrep: install-semgrep
-    {{ semgrep }} --config checks/semgrep/ --error --quiet .
+    {{ semgrep }} --config checks/semgrep/ --error --quiet --metrics=off --disable-version-check .
 
 # Lint all.
 [parallel]
