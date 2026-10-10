@@ -31,8 +31,15 @@ import (
 )
 
 // ControlPlane is the backend seam consumed by HTTP and extension handlers.
+// A method that reads or changes account-owned data - lists, counts, orders,
+// limits, trading access, the overview - needs the caller in its context
+// (auth.ContextWithCaller): the installed AccountScope answers per caller, so
+// such a call without one is refused, under EveryAccount too.
 type ControlPlane interface {
 	Status(ctx context.Context) (Status, error)
+	// AccountFeatures reports the account surfaces the installed AccountScope
+	// offers clients.
+	AccountFeatures() AccountFeatures
 	ListAccounts(ctx context.Context) ([]domain.Account, error)
 	ListAccountRows(
 		ctx context.Context, filter store.AccountListFilter,
@@ -118,6 +125,12 @@ type ControlPlane interface {
 	) (store.AuditListPage, error)
 	ListMcpAccess(ctx context.Context) ([]McpCommand, error)
 	SetMcpAccess(ctx context.Context, command string, enabled bool) error
+	Setting(ctx context.Context, key string) (string, bool, error)
+	// SetSetting upserts one realm-wide setting under the caller resolved from
+	// ctx. The key is a code constant owned by one consumer, never client
+	// input; domain.SettingKeyNoESign is reserved for the signing configuration
+	// (SetNoESign) and is refused here.
+	SetSetting(ctx context.Context, key, value string) error
 	CommandEnabled(ctx context.Context, command string) (bool, error)
 	WelcomeSeen(ctx context.Context) (bool, error)
 	SetWelcomeSeen(ctx context.Context, seen bool) error

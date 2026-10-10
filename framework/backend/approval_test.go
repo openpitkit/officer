@@ -39,7 +39,7 @@ func TestBuildExecutionReportPayloadSignsWriteSetLeaves(t *testing.T) {
 		Leaves:      "5",
 	}
 
-	payload, err := (&Service{}).buildExecutionReportPayload(order, persistence)
+	payload, err := (&Service{scope: EveryAccount{}}).buildExecutionReportPayload(order, persistence)
 	if err != nil {
 		t.Fatalf("buildExecutionReportPayload: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestBuildExecutionReportPayloadCarriesTypedBlockCause(t *testing.T) {
 		Code: domain.RejectCodePnlKillSwitchTriggered, Reason: "lower bound breached",
 		Details: "account pnl below lower bound",
 	}
-	payload, err := (&Service{}).buildExecutionReportPayload(
+	payload, err := (&Service{scope: EveryAccount{}}).buildExecutionReportPayload(
 		domain.Order{Account: block.Account},
 		engine.ExecutionReportPersistence{Blocks: []domain.AccountBlock{block}},
 	)
@@ -102,7 +102,7 @@ func TestBuildImmediateSettlementPayloadSignsWriteSetLeaves(t *testing.T) {
 		Leaves:      "5",
 	}
 
-	payload, err := (&Service{}).buildImmediateSettlementPayload(
+	payload, err := (&Service{scope: EveryAccount{}}).buildImmediateSettlementPayload(
 		order, event, &persistence,
 	)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestBuildImmediateSettlementPayloadSignsWriteSetLeaves(t *testing.T) {
 			domain.AttestationRequestExecutionReport,
 		)
 	}
-	if _, err := (&Service{}).buildImmediateSettlementPayload(
+	if _, err := (&Service{scope: EveryAccount{}}).buildImmediateSettlementPayload(
 		order, event, nil,
 	); err == nil {
 		t.Fatal("settlement without a write set: want an error")

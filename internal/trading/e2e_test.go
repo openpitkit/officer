@@ -369,7 +369,7 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 			return n, eng, err
 		})
 		builder.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) { return signing.New(st) })
-		builder.SetServiceFactory(func(n node.Node, md backend.MarketDataRuntime, rt backend.TradingRuntime, signer fwsigning.Service,
+		builder.SetServiceFactory(func(_ context.Context, n node.Node, md backend.MarketDataRuntime, rt backend.TradingRuntime, signer fwsigning.Service,
 			_ *marketdata.Registry, _ *frameworkmcp.ToolRegistry) (backend.ControlPlane, error) {
 			return backend.New(n, md, signer, engine.LockSettlementPrice, backend.WithTradingRuntime(rt))
 		})

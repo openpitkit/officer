@@ -178,7 +178,8 @@ func (r *memoryRealm) ListOrderRows(
 	}
 	orders := make([]domain.Order, 0, len(all))
 	for _, order := range all {
-		if !textMatches(filter.BaseAsset, order.BaseAsset) ||
+		if !restrictionMatches(filter.Restriction, order.Account) ||
+			!textMatches(filter.BaseAsset, order.BaseAsset) ||
 			!textMatches(filter.QuoteAsset, order.QuoteAsset) {
 			continue
 		}
@@ -218,17 +219,30 @@ func (r *memoryRealm) ListAllOrders(
 	return out, nil
 }
 
-func (r *memoryRealm) CountOrders(context.Context) (int, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.orders), nil
-}
-
-func (r *memoryRealm) CountActiveOrders(context.Context) (int, error) {
+func (r *memoryRealm) CountOrders(
+	_ context.Context, restriction domain.AccountRestriction,
+) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	n := 0
 	for _, order := range r.orders {
+		if restrictionMatches(restriction, order.Account) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r *memoryRealm) CountActiveOrders(
+	_ context.Context, restriction domain.AccountRestriction,
+) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, order := range r.orders {
+		if !restrictionMatches(restriction, order.Account) {
+			continue
+		}
 		switch order.Status {
 		case domain.OrderStatusSubmitted,
 			domain.OrderStatusAccepted,
@@ -240,12 +254,14 @@ func (r *memoryRealm) CountActiveOrders(context.Context) (int, error) {
 	return n, nil
 }
 
-func (r *memoryRealm) CountOrdersSince(_ context.Context, since time.Time) (int, error) {
+func (r *memoryRealm) CountOrdersSince(
+	_ context.Context, since time.Time, restriction domain.AccountRestriction,
+) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var n int
 	for _, order := range r.orders {
-		if !order.At.Before(since) {
+		if restrictionMatches(restriction, order.Account) && !order.At.Before(since) {
 			n++
 		}
 	}
@@ -636,7 +652,8 @@ func (r *memoryRealm) ListTradeRows(
 		if !filter.ExternalID.IsZero() && trade.ExternalID != filter.ExternalID {
 			continue
 		}
-		if !textMatches(filter.Account, trade.Account.String()) ||
+		if !restrictionMatches(filter.Restriction, trade.Account) ||
+			!textMatches(filter.Account, trade.Account.String()) ||
 			!textMatches(filter.BaseAsset, trade.BaseAsset) ||
 			!textMatches(filter.QuoteAsset, trade.QuoteAsset) {
 			continue

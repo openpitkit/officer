@@ -94,6 +94,7 @@ func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
 	ctx = auth.ContextWithCaller(ctx, auth.SystemCaller())
 
 	assertHostRouteAdded(t, router)
+	assertAccountModeServed(t, router)
 	assertHostToolCatalogued(t, service)
 	assertHostProvider(t, ctx, service)
 	assertRouteAndToolReplacement(t, ctx, router, service)
@@ -219,6 +220,23 @@ func assertHostRouteAdded(t *testing.T, router http.Handler) {
 	}
 	if body["example"] != "ok" {
 		t.Fatalf("custom host route body = %#v", body)
+	}
+}
+
+// assertAccountModeServed checks that the host, which rebuilds its routes from
+// officer.RouteConfig, still serves the account mode Register enforces.
+func assertAccountModeServed(t *testing.T, router http.Handler) {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(
+		rec,
+		httptest.NewRequest(http.MethodGet, "/api/v1/account-mode", nil),
+	)
+	const want = `{"mode":null,"account":"",` +
+		`"features":{"accounts":true,"account":""},"restartRequired":false}`
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
+		t.Fatalf("GET /account-mode = %d %s, want 200 %s", rec.Code, got, want)
 	}
 }
 
@@ -366,6 +384,10 @@ type customHostSource struct {
 
 func (s *customHostSource) Status(context.Context) (mcp.Status, error) {
 	return mcp.Status{}, nil
+}
+
+func (s *customHostSource) AccountFeatures() backend.AccountFeatures {
+	return backend.EveryAccount{}.Features()
 }
 
 func (s *customHostSource) GetAccountState(context.Context, domain.AccountID) (

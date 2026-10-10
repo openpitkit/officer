@@ -582,15 +582,16 @@ CREATE TABLE secret_state (
     vacuumed_at  TEXT
 );
 
--- Global signing configuration; key is a hardcoded enum, not a dictionary.
-CREATE TABLE signing_config (
+-- Realm-wide settings; key is a hardcoded enum, not a dictionary. Each key is a
+-- constant owned by the code that reads it (signing owns no_esign).
+CREATE TABLE setting (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
 -- Intentional default: fresh installs ship with eSign OFF ('1'). The operator
 -- opts in to signing; this is not a leftover.
-INSERT OR IGNORE INTO signing_config (key, value) VALUES ('no_esign', '1');
+INSERT OR IGNORE INTO setting (key, value) VALUES ('no_esign', '1');
 
 -- Per-command MCP access overrides; command is the key, enabled is the toggle.
 CREATE TABLE mcp_access (

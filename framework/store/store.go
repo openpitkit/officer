@@ -295,6 +295,13 @@ type AccountListFilter struct {
 	Venue VenueFilter
 	Sort  SortSpec
 	Page  PageSpec
+
+	// Restriction is the list's mandatory account restriction, applied in the
+	// query with the filters above before the total and the page are taken.
+	// It keeps the restricted account itself; IncludeUnowned adds no rows. The
+	// zero value restricts nothing. The control plane sets it from its account
+	// scope and replaces any value the caller supplies.
+	Restriction domain.AccountRestriction
 }
 
 // Validate rejects P&L selection without an explicit denomination.
@@ -352,6 +359,13 @@ type OrderListFilter struct {
 	At         TimeRangeFilter
 	Sort       SortSpec
 	Page       PageSpec
+
+	// Restriction is the list's mandatory account restriction, applied in the
+	// query with the filters above before the total and the page are taken.
+	// Every order has an account, so IncludeUnowned adds no rows. The zero
+	// value restricts nothing. The control plane sets it from its account
+	// scope and replaces any value the caller supplies.
+	Restriction domain.AccountRestriction
 }
 
 // OrderListRow is an order row plus list-only data.
@@ -389,6 +403,13 @@ type BalanceListFilter struct {
 	UpdatedAt                TimeRangeFilter
 	Sort                     SortSpec
 	Page                     PageSpec
+
+	// Restriction is the list's mandatory account restriction, applied in the
+	// query with the filters above before the total and the page are taken.
+	// Every balance has an account, so IncludeUnowned adds no rows. The zero
+	// value restricts nothing. The control plane sets it from its account
+	// scope and replaces any value the caller supplies.
+	Restriction domain.AccountRestriction
 }
 
 // Validate reports whether every denominated threshold names its currency.
@@ -444,6 +465,16 @@ type GroupListFilter struct {
 	Venue VenueFilter
 	Sort  SortSpec
 	Page  PageSpec
+
+	// Restriction is the list's mandatory account restriction, applied in the
+	// query with the filters above before the total and the page are taken.
+	// It keeps only the groups the restricted account is a member of, and the
+	// account and position counts, their filters and their sort count that
+	// member alone. The synthetic default group is no membership group, so a
+	// restriction omits it. IncludeUnowned adds no rows. The zero value
+	// restricts nothing. The control plane sets it from its account scope and
+	// replaces any value the caller supplies.
+	Restriction domain.AccountRestriction
 }
 
 // GroupListRow is a group row plus list-only aggregates.
@@ -509,6 +540,16 @@ type PolicyListFilter struct {
 	Kind         *PolicyKind
 	Sort         SortSpec
 	Page         PageSpec
+
+	// Restriction is the list's mandatory account restriction, applied in the
+	// query with the filters above before the total and the page are taken.
+	// It keeps the barriers of the restricted account and, with
+	// IncludeUnowned, the barriers that name no account: broker, global and
+	// asset scopes, and the account-group barriers of a group the restricted
+	// account is a member of; a barrier of any other group stays out. The zero
+	// value restricts nothing. The control plane sets it from its account scope and replaces
+	// any value the caller supplies.
+	Restriction domain.AccountRestriction
 }
 
 // PolicyListRow is one barrier flattened into the common policy shape: the kind
@@ -543,6 +584,13 @@ type AdjustmentListFilter struct {
 	At         TimeRangeFilter
 	Sort       SortSpec
 	Page       PageSpec
+
+	// Restriction is the list's mandatory account restriction, applied in the
+	// query with the filters above before the total and the page are taken.
+	// Every adjustment has an account, so IncludeUnowned adds no rows. The
+	// zero value restricts nothing. The control plane sets it from its account
+	// scope and replaces any value the caller supplies.
+	Restriction domain.AccountRestriction
 }
 
 // AdjustmentListPage is a paged adjustment-list result.
@@ -566,6 +614,13 @@ type TradeListFilter struct {
 	LockPrice  DecimalRangeFilter
 	Sort       SortSpec
 	Page       PageSpec
+
+	// Restriction is the list's mandatory account restriction, applied in the
+	// query with the filters above before the total and the page are taken.
+	// Every trade has an account, so IncludeUnowned adds no rows. The zero
+	// value restricts nothing. The control plane sets it from its account
+	// scope and replaces any value the caller supplies.
+	Restriction domain.AccountRestriction
 }
 
 // TradeListRow is a trade row plus list-only data.
@@ -593,6 +648,14 @@ type AuditListFilter struct {
 	Category   domain.AuditCategory
 	At         TimeRangeFilter
 	Page       PageSpec
+
+	// Restriction is the list's mandatory account restriction, applied in the
+	// query with the filters above before the total and the page are taken.
+	// It matches the account snapshot; with IncludeUnowned it also keeps the
+	// rows recorded with no account. The zero value restricts nothing. The
+	// control plane sets it from its account scope and replaces any value the
+	// caller supplies.
+	Restriction domain.AccountRestriction
 }
 
 // AuditListPage is a paged audit-list result.
@@ -770,7 +833,8 @@ type RealmStore interface {
 	// surface includes the synthetic default group (code empty) for accounts
 	// without a group; persisted dictionary reads through ListGroups do not. The
 	// default group is pinned first on the first page (offset zero) and excluded
-	// from the real-group sort, paging window, and Total.
+	// from the real-group sort, paging window, and Total; a non-zero
+	// filter.Restriction omits it.
 	ListGroupRows(ctx context.Context, filter GroupListFilter) (GroupListPage, error)
 
 	// SetGroupNotes replaces the notes of the identified group. Returns
@@ -1050,15 +1114,24 @@ type RealmStore interface {
 		ctx context.Context, account domain.AccountID, source domain.Source,
 	) ([]domain.Order, error)
 
-	// CountOrders returns the total number of orders recorded in the realm.
-	CountOrders(ctx context.Context) (int, error)
+	// CountOrders returns the total number of orders recorded in the realm
+	// within restriction, the mandatory account restriction the order list
+	// applies; every order has an account, so IncludeUnowned adds none. The zero
+	// restriction counts every order.
+	CountOrders(ctx context.Context, restriction domain.AccountRestriction) (int, error)
 
-	// CountActiveOrders returns orders in the working lifecycle set.
-	CountActiveOrders(ctx context.Context) (int, error)
+	// CountActiveOrders returns orders in the working lifecycle set within
+	// restriction, as CountOrders applies it.
+	CountActiveOrders(
+		ctx context.Context, restriction domain.AccountRestriction,
+	) (int, error)
 
 	// CountOrdersSince returns the number of orders whose at timestamp is at or
-	// after since. Timestamps are compared as RFC3339Nano UTC text.
-	CountOrdersSince(ctx context.Context, since time.Time) (int, error)
+	// after since, within restriction as CountOrders applies it. Timestamps are
+	// compared as RFC3339Nano UTC text.
+	CountOrdersSince(
+		ctx context.Context, since time.Time, restriction domain.AccountRestriction,
+	) (int, error)
 
 	// ExecutionReportExists reports whether id is already bound to a persisted
 	// execution-report request in this realm.
@@ -1162,9 +1235,10 @@ type RealmStore interface {
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
 
 	// ListAuditFiltered returns the most recent n audit rows matching the filter,
-	// newest first, applying the account, source, and action filters in the query
-	// so the limit bounds the filtered set. A zero-value filter matches all rows;
-	// a non-positive n returns an empty slice.
+	// newest first, applying the account restriction and the account, source,
+	// and action filters in the query so the limit bounds the filtered set. A
+	// zero-value filter matches all rows; a non-positive n returns an empty
+	// slice.
 	ListAuditFiltered(
 		ctx context.Context, filter domain.AuditFilter, n int,
 	) ([]domain.AuditRow, error)
@@ -1435,12 +1509,14 @@ type RealmStore interface {
 	// DeactivateAllSigningKeys sets active=0 for every signing key.
 	DeactivateAllSigningKeys(ctx context.Context) error
 
-	// GetSigningConfig returns the value for the given config key. The bool is
-	// false when absent.
-	GetSigningConfig(ctx context.Context, key string) (string, bool, error)
+	// --- Realm settings ---
 
-	// SetSigningConfig upserts the value for the given config key.
-	SetSigningConfig(ctx context.Context, key, value string) error
+	// GetSetting returns the value of the realm-wide setting stored under key.
+	// The bool is false when the setting is absent.
+	GetSetting(ctx context.Context, key string) (string, bool, error)
+
+	// SetSetting upserts the value of the realm-wide setting stored under key.
+	SetSetting(ctx context.Context, key, value string) error
 
 	// --- MCP access control ---
 

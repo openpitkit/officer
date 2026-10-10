@@ -451,7 +451,7 @@ func TestTradingStatusRedactsOverlappingCredentials(t *testing.T) {
 	rt.states = map[domain.ExternalID]trading.ConnectionState{
 		c.ExternalID: {Unavailable: "denied overlap-long overlap"},
 	}
-	status, err := s.GetTrading(context.Background())
+	status, err := s.GetTrading(systemCtx())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,7 +601,7 @@ func TestTradingStatus(t *testing.T) {
 	rt.states = map[domain.ExternalID]trading.ConnectionState{c.ExternalID: {}, "connection-2": {Unavailable: "denied test-secret-value nested-secret"}}
 	for _, sealed := range []bool{true, false} {
 		n.sealed = sealed
-		got, err := s.GetTrading(context.Background())
+		got, err := s.GetTrading(systemCtx())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -734,7 +734,7 @@ func TestTradingDestinations(t *testing.T) {
 		{domain.TradingModePaper, []domain.ExternalID{"connection-3", "connection-1"}},
 		{domain.TradingModeLive, []domain.ExternalID{"connection-2"}},
 	} {
-		got, err := s.ListTradingDestinations(context.Background(), "acct-1", tc.mode)
+		got, err := s.ListTradingDestinations(systemCtx(), "acct-1", tc.mode)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -754,10 +754,10 @@ func TestTradingDestinations(t *testing.T) {
 			}
 		}
 	}
-	if _, err := s.ListTradingDestinations(context.Background(), "missing", ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := s.ListTradingDestinations(systemCtx(), "missing", ""); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatal("unknown account did not fail")
 	}
-	if _, err := s.ListTradingDestinations(context.Background(), "acct-1", "other"); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := s.ListTradingDestinations(systemCtx(), "acct-1", "other"); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatal("invalid mode did not fail")
 	}
 }
@@ -883,7 +883,7 @@ func TestTradingRequiresCaller(t *testing.T) {
 	s, n, rt := newTradingTestService(t)
 	n.connections = []domain.TradingConnection{tradingTestConnection()}
 	for name, call := range tradingTestCalls(s, context.Background()) {
-		if name == "get" || name == "check" || name == "verify" || name == "search" || name == "destinations" {
+		if name == "check" || name == "verify" || name == "search" {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
@@ -898,7 +898,7 @@ func TestTradingRequiresCaller(t *testing.T) {
 }
 
 func TestTradingRequiresRuntime(t *testing.T) {
-	s := &Service{}
+	s := &Service{scope: EveryAccount{}}
 	for name, call := range tradingTestCalls(s, systemCtx()) {
 		t.Run(name, func(t *testing.T) {
 			err := call()

@@ -58,6 +58,9 @@ func (r *memoryRealm) ListGroups(context.Context) ([]domain.AccountGroup, error)
 	return out, nil
 }
 
+// ListGroupRows mirrors the SQLite group list. A non-zero account restriction
+// keeps only the groups the restricted account is a member of, counting that
+// member alone, and omits the default group.
 func (r *memoryRealm) ListGroupRows(
 	ctx context.Context, filter store.GroupListFilter,
 ) (store.GroupListPage, error) {
@@ -69,28 +72,33 @@ func (r *memoryRealm) ListGroupRows(
 	if err != nil {
 		return store.GroupListPage{}, err
 	}
+	restricted := filter.Restriction.Account != ""
 	out := make([]store.GroupListRow, 0, len(groups)+1)
-	defaultRow := store.GroupListRow{
-		Group: domain.AccountGroup{Code: "", Currency: r.groups[""].Currency},
-	}
-	for _, account := range r.accounts {
-		if account.GroupCode != "" {
-			continue
+	if !restricted {
+		defaultRow := store.GroupListRow{
+			Group: domain.AccountGroup{Code: "", Currency: r.groups[""].Currency},
 		}
-		defaultRow.AccountCount++
-		for _, balance := range r.balances {
-			if balance.Account == account.Code {
-				defaultRow.PositionCount++
+		for _, account := range r.accounts {
+			if account.GroupCode != "" {
+				continue
+			}
+			defaultRow.AccountCount++
+			for _, balance := range r.balances {
+				if balance.Account == account.Code {
+					defaultRow.PositionCount++
+				}
 			}
 		}
+		out = append(out, defaultRow)
 	}
-	out = append(out, defaultRow)
+	total := 0
 	for _, group := range groups {
 		row := store.GroupListRow{
 			Group: group, VenueAccess: r.venueAccess("", group.Code),
 		}
 		for _, account := range r.accounts {
-			if account.GroupCode != group.Code {
+			if account.GroupCode != group.Code ||
+				!restrictionMatches(filter.Restriction, account.Code) {
 				continue
 			}
 			row.AccountCount++
@@ -100,9 +108,13 @@ func (r *memoryRealm) ListGroupRows(
 				}
 			}
 		}
+		if restricted && row.AccountCount == 0 {
+			continue
+		}
 		out = append(out, row)
+		total++
 	}
-	return store.GroupListPage{Rows: out, Total: len(groups)}, nil
+	return store.GroupListPage{Rows: out, Total: total}, nil
 }
 
 func (r *memoryRealm) SetGroupNotes(_ context.Context, code, notes string) error {

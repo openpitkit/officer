@@ -54,7 +54,7 @@ func (n *limitTestNode) PutSpotFundsPnlBoundsLimit(
 
 func newLimitTestService(t *testing.T, n *limitTestNode) *Service {
 	t.Helper()
-	return &Service{node: n}
+	return &Service{node: n, scope: EveryAccount{}}
 }
 
 func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {

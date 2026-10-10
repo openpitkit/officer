@@ -324,15 +324,28 @@ func (s *Service) submitOrderToken(
 	mode string,
 	missing domain.MissingAccountPolicy,
 ) (ApprovalToken, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return ApprovalToken{}, err
+	}
+	scopedAccount, err := s.scope.Account(caller, o.Account)
+	if err != nil {
+		return ApprovalToken{}, err
+	}
+	scopedMissing, err := s.scope.MissingAccount(caller, missing)
+	if err != nil {
+		return ApprovalToken{}, err
+	}
 	// Malformed identity is refused here, not only at a surface: every caller -
 	// HTTP, MCP, or an embedder - reaches the engine lane through this seam, and
 	// an account registered under an unaddressable code could never be read back.
-	if err := domain.ValidateAccountID(o.Account); err != nil {
+	if err := domain.ValidateAccountID(scopedAccount); err != nil {
 		return ApprovalToken{}, err
 	}
 	if err := validateMissingAccountPolicy(o.Account, missing); err != nil {
 		return ApprovalToken{}, err
 	}
+	o.Account, missing = scopedAccount, scopedMissing
 	signer, err := s.signerOrErr()
 	if err != nil {
 		return ApprovalToken{}, err
@@ -358,10 +371,6 @@ func (s *Service) submitOrderToken(
 	// a duplicate id is rejected by the store with domain.ErrAlreadyExists.
 
 	n := s.node
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return ApprovalToken{}, err
-	}
 	submitApprovalID, err := newNonce()
 	if err != nil {
 		return ApprovalToken{}, err
@@ -567,32 +576,46 @@ func (s *Service) submitOrderToken(
 // SubmitDropCopyOrder submits one non-enforcing pre-trade order without ever
 // creating an approval token or lifecycle attestation. A caller-supplied
 // external id is preserved; when omitted, the store assigns one. Duplicate ids
-// follow the ordinary unique-store conflict path. missing must be an explicit
-// domain.MissingAccountCreate, enforced by the shared domain validator.
+// follow the ordinary unique-store conflict path. A drop-copy reports an
+// execution that already happened, so it can never reject a missing account:
+// for an account the caller names, missing must be an explicit
+// domain.MissingAccountCreate, enforced by the shared domain validator; the
+// account scope is never asked for a policy, and the node always receives
+// domain.MissingAccountCreate, whether the caller named the account or the
+// scope supplied it.
 func (s *Service) SubmitDropCopyOrder(
 	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 ) (domain.Order, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	scopedAccount, err := s.scope.Account(caller, o.Account)
+	if err != nil {
+		return domain.Order{}, err
+	}
 	// See submitOrderToken: identity format is a seam check, not a surface check.
-	if err := domain.ValidateAccountID(o.Account); err != nil {
+	if err := domain.ValidateAccountID(scopedAccount); err != nil {
 		return domain.Order{}, err
 	}
 	if err := validateMissingAccountPolicy(o.Account, missing); err != nil {
 		return domain.Order{}, err
 	}
-	if err := domain.ValidateDropCopyMissingAccountPolicy(missing); err != nil {
-		return domain.Order{}, fmt.Errorf("backend: %w", err)
+	// The drop-copy exception binds the policy a client sent with the account
+	// it named; an account the scope supplied carries no client policy.
+	if o.Account != "" {
+		if err := domain.ValidateDropCopyMissingAccountPolicy(missing); err != nil {
+			return domain.Order{}, fmt.Errorf("backend: %w", err)
+		}
 	}
+	o.Account = scopedAccount
 	o.DropCopy = true
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return domain.Order{}, err
-	}
 
 	n := s.node
 
 	// A drop-copy submit must never be signed. Its pre-trade decision was not
 	// enforced, so a submit attestation would falsely claim risk approval.
-	return n.SubmitOrder(ctx, o, missing, caller)
+	return n.SubmitOrder(ctx, o, domain.MissingAccountCreate, caller)
 }
 
 func isDropCopyOrder(order domain.Order) bool {
@@ -629,6 +652,13 @@ func (s *Service) ConfirmExecution(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	if err := s.scope.Visible(caller, stored.Order.Account); err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
 	payload, signer, err := s.authorizeShortcutSubmitVerdict(
 		ctx, stored, "confirmed",
 	)
@@ -636,10 +666,6 @@ func (s *Service) ConfirmExecution(
 		return domain.Order{}, Attestation{}, err
 	}
 
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return domain.Order{}, Attestation{}, err
-	}
 	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
@@ -724,6 +750,13 @@ func (s *Service) CancelOrder(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	if err := s.scope.Visible(caller, stored.Order.Account); err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
 	payload, signer, err := s.authorizeShortcutSubmitVerdict(
 		ctx, stored, "cancelled",
 	)
@@ -731,10 +764,6 @@ func (s *Service) CancelOrder(
 		return domain.Order{}, Attestation{}, err
 	}
 
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return domain.Order{}, Attestation{}, err
-	}
 	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err

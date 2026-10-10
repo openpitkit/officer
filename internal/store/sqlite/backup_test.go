@@ -3381,7 +3381,7 @@ var backupExportedTables = map[string]bool{
 	"trading_access":             true,
 	"venue_order":                true,
 	"signing_key":                true,
-	"signing_config":             true,
+	"setting":                    true,
 	"mcp_access":                 true,
 	"user_setting":               true,
 }

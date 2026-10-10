@@ -66,15 +66,15 @@ func (r *memoryRealm) DeactivateAllSigningKeys(context.Context) error {
 	return nil
 }
 
-func (r *memoryRealm) GetSigningConfig(
+func (r *memoryRealm) GetSetting(
 	_ context.Context, key string,
 ) (string, bool, error) {
-	value, ok := r.signingConfig[key]
+	value, ok := r.settings[key]
 	return value, ok, nil
 }
 
-func (r *memoryRealm) SetSigningConfig(_ context.Context, key, value string) error {
-	r.signingConfig[key] = value
+func (r *memoryRealm) SetSetting(_ context.Context, key, value string) error {
+	r.settings[key] = value
 	return nil
 }
 

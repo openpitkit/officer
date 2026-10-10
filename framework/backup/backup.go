@@ -41,7 +41,7 @@ import (
 )
 
 // FormatVersion is the current portable archive shape.
-const FormatVersion = 2
+const FormatVersion = 3
 
 const (
 	// CredentialFormPlaintext declares that archived credentials are plaintext.
@@ -63,7 +63,8 @@ const (
 	SectionRiskLimits Section = "risk_limits"
 	// SectionMarketData carries market-data instances and their instruments.
 	SectionMarketData Section = "market_data_settings"
-	// SectionGeneralSettings carries the MCP access overrides and signing config.
+	// SectionGeneralSettings carries the MCP access overrides and the realm
+	// settings.
 	SectionGeneralSettings Section = "general_settings"
 	// SectionUserSettings carries the per-user UI settings.
 	SectionUserSettings Section = "user_settings"
@@ -503,9 +504,9 @@ type SigningKey struct {
 	Active bool `json:"active,omitempty"`
 }
 
-// SigningConfigEntry is one portable signing-config key/value pair. The key is a
-// hardcoded enum stored as text.
-type SigningConfigEntry struct {
+// SettingEntry is one portable realm-setting key/value pair. The key is a
+// hardcoded enum stored as text, owned by the code that reads it.
+type SettingEntry struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
@@ -601,8 +602,8 @@ type Data struct {
 	MarketDataInstruments []MarketDataInstrument `json:"marketDataInstruments,omitempty"`
 	// SigningKeys are the signing public keys (by key_id).
 	SigningKeys []SigningKey `json:"signingKeys,omitempty"`
-	// SigningConfig is the global signing configuration (enum keys).
-	SigningConfig []SigningConfigEntry `json:"signingConfig,omitempty"`
+	// Settings are the realm-wide settings (enum keys).
+	Settings []SettingEntry `json:"settings,omitempty"`
 	// McpAccess is the per-command MCP enable/disable overrides.
 	McpAccess map[string]bool `json:"mcpAccess,omitempty"`
 	// UserSettings are the per-user UI settings.
@@ -847,7 +848,7 @@ func FilterData(data Data, scope Scope) Data {
 				out.McpAccess[command] = enabled
 			}
 		}
-		out.SigningConfig = append([]SigningConfigEntry(nil), data.SigningConfig...)
+		out.Settings = append([]SettingEntry(nil), data.Settings...)
 		out.SigningKeys = append([]SigningKey(nil), data.SigningKeys...)
 	}
 	if scope.Included(SectionUserSettings) && data.UserSettings != nil {

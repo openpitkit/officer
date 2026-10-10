@@ -41,7 +41,8 @@ type BusinessCSVExportRequest struct {
 
 // ExportBusinessCSV exports one business entity as CSV or ZIP and records one
 // operator audit event. It intentionally uses export-specific order/trade list
-// paths so display limits cannot truncate downloaded files.
+// paths so display limits cannot truncate downloaded files. Every entity is
+// read through a list the account scope narrows.
 func (s *Service) ExportBusinessCSV(
 	ctx context.Context, req BusinessCSVExportRequest,
 ) (businesscsv.ExportFile, error) {
@@ -66,19 +67,19 @@ func (s *Service) ExportBusinessCSV(
 	case businesscsv.EntityAccounts:
 		accounts, lerr := s.businessCSVAccounts(ctx, req.Filter)
 		if lerr != nil {
-			return businesscsv.ExportFile{}, lerr
+			return businesscsv.ExportFile{}, businessCSVFilterError(lerr)
 		}
 		body, err = businesscsv.EncodeAccounts(accounts, req.Delimiter)
 	case businesscsv.EntityPositions:
 		balances, lerr := s.ListBalances(ctx, req.Filter.Account, req.Filter.Asset)
 		if lerr != nil {
-			return businesscsv.ExportFile{}, lerr
+			return businesscsv.ExportFile{}, businessCSVFilterError(lerr)
 		}
 		body, err = businesscsv.EncodePositions(balances, req.Delimiter)
 	case businesscsv.EntityOrders:
 		orders, lerr := s.ListAllOrders(ctx, req.Filter.Account, req.Filter.Source)
 		if lerr != nil {
-			return businesscsv.ExportFile{}, lerr
+			return businesscsv.ExportFile{}, businessCSVFilterError(lerr)
 		}
 		body, err = businesscsv.EncodeOrders(
 			orders, req.Delimiter, s.businessCSVOrderLockPrice,
@@ -86,7 +87,7 @@ func (s *Service) ExportBusinessCSV(
 	case businesscsv.EntityTrades:
 		trades, lerr := s.ListAllTrades(ctx, req.Filter.Account, req.Filter.Source)
 		if lerr != nil {
-			return businesscsv.ExportFile{}, lerr
+			return businesscsv.ExportFile{}, businessCSVFilterError(lerr)
 		}
 		body, err = businesscsv.EncodeTrades(trades, req.Delimiter)
 	}
@@ -137,23 +138,61 @@ func (s *Service) businessCSVGroups(ctx context.Context) ([]domain.AccountGroup,
 	return out, nil
 }
 
+// businessCSVAccounts lists the exported accounts: those within the account
+// scope's list restriction, narrowed to the filter's account and to its group
+// when they are set. A named account is checked with the scope as the other
+// entities' account filter is, and a named group is an account-group input
+// checked with the scope; their refusals are returned unchanged.
 func (s *Service) businessCSVAccounts(
 	ctx context.Context, filter businesscsv.ExportFilter,
 ) ([]domain.Account, error) {
+	if filter.Account != "" {
+		if _, err := s.listRestriction(ctx, filter.Account); err != nil {
+			return nil, err
+		}
+		if err := domain.ValidateAccountID(filter.Account); err != nil {
+			return nil, err
+		}
+	}
+	if filter.GroupCodeSet && filter.GroupCode != "" {
+		caller, err := auth.CallerFromContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.scope.Group(caller, filter.GroupCode); err != nil {
+			return nil, err
+		}
+	}
 	accounts, err := s.ListAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if !filter.GroupCodeSet {
-		return accounts, nil
-	}
 	filtered := make([]domain.Account, 0, len(accounts))
 	for _, account := range accounts {
-		if account.GroupCode == filter.GroupCode {
-			filtered = append(filtered, account)
+		if filter.Account != "" && account.Code != filter.Account {
+			continue
 		}
+		if filter.GroupCodeSet && account.GroupCode != filter.GroupCode {
+			continue
+		}
+		filtered = append(filtered, account)
 	}
 	return filtered, nil
+}
+
+// businessCSVFilterError points a validation error an export filter caused at
+// that filter in the request body. The lists the export reads take the filter
+// as their own account or account-group input, so their errors name /account
+// or /accountGroup; every other error is returned unchanged.
+func businessCSVFilterError(err error) error {
+	switch domain.ValidationPointer(err) {
+	case "/account":
+		return domain.WithValidationPointer("/filters/account", err)
+	case "/accountGroup":
+		return domain.WithValidationPointer("/filters/groupCode", err)
+	default:
+		return err
+	}
 }
 
 func (s *Service) auditBusinessCSV(
@@ -201,16 +240,25 @@ func businessCSVFilterDetail(filter businesscsv.ExportFilter) string {
 	return strings.Join(parts, ",")
 }
 
-// ListAllOrders returns every order matching export filters, newest first.
+// ListAllOrders returns every order matching export filters, newest first,
+// within the account scope's list restriction, asked with that account.
 func (s *Service) ListAllOrders(
 	ctx context.Context, account domain.AccountID, source domain.Source,
 ) ([]domain.Order, error) {
+	restriction, err := s.listRestriction(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	scoped, ok := restrictedAccount(account, restriction)
+	if !ok {
+		return []domain.Order{}, nil
+	}
 	if account != "" {
 		if err := domain.ValidateAccountID(account); err != nil {
 			return nil, err
 		}
 	}
-	orders, err := s.node.ListAllOrders(ctx, account, source)
+	orders, err := s.node.ListAllOrders(ctx, scoped, source)
 	if err != nil {
 		return nil, err
 	}
@@ -218,16 +266,25 @@ func (s *Service) ListAllOrders(
 	return orders, nil
 }
 
-// ListAllTrades returns every trade matching export filters, newest first.
+// ListAllTrades returns every trade matching export filters, newest first,
+// within the account scope's list restriction, asked with that account.
 func (s *Service) ListAllTrades(
 	ctx context.Context, account domain.AccountID, source domain.Source,
 ) ([]domain.Trade, error) {
+	restriction, err := s.listRestriction(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	scoped, ok := restrictedAccount(account, restriction)
+	if !ok {
+		return []domain.Trade{}, nil
+	}
 	if account != "" {
 		if err := domain.ValidateAccountID(account); err != nil {
 			return nil, err
 		}
 	}
-	trades, err := s.node.ListAllTrades(ctx, account, source)
+	trades, err := s.node.ListAllTrades(ctx, scoped, source)
 	if err != nil {
 		return nil, err
 	}

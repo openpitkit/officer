@@ -94,7 +94,9 @@ const overviewActivityCap = 20
 // adjustments. The feed is derived from the persisted log (newest first,
 // capped), not an in-memory registry. The since boundary delimits "today" for
 // the OrdersToday tally; the caller supplies it (request-local or server-local
-// start-of-day).
+// start-of-day). Every tally and feed is narrowed by the account scope: the
+// composed lists narrow themselves, and the order counts take the scope's
+// list restriction asked with no requested account.
 func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, error) {
 	accounts, err := s.ListAccounts(ctx)
 	if err != nil {
@@ -111,15 +113,19 @@ func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, erro
 	limitCount := len(limits.RateLimits) + len(limits.OrderSizeLimits) +
 		len(limits.SpotFundsPnlBoundsLimits)
 
-	ordersTotal, err := s.node.CountOrders(ctx)
+	restriction, err := s.listRestriction(ctx, "")
+	if err != nil {
+		return Overview{}, err
+	}
+	ordersTotal, err := s.node.CountOrders(ctx, restriction)
 	if err != nil {
 		return Overview{}, fmt.Errorf("backend: count orders: %w", err)
 	}
-	ordersActive, err := s.node.CountActiveOrders(ctx)
+	ordersActive, err := s.node.CountActiveOrders(ctx, restriction)
 	if err != nil {
 		return Overview{}, fmt.Errorf("backend: count active orders: %w", err)
 	}
-	ordersToday, err := s.node.CountOrdersSince(ctx, since)
+	ordersToday, err := s.node.CountOrdersSince(ctx, since, restriction)
 	if err != nil {
 		return Overview{}, fmt.Errorf("backend: count orders since: %w", err)
 	}

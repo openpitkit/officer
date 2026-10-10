@@ -50,6 +50,8 @@ tags:
     description: MCP command access control
   - name: user-settings
     description: Operator UI preferences
+  - name: account-mode
+    description: Single- or multi-account mode of the control plane
   - name: market-data
     description: Market-data source configuration and latest quote snapshots
   - name: trading
@@ -706,7 +708,9 @@ paths:
           in: query
           schema:
             type: string
-          description: Group code. Present with an empty value selects ungrouped accounts.
+          description: >-
+            Group code. Present with an empty value selects ungrouped accounts.
+            In single-account mode no other account's rows are returned.
         - name: venue
           in: query
           schema:
@@ -796,7 +800,7 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
         "409":
-          $ref: "#/components/responses/ConflictError"
+          $ref: "#/components/responses/AccountSetConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -866,7 +870,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/ConflictError"
+          $ref: "#/components/responses/AccountSetConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
     delete:
@@ -1020,7 +1024,7 @@ paths:
         "404":
           $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "409":
-          $ref: "#/components/responses/CurrencyChangeBlockedError"
+          $ref: "#/components/responses/CurrencyChangeBlockedOrAccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1191,6 +1195,10 @@ paths:
     get:
       operationId: listGroups
       summary: List all account groups
+      description: >
+        In single-account mode only the group the default account belongs to is
+        listed, with that account as its only counted member, and the default
+        group is not listed.
       tags: [groups]
       parameters:
         - $ref: "#/components/parameters/CodeFilter"
@@ -1319,7 +1327,7 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
         "409":
-          $ref: "#/components/responses/ConflictError"
+          $ref: "#/components/responses/AccountSetConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1399,7 +1407,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/ConflictError"
+          $ref: "#/components/responses/AccountSetConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1430,13 +1438,17 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          description: Currency-change or dependent-row deletion refusal.
+          description: >-
+            Currency-change or dependent-row deletion refusal, or, when the
+            server runs in single-account mode, a refused change of the account
+            set (`accounts_not_managed`).
           content:
             application/json:
               schema:
-                oneOf:
+                anyOf:
                   - $ref: "#/components/schemas/CurrencyChangeBlockedError"
                   - $ref: "#/components/schemas/HasDependentsError"
+                  - $ref: "#/components/schemas/Error"
         "503":
           $ref: "#/components/responses/EngineRestartingError"
         "500":
@@ -1480,7 +1492,7 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
         "409":
-          $ref: "#/components/responses/CurrencyChangeBlockedError"
+          $ref: "#/components/responses/CurrencyChangeBlockedOrAccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1526,7 +1538,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/CurrencyChangeBlockedError"
+          $ref: "#/components/responses/CurrencyChangeBlockedOrAccountsNotManagedError"
         "422":
           $ref: "#/components/responses/ValidationError"
         "500":
@@ -1570,6 +1582,8 @@ paths:
           $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/AccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1611,6 +1625,8 @@ paths:
           $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/AccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1647,6 +1663,8 @@ paths:
           $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/AccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1702,12 +1720,16 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Exact account code.
+          description: >-
+            Exact account code. In single-account mode no other account's rows
+            are returned.
           schema:
             type: string
         - name: groupCode
           in: query
-          description: Group code. Present with an empty value selects ungrouped accounts.
+          description: >-
+            Group code. Present with an empty value selects ungrouped accounts.
+            In single-account mode no other account's rows are returned.
           schema:
             type: string
         - name: asset
@@ -1910,7 +1932,9 @@ paths:
             type: string
         - name: account
           in: query
-          description: Exact account code.
+          description: >-
+            Exact account code. In single-account mode no other account's rows
+            are returned.
           schema:
             type: string
         - name: asset
@@ -1990,7 +2014,9 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Filter by account code.
+          description: >-
+            Filter by account code. In single-account mode no other account's
+            rows are returned.
           schema:
             type: string
         - $ref: "#/components/parameters/SourceFilter"
@@ -2125,11 +2151,15 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
+              required: [baseAsset, quoteAsset, side, amountKind, amountValue]
               properties:
                 account:
                   type: string
-                  description: Account code to evaluate without mutation.
+                  description: >-
+                    Account code to evaluate without mutation. When the server
+                    runs in single-account mode the account may be omitted and
+                    defaults to that account; naming any other account is
+                    refused with 422 (constraint `single_account_mode`).
                 baseAsset:
                   type: string
                   description: Asset being bought or sold.
@@ -2455,7 +2485,9 @@ paths:
             type: string
         - name: account
           in: query
-          description: Exact account code.
+          description: >-
+            Exact account code. In single-account mode no other account's rows
+            are returned.
           schema:
             type: string
         - name: baseAsset
@@ -2597,12 +2629,16 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Filter by exact account code.
+          description: >-
+            Filter by exact account code. In single-account mode no other
+            account's rows are returned.
           schema:
             type: string
         - name: accountGroup
           in: query
-          description: Filter by exact account-group code.
+          description: >-
+            Filter by exact account-group code. In single-account mode no other
+            account's rows are returned.
           schema:
             type: string
         - name: asset
@@ -2658,6 +2694,11 @@ paths:
     delete:
       operationId: deleteLimit
       summary: Delete a risk limit barrier
+      description: >
+        When the server runs in single-account mode the account may be omitted
+        and defaults to that account; naming any other account is refused with
+        422 (constraint `single_account_mode`). Account groups are not
+        accepted in single-account mode.
       tags: [limits]
       parameters:
         - name: policy
@@ -2711,7 +2752,9 @@ paths:
         `account_asset`) may name an account that does not exist yet;
         `missingAccount` is the caller's required choice between registering it
         and refusing the request. A created account's barrier is enforced from
-        this call onward.
+        this call onward. When the server runs in single-account mode the
+        account may be left empty and defaults to that account; naming any
+        other account is refused with 422 (constraint `single_account_mode`).
       tags: [limits]
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
@@ -2756,7 +2799,10 @@ paths:
         `account_underlying_asset` carry only `maxQuantity`;
         `settlement_asset` and `account_settlement_asset` carry only
         `maxNotional`. A barrier carrying neither cap, or a cap its scope does
-        not consult, is rejected with a validation error.
+        not consult, is rejected with a validation error. When the server runs
+        in single-account mode the account may be left empty and defaults to
+        that account; naming any other account is refused with 422 (constraint
+        `single_account_mode`).
       tags: [limits]
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
@@ -2796,7 +2842,11 @@ paths:
       summary: Upsert a SpotFunds P&L-bounds barrier
       description: >
         `missingAccount` follows the rate-limit barrier; only the `account`
-        scope carries an account axis here.
+        scope carries an account axis here. When the server runs in
+        single-account mode the account may be left empty and defaults to that
+        account; naming any other account is refused with 422 (constraint
+        `single_account_mode`). Account groups are not accepted in
+        single-account mode.
       tags: [limits]
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
@@ -2854,7 +2904,9 @@ paths:
             type: string
         - name: account
           in: query
-          description: Exact account code.
+          description: >-
+            Exact account code. In single-account mode no other account's rows
+            are returned.
           schema:
             type: string
         - name: asset
@@ -2867,7 +2919,8 @@ paths:
           description: >-
             Exact account group code. It selects a group's rows by identity;
             searching the free-form `detail` text instead can surface another
-            group's rows.
+            group's rows. In single-account mode no other account's rows are
+            returned.
           schema:
             type: string
         - name: actor
@@ -3098,6 +3151,78 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   # ---------------------------------------------------------------------------
+  # Account mode
+  # ---------------------------------------------------------------------------
+
+  /account-mode:
+    get:
+      operationId: getAccountMode
+      summary: Read the stored account mode and what the running process enforces
+      description: >
+        The service reads the stored account mode once, when it starts, and
+        keeps that mode until it stops. `mode` and `account` are the stored
+        choice; `mode` is null until a mode is chosen, which behaves as
+        multi-account mode. `features` is what the running process enforces,
+        and `restartRequired` reports that the stored choice takes effect only
+        after a restart.
+      tags: [account-mode]
+      responses:
+        "200":
+          description: Stored account mode and the running account features.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountMode"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: setAccountMode
+      summary: Store the account mode for the next start
+      description: >
+        Stores the account mode; the running process keeps the mode it started
+        with. The change takes effect after `POST /service/restart`, and a stdio
+        MCP process picks it up at its own next start. `multi` lets clients see
+        and choose every account and group, and takes no account. `single` makes
+        every client request act on one default account: the named account,
+        which must exist (404 `account_missing`); with none named, the one
+        existing account, or a new account `default` when there is none -
+        several accounts without one named are refused with 422 `required` at
+        `/account`. While the process
+        runs single-account mode only its own default account is accepted:
+        choosing another one needs multi-account mode and a restart first (409
+        `accounts_not_managed`). A refused request stores nothing.
+      tags: [account-mode]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountModeRequest"
+      responses:
+        "200":
+          description: Mode stored; returns the stored mode and the running account features.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountMode"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "404":
+          description: >
+            The named account does not exist. The error `code` is
+            `account_missing` and the envelope carries the account code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountMissingError"
+        "409":
+          $ref: "#/components/responses/AccountsNotManagedError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
   # Signing keys and order approval flow
   # ---------------------------------------------------------------------------
 
@@ -3307,7 +3432,7 @@ paths:
         resolve the same order.
       tags: [signing]
       parameters:
-        - $ref: "#/components/parameters/MissingAccount"
+        - $ref: "#/components/parameters/MissingAccountWhenNamed"
       requestBody:
         required: true
         content:
@@ -3408,8 +3533,9 @@ paths:
         market orders for drop-copy because they cannot be reconciled without a
         limit price. Requests without a price therefore return the SDK
         validation error instead of creating an order. `missingAccount` is
-        required and accepts only `create`: a drop-copy reports an execution
-        that already happened, so it cannot refuse an unknown account.
+        required when the request names an account and accepts only `create`:
+        a drop-copy reports an execution that already happened, so it cannot
+        refuse an unknown account.
       tags: [orders]
       parameters:
         - $ref: "#/components/parameters/MissingAccountCreate"
@@ -3858,7 +3984,11 @@ paths:
         member of the group; on one connection an account's own grant wins
         over its group's. On a provider with unlinked fees, a connection
         without a fee account refuses a group grant, and an account grant
-        while it holds any other grant, with fee_account_required.
+        while it holds any other grant, with fee_account_required. When the
+        server runs in single-account mode the account may be omitted and
+        defaults to that account; naming any other account is refused with
+        422 (constraint `single_account_mode`). Account groups are not
+        accepted in single-account mode.
       tags: [trading]
       requestBody:
         required: true
@@ -3896,7 +4026,11 @@ paths:
       description: >
         Exactly one of `account` and `accountGroup` names the grant to remove;
         a validation error points at `/account` when neither is named and at
-        `/accountGroup` when both are.
+        `/accountGroup` when both are. When the server runs in single-account
+        mode the account may be omitted and defaults to that account; naming
+        any other account is refused with 422 (constraint
+        `single_account_mode`). Account groups are not accepted in
+        single-account mode.
       tags: [trading]
       parameters:
         - name: account
@@ -4367,6 +4501,9 @@ paths:
     get:
       operationId: getOverview
       summary: Dashboard overview - headline counts and recent activity
+      description: >
+        In single-account mode every count and the activity feed cover the
+        default account and the rows of no account only.
       tags: [dashboard]
       parameters:
         - name: since
@@ -4703,14 +4840,29 @@ components:
         type: string
         enum: [create, reject]
 
+    MissingAccountWhenNamed:
+      name: missingAccount
+      in: query
+      description: >
+        Explicit choice for a request that names an account Officer does not
+        know yet: `create` registers it with default settings (no group, no
+        currency) and applies the request; `reject` fails with 404
+        `account_missing`. There is no default - the value is required whenever
+        the request names a non-empty account code. A request that names no
+        account needs no choice, and a value supplied anyway is ignored.
+      schema:
+        type: string
+        enum: [create, reject]
+
     MissingAccountCreate:
       name: missingAccount
       in: query
-      required: true
       description: >
-        Must be `create`. A drop-copy request reports an execution that already
+        Required whenever the request names a non-empty account code, and then
+        must be `create`. A drop-copy request reports an execution that already
         happened, so Officer registers an unknown account with default settings
-        rather than refusing to record the report.
+        rather than refusing to record the report. A request that names no
+        account needs no choice, and a value supplied anyway is ignored.
       schema:
         type: string
         enum: [create]
@@ -4778,12 +4930,45 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    AccountsNotManagedError:
+      description: >-
+        The server runs in single-account mode, where clients do not manage the
+        account set: creating, changing or deleting accounts and account groups
+        is refused. The error `code` is `accounts_not_managed`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    AccountSetConflictError:
+      description: >-
+        Resource conflict (`conflict`), including an existing code, protected
+        runtime state, or a configured dependency that prevents the mutation;
+        or, when the server runs in single-account mode, a refused change of
+        the account set (`accounts_not_managed`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     CurrencyChangeBlockedError:
       description: Currency change rejected because economic state is non-empty.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/CurrencyChangeBlockedError"
+
+    CurrencyChangeBlockedOrAccountsNotManagedError:
+      description: >-
+        Currency change rejected because economic state is non-empty
+        (`currency_change_blocked`), or, when the server runs in single-account
+        mode, a refused change of the account set (`accounts_not_managed`).
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/CurrencyChangeBlockedError"
+              - $ref: "#/components/schemas/Error"
 
     ReservedGroupError:
       description: >
@@ -4833,7 +5018,8 @@ components:
       description: >
         Delete would remove dependent rows without force (has_dependents), or
         the account is a connection's fee account and cannot be deleted even
-        with force (conflict).
+        with force (conflict), or, when the server runs in single-account mode,
+        clients do not manage the account set (accounts_not_managed).
       content:
         application/json:
           schema:
@@ -5056,7 +5242,7 @@ components:
                 `forbidden`, `reserved_group`,
                 `live_trading_unavailable`, `trading_mode_mismatch`,
                 `fee_account_required`, `venue_order_managed`, `no_destination`,
-                `destination_ambiguous`,
+                `destination_ambiguous`, `accounts_not_managed`,
                 `engine_restarting`, `signing`, `upstream`, `not_implemented`,
                 or `internal`.
               example: not_found
@@ -5197,10 +5383,13 @@ components:
           description: >
             Accounts export group filter. Omit or use null to export all
             accounts; use "" to export the default/no-group bucket; use a
-            non-empty group code to export that group.
+            non-empty group code to export that group. In single-account mode a
+            non-empty group code is refused with 422.
         account:
           type: string
-          description: Accounts, positions, orders, and trades account filter.
+          description: >-
+            Accounts, positions, orders, and trades account filter. In
+            single-account mode no other account's rows are returned.
         asset:
           type: string
           description: Positions asset filter.
@@ -5513,9 +5702,9 @@ components:
           description: Serialized signing key rows.
           items:
             type: object
-        signingConfig:
+        settings:
           type: array
-          description: Serialized signing configuration rows.
+          description: Serialized realm setting rows.
           items:
             type: object
         userSettings:
@@ -6512,13 +6701,17 @@ components:
     RateLimit:
       type: object
       additionalProperties: false
-      required: [scope, account, asset, windowMs, maxOrders]
+      required: [scope, asset, windowMs, maxOrders]
       properties:
         scope:
           $ref: "#/components/schemas/RateLimitScope"
         account:
           type: string
-          description: Account code this barrier applies to, or empty for a global barrier.
+          description: >
+            Account code this barrier applies to, or empty for a global barrier.
+            Always present in a response. A request may omit it as empty; in
+            single-account mode an omitted or empty account stands for that
+            account on a scope with the account axis.
         asset:
           type: string
           description: Asset this barrier applies to, or empty when not asset-scoped.
@@ -6535,7 +6728,7 @@ components:
     OrderSizeLimit:
       type: object
       additionalProperties: false
-      required: [scope, account, asset, maxQuantity, maxNotional]
+      required: [scope, asset, maxQuantity, maxNotional]
       properties:
         scope:
           $ref: "#/components/schemas/OrderSizeLimitScope"
@@ -6543,9 +6736,11 @@ components:
           type: string
           description: >
             Account code this barrier applies to. Required by
-            `account_underlying_asset` and `account_settlement_asset`; must be
-            empty for every other scope, and a non-empty value there is rejected
-            with a validation error.
+            `account_underlying_asset` and `account_settlement_asset`, except in
+            single-account mode, where an omitted or empty value there stands
+            for that account; must be empty for every other scope, and a
+            non-empty value there is rejected with a validation error. Always
+            present in a response; a request may omit it as empty.
         asset:
           type: string
           description: >
@@ -6575,13 +6770,17 @@ components:
     SpotFundsPnlBoundsLimit:
       type: object
       additionalProperties: false
-      required: [scope, account, accountGroup, currency, lowerBound, upperBound]
+      required: [scope, accountGroup, currency, lowerBound, upperBound]
       properties:
         scope:
           $ref: "#/components/schemas/SpotFundsPnlBoundsScope"
         account:
           type: string
-          description: Account code this barrier applies to, or empty when not account-scoped.
+          description: >
+            Account code this barrier applies to, or empty when not
+            account-scoped. Always present in a response. A request may omit it
+            as empty; in single-account mode an omitted or empty account stands
+            for that account on the `account` scope.
         accountGroup:
           type: string
           description: Account group code this barrier applies to, or empty when not group-scoped.
@@ -6870,6 +7069,63 @@ components:
           type: boolean
           description: Whether the operator dismissed the first-run welcome dialog.
 
+    # Account mode
+
+    AccountMode:
+      type: object
+      additionalProperties: false
+      required: [mode, account, features, restartRequired]
+      properties:
+        mode:
+          type: [string, "null"]
+          enum: [single, multi, null]
+          description: >-
+            Stored account mode; null until a mode is chosen, which behaves as
+            multi.
+        account:
+          type: string
+          description: >-
+            Stored default account of single-account mode; empty otherwise.
+        features:
+          description: Account features the running process enforces.
+          $ref: "#/components/schemas/AccountFeatures"
+        restartRequired:
+          type: boolean
+          description: >-
+            Whether the stored choice enforces other account features than the
+            running process; it takes effect after a restart.
+
+    AccountFeatures:
+      type: object
+      additionalProperties: false
+      required: [accounts, account]
+      properties:
+        accounts:
+          type: boolean
+          description: >-
+            Whether clients see and choose accounts and groups; false in
+            single-account mode.
+        account:
+          type: string
+          description: >-
+            The account every client request acts on in single-account mode;
+            empty otherwise.
+
+    AccountModeRequest:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [single, multi]
+          description: Account mode to store for the next start.
+        account:
+          type: string
+          description: >-
+            Default account for `single`; omit it to take the one existing
+            account or, with none, a new account `default`. `multi` takes none.
+
     # Trading
 
     TradingMode:
@@ -6962,7 +7218,10 @@ components:
           type: string
         feeAccount:
           type: string
-          description: Empty string when unset.
+          description: >
+            Empty string when unset. In single-account mode it is also empty when
+            the fee account is another account, which still receives the
+            connection's unlinked fees.
         state:
           $ref: "#/components/schemas/TradingState"
         error:
@@ -6979,6 +7238,9 @@ components:
             $ref: "#/components/schemas/TradingInstrument"
         access:
           type: array
+          description: >
+            In single-account mode the grants of other accounts, and of groups
+            the default account is not a member of, are not listed.
           items:
             $ref: "#/components/schemas/TradingAccess"
 
@@ -7172,8 +7434,9 @@ components:
       additionalProperties: false
       description: >
         Exactly one of `account` and `accountGroup` names the grantee; a
-        validation error points at `/account` when neither is named and at
-        `/accountGroup` when both are.
+        validation error points at `/accountGroup` when both are named. When
+        neither is named, a validation error points at `/account`, except in
+        single-account mode, where the omitted grantee is that account.
       properties:
         account:
           type: string
@@ -7187,11 +7450,15 @@ components:
     TradingFeeAccountRequest:
       type: object
       additionalProperties: false
-      required: [account]
       properties:
         account:
           type: string
           minLength: 1
+          description: >-
+            Account code that receives the connection's unlinked venue fees.
+            When the server runs in single-account mode the account may be
+            omitted and defaults to that account; naming any other account is
+            refused with 422 (constraint `single_account_mode`).
 
     TradingDestinationsResponse:
       type: object
@@ -7802,11 +8069,15 @@ components:
 
     OrderSubmissionRequest:
       type: object
-      required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
+      required: [baseAsset, quoteAsset, side, amountKind, amountValue]
       properties:
         account:
           type: string
-          description: Account code that owns the order.
+          description: >-
+            Account code that owns the order. When the server runs in
+            single-account mode the account may be omitted and defaults to
+            that account; naming any other account is refused with 422
+            (constraint `single_account_mode`).
         baseAsset:
           type: string
           description: Asset being bought or sold.

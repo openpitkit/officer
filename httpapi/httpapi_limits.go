@@ -164,9 +164,23 @@ func handlePutSpotFundsPnlBoundsLimit(svc backend.ControlPlane) http.HandlerFunc
 	}
 }
 
+// storedLimitAccount is the account a barrier put with account is stored
+// under: account itself, except that a scope with an account axis naming none,
+// in a composition that does not offer accounts, is stored under the one
+// account the service's account scope supplied.
+func storedLimitAccount(
+	svc backend.ControlPlane, scope domain.LimitScope, account domain.AccountID,
+) domain.AccountID {
+	if scope.HasAccountAxis() {
+		return svc.AccountFeatures().AccountFor(account)
+	}
+	return account
+}
+
 func persistedRateLimit(
 	ctx context.Context, svc backend.ControlPlane, target domain.LimitRate,
 ) (domain.LimitRate, error) {
+	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
 	limits, err := svc.ListLimits(ctx, target.Account)
 	if err != nil {
 		return domain.LimitRate{}, err
@@ -183,6 +197,7 @@ func persistedRateLimit(
 func persistedOrderSizeLimit(
 	ctx context.Context, svc backend.ControlPlane, target domain.LimitOrderSize,
 ) (domain.LimitOrderSize, error) {
+	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
 	limits, err := svc.ListLimits(ctx, target.Account)
 	if err != nil {
 		return domain.LimitOrderSize{}, err
@@ -199,6 +214,7 @@ func persistedOrderSizeLimit(
 func persistedSpotFundsPnlBoundsLimit(
 	ctx context.Context, svc backend.ControlPlane, target domain.LimitSpotFundsPnlBounds,
 ) (domain.LimitSpotFundsPnlBounds, error) {
+	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
 	limits, err := svc.ListLimits(ctx, target.Account)
 	if err != nil {
 		return domain.LimitSpotFundsPnlBounds{}, err

@@ -280,7 +280,7 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.SigningKeys, err = r.exportSigningKeys(ctx); err != nil {
 		return backup.Data{}, err
 	}
-	if data.SigningConfig, err = r.exportSigningConfig(ctx); err != nil {
+	if data.Settings, err = r.exportSettings(ctx); err != nil {
 		return backup.Data{}, err
 	}
 	if data.McpAccess, err = r.ListMcpAccess(ctx); err != nil {

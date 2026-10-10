@@ -77,7 +77,7 @@ type memoryRealm struct {
 	tradingAccess      []domain.TradingAccess
 
 	signingKeys   map[string]domain.SigningKey
-	signingConfig map[string]string
+	settings      map[string]string
 	mcpAccess     map[string]bool
 	userSettings  map[string]domain.UserSetting
 	nextAccountID domain.EngineAccountID
@@ -111,7 +111,7 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		tradingConnections:       map[domain.ExternalID]domain.TradingConnection{},
 		tradingInstruments:       map[string]domain.TradingInstrument{},
 		signingKeys:              map[string]domain.SigningKey{},
-		signingConfig:            map[string]string{},
+		settings:                 map[string]string{},
 		mcpAccess:                map[string]bool{},
 		userSettings:             map[string]domain.UserSetting{},
 	}
@@ -395,4 +395,14 @@ func textMatchesAny(matcher store.TextMatcher, values ...string) bool {
 		}
 	}
 	return false
+}
+
+// restrictionMatches mirrors the SQLite account restriction: the zero
+// restriction keeps every row; otherwise a row is kept when its account is the
+// restricted one or, with IncludeUnowned, when it has no account.
+func restrictionMatches(
+	restriction domain.AccountRestriction, account domain.AccountID,
+) bool {
+	return restriction.Account == "" || account == restriction.Account ||
+		(restriction.IncludeUnowned && account == "")
 }

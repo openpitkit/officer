@@ -60,6 +60,46 @@ func (n *localNode) SetMcpAccess(
 	return nil
 }
 
+// Setting returns the stored value of one realm-wide setting. Realm settings
+// have no engine side-effect, so this is a plain store read.
+func (n *localNode) Setting(ctx context.Context, key string) (string, bool, error) {
+	if err := domain.ValidateSettingKey(key); err != nil {
+		return "", false, err
+	}
+	value, ok, err := n.realm.GetSetting(ctx, key)
+	if err != nil {
+		return "", false, fmt.Errorf("get setting: %w", err)
+	}
+	return value, ok, nil
+}
+
+// SetSetting upserts one realm-wide setting and audits the action. There is no
+// engine side-effect: the store is the sole authority and nothing is applied
+// to or reverted from the engine. A key reserved for its owner's dedicated
+// write path is refused before anything is written or audited.
+func (n *localNode) SetSetting(
+	ctx context.Context, key, value string, caller domain.Caller,
+) error {
+	if err := domain.ValidateSettingWriteKey(key); err != nil {
+		return err
+	}
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
+
+	if err := n.realm.SetSetting(ctx, key, value); err != nil {
+		return fmt.Errorf("set setting: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetSetting,
+		Detail: setSettingDetail(key, value),
+	}); err != nil {
+		return fmt.Errorf("audit set setting: %w", err)
+	}
+	return nil
+}
+
 // GetUserSetting returns the stored value for (userID, key). User settings are
 // a plain store read with no engine side-effect.
 func (n *localNode) GetUserSetting(

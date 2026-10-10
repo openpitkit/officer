@@ -544,6 +544,10 @@ func (s *guardSource) Status(context.Context) (Status, error) {
 	return Status{}, nil
 }
 
+func (s *guardSource) AccountFeatures() backend.AccountFeatures {
+	return backend.EveryAccount{}.Features()
+}
+
 func (s *guardSource) GetAccountState(context.Context, domain.AccountID) (
 	domain.Account,
 	node.AccountLimits,

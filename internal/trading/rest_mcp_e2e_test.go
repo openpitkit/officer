@@ -228,7 +228,7 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 		return node.NewLocalNode(ctx, domain.DefaultRealm, st, engine.NewOpenPitEngineBuildFunc(), fatal)
 	})
 	f.builder.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) { return signing.New(st) })
-	f.builder.SetServiceFactory(func(n node.Node, md backend.MarketDataRuntime, rt backend.TradingRuntime, signer fwsigning.Service,
+	f.builder.SetServiceFactory(func(_ context.Context, n node.Node, md backend.MarketDataRuntime, rt backend.TradingRuntime, signer fwsigning.Service,
 		_ *marketdata.Registry, tools *frameworkmcp.ToolRegistry) (backend.ControlPlane, error) {
 		return backend.New(n, md, signer, engine.LockSettlementPrice, backend.WithTradingRuntime(rt), backend.WithMCPCatalogProvider(tools))
 	})

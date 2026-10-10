@@ -15,16 +15,14 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Signing group of the SQLite store: Ed25519 signing keys and the global signing
-// configuration. A signing key is a dictionary entity, but unlike the code-keyed
-// dictionaries it is addressed by its own UUID key_id (the handle it carries into
-// approval envelopes), so the surrogate id never crosses the interface boundary
-// here either. The private key is sealed when the store has a sealer, while the
-// public key is always stored verbatim. Active-key semantics are caller-driven:
-// the signing service deactivates every key, then upserts one with Active set,
-// so these methods only persist and surface the flag faithfully. signing_config
-// is a plain key/value table whose key is a hardcoded enum stored as TEXT, never
-// a dictionary.
+// Signing group of the SQLite store: Ed25519 signing keys. A signing key is a
+// dictionary entity, but unlike the code-keyed dictionaries it is addressed by
+// its own UUID key_id (the handle it carries into approval envelopes), so the
+// surrogate id never crosses the interface boundary here either. The private key
+// is sealed when the store has a sealer, while the public key is always stored
+// verbatim. Active-key semantics are caller-driven: the signing service
+// deactivates every key, then upserts one with Active set, so these methods only
+// persist and surface the flag faithfully.
 
 package sqlite
 
@@ -228,48 +226,6 @@ func scanSigningKeyListRow(rows *sql.Rows) (domain.SigningKey, error) {
 	key.PublicKey = publicKey
 	key.CreatedAt = parsed
 	return key, nil
-}
-
-// --- Signing config ---------------------------------------------------------
-
-// GetSigningConfig returns the value for the given enum config key. The bool is
-// false when the key is absent. The key is a hardcoded enum stored as TEXT, not
-// a dictionary code.
-func (r *realmStore) GetSigningConfig(
-	ctx context.Context, key string,
-) (string, bool, error) {
-	var value string
-	db, err := r.db()
-	if err != nil {
-		return "", false, err
-	}
-	err = db.QueryRowContext(
-		ctx, `SELECT value FROM signing_config WHERE key = ?`, key,
-	).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("store: get signing config: %w", err)
-	}
-	return value, true, nil
-}
-
-// SetSigningConfig upserts the value for the given enum config key.
-func (r *realmStore) SetSigningConfig(ctx context.Context, key, value string) error {
-	db, err := r.db()
-	if err != nil {
-		return err
-	}
-	if _, err := db.ExecContext(
-		ctx,
-		`INSERT INTO signing_config (key, value) VALUES (?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		key, value,
-	); err != nil {
-		return fmt.Errorf("store: set signing config: %w", err)
-	}
-	return nil
 }
 
 func resolveSigningKeyID(ctx context.Context, q sqlQueryer, keyID string) (int64, error) {

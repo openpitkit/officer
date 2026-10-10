@@ -285,6 +285,43 @@ func officerToolRegistry() *frameworkmcp.ToolRegistry {
 	return reg
 }
 
+// officerSession connects an MCP client over an in-memory transport to the
+// framework server built over the Officer tool registry and src, both running
+// under ctx. The returned close ends the session and the server, and fails the
+// test when the server stopped with an error of its own.
+func officerSession(
+	t *testing.T, ctx context.Context, src frameworkmcp.Source,
+) (session *sdkmcp.ClientSession, closeSession func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(ctx)
+	server, err := frameworkmcp.Build(
+		officerToolRegistry(), src, nil, httpx.AllowAll{}, operatorCaller(),
+	)
+	if err != nil {
+		cancel()
+		t.Fatalf("build MCP server: %v", err)
+	}
+	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Run(ctx, serverTransport)
+	}()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
+	session, err = client.Connect(ctx, clientTransport)
+	if err != nil {
+		cancel()
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, func() {
+		t.Helper()
+		_ = session.Close()
+		cancel()
+		if err := <-serverErr; err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("server run: %v", err)
+		}
+	}
+}
+
 // callTool calls one Officer MCP tool over an in-memory MCP session with the
 // framework server built over the Officer tool registry, and fails the test on
 // a protocol-level error.
@@ -295,28 +332,9 @@ func callTool[Out any](
 	ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
 	defer cancel()
 
-	server, err := frameworkmcp.Build(
-		officerToolRegistry(), src, nil, httpx.AllowAll{}, operatorCaller(),
-	)
-	if err != nil {
-		t.Fatalf("build MCP server: %v", err)
-	}
-	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- server.Run(ctx, serverTransport)
-	}()
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
-	session, err := client.Connect(ctx, clientTransport)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
+	session, closeSession := officerSession(t, ctx, src)
 	res, callErr := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: in})
-	_ = session.Close()
-	cancel()
-	if err := <-serverErr; err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("server run: %v", err)
-	}
+	closeSession()
 	if callErr != nil {
 		t.Fatalf("%s returned protocol error: %v", name, callErr)
 	}

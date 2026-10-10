@@ -97,6 +97,22 @@ func (s *Service) SetMcpAccess(
 	return s.node.SetMcpAccess(ctx, command, enabled, caller)
 }
 
+// Setting returns the stored value of one realm-wide setting from the group
+// node; ok is false when the key has no stored value.
+func (s *Service) Setting(ctx context.Context, key string) (string, bool, error) {
+	return s.node.Setting(ctx, key)
+}
+
+// SetSetting upserts one realm-wide setting on the group node, which audits
+// the write under the caller resolved from the context.
+func (s *Service) SetSetting(ctx context.Context, key, value string) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.node.SetSetting(ctx, key, value, caller)
+}
+
 func (s *Service) hasCommand(command string) bool {
 	_, ok := s.catalog().Lookup(command)
 	return ok

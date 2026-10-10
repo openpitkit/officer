@@ -251,6 +251,7 @@ func newBackupRestoreTestService(
 		md:       md,
 		registry: registry,
 		signer:   fwsigning.ServiceOrUnavailable(nil),
+		scope:    EveryAccount{},
 	}, n, md
 }
 
@@ -262,6 +263,7 @@ func newBackupTradingLifecycleService(
 		trading:  tradingRuntime,
 		registry: marketdata.NewRegistry(),
 		signer:   fwsigning.ServiceOrUnavailable(nil),
+		scope:    EveryAccount{},
 	}
 }
 

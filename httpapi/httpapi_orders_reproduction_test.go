@@ -86,12 +86,12 @@ func (s *reproSigningStore) DeactivateAllSigningKeys(_ context.Context) error {
 	return nil
 }
 
-func (s *reproSigningStore) GetSigningConfig(_ context.Context, key string) (string, bool, error) {
+func (s *reproSigningStore) GetSetting(_ context.Context, key string) (string, bool, error) {
 	v, ok := s.config[key]
 	return v, ok, nil
 }
 
-func (s *reproSigningStore) SetSigningConfig(_ context.Context, key, value string) error {
+func (s *reproSigningStore) SetSetting(_ context.Context, key, value string) error {
 	s.config[key] = value
 	return nil
 }

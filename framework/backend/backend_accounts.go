@@ -26,7 +26,8 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// ListAccounts returns every account.
+// ListAccounts returns the accounts within the account scope's list
+// restriction, read through ListAccountRows.
 func (s *Service) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	page, err := s.ListAccountRows(ctx, store.AccountListFilter{})
 	if err != nil {
@@ -39,10 +40,18 @@ func (s *Service) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	return accounts, nil
 }
 
-// ListAccountRows returns accounts with list-only counts.
+// ListAccountRows returns accounts with list-only counts, narrowed by the
+// account scope's list restriction; the code filter is a text pattern, so the
+// scope is asked with no requested account. The restriction replaces any
+// filter.Restriction the caller supplies.
 func (s *Service) ListAccountRows(
 	ctx context.Context, filter store.AccountListFilter,
 ) (store.AccountListPage, error) {
+	var err error
+	filter.Restriction, err = s.listRestriction(ctx, "")
+	if err != nil {
+		return store.AccountListPage{}, err
+	}
 	return s.node.ListAccountRows(ctx, filter)
 }
 
@@ -50,6 +59,13 @@ func (s *Service) ListAccountRows(
 func (s *Service) CreateAccount(
 	ctx context.Context, account domain.Account,
 ) (domain.Account, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Account{}, err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return domain.Account{}, err
+	}
 	id := account.Code
 	if err := domain.WithValidationPointer(
 		"/code", domain.ValidateAccountID(id),
@@ -65,10 +81,6 @@ func (s *Service) CreateAccount(
 	if err := validateOptionalCurrency(account.Currency); err != nil {
 		return domain.Account{}, err
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return domain.Account{}, err
-	}
 	return s.node.CreateAccount(ctx, account, caller)
 }
 
@@ -79,6 +91,13 @@ func (s *Service) UpdateAccount(
 	oldID domain.AccountID,
 	account domain.Account,
 ) (domain.Account, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Account{}, err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return domain.Account{}, err
+	}
 	if err := domain.ValidateAccountID(oldID); err != nil {
 		return domain.Account{}, err
 	}
@@ -88,10 +107,6 @@ func (s *Service) UpdateAccount(
 		return domain.Account{}, err
 	}
 	if err := domain.ValidateTitle(account.Title); err != nil {
-		return domain.Account{}, err
-	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
 		return domain.Account{}, err
 	}
 	return s.node.UpdateAccount(
@@ -126,11 +141,14 @@ func (s *Service) UnblockAccount(
 func (s *Service) DeleteAccount(
 	ctx context.Context, id domain.AccountID, force bool,
 ) error {
-	if err := domain.ValidateAccountID(id); err != nil {
-		return err
-	}
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return err
+	}
+	if err := domain.ValidateAccountID(id); err != nil {
 		return err
 	}
 	return s.node.DeleteAccount(ctx, id, force, caller)
@@ -140,7 +158,19 @@ func (s *Service) setAccountBlocked(
 	ctx context.Context, id domain.AccountID, blocked bool, reason string,
 	missing domain.MissingAccountPolicy,
 ) error {
-	if err := domain.ValidateAccountID(id); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	scopedAccount, err := s.scope.Account(caller, id)
+	if err != nil {
+		return err
+	}
+	scopedMissing, err := s.scope.MissingAccount(caller, missing)
+	if err != nil {
+		return err
+	}
+	if err := domain.ValidateAccountID(scopedAccount); err != nil {
 		return err
 	}
 	if err := domain.ValidateBlockReason(reason); err != nil {
@@ -149,12 +179,8 @@ func (s *Service) setAccountBlocked(
 	if err := validateMissingAccountPolicy(id, missing); err != nil {
 		return err
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return err
-	}
 	return s.node.SetAccountBlocked(
-		ctx, id, blocked, reason, missing, caller,
+		ctx, scopedAccount, blocked, reason, scopedMissing, caller,
 	)
 }
 
@@ -163,10 +189,18 @@ func (s *Service) setAccountBlocked(
 func (s *Service) GetAccountState(
 	ctx context.Context, id domain.AccountID,
 ) (domain.Account, node.AccountLimits, error) {
-	if err := domain.ValidateAccountID(id); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
 		return domain.Account{}, node.AccountLimits{}, err
 	}
-	return s.node.GetAccountState(ctx, id)
+	scopedAccount, err := s.scope.Account(caller, id)
+	if err != nil {
+		return domain.Account{}, node.AccountLimits{}, err
+	}
+	if err := domain.ValidateAccountID(scopedAccount); err != nil {
+		return domain.Account{}, node.AccountLimits{}, err
+	}
+	return s.node.GetAccountState(ctx, scopedAccount)
 }
 
 // SetAccountGroup validates the account id and sets or clears (empty
@@ -178,6 +212,13 @@ func (s *Service) SetAccountGroup(
 	groupCode string,
 	missing domain.MissingAccountPolicy,
 ) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return err
+	}
 	if err := domain.ValidateAccountID(id); err != nil {
 		return err
 	}
@@ -191,10 +232,6 @@ func (s *Service) SetAccountGroup(
 			return err
 		}
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return err
-	}
 	return s.node.SetAccountGroup(
 		ctx, id, groupCode, missing, caller,
 	)
@@ -204,17 +241,21 @@ func (s *Service) SetAccountGroup(
 func (s *Service) SetAccountCurrency(
 	ctx context.Context, id domain.AccountID, currency string,
 ) error {
-	if err := domain.ValidateAccountID(id); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	scopedAccount, err := s.scope.Account(caller, id)
+	if err != nil {
+		return err
+	}
+	if err := domain.ValidateAccountID(scopedAccount); err != nil {
 		return err
 	}
 	if err := validateOptionalCurrency(currency); err != nil {
 		return err
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return err
-	}
-	return s.node.SetAccountCurrency(ctx, id, currency, caller)
+	return s.node.SetAccountCurrency(ctx, scopedAccount, currency, caller)
 }
 
 // SetAccountNotes validates the account id and notes and replaces the
@@ -222,15 +263,19 @@ func (s *Service) SetAccountCurrency(
 func (s *Service) SetAccountNotes(
 	ctx context.Context, id domain.AccountID, notes string,
 ) error {
-	if err := domain.ValidateAccountID(id); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	scopedAccount, err := s.scope.Account(caller, id)
+	if err != nil {
+		return err
+	}
+	if err := domain.ValidateAccountID(scopedAccount); err != nil {
 		return err
 	}
 	if err := domain.ValidateNotes(notes); err != nil {
 		return err
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return err
-	}
-	return s.node.SetAccountNotes(ctx, id, notes, caller)
+	return s.node.SetAccountNotes(ctx, scopedAccount, notes, caller)
 }

@@ -183,7 +183,7 @@
         "enabled": true
       }
     ],
-    "signingConfig": [
+    "settings": [
       {
         "key": "no_esign",
         "value": "0"

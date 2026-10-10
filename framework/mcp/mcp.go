@@ -41,6 +41,9 @@ const serverName = "pit-officer"
 type Source interface {
 	// Status returns the node's engine and store health.
 	Status(ctx context.Context) (Status, error)
+	// AccountFeatures reports the account surfaces the control plane offers
+	// clients.
+	AccountFeatures() backend.AccountFeatures
 	// GetAccountState returns the account row and its account-scoped barriers.
 	GetAccountState(ctx context.Context, id domain.AccountID) (
 		domain.Account, node.AccountLimits, error)
@@ -628,6 +631,10 @@ func (s controlPlaneSource) Status(ctx context.Context) (Status, error) {
 		},
 		Healthy: status.Healthy,
 	}, nil
+}
+
+func (s controlPlaneSource) AccountFeatures() backend.AccountFeatures {
+	return s.cp.AccountFeatures()
 }
 
 func (s controlPlaneSource) GetAccountState(

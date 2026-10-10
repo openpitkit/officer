@@ -18,7 +18,8 @@ that.
 These are the packages, by path under `go.openpit.dev/officer`; everything else
 is a command or under `internal/`, and cannot be imported:
 
-- the root - `Register` and `Config`, the default composition `pit-officer` runs.
+- the root - `Register` and `Config`, the default composition `pit-officer` runs,
+  and `RouteConfig`, its REST route surface, which a host rebuilds routes from.
 - `web` - the embedded dashboard build (`Dist`).
 - `httpapi` - the REST routes (`RouteConfig`) and the service lifecycle routes.
 - `mcptools` - the MCP tool set (`RegisterTools`).
@@ -83,6 +84,16 @@ and exits. It is required: `Build` rejects a nil hook.
 `officerApp.RunMCPStdio` serves MCP over stdio as a given caller, and
 `officerApp.BuildServeHandler` returns the HTTP handler for the dashboard, REST,
 and MCP over HTTP; `cmd/pit-officer` runs both.
+
+The account mode is part of `Register`'s service factory and private to
+Officer, so a host that replaces the service factory runs every account and
+should not serve the account-mode routes `RouteConfig` adds; it builds its
+routes from `httpapi.RouteConfig` instead.
+
+A host that calls the control plane itself, outside a request, puts a caller
+in the context first (`auth.ContextWithCaller`): every call that reads or
+changes account-owned data asks the account scope about that caller and is
+refused without one, in every account mode.
 
 `examples/customhost` is the worked example: it replaces the authorizer, adds a
 market-data provider, and adds, replaces, and removes MCP tools and REST routes

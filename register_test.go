@@ -20,16 +20,22 @@ package officer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	openpit "go.openpit.dev/openpit"
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
@@ -50,6 +56,8 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/httpapi"
+	"go.openpit.dev/officer/internal/accountmode"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 )
@@ -195,7 +203,9 @@ func TestRegisterTradingComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = app.Close() })
-	status, err := app.Service().GetTrading(ctx)
+	status, err := app.Service().GetTrading(
+		auth.ContextWithCaller(ctx, auth.SystemCaller()),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +422,9 @@ func TestRESTMutationAuditUsesResolvedPrincipal(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("mutation status = %d, body = %q", rec.Code, rec.Body.String())
 	}
-	rows, err := app.Service().ListAudit(context.Background(), 100)
+	rows, err := app.Service().ListAudit(
+		auth.ContextWithCaller(context.Background(), auth.SystemCaller()), 100,
+	)
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
@@ -438,7 +450,9 @@ func TestRecordServiceLifecycleUsesContextCaller(t *testing.T) {
 	); err != nil {
 		t.Fatalf("RecordServiceLifecycle: %v", err)
 	}
-	rows, err := app.Service().ListAudit(context.Background(), 100)
+	rows, err := app.Service().ListAudit(
+		auth.ContextWithCaller(context.Background(), auth.SystemCaller()), 100,
+	)
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
@@ -486,7 +500,9 @@ func TestRecordServiceLifecycleRecordsExplicitSystemCaller(t *testing.T) {
 	); err != nil {
 		t.Fatalf("RecordServiceLifecycle: %v", err)
 	}
-	rows, err := app.Service().ListAudit(context.Background(), 100)
+	rows, err := app.Service().ListAudit(
+		auth.ContextWithCaller(context.Background(), auth.SystemCaller()), 100,
+	)
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
@@ -495,6 +511,284 @@ func TestRecordServiceLifecycleRecordsExplicitSystemCaller(t *testing.T) {
 		t.Fatalf("audit caller = (%q, %q), want (%q, %q)",
 			row.Actor, row.Source, "", domain.SourceSystem)
 	}
+}
+
+// TestRegisterSingleAccountMode drives, over REST, the real composition started
+// on a database that stores single-account mode for the account "default": a
+// client never names the account and any other one is refused, lists show the
+// default account alone, the account set cannot change, and a stored switch
+// back to multi-account mode waits for a restart.
+func TestRegisterSingleAccountMode(t *testing.T) {
+	handler := serveSeededApp(t, map[string]string{
+		accountmode.SettingKeyMode: "single:default",
+	})
+	assertAccountMode(t, handler, http.MethodGet, "",
+		`{"mode":"single","account":"default",`+
+			`"features":{"accounts":false,"account":"default"},"restartRequired":false}`)
+
+	restCall(t, handler, http.MethodPost, "/signing/keys/generate", "", http.StatusCreated)
+	order := `"baseAsset":"AAPL","quoteAsset":"USD","side":"buy",` +
+		`"amountKind":"quantity","amountValue":"1","price":"100"`
+	submitted := restCall(t, handler, http.MethodPost, "/orders/submit",
+		`{`+order+`,"mode":"hold"}`, http.StatusCreated)
+	id, _ := submitted["id"].(string)
+	detail := restCall(t, handler, http.MethodGet, "/orders/"+url.PathEscape(id), "", http.StatusOK)
+	if stored, _ := detail["order"].(map[string]any); stored["account"] != "default" {
+		t.Fatalf("submitted order = %v, want it bound to the default account", stored)
+	}
+
+	refused := restCall(t, handler, http.MethodPost, "/orders/check",
+		`{"account":"other",`+order+`}`, http.StatusUnprocessableEntity)
+	problems, _ := refused["errors"].([]any)
+	if problem, _ := firstOf(problems).(map[string]any); len(problems) != 1 ||
+		problem["pointer"] != "/account" || problem["constraint"] != "single_account_mode" {
+		t.Fatalf("check naming another account = %v, want single_account_mode at /account", refused)
+	}
+
+	if got := listedAccounts(t, handler); !slices.Equal(got, []string{"default"}) {
+		t.Fatalf("listed accounts = %v, want the default account alone", got)
+	}
+	created := restCall(t, handler, http.MethodPost, "/accounts", `{"code":"desk"}`, http.StatusConflict)
+	if errObj, _ := created["error"].(map[string]any); errObj["code"] != "accounts_not_managed" {
+		t.Fatalf("account create = %v, want accounts_not_managed", created)
+	}
+
+	assertAccountMode(t, handler, http.MethodPut, `{"mode":"multi"}`,
+		`{"mode":"multi","account":"",`+
+			`"features":{"accounts":false,"account":"default"},"restartRequired":true}`)
+	if got := listedAccounts(t, handler); !slices.Equal(got, []string{"default"}) {
+		t.Fatalf("listed accounts after the stored switch = %v, want the default account alone", got)
+	}
+	switched := restCall(t, handler, http.MethodPut, "/account-mode",
+		`{"mode":"single","account":"other"}`, http.StatusConflict)
+	if errObj, _ := switched["error"].(map[string]any); errObj["code"] != "accounts_not_managed" ||
+		!strings.Contains(fmt.Sprint(errObj["message"]), "switch to multi-account mode and restart") {
+		t.Fatalf("switch to another default account = %v, want accounts_not_managed with the way out", switched)
+	}
+}
+
+// TestRegisterWithoutAccountMode starts the real composition on a database
+// with no stored account mode: clients see every account, as before the mode
+// existed, the mode reads as not chosen, and refused mode choices answer with
+// their own codes.
+func TestRegisterWithoutAccountMode(t *testing.T) {
+	handler := serveSeededApp(t, nil)
+	assertAccountMode(t, handler, http.MethodGet, "",
+		`{"mode":null,"account":"","features":{"accounts":true,"account":""},"restartRequired":false}`)
+	got := listedAccounts(t, handler)
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"default", "other"}) {
+		t.Fatalf("listed accounts = %v, want every account", got)
+	}
+	refused := restCall(t, handler, http.MethodPut, "/account-mode", `{"mode":"solo"}`,
+		http.StatusUnprocessableEntity)
+	problems, _ := refused["errors"].([]any)
+	if problem, _ := firstOf(problems).(map[string]any); len(problems) != 1 ||
+		problem["pointer"] != "/mode" || problem["constraint"] != "enum" {
+		t.Fatalf("unknown mode = %v, want enum at /mode", refused)
+	}
+	missing := restCall(t, handler, http.MethodPut, "/account-mode",
+		`{"mode":"single","account":"ghost"}`, http.StatusNotFound)
+	if errObj, _ := missing["error"].(map[string]any); errObj["code"] != "account_missing" ||
+		errObj["account"] != "ghost" {
+		t.Fatalf("single with a missing account = %v, want account_missing for ghost", missing)
+	}
+}
+
+// TestRegisterSingleAccountModeMCPSchemas lists the tools over the served MCP
+// endpoint of the real composition started in single-account mode: the MCP
+// registrar sees the scope Register installs, so submit_order neither requires
+// an account nor offers an account group.
+func TestRegisterSingleAccountModeMCPSchemas(t *testing.T) {
+	server := httptest.NewServer(serveSeededApp(t, map[string]string{
+		accountmode.SettingKeyMode: "single:default",
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
+	session, err := client.Connect(ctx, sdkmcp.NewStreamableClientTransport(server.URL+"/mcp", nil))
+	if err != nil {
+		t.Fatalf("connect MCP: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	list, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	index := slices.IndexFunc(list.Tools, func(tool *sdkmcp.Tool) bool {
+		return tool.Name == "submit_order"
+	})
+	if index < 0 {
+		t.Fatal("submit_order missing from tools/list")
+	}
+	raw, err := json.Marshal(list.Tools[index].InputSchema)
+	if err != nil {
+		t.Fatalf("marshal submit_order input schema: %v", err)
+	}
+	var schema struct {
+		Required   []string       `json:"required"`
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("decode submit_order input schema: %v", err)
+	}
+	if _, group := schema.Properties["accountGroup"]; slices.Contains(schema.Required, "account") ||
+		group || schema.Properties["account"] == nil {
+		t.Fatalf("submit_order input schema = %s, want account optional and no accountGroup", raw)
+	}
+}
+
+// TestRegisterRouteBaseline pins the v1 surface of the assembled app: the
+// httpapi registry, then the account-mode routes, then the route manifest.
+func TestRegisterRouteBaseline(t *testing.T) {
+	app, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+		return domain.Caller{Principal: domain.PrincipalOperator}, nil
+	})
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatalf("BuildServeHandler: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/route-manifest.json", nil))
+	var manifest struct {
+		Routes []struct {
+			Method string `json:"method"`
+			Path   string `json:"path"`
+		} `json:"routes"`
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route manifest = %d: %s", rec.Code, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &manifest); err != nil {
+		t.Fatalf("decode route manifest: %v", err)
+	}
+	got := make([]string, 0, len(manifest.Routes))
+	for _, route := range manifest.Routes {
+		got = append(got, route.Method+" "+route.Path)
+	}
+	var want []string
+	for _, route := range httpapi.NewRouteRegistry(app.Service(), nil).Routes() {
+		want = append(want, route.Method+" "+route.Pattern)
+	}
+	want = append(want, "GET /account-mode", "PUT /account-mode", "GET /route-manifest.json")
+	if !slices.Equal(got, want) {
+		t.Fatalf("assembled route surface mismatch\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+// serveSeededApp builds the real composition - Register over a temporary
+// SQLite database, with Register's own node over the native engine - on a
+// database seeded with the accounts "default" and "other", the assets AAPL and
+// USD, and settings, and returns the app's served handler.
+func serveSeededApp(t *testing.T, settings map[string]string) http.Handler {
+	t.Helper()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	st, err := sqlite.New(path, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("sqlite.New: %v", err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		_ = st.Close()
+		t.Fatalf("Migrate: %v", err)
+	}
+	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		_ = st.Close()
+		t.Fatalf("ForRealm: %v", err)
+	}
+	for _, code := range []domain.AccountID{"default", "other"} {
+		if _, err := realm.CreateAccount(ctx, domain.Account{Code: code}); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", code, err)
+		}
+	}
+	for _, code := range []string{"AAPL", "USD"} {
+		if _, err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
+	}
+	for key, value := range settings {
+		if err := realm.SetSetting(ctx, key, value); err != nil {
+			t.Fatalf("SetSetting(%s): %v", key, err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seeded store: %v", err)
+	}
+
+	builder := frameworkapp.NewBuilder()
+	if err := Register(builder, Config{SQLitePath: path}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	builder.SetSPAFactory(func() (fs.FS, error) {
+		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
+	})
+	app, err := builder.Build(ctx, slog.Default(), failOnFatal(t))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatalf("BuildServeHandler: %v", err)
+	}
+	return handler
+}
+
+// restCall serves one /api/v1 request through handler and decodes its JSON
+// answer, failing the test unless the status is want.
+func restCall(
+	t *testing.T, handler http.Handler, method, path, body string, want int,
+) map[string]any {
+	t.Helper()
+	rec := serveREST(handler, method, path, body)
+	if rec.Code != want {
+		t.Fatalf("%s %s = %d, want %d: %s", method, path, rec.Code, want, rec.Body)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("%s %s: decode %q: %v", method, path, rec.Body, err)
+	}
+	return out
+}
+
+// assertAccountMode serves one /account-mode request and checks its exact wire
+// answer.
+func assertAccountMode(t *testing.T, handler http.Handler, method, body, want string) {
+	t.Helper()
+	rec := serveREST(handler, method, "/account-mode", body)
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
+		t.Fatalf("%s /account-mode = %d %s, want 200 %s", method, rec.Code, got, want)
+	}
+}
+
+func serveREST(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+// listedAccounts returns the codes GET /accounts lists.
+func listedAccounts(t *testing.T, handler http.Handler) []string {
+	t.Helper()
+	listed, _ := restCall(t, handler, http.MethodGet, "/accounts", "", http.StatusOK)["accounts"].([]any)
+	codes := make([]string, 0, len(listed))
+	for _, account := range listed {
+		row, _ := account.(map[string]any)
+		codes = append(codes, fmt.Sprint(row["code"]))
+	}
+	return codes
+}
+
+// firstOf returns the first element, or nil for none.
+func firstOf(items []any) any {
+	if len(items) == 0 {
+		return nil
+	}
+	return items[0]
 }
 
 func buildTestApp(

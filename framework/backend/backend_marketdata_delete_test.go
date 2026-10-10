@@ -148,7 +148,7 @@ func newMarketDataDeleteTestService(
 	md MarketDataRuntime,
 ) *Service {
 	t.Helper()
-	return &Service{node: n, md: md}
+	return &Service{node: n, md: md, scope: EveryAccount{}}
 }
 
 func TestServiceDeleteAssetForceRestartsMarketData(t *testing.T) {

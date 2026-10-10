@@ -1658,6 +1658,7 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 
 	sentinels := map[string]error{
 		"ErrAccountMissing":          domain.ErrAccountMissing,
+		"ErrAccountsNotManaged":      domain.ErrAccountsNotManaged,
 		"ErrApprovalRequired":        domain.ErrApprovalRequired,
 		"ErrAssetMissing":            domain.ErrAssetMissing,
 		"ErrAlreadyExists":           domain.ErrAlreadyExists,

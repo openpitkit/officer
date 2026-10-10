@@ -1493,7 +1493,7 @@ func TestListRowsInvalidVenueFilter(t *testing.T) {
 func TestCountOrders(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
-	if n, err := rs.CountOrders(ctx); err != nil || n != 0 {
+	if n, err := rs.CountOrders(ctx, domain.AccountRestriction{}); err != nil || n != 0 {
 		t.Fatalf("CountOrders(empty) = %d, err=%v, want 0", n, err)
 	}
 
@@ -1504,16 +1504,18 @@ func TestCountOrders(t *testing.T) {
 		}
 	}
 
-	n, err := rs.CountOrders(ctx)
+	n, err := rs.CountOrders(ctx, domain.AccountRestriction{})
 	if err != nil || n != 3 {
 		t.Fatalf("CountOrders = %d, err=%v, want 3", n, err)
 	}
 
-	since, err := rs.CountOrdersSince(ctx, before)
+	since, err := rs.CountOrdersSince(ctx, before, domain.AccountRestriction{})
 	if err != nil || since != 3 {
 		t.Fatalf("CountOrdersSince(before) = %d, err=%v, want 3", since, err)
 	}
-	future, err := rs.CountOrdersSince(ctx, time.Now().UTC().Add(time.Hour))
+	future, err := rs.CountOrdersSince(
+		ctx, time.Now().UTC().Add(time.Hour), domain.AccountRestriction{},
+	)
 	if err != nil || future != 0 {
 		t.Fatalf("CountOrdersSince(future) = %d, err=%v, want 0", future, err)
 	}
@@ -1537,7 +1539,7 @@ func TestCountActiveOrders(t *testing.T) {
 		}
 	}
 
-	n, err := rs.CountActiveOrders(ctx)
+	n, err := rs.CountActiveOrders(ctx, domain.AccountRestriction{})
 	if err != nil || n != len(activeStatuses) {
 		t.Fatalf(
 			"CountActiveOrders = %d, err=%v, want %d",

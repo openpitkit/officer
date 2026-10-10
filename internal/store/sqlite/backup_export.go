@@ -650,32 +650,32 @@ func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey
 	return out, nil
 }
 
-// exportSigningConfig reads the whole signing-config table as portable entries.
-func (r *realmStore) exportSigningConfig(
+// exportSettings reads the whole setting table as portable entries.
+func (r *realmStore) exportSettings(
 	ctx context.Context,
-) ([]backup.SigningConfigEntry, error) {
+) ([]backup.SettingEntry, error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
 	}
 	rows, err := db.QueryContext(
-		ctx, `SELECT key, value FROM signing_config ORDER BY key`,
+		ctx, `SELECT key, value FROM setting ORDER BY key`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("store: export signing config: %w", err)
+		return nil, fmt.Errorf("store: export setting: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := make([]backup.SigningConfigEntry, 0)
+	out := make([]backup.SettingEntry, 0)
 	for rows.Next() {
-		var entry backup.SigningConfigEntry
+		var entry backup.SettingEntry
 		if err := rows.Scan(&entry.Key, &entry.Value); err != nil {
-			return nil, fmt.Errorf("store: scan signing config: %w", err)
+			return nil, fmt.Errorf("store: scan setting: %w", err)
 		}
 		out = append(out, entry)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate signing config: %w", err)
+		return nil, fmt.Errorf("store: iterate setting: %w", err)
 	}
 	return out, nil
 }

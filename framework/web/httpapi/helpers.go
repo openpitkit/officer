@@ -411,6 +411,8 @@ func WriteErr(w http.ResponseWriter, err error) {
 		WriteErrMsg(w, http.StatusConflict, "trading_mode_mismatch", domain.ErrTradingModeMismatch.Error())
 	case errors.Is(err, domain.ErrFeeAccountRequired):
 		WriteErrMsg(w, http.StatusConflict, "fee_account_required", domain.ErrFeeAccountRequired.Error())
+	case errors.Is(err, domain.ErrAccountsNotManaged):
+		WriteErrMsg(w, http.StatusConflict, "accounts_not_managed", err.Error())
 	case errors.Is(err, domain.ErrVenueOrderManaged):
 		WriteErrMsg(w, http.StatusConflict, "venue_order_managed", domain.ErrVenueOrderManaged.Error())
 	case errors.Is(err, domain.ErrNoDestination):

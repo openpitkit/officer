@@ -62,7 +62,7 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 
 	const orderID = "ord-1"
 	recorder := &reachRecorder{}
-	svc := &Service{node: recorder}
+	svc := &Service{node: recorder, scope: EveryAccount{}}
 	ctx := systemCtx()
 
 	_, _, err := svc.CancelOrder(ctx, orderID, "",
@@ -200,7 +200,7 @@ func TestImmediateApprovalIsNoShortcut(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			recorder := &shortcutRecorder{stored: stored}
-			svc := &Service{node: recorder, signer: envelopeSigner{}}
+			svc := &Service{node: recorder, signer: envelopeSigner{}, scope: EveryAccount{}}
 
 			err := tc.call(svc)
 			if !errors.Is(err, domain.ErrApprovalRequired) ||

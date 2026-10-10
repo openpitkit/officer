@@ -363,7 +363,7 @@ func TestPreCheckMappingAndUnsupportedBeforeClaim(t *testing.T) {
 	if mapped.Symbol != "AAPL" || mapped.Quantity != draft.AmountValue || mapped.LimitPrice != "" || mapped.Route != dest.Route || mapped.ClientOrderID != "" {
 		t.Fatalf("mapped draft=%+v", mapped)
 	}
-	count, err := f.st.CountOrders(testCtx)
+	count, err := f.st.CountOrders(testCtx, domain.AccountRestriction{})
 	must(t, err)
 	if count != 0 {
 		t.Fatal("draft precheck wrote an order")

@@ -186,6 +186,79 @@ func TestLocalNode_SetAccountGroupPersistsMembership(t *testing.T) {
 	assertFakeAccountGroup(t, eng, id, "desk-a")
 }
 
+// TestLocalNode_ListGroupRowsAccountRestriction pins the group list the node
+// reads under an account restriction: only the groups the restricted account is
+// a member of remain, their counts count that member alone, and the default
+// group is omitted.
+func TestLocalNode_ListGroupRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	for _, code := range []string{"desk", "ops"} {
+		if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: code}, testCaller); err != nil {
+			t.Fatalf("CreateGroup(%s): %v", code, err)
+		}
+	}
+	for id, group := range map[domain.AccountID]string{"a": "desk", "b": "ops", "c": "desk"} {
+		if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", id, err)
+		}
+		if err := n.SetAccountGroup(ctx, id, group, domain.MissingAccountCreate, testCaller); err != nil {
+			t.Fatalf("SetAccountGroup(%s, %s): %v", id, group, err)
+		}
+	}
+	// c holds two positions, a and b one each.
+	for _, position := range []struct {
+		account domain.AccountID
+		asset   string
+	}{{"a", "USD"}, {"b", "USD"}, {"c", "USD"}, {"c", "EUR"}} {
+		if err := st.UpsertBalance(ctx, domain.Balance{
+			Account: position.account, Asset: position.asset,
+		}); err != nil {
+			t.Fatalf("UpsertBalance(%s %s): %v", position.account, position.asset, err)
+		}
+	}
+
+	type groupRow struct {
+		code                string
+		accounts, positions int
+	}
+	for _, tc := range []struct {
+		name      string
+		filter    store.GroupListFilter
+		wantTotal int
+		want      []groupRow
+	}{
+		{
+			name:      "zero restriction lists every group and the default group",
+			wantTotal: 2,
+			want:      []groupRow{{"", 0, 0}, {"desk", 2, 3}, {"ops", 1, 1}},
+		},
+		{
+			name: "restricted to a lists its group counting a alone",
+			filter: store.GroupListFilter{
+				Restriction: domain.AccountRestriction{Account: "a"},
+			},
+			wantTotal: 1,
+			want:      []groupRow{{"desk", 1, 1}},
+		},
+	} {
+		page, err := n.ListGroupRows(ctx, tc.filter)
+		if err != nil {
+			t.Fatalf("%s: ListGroupRows: %v", tc.name, err)
+		}
+		got := make([]groupRow, 0, len(page.Rows))
+		for _, row := range page.Rows {
+			got = append(got, groupRow{row.Group.Code, row.AccountCount, row.PositionCount})
+		}
+		if page.Total != tc.wantTotal || !slices.Equal(got, tc.want) {
+			t.Fatalf("%s: ListGroupRows = total %d rows %+v, want total %d rows %+v",
+				tc.name, page.Total, got, tc.wantTotal, tc.want)
+		}
+	}
+}
+
 // TestLocalNode_SetAccountGroupAutoCreatesUnknownGroup proves the auto-create
 // contract against a strict resolver: moving an account into a group with no
 // account_groups record succeeds because the missing record and its stable

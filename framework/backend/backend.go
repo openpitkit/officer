@@ -83,6 +83,7 @@ type Service struct {
 	signer         fwsigning.Service
 	commands       catalog.Provider
 	lockSettlement LockSettlementPrice
+	scope          AccountScope
 	marketDataMu   sync.Mutex
 	tradingMu      sync.Mutex
 }
@@ -134,6 +135,13 @@ func WithMCPCatalogProvider(commands catalog.Provider) Option {
 	}
 }
 
+// WithAccountScope installs the account scope the control plane applies to the
+// accounts a request names and returns. Without it New installs EveryAccount;
+// a nil scope makes New fail.
+func WithAccountScope(scope AccountScope) Option {
+	return func(s *Service) { s.scope = scope }
+}
+
 // New constructs a Service over n, the node of the realm the service serves.
 // md is the live connector-manager view used to surface per-instance
 // subscription state and to re-apply configuration; signer is the framework
@@ -141,7 +149,8 @@ func WithMCPCatalogProvider(commands catalog.Provider) Option {
 // display settlement price of an order from its engine lock. md may be nil
 // (market-data state resolves to empty and RestartMarketData is a no-op);
 // signer may be nil (the signing and approval-token methods then report the
-// feature unconfigured). New returns an error when n or lockSettlement is nil.
+// feature unconfigured). New returns an error when n or lockSettlement is nil,
+// or when WithAccountScope passes a nil scope.
 func New(
 	n node.Node,
 	md MarketDataRuntime,
@@ -168,9 +177,13 @@ func New(
 		signer:         fwsigning.ServiceOrUnavailable(signer),
 		commands:       staticCatalogProvider{catalog: catalog.New(nil)},
 		lockSettlement: lockSettlement,
+		scope:          EveryAccount{},
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.scope == nil {
+		return nil, errors.New("backend: nil account scope")
 	}
 	return s, nil
 }

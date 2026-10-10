@@ -765,6 +765,10 @@ func (r *realmStore) ListGroups(ctx context.Context) ([]domain.AccountGroup, err
 // pinned first on the first page (offset zero). It is excluded from the real
 // groups' ORDER BY, LIMIT/OFFSET window, and from Total, so paging the real
 // groups stays deterministic regardless of the default group's presence.
+//
+// A non-zero account restriction keeps only the groups the restricted account
+// is a member of, counting that member alone, and omits the default group:
+// holding the accounts with no group, it is no membership group.
 func (r *realmStore) ListGroupRows(
 	ctx context.Context, filter fwstore.GroupListFilter,
 ) (fwstore.GroupListPage, error) {
@@ -798,7 +802,7 @@ GROUP BY g.id` + having
 	// the SQLite connector serializes on a single connection, so a second query
 	// issued while a result set is still open would deadlock on the pool.
 	groups := make([]fwstore.GroupListRow, 0)
-	if filter.Page.Offset <= 0 {
+	if filter.Page.Offset <= 0 && filter.Restriction.Account == "" {
 		defaultRow, ok, err := r.defaultGroupRow(ctx, filter)
 		if err != nil {
 			return fwstore.GroupListPage{}, err
@@ -1734,6 +1738,7 @@ func groupVenueLinks(tableAlias string) venueLinks {
 func accountListWhere(filter fwstore.AccountListFilter) (string, []any, error) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
+	appendAccountRestriction(&clauses, &args, "a.code", "", filter.Restriction)
 	appendMatcherAny(&clauses, &args, []string{"a.code", "a.title"}, filter.Code)
 	appendMatcher(&clauses, &args, accountEffectiveBlockReasonExpr, filter.BlockReason)
 	appendStatusFilter(&clauses, filter.Status, accountEffectiveBlockedExpr)
@@ -1807,11 +1812,16 @@ func groupListOrderBy(sort fwstore.SortSpec) string {
 	return "\nORDER BY " + column + " " + direction + ", g.code " + tieDirection
 }
 
+// groupListWhere builds the WHERE clause of a group list over tableAlias and
+// the member account alias a. The account restriction keeps the joined rows of
+// the restricted member alone, so only its groups remain and their counts are
+// its own.
 func groupListWhere(
 	filter fwstore.GroupListFilter, tableAlias string,
 ) (string, []any, error) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
+	appendAccountRestriction(&clauses, &args, "a.code", "", filter.Restriction)
 	appendMatcherAny(
 		&clauses, &args,
 		[]string{tableAlias + ".code", tableAlias + ".title"}, filter.Code,

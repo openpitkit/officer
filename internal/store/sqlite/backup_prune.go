@@ -563,7 +563,7 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 	return nil
 }
 
-// pruneGeneralSettings deletes the MCP access overrides, signing-config entries
+// pruneGeneralSettings deletes the MCP access overrides, realm setting entries
 // and signing keys the archive omits. Signing keys referenced by a surviving
 // order approval are kept (the RESTRICT foreign key forbids dropping a key in
 // use); such a key is still in the archive whenever the order it signs is.
@@ -587,22 +587,22 @@ func (rt *restoreTx) pruneGeneralSettings(ctx context.Context, data backup.Data)
 		}
 	}
 
-	keepConfig := make(map[string]bool, len(data.SigningConfig))
-	for _, entry := range data.SigningConfig {
-		keepConfig[entry.Key] = true
+	keepSettings := make(map[string]bool, len(data.Settings))
+	for _, entry := range data.Settings {
+		keepSettings[entry.Key] = true
 	}
-	keys, err := scanStrings(rt.tx.QueryContext(ctx, `SELECT key FROM signing_config`))
+	keys, err := scanStrings(rt.tx.QueryContext(ctx, `SELECT key FROM setting`))
 	if err != nil {
-		return fmt.Errorf("store: prune signing config: %w", err)
+		return fmt.Errorf("store: prune setting: %w", err)
 	}
 	for _, key := range keys {
-		if keepConfig[key] {
+		if keepSettings[key] {
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM signing_config WHERE key = ?`, key,
+			ctx, `DELETE FROM setting WHERE key = ?`, key,
 		); err != nil {
-			return fmt.Errorf("store: prune signing config %q: %w", key, err)
+			return fmt.Errorf("store: prune setting %q: %w", key, err)
 		}
 	}
 

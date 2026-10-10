@@ -29,6 +29,14 @@ import (
 // live in allowedScopes.
 type LimitScope string
 
+// HasAccountAxis reports whether the scope carries an account axis, so that a
+// barrier of this scope names exactly one account.
+func (s LimitScope) HasAccountAxis() bool {
+	return s == ScopeAccount || s == ScopeAccountAsset ||
+		s == ScopeAccountUnderlyingAsset ||
+		s == ScopeAccountSettlementAsset
+}
+
 // LimitRate is the typed rate-limit barrier: at most MaxOrders new orders per
 // rolling Window for the addressed scope. It maps to the engine's rate-limit
 // policy. The optional Account and Asset axes are present exactly when Scope
@@ -254,9 +262,7 @@ func ValidateLimitScopeAndAxes(
 		)
 	}
 
-	needsAccount := scope == ScopeAccount || scope == ScopeAccountAsset ||
-		scope == ScopeAccountUnderlyingAsset ||
-		scope == ScopeAccountSettlementAsset
+	needsAccount := scope.HasAccountAxis()
 	needsAccountGroup := scope == ScopeAccountGroup
 	needsAsset := scope == ScopeAsset || scope == ScopeAccountAsset ||
 		scope == ScopeUnderlyingAsset || scope == ScopeSettlementAsset ||

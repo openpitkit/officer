@@ -1080,7 +1080,7 @@ export interface BackupData {
   marketDataInstances?: Record<string, unknown>[];
   marketDataInstruments?: Record<string, unknown>[];
   signingKeys?: Record<string, unknown>[];
-  signingConfig?: Record<string, unknown>[];
+  settings?: Record<string, unknown>[];
   mcpAccess?: Record<string, boolean>;
   userSettings?: Record<string, unknown>[];
 }

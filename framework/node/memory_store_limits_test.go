@@ -37,7 +37,8 @@ func (r *memoryRealm) ListPolicyRows(
 	out := make([]store.PolicyListRow, 0)
 	if wantKind(store.PolicyKindRate) {
 		for _, limit := range r.rateLimits {
-			if !textMatches(filter.Account, string(limit.Account)) ||
+			if !restrictionMatches(filter.Restriction, limit.Account) ||
+				!textMatches(filter.Account, string(limit.Account)) ||
 				!textMatches(filter.Asset, limit.Asset) {
 				continue
 			}
@@ -53,7 +54,8 @@ func (r *memoryRealm) ListPolicyRows(
 	}
 	if wantKind(store.PolicyKindOrderSize) {
 		for _, limit := range r.orderSizeLimits {
-			if !textMatches(filter.Account, string(limit.Account)) ||
+			if !restrictionMatches(filter.Restriction, limit.Account) ||
+				!textMatches(filter.Account, string(limit.Account)) ||
 				!textMatches(filter.Asset, limit.Asset) {
 				continue
 			}
@@ -69,7 +71,11 @@ func (r *memoryRealm) ListPolicyRows(
 	}
 	if wantKind(store.PolicyKindSpotFundsPnlBounds) {
 		for _, limit := range r.spotFundsPnlBoundsLimits {
-			if !textMatches(filter.Account, string(limit.Account)) {
+			if !restrictionMatches(filter.Restriction, limit.Account) ||
+				!r.restrictionReachesGroup(
+					filter.Restriction, limit.Account, limit.AccountGroup,
+				) ||
+				!textMatches(filter.Account, string(limit.Account)) {
 				continue
 			}
 			value := limit
@@ -86,6 +92,16 @@ func (r *memoryRealm) ListPolicyRows(
 	total := len(out)
 	out = pageRows(out, filter.Page)
 	return store.PolicyListPage{Rows: out, Total: total}, nil
+}
+
+// restrictionReachesGroup mirrors the SQLite policy restriction for a barrier
+// that names no account but an account group: under a non-zero restriction it
+// is kept only when the restricted account is a member of that group.
+func (r *memoryRealm) restrictionReachesGroup(
+	restriction domain.AccountRestriction, account domain.AccountID, group string,
+) bool {
+	return restriction.Account == "" || account != "" || group == "" ||
+		r.accounts[restriction.Account].GroupCode == group
 }
 
 // policyRowKey returns the deterministic composite sort key matching the

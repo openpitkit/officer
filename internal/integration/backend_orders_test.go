@@ -141,11 +141,11 @@ func TestService_CheckOrderForwardsWithoutFormatValidation(t *testing.T) {
 	t.Parallel()
 	ctx := systemCtx()
 
-	// Officer no longer pre-validates the probe account/asset format; the engine
-	// seam parses and rejects bad values downstream. Every probe now reaches the
-	// node, including ones Officer used to reject (empty/interior-space asset).
+	// Officer checks the probe account as at submit but not the asset format;
+	// the engine seam parses and rejects bad assets downstream. Every probe
+	// naming an account reaches the node, including ones Officer used to reject
+	// (empty/interior-space asset).
 	probes := []domain.OrderProbe{
-		{Account: "", BaseAsset: "AAPL", QuoteAsset: "USD"},
 		{Account: "acc-1", BaseAsset: "", QuoteAsset: "USD"},
 		{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "bad asset"},
 	}
@@ -157,6 +157,16 @@ func TestService_CheckOrderForwardsWithoutFormatValidation(t *testing.T) {
 		if len(fn.checkProbes) != 1 {
 			t.Fatalf("probe must reach the node, got %d calls", len(fn.checkProbes))
 		}
+	}
+
+	// A probe naming no account is refused before the node.
+	svc, fn := newTestService(t)
+	_, err := svc.CheckOrder(ctx, domain.OrderProbe{BaseAsset: "AAPL", QuoteAsset: "USD"})
+	if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/account" {
+		t.Fatalf("CheckOrder without account = %v, want invalid /account", err)
+	}
+	if len(fn.checkProbes) != 0 {
+		t.Fatalf("probe without account reached the node %d times", len(fn.checkProbes))
 	}
 }
 

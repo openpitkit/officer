@@ -15,12 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Settings group of the SQLite store: the per-command MCP access overrides and
-// the per-user UI settings. Both are plain key/value tables: mcp_access is keyed
-// by the command name, user_setting by the (user_id, setting_key) composite.
-// The keys are hardcoded enums stored as TEXT (validated by the surfaces that own
-// them), never dictionaries, so there is no surrogate id and no code resolution
-// in this group.
+// Settings group of the SQLite store: the realm-wide settings, the per-command
+// MCP access overrides and the per-user UI settings. All are plain key/value
+// tables: setting is keyed by the setting key, mcp_access by the command name,
+// user_setting by the (user_id, setting_key) composite. The keys are hardcoded
+// enums stored as TEXT (validated by the surfaces that own them), never
+// dictionaries, so there is no surrogate id and no code resolution in this
+// group.
 
 package sqlite
 
@@ -32,6 +33,48 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 )
+
+// --- Realm settings ---------------------------------------------------------
+
+// GetSetting returns the value of the realm-wide setting stored under key. The
+// bool is false when the setting is absent. The key is a hardcoded enum stored
+// as TEXT, not a dictionary code.
+func (r *realmStore) GetSetting(
+	ctx context.Context, key string,
+) (string, bool, error) {
+	var value string
+	db, err := r.db()
+	if err != nil {
+		return "", false, err
+	}
+	err = db.QueryRowContext(
+		ctx, `SELECT value FROM setting WHERE key = ?`, key,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("store: get setting: %w", err)
+	}
+	return value, true, nil
+}
+
+// SetSetting upserts the value of the realm-wide setting stored under key.
+func (r *realmStore) SetSetting(ctx context.Context, key, value string) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`INSERT INTO setting (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	); err != nil {
+		return fmt.Errorf("store: set setting: %w", err)
+	}
+	return nil
+}
 
 // --- MCP access control -----------------------------------------------------
 

@@ -306,6 +306,56 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 	}
 }
 
+func TestService_BusinessCSVExportAccountsAccountFilter(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService(t)
+	fn.accounts = []domain.Account{
+		{Code: "acc-a"},
+		{Code: "acc-b", GroupCode: "desk-b"},
+	}
+	export := func(filter businesscsv.ExportFilter) string {
+		t.Helper()
+		file, err := svc.ExportBusinessCSV(systemCtx(), backend.BusinessCSVExportRequest{
+			Entity: businesscsv.EntityAccounts, Delimiter: businesscsv.DelimiterComma,
+			Filter: filter,
+		})
+		if err != nil {
+			t.Fatalf("ExportBusinessCSV(%+v): %v", filter, err)
+		}
+		return string(file.Body)
+	}
+	if body := export(businesscsv.ExportFilter{Account: "acc-b"}); !strings.Contains(body, "acc-b") ||
+		strings.Contains(body, "acc-a") {
+		t.Fatalf("account filter export = %q, want acc-b alone", body)
+	}
+	if body := export(businesscsv.ExportFilter{
+		Account: "acc-b", GroupCode: "desk-a", GroupCodeSet: true,
+	}); strings.Contains(body, "acc-b") || strings.Contains(body, "acc-a") {
+		t.Fatalf("account and group filter export = %q, want no account", body)
+	}
+}
+
+func TestService_BusinessCSVExportAccountFilterErrorPointsAtFilter(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService(t)
+	for _, entity := range []businesscsv.Entity{
+		businesscsv.EntityAccounts, businesscsv.EntityOrders, businesscsv.EntityTrades,
+	} {
+		_, err := svc.ExportBusinessCSV(systemCtx(), backend.BusinessCSVExportRequest{
+			Entity: entity, Delimiter: businesscsv.DelimiterComma,
+			Filter: businesscsv.ExportFilter{Account: " acc-a"},
+		})
+		if !errors.Is(err, domain.ErrInvalid) ||
+			domain.ValidationPointer(err) != "/filters/account" {
+			t.Errorf("export %s with a malformed account = %v (pointer %q), want /filters/account",
+				entity, err, domain.ValidationPointer(err))
+		}
+	}
+	if len(fn.auditCalls) != 0 {
+		t.Fatalf("refused exports were audited: %+v", fn.auditCalls)
+	}
+}
+
 func TestService_BusinessCSVOrderExportKeepsUnreadableLockRow(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)

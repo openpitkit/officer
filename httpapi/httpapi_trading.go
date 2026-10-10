@@ -366,8 +366,11 @@ func handlePutTradingAccess(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		// Both subjects reach the service, whose validation refuses them at
-		// /accountGroup; a second mapping here would drift from it.
-		if strings.TrimSpace(req.Account) == "" && strings.TrimSpace(req.AccountGroup) == "" {
+		// /accountGroup; a second mapping here would drift from it. When the
+		// composition does not offer accounts, an omitted subject reaches the
+		// service, whose account scope supplies the one account.
+		if svc.AccountFeatures().Accounts() &&
+			strings.TrimSpace(req.Account) == "" && strings.TrimSpace(req.AccountGroup) == "" {
 			httpx.WriteValidationProblem(w, "account or accountGroup is required", "/account", "required")
 			return
 		}
@@ -407,8 +410,11 @@ func handleRemoveTradingAccess(svc backend.ControlPlane) http.HandlerFunc {
 		query := r.URL.Query()
 		account, accountGroup := query.Get("account"), query.Get("accountGroup")
 		// Both subjects reach the service, whose validation refuses them at
-		// /accountGroup; a second mapping here would drift from it.
-		if strings.TrimSpace(account) == "" && strings.TrimSpace(accountGroup) == "" {
+		// /accountGroup; a second mapping here would drift from it. When the
+		// composition does not offer accounts, an omitted subject reaches the
+		// service, whose account scope supplies the one account.
+		if svc.AccountFeatures().Accounts() &&
+			strings.TrimSpace(account) == "" && strings.TrimSpace(accountGroup) == "" {
 			httpx.WriteValidationProblem(w, "account or accountGroup is required", "/account", "required")
 			return
 		}
@@ -433,16 +439,20 @@ func handleSetTradingFeeAccount(svc backend.ControlPlane) http.HandlerFunc {
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if strings.TrimSpace(req.Account) == "" {
+		features := svc.AccountFeatures()
+		if features.Accounts() && strings.TrimSpace(req.Account) == "" {
 			httpx.WriteValidationProblem(w, "account is required", "/account", "required")
 			return
 		}
+		// The service reads an empty fee account as a clear, so an omitted one
+		// is named here as the composition's one account.
+		account := features.AccountFor(domain.AccountID(req.Account))
 		connection, err := domain.ParseExternalID(id)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.SetTradingFeeAccount(r.Context(), connection, domain.AccountID(req.Account)); err != nil {
+		if err := svc.SetTradingFeeAccount(r.Context(), connection, account); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -507,7 +517,7 @@ func handleSendPaperOrder(svc backend.ControlPlane) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		order, err := submitOrderFromDTO(req.orderFields())
+		order, err := submitOrderFromDTO(req.orderFields(), svc.AccountFeatures())
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return

@@ -748,9 +748,9 @@ var backupParitySpecs = []paritySpec{
 	},
 	{
 		surface: driftBackup,
-		entity:  "signing-config",
-		source:  reflect.TypeOf(backup.SigningConfigEntry{}),
-		target:  reflect.TypeOf(backup.SigningConfigEntry{}),
+		entity:  "settings",
+		source:  reflect.TypeOf(backup.SettingEntry{}),
+		target:  reflect.TypeOf(backup.SettingEntry{}),
 	},
 	{
 		surface: driftBackup,
@@ -843,7 +843,7 @@ var expectedSchemaTableNames = []string{
 	"principal",
 	"realm",
 	"secret_state",
-	"signing_config",
+	"setting",
 	"signing_key",
 	"source_kind",
 	"trade",
@@ -1202,7 +1202,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"active":      "Active",
 		},
 	},
-	"signing_config": {
+	"setting": {
 		backup: map[string]string{
 			"key":   "Key",
 			"value": "Value",
@@ -1909,7 +1909,7 @@ func seedClientDataDriftRealm(
 	must(t, "SetVenueOrderID", rs.SetVenueOrderID(
 		ctx, order.ExternalID, "venue-order-sentinel",
 	))
-	must(t, "SetSigningConfig", rs.SetSigningConfig(ctx, "no_esign", "0"))
+	must(t, "SetSetting", rs.SetSetting(ctx, "no_esign", "0"))
 	must(t, "SetMcpAccess", rs.SetMcpAccess(ctx, "submit_order", true))
 	must(t, "SetUserSetting", rs.SetUserSetting(
 		ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen, "1",
@@ -2086,7 +2086,7 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"trading-access", data.TradingAccess},
 		{"venue-orders", data.VenueOrders},
 		{"signing-keys", data.SigningKeys},
-		{"signing-config", data.SigningConfig},
+		{"settings", data.Settings},
 		{"mcp-access", data.McpAccess},
 		{"user-settings", data.UserSettings},
 	}

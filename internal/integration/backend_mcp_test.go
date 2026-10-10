@@ -18,9 +18,11 @@
 package integration_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
 )
@@ -93,6 +95,32 @@ func TestService_SetMcpAccessValidatesCommand(t *testing.T) {
 	if len(fn.setMcpAccessCall) != 1 || fn.setMcpAccessCall[0].command != "health" ||
 		fn.setMcpAccessCall[0].enabled != false {
 		t.Fatalf("valid set must route to node: %+v", fn.setMcpAccessCall)
+	}
+}
+
+func TestService_SetSettingRoutesKeyValueAndCaller(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService(t)
+	caller := domain.Caller{Source: domain.SourcePanel, Principal: "settings-operator"}
+	ctx := auth.ContextWithCaller(context.Background(), caller)
+
+	if err := svc.SetSetting(context.Background(), "k", "v"); err == nil {
+		t.Fatal("SetSetting without a caller succeeded, want an error")
+	}
+	if len(fn.setSettingCalls) != 0 || len(fn.settings) != 0 {
+		t.Fatalf("SetSetting without a caller reached the node: calls = %+v, settings = %v",
+			fn.setSettingCalls, fn.settings)
+	}
+
+	if err := svc.SetSetting(ctx, "k", "v"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if value, ok, err := svc.Setting(ctx, "k"); err != nil || !ok || value != "v" {
+		t.Fatalf("Setting = %q, %v, %v; want %q, true, nil", value, ok, err, "v")
+	}
+	if len(fn.setSettingCalls) != 1 || fn.setSettingCalls[0].key != "k" ||
+		fn.setSettingCalls[0].value != "v" || fn.setSettingCalls[0].caller != caller {
+		t.Fatalf("node SetSetting calls = %+v, want one {k v %+v}", fn.setSettingCalls, caller)
 	}
 }
 

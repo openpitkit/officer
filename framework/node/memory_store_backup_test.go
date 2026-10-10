@@ -92,9 +92,9 @@ func (r *memoryRealm) RestoreBackup(
 		r.restoreAssets(data.Assets, opts.Mode)
 		if opts.Scope.Normalize().Included(backup.SectionGeneralSettings) {
 			r.restoreSigningKeys(data.SigningKeys, opts.Mode)
-			r.signingConfig = map[string]string{}
-			for _, entry := range data.SigningConfig {
-				r.signingConfig[entry.Key] = entry.Value
+			r.settings = map[string]string{}
+			for _, entry := range data.Settings {
+				r.settings[entry.Key] = entry.Value
 			}
 		}
 		for key := range r.mcpAccess {
@@ -137,7 +137,7 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		MarketDataInstances:   make([]backup.MarketDataInstance, 0, len(r.instances)),
 		MarketDataInstruments: make([]backup.MarketDataInstrument, 0, len(r.instruments)),
 		SigningKeys:           make([]backup.SigningKey, 0, len(r.signingKeys)),
-		SigningConfig:         make([]backup.SigningConfigEntry, 0, len(r.signingConfig)),
+		Settings:              make([]backup.SettingEntry, 0, len(r.settings)),
 		McpAccess:             make(map[string]bool, len(r.mcpAccess)),
 		UserSettings:          make([]domain.UserSetting, 0, len(r.userSettings)),
 	}
@@ -224,9 +224,9 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 			PublicKey: key.PublicKey, Active: key.Active,
 		})
 	}
-	for key, value := range r.signingConfig {
-		data.SigningConfig = append(data.SigningConfig,
-			backup.SigningConfigEntry{Key: key, Value: value})
+	for key, value := range r.settings {
+		data.Settings = append(data.Settings,
+			backup.SettingEntry{Key: key, Value: value})
 	}
 	for key, value := range r.mcpAccess {
 		data.McpAccess[key] = value
@@ -392,9 +392,9 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 		r.instruments[instrumentKey(instrument.Instance, instrument.ExternalSymbol)] = stored
 	}
 	r.restoreSigningKeys(data.SigningKeys, mode)
-	r.signingConfig = map[string]string{}
-	for _, entry := range data.SigningConfig {
-		r.signingConfig[entry.Key] = entry.Value
+	r.settings = map[string]string{}
+	for _, entry := range data.Settings {
+		r.settings[entry.Key] = entry.Value
 	}
 	r.mcpAccess = map[string]bool{}
 	for key, value := range data.McpAccess {
@@ -448,7 +448,7 @@ func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) in
 	case backup.SectionMarketData:
 		return len(r.instances) + len(r.instruments)
 	case backup.SectionGeneralSettings:
-		return len(r.mcpAccess) + len(r.signingConfig)
+		return len(r.mcpAccess) + len(r.settings)
 	case backup.SectionUserSettings:
 		return len(r.userSettings)
 	case backup.SectionActivityHistory:

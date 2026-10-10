@@ -17,11 +17,36 @@
 
 package sqlite
 
-import "strings"
+import (
+	"strings"
+
+	"go.openpit.dev/officer/framework/domain"
+)
 
 func whereFromClauses(clauses []string) string {
 	if len(clauses) == 0 {
 		return ""
 	}
 	return "\nWHERE " + strings.Join(clauses, " AND ")
+}
+
+// appendAccountRestriction appends the clause of a list's mandatory account
+// restriction: rows whose account, read from column, is the restricted one,
+// plus, with IncludeUnowned, the rows that unowned selects, those that belong
+// to no account. unowned is empty for a table whose every row has an account,
+// where IncludeUnowned has no rows to add. The zero restriction appends
+// nothing.
+func appendAccountRestriction(
+	clauses *[]string, args *[]any, column, unowned string,
+	restriction domain.AccountRestriction,
+) {
+	if restriction.Account == "" {
+		return
+	}
+	clause := column + " = ?"
+	if restriction.IncludeUnowned && unowned != "" {
+		clause = "(" + clause + " OR " + unowned + ")"
+	}
+	*clauses = append(*clauses, clause)
+	*args = append(*args, restriction.Account.String())
 }

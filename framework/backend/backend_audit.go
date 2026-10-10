@@ -25,11 +25,25 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// ListAudit returns the most recent count audit rows, newest first.
+// ListAudit returns the most recent count audit rows, newest first, narrowed by
+// the account scope's list restriction. The zero restriction reads the node's
+// unfiltered listing; any other is read through its filtered one, so count
+// bounds the restricted set.
 func (s *Service) ListAudit(
 	ctx context.Context, count int,
 ) ([]domain.AuditRow, error) {
-	rows, err := s.node.ListAudit(ctx, count)
+	restriction, err := s.listRestriction(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	var rows []domain.AuditRow
+	if restriction == (domain.AccountRestriction{}) {
+		rows, err = s.node.ListAudit(ctx, count)
+	} else {
+		rows, err = s.node.ListAuditFiltered(
+			ctx, domain.AuditFilter{Restriction: restriction}, count,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -38,12 +52,19 @@ func (s *Service) ListAudit(
 }
 
 // ListAuditFiltered returns audit entries, newest first, narrowed by the
-// filter. The account, source, and action filters are applied in the node's
-// query so count bounds the already-filtered set. A zero-value filter matches
-// all rows.
+// filter and the account scope's list restriction, which is asked with the
+// filter's exact account and replaces any filter.Restriction the caller
+// supplies. The restriction and the account, source, and action filters are
+// applied in the node's query so count bounds the already-filtered set. A
+// zero-value filter matches all rows.
 func (s *Service) ListAuditFiltered(
 	ctx context.Context, filter domain.AuditFilter, count int,
 ) ([]domain.AuditRow, error) {
+	var err error
+	filter.Restriction, err = s.listRestriction(ctx, filter.Account)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.node.ListAuditFiltered(ctx, filter, count)
 	if err != nil {
 		return nil, err
@@ -65,9 +86,17 @@ func sortAuditNewestFirst(rows []domain.AuditRow) {
 	})
 }
 
-// ListAuditRows returns audit entries with DB-side filters and counts.
+// ListAuditRows returns audit entries with DB-side filters and counts, narrowed
+// by the account scope's list restriction; the account filter is a text
+// pattern, so the scope is asked with no requested account. The restriction
+// replaces any filter.Restriction the caller supplies.
 func (s *Service) ListAuditRows(
 	ctx context.Context, filter store.AuditListFilter,
 ) (store.AuditListPage, error) {
+	var err error
+	filter.Restriction, err = s.listRestriction(ctx, "")
+	if err != nil {
+		return store.AuditListPage{}, err
+	}
 	return s.node.ListAuditRows(ctx, filter)
 }

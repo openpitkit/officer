@@ -23,10 +23,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -274,11 +276,11 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		"Search venue symbols for a trading connection. Read-only - credentials are never exposed.",
 		"Search venue symbols for a trading connection.", false, false, true, true), searchTradingSymbolsHandler)
 	registerTool(reg, descriptor("grant_trading_access", "Grant trading access",
-		"Grant an Officer account or an account group access to a trading connection. A group grant needs the connection's fee account on providers with unlinked fees. Mutates Officer control-plane config; protected and disabled by default.",
-		"Grant an Officer account or an account group access to a trading connection; a group grant needs the connection's fee account on providers with unlinked fees.", true, true, true, false), grantTradingAccessHandler)
+		"Grant an Officer account access to a trading connection, or an account group where the server offers account groups. A group grant needs the connection's fee account on providers with unlinked fees. Mutates Officer control-plane config; protected and disabled by default.",
+		"Grant an Officer account access to a trading connection, or an account group where the server offers account groups; a group grant needs the connection's fee account on providers with unlinked fees.", true, true, true, false), grantTradingAccessHandler)
 	registerTool(reg, descriptor("revoke_trading_access", "Revoke trading access",
-		"Revoke the access of an Officer account or an account group to a trading connection. Mutates Officer control-plane config; protected and disabled by default.",
-		"Revoke the access of an Officer account or an account group to a trading connection.", true, true, true, false), revokeTradingAccessHandler)
+		"Revoke the access of an Officer account to a trading connection, or of an account group where the server offers account groups. Mutates Officer control-plane config; protected and disabled by default.",
+		"Revoke the access of an Officer account to a trading connection, or of an account group where the server offers account groups.", true, true, true, false), revokeTradingAccessHandler)
 	registerTool(reg, descriptor("set_trading_fee_account", "Set trading fee account",
 		"Set the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default.",
 		"Set the Officer account receiving unlinked venue fees.", true, true, true, false), setTradingFeeAccountHandler)
@@ -318,12 +320,71 @@ func registerTool[In, Out any](
 	handler func(frameworkmcp.Source) frameworkmcp.ToolBody[In, Out],
 ) {
 	d.Register = func(server *sdkmcp.Server, deps frameworkmcp.RegisterDeps) {
-		sdkmcp.AddTool(server, &sdkmcp.Tool{
-			Name:        d.Name,
-			Description: d.Description,
-		}, frameworkmcp.Guard(d, deps, handler(deps.Source)))
+		tool := &sdkmcp.Tool{Name: d.Name, Description: d.Description}
+		// A composition that offers clients accounts leaves the input schema
+		// to the SDK, which infers it from In.
+		if !deps.Source.AccountFeatures().Accounts() {
+			tool.InputSchema = oneAccountInputSchema[In]()
+		}
+		sdkmcp.AddTool(server, tool, frameworkmcp.Guard(d, deps, handler(deps.Source)))
 	}
 	reg.Register(d)
+}
+
+// Input property descriptions of a composition that fixes one account. A
+// required missingAccount opens with requiredDescriptionPrefix by default; with
+// one account fixed it applies only when account is named, so that opening is
+// replaced and the allowed values that follow it are kept.
+const (
+	oneAccountAccountDescription   = "Account code; may be omitted to act on the one account the server works with"
+	requiredDescriptionPrefix      = "Required: "
+	oneAccountMissingAccountPrefix = "Applies only when account is named, and is then required: "
+)
+
+// oneAccountInputSchema is the input schema inferred from In, edited for a
+// composition that fixes one account: an omitted account means that account,
+// so neither account nor its missingAccount policy is required, and account
+// groups are not offered, so accountGroup is not a property. The descriptions
+// of the properties it relaxes say so in place of the default text. A tool
+// without these fields keeps the inferred schema unchanged.
+func oneAccountInputSchema[In any]() *jsonschema.Schema {
+	schema, err := jsonschema.For[In]()
+	if err != nil {
+		// sdkmcp.AddTool panics on the same inference failure.
+		panic(err)
+	}
+	_, group := schema.Properties["accountGroup"]
+	delete(schema.Properties, "accountGroup")
+	account := slices.Contains(schema.Required, "account")
+	missing := slices.Contains(schema.Required, "missingAccount")
+	schema.Required = slices.DeleteFunc(schema.Required, func(name string) bool {
+		return name == "account" || name == "missingAccount"
+	})
+	if account || group {
+		// The default text names the account as required, or as one of two
+		// subjects with accountGroup.
+		schema.Properties["account"].Description = oneAccountAccountDescription
+	}
+	if missing {
+		property := schema.Properties["missingAccount"]
+		values, ok := strings.CutPrefix(property.Description, requiredDescriptionPrefix)
+		if !ok {
+			panic(fmt.Errorf(
+				"missingAccount description %q does not open with %q",
+				property.Description, requiredDescriptionPrefix,
+			))
+		}
+		property.Description = oneAccountMissingAccountPrefix + values
+	}
+	if account || missing {
+		// The SDK validates the decoded In value, where a field no longer
+		// required is still present, empty when omitted, and it checks such an
+		// empty optional field as an additional property. Decoding In already
+		// refuses every undeclared field, so the schema stops refusing
+		// additional properties instead.
+		schema.AdditionalProperties = nil
+	}
+	return schema
 }
 
 type healthInput struct{}
@@ -864,17 +925,16 @@ func getAccountStateHandler(
 		in getAccountStateInput,
 	) (string, getAccountStateOutput, error) {
 		id := domain.AccountID(strings.TrimSpace(in.Account))
-		if id == "" {
+		// A composition that fixes one account resolves an omitted one in the
+		// Source.
+		if id == "" && src.AccountFeatures().Accounts() {
 			return "", getAccountStateOutput{}, fmt.Errorf("account is required")
 		}
 		acc, limits, err := src.GetAccountState(ctx, id)
 		if err != nil {
-			if isNotFound(err) {
-				return "", getAccountStateOutput{}, fmt.Errorf("account %q not found", id)
-			}
-			// A rejected id is the caller's mistake to correct, not an outage
-			// to retry, so the domain message must reach the agent.
-			if errors.Is(err, domain.ErrInvalid) {
+			// A rejected or unknown id is the caller's mistake to correct, not
+			// an outage to retry, so the Source's message must reach the agent.
+			if isRefusal(err) {
 				return "", getAccountStateOutput{}, err
 			}
 			return "", getAccountStateOutput{}, fmt.Errorf("get account state failed")
@@ -889,7 +949,7 @@ func getAccountStateHandler(
 			Limits:  toLimitsDTO(limits),
 		}
 		summary := fmt.Sprintf(
-			"account %s: %d limit(s)", id, limitsCount(limits),
+			"account %s: %d limit(s)", acc.Code, limitsCount(limits),
 		)
 		if block.Blocked {
 			// Name the blocking tier only; the operator-supplied reason stays
@@ -911,6 +971,9 @@ func getLimitsHandler(
 		account := domain.AccountID(strings.TrimSpace(in.Account))
 		limits, err := src.ListLimits(ctx, account)
 		if err != nil {
+			if isRefusal(err) {
+				return "", getLimitsOutput{}, err
+			}
 			return "", getLimitsOutput{}, fmt.Errorf("list limits failed")
 		}
 		out := getLimitsOutput{Limits: toLimitsDTO(limits)}
@@ -987,6 +1050,9 @@ func getAuditHandler(
 		}
 		rows, err := src.ListAuditFiltered(ctx, filter, n)
 		if err != nil {
+			if isRefusal(err) {
+				return "", getAuditOutput{}, err
+			}
 			return "", getAuditOutput{}, fmt.Errorf("list audit failed")
 		}
 		out := getAuditOutput{Entries: toAuditDTOs(rows)}
@@ -1002,8 +1068,11 @@ func checkOrderHandler(
 		_ *sdkmcp.ServerSession,
 		in checkOrderInput,
 	) (string, checkOrderOutput, error) {
+		features := src.AccountFeatures()
 		account := domain.AccountID(strings.TrimSpace(in.Account))
-		if account == "" {
+		// A composition that fixes one account resolves an omitted one in the
+		// Source.
+		if account == "" && features.Accounts() {
 			return "", checkOrderOutput{}, fmt.Errorf("account is required")
 		}
 		probe := domain.OrderProbe{
@@ -1017,8 +1086,13 @@ func checkOrderHandler(
 		}
 		result, err := src.CheckOrder(ctx, probe)
 		if err != nil {
+			if isRefusal(err) {
+				return "", checkOrderOutput{}, err
+			}
 			return "", checkOrderOutput{}, fmt.Errorf("check order failed")
 		}
+		// The Source checked the composition's one account when none was named.
+		account = features.AccountFor(account)
 		out := toCheckOrderOutput(result)
 		summary := fmt.Sprintf("check %s: pass", account)
 		if !result.Passed {
@@ -1075,15 +1149,22 @@ func submitOrderHandler(
 		_ *sdkmcp.ServerSession,
 		in submitOrderInput,
 	) (string, submitOrderOutput, error) {
+		// A composition that fixes one account resolves an omitted one in the
+		// Source. The missing-account policy belongs to an account the caller
+		// named, so only then is it parsed, as over REST.
 		account := domain.AccountID(strings.TrimSpace(in.Account))
-		if account == "" {
+		if account == "" && src.AccountFeatures().Accounts() {
 			return "", submitOrderOutput{}, fmt.Errorf("account is required")
 		}
-		missing, err := domain.ParseMissingAccountPolicy(
-			strings.TrimSpace(in.MissingAccount),
-		)
-		if err != nil {
-			return "", submitOrderOutput{}, err
+		var missing domain.MissingAccountPolicy
+		if account != "" {
+			var err error
+			missing, err = domain.ParseMissingAccountPolicy(
+				strings.TrimSpace(in.MissingAccount),
+			)
+			if err != nil {
+				return "", submitOrderOutput{}, err
+			}
 		}
 		o := domain.Order{
 			Account:     account,
@@ -1135,13 +1216,19 @@ func submitDropCopyOrderHandler(
 		_ *sdkmcp.ServerSession,
 		in submitDropCopyOrderInput,
 	) (string, submitDropCopyOrderOutput, error) {
+		// A composition that fixes one account resolves an omitted one in the
+		// Source. The missing-account policy belongs to an account the caller
+		// named, so only then is it checked, as over REST.
 		account := domain.AccountID(strings.TrimSpace(in.Account))
-		if account == "" {
+		if account == "" && src.AccountFeatures().Accounts() {
 			return "", submitDropCopyOrderOutput{}, fmt.Errorf("account is required")
 		}
-		missing := domain.MissingAccountPolicy(strings.TrimSpace(in.MissingAccount))
-		if err := domain.ValidateDropCopyMissingAccountPolicy(missing); err != nil {
-			return "", submitDropCopyOrderOutput{}, err
+		var missing domain.MissingAccountPolicy
+		if account != "" {
+			missing = domain.MissingAccountPolicy(strings.TrimSpace(in.MissingAccount))
+			if err := domain.ValidateDropCopyMissingAccountPolicy(missing); err != nil {
+				return "", submitDropCopyOrderOutput{}, err
+			}
 		}
 		o := domain.Order{
 			Account:     account,
@@ -1765,8 +1852,11 @@ func grantTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[gr
 			return "", grantTradingAccessInput{}, fmt.Errorf("connection is required")
 		}
 		// Both subjects reach the Source, whose validation refuses them; a
-		// second rule here would drift from it, as in the REST handler.
-		if strings.TrimSpace(in.Account) == "" && strings.TrimSpace(in.AccountGroup) == "" {
+		// second rule here would drift from it, as in the REST handler. When
+		// the composition fixes one account, an omitted subject reaches the
+		// Source, whose account scope supplies that account.
+		if src.AccountFeatures().Accounts() &&
+			strings.TrimSpace(in.Account) == "" && strings.TrimSpace(in.AccountGroup) == "" {
 			return "", grantTradingAccessInput{}, fmt.Errorf("account or accountGroup is required")
 		}
 		if err := src.PutTradingAccess(ctx, domain.TradingAccess{Connection: domain.ExternalID(in.Connection), Account: domain.AccountID(in.Account), AccountGroup: in.AccountGroup, VenueAccount: in.VenueAccount}); err != nil {
@@ -1781,8 +1871,11 @@ func revokeTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[r
 			return "", revokeTradingAccessInput{}, fmt.Errorf("connection is required")
 		}
 		// Both subjects reach the Source, whose validation refuses them; a
-		// second rule here would drift from it, as in the REST handler.
-		if strings.TrimSpace(in.Account) == "" && strings.TrimSpace(in.AccountGroup) == "" {
+		// second rule here would drift from it, as in the REST handler. When
+		// the composition fixes one account, an omitted subject reaches the
+		// Source, whose account scope supplies that account.
+		if src.AccountFeatures().Accounts() &&
+			strings.TrimSpace(in.Account) == "" && strings.TrimSpace(in.AccountGroup) == "" {
 			return "", revokeTradingAccessInput{}, fmt.Errorf("account or accountGroup is required")
 		}
 		if err := src.RemoveTradingAccess(ctx, domain.ExternalID(in.Connection), domain.AccountID(in.Account), in.AccountGroup); err != nil {
@@ -1796,12 +1889,17 @@ func setTradingFeeAccountHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[
 		if strings.TrimSpace(in.Connection) == "" {
 			return "", tradingAccountInput{}, fmt.Errorf("connection is required")
 		}
-		if strings.TrimSpace(in.Account) == "" {
+		features := src.AccountFeatures()
+		if features.Accounts() && strings.TrimSpace(in.Account) == "" {
 			return "", tradingAccountInput{}, fmt.Errorf("account is required")
 		}
-		if err := src.SetTradingFeeAccount(ctx, domain.ExternalID(in.Connection), domain.AccountID(in.Account)); err != nil {
+		// The Source reads an empty fee account as a clear, so an omitted one
+		// is named here as the composition's one account, as over REST.
+		account := features.AccountFor(domain.AccountID(in.Account))
+		if err := src.SetTradingFeeAccount(ctx, domain.ExternalID(in.Connection), account); err != nil {
 			return "", tradingAccountInput{}, tradingToolError("set trading fee account", err, nil)
 		}
+		in.Account = string(account)
 		return "set trading fee account", in, nil
 	}
 }
@@ -1854,7 +1952,9 @@ func searchTradingSymbolsHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[
 }
 func listTradingDestinationsHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[listTradingDestinationsInput, listTradingDestinationsOutput] {
 	return func(ctx context.Context, _ *sdkmcp.ServerSession, in listTradingDestinationsInput) (string, listTradingDestinationsOutput, error) {
-		if strings.TrimSpace(in.Account) == "" {
+		// A composition that fixes one account resolves an omitted one in the
+		// Source.
+		if strings.TrimSpace(in.Account) == "" && src.AccountFeatures().Accounts() {
 			return "", listTradingDestinationsOutput{}, fmt.Errorf("account is required")
 		}
 
@@ -1961,4 +2061,12 @@ func sendPaperOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[sendPa
 
 func isNotFound(err error) bool {
 	return errors.Is(err, domain.ErrNotFound)
+}
+
+// isRefusal reports whether err is the Source refusing the request rather than
+// failing to serve it: invalid input, the account scope's refusal included, or
+// a resource that does not exist or is hidden from the caller. Its message is
+// the caller's to act on, so it must reach the agent.
+func isRefusal(err error) bool {
+	return errors.Is(err, domain.ErrInvalid) || isNotFound(err)
 }

@@ -37,6 +37,7 @@ import (
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
+	"go.openpit.dev/officer/internal/accountmode"
 	appmarketdata "go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	apptrading "go.openpit.dev/officer/internal/trading"
@@ -98,6 +99,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		}
 	}
 	b.SetServiceFactory(func(
+		ctx context.Context,
 		n node.Node,
 		md fwbackend.MarketDataRuntime,
 		rt fwbackend.TradingRuntime,
@@ -105,6 +107,12 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		registry *fwmarketdata.Registry,
 		mcpRegistry *frameworkmcp.ToolRegistry,
 	) (fwbackend.ControlPlane, error) {
+		// The account mode is read once per process; a stored change takes
+		// effect at the next start.
+		scope, err := accountmode.Load(ctx, n)
+		if err != nil {
+			return nil, err
+		}
 		service, err := fwbackend.New(
 			n,
 			md,
@@ -113,14 +121,28 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 			fwbackend.WithMarketDataRegistry(registry),
 			fwbackend.WithTradingRuntime(rt),
 			fwbackend.WithMCPCatalogProvider(mcpRegistry),
+			fwbackend.WithAccountScope(scope),
 		)
 		if err != nil {
 			return nil, err
 		}
 		return service, nil
 	})
-	b.SetRouteConfigBuilder(httpapi.RouteConfig)
+	b.SetRouteConfigBuilder(RouteConfig)
 	b.AddToolRegistrar(mcptools.RegisterTools)
 	b.SetSPAFactory(web.Dist)
 	return nil
+}
+
+// RouteConfig returns the default Officer route surface over svc, the one
+// Register installs: httpapi.RouteConfig followed by the account-mode routes.
+// A host that customises routes on top of Register starts from it, not from
+// httpapi.RouteConfig, so the account mode Register enforces stays readable
+// and changeable.
+func RouteConfig(svc fwbackend.ControlPlane, logs httpx.LogSource) frameworkapp.RouteConfig {
+	config := httpapi.RouteConfig(svc, logs)
+	for _, route := range accountmode.Routes(svc) {
+		config.Routes.Register(route)
+	}
+	return config
 }

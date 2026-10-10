@@ -411,6 +411,7 @@ func adjustmentListClauses(
 		clauses = append(clauses, "adj.external_id = ?")
 		args = append(args, filter.ExternalID.Bytes())
 	}
+	appendAccountRestriction(&clauses, &args, "a.code", "", filter.Restriction)
 	appendMatcher(&clauses, &args, "a.code", filter.Account)
 	appendMatcher(&clauses, &args, "ast.code", filter.Asset)
 	if filter.Source != "" {

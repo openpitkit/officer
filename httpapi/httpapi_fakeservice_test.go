@@ -120,6 +120,7 @@ type fakeService struct {
 	status                backend.Status
 	statusErr             error
 	welcomeSeen           bool
+	settings              map[string]string
 	createAssetErr        error
 	updateAssetErr        error
 	deleteAssetErr        error
@@ -201,6 +202,10 @@ type fakeService struct {
 	// SubmitOrderToken (which CREATES the order once, mirroring the backend).
 	adjustmentExternalID domain.ExternalID
 	submitOrderIn        domain.Order
+
+	// accountFeatures is what AccountFeatures reports; the zero value is the
+	// default composition's (backend.EveryAccount), where clients see accounts.
+	accountFeatures backend.AccountFeatures
 
 	// missingAccount is the missing-account choice the last mutating command
 	// received, so a handler test can assert the query parameter was threaded.
@@ -301,6 +306,9 @@ type setMcpCall struct {
 
 func (f *fakeService) Status(_ context.Context) (backend.Status, error) {
 	return f.status, f.statusErr
+}
+func (f *fakeService) AccountFeatures() backend.AccountFeatures {
+	return f.accountFeatures
 }
 func (f *fakeService) ListAccounts(_ context.Context) ([]domain.Account, error) {
 	return f.accounts, f.listAccountsErr
@@ -566,6 +574,17 @@ func (f *fakeService) SetMcpAccess(_ context.Context, command string, enabled bo
 		return f.setMcpErr
 	}
 	f.setMcpCalls = append(f.setMcpCalls, setMcpCall{command: command, enabled: enabled})
+	return nil
+}
+func (f *fakeService) Setting(_ context.Context, key string) (string, bool, error) {
+	value, ok := f.settings[key]
+	return value, ok, nil
+}
+func (f *fakeService) SetSetting(_ context.Context, key, value string) error {
+	if f.settings == nil {
+		f.settings = make(map[string]string)
+	}
+	f.settings[key] = value
 	return nil
 }
 func (f *fakeService) WelcomeSeen(_ context.Context) (bool, error) {

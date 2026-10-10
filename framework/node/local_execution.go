@@ -675,29 +675,36 @@ func (n *localNode) ListAllOrders(
 	return orders, nil
 }
 
-// CountOrders returns the total number of orders recorded in the realm.
-func (n *localNode) CountOrders(ctx context.Context) (int, error) {
-	count, err := n.realm.CountOrders(ctx)
+// CountOrders returns the total number of orders recorded in the realm within
+// restriction.
+func (n *localNode) CountOrders(
+	ctx context.Context, restriction domain.AccountRestriction,
+) (int, error) {
+	count, err := n.realm.CountOrders(ctx, restriction)
 	if err != nil {
 		return 0, fmt.Errorf("count orders: %w", err)
 	}
 	return count, nil
 }
 
-// CountActiveOrders returns orders in the working lifecycle set.
-func (n *localNode) CountActiveOrders(ctx context.Context) (int, error) {
-	count, err := n.realm.CountActiveOrders(ctx)
+// CountActiveOrders returns orders in the working lifecycle set within
+// restriction.
+func (n *localNode) CountActiveOrders(
+	ctx context.Context, restriction domain.AccountRestriction,
+) (int, error) {
+	count, err := n.realm.CountActiveOrders(ctx, restriction)
 	if err != nil {
 		return 0, fmt.Errorf("count active orders: %w", err)
 	}
 	return count, nil
 }
 
-// CountOrdersSince returns the number of orders in the realm at or after since.
+// CountOrdersSince returns the number of orders in the realm at or after since
+// within restriction.
 func (n *localNode) CountOrdersSince(
-	ctx context.Context, since time.Time,
+	ctx context.Context, since time.Time, restriction domain.AccountRestriction,
 ) (int, error) {
-	count, err := n.realm.CountOrdersSince(ctx, since)
+	count, err := n.realm.CountOrdersSince(ctx, since, restriction)
 	if err != nil {
 		return 0, fmt.Errorf("count orders since: %w", err)
 	}

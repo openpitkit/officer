@@ -44,7 +44,19 @@ func (s *Service) ApplyAdjustment(
 	req domain.AdjustmentRequest,
 	missing domain.MissingAccountPolicy,
 ) (domain.AccountAdjustmentRecord, error) {
-	if err := domain.ValidateAccountID(account); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	scopedAccount, err := s.scope.Account(caller, account)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	scopedMissing, err := s.scope.MissingAccount(caller, missing)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	if err := domain.ValidateAccountID(scopedAccount); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	if err := validateMissingAccountPolicy(account, missing); err != nil {
@@ -57,12 +69,8 @@ func (s *Service) ApplyAdjustment(
 		}
 		req.RealizedPnl = normalized
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
 	return s.node.ApplyAdjustment(
-		ctx, account, externalID, req, missing, caller,
+		ctx, scopedAccount, externalID, req, scopedMissing, caller,
 	)
 }
 
@@ -77,7 +85,19 @@ func (s *Service) SetBalanceRealizedPnl(
 	realizedPnl string,
 	missing domain.MissingAccountPolicy,
 ) (domain.Balance, error) {
-	if err := domain.ValidateAccountID(account); err != nil {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.Balance{}, err
+	}
+	scopedAccount, err := s.scope.Account(caller, account)
+	if err != nil {
+		return domain.Balance{}, err
+	}
+	scopedMissing, err := s.scope.MissingAccount(caller, missing)
+	if err != nil {
+		return domain.Balance{}, err
+	}
+	if err := domain.ValidateAccountID(scopedAccount); err != nil {
 		return domain.Balance{}, err
 	}
 	if err := validateMissingAccountPolicy(account, missing); err != nil {
@@ -90,29 +110,26 @@ func (s *Service) SetBalanceRealizedPnl(
 	if err != nil {
 		return domain.Balance{}, err
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return domain.Balance{}, err
-	}
 	return s.node.SetBalanceRealizedPnl(
 		ctx,
-		account,
+		scopedAccount,
 		asset,
 		normalized,
-		missing,
+		scopedMissing,
 		caller,
 	)
 }
 
 // ListBalances returns the balance rows for the realm, optionally narrowed to a
-// non-empty account and/or asset.
+// non-empty account and/or asset, within the account scope's list restriction,
+// asked with that account.
 func (s *Service) ListBalances(
 	ctx context.Context, account domain.AccountID, asset string,
 ) ([]domain.Balance, error) {
-	page, err := s.ListBalanceRows(ctx, store.BalanceListFilter{
+	page, err := s.listBalanceRows(ctx, store.BalanceListFilter{
 		Account: store.ExactTextMatcher(account.String()),
 		Asset:   store.ExactTextMatcher(asset),
-	})
+	}, account)
 	if err != nil {
 		return nil, err
 	}
@@ -123,10 +140,26 @@ func (s *Service) ListBalances(
 	return balances, nil
 }
 
-// ListBalanceRows returns balance rows matching filter.
+// ListBalanceRows returns balance rows matching filter, narrowed by the account
+// scope's list restriction; the account filter is a text pattern, so the scope
+// is asked with no requested account. The restriction replaces any
+// filter.Restriction the caller supplies.
 func (s *Service) ListBalanceRows(
 	ctx context.Context, filter store.BalanceListFilter,
 ) (store.BalanceListPage, error) {
+	return s.listBalanceRows(ctx, filter, "")
+}
+
+// listBalanceRows reads balance rows narrowed by the account scope's list
+// restriction, asked with requested, the exact account the caller named.
+func (s *Service) listBalanceRows(
+	ctx context.Context, filter store.BalanceListFilter, requested domain.AccountID,
+) (store.BalanceListPage, error) {
+	var err error
+	filter.Restriction, err = s.listRestriction(ctx, requested)
+	if err != nil {
+		return store.BalanceListPage{}, err
+	}
 	if err := filter.Validate(); err != nil {
 		return store.BalanceListPage{}, err
 	}
@@ -134,28 +167,48 @@ func (s *Service) ListBalanceRows(
 }
 
 // ListAdjustments validates the account id and returns the most recent n
-// adjustments for the account, newest first; an empty source returns all.
+// adjustments for the account, newest first; an empty source returns all. The
+// account scope's list restriction is asked with the account, and the id is
+// validated as the restriction resolves it, so an omitted account takes the
+// restricted one.
 func (s *Service) ListAdjustments(
 	ctx context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.AccountAdjustmentRecord, error) {
-	if err := domain.ValidateAccountID(account); err != nil {
+	restriction, err := s.listRestriction(ctx, account)
+	if err != nil {
 		return nil, err
 	}
-	return s.node.ListAdjustments(ctx, account, source, n)
+	scoped, ok := restrictedAccount(account, restriction)
+	if !ok {
+		return []domain.AccountAdjustmentRecord{}, nil
+	}
+	if err := domain.ValidateAccountID(scoped); err != nil {
+		return nil, err
+	}
+	return s.node.ListAdjustments(ctx, scoped, source, n)
 }
 
 // ListAllAdjustments returns the most recent n adjustments across accounts,
-// newest first, optionally narrowed to a non-empty account and/or source.
+// newest first, optionally narrowed to a non-empty account and/or source,
+// within the account scope's list restriction, asked with that account.
 func (s *Service) ListAllAdjustments(
 	ctx context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.AccountAdjustmentRecord, error) {
+	restriction, err := s.listRestriction(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	scoped, ok := restrictedAccount(account, restriction)
+	if !ok {
+		return []domain.AccountAdjustmentRecord{}, nil
+	}
 	if account != "" {
 		if err := domain.ValidateAccountID(account); err != nil {
 			return nil, err
 		}
-		return s.node.ListAdjustments(ctx, account, source, n)
+		return s.node.ListAdjustments(ctx, scoped, source, n)
 	}
-	recs, err := s.node.ListAdjustments(ctx, "", source, n)
+	recs, err := s.node.ListAdjustments(ctx, scoped, source, n)
 	if err != nil {
 		return nil, err
 	}
@@ -170,9 +223,17 @@ func (s *Service) ListAllAdjustments(
 	return recs, nil
 }
 
-// ListAdjustmentRows returns adjustments with DB-side filters and counts.
+// ListAdjustmentRows returns adjustments with DB-side filters and counts,
+// narrowed by the account scope's list restriction; the account filter is a
+// text pattern, so the scope is asked with no requested account. The
+// restriction replaces any filter.Restriction the caller supplies.
 func (s *Service) ListAdjustmentRows(
 	ctx context.Context, filter store.AdjustmentListFilter,
 ) (store.AdjustmentListPage, error) {
+	var err error
+	filter.Restriction, err = s.listRestriction(ctx, "")
+	if err != nil {
+		return store.AdjustmentListPage{}, err
+	}
 	return s.node.ListAdjustmentRows(ctx, filter)
 }

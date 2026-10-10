@@ -69,7 +69,7 @@ func newAssetUpdateTestService(
 	md MarketDataRuntime,
 ) *Service {
 	t.Helper()
-	return &Service{node: n, md: md}
+	return &Service{node: n, md: md, scope: EveryAccount{}}
 }
 
 func assetUpdateTestAsset(code string) domain.Asset {

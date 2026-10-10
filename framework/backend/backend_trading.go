@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -47,14 +48,16 @@ type TradingConnectionStatus struct {
 	VenueIdentity string
 	Mode          domain.TradingMode
 	Enabled       bool
-	FeeAccount    domain.AccountID
+	// FeeAccount is the connection's fee account; empty when it has none or
+	// when the account scope does not show it to the caller.
+	FeeAccount domain.AccountID
 	// State is running, unavailable or stopped, independently of Enabled.
 	State       string
 	Unavailable string
 	Secrets     map[string]bool
 	Instruments []domain.TradingInstrument
-	// Access lists every grant of the connection, each with the granted
-	// account's current group.
+	// Access lists the connection's grants the account scope shows the caller,
+	// each with the granted account's current group.
 	Access []store.TradingAccessListRow
 }
 
@@ -130,12 +133,30 @@ type TradingSymbolSearch struct {
 	Matches   []trading.SymbolMatch
 }
 
-// GetTrading returns stored configuration and the current runtime states.
+// GetTrading returns stored configuration and the current runtime states,
+// narrowed to what the account scope shows the caller: a connection keeps the
+// account grants whose account is visible and the group grants of the groups
+// the caller sees, by visibleGroups, and reports its fee account only when that
+// account is visible, otherwise exactly as a connection with no fee account.
 func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
 	if err := s.requireTradingRuntime(); err != nil {
 		return TradingStatus{}, err
+	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return TradingStatus{}, err
+	}
+	groupVisible, err := s.visibleGroups(ctx, caller)
+	if err != nil {
+		return TradingStatus{}, err
+	}
+	hidden := func(row store.TradingAccessListRow) bool {
+		if row.Access.AccountGroup != "" {
+			return !groupVisible(row.Access.AccountGroup)
+		}
+		return s.scope.Visible(caller, row.Access.Account) != nil
 	}
 	connections, err := s.node.ListTradingConnections(ctx)
 	if err != nil {
@@ -162,6 +183,11 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 		if err != nil {
 			return TradingStatus{}, err
 		}
+		access = slices.DeleteFunc(slices.Clone(access), hidden)
+		feeAccount := c.FeeAccount
+		if feeAccount != "" && s.scope.Visible(caller, feeAccount) != nil {
+			feeAccount = ""
+		}
 		state, reason := tradingConnectionState(c.ExternalID, states)
 		secrets, reason, err := tradingCredentialStatus(c.Credentials, reason)
 		if err != nil {
@@ -170,7 +196,7 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 		status.Connections = append(status.Connections, TradingConnectionStatus{
 			ExternalID: c.ExternalID, Provider: c.Provider, Label: c.Label,
 			VenueIdentity: c.VenueIdentity, Mode: c.Mode, Enabled: c.Enabled,
-			FeeAccount: c.FeeAccount, State: state, Unavailable: reason,
+			FeeAccount: feeAccount, State: state, Unavailable: reason,
 			Secrets: secrets, Instruments: instruments, Access: access,
 		})
 	}
@@ -453,6 +479,10 @@ func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAcc
 	if err != nil {
 		return err
 	}
+	access.Account, err = s.scopeTradingSubject(caller, access.Account, access.AccountGroup)
+	if err != nil {
+		return err
+	}
 	if err := domain.ValidateTradingAccess(access); err != nil {
 		return err
 	}
@@ -481,12 +511,32 @@ func (s *Service) RemoveTradingAccess(ctx context.Context, connection domain.Ext
 	if err != nil {
 		return err
 	}
+	account, err = s.scopeTradingSubject(caller, account, accountGroup)
+	if err != nil {
+		return err
+	}
 	if err := domain.ValidateTradingAccess(domain.TradingAccess{
 		Account: account, AccountGroup: accountGroup, Connection: connection,
 	}); err != nil {
 		return err
 	}
 	return s.node.RemoveTradingAccess(ctx, connection, account, accountGroup, caller)
+}
+
+// scopeTradingSubject passes the subject of a trading grant through the account
+// scope: a named group is checked and the account is kept as sent, otherwise
+// the account is resolved, so a request naming neither acts on the scope's
+// account.
+func (s *Service) scopeTradingSubject(
+	caller domain.Caller, account domain.AccountID, group string,
+) (domain.AccountID, error) {
+	if group != "" {
+		if err := s.scope.Group(caller, group); err != nil {
+			return "", err
+		}
+		return account, nil
+	}
+	return s.scope.Account(caller, account)
 }
 
 // SetTradingFeeAccount accepts an empty account to clear the fee target.
@@ -500,6 +550,12 @@ func (s *Service) SetTradingFeeAccount(ctx context.Context, connection domain.Ex
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
 		return err
+	}
+	// An empty account clears the fee account and names none to resolve.
+	if account != "" {
+		if account, err = s.scope.Account(caller, account); err != nil {
+			return err
+		}
 	}
 	c, err := s.tradingConnection(ctx, connection.String())
 	if err != nil {
@@ -522,6 +578,13 @@ func (s *Service) ListTradingDestinations(ctx context.Context, account domain.Ac
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
 	if err := s.requireTradingRuntime(); err != nil {
+		return nil, err
+	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if account, err = s.scope.Account(caller, account); err != nil {
 		return nil, err
 	}
 	if mode != "" && !domain.TradingModeSupported(mode) {
@@ -587,6 +650,13 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 			result.Send.Error = redact.Replace(result.Send.Error)
 		}
 	}()
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return VenueSendResult{}, err
+	}
+	if o.Account, err = s.scope.Account(caller, o.Account); err != nil {
+		return VenueSendResult{}, err
+	}
 	if err := domain.ValidateAccountID(o.Account); err != nil {
 		return VenueSendResult{}, err
 	}

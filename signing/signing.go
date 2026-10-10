@@ -57,10 +57,6 @@ var ErrNoPrivateMaterial = errors.New(
 	"signing key holds no private material; generate a new signing key",
 )
 
-// signingConfigNoESign is the signing_config key holding the global eSign flag
-// ("0" or "1").
-const signingConfigNoESign = "no_esign"
-
 // Store is the subset of the persistence layer the signing service consumes.
 // GetActiveSigningKey and GetSigningKey return PrivateKey-populated rows; all
 // other reads omit it.
@@ -70,8 +66,8 @@ type Store interface {
 	GetSigningKey(ctx context.Context, keyID string) (domain.SigningKey, error)
 	ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error)
 	DeactivateAllSigningKeys(ctx context.Context) error
-	GetSigningConfig(ctx context.Context, key string) (string, bool, error)
-	SetSigningConfig(ctx context.Context, key, value string) error
+	GetSetting(ctx context.Context, key string) (string, bool, error)
+	SetSetting(ctx context.Context, key, value string) error
 }
 
 // Service signs and verifies approval tokens against the persisted key set. The
@@ -351,7 +347,7 @@ func (s *Service) publicKeyFor(ctx context.Context, keyID string) (ed25519.Publi
 
 // NoESign reports whether the global eSign-off flag is set.
 func (s *Service) NoESign(ctx context.Context) (bool, error) {
-	v, ok, err := s.store.GetSigningConfig(ctx, signingConfigNoESign)
+	v, ok, err := s.store.GetSetting(ctx, domain.SettingKeyNoESign)
 	if err != nil {
 		return false, fmt.Errorf("signing: read no_esign: %w", err)
 	}
@@ -367,7 +363,7 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 	if off {
 		v = "1"
 	}
-	if err := s.store.SetSigningConfig(ctx, signingConfigNoESign, v); err != nil {
+	if err := s.store.SetSetting(ctx, domain.SettingKeyNoESign, v); err != nil {
 		return fmt.Errorf("signing: write no_esign: %w", err)
 	}
 	return nil

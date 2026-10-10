@@ -95,6 +95,7 @@ func listMarketDataTestInstrumentStatus(
 			},
 		},
 		registry: marketdata.NewRegistry(),
+		scope:    EveryAccount{},
 	}
 	status, err := service.ListMarketData(systemCtx())
 	if err != nil {

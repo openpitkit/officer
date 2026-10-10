@@ -112,6 +112,28 @@ func TestWriteErrTradingCodes(t *testing.T) {
 	}
 }
 
+// TestWriteErrAccountsNotManaged maps a refused change of the account set to a
+// 409 carrying its own code and the error's own text, so a refusal that says
+// what to do instead reaches the client.
+func TestWriteErrAccountsNotManaged(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("create account acc-1: %w", domain.ErrAccountsNotManaged)
+	rec := httptest.NewRecorder()
+	WriteErr(rec, err)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d want=%d", rec.Code, http.StatusConflict)
+	}
+	var body struct {
+		Error struct{ Code, Message string }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != "accounts_not_managed" || body.Error.Message != err.Error() {
+		t.Fatalf("body=%s", rec.Body)
+	}
+}
+
 func TestWriteErrDestinationCandidates(t *testing.T) {
 	id, err := domain.ParseExternalID("connection-1")
 	if err != nil {

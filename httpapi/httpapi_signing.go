@@ -217,7 +217,7 @@ func handleSubmitOrderToken(svc backend.ControlPlane) http.HandlerFunc {
 			)
 			return
 		}
-		order, err := submitOrderFromDTO(req.orderFields())
+		order, err := submitOrderFromDTO(req.orderFields(), svc.AccountFeatures())
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -253,7 +253,7 @@ func handleSubmitDropCopyOrder(svc backend.ControlPlane) http.HandlerFunc {
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		order, err := submitOrderFromDTO(req.orderFields())
+		order, err := submitOrderFromDTO(req.orderFields(), svc.AccountFeatures())
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -275,7 +275,9 @@ func handleSubmitDropCopyOrder(svc backend.ControlPlane) http.HandlerFunc {
 	}
 }
 
-func submitOrderFromDTO(req submitOrderFieldsDTO) (domain.Order, error) {
+func submitOrderFromDTO(
+	req submitOrderFieldsDTO, features backend.AccountFeatures,
+) (domain.Order, error) {
 	order := domain.Order{
 		Account:     domain.AccountID(req.Account),
 		BaseAsset:   req.BaseAsset,
@@ -287,9 +289,13 @@ func submitOrderFromDTO(req submitOrderFieldsDTO) (domain.Order, error) {
 	}
 	// The backend seam validates the id too, for callers that never pass here.
 	// The surface repeats it so a malformed account is reported ahead of the
-	// secondary missingAccount parameter error.
-	if err := domain.ValidateAccountID(order.Account); err != nil {
-		return domain.Order{}, err
+	// secondary missingAccount parameter error. When the composition does not
+	// offer accounts, an omitted account reaches the backend, whose account
+	// scope supplies the one account.
+	if order.Account != "" || features.Accounts() {
+		if err := domain.ValidateAccountID(order.Account); err != nil {
+			return domain.Order{}, err
+		}
 	}
 	if req.ID == "" {
 		return order, nil

@@ -1300,7 +1300,7 @@ func (rt *restoreTx) restoreVenueOrderOrderID(
 
 // --- Restore: settings ------------------------------------------------------
 
-// restoreGeneralSettings restores the MCP access overrides, the signing config
+// restoreGeneralSettings restores the MCP access overrides, the realm settings
 // and the signing keys. Signing keys are dictionary support rows referenced by
 // order approvals through key_id, so they must land before activity history.
 func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Data) error {
@@ -1325,8 +1325,8 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 		}
 		rt.summary.AddApplied(backup.SectionGeneralSettings, 1)
 	}
-	for _, entry := range data.SigningConfig {
-		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM signing_config WHERE key = ?`, entry.Key)
+	for _, entry := range data.Settings {
+		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM setting WHERE key = ?`, entry.Key)
 		if err != nil {
 			return err
 		}
@@ -1335,11 +1335,11 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT INTO signing_config (key, value) VALUES (?, ?)
+			`INSERT INTO setting (key, value) VALUES (?, ?)
 			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 			entry.Key, entry.Value,
 		); err != nil {
-			return fmt.Errorf("store: restore signing config %q: %w", entry.Key, err)
+			return fmt.Errorf("store: restore setting %q: %w", entry.Key, err)
 		}
 		rt.summary.AddApplied(backup.SectionGeneralSettings, 1)
 	}

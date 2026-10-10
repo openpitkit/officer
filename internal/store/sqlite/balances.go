@@ -309,6 +309,7 @@ func (r *realmStore) ListBalanceRows(
 func balanceListWhere(filter fwstore.BalanceListFilter) (string, []any) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
+	appendAccountRestriction(&clauses, &args, "a.code", "", filter.Restriction)
 	appendMatcher(&clauses, &args, "a.code", filter.Account)
 	if filter.GroupCode != nil {
 		if *filter.GroupCode == "" {

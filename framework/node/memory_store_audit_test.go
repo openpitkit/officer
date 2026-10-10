@@ -214,6 +214,9 @@ func (r *memoryRealm) ListAuditFiltered(
 	var out []domain.AuditRow
 	for i := len(r.audit) - 1; i >= 0 && len(out) < n; i-- {
 		row := r.audit[i]
+		if !restrictionMatches(filter.Restriction, row.Account) {
+			continue
+		}
 		if filter.Account != "" && row.Account != filter.Account {
 			continue
 		}
@@ -240,7 +243,8 @@ func (r *memoryRealm) ListAuditRows(
 		if !filter.ExternalID.IsZero() && row.ExternalID != filter.ExternalID {
 			continue
 		}
-		if !textMatches(filter.Account, row.Account.String()) ||
+		if !restrictionMatches(filter.Restriction, row.Account) ||
+			!textMatches(filter.Account, row.Account.String()) ||
 			!textMatches(filter.Asset, row.Asset) ||
 			!textMatches(filter.Group, row.Group) ||
 			!textMatches(filter.Actor, row.Actor) {

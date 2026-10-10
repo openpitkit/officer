@@ -20,6 +20,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -31,6 +32,13 @@ import (
 func (s *Service) CreateGroup(
 	ctx context.Context, group domain.AccountGroup,
 ) (domain.AccountGroup, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return domain.AccountGroup{}, err
+	}
 	if err := domain.ValidateGroupID(group.Code); err != nil {
 		return domain.AccountGroup{}, err
 	}
@@ -46,10 +54,6 @@ func (s *Service) CreateGroup(
 	if err := validateOptionalCurrency(group.Currency); err != nil {
 		return domain.AccountGroup{}, err
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return domain.AccountGroup{}, err
-	}
 	return s.node.CreateGroup(ctx, group, caller)
 }
 
@@ -59,6 +63,13 @@ func (s *Service) UpdateGroup(
 	oldCode string,
 	group domain.AccountGroup,
 ) (domain.AccountGroup, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return domain.AccountGroup{}, err
+	}
 	if err := domain.ValidateGroupID(oldCode); err != nil {
 		return domain.AccountGroup{}, err
 	}
@@ -68,14 +79,11 @@ func (s *Service) UpdateGroup(
 	if err := domain.ValidateTitle(group.Title); err != nil {
 		return domain.AccountGroup{}, err
 	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
-		return domain.AccountGroup{}, err
-	}
 	return s.node.UpdateGroup(ctx, oldCode, group, caller)
 }
 
-// ListGroups returns every group in the realm.
+// ListGroups returns the groups in the realm within the account scope's list
+// restriction, read through ListGroupRows.
 func (s *Service) ListGroups(ctx context.Context) ([]domain.AccountGroup, error) {
 	page, err := s.ListGroupRows(ctx, store.GroupListFilter{})
 	if err != nil {
@@ -88,12 +96,21 @@ func (s *Service) ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 	return groups, nil
 }
 
-// ListGroupRows returns groups in the realm with list-only counts. The page
-// passes through from the node unchanged; sort and paging are applied by the
-// connector.
+// ListGroupRows returns groups in the realm with list-only counts, narrowed by
+// the account scope's list restriction: a restricted list keeps only the
+// groups the restricted account is a member of and counts that member alone.
+// The code filter is a text pattern, so the scope is asked with no requested
+// account, and the restriction replaces any filter.Restriction the caller
+// supplies. The page passes through from the node unchanged; sort and paging
+// are applied by the connector.
 func (s *Service) ListGroupRows(
 	ctx context.Context, filter store.GroupListFilter,
 ) (store.GroupListPage, error) {
+	var err error
+	filter.Restriction, err = s.listRestriction(ctx, "")
+	if err != nil {
+		return store.GroupListPage{}, err
+	}
 	n := s.node
 	page, err := n.ListGroupRows(ctx, filter)
 	if err != nil {
@@ -102,18 +119,31 @@ func (s *Service) ListGroupRows(
 	return page, nil
 }
 
-// GetGroup validates the code and returns the group and its member accounts. It
-// maps a missing group onto domain.ErrNotFound.
+// GetGroup validates the code and returns the group and its member accounts,
+// narrowed by the account scope's list restriction: a restricted caller sees a
+// group only when the restricted account is one of its members, and then sees
+// that member alone. It maps a missing group, and a group the restriction
+// hides, onto the same domain.ErrNotFound, which names no account.
 func (s *Service) GetGroup(
 	ctx context.Context, code string,
 ) (domain.AccountGroup, []domain.Account, error) {
 	if err := domain.ValidateGroupID(code); err != nil {
 		return domain.AccountGroup{}, nil, err
 	}
+	restriction, err := s.listRestriction(ctx, "")
+	if err != nil {
+		return domain.AccountGroup{}, nil, err
+	}
 	n := s.node
 	group, accounts, ok, err := n.GetGroup(ctx, code)
 	if err != nil {
 		return domain.AccountGroup{}, nil, fmt.Errorf("backend: get group: %w", err)
+	}
+	if ok && restriction.Account != "" {
+		accounts = slices.DeleteFunc(slices.Clone(accounts), func(member domain.Account) bool {
+			return member.Code != restriction.Account
+		})
+		ok = len(accounts) > 0
 	}
 	if !ok {
 		return domain.AccountGroup{}, nil, fmt.Errorf("group %q: %w", code, domain.ErrNotFound)
@@ -123,14 +153,17 @@ func (s *Service) GetGroup(
 
 // SetGroupNotes validates the code and notes and replaces the group's notes.
 func (s *Service) SetGroupNotes(ctx context.Context, code, notes string) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return err
+	}
 	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
 	if err := domain.ValidateNotes(notes); err != nil {
-		return err
-	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
 		return err
 	}
 	return s.node.SetGroupNotes(ctx, code, notes, caller)
@@ -138,14 +171,17 @@ func (s *Service) SetGroupNotes(ctx context.Context, code, notes string) error {
 
 // SetGroupCurrency validates and sets or clears a group-level currency.
 func (s *Service) SetGroupCurrency(ctx context.Context, code, currency string) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return err
+	}
 	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
 	if err := validateOptionalCurrency(currency); err != nil {
-		return err
-	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
 		return err
 	}
 	return s.node.SetGroupCurrency(ctx, code, currency, caller)
@@ -153,11 +189,14 @@ func (s *Service) SetGroupCurrency(ctx context.Context, code, currency string) e
 
 // SetDefaultGroupCurrency sets or clears the reserved default group currency.
 func (s *Service) SetDefaultGroupCurrency(ctx context.Context, currency string) error {
-	if err := validateOptionalCurrency(currency); err != nil {
-		return err
-	}
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return err
+	}
+	if err := validateOptionalCurrency(currency); err != nil {
 		return err
 	}
 	return s.node.SetDefaultGroupCurrency(ctx, currency, caller)
@@ -168,14 +207,17 @@ func (s *Service) SetDefaultGroupCurrency(ctx context.Context, currency string) 
 func (s *Service) SetGroupBlocked(
 	ctx context.Context, code string, blocked bool, reason string,
 ) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return err
+	}
 	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
 	if err := domain.ValidateBlockReason(reason); err != nil {
-		return err
-	}
-	caller, err := auth.CallerFromContext(ctx)
-	if err != nil {
 		return err
 	}
 	return s.node.SetGroupBlocked(ctx, code, blocked, reason, caller)
@@ -184,11 +226,14 @@ func (s *Service) SetGroupBlocked(
 // DeleteGroup validates the code and removes the group. Destructive
 // group-owned cascades require force.
 func (s *Service) DeleteGroup(ctx context.Context, code string, force bool) error {
-	if err := domain.ValidateGroupID(code); err != nil {
-		return err
-	}
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.scope.ManageAccounts(caller); err != nil {
+		return err
+	}
+	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
 	return s.node.DeleteGroup(ctx, code, force, caller)

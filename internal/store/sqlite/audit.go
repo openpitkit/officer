@@ -21,8 +21,8 @@
 // snapshots, so dictionary deletes do not rewrite history. Account, asset, and
 // group filters use those captured strings rather than following a mutable
 // identity link. Listings honor the (at DESC, id DESC) index and apply the
-// account, asset, source, and action filters in the query so the limit bounds
-// the filtered set.
+// account restriction and the account, asset, source, and action filters in
+// the query so the limit bounds the filtered set.
 
 package sqlite
 
@@ -44,6 +44,16 @@ SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
        au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
        au.source_id, au.detail, au.order_id, au.verdict, au.reject_code
 FROM audit au`
+
+// auditRestrictionColumn and auditUnownedPredicate address the account
+// snapshot in the account restriction. The unary plus keeps SQLite from
+// choosing idx_audit_account_code for the restriction's IN-like OR, which
+// returns rows out of (at, id) order and adds a temp B-tree sort; the ordered
+// idx_audit_at scan stays the plan unless an exact account filter applies.
+const (
+	auditRestrictionColumn = "+au.account_code"
+	auditUnownedPredicate  = "+au.account_code = ''"
+)
 
 // AppendAudit persists a new append-only audit record, assigning the external id
 // and timestamp. Account and actor codes are written verbatim; missing
@@ -158,9 +168,10 @@ func (r *realmStore) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, e
 }
 
 // ListAuditFiltered returns the most recent n audit rows matching the filter,
-// newest first by (at, id). The account, source, and action filters are applied
-// in the query so the limit bounds the filtered set, not a pre-filter window. A
-// zero-value filter matches all rows; a non-positive n returns an empty slice.
+// newest first by (at, id). The account restriction and the account, source,
+// and action filters are applied in the query so the limit bounds the filtered
+// set, not a pre-filter window. A zero-value filter matches all rows; a
+// non-positive n returns an empty slice.
 func (r *realmStore) ListAuditFiltered(
 	ctx context.Context, filter domain.AuditFilter, n int,
 ) ([]domain.AuditRow, error) {
@@ -168,41 +179,14 @@ func (r *realmStore) ListAuditFiltered(
 		return make([]domain.AuditRow, 0), nil
 	}
 
-	q := auditSelect + ` WHERE 1 = 1`
-	args := make([]any, 0, 4)
-	if filter.Account != "" {
-		q += ` AND au.account_code = ?`
-		args = append(args, filter.Account.String())
+	dictionaries, err := r.dictionaries()
+	if err != nil {
+		return nil, err
 	}
-	if filter.Source != "" {
-		dictionaries, err := r.dictionaries()
-		if err != nil {
-			return nil, err
-		}
-		sourceID, err := dictionaries.id(sourceKindTable, "source", string(filter.Source))
-		if err != nil {
-			return nil, err
-		}
-		q += ` AND au.source_id = ?`
-		args = append(args, sourceID)
+	q, args, err := buildAuditFilteredQuery(dictionaries, filter, n)
+	if err != nil {
+		return nil, err
 	}
-	if len(filter.Actions) > 0 {
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(filter.Actions)), ",")
-		q += fmt.Sprintf(` AND au.action_id IN (%s)`, placeholders)
-		dictionaries, err := r.dictionaries()
-		if err != nil {
-			return nil, err
-		}
-		for _, action := range filter.Actions {
-			id, err := dictionaries.id(auditActionTable, "audit action", string(action))
-			if err != nil {
-				return nil, err
-			}
-			args = append(args, id)
-		}
-	}
-	q += ` ORDER BY au.at DESC, au.id DESC LIMIT ?`
-	args = append(args, n)
 
 	db, err := r.db()
 	if err != nil {
@@ -213,10 +197,6 @@ func (r *realmStore) ListAuditFiltered(
 		return nil, fmt.Errorf("store: list audit: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	dictionaries, err := r.dictionaries()
-	if err != nil {
-		return nil, err
-	}
 
 	result := make([]domain.AuditRow, 0, n)
 	for rows.Next() {
@@ -230,6 +210,47 @@ func (r *realmStore) ListAuditFiltered(
 		return nil, fmt.Errorf("store: iterate audit: %w", err)
 	}
 	return result, nil
+}
+
+// buildAuditFilteredQuery assembles the ListAuditFiltered query and its bound
+// args for the newest n rows matching filter. Extracted so tests can EXPLAIN
+// the exact query the filtered path runs.
+func buildAuditFilteredQuery(
+	dictionaries *enumDictionaries, filter domain.AuditFilter, n int,
+) (string, []any, error) {
+	args := make([]any, 0, 5)
+	where := []string{"1 = 1"}
+	appendAccountRestriction(
+		&where, &args, auditRestrictionColumn, auditUnownedPredicate,
+		filter.Restriction,
+	)
+	q := auditSelect + ` WHERE ` + strings.Join(where, ` AND `)
+	if filter.Account != "" {
+		q += ` AND au.account_code = ?`
+		args = append(args, filter.Account.String())
+	}
+	if filter.Source != "" {
+		sourceID, err := dictionaries.id(sourceKindTable, "source", string(filter.Source))
+		if err != nil {
+			return "", nil, err
+		}
+		q += ` AND au.source_id = ?`
+		args = append(args, sourceID)
+	}
+	if len(filter.Actions) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(filter.Actions)), ",")
+		q += fmt.Sprintf(` AND au.action_id IN (%s)`, placeholders)
+		for _, action := range filter.Actions {
+			id, err := dictionaries.id(auditActionTable, "audit action", string(action))
+			if err != nil {
+				return "", nil, err
+			}
+			args = append(args, id)
+		}
+	}
+	q += ` ORDER BY au.at DESC, au.id DESC LIMIT ?`
+	args = append(args, n)
+	return q, args, nil
 }
 
 // ListAuditRows returns audit rows matching filter, with total count before
@@ -313,6 +334,10 @@ func auditListClauses(
 		clauses = append(clauses, "au.external_id = ?")
 		args = append(args, filter.ExternalID.Bytes())
 	}
+	appendAccountRestriction(
+		&clauses, &args, auditRestrictionColumn, auditUnownedPredicate,
+		filter.Restriction,
+	)
 	appendMatcher(&clauses, &args, "au.account_code", filter.Account)
 	appendMatcher(&clauses, &args, "au.asset_code", filter.Asset)
 	appendMatcher(&clauses, &args, "au.group_code", filter.Group)

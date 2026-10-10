@@ -15,6 +15,7 @@ evaluates orders.
 - **A REST API over the control plane** - see the [API notes](docs/api.md).
 - **An MCP server** over stdio or streamable HTTP, with mutating tools off until an operator enables them by name.
 - **An operator dashboard**, an embedded single-page app driven by the same API.
+- **Single-account mode** - account fields in request bodies, query parameters and MCP inputs may be omitted and default to one account.
 - **Signed order approvals** - an Ed25519 approval envelope for every order that passes pre-trade.
 - **An append-only audit trail** of every control-plane action.
 - **Market data through pluggable connectors**, configured and toggled at runtime.

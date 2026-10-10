@@ -16,8 +16,9 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Settings-group tests: MCP access map get/set/list round-trips keyed by command,
-// and per-user settings get/set/list round-trips keyed by the
-// (user_id, setting_key) composite. Both surface non-nil empty results on an
+// per-user settings get/set/list round-trips keyed by the
+// (user_id, setting_key) composite, and the realm setting key/value round-trip.
+// The MCP access and per-user settings surface non-nil empty results on an
 // empty table.
 
 package sqlite
@@ -130,5 +131,43 @@ func TestUserSettingsRoundTrip(t *testing.T) {
 	}
 	if settings[0].UserID != domain.DefaultUserID || settings[1].UserID != "other-user" {
 		t.Fatalf("ListUserSettings order = %+v", settings)
+	}
+}
+
+func TestSettingRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	// The migration seeds no_esign=1, so fresh realms do not require signatures
+	// until an operator configures a signing key and enables the mode.
+	v, ok, err := rs.GetSetting(ctx, "no_esign")
+	if err != nil || !ok {
+		t.Fatalf("GetSetting(no_esign): ok=%v err=%v", ok, err)
+	}
+	if v != "1" {
+		t.Fatalf("seeded no_esign = %q, want 1", v)
+	}
+
+	// Set then read back (upsert over the seeded row).
+	if err := rs.SetSetting(ctx, "no_esign", "0"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	v, _, _ = rs.GetSetting(ctx, "no_esign")
+	if v != "0" {
+		t.Fatalf("no_esign after set = %q, want 0", v)
+	}
+
+	// An absent enum key reports ok=false, not an error.
+	if _, ok, err := rs.GetSetting(ctx, "unset_key"); err != nil || ok {
+		t.Fatalf("GetSetting(unset): ok=%v err=%v, want ok=false", ok, err)
+	}
+
+	// A fresh enum key inserts.
+	if err := rs.SetSetting(ctx, "unset_key", "x"); err != nil {
+		t.Fatalf("SetSetting(new): %v", err)
+	}
+	v, ok, _ = rs.GetSetting(ctx, "unset_key")
+	if !ok || v != "x" {
+		t.Fatalf("unset_key after set = %q ok=%v, want x true", v, ok)
 	}
 }

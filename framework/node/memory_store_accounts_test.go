@@ -146,7 +146,8 @@ func (r *memoryRealm) ListAccountRows(
 				row.PositionCount++
 			}
 		}
-		if !textMatchesAny(filter.Code, string(row.Account.Code), row.Account.Title) ||
+		if !restrictionMatches(filter.Restriction, row.Account.Code) ||
+			!textMatchesAny(filter.Code, string(row.Account.Code), row.Account.Title) ||
 			!textMatches(filter.BlockReason, row.Account.BlockReason) ||
 			!statusMatches(filter.Status, row.Account.Blocked) ||
 			!countMatches(filter.Position, row.PositionCount) {

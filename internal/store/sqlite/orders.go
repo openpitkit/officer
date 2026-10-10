@@ -542,6 +542,7 @@ func orderListWhere(
 ) (string, []any, error) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
+	appendAccountRestriction(&clauses, &args, "a.code", "", filter.Restriction)
 	if filter.Account != "" {
 		clauses = append(clauses, "a.code = ?")
 		args = append(args, filter.Account.String())
@@ -613,17 +614,38 @@ func orderListOrderBy(sort fwstore.SortSpec) string {
 	return "\nORDER BY " + column + " " + direction + ", o.id " + tieDirection
 }
 
-// CountOrders returns the total number of orders recorded in the realm.
-func (r *realmStore) CountOrders(ctx context.Context) (int, error) {
+// CountOrders returns the total number of orders recorded in the realm within
+// the account restriction.
+func (r *realmStore) CountOrders(
+	ctx context.Context, restriction domain.AccountRestriction,
+) (int, error) {
+	return r.countOrders(ctx, "count orders", restriction, nil, nil)
+}
+
+// countOrders counts the orders matching clauses, bound to args, within the
+// account restriction, which reads the order's account code as the order list
+// does. Only a non-zero restriction joins the account, so an unrestricted
+// count reads order_record alone. operation names the count in its error.
+func (r *realmStore) countOrders(
+	ctx context.Context, operation string, restriction domain.AccountRestriction,
+	clauses []string, args []any,
+) (int, error) {
 	db, err := r.db()
 	if err != nil {
 		return 0, err
 	}
+	from := "\nFROM order_record o"
+	if restriction.Account != "" {
+		from += "\nJOIN account a ON a.id = o.account_id"
+		appendAccountRestriction(&clauses, &args, "a.code", "", restriction)
+	}
 	var n int
 	if err := db.QueryRowContext(
-		ctx, `SELECT COUNT(*) FROM order_record`,
+		ctx,
+		`SELECT COUNT(*)`+from+whereFromClauses(clauses),
+		args...,
 	).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count orders: %w", err)
+		return 0, fmt.Errorf("store: %s: %w", operation, err)
 	}
 	return n, nil
 }
@@ -648,46 +670,33 @@ func (r *realmStore) activeOrderStatusIDs(ctx context.Context) ([]any, error) {
 	return statusIDs, nil
 }
 
-// CountActiveOrders returns orders in the working lifecycle set.
-func (r *realmStore) CountActiveOrders(ctx context.Context) (int, error) {
-	db, err := r.db()
-	if err != nil {
-		return 0, err
-	}
+// CountActiveOrders returns orders in the working lifecycle set within the
+// account restriction.
+func (r *realmStore) CountActiveOrders(
+	ctx context.Context, restriction domain.AccountRestriction,
+) (int, error) {
 	statusIDs, err := r.activeOrderStatusIDs(ctx)
 	if err != nil {
 		return 0, err
 	}
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(statusIDs)), ",")
-	var n int
-	if err := db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM order_record
-		 WHERE status_id IN (`+placeholders+`)`,
-		statusIDs...,
-	).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count active orders: %w", err)
-	}
-	return n, nil
+	return r.countOrders(
+		ctx, "count active orders", restriction,
+		[]string{"o.status_id IN (" + placeholders + ")"}, statusIDs,
+	)
 }
 
 // CountOrdersSince returns the number of orders whose at timestamp is at or
-// after since. The at column is fixed-width UTC text, so the boundary is
-// formatted the same way for a lexicographic comparison.
-func (r *realmStore) CountOrdersSince(ctx context.Context, since time.Time) (int, error) {
-	db, err := r.db()
-	if err != nil {
-		return 0, err
-	}
-	var n int
-	if err := db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM order_record WHERE at >= ?`,
-		timeStr(since),
-	).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count orders since: %w", err)
-	}
-	return n, nil
+// after since, within the account restriction. The at column is fixed-width
+// UTC text, so the boundary is formatted the same way for a lexicographic
+// comparison.
+func (r *realmStore) CountOrdersSince(
+	ctx context.Context, since time.Time, restriction domain.AccountRestriction,
+) (int, error) {
+	return r.countOrders(
+		ctx, "count orders since", restriction,
+		[]string{"o.at >= ?"}, []any{timeStr(since)},
+	)
 }
 
 func (r *realmStore) ExecutionReportExists(
@@ -1226,6 +1235,7 @@ func tradeListClauses(
 		clauses = append(clauses, "t.external_id = ?")
 		args = append(args, filter.ExternalID.Bytes())
 	}
+	appendAccountRestriction(&clauses, &args, "a.code", "", filter.Restriction)
 	appendMatcher(&clauses, &args, "a.code", filter.Account)
 	appendMatcher(&clauses, &args, "ba.code", filter.BaseAsset)
 	appendMatcher(&clauses, &args, "qa.code", filter.QuoteAsset)

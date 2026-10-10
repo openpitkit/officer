@@ -81,9 +81,21 @@ func (s *Service) enrichOrderListPage(page store.OrderListPage) (OrderListPage, 
 func (s *Service) CheckOrder(
 	ctx context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
-	// Officer applies no boundary id/asset format checks; the engine seam parses
-	// the account and assets and enforces the real trading rules. An asset missing
-	// from the live engine dictionary is invalid input and is never auto-created.
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.CheckResult{}, err
+	}
+	probe.Account, err = s.scope.Account(caller, probe.Account)
+	if err != nil {
+		return domain.CheckResult{}, err
+	}
+	// The account code is required and checked here, as at submit. The assets
+	// get no boundary format checks: the engine seam parses them and enforces
+	// the real trading rules. An asset missing from the live engine dictionary
+	// is invalid input and is never auto-created.
+	if err := domain.ValidateAccountID(probe.Account); err != nil {
+		return domain.CheckResult{}, err
+	}
 	return s.node.CheckOrder(ctx, probe)
 }
 
@@ -105,6 +117,9 @@ func (s *Service) ApplyExecutionReport(
 	}
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
+		return engine.ExecutionReportResult{}, Attestation{}, err
+	}
+	if err := s.scope.Visible(caller, stored.Order.Account); err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
 	}
 	if isDropCopyOrder(stored.Order) {
@@ -241,6 +256,13 @@ func (s *Service) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
+	if err := s.scope.Visible(caller, detail.Order.Account); err != nil {
+		return domain.OrderDetail{}, err
+	}
 	venue, linked, err := n.GetVenueOrder(ctx, order)
 	if err != nil {
 		return domain.OrderDetail{}, err
@@ -268,7 +290,8 @@ func (s *Service) requireNoVenueOrder(ctx context.Context, order domain.External
 }
 
 // ListOrders returns the most recent n orders, optionally narrowed to a
-// non-empty account and/or source, newest first.
+// non-empty account and/or source, newest first, within the account scope's
+// list restriction, asked with that account.
 func (s *Service) ListOrders(
 	ctx context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.Order, error) {
@@ -288,7 +311,9 @@ func (s *Service) ListOrders(
 	return orders, nil
 }
 
-// ListOrderRows returns order rows matching filter.
+// ListOrderRows returns order rows matching filter, narrowed by the account
+// scope's list restriction, asked with the filter's exact account. The
+// restriction replaces any filter.Restriction the caller supplies.
 func (s *Service) ListOrderRows(
 	ctx context.Context, filter store.OrderListFilter,
 ) (OrderListPage, error) {
@@ -299,9 +324,16 @@ func (s *Service) ListOrderRows(
 	return s.enrichOrderListPage(page)
 }
 
+// listOrderRows reads order rows narrowed by the account scope's list
+// restriction, asked with the filter's exact account.
 func (s *Service) listOrderRows(
 	ctx context.Context, filter store.OrderListFilter,
 ) (store.OrderListPage, error) {
+	var err error
+	filter.Restriction, err = s.listRestriction(ctx, filter.Account)
+	if err != nil {
+		return store.OrderListPage{}, err
+	}
 	if filter.Account != "" {
 		if err := domain.ValidateAccountID(filter.Account); err != nil {
 			return store.OrderListPage{}, err
@@ -311,16 +343,25 @@ func (s *Service) listOrderRows(
 }
 
 // ListTrades returns the most recent n trades, optionally narrowed to a
-// non-empty account and/or source, newest first.
+// non-empty account and/or source, newest first, within the account scope's
+// list restriction, asked with that account.
 func (s *Service) ListTrades(
 	ctx context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.Trade, error) {
+	restriction, err := s.listRestriction(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	scoped, ok := restrictedAccount(account, restriction)
+	if !ok {
+		return []domain.Trade{}, nil
+	}
 	if account != "" {
 		if err := domain.ValidateAccountID(account); err != nil {
 			return nil, err
 		}
 	}
-	trades, err := s.node.ListTrades(ctx, account, source, n)
+	trades, err := s.node.ListTrades(ctx, scoped, source, n)
 	if err != nil {
 		return nil, err
 	}
@@ -352,9 +393,17 @@ func sortTradesNewestFirst(trades []domain.Trade) {
 	})
 }
 
-// ListTradeRows returns trades with DB-side filters and counts.
+// ListTradeRows returns trades with DB-side filters and counts, narrowed by the
+// account scope's list restriction; the account filter is a text pattern, so
+// the scope is asked with no requested account. The restriction replaces any
+// filter.Restriction the caller supplies.
 func (s *Service) ListTradeRows(
 	ctx context.Context, filter store.TradeListFilter,
 ) (store.TradeListPage, error) {
+	var err error
+	filter.Restriction, err = s.listRestriction(ctx, "")
+	if err != nil {
+		return store.TradeListPage{}, err
+	}
 	return s.node.ListTradeRows(ctx, filter)
 }

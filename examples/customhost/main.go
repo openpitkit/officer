@@ -27,7 +27,6 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/marketdata"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
-	"go.openpit.dev/officer/httpapi"
 )
 
 type customHostComposition struct {
@@ -60,7 +59,7 @@ func newCustomHostComposition(cfg officer.Config) (customHostComposition, error)
 		svc backend.ControlPlane,
 		logs httpx.LogSource,
 	) frameworkapp.RouteConfig {
-		cfg := httpapi.RouteConfig(svc, logs)
+		cfg := officer.RouteConfig(svc, logs)
 		composeCustomHostRoutes(cfg.Routes)
 		return cfg
 	})

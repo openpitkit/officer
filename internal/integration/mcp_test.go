@@ -54,6 +54,10 @@ type fakeSource struct {
 	checkErr      error
 	setMDCalls    []setMDCall
 
+	// accountFeatures is what AccountFeatures reports; the zero value is the
+	// default composition's (backend.EveryAccount), where clients see accounts.
+	accountFeatures backend.AccountFeatures
+
 	// disabledCommands lists command names the fake reports as disabled; any
 	// command not listed is enabled. cmdEnabledErr, when set, is returned from
 	// CommandEnabled so the fail-open path can be exercised.
@@ -85,12 +89,19 @@ func (f *fakeSource) Status(_ context.Context) (frameworkmcp.Status, error) {
 	return f.status, f.statusErr
 }
 
+func (f *fakeSource) AccountFeatures() backend.AccountFeatures {
+	return f.accountFeatures
+}
+
 func (f *fakeSource) GetAccountState(
 	_ context.Context, id domain.AccountID,
 ) (domain.Account, node.AccountLimits, error) {
 	if f.accStateErr != nil {
 		return domain.Account{}, node.AccountLimits{}, f.accStateErr
 	}
+	// An omitted account is the composition's one account, as the account
+	// scope resolves it; the default composition keeps it omitted.
+	id = f.accountFeatures.AccountFor(id)
 	if f.account.Code != id {
 		return domain.Account{}, node.AccountLimits{},
 			fmt.Errorf("account %q: %w", id, domain.ErrNotFound)
@@ -795,6 +806,9 @@ type captureNSource struct {
 func (c *captureNSource) Status(_ context.Context) (frameworkmcp.Status, error) {
 	return frameworkmcp.Status{}, nil
 }
+func (c *captureNSource) AccountFeatures() backend.AccountFeatures {
+	return backend.EveryAccount{}.Features()
+}
 func (c *captureNSource) GetAccountState(_ context.Context, _ domain.AccountID) (
 	domain.Account, node.AccountLimits, error) {
 	return domain.Account{}, node.AccountLimits{}, nil
@@ -1120,6 +1134,8 @@ func TestCheckOrderMissingAccount(t *testing.T) {
 	}
 }
 
+// TestCheckOrderSourceFailure: a Source failure that is not a refusal reaches
+// the agent as the bare tool message, never as the internal one.
 func TestCheckOrderSourceFailure(t *testing.T) {
 	t.Parallel()
 	src := &fakeSource{checkErr: fmt.Errorf("boom")}
@@ -1128,6 +1144,9 @@ func TestCheckOrderSourceFailure(t *testing.T) {
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 	})
 	requireToolError(t, res.IsError)
+	if got := textContent(res.Content); got != "check order failed" {
+		t.Fatalf("error text = %q, want the bare %q", got, "check order failed")
+	}
 }
 
 // -- set_market_data_instrument --

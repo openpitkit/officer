@@ -146,6 +146,11 @@ func setMcpAccessDetail(command string, enabled bool) string {
 	return fmt.Sprintf("%s mcp command %s", state, command)
 }
 
+// setSettingDetail renders one realm-wide setting write.
+func setSettingDetail(key, value string) string {
+	return fmt.Sprintf("set setting %s=%s", key, value)
+}
+
 // marketDataToggleDetail renders one market-data enable/disable toggle.
 func marketDataToggleDetail(kind, id string, enabled bool) string {
 	state := "disable"

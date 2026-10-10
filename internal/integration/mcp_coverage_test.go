@@ -101,6 +101,10 @@ func (s *setMDErrSource) Status(context.Context) (frameworkmcp.Status, error) {
 	return frameworkmcp.Status{}, nil
 }
 
+func (s *setMDErrSource) AccountFeatures() backend.AccountFeatures {
+	return backend.EveryAccount{}.Features()
+}
+
 func (s *setMDErrSource) GetAccountState(
 	context.Context, domain.AccountID,
 ) (domain.Account, node.AccountLimits, error) {

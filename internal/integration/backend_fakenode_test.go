@@ -65,12 +65,25 @@ type fakeNode struct {
 	// command received, so a routing test can assert the parameter is threaded.
 	missingAccountCalls []domain.MissingAccountPolicy
 
+	// accountCalls records, in call order, each node call that addresses an
+	// account, a group or an order: the method name followed by the quoted
+	// subject values it received, so an account-scope test can assert exactly
+	// which values reached the node.
+	accountCalls []string
+
+	// tradingConnections and tradingAccess are the venue connections and the
+	// account grants the trading reads return.
+	tradingConnections []domain.TradingConnection
+	tradingAccess      []domain.TradingAccess
+
 	checkResult domain.CheckResult
 	checkProbes []domain.OrderProbe
 
 	mcpAccess        map[string]bool
 	setMcpAccessCall []setMcpAccessCall
 	userSettings     map[string]string
+	settings         map[string]string
+	setSettingCalls  []setSettingCall
 	mdInstances      []domain.MarketDataInstance
 	mdInstruments    map[string][]domain.MarketDataInstrument
 
@@ -120,6 +133,25 @@ type fakeNode struct {
 	lastBalanceFilter store.BalanceListFilter
 	lastPolicyFilter  store.PolicyListFilter
 
+	lastAccountFilter    store.AccountListFilter
+	lastTradeFilter      store.TradeListFilter
+	lastAdjustmentFilter store.AdjustmentListFilter
+	lastAuditFilter      store.AuditListFilter
+	// auditFilters records every filter ListAuditFiltered saw, in call order,
+	// so a test can tell the filtered audit read from the unfiltered one.
+	auditFilters []domain.AuditFilter
+
+	// lastGroupFilter is the last filter ListGroupRows saw; groupMembers maps
+	// each group GetGroup finds to its member accounts.
+	lastGroupFilter store.GroupListFilter
+	groupMembers    map[string][]domain.Account
+	// allTrades are the trades ListAllTrades returns, narrowed to the account
+	// it is given as ListAllOrders narrows allOrders.
+	allTrades []domain.Trade
+	// countRestrictions records the account restriction every order count
+	// received, in call order.
+	countRestrictions []domain.AccountRestriction
+
 	// getOrderCount counts GetOrder invocations; the order-resolving flows must
 	// fetch the stored order at most once per operation.
 	getOrderCount atomic.Int64
@@ -135,6 +167,15 @@ type fakeOrderTxnSnapshot struct {
 	persistAttestationCalls []domain.ExternalID
 	nextOrderSeq            byte
 	nextEventSeq            int
+}
+
+// recordCall appends one accountCalls entry: method and the quoted subjects.
+func (n *fakeNode) recordCall(method string, subjects ...any) {
+	call := method
+	for _, subject := range subjects {
+		call += fmt.Sprintf(" %q", subject)
+	}
+	n.accountCalls = append(n.accountCalls, call)
 }
 
 // newOrderExternalID returns a deterministic distinct external id for a fake
@@ -305,6 +346,12 @@ type setMcpAccessCall struct {
 	enabled bool
 }
 
+type setSettingCall struct {
+	key    string
+	value  string
+	caller domain.Caller
+}
+
 type blockCall struct {
 	account domain.AccountID
 	blocked bool
@@ -322,10 +369,15 @@ func (n *fakeNode) ListAccounts(context.Context) ([]domain.Account, error) {
 }
 
 func (n *fakeNode) ListAccountRows(
-	_ context.Context, _ store.AccountListFilter,
+	_ context.Context, filter store.AccountListFilter,
 ) (store.AccountListPage, error) {
+	n.lastAccountFilter = filter
 	out := make([]store.AccountListRow, 0, len(n.accounts))
 	for _, account := range n.accounts {
+		restricted := filter.Restriction.Account
+		if restricted != "" && account.Code != restricted {
+			continue
+		}
 		out = append(out, store.AccountListRow{Account: account})
 	}
 	return store.AccountListPage{Rows: out, Total: len(out)}, nil
@@ -489,6 +541,7 @@ func (n *fakeNode) DeleteAsset(
 func (n *fakeNode) CreateAccount(
 	_ context.Context, account domain.Account, _ domain.Caller,
 ) (domain.Account, error) {
+	n.recordCall("CreateAccount", account.Code)
 	n.createCalls = append(n.createCalls, account)
 	account.EngineAccountID = 1
 	n.accounts = append(n.accounts, account)
@@ -499,6 +552,7 @@ func (n *fakeNode) SetAccountBlocked(
 	_ context.Context, account domain.AccountID, blocked bool, reason string,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) error {
+	n.recordCall("SetAccountBlocked", account, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	n.blockCalls = append(n.blockCalls, blockCall{account, blocked, reason})
 	return nil
@@ -507,6 +561,7 @@ func (n *fakeNode) SetAccountBlocked(
 func (n *fakeNode) GetAccountState(
 	_ context.Context, code domain.AccountID,
 ) (domain.Account, node.AccountLimits, error) {
+	n.recordCall("GetAccountState", code)
 	if n.getAccountErr != nil {
 		return domain.Account{}, node.AccountLimits{}, n.getAccountErr
 	}
@@ -514,8 +569,9 @@ func (n *fakeNode) GetAccountState(
 }
 
 func (n *fakeNode) ListLimits(
-	context.Context, domain.AccountID,
+	_ context.Context, account domain.AccountID,
 ) (node.AccountLimits, error) {
+	n.recordCall("ListLimits", account)
 	return n.limits, nil
 }
 
@@ -530,6 +586,7 @@ func (n *fakeNode) PutRateLimit(
 	_ context.Context, limit domain.LimitRate,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.recordCall("PutRateLimit", limit.Account, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	if n.putRateLimitHook != nil {
 		n.putRateLimitHook()
@@ -542,6 +599,7 @@ func (n *fakeNode) PutOrderSizeLimit(
 	_ context.Context, limit domain.LimitOrderSize,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.recordCall("PutOrderSizeLimit", limit.Account, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	if n.putOrderSizeLimitHook != nil {
 		n.putOrderSizeLimitHook()
@@ -554,6 +612,9 @@ func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
 	_ context.Context, limit domain.LimitSpotFundsPnlBounds,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.recordCall(
+		"PutSpotFundsPnlBoundsLimit", limit.Account, limit.AccountGroup, missing,
+	)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	n.putSpotFundsPnlBoundsLimitCalls = append(
 		n.putSpotFundsPnlBoundsLimitCalls,
@@ -565,48 +626,55 @@ func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
 func (n *fakeNode) DeleteLimit(
 	_ context.Context, target node.LimitTarget, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.recordCall("DeleteLimit", target.Account, target.AccountGroup)
 	n.deleteLimitCalls = append(n.deleteLimitCalls, target)
 	return n.restoreSink, nil
 }
 
 func (n *fakeNode) SetAccountGroup(
-	_ context.Context, _ domain.AccountID, _ string,
+	_ context.Context, account domain.AccountID, group string,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) error {
+	n.recordCall("SetAccountGroup", account, group, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	return nil
 }
 
 func (n *fakeNode) SetAccountCurrency(
-	context.Context, domain.AccountID, string, domain.Caller,
+	_ context.Context, account domain.AccountID, _ string, _ domain.Caller,
 ) error {
+	n.recordCall("SetAccountCurrency", account)
 	return nil
 }
 
 func (n *fakeNode) SetAccountNotes(
-	context.Context, domain.AccountID, string, domain.Caller,
+	_ context.Context, account domain.AccountID, _ string, _ domain.Caller,
 ) error {
+	n.recordCall("SetAccountNotes", account)
 	return nil
 }
 
 func (n *fakeNode) UpdateAccount(
 	_ context.Context,
-	_ domain.AccountID,
+	oldID domain.AccountID,
 	account domain.Account,
 	_ domain.Caller,
 ) (domain.Account, error) {
+	n.recordCall("UpdateAccount", oldID)
 	return account, nil
 }
 
 func (n *fakeNode) DeleteAccount(
-	context.Context, domain.AccountID, bool, domain.Caller,
+	_ context.Context, account domain.AccountID, _ bool, _ domain.Caller,
 ) error {
+	n.recordCall("DeleteAccount", account)
 	return nil
 }
 
 func (n *fakeNode) CreateGroup(
 	_ context.Context, group domain.AccountGroup, _ domain.Caller,
 ) (domain.AccountGroup, error) {
+	n.recordCall("CreateGroup", group.Code)
 	group.EngineGroupID = 1
 	return group, nil
 }
@@ -616,51 +684,65 @@ func (n *fakeNode) ListGroups(context.Context) ([]domain.AccountGroup, error) {
 }
 
 func (n *fakeNode) ListGroupRows(
-	context.Context, store.GroupListFilter,
+	_ context.Context, filter store.GroupListFilter,
 ) (store.GroupListPage, error) {
+	n.lastGroupFilter = filter
 	return store.GroupListPage{}, nil
 }
 
 func (n *fakeNode) GetGroup(
-	context.Context, string,
+	_ context.Context, code string,
 ) (domain.AccountGroup, []domain.Account, bool, error) {
-	return domain.AccountGroup{}, nil, false, nil
+	n.recordCall("GetGroup", code)
+	members, ok := n.groupMembers[code]
+	if !ok {
+		return domain.AccountGroup{}, nil, false, nil
+	}
+	return domain.AccountGroup{Code: code}, members, true, nil
 }
 
 func (n *fakeNode) SetGroupNotes(
-	context.Context, string, string, domain.Caller,
+	_ context.Context, code string, _ string, _ domain.Caller,
 ) error {
+	n.recordCall("SetGroupNotes", code)
 	return nil
 }
 
 func (n *fakeNode) SetGroupCurrency(
-	context.Context, string, string, domain.Caller,
+	_ context.Context, code string, _ string, _ domain.Caller,
 ) error {
+	n.recordCall("SetGroupCurrency", code)
 	return nil
 }
 
 func (n *fakeNode) SetDefaultGroupCurrency(
 	context.Context, string, domain.Caller,
 ) error {
+	n.recordCall("SetDefaultGroupCurrency")
 	return nil
 }
 
 func (n *fakeNode) UpdateGroup(
 	_ context.Context,
-	_ string,
+	oldCode string,
 	group domain.AccountGroup,
 	_ domain.Caller,
 ) (domain.AccountGroup, error) {
+	n.recordCall("UpdateGroup", oldCode)
 	return group, nil
 }
 
 func (n *fakeNode) SetGroupBlocked(
-	context.Context, string, bool, string, domain.Caller,
+	_ context.Context, code string, _ bool, _ string, _ domain.Caller,
 ) error {
+	n.recordCall("SetGroupBlocked", code)
 	return nil
 }
 
-func (n *fakeNode) DeleteGroup(context.Context, string, bool, domain.Caller) error {
+func (n *fakeNode) DeleteGroup(
+	_ context.Context, code string, _ bool, _ domain.Caller,
+) error {
+	n.recordCall("DeleteGroup", code)
 	return nil
 }
 
@@ -669,6 +751,7 @@ func (n *fakeNode) ApplyAdjustment(
 	req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
+	n.recordCall("ApplyAdjustment", account, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	n.adjustmentExternalIDs = append(n.adjustmentExternalIDs, externalID)
 	if n.adjustmentErr != nil {
@@ -693,6 +776,7 @@ func (n *fakeNode) SetBalanceRealizedPnl(
 	_ context.Context, account domain.AccountID, asset string, realizedPnl string,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (domain.Balance, error) {
+	n.recordCall("SetBalanceRealizedPnl", account, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	return domain.Balance{
 		Account:     account,
@@ -721,14 +805,16 @@ func (n *fakeNode) GetBalance(
 }
 
 func (n *fakeNode) ListAdjustments(
-	context.Context, domain.AccountID, domain.Source, int,
+	_ context.Context, account domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.AccountAdjustmentRecord, error) {
+	n.recordCall("ListAdjustments", account)
 	return nil, nil
 }
 
 func (n *fakeNode) ListAdjustmentRows(
-	context.Context, store.AdjustmentListFilter,
+	_ context.Context, filter store.AdjustmentListFilter,
 ) (store.AdjustmentListPage, error) {
+	n.lastAdjustmentFilter = filter
 	return store.AdjustmentListPage{}, nil
 }
 
@@ -766,6 +852,7 @@ func (n *fakeNode) SubmitOrder(
 	_ context.Context, o domain.Order,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Order, error) {
+	n.recordCall("SubmitOrder", o.Account, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	if n.submitErr != nil {
 		return domain.Order{}, n.submitErr
@@ -961,6 +1048,7 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 func (n *fakeNode) ConfirmOrder(
 	_ context.Context, orderID domain.ExternalID, _ domain.Caller,
 ) (domain.Order, error) {
+	n.recordCall("ConfirmOrder", orderID)
 	if n.confirmErr != nil {
 		return domain.Order{}, n.confirmErr
 	}
@@ -1003,6 +1091,7 @@ func (n *fakeNode) CancelOrder(
 	leavesQuantity string,
 	_ domain.Caller,
 ) (domain.Order, fwengine.ExecutionReportResult, error) {
+	n.recordCall("CancelOrder", orderID)
 	order := n.orders[orderID]
 	if n.cancelNoop {
 		return order, fwengine.ExecutionReportResult{}, nil
@@ -1070,6 +1159,7 @@ func (n *fakeNode) CancelOrderWithAttestation(
 func (n *fakeNode) ApplyExecutionReport(
 	_ context.Context, in domain.ExecutionReportInput, caller domain.Caller,
 ) (fwengine.ExecutionReportResult, error) {
+	n.recordCall("ApplyExecutionReport", in.Order)
 	n.execReportCallers = append(n.execReportCallers, caller)
 	if n.execReportNoop {
 		n.execReports = append(n.execReports, in)
@@ -1233,22 +1323,36 @@ func (n *fakeNode) ListOrderRows(
 }
 
 func (n *fakeNode) ListAllOrders(
-	context.Context, domain.AccountID, domain.Source,
+	_ context.Context, account domain.AccountID, _ domain.Source,
 ) ([]domain.Order, error) {
-	return append([]domain.Order(nil), n.allOrders...), nil
+	n.recordCall("ListAllOrders", account)
+	var orders []domain.Order
+	for _, order := range n.allOrders {
+		if account == "" || order.Account == account {
+			orders = append(orders, order)
+		}
+	}
+	return orders, nil
 }
 
-func (n *fakeNode) CountOrders(context.Context) (int, error) {
+func (n *fakeNode) CountOrders(
+	_ context.Context, restriction domain.AccountRestriction,
+) (int, error) {
+	n.countRestrictions = append(n.countRestrictions, restriction)
 	return 0, nil
 }
 
-func (n *fakeNode) CountActiveOrders(context.Context) (int, error) {
+func (n *fakeNode) CountActiveOrders(
+	_ context.Context, restriction domain.AccountRestriction,
+) (int, error) {
+	n.countRestrictions = append(n.countRestrictions, restriction)
 	return 0, nil
 }
 
 func (n *fakeNode) CountOrdersSince(
-	context.Context, time.Time,
+	_ context.Context, _ time.Time, restriction domain.AccountRestriction,
 ) (int, error) {
+	n.countRestrictions = append(n.countRestrictions, restriction)
 	return 0, nil
 }
 
@@ -1259,20 +1363,29 @@ func (n *fakeNode) ListOrderEvents(
 }
 
 func (n *fakeNode) ListTrades(
-	context.Context, domain.AccountID, domain.Source, int,
+	_ context.Context, account domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.Trade, error) {
+	n.recordCall("ListTrades", account)
 	return nil, nil
 }
 
 func (n *fakeNode) ListAllTrades(
-	context.Context, domain.AccountID, domain.Source,
+	_ context.Context, account domain.AccountID, _ domain.Source,
 ) ([]domain.Trade, error) {
-	return nil, nil
+	n.recordCall("ListAllTrades", account)
+	var trades []domain.Trade
+	for _, trade := range n.allTrades {
+		if account == "" || trade.Account == account {
+			trades = append(trades, trade)
+		}
+	}
+	return trades, nil
 }
 
 func (n *fakeNode) ListTradeRows(
-	context.Context, store.TradeListFilter,
+	_ context.Context, filter store.TradeListFilter,
 ) (store.TradeListPage, error) {
+	n.lastTradeFilter = filter
 	return store.TradeListPage{}, nil
 }
 
@@ -1281,14 +1394,16 @@ func (n *fakeNode) ListAudit(context.Context, int) ([]domain.AuditRow, error) {
 }
 
 func (n *fakeNode) ListAuditRows(
-	context.Context, store.AuditListFilter,
+	_ context.Context, filter store.AuditListFilter,
 ) (store.AuditListPage, error) {
+	n.lastAuditFilter = filter
 	return store.AuditListPage{}, nil
 }
 
 func (n *fakeNode) ListAuditFiltered(
 	_ context.Context, filter domain.AuditFilter, _ int,
 ) ([]domain.AuditRow, error) {
+	n.auditFilters = append(n.auditFilters, filter)
 	actions := make(map[domain.AuditAction]struct{}, len(filter.Actions))
 	for _, action := range filter.Actions {
 		actions[action] = struct{}{}
@@ -1324,6 +1439,7 @@ func (n *fakeNode) AppendAudit(
 func (n *fakeNode) CheckOrder(
 	_ context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
+	n.recordCall("CheckOrder", probe.Account)
 	n.checkProbes = append(n.checkProbes, probe)
 	return n.checkResult, nil
 }
@@ -1341,6 +1457,23 @@ func (n *fakeNode) SetMcpAccess(
 		n.mcpAccess = make(map[string]bool)
 	}
 	n.mcpAccess[command] = enabled
+	return nil
+}
+
+func (n *fakeNode) Setting(_ context.Context, key string) (string, bool, error) {
+	value, ok := n.settings[key]
+	return value, ok, nil
+}
+
+func (n *fakeNode) SetSetting(
+	_ context.Context, key, value string, caller domain.Caller,
+) error {
+	n.setSettingCalls = append(n.setSettingCalls,
+		setSettingCall{key: key, value: value, caller: caller})
+	if n.settings == nil {
+		n.settings = make(map[string]string)
+	}
+	n.settings[key] = value
 	return nil
 }
 
@@ -1516,11 +1649,13 @@ func (n *fakeNode) DeleteTradingInstrument(ctx context.Context, connection domai
 }
 
 func (n *fakeNode) PutTradingAccess(ctx context.Context, access domain.TradingAccess, requireFeeAccount bool, caller domain.Caller) error {
-	return domain.ErrNotImplemented
+	n.recordCall("PutTradingAccess", access.Account, access.AccountGroup)
+	return nil
 }
 
 func (n *fakeNode) SetTradingConnectionFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID, caller domain.Caller) error {
-	return domain.ErrNotImplemented
+	n.recordCall("SetTradingConnectionFeeAccount", account)
+	return nil
 }
 
 func (n *fakeNode) RecordVenueFeeSkipped(ctx context.Context, connection domain.ExternalID, feeID, reason string, caller domain.Caller) error {
@@ -1528,15 +1663,21 @@ func (n *fakeNode) RecordVenueFeeSkipped(ctx context.Context, connection domain.
 }
 
 func (n *fakeNode) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string, caller domain.Caller) error {
-	return domain.ErrNotImplemented
+	n.recordCall("RemoveTradingAccess", account, accountGroup)
+	return nil
 }
 
 func (n *fakeNode) GetTradingConnection(ctx context.Context, id domain.ExternalID) (domain.TradingConnection, bool, error) {
+	for _, connection := range n.tradingConnections {
+		if connection.ExternalID == id {
+			return connection, true, nil
+		}
+	}
 	return domain.TradingConnection{}, false, nil
 }
 
 func (n *fakeNode) ListTradingConnections(ctx context.Context) ([]domain.TradingConnection, error) {
-	return nil, nil
+	return n.tradingConnections, nil
 }
 
 func (n *fakeNode) ListTradingInstruments(ctx context.Context, connection domain.ExternalID) ([]domain.TradingInstrument, error) {
@@ -1544,14 +1685,35 @@ func (n *fakeNode) ListTradingInstruments(ctx context.Context, connection domain
 }
 
 func (n *fakeNode) ListTradingAccess(ctx context.Context, account domain.AccountID) ([]domain.TradingAccess, error) {
-	return nil, nil
+	n.recordCall("ListTradingAccess", account)
+	var grants []domain.TradingAccess
+	for _, grant := range n.tradingAccess {
+		if grant.Account == account {
+			grants = append(grants, grant)
+		}
+	}
+	return grants, nil
 }
 
 func (n *fakeNode) ListTradingAccessForConnection(ctx context.Context, connection domain.ExternalID) ([]store.TradingAccessListRow, error) {
-	return nil, nil
+	var rows []store.TradingAccessListRow
+	for _, grant := range n.tradingAccess {
+		if grant.Connection != connection {
+			continue
+		}
+		row := store.TradingAccessListRow{Access: grant}
+		for _, account := range n.accounts {
+			if grant.Account != "" && account.Code == grant.Account {
+				row.Group = account.GroupCode
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 func (n *fakeNode) GetVenueOrder(ctx context.Context, order domain.ExternalID) (domain.VenueOrder, bool, error) {
+	n.recordCall("GetVenueOrder", order)
 	return domain.VenueOrder{}, false, nil
 }
 
@@ -1667,15 +1829,18 @@ func newTestServiceWithSigner(
 
 // newOfficerService builds the service the Officer composition builds over n:
 // the native engine's lock decoder, the first-party market-data providers, and
-// the Officer MCP catalogue.
+// the Officer MCP catalogue, plus any further options a test composes in.
 func newOfficerService(
 	t *testing.T, n node.Node, md backend.MarketDataRuntime, signer fwsigning.Service,
+	opts ...backend.Option,
 ) *backend.Service {
 	t.Helper()
 	svc, err := backend.New(
 		n, md, signer, engine.LockSettlementPrice,
-		backend.WithMarketDataRegistry(firstPartyMarketDataRegistry(t)),
-		backend.WithMCPCatalogProvider(officerToolRegistry()),
+		append([]backend.Option{
+			backend.WithMarketDataRegistry(firstPartyMarketDataRegistry(t)),
+			backend.WithMCPCatalogProvider(officerToolRegistry()),
+		}, opts...)...,
 	)
 	if err != nil {
 		t.Fatalf("backend.New: %v", err)

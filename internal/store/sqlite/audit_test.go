@@ -695,8 +695,9 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 }
 
 // TestAuditListUsesIndexNoTempSort asserts the audit list query
-// (newest-first, no filter and default control-category filter) is satisfied by an index
-// and never triggers a full TEMP B-TREE sort.
+// (newest-first, no filter and default control-category filter, with and
+// without an account restriction) and the restricted filtered query are
+// satisfied by an index and never trigger a full TEMP B-TREE sort.
 func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 	r := rs.(*realmStore)
@@ -712,17 +713,13 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 		}
 	}
 
-	explain := func(filter fwstore.AuditListFilter) string {
+	dictionaries, err := r.dictionaries()
+	if err != nil {
+		t.Fatalf("dictionaries: %v", err)
+	}
+
+	explain := func(query string, queryArgs []any) string {
 		t.Helper()
-		dictionaries, err := r.dictionaries()
-		if err != nil {
-			t.Fatalf("dictionaries: %v", err)
-		}
-		clauses, args, err := auditListClauses(dictionaries, filter)
-		if err != nil {
-			t.Fatalf("auditListClauses: %v", err)
-		}
-		query, queryArgs := buildAuditListQuery(clauses, args, filter.Page)
 		rows, err := r.rawDB().QueryContext(
 			ctx, "EXPLAIN QUERY PLAN "+query, queryArgs...,
 		)
@@ -746,17 +743,28 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 		return plan.String()
 	}
 
-	assertIndexedNoSort := func(name string, filter fwstore.AuditListFilter) {
+	assertPlanIndexedNoSort := func(name, plan string) {
 		t.Helper()
-		plan := explain(filter)
 		if strings.Contains(plan, "USE TEMP B-TREE FOR ORDER BY") {
-			t.Fatalf("%s: plan contains temp b-tree sort:\n%s", name, plan)
+			t.Errorf("%s: plan contains temp b-tree sort:\n%s", name, plan)
 		}
 		if !strings.Contains(plan, "USING INDEX") &&
 			!strings.Contains(plan, "USING COVERING INDEX") {
-			t.Fatalf("%s: plan does not use an index:\n%s", name, plan)
+			t.Errorf("%s: plan does not use an index:\n%s", name, plan)
 		}
 	}
+
+	assertIndexedNoSort := func(name string, filter fwstore.AuditListFilter) {
+		t.Helper()
+		clauses, args, err := auditListClauses(dictionaries, filter)
+		if err != nil {
+			t.Fatalf("auditListClauses: %v", err)
+		}
+		query, queryArgs := buildAuditListQuery(clauses, args, filter.Page)
+		assertPlanIndexedNoSort(name, explain(query, queryArgs))
+	}
+
+	restriction := domain.AccountRestriction{Account: "acc-1", IncludeUnowned: true}
 
 	// Default browse view: newest-first, no action filter.
 	assertIndexedNoSort("no filter", fwstore.AuditListFilter{
@@ -768,6 +776,43 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 		Category: domain.AuditCategoryControl,
 		Page:     fwstore.PageSpec{Limit: 50},
 	})
+	// The same views under a restricted account scope, which also keeps the rows
+	// recorded with no account.
+	assertIndexedNoSort("restriction", fwstore.AuditListFilter{
+		Restriction: restriction,
+		Page:        fwstore.PageSpec{Limit: 50},
+	})
+	assertIndexedNoSort("restriction and control category", fwstore.AuditListFilter{
+		Restriction: restriction,
+		Category:    domain.AuditCategoryControl,
+		Page:        fwstore.PageSpec{Limit: 50},
+	})
+
+	// The recent-activity read under a restricted account scope.
+	query, queryArgs, err := buildAuditFilteredQuery(
+		dictionaries, domain.AuditFilter{Restriction: restriction}, 50,
+	)
+	if err != nil {
+		t.Fatalf("buildAuditFilteredQuery: %v", err)
+	}
+	assertPlanIndexedNoSort("filtered restriction", explain(query, queryArgs))
+
+	// An exact account filter on top of the restriction still reads that
+	// account's own index range in order.
+	query, queryArgs, err = buildAuditFilteredQuery(
+		dictionaries,
+		domain.AuditFilter{Account: "acc-1", Restriction: restriction},
+		50,
+	)
+	if err != nil {
+		t.Fatalf("buildAuditFilteredQuery(account): %v", err)
+	}
+	plan := explain(query, queryArgs)
+	assertPlanIndexedNoSort("filtered restriction and account", plan)
+	if !strings.Contains(plan, "idx_audit_account_code") {
+		t.Errorf("filtered restriction and account: plan does not use "+
+			"idx_audit_account_code:\n%s", plan)
+	}
 }
 
 // TestAuditTrailPreservedOnAccountDelete verifies an account delete neither

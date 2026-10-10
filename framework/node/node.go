@@ -530,15 +530,22 @@ type Node interface {
 		ctx context.Context, account domain.AccountID, source domain.Source,
 	) ([]domain.Order, error)
 
-	// CountOrders returns the total number of orders recorded in the realm.
-	CountOrders(ctx context.Context) (int, error)
+	// CountOrders returns the total number of orders recorded in the realm
+	// within restriction, the mandatory account restriction of the order list.
+	// The zero restriction counts every order.
+	CountOrders(ctx context.Context, restriction domain.AccountRestriction) (int, error)
 
-	// CountActiveOrders returns orders in the working lifecycle set.
-	CountActiveOrders(ctx context.Context) (int, error)
+	// CountActiveOrders returns orders in the working lifecycle set within
+	// restriction.
+	CountActiveOrders(
+		ctx context.Context, restriction domain.AccountRestriction,
+	) (int, error)
 
 	// CountOrdersSince returns the number of orders recorded in the realm whose
-	// timestamp is at or after since.
-	CountOrdersSince(ctx context.Context, since time.Time) (int, error)
+	// timestamp is at or after since, within restriction.
+	CountOrdersSince(
+		ctx context.Context, since time.Time, restriction domain.AccountRestriction,
+	) (int, error)
 
 	// ListOrderEvents returns all events for the identified order, oldest first,
 	// addressed by the order's opaque external id.
@@ -590,6 +597,20 @@ type Node interface {
 	// SetMcpAccess upserts the enabled state for one MCP command. The command is
 	// validated against the catalogue by the backend before it reaches here.
 	SetMcpAccess(ctx context.Context, command string, enabled bool, caller domain.Caller) error
+
+	// Setting returns the stored value of one realm-wide setting; ok is false
+	// when no such setting exists. It is a store passthrough with no engine
+	// side-effect. An empty key is rejected with an error wrapping
+	// domain.ErrInvalid.
+	Setting(ctx context.Context, key string) (value string, ok bool, err error)
+
+	// SetSetting upserts one realm-wide setting and audits the write. Like MCP
+	// access it has no engine side-effect. The key is a code constant owned by
+	// one consumer, never client input. An empty key, or a key reserved for its
+	// owner's dedicated write path (domain.SettingKeyNoESign belongs to the
+	// signing configuration), is rejected with an error wrapping
+	// domain.ErrInvalid and nothing is written or audited.
+	SetSetting(ctx context.Context, key, value string, caller domain.Caller) error
 
 	// GetUserSetting returns the stored value for (userID, key); ok is false when
 	// no such setting exists. User settings are a store passthrough with no engine

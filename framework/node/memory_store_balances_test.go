@@ -363,7 +363,8 @@ func (r *memoryRealm) ListBalanceRows(
 	rows := make([]store.BalanceListRow, 0, len(balances))
 	for _, balance := range balances {
 		row := store.BalanceListRow{Balance: balance}
-		if !textMatches(filter.Account, string(balance.Account)) ||
+		if !restrictionMatches(filter.Restriction, balance.Account) ||
+			!textMatches(filter.Account, string(balance.Account)) ||
 			!textMatches(filter.Asset, balance.Asset) ||
 			!decimalMatches(filter.Available, balance.Available) ||
 			!decimalMatches(filter.Held, balance.Held) ||
@@ -514,7 +515,8 @@ func (r *memoryRealm) ListAdjustmentRows(
 		if !filter.ExternalID.IsZero() && rec.ExternalID != filter.ExternalID {
 			continue
 		}
-		if !textMatches(filter.Account, rec.Account.String()) ||
+		if !restrictionMatches(filter.Restriction, rec.Account) ||
+			!textMatches(filter.Account, rec.Account.String()) ||
 			!textMatches(filter.Asset, rec.Asset) {
 			continue
 		}

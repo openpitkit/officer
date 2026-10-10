@@ -60,7 +60,9 @@ type NodeBuilder func(
 type SigningFactory func(store.RealmStore) (signing.Service, error)
 
 // ServiceFactory builds the framework control plane service over the node.
+// The context is Build's: the factory may read the node while it builds.
 type ServiceFactory func(
+	context.Context,
 	node.Node,
 	backend.MarketDataRuntime,
 	backend.TradingRuntime,
@@ -274,7 +276,7 @@ func (b *Builder) Build(
 		_ = localNode.Close()
 		return nil, fmt.Errorf("build trading runtime: %w", err)
 	}
-	service, err = b.serviceFactory(localNode, manager, runtime, signer, b.mdRegistry, mcpRegistry)
+	service, err = b.serviceFactory(ctx, localNode, manager, runtime, signer, b.mdRegistry, mcpRegistry)
 	if err != nil {
 		manager.Stop()
 		_ = localNode.Close()

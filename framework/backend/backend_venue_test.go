@@ -66,8 +66,8 @@ func TestGetOrderVenue(t *testing.T) {
 		if linked {
 			n.venue = &link
 		}
-		s := &Service{node: n}
-		got, err := s.GetOrder(context.Background(), "order-1")
+		s := &Service{node: n, scope: EveryAccount{}}
+		got, err := s.GetOrder(systemCtx(), "order-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,7 +82,7 @@ func TestGetOrderVenue(t *testing.T) {
 			t.Fatal("order detail changed beyond venue link")
 		}
 		n.venueErr = domain.ErrConflict
-		if _, err := s.GetOrder(context.Background(), "order-1"); !errors.Is(err, domain.ErrConflict) {
+		if _, err := s.GetOrder(systemCtx(), "order-1"); !errors.Is(err, domain.ErrConflict) {
 			t.Fatal("venue read failure was ignored")
 		}
 	}
@@ -101,7 +101,7 @@ func TestVenueManagedOrders(t *testing.T) {
 					n.detail.Events = []domain.OrderEvent{{Payload: domain.OrderEventPayload{ExecutionReport: &domain.ExecutionReportRequest{Order: "order-1"}}}}
 				}
 				before := n.detail
-				s := &Service{node: n}
+				s := &Service{node: n, scope: EveryAccount{}}
 				var err error
 				switch action {
 				case "report":
@@ -133,7 +133,7 @@ func TestVenueManagedOrders(t *testing.T) {
 			if tc.linked {
 				n.venue = &domain.VenueOrder{Order: "order-1"}
 			}
-			s := &Service{node: n}
+			s := &Service{node: n, scope: EveryAccount{}}
 			in := domain.ExecutionReportInput{Order: "order-1", OrderStatus: domain.OrderStatusFilled, FillQuantity: "1", FillPrice: "100"}
 			_, _, err := s.ApplyExecutionReport(auth.ContextWithCaller(context.Background(), tc.caller), in)
 			if err != nil || n.reports != 1 || n.caller != tc.caller || n.detail.Order.Status != domain.OrderStatusFilled || len(n.detail.Events) != 1 || len(n.detail.Trades) != 1 {

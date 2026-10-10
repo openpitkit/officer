@@ -88,6 +88,56 @@ confirmed; `error` says why. `GET /orders/{id}` is authoritative, and the runtim
 reconciles orders that reached the send step, retrying cancellation after a
 refusal.
 
+## Single-account mode
+
+In single-account mode every client request acts on one default account. The
+mode is stored and read once, when the process starts. `GET /account-mode`
+answers the stored `mode` (`single`, `multi`, or `null` until chosen, which
+behaves as `multi`) and `account`, the `features` the running process enforces,
+and `restartRequired`. `PUT /account-mode` stores the next mode and leaves the
+running process unchanged; the change takes effect after
+`POST /service/restart`. `single` takes the named account, which must exist;
+with none named, the one existing account, or a new account `default` when
+there is none. Several accounts without one named are refused with 422 with
+constraint `required` at pointer `/account`, and a running single-account mode
+accepts only its own account (409 `accounts_not_managed`: switch to `multi` and
+restart first). A database reset or a backup restore that changes the stored
+choice is reported by `restartRequired` too.
+
+While the mode runs:
+
+- An `account` omitted from a request body, a query parameter or an MCP input
+  means the default account. A route that carries the account in its path, such
+  as `GET /accounts/{code}` or `POST /accounts/{code}/adjustments`, still takes
+  it there: the client sends the code `features.account` reports.
+- With the account omitted, `missingAccount` is not needed: an omitted policy is
+  `reject`, as the default account always exists, except for a drop-copy, which
+  can never refuse a missing account and always uses `create`, in either mode.
+  With the account named, in the path or as `account`, the default account
+  included, `missingAccount` is required as in multi-account mode (422 with
+  constraint `required` at pointer `/missingAccount`).
+- Another account is refused with 422 with constraint `single_account_mode` at
+  pointer `/account`, any account group with 422 with constraint
+  `single_account_mode` at pointer `/accountGroup`, and an order of another
+  account is not found.
+- Creating or deleting an account, `PUT /accounts/{code}` even on the default
+  account, setting an account's group, any group change, and the default-group
+  currency are refused with 409 `accounts_not_managed`. The default account's
+  currency, notes and block state change as usual.
+- Lists and counts show the default account's rows and rows of no account;
+  groups, trading grants and fee accounts of other accounts are hidden. Venue
+  executions and fees still post to the account they belong to.
+
+The mode narrows what clients see, not what they may do: backup export, backup
+restore and `POST /database/reset` act on every account, and any client can
+switch the mode.
+
+The stdio MCP server is a process of its own: it reads the mode when it starts,
+so it sees a change only once its host restarts it. MCP tool input schemas, over
+stdio and over HTTP, are built when the process starts; in single-account mode
+`account` and `missingAccount` are optional and `accountGroup` is not a
+property.
+
 ## Audit source
 
 Every control-plane action is recorded with the surface it arrived on. The

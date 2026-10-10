@@ -54,6 +54,41 @@ type UserSetting struct {
 	Value  string
 }
 
+// Realm-setting keys. Each key is a code constant owned by exactly one
+// consumer, never client input.
+const (
+	// SettingKeyNoESign holds the global eSign-off flag ("0" or "1"). Signing
+	// owns it and writes it only through the signing configuration, so the
+	// generic realm-setting writer refuses it (ValidateSettingWriteKey).
+	SettingKeyNoESign = "no_esign"
+)
+
+// ValidateSettingKey returns an error wrapping ErrInvalid when key cannot name
+// a realm-wide setting: the key is required.
+func ValidateSettingKey(key string) error {
+	if key == "" {
+		return invalidField("/key", "required", fmt.Errorf("setting key is empty: %w", ErrInvalid))
+	}
+	return nil
+}
+
+// ValidateSettingWriteKey returns an error wrapping ErrInvalid when key cannot
+// be written through the generic realm-setting writer: it must pass
+// ValidateSettingKey and must not be a key reserved for its owner's dedicated
+// write path. SettingKeyNoESign is reserved for the signing configuration.
+func ValidateSettingWriteKey(key string) error {
+	if err := ValidateSettingKey(key); err != nil {
+		return err
+	}
+	if key == SettingKeyNoESign {
+		return invalidField("/key", "reserved", fmt.Errorf(
+			"setting key %q is written only through the signing configuration: %w",
+			key, ErrInvalid,
+		))
+	}
+	return nil
+}
+
 var sentinelErrors []error
 
 func registerSentinel(err error) error {
@@ -111,6 +146,10 @@ var (
 	// ErrAccountMissing it is not an ErrNotFound: the asset is a request
 	// parameter, not the addressed resource. The concrete error carries the code.
 	ErrAssetMissing = registerSentinel(errors.New("asset does not exist"))
+	// ErrAccountsNotManaged marks a request to change the account set itself -
+	// its accounts or its account groups - in a composition that does not let
+	// clients change it. The surface layer maps it to an HTTP 409.
+	ErrAccountsNotManaged = registerSentinel(errors.New("accounts and groups are not managed by clients"))
 	// ErrTerminalOrder marks the remaining Officer safety net for terminal
 	// orders; callers can bypass it with force and route straight to the engine.
 	ErrTerminalOrder = registerSentinel(errors.New("order in terminal status"))
@@ -346,6 +385,17 @@ type AccountID string
 // String returns the raw account code.
 func (id AccountID) String() string { return string(id) }
 
+// AccountRestriction is the mandatory account restriction of a list. The zero
+// value restricts nothing; a non-empty Account restricts rows to that account,
+// plus rows with no account when IncludeUnowned.
+type AccountRestriction struct {
+	// Account is the account rows are restricted to; empty restricts nothing.
+	Account AccountID
+	// IncludeUnowned also keeps the rows that belong to no account. It applies
+	// only with a non-empty Account.
+	IncludeUnowned bool
+}
+
 // Account is the control-plane view of an engine account: a dictionary entity
 // addressed by its public Code, displayed under a mutable Title, and run on the
 // engine under EngineAccountID. The surrogate key never appears here.
@@ -467,6 +517,7 @@ const (
 	AuditActionSubmitDropCopy     AuditAction = "submit_drop_copy_order"
 	AuditActionExecutionReport    AuditAction = "execution_report"
 	AuditActionSetMcpAccess       AuditAction = "set_mcp_access"
+	AuditActionSetSetting         AuditAction = "set_setting"
 	AuditActionSetMarketData      AuditAction = "set_market_data"
 	AuditActionSetTrading         AuditAction = "set_trading"
 	AuditActionVenueFeeSkipped    AuditAction = "venue_fee_skipped"
@@ -544,6 +595,7 @@ func AllAuditActions() []AuditAction {
 		AuditActionUpdateAssetClass,
 		AuditActionDeleteAssetClass,
 		AuditActionSetMcpAccess,
+		AuditActionSetSetting,
 		AuditActionSetMarketData,
 		AuditActionSetTrading,
 		AuditActionVenueFeeSkipped,
@@ -649,6 +701,14 @@ type AuditFilter struct {
 	Account AccountID
 	Source  Source
 	Actions []AuditAction
+
+	// Restriction is the listing's mandatory account restriction, applied in
+	// the query with the filters above before count bounds the rows. It
+	// matches the account snapshot; with IncludeUnowned it also keeps the rows
+	// recorded with no account. The zero value restricts nothing. The control
+	// plane sets it from its account scope and replaces any value the caller
+	// supplies.
+	Restriction AccountRestriction
 }
 
 // AuditRow is the persisted, immutable record of a single control-plane action.

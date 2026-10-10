@@ -87,12 +87,12 @@ func (f *fakeStore) DeactivateAllSigningKeys(_ context.Context) error {
 	return nil
 }
 
-func (f *fakeStore) GetSigningConfig(_ context.Context, key string) (string, bool, error) {
+func (f *fakeStore) GetSetting(_ context.Context, key string) (string, bool, error) {
 	v, ok := f.config[key]
 	return v, ok, nil
 }
 
-func (f *fakeStore) SetSigningConfig(_ context.Context, key, value string) error {
+func (f *fakeStore) SetSetting(_ context.Context, key, value string) error {
 	f.config[key] = value
 	return nil
 }
@@ -568,8 +568,8 @@ func TestESignOffNoneAlg(t *testing.T) {
 	if err != nil || !off {
 		t.Fatalf("NoESign = %v, %v; want true", off, err)
 	}
-	if st.config[signingConfigNoESign] != "1" {
-		t.Fatalf("config no_esign = %q, want 1", st.config[signingConfigNoESign])
+	if st.config[domain.SettingKeyNoESign] != "1" {
+		t.Fatalf("config no_esign = %q, want 1", st.config[domain.SettingKeyNoESign])
 	}
 	p := samplePayload()
 	token, err := SignNone(p)
