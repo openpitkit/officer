@@ -1,8 +1,6 @@
 {
   "unknownVenue": "Unknown venue {{provider}}",
-  "title": "Trading connections",
   "empty": {
-    "title": "No trading connections",
     "description": "Configure a trading connection to send orders to a venue."
   },
   "missingProvider": "Provider {{provider}} is missing from the trading snapshot.",
@@ -16,11 +14,8 @@
     "stopped": "Stopped"
   },
   "connection": {
-    "venueAccount": "Venue account",
     "enabled": "Enabled",
     "disabled": "Disabled",
-    "apiKey": "API key",
-    "apiSecret": "API secret",
     "apiKeyStored": "API key: stored",
     "apiKeyNotSet": "API key: not set",
     "apiSecretStored": "API secret: stored",
@@ -28,9 +23,7 @@
   },
   "actions": {
     "addConnection": "Add trading connection",
-    "check": "Check connection",
-    "editSettings": "Edit settings",
-    "save": "Save"
+    "check": "Check connection"
   },
   "create": {
     "title": "Add {{provider}} connection",
@@ -38,7 +31,6 @@
     "prepareAccount": "Prepare your {{provider}} account",
     "mode": "Mode",
     "liveNote": "Live trading is not available yet: it arrives together with the live connection token.",
-    "submit": "Create connection",
     "alpaca": {
       "createAccount": "Create an Alpaca account.",
       "signUp": "Sign up at Alpaca",
@@ -60,14 +52,11 @@
     "result": "Venue account {{id}} · status {{status}}"
   },
   "settings": {
-    "description": "Leave fields blank to keep the stored values.",
-    "label": "Label",
-    "keepStoredSecret": "Keep stored secret"
+    "description": "Leave fields blank to keep the stored values."
   },
   "unsealed": {
     "title": "Keys will be stored unencrypted",
     "description": "Officer runs without a master key, so these API keys are written to its database in plain text. Anyone who can read the database or a backup can trade on this account. Set a master key to store them sealed.",
-    "link": "How to set a master key",
     "caution": "A lost master key makes the database unopenable - back the key up before you set it."
   },
   "instruments": {
@@ -89,9 +78,7 @@
   },
   "access": {
     "title": "Account access",
-    "grantTo": "Grant to",
-    "account": "Account",
-    "group": "Group"
+    "grantTo": "Grant to"
   },
   "fee": {
     "title": "Fee account",

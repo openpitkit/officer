@@ -148,6 +148,7 @@ type AccessSubjectKind = "account" | "group";
 /** Warns about unsealed credentials without restricting key entry. */
 export function UnsealedKeysWarning() {
   const { t } = useTranslation("trading");
+  const { t: tc } = useTranslation();
   return (
     <div
       role="alert"
@@ -164,7 +165,7 @@ export function UnsealedKeysWarning() {
         rel="noopener noreferrer"
         className="underline underline-offset-4"
       >
-        {t("unsealed.link")}
+        {tc("sensitiveData.masterKeyLink")}
       </a>
       <p className="text-xs">{t("unsealed.caution")}</p>
     </div>
@@ -184,6 +185,7 @@ function AddTradingConnectionDialog({
 }) {
   const { t } = useTranslation("trading");
   const { t: tc } = useTranslation();
+  const { t: tv } = useTranslation("venues");
   const { createTradingConnection } = useOfficerApi();
   const id = useId();
   const [label, setLabel] = useState(provider.title);
@@ -249,7 +251,7 @@ function AddTradingConnectionDialog({
           }}
         >
           <div className="space-y-2">
-            <Label htmlFor={`${id}-label`}>{t("settings.label")}</Label>
+            <Label htmlFor={`${id}-label`}>{tv("settings.label")}</Label>
             <Input
               id={`${id}-label`}
               value={label}
@@ -303,7 +305,7 @@ function AddTradingConnectionDialog({
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor={`${id}-api-key`}>{t("connection.apiKey")}</Label>
+            <Label htmlFor={`${id}-api-key`}>{tv("settings.apiKey")}</Label>
             <Input
               id={`${id}-api-key`}
               type="password"
@@ -316,7 +318,7 @@ function AddTradingConnectionDialog({
           </div>
           <div className="space-y-2">
             <Label htmlFor={`${id}-api-secret`}>
-              {t("connection.apiSecret")}
+              {tv("settings.apiSecret")}
             </Label>
             <Input
               id={`${id}-api-secret`}
@@ -343,7 +345,7 @@ function AddTradingConnectionDialog({
               {tc("actions.cancel")}
             </Button>
             <Button type="submit" disabled={busy || !ready}>
-              {t("create.submit")}
+              {tc("actions.create")}
             </Button>
           </DialogFooter>
         </form>
@@ -365,6 +367,7 @@ function ConnectionSettingsDialog({
 }) {
   const { t } = useTranslation("trading");
   const { t: tc } = useTranslation();
+  const { t: tv } = useTranslation("venues");
   const { updateTradingConnectionSettings } = useOfficerApi();
   const id = useId();
   const [initialLabel] = useState(connection.label);
@@ -416,12 +419,12 @@ function ConnectionSettingsDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>{t("actions.editSettings")}</DialogTitle>
+            <DialogTitle>{tc("actions.editSettings")}</DialogTitle>
             <DialogDescription>{t("settings.description")}</DialogDescription>
           </DialogHeader>
           {error && <ErrorBanner message={error} />}
           <div className="space-y-2">
-            <Label htmlFor={`${id}-label`}>{t("settings.label")}</Label>
+            <Label htmlFor={`${id}-label`}>{tv("settings.label")}</Label>
             <Input
               id={`${id}-label`}
               value={label}
@@ -432,14 +435,14 @@ function ConnectionSettingsDialog({
           </div>
           {!credentialsSealed && <UnsealedKeysWarning />}
           <div className="space-y-2">
-            <Label htmlFor={`${id}-api-key`}>{t("connection.apiKey")}</Label>
+            <Label htmlFor={`${id}-api-key`}>{tv("settings.apiKey")}</Label>
             <Input
               id={`${id}-api-key`}
               type="password"
               autoComplete="new-password"
               value={apiKey}
               placeholder={
-                connection.secrets.apiKey ? t("settings.keepStoredSecret") : ""
+                connection.secrets.apiKey ? tv("settings.keepStoredSecret") : ""
               }
               onChange={(event) => setApiKey(event.target.value)}
               disabled={busy}
@@ -447,7 +450,7 @@ function ConnectionSettingsDialog({
           </div>
           <div className="space-y-2">
             <Label htmlFor={`${id}-api-secret`}>
-              {t("connection.apiSecret")}
+              {tv("settings.apiSecret")}
             </Label>
             <Input
               id={`${id}-api-secret`}
@@ -456,7 +459,7 @@ function ConnectionSettingsDialog({
               value={apiSecret}
               placeholder={
                 connection.secrets.apiSecret
-                  ? t("settings.keepStoredSecret")
+                  ? tv("settings.keepStoredSecret")
                   : ""
               }
               onChange={(event) => setApiSecret(event.target.value)}
@@ -473,7 +476,7 @@ function ConnectionSettingsDialog({
               {tc("actions.cancel")}
             </Button>
             <Button type="submit" disabled={busy || !changed}>
-              {t("actions.save")}
+              {tc("actions.save")}
             </Button>
           </DialogFooter>
         </form>
@@ -607,15 +610,15 @@ function ConnectionAccessSection({
           <Segmented
             value={subjectKind}
             options={[
-              { value: "account", label: t("access.account") },
-              { value: "group", label: t("access.group") },
+              { value: "account", label: tc("fields.account") },
+              { value: "group", label: tc("fields.group") },
             ]}
             onChange={(value) => setSubjectKind(value as AccessSubjectKind)}
           />
         </fieldset>
         <div className="space-y-2">
           <Label htmlFor={`${id}-subject`}>
-            {t(subjectKind === "account" ? "access.account" : "access.group")}
+            {tc(subjectKind === "account" ? "fields.account" : "fields.group")}
           </Label>
           <Autocomplete
             id={`${id}-subject`}
@@ -633,9 +636,7 @@ function ConnectionAccessSection({
         </div>
         {provider.venueAccounts && (
           <div className="space-y-2">
-            <Label htmlFor={`${id}-venue-account`}>
-              {t("connection.venueAccount")}
-            </Label>
+            <Label htmlFor={`${id}-venue-account`}>{tv("venueAccount")}</Label>
             <ClearableInput
               id={`${id}-venue-account`}
               onClear={() => setVenueAccount("")}
@@ -737,7 +738,7 @@ function ConnectionFeeAccountSection({
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={busy || feeAccountCode === ""}>
-            {t("actions.save")}
+            {tc("actions.save")}
           </Button>
           {feeAccountCode !== "" &&
             feeLookup?.code === feeAccountCode &&
@@ -1118,6 +1119,7 @@ function ConnectionCard({
   reload: () => void;
 }) {
   const { t } = useTranslation("trading");
+  const { t: tc } = useTranslation();
   const { t: tv } = useTranslation("venues");
   const api = useOfficerApi();
   const id = useId();
@@ -1383,8 +1385,8 @@ function ConnectionCard({
               variant="ghost"
               size="icon"
               disabled={busy}
-              aria-label={t("actions.editSettings")}
-              title={t("actions.editSettings")}
+              aria-label={tc("actions.editSettings")}
+              title={tc("actions.editSettings")}
               onClick={() => setSettingsOpen(true)}
             >
               <Settings />
@@ -1411,7 +1413,7 @@ function ConnectionCard({
       <CardContent className="space-y-6">
         <div className="space-y-1 text-xs">
           <dl className="flex flex-wrap gap-2">
-            <dt className="text-muted">{t("connection.venueAccount")}</dt>
+            <dt className="text-muted">{tv("venueAccount")}</dt>
             <dd className="break-all">{connection.venueIdentity}</dd>
           </dl>
           <p>
@@ -1570,6 +1572,7 @@ function ConnectionCard({
 export function TradingConnections() {
   const { t } = useTranslation("trading");
   const { t: tc } = useTranslation();
+  const { t: tv } = useTranslation("venues");
   const { load, reload } = useTrading();
   const [addOpen, setAddOpen] = useState(false);
   const [selectedProvider, setSelectedProvider] =
@@ -1580,7 +1583,7 @@ export function TradingConnections() {
   const snapshot = load.state === "ready" ? load.data : null;
   return (
     <Page
-      title={t("title")}
+      title={tc("nav.tradingConnections")}
       actions={
         <Button type="button" variant="ghost" size="sm" onClick={reload}>
           <RefreshCw />
@@ -1602,7 +1605,7 @@ export function TradingConnections() {
           />
           {load.data.connections.length === 0 && (
             <EmptyState
-              title={t("empty.title")}
+              title={tv("emptyConnections")}
               hint={t("empty.description")}
             />
           )}

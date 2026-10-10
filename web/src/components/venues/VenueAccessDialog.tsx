@@ -299,7 +299,7 @@ export function VenueAccessDialog({
           !error && <TableSkeleton rows={2} cols={3} />
         ) : connections.length === 0 ? (
           <EmptyState
-            title={t("accessDialog.empty.title")}
+            title={t("emptyConnections")}
             hint={t("accessDialog.empty.hint")}
             action={
               <Button asChild variant="outline" size="sm">

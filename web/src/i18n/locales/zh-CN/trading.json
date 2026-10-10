@@ -1,8 +1,6 @@
 {
   "unknownVenue": "未知交易场所 {{provider}}",
-  "title": "交易连接",
   "empty": {
-    "title": "没有交易连接",
     "description": "配置交易连接以向交易场所发送订单。"
   },
   "missingProvider": "交易连接快照中缺少提供方 {{provider}}。",
@@ -16,11 +14,8 @@
     "stopped": "已停止"
   },
   "connection": {
-    "venueAccount": "交易场所账户",
     "enabled": "已启用",
     "disabled": "已停用",
-    "apiKey": "API key",
-    "apiSecret": "API secret",
     "apiKeyStored": "API key: 已保存",
     "apiKeyNotSet": "API key: 未设置",
     "apiSecretStored": "API secret: 已保存",
@@ -28,9 +23,7 @@
   },
   "actions": {
     "addConnection": "添加交易连接",
-    "check": "检查连接",
-    "editSettings": "编辑设置",
-    "save": "保存"
+    "check": "检查连接"
   },
   "create": {
     "title": "添加 {{provider}} 连接",
@@ -38,7 +31,6 @@
     "prepareAccount": "准备您的 {{provider}} 账户",
     "mode": "模式",
     "liveNote": "实盘交易暂不可用：它将与实盘连接令牌一同提供。",
-    "submit": "创建连接",
     "alpaca": {
       "createAccount": "创建 Alpaca 账户。",
       "signUp": "注册 Alpaca",
@@ -60,14 +52,11 @@
     "result": "交易场所账户 {{id}} · 状态 {{status}}"
   },
   "settings": {
-    "description": "将字段留空以保留已保存的值。",
-    "label": "标签",
-    "keepStoredSecret": "保留已保存的密钥"
+    "description": "将字段留空以保留已保存的值。"
   },
   "unsealed": {
     "title": "密钥将以未加密形式保存",
     "description": "Officer 未配置主密钥，因此这些 API 密钥会以明文写入数据库。任何能够读取数据库或备份的人都可以使用此账户进行交易。请设置主密钥以加密保存这些密钥。",
-    "link": "如何设置主密钥",
     "caution": "主密钥丢失后将无法打开数据库 - 请在设置前备份主密钥。"
   },
   "instruments": {
@@ -89,9 +78,7 @@
   },
   "access": {
     "title": "账户访问权限",
-    "grantTo": "授权给",
-    "account": "账户",
-    "group": "账户组"
+    "grantTo": "授权给"
   },
   "fee": {
     "title": "手续费账户",

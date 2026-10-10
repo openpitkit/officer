@@ -181,9 +181,7 @@ export function VenueAccessList({
           <TableRow>
             <TableHead>{t("access.columns.subject")}</TableHead>
             <TableHead>{t("access.columns.group")}</TableHead>
-            {showVenueAccount && (
-              <TableHead>{t("access.columns.venueAccount")}</TableHead>
-            )}
+            {showVenueAccount && <TableHead>{t("venueAccount")}</TableHead>}
             <TableHead className="text-right">{t("table.actions")}</TableHead>
           </TableRow>
         </TableHeader>

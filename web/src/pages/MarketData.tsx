@@ -1263,7 +1263,7 @@ function ProviderSettingsFields({
         <div className="grid gap-3 md:grid-cols-2">
           <SecretInput
             id="md-settings-api-key"
-            label={t("settings.apiKey")}
+            label={t("venues:settings.apiKey")}
             value={draft.apiKey ?? ""}
             hasStored={hasSecret(instance, "apiKey")}
             disabled={busy}
@@ -1271,7 +1271,7 @@ function ProviderSettingsFields({
           />
           <SecretInput
             id="md-settings-api-secret"
-            label={t("settings.apiSecret")}
+            label={t("venues:settings.apiSecret")}
             value={draft.apiSecret ?? ""}
             hasStored={hasSecret(instance, "apiSecret")}
             disabled={busy}
@@ -1414,7 +1414,7 @@ function SecretInput({
         id={id}
         type="password"
         value={value}
-        placeholder={hasStored ? t("settings.keepStoredSecret") : ""}
+        placeholder={hasStored ? t("venues:settings.keepStoredSecret") : ""}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
       />
@@ -1546,7 +1546,9 @@ export function CreateInstanceDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="md-create-label">{t("instance.label")}</Label>
+            <Label htmlFor="md-create-label">
+              {t("venues:settings.label")}
+            </Label>
             <Input
               id="md-create-label"
               value={draft.label}
@@ -1593,7 +1595,7 @@ export function CreateInstanceDialog({
             onClick={close}
             disabled={busy}
           >
-            {t("actions.cancel")}
+            {t("common:actions.cancel")}
           </Button>
           <Button
             type="button"
@@ -1610,7 +1612,7 @@ export function CreateInstanceDialog({
             }
           >
             <Plus />
-            {t("actions.addInstance")}
+            {t("common:actions.create")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2008,7 +2010,9 @@ export function InstanceSettingsDialog({
         {instance && (
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="md-edit-label">{t("instance.label")}</Label>
+              <Label htmlFor="md-edit-label">
+                {t("venues:settings.label")}
+              </Label>
               <Input
                 id="md-edit-label"
                 value={draft.label}
@@ -2049,7 +2053,7 @@ export function InstanceSettingsDialog({
             onClick={close}
             disabled={busy}
           >
-            {t("actions.cancel")}
+            {t("common:actions.cancel")}
           </Button>
           <Button
             type="button"
@@ -2064,7 +2068,7 @@ export function InstanceSettingsDialog({
               !providerSettingsReady(instance.provider, settingsDraft, instance)
             }
           >
-            {t("actions.saveSettings")}
+            {t("common:actions.save")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2334,8 +2338,8 @@ export function InstanceCard({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={t("actions.editSettings")}
-                title={t("actions.editSettings")}
+                aria-label={t("common:actions.editSettings")}
+                title={t("common:actions.editSettings")}
                 onClick={() => onEditSettings(instance)}
                 disabled={busy}
               >
@@ -2565,7 +2569,7 @@ export function InstanceCard({
                   onClick={closeInstrumentDialog}
                   disabled={busy}
                 >
-                  {t("actions.cancel")}
+                  {t("common:actions.cancel")}
                 </Button>
                 <Button
                   type="button"
@@ -2797,7 +2801,7 @@ function DeleteInstanceDialog({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            {t("deleteInstance.cancel")}
+            {t("common:actions.cancel")}
           </Button>
           <Button
             onClick={onSubmit}
@@ -2805,7 +2809,7 @@ function DeleteInstanceDialog({
             className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
           >
             <Trash2 />
-            {t("deleteInstance.submit")}
+            {t("common:actions.delete")}
           </Button>
         </DialogFooter>
       </DialogContent>

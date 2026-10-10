@@ -3,11 +3,6 @@
   "instances": {
     "title": "来源"
   },
-  "instance": {
-    "id": "实例 ID",
-    "type": "提供方",
-    "label": "标签"
-  },
   "instrument": {
     "manualPrice": "手动价格",
     "manualPriceFor": "{{symbol}} 的手动价格",
@@ -22,11 +17,8 @@
   "actions": {
     "addInstance": "添加来源",
     "deleteInstance": "删除来源",
-    "editSettings": "编辑设置",
     "restart": "重启数据源",
-    "sendPrice": "发送价格",
-    "saveSettings": "保存设置",
-    "cancel": "取消"
+    "sendPrice": "发送价格"
   },
   "create": {
     "title": "添加 {{provider}} 来源",
@@ -131,15 +123,12 @@
     "lastTradeDate": "到期日 (YYYYMMDD)",
     "strike": "行权价",
     "right": "期权类型",
-    "apiKey": "API key",
-    "apiSecret": "API secret",
     "getApiKeys": "获取 API 密钥",
     "getApiToken": "获取 API 令牌",
     "token": "Token",
     "accountID": "Account ID",
     "environment": "环境",
     "category": "类别",
-    "keepStoredSecret": "保留已保存密钥",
     "marketData": {
       "live": "实时",
       "frozen": "冻结",
@@ -200,26 +189,14 @@
     "unsupported": "此提供方无法校验代码",
     "unavailable": "该代码没有新鲜价格"
   },
-  "search": {
-    "action": "搜索代码",
-    "placeholder": "按名称或代码搜索",
-    "searching": "搜索中…",
-    "noResults": "未找到匹配的代码",
-    "unsupported": "此提供方无法搜索代码",
-    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}",
-    "pick": "使用"
-  },
   "resolve": {
     "label": "在此数据源中解析代码",
     "placeholder": "输入 EUR、EUR/USD、BTC 或 AAPL",
-    "noResults": "此数据源中没有匹配代码",
-    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
+    "noResults": "此数据源中没有匹配代码"
   },
   "deleteInstance": {
     "title": "删除行情数据来源？",
-    "description": "{{label}} 将被永久删除。",
-    "cancel": "取消",
-    "submit": "删除"
+    "description": "{{label}} 将被永久删除。"
   },
   "deleteInstrument": {
     "description": "{{symbol}} 将从此来源中永久删除。"

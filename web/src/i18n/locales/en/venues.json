@@ -16,6 +16,12 @@
     "baseAsset": "Base",
     "quoteAsset": "Quote"
   },
+  "settings": {
+    "label": "Label",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "keepStoredSecret": "Keep stored secret"
+  },
   "actions": {
     "addInstrument": "Add instrument",
     "enable": "Enable",
@@ -81,8 +87,7 @@
     "codePlaceholder": "Account or group code",
     "columns": {
       "subject": "Account or group",
-      "group": "Account group",
-      "venueAccount": "Venue account"
+      "group": "Account group"
     },
     "groupBadge": "Group",
     "empty": "No accounts or groups have access",
@@ -111,7 +116,6 @@
     "groupVenueAccount": "An own grant would replace the group's venue account {{venueAccount}}. Grant it on the trading connections page.",
     "openConnections": "Open trading connections",
     "empty": {
-      "title": "No trading connections",
       "hint": "Set up a trading connection first, then grant access to it."
     }
   },
@@ -121,5 +125,7 @@
       "rowCount": "{{count}} rows per page"
     }
   },
-  "emptyInstruments": "No instruments configured"
+  "emptyInstruments": "No instruments configured",
+  "emptyConnections": "No trading connections",
+  "venueAccount": "Venue account"
 }

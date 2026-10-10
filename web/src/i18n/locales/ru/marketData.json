@@ -3,11 +3,6 @@
   "instances": {
     "title": "Источники"
   },
-  "instance": {
-    "id": "ID инстанса",
-    "type": "Провайдер",
-    "label": "Метка"
-  },
   "instrument": {
     "manualPrice": "Ручная цена",
     "manualPriceFor": "Ручная цена для {{symbol}}",
@@ -22,11 +17,8 @@
   "actions": {
     "addInstance": "Добавить источник",
     "deleteInstance": "Удалить источник",
-    "editSettings": "Изменить настройки",
     "restart": "Перезапустить фиды",
-    "sendPrice": "Отправить цену",
-    "saveSettings": "Сохранить настройки",
-    "cancel": "Отмена"
+    "sendPrice": "Отправить цену"
   },
   "create": {
     "title": "Добавить источник {{provider}}",
@@ -131,15 +123,12 @@
     "lastTradeDate": "Экспирация (ГГГГММДД)",
     "strike": "Страйк",
     "right": "Тип опциона",
-    "apiKey": "API key",
-    "apiSecret": "API secret",
     "getApiKeys": "Получить ключи API",
     "getApiToken": "Получить токен API",
     "token": "Token",
     "accountID": "Account ID",
     "environment": "Окружение",
     "category": "Категория",
-    "keepStoredSecret": "Сохранить текущий секрет",
     "marketData": {
       "live": "Живые",
       "frozen": "Замороженные",
@@ -200,26 +189,14 @@
     "unsupported": "Этот провайдер не умеет проверять символы",
     "unavailable": "Нет свежей цены для символа"
   },
-  "search": {
-    "action": "Поиск символов",
-    "placeholder": "Поиск по названию или символу",
-    "searching": "Поиск…",
-    "noResults": "Подходящих символов не найдено",
-    "unsupported": "Этот провайдер не умеет искать символы",
-    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}",
-    "pick": "Выбрать"
-  },
   "resolve": {
     "label": "Найти символ в этом фиде",
     "placeholder": "Введите EUR, EUR/USD, BTC или AAPL",
-    "noResults": "В этом фиде подходящих символов не найдено",
-    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
+    "noResults": "В этом фиде подходящих символов не найдено"
   },
   "deleteInstance": {
     "title": "Удалить источник рыночных данных?",
-    "description": "{{label}} будет удалён без возможности восстановления.",
-    "cancel": "Отмена",
-    "submit": "Удалить"
+    "description": "{{label}} будет удалён без возможности восстановления."
   },
   "deleteInstrument": {
     "description": "{{symbol}} будет удалён из этого источника без возможности восстановления."

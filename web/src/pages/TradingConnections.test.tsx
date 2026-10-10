@@ -3727,7 +3727,7 @@ describe("Add trading connection dialog", () => {
     const user = userEvent.setup();
     renderTrading();
     const dialog = await openCreateConnection(user);
-    const create = dialog.getByRole("button", { name: "Create connection" });
+    const create = dialog.getByRole("button", { name: "Create" });
     const label = dialog.getByLabelText("Label");
     expect(label).toHaveValue("Alpaca");
     for (const name of ["Label", "API key", "API secret"])
@@ -3780,7 +3780,7 @@ describe("Add trading connection dialog", () => {
     await user.type(dialog.getByLabelText("API key"), "  paper-key  ");
     await user.type(dialog.getByLabelText("API secret"), "  paper-secret  ");
     const callsBeforeCreate = api.fetchTrading.mock.calls.length;
-    await user.click(dialog.getByRole("button", { name: "Create connection" }));
+    await user.click(dialog.getByRole("button", { name: "Create" }));
     expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
       provider: "alpaca",
       label: "Desk paper",
@@ -3788,9 +3788,7 @@ describe("Add trading connection dialog", () => {
       credentials: { apiKey: "paper-key", apiSecret: "paper-secret" },
       enabled: false,
     });
-    expect(
-      dialog.getByRole("button", { name: "Create connection" }),
-    ).toBeDisabled();
+    expect(dialog.getByRole("button", { name: "Create" })).toBeDisabled();
     expect(dialog.getByLabelText("Label")).toBeDisabled();
     expect(dialog.getByLabelText("API key")).toBeDisabled();
     expect(dialog.getByLabelText("API secret")).toBeDisabled();
@@ -3834,9 +3832,7 @@ describe("Add trading connection dialog", () => {
       await user.type(dialog.getByLabelText("Label"), "Desk paper");
       await user.type(dialog.getByLabelText("API key"), "paper-key");
       await user.type(dialog.getByLabelText("API secret"), "paper-secret");
-      await user.click(
-        dialog.getByRole("button", { name: "Create connection" }),
-      );
+      await user.click(dialog.getByRole("button", { name: "Create" }));
       expect(api.createTradingConnection).toHaveBeenCalledTimes(1);
       if (close === "Escape") await user.keyboard("{Escape}");
       else
@@ -3881,9 +3877,7 @@ describe("Add trading connection dialog", () => {
       await user.type(dialog.getByLabelText("API key"), "paper-key");
       await user.type(dialog.getByLabelText("API secret"), "paper-secret");
       const callsBeforeCreate = api.fetchTrading.mock.calls.length;
-      await user.click(
-        dialog.getByRole("button", { name: "Create connection" }),
-      );
+      await user.click(dialog.getByRole("button", { name: "Create" }));
       const alert = await dialog.findByRole("alert");
       expect(alert).toHaveTextContent(message);
       const errorWrapper = alert.parentElement;
@@ -3894,7 +3888,7 @@ describe("Add trading connection dialog", () => {
         block: "nearest",
       });
       expect(scrollIntoView.mock.contexts[0]).toBe(errorWrapper);
-      const submit = dialog.getByRole("button", { name: "Create connection" });
+      const submit = dialog.getByRole("button", { name: "Create" });
       const cancel = dialog.getByRole("button", { name: "Cancel" });
       const form = submit.closest("form");
       expect(form).toContainElement(alert);

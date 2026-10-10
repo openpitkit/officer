@@ -3,11 +3,6 @@
   "instances": {
     "title": "Sources"
   },
-  "instance": {
-    "id": "Instance ID",
-    "type": "Provider",
-    "label": "Label"
-  },
   "instrument": {
     "manualPrice": "Manual price",
     "manualPriceFor": "Manual price for {{symbol}}",
@@ -22,11 +17,8 @@
   "actions": {
     "addInstance": "Add source",
     "deleteInstance": "Delete source",
-    "editSettings": "Edit settings",
     "restart": "Restart feeds",
-    "sendPrice": "Send price",
-    "saveSettings": "Save settings",
-    "cancel": "Cancel"
+    "sendPrice": "Send price"
   },
   "create": {
     "title": "Add {{provider}} source",
@@ -131,15 +123,12 @@
     "lastTradeDate": "Expiry (YYYYMMDD)",
     "strike": "Strike",
     "right": "Right",
-    "apiKey": "API key",
-    "apiSecret": "API secret",
     "getApiKeys": "Get API keys",
     "getApiToken": "Get API token",
     "token": "Token",
     "accountID": "Account ID",
     "environment": "Environment",
     "category": "Category",
-    "keepStoredSecret": "Keep stored secret",
     "marketData": {
       "live": "Live",
       "frozen": "Frozen",
@@ -200,26 +189,14 @@
     "unsupported": "This provider can't verify symbols",
     "unavailable": "No fresh price for symbol"
   },
-  "search": {
-    "action": "Search symbols",
-    "placeholder": "Search by name or symbol",
-    "searching": "Searching…",
-    "noResults": "No matching symbols",
-    "unsupported": "This provider can't search symbols",
-    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}",
-    "pick": "Use"
-  },
   "resolve": {
     "label": "Resolve symbol in this feed",
     "placeholder": "Type EUR, EUR/USD, BTC, or AAPL",
-    "noResults": "No matching symbols in this feed",
-    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
+    "noResults": "No matching symbols in this feed"
   },
   "deleteInstance": {
     "title": "Delete market-data source?",
-    "description": "{{label}} will be permanently removed.",
-    "cancel": "Cancel",
-    "submit": "Delete"
+    "description": "{{label}} will be permanently removed."
   },
   "deleteInstrument": {
     "description": "{{symbol}} will be permanently removed from this source."

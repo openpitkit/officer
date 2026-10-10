@@ -530,7 +530,7 @@ describe("provider references", () => {
       </I18nextProvider>,
     );
 
-    const submit = screen.getByRole("button", { name: "Add source" });
+    const submit = screen.getByRole("button", { name: "Create" });
     const clientId = screen.getByLabelText("Client ID");
     expect(submit).toBeEnabled();
 
@@ -1278,7 +1278,7 @@ describe("IB advanced section removed", () => {
     );
 
     const clientId = screen.getByLabelText("Client ID");
-    const save = screen.getByRole("button", { name: "Save settings" });
+    const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeEnabled();
     await user.clear(clientId);
     await user.type(clientId, "1.5");

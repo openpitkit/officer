@@ -16,6 +16,12 @@
     "baseAsset": "基础资产",
     "quoteAsset": "计价资产"
   },
+  "settings": {
+    "label": "标签",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "keepStoredSecret": "保留已保存密钥"
+  },
   "actions": {
     "addInstrument": "添加工具",
     "enable": "启用",
@@ -81,8 +87,7 @@
     "codePlaceholder": "账户或账户组代码",
     "columns": {
       "subject": "账户或账户组",
-      "group": "所属账户组",
-      "venueAccount": "交易场所账户"
+      "group": "所属账户组"
     },
     "groupBadge": "账户组",
     "empty": "没有账户或账户组拥有访问权限",
@@ -111,7 +116,6 @@
     "groupVenueAccount": "自身授权将替换账户组的交易场所账户 {{venueAccount}}。请在交易连接页面授予访问权限。",
     "openConnections": "打开交易连接",
     "empty": {
-      "title": "没有交易连接",
       "hint": "请先设置交易连接，再授予访问权限。"
     }
   },
@@ -121,5 +125,7 @@
       "rowCount": "每页 {{count}} 行"
     }
   },
-  "emptyInstruments": "未配置工具"
+  "emptyInstruments": "未配置工具",
+  "emptyConnections": "没有交易连接",
+  "venueAccount": "交易场所账户"
 }
