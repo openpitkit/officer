@@ -20,12 +20,13 @@ import {
   ArrowLeftRight,
   BadgeDollarSign,
   BriefcaseBusiness,
+  ChartCandlestick,
   ClipboardList,
-  Cable,
   Database,
   Info,
   KeyRound,
   LayoutDashboard,
+  Route,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
@@ -64,6 +65,7 @@ import {
   CountsRow,
   MarketDataCard,
   McpAccessCard,
+  TradingConnectionsCard,
 } from "@/pages/dashboard/widgets";
 
 const appRouteComponents = {
@@ -107,8 +109,8 @@ export function registerOfficerDefaults(): void {
   }
 
   // Nav ids: dashboard, accounts, positions, orders, policies,
-  // restart-required, audit, mcp-access, signing-keys, market-data,
-  // trading-connections, service, non-release, about.
+  // restart-required, audit, mcp-access, signing-keys, trading-connections,
+  // market-data, service, non-release, about.
   registerNav({
     id: "dashboard",
     to: "/",
@@ -192,20 +194,20 @@ export function registerOfficerDefaults(): void {
     order: 30,
   });
   registerNav({
-    id: "market-data",
-    to: "/market-data",
-    labelKey: "nav.marketData",
-    icon: Database,
-    section: "footer",
-    order: 40,
-  });
-  registerNav({
     id: "trading-connections",
     to: "/trading-connections",
     labelKey: "nav.tradingConnections",
-    icon: Cable,
+    icon: Route,
     section: "footer",
-    order: 45,
+    order: 35,
+  });
+  registerNav({
+    id: "market-data",
+    to: "/market-data",
+    labelKey: "nav.marketData",
+    icon: ChartCandlestick,
+    section: "footer",
+    order: 40,
   });
   registerNav({
     id: "service",
@@ -234,13 +236,18 @@ export function registerOfficerDefaults(): void {
     render: () => createElement(AboutNavEntry),
   });
 
-  // Widget ids: counts-row, mcp-access-card, market-data-card,
-  // activity-columns, audit-strip.
+  // Widget ids: counts-row, mcp-access-card, trading-connections-card,
+  // market-data-card, activity-columns, audit-strip.
   registerWidget({ id: "counts-row", order: 10, Component: CountsRow });
   registerWidget({
     id: "mcp-access-card",
     order: 20,
     Component: McpAccessCard,
+  });
+  registerWidget({
+    id: "trading-connections-card",
+    order: 25,
+    Component: TradingConnectionsCard,
   });
   registerWidget({
     id: "market-data-card",

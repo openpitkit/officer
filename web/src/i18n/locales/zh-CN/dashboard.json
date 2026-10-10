@@ -36,6 +36,11 @@
     "restartRequired": "需要重启",
     "issues": "{{count}} 个问题"
   },
+  "trading": {
+    "title": "交易连接",
+    "none": "无已启用连接",
+    "more": "+{{count}} 个"
+  },
   "audit": {
     "title": "近期审计",
     "noEntries": "暂无审计记录",

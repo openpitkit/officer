@@ -38,7 +38,7 @@ vi.mock("@/components/PageStates", async (importOriginal) => ({
 }));
 vi.mock("@/framework", () => ({
   DashboardWidgets: ({ ids }: { ids: string[] }) => (
-    <div>
+    <div data-testid="dashboard-widgets" data-ids={ids.join(" ")}>
       {ids.includes("mcp-access-card") && <McpAccessCard />}
       {ids.includes("audit-strip") && <span>audit-strip</span>}
     </div>
@@ -128,6 +128,38 @@ describe("Dashboard first load", () => {
     renderDashboard();
 
     expect(screen.getByText("audit-strip")).toBeInTheDocument();
+  });
+
+  it("renders the trading connections card with the ready widgets", () => {
+    useOverviewMock.mockReturnValue({
+      load: {
+        state: "ready",
+        data: {
+          counts: {
+            accounts: 0,
+            accountsActive: 0,
+            groups: 0,
+            groupsActive: 0,
+            limits: 0,
+            ordersActive: 0,
+            ordersToday: 0,
+            ordersTotal: 0,
+          },
+          activity: [],
+        },
+        error: null,
+      },
+      reload: vi.fn(),
+    });
+
+    renderDashboard();
+
+    const passed = screen
+      .getAllByTestId("dashboard-widgets")
+      .map((widgets) => widgets.getAttribute("data-ids"));
+    expect(passed).toContain(
+      "counts-row mcp-access-card trading-connections-card market-data-card activity-columns",
+    );
   });
 
   it("marks nested MCP data stale while the overview stays healthy", () => {

@@ -36,6 +36,11 @@
     "restartRequired": "Restart needed",
     "issues": "{{count}} issue(s)"
   },
+  "trading": {
+    "title": "Trading connections",
+    "none": "No connections enabled",
+    "more": "+{{count}} more"
+  },
   "audit": {
     "title": "Recent audit",
     "noEntries": "No audit entries",

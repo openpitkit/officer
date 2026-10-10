@@ -28,6 +28,7 @@ import type { DashboardReadyWidgetProps } from "@/pages/dashboard/widgets";
 const READY_WIDGET_IDS = [
   "counts-row",
   "mcp-access-card",
+  "trading-connections-card",
   "market-data-card",
   "activity-columns",
 ];

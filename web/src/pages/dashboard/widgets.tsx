@@ -29,6 +29,15 @@ import type {
 import { useAudit } from "@/api/useAudit";
 import { useMarketData } from "@/api/useMarketData";
 import { useMcpAccess } from "@/api/useMcpAccess";
+import { useTrading } from "@/api/useTrading";
+import {
+  DashboardItemChips,
+  DashboardNote,
+  DashboardSourceError,
+  DashboardSourceRow,
+  DashboardStatusCard,
+  type DashboardItem,
+} from "@/components/dashboard";
 import { CompactStaleState } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -139,194 +148,193 @@ function mcpChipVariant(cmd: McpCommand): "danger" | "warn" | "neutral" {
 
 export function McpAccessCard() {
   const { t } = useTranslation("dashboard");
-  const navigate = useNavigate();
   const { load } = useMcpAccess();
 
   return (
-    <button
-      type="button"
-      onClick={() => navigate("/mcp-access")}
-      className="animate-fade-in w-full cursor-pointer rounded-card text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <Card className="pointer-events-none">
-        <CardContent className="flex flex-wrap items-center gap-2 py-3">
-          <CardTitle className="shrink-0">{t("mcp.title")}</CardTitle>
-          {load.state === "loading" && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
-          )}
-          <CompactStaleState load={load} />
-          {load.state === "error" && (
-            <span className="text-xs text-muted-lt">{load.error}</span>
-          )}
-          {load.state === "ready" &&
-            (() => {
-              const enabled = load.data.filter((c) => c.enabled);
-              return enabled.length === 0 ? (
-                <span className="text-xs text-muted-lt">{t("mcp.none")}</span>
-              ) : (
-                enabled.map((cmd) => (
-                  <Badge key={cmd.name} variant={mcpChipVariant(cmd)}>
-                    {cmd.name}
-                  </Badge>
-                ))
-              );
-            })()}
-        </CardContent>
-      </Card>
-    </button>
+    <DashboardStatusCard title={t("mcp.title")} to="/mcp-access" load={load}>
+      {(commands) => {
+        const enabled = commands.filter((c) => c.enabled);
+        return enabled.length === 0 ? (
+          <DashboardNote>{t("mcp.none")}</DashboardNote>
+        ) : (
+          enabled.map((cmd) => (
+            <Badge key={cmd.name} variant={mcpChipVariant(cmd)}>
+              {cmd.name}
+            </Badge>
+          ))
+        );
+      }}
+    </DashboardStatusCard>
   );
 }
 
 const MD_STALE_LIMIT = 4;
-const MD_OK_LIMIT = 3;
+const ITEM_CHIP_LIMIT = 3;
 const MANUAL_PROVIDER = "byo";
+
+function instrumentItem(instr: {
+  externalSymbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+}): DashboardItem {
+  return {
+    key: instr.externalSymbol,
+    text: `${instr.baseAsset}/${instr.quoteAsset}`,
+  };
+}
+
+export function TradingConnectionsCard() {
+  const { t } = useTranslation("dashboard");
+  const { load } = useTrading();
+
+  return (
+    <DashboardStatusCard
+      title={t("trading.title")}
+      to="/trading-connections"
+      load={load}
+    >
+      {(data) => {
+        const enabled = data.connections.filter((c) => c.enabled);
+        if (enabled.length === 0) {
+          return <DashboardNote>{t("trading.none")}</DashboardNote>;
+        }
+        return enabled.map((connection) => (
+          <DashboardSourceRow key={connection.id} label={connection.label}>
+            <Badge>{t(`trading:mode.${connection.mode}`)}</Badge>
+            {connection.state === "unavailable" && (
+              <DashboardSourceError
+                title={t("trading:state.unavailable")}
+                error={connection.error}
+              />
+            )}
+            {connection.state === "stopped" && (
+              <Badge variant="warn">{t("trading:state.stopped")}</Badge>
+            )}
+            {connection.state === "running" && (
+              <>
+                <Badge variant="ok">{t("trading:state.running")}</Badge>
+                <DashboardItemChips
+                  items={connection.instruments
+                    .filter((i) => i.enabled)
+                    .map(instrumentItem)}
+                  variant="neutral"
+                  limit={ITEM_CHIP_LIMIT}
+                  moreLabel={(count) => t("trading.more", { count })}
+                />
+              </>
+            )}
+          </DashboardSourceRow>
+        ));
+      }}
+    </DashboardStatusCard>
+  );
+}
 
 export function MarketDataCard() {
   const { t } = useTranslation("dashboard");
-  const navigate = useNavigate();
   const { load } = useMarketData();
 
   return (
-    <button
-      type="button"
-      onClick={() => navigate("/market-data")}
-      className="animate-fade-in w-full cursor-pointer rounded-card text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    <DashboardStatusCard
+      title={t("marketData.title")}
+      to="/market-data"
+      load={load}
     >
-      <Card className="pointer-events-none">
-        <CardContent className="flex flex-wrap items-center gap-2 py-3">
-          <CardTitle className="shrink-0">{t("marketData.title")}</CardTitle>
-          {load.state === "loading" && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
-          )}
-          <CompactStaleState load={load} />
-          {load.state === "error" && (
-            <span className="text-xs text-muted-lt">{load.error}</span>
-          )}
-          {load.state === "ready" &&
-            (() => {
-              const enabled = load.data.instances.filter((i) => i.enabled);
-              if (enabled.length === 0) {
+      {(data) => {
+        const enabled = data.instances.filter((i) => i.enabled);
+        if (enabled.length === 0) {
+          return <DashboardNote>{t("marketData.none")}</DashboardNote>;
+        }
+
+        const allStale = enabled.flatMap((inst) =>
+          inst.state === "error" || inst.provider === MANUAL_PROVIDER
+            ? []
+            : inst.instruments
+                .filter((instr) => instr.stale)
+                .map((instr) => ({
+                  key: `${inst.id}/${instr.externalSymbol}`,
+                  label: `${instr.baseAsset}/${instr.quoteAsset}`,
+                })),
+        );
+        const shownStale = allStale.slice(0, MD_STALE_LIMIT);
+        const extraStale = allStale.length - shownStale.length;
+        let staleConsumed = 0;
+
+        return (
+          <>
+            {data.restartRequired && (
+              <Badge variant="warn">{t("marketData.restartRequired")}</Badge>
+            )}
+            {enabled.map((inst) => {
+              const label = inst.label || inst.id;
+
+              if (inst.state === "error") {
+                const latest =
+                  inst.diagnostics.length > 0
+                    ? inst.diagnostics[inst.diagnostics.length - 1]
+                    : null;
                 return (
-                  <span className="text-xs text-muted-lt">
-                    {t("marketData.none")}
-                  </span>
+                  <DashboardSourceError
+                    key={inst.id}
+                    title={`${t("marketData.instanceError")} ${label}`}
+                    error={inst.error}
+                    diagnostic={latest?.title}
+                  />
                 );
               }
 
-              const allStale = enabled.flatMap((inst) =>
-                inst.state === "error" || inst.provider === MANUAL_PROVIDER
-                  ? []
-                  : inst.instruments
-                      .filter((instr) => instr.stale)
-                      .map((instr) => ({
-                        key: `${inst.id}/${instr.externalSymbol}`,
-                        label: `${instr.baseAsset}/${instr.quoteAsset}`,
-                      })),
+              if (inst.state === "pending") {
+                return (
+                  <Badge key={inst.id} variant="warn">
+                    {label} - {t("marketData.instanceNotApplied")}
+                  </Badge>
+                );
+              }
+
+              const isManual = inst.provider === MANUAL_PROVIDER;
+              const instStale = isManual
+                ? []
+                : inst.instruments.filter((i) => i.stale);
+              const instOk = inst.instruments.filter(
+                (i) => i.enabled && (isManual || !i.stale),
               );
-              const shownStale = allStale.slice(0, MD_STALE_LIMIT);
-              const extraStale = allStale.length - shownStale.length;
-              let staleConsumed = 0;
+
+              const instStaleSlot = Math.max(0, MD_STALE_LIMIT - staleConsumed);
+              const shownInstStale = instStale.slice(0, instStaleSlot);
+              staleConsumed += shownInstStale.length;
 
               return (
-                <>
-                  {load.data.restartRequired && (
-                    <Badge variant="warn">
-                      {t("marketData.restartRequired")}
+                <DashboardSourceRow key={inst.id} label={label}>
+                  {shownInstStale.map((instr) => (
+                    <Badge key={instr.externalSymbol} variant="warn">
+                      {instr.baseAsset}/{instr.quoteAsset}
                     </Badge>
-                  )}
-                  {enabled.map((inst) => {
-                    const label = inst.label || inst.id;
-
-                    if (inst.state === "error") {
-                      const errSuffix = inst.error
-                        ? `: ${inst.error.slice(0, 40)}${inst.error.length > 40 ? "…" : ""}`
-                        : "";
-                      const latest =
-                        inst.diagnostics.length > 0
-                          ? inst.diagnostics[inst.diagnostics.length - 1]
-                          : null;
-                      const diagSuffix = latest
-                        ? ` - ${latest.title.slice(0, 40)}${latest.title.length > 40 ? "…" : ""}`
-                        : "";
-                      return (
-                        <Badge key={inst.id} variant="danger">
-                          {t("marketData.instanceError")} {label}
-                          {errSuffix || diagSuffix}
-                        </Badge>
-                      );
-                    }
-
-                    if (inst.state === "pending") {
-                      return (
-                        <Badge key={inst.id} variant="warn">
-                          {label} - {t("marketData.instanceNotApplied")}
-                        </Badge>
-                      );
-                    }
-
-                    const isManual = inst.provider === MANUAL_PROVIDER;
-                    const instStale = isManual
-                      ? []
-                      : inst.instruments.filter((i) => i.stale);
-                    const instOk = inst.instruments.filter(
-                      (i) => i.enabled && (isManual || !i.stale),
-                    );
-
-                    const instStaleSlot = Math.max(
-                      0,
-                      MD_STALE_LIMIT - staleConsumed,
-                    );
-                    const shownInstStale = instStale.slice(0, instStaleSlot);
-                    staleConsumed += shownInstStale.length;
-
-                    const shownOk = instOk.slice(0, MD_OK_LIMIT);
-                    const extraOk = instOk.length - shownOk.length;
-
-                    return (
-                      <span
-                        key={inst.id}
-                        className="flex flex-wrap items-center gap-1"
-                      >
-                        <Badge variant="neutral">{label}</Badge>
-                        {shownInstStale.map((instr) => (
-                          <Badge key={instr.externalSymbol} variant="warn">
-                            {instr.baseAsset}/{instr.quoteAsset}
-                          </Badge>
-                        ))}
-                        {shownOk.map((instr) => (
-                          <Badge
-                            key={instr.externalSymbol}
-                            variant={isManual ? "neutral" : "ok"}
-                          >
-                            {instr.baseAsset}/{instr.quoteAsset}
-                          </Badge>
-                        ))}
-                        {extraOk > 0 && (
-                          <span className="text-xs text-muted-lt">
-                            {t("marketData.moreOk", { count: extraOk })}
-                          </span>
-                        )}
-                        {inst.diagnostics.length > 0 && (
-                          <span className="text-xs text-[var(--warn)]">
-                            {t("marketData.issues", {
-                              count: inst.diagnostics.length,
-                            })}
-                          </span>
-                        )}
-                      </span>
-                    );
-                  })}
-                  {extraStale > 0 && (
-                    <span className="text-xs text-muted-lt">
-                      {t("marketData.moreStale", { count: extraStale })}
+                  ))}
+                  <DashboardItemChips
+                    items={instOk.map(instrumentItem)}
+                    variant={isManual ? "neutral" : "ok"}
+                    limit={ITEM_CHIP_LIMIT}
+                    moreLabel={(count) => t("marketData.moreOk", { count })}
+                  />
+                  {inst.diagnostics.length > 0 && (
+                    <span className="text-xs text-[var(--warn)]">
+                      {t("marketData.issues", {
+                        count: inst.diagnostics.length,
+                      })}
                     </span>
                   )}
-                </>
+                </DashboardSourceRow>
               );
-            })()}
-        </CardContent>
-      </Card>
-    </button>
+            })}
+            {extraStale > 0 && (
+              <DashboardNote>
+                {t("marketData.moreStale", { count: extraStale })}
+              </DashboardNote>
+            )}
+          </>
+        );
+      }}
+    </DashboardStatusCard>
   );
 }
 

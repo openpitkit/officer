@@ -17,8 +17,8 @@
 
 import {
   BookOpen,
+  ChartCandlestick,
   CheckCircle2,
-  Database,
   ExternalLink,
   Landmark,
   ListChecks,
@@ -754,7 +754,10 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
             </div>
           </Section>
 
-          <Section icon={Database} label={t("welcome.sections.marketData")}>
+          <Section
+            icon={ChartCandlestick}
+            label={t("welcome.sections.marketData")}
+          >
             <p>{t("welcome.marketData.copy")}</p>
             <div className="mt-3 flex flex-wrap gap-2">
               <ActionButton
