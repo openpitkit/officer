@@ -64,6 +64,9 @@ LEFT JOIN principal p ON p.id = o.principal_id`
 // view can report whether the order carries at least one Ed25519-signed event
 // attestation without a second query per order. The correlated subquery is 1
 // when any of the order's events has a signed attestation, else 0.
+// LEFT JOINs to venue_order (order_id is its primary key) and trading_connection
+// expose the linked connection's external id, NULL when unlinked, with at most
+// one venue link per order.
 const orderListSelect = `
 SELECT o.external_id, a.code, ba.code, qa.code, p.code,
        o.at, o.source_id, o.side_id, o.amount_kind_id, o.amount_value,
@@ -73,12 +76,14 @@ SELECT o.external_id, a.code, ba.code, qa.code, p.code,
            SELECT 1 FROM order_event e
            JOIN event_attestation ea ON ea.event_id = e.id
            WHERE e.order_id = o.id AND ea.alg_id = 1
-       ) AS signed
+       ) AS signed, tc.external_id
 FROM order_record o
 JOIN account a       ON a.id = o.account_id
 JOIN asset ba        ON ba.id = o.base_asset_id
 JOIN asset qa        ON qa.id = o.quote_asset_id
-LEFT JOIN principal p ON p.id = o.principal_id`
+LEFT JOIN principal p ON p.id = o.principal_id
+LEFT JOIN venue_order vo ON vo.order_id = o.id
+LEFT JOIN trading_connection tc ON tc.id = vo.connection_id`
 
 // CreateOrder inserts a new order and its submission time. It resolves the
 // account and both assets by code to their surrogate ids and the optional
@@ -489,12 +494,12 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 	result := make([]fwstore.OrderListRow, 0)
 	orderIDs := make([]domain.ExternalID, 0)
 	for rows.Next() {
-		o, signed, err := scanOrderListRow(dictionaries, rows)
+		row, err := scanOrderListRow(dictionaries, rows)
 		if err != nil {
 			return fwstore.OrderListPage{}, err
 		}
-		result = append(result, fwstore.OrderListRow{Order: o, Signed: signed})
-		orderIDs = append(orderIDs, o.ExternalID)
+		result = append(result, row)
+		orderIDs = append(orderIDs, row.Order.ExternalID)
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: iterate order rows: %w", err)
@@ -573,6 +578,9 @@ func orderListWhere(
 	appendDecimalRangeFilter(&clauses, &args, "o.amount_value", filter.Amount)
 	appendDecimalRangeFilter(&clauses, &args, "o.price", filter.Price)
 	appendTimeRangeFilter(&clauses, &args, "o.at", filter.At)
+	if err := appendVenueFilter(&clauses, &args, "o.id", filter.Venue); err != nil {
+		return "", nil, err
+	}
 	if len(clauses) == 0 {
 		return "", args, nil
 	}
@@ -721,19 +729,33 @@ func scanOrderRow(
 // scanOrderListRow scans one orderListSelect projection, returning the order
 // plus the "signed" rollup: whether any of its events carries an Ed25519-signed
 // attestation. An order with no attestation, or only eSign-off ("none")
-// attestations, reports false.
+// attestations, reports false. The linked connection's external id is returned
+// as VenueConnection, zero when unlinked.
 func scanOrderListRow(
 	dictionaries *enumDictionaries,
 	rows *sql.Rows,
-) (domain.Order, bool, error) {
-	var o domain.Order
-	var signed bool
+) (fwstore.OrderListRow, error) {
+	var row fwstore.OrderListRow
+	var connectionID []byte
 	if err := scanOrderInto(dictionaries, func(dest ...any) error {
-		return rows.Scan(append(dest, &signed)...)
-	}, &o); err != nil {
-		return domain.Order{}, false, fmt.Errorf("store: scan order list row: %w", err)
+		return rows.Scan(append(dest, &row.Signed, &connectionID)...)
+	}, &row.Order); err != nil {
+		return fwstore.OrderListRow{}, fmt.Errorf("store: scan order list row: %w", err)
 	}
-	return o, signed, nil
+	id, err := optionalExternalIDFromBytes(connectionID)
+	if err != nil {
+		return fwstore.OrderListRow{}, fmt.Errorf(
+			"store: decode order venue connection id: %w", err)
+	}
+	row.VenueConnection = id
+	return row, nil
+}
+
+func optionalExternalIDFromBytes(raw []byte) (domain.ExternalID, error) {
+	if raw == nil {
+		return "", nil
+	}
+	return domain.ExternalIDFromBytes(raw)
 }
 
 // scanOrderInto scans one order projection through scan into o, decoding the
@@ -1156,13 +1178,15 @@ LEFT JOIN principal p ON p.id = t.principal_id` + whereFromClauses(clauses)
 	query := `
 SELECT t.external_id, o.external_id, a.code, ba.code, qa.code, p.code,
        t.at, t.source_id, t.side_id, t.quantity, t.price, t.lock_price,
-       t.commission_amount, t.commission_currency
+       t.commission_amount, t.commission_currency, tc.external_id
 FROM trade t
 JOIN order_record o          ON o.id = t.order_id
 JOIN account a        ON a.id = t.account_id
 JOIN asset ba         ON ba.id = t.base_asset_id
 JOIN asset qa         ON qa.id = t.quote_asset_id
-LEFT JOIN principal p ON p.id = t.principal_id` +
+LEFT JOIN principal p ON p.id = t.principal_id
+LEFT JOIN venue_order vo ON vo.order_id = t.order_id
+LEFT JOIN trading_connection tc ON tc.id = vo.connection_id` +
 		whereFromClauses(clauses) +
 		tradeListOrderBy(sortColumn, filter.Sort)
 	if filter.Page.Limit > 0 {
@@ -1175,7 +1199,7 @@ LEFT JOIN principal p ON p.id = t.principal_id` +
 	}
 	defer func() { _ = rows.Close() }()
 
-	result := make([]domain.Trade, 0)
+	result := make([]fwstore.TradeListRow, 0)
 	for rows.Next() {
 		row, err := scanTradeListRow(dictionaries, rows)
 		if err != nil {
@@ -1225,7 +1249,44 @@ func tradeListClauses(
 	appendDecimalRangeFilter(&clauses, &args, "t.quantity COLLATE DECIMAL", filter.Quantity)
 	appendDecimalRangeFilter(&clauses, &args, "t.price COLLATE DECIMAL", filter.Price)
 	appendDecimalRangeFilter(&clauses, &args, "t.lock_price COLLATE DECIMAL", filter.LockPrice)
+	if err := appendVenueFilter(&clauses, &args, "t.order_id", filter.Venue); err != nil {
+		return nil, nil, err
+	}
 	return clauses, args, nil
+}
+
+func appendVenueFilter(
+	clauses *[]string, args *[]any, orderID string, filter fwstore.VenueFilter,
+) error {
+	if filter.Mode != fwstore.VenueFilterConnection && !filter.ConnectionID.IsZero() {
+		return fmt.Errorf("store: venue connection id requires connection mode: %w", domain.ErrInvalid)
+	}
+	switch filter.Mode {
+	case fwstore.VenueFilterAll:
+		return nil
+	case fwstore.VenueFilterAny:
+		*clauses = append(*clauses,
+			"EXISTS (SELECT 1 FROM venue_order venue_filter_order "+
+				"WHERE venue_filter_order.order_id = "+orderID+")")
+	case fwstore.VenueFilterNone:
+		*clauses = append(*clauses,
+			"NOT EXISTS (SELECT 1 FROM venue_order venue_filter_order "+
+				"WHERE venue_filter_order.order_id = "+orderID+")")
+	case fwstore.VenueFilterConnection:
+		if filter.ConnectionID.IsZero() {
+			return fmt.Errorf("store: venue connection mode requires a connection id: %w", domain.ErrInvalid)
+		}
+		*clauses = append(*clauses,
+			"EXISTS (SELECT 1 FROM venue_order venue_filter_order "+
+				"JOIN trading_connection venue_filter_connection "+
+				"ON venue_filter_connection.id = venue_filter_order.connection_id "+
+				"WHERE venue_filter_order.order_id = "+orderID+
+				" AND venue_filter_connection.external_id = ?)")
+		*args = append(*args, filter.ConnectionID.Bytes())
+	default:
+		return fmt.Errorf("store: unknown venue filter mode %q: %w", filter.Mode, domain.ErrInvalid)
+	}
+	return nil
 }
 
 func tradeListSortColumn(sort fwstore.SortSpec) string {
@@ -1348,9 +1409,10 @@ func scanTrades(dictionaries *enumDictionaries, rows *sql.Rows) ([]domain.Trade,
 func scanTradeListRow(
 	dictionaries *enumDictionaries,
 	rows *sql.Rows,
-) (domain.Trade, error) {
+) (fwstore.TradeListRow, error) {
 	var (
 		tradeExtID, orderExtID               []byte
+		connectionID                         []byte
 		account                              string
 		baseAsset, quoteAsset                string
 		principal                            sql.NullString
@@ -1361,9 +1423,9 @@ func scanTradeListRow(
 	if err := rows.Scan(
 		&tradeExtID, &orderExtID, &account, &baseAsset,
 		&quoteAsset, &principal, &at, &sourceID, &sideID, &quantity, &price, &lockPx,
-		&commissionAmount, &commissionCurrency,
+		&commissionAmount, &commissionCurrency, &connectionID,
 	); err != nil {
-		return domain.Trade{}, fmt.Errorf("store: scan trade row: %w", err)
+		return fwstore.TradeListRow{}, fmt.Errorf("store: scan trade row: %w", err)
 	}
 	trade, err := tradeFromScanned(
 		dictionaries, tradeExtID, orderExtID, account, baseAsset, quoteAsset,
@@ -1371,9 +1433,16 @@ func scanTradeListRow(
 		commissionAmount, commissionCurrency,
 	)
 	if err != nil {
-		return domain.Trade{}, err
+		return fwstore.TradeListRow{}, err
 	}
-	return trade, nil
+	row := fwstore.TradeListRow{Trade: trade}
+	id, err := optionalExternalIDFromBytes(connectionID)
+	if err != nil {
+		return fwstore.TradeListRow{}, fmt.Errorf(
+			"store: decode trade venue connection id: %w", err)
+	}
+	row.VenueConnection = id
+	return row, nil
 }
 
 func scanTrade(dictionaries *enumDictionaries, rows *sql.Rows) (domain.Trade, error) {

@@ -446,6 +446,8 @@ export type RangeFilterMode =
 export interface OrderListFilters extends PageRequest, SortSpec {
   account?: string;
   source?: string;
+  /** REST venue value: `any`, `none`, or `connection:<id>`. */
+  venue?: string;
   side?: "all" | OrderSide;
   status?: string;
   baseAsset?: string;
@@ -524,6 +526,11 @@ export interface Order {
   account: string;
   at: string;
   principal?: string;
+  /**
+   * Trading connection the order is linked to, on GET /orders list rows only.
+   * Absent when the order has no venue link.
+   */
+  venueConnection?: string;
   source: Source;
   baseAsset: string;
   quoteAsset: string;
@@ -578,6 +585,11 @@ export interface Trade {
   account: string;
   at: string;
   principal?: string;
+  /**
+   * Trading connection the order is linked to, on GET /trades list rows only.
+   * Absent when the order has no venue link.
+   */
+  venueConnection?: string;
   source: Source;
   baseAsset: string;
   quoteAsset: string;

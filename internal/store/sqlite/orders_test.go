@@ -28,6 +28,7 @@ import (
 	"crypto/ed25519"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1249,7 +1250,7 @@ func TestTradeListRowsDBCountPageFilterSortDecimalsNumerically(t *testing.T) {
 	if page.Total != 3 || len(page.Rows) != 2 {
 		t.Fatalf("page total/len = %d/%d, want 3/2", page.Total, len(page.Rows))
 	}
-	got := []string{page.Rows[0].Quantity, page.Rows[1].Quantity}
+	got := []string{page.Rows[0].Trade.Quantity, page.Rows[1].Trade.Quantity}
 	if strings.Join(got, ",") != "2,10" {
 		t.Fatalf("numeric quantity sort = %v, want [2 10]", got)
 	}
@@ -1267,7 +1268,7 @@ func TestTradeListRowsDBCountPageFilterSortDecimalsNumerically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTradeRows(next): %v", err)
 	}
-	if next.Total != 3 || len(next.Rows) != 1 || next.Rows[0].Quantity != "100" {
+	if next.Total != 3 || len(next.Rows) != 1 || next.Rows[0].Trade.Quantity != "100" {
 		t.Fatalf("next page = total %d rows %+v", next.Total, next.Rows)
 	}
 
@@ -1284,7 +1285,7 @@ func TestTradeListRowsDBCountPageFilterSortDecimalsNumerically(t *testing.T) {
 	}
 	got = got[:0]
 	for _, row := range filtered.Rows {
-		got = append(got, row.LockPrice)
+		got = append(got, row.Trade.LockPrice)
 	}
 	if strings.Join(got, ",") != "3,10" {
 		t.Fatalf("price/lock filtered rows = %v, want [3 10]", got)
@@ -1298,9 +1299,195 @@ func TestTradeListRowsDBCountPageFilterSortDecimalsNumerically(t *testing.T) {
 		t.Fatalf("ListTradeRows(external id): %v", err)
 	}
 	if exact.Total != 1 || len(exact.Rows) != 1 ||
-		exact.Rows[0].ExternalID != trade10.ExternalID {
+		exact.Rows[0].Trade.ExternalID != trade10.ExternalID {
 		t.Fatalf("external id page = total %d rows %+v",
 			exact.Total, exact.Rows)
+	}
+}
+
+func TestListRowsVenueFilter(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	connections := make([]domain.ExternalID, 0, 3)
+	for _, label := range []string{"linked", "other linked", "unlinked"} {
+		connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+			Provider:      domain.TradingProviderAlpaca,
+			Label:         label,
+			VenueIdentity: label,
+			Mode:          domain.TradingModePaper,
+			Credentials:   `{}`,
+			Enabled:       true,
+		})
+		if err != nil {
+			t.Fatalf("CreateTradingConnection(%s): %v", label, err)
+		}
+		connections = append(connections, connection.ExternalID)
+	}
+	venues := []domain.ExternalID{connections[0], "", connections[1], connections[0]}
+	orders := make([]domain.Order, 0, len(venues))
+	trades := make([]domain.Trade, 0, len(venues)+1)
+	tradeVenues := make([]domain.ExternalID, 0, len(venues)+1)
+	for i, venue := range venues {
+		order := sampleOrder()
+		order.At = time.Date(2026, 1, 2, 3, 4, i, 0, time.UTC)
+		order, err := rs.CreateOrder(ctx, order)
+		if err != nil {
+			t.Fatalf("CreateOrder(%d): %v", i, err)
+		}
+		orders = append(orders, order)
+		if !venue.IsZero() {
+			if _, err := rs.CreateVenueOrder(ctx, domain.VenueOrder{
+				Order:         order.ExternalID,
+				Connection:    venue,
+				Route:         `{}`,
+				ClientOrderID: fmt.Sprintf("client-%d", i),
+			}); err != nil {
+				t.Fatalf("CreateVenueOrder(%d): %v", i, err)
+			}
+		}
+		trade, err := rs.CreateTrade(ctx, domain.Trade{
+			Order:      order.ExternalID,
+			Account:    order.Account,
+			BaseAsset:  order.BaseAsset,
+			QuoteAsset: order.QuoteAsset,
+			Principal:  order.Principal,
+			At:         order.At,
+			Source:     order.Source,
+			Side:       order.Side,
+			Quantity:   "1",
+			Price:      order.Price,
+			LockPrice:  order.Price,
+		})
+		if err != nil {
+			t.Fatalf("CreateTrade(%d): %v", i, err)
+		}
+		trades = append(trades, trade)
+		tradeVenues = append(tradeVenues, venue)
+		if i == 0 {
+			// A second trade makes later trade ids differ from their order ids.
+			// CreateTrade stamps the insertion time, so it sorts between trade 0
+			// and trade 1.
+			trade, err = rs.CreateTrade(ctx, trade)
+			if err != nil {
+				t.Fatalf("CreateTrade(extra): %v", err)
+			}
+			trades = append(trades, trade)
+			tradeVenues = append(tradeVenues, venue)
+		}
+	}
+
+	for _, tc := range []struct {
+		name       string
+		filter     fwstore.VenueFilter
+		want       []int
+		wantTrades []int
+	}{
+		{name: "unrestricted", want: []int{0, 1, 2, 3}, wantTrades: []int{0, 1, 2, 3, 4}},
+		{name: "any", filter: fwstore.VenueFilter{Mode: fwstore.VenueFilterAny},
+			want: []int{0, 2, 3}, wantTrades: []int{0, 1, 3, 4}},
+		{name: "none", filter: fwstore.VenueFilter{Mode: fwstore.VenueFilterNone},
+			want: []int{1}, wantTrades: []int{2}},
+		{name: "connection", filter: fwstore.VenueFilter{
+			Mode: fwstore.VenueFilterConnection, ConnectionID: connections[0],
+		}, want: []int{0, 3}, wantTrades: []int{0, 1, 4}},
+		{name: "connection_without_links", filter: fwstore.VenueFilter{
+			Mode: fwstore.VenueFilterConnection, ConnectionID: connections[2],
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, pageSpec := range []fwstore.PageSpec{{}, {Limit: 1, Offset: 1}} {
+				want := tc.want
+				wantTrades := tc.wantTrades
+				if pageSpec.Limit > 0 {
+					start := min(pageSpec.Offset, len(want))
+					want = want[start:min(start+pageSpec.Limit, len(want))]
+					start = min(pageSpec.Offset, len(wantTrades))
+					wantTrades = wantTrades[start:min(start+pageSpec.Limit, len(wantTrades))]
+				}
+				t.Run(fmt.Sprintf("page_%d", pageSpec.Limit), func(t *testing.T) {
+					t.Run("orders", func(t *testing.T) {
+						page, err := rs.ListOrderRows(ctx, fwstore.OrderListFilter{
+							Venue: tc.filter,
+							Sort:  fwstore.SortSpec{Column: "at"},
+							Page:  pageSpec,
+						})
+						if err != nil {
+							t.Fatalf("ListOrderRows: %v", err)
+						}
+						if page.Total != len(tc.want) {
+							t.Fatalf("total = %d, want %d", page.Total, len(tc.want))
+						}
+						if len(page.Rows) != len(want) {
+							t.Fatalf("row count = %d, want %d", len(page.Rows), len(want))
+						}
+						for i, index := range want {
+							if page.Rows[i].Order.ExternalID != orders[index].ExternalID {
+								t.Fatalf("row %d order = %s, want %s", i,
+									page.Rows[i].Order.ExternalID, orders[index].ExternalID)
+							}
+							if page.Rows[i].VenueConnection != venues[index] {
+								t.Fatalf("row %d venue = %s, want %s", i,
+									page.Rows[i].VenueConnection, venues[index])
+							}
+						}
+					})
+					t.Run("trades", func(t *testing.T) {
+						page, err := rs.ListTradeRows(ctx, fwstore.TradeListFilter{
+							Venue: tc.filter,
+							Sort:  fwstore.SortSpec{Column: "at"},
+							Page:  pageSpec,
+						})
+						if err != nil {
+							t.Fatalf("ListTradeRows: %v", err)
+						}
+						if page.Total != len(tc.wantTrades) {
+							t.Fatalf("total = %d, want %d", page.Total, len(tc.wantTrades))
+						}
+						if len(page.Rows) != len(wantTrades) {
+							t.Fatalf("row count = %d, want %d", len(page.Rows), len(wantTrades))
+						}
+						for i, index := range wantTrades {
+							if page.Rows[i].Trade.ExternalID != trades[index].ExternalID {
+								t.Fatalf("row %d trade = %s, want %s", i,
+									page.Rows[i].Trade.ExternalID, trades[index].ExternalID)
+							}
+							if page.Rows[i].VenueConnection != tradeVenues[index] {
+								t.Fatalf("row %d venue = %s, want %s", i,
+									page.Rows[i].VenueConnection, tradeVenues[index])
+							}
+						}
+					})
+				})
+			}
+		})
+	}
+}
+
+func TestListRowsInvalidVenueFilter(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	for _, tc := range []struct {
+		name   string
+		filter fwstore.VenueFilter
+	}{
+		{name: "missing_connection", filter: fwstore.VenueFilter{Mode: fwstore.VenueFilterConnection}},
+		{name: "unknown_mode", filter: fwstore.VenueFilter{Mode: "unknown"}},
+		{name: "unexpected_connection", filter: fwstore.VenueFilter{ConnectionID: "connection"}},
+		{name: "any_with_connection", filter: fwstore.VenueFilter{
+			Mode: fwstore.VenueFilterAny, ConnectionID: "connection",
+		}},
+		{name: "none_with_connection", filter: fwstore.VenueFilter{
+			Mode: fwstore.VenueFilterNone, ConnectionID: "connection",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := rs.ListOrderRows(ctx, fwstore.OrderListFilter{Venue: tc.filter})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ListOrderRows error = %v, want ErrInvalid", err)
+			}
+			_, err = rs.ListTradeRows(ctx, fwstore.TradeListFilter{Venue: tc.filter})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ListTradeRows error = %v, want ErrInvalid", err)
+			}
+		})
 	}
 }
 

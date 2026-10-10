@@ -564,6 +564,7 @@ function normalizeAdjustment(v: unknown): Adjustment {
 
 function normalizeOrder(v: unknown): Order {
   const o = isObject(v) ? v : {};
+  const venueConnection = asString(o.venueConnection) || undefined;
   const rawDisplayPrice = pick(
     o,
     "displayPrice",
@@ -585,6 +586,7 @@ function normalizeOrder(v: unknown): Order {
     account: asString(pick(o, "account", "Account")),
     at: asString(pick(o, "at", "At")),
     principal: asString(pick(o, "principal", "Principal")) || undefined,
+    ...(venueConnection ? { venueConnection } : {}),
     source: asSource(pick(o, "source", "Source")),
     baseAsset: asString(pick(o, "baseAsset", "BaseAsset", "base_asset")),
     quoteAsset: asString(pick(o, "quoteAsset", "QuoteAsset", "quote_asset")),
@@ -725,12 +727,14 @@ function normalizeExecutionReportRequestRecord(
 
 function normalizeTrade(v: unknown): Trade {
   const o = isObject(v) ? v : {};
+  const venueConnection = asString(o.venueConnection) || undefined;
   return {
     id: asString(pick(o, "id")),
     order: asString(pick(o, "order", "Order")),
     account: asString(pick(o, "account", "Account")),
     at: asString(pick(o, "at", "At")),
     principal: asString(pick(o, "principal", "Principal")) || undefined,
+    ...(venueConnection ? { venueConnection } : {}),
     source: asSource(pick(o, "source", "Source")),
     baseAsset: asString(pick(o, "baseAsset", "BaseAsset", "base_asset")),
     quoteAsset: asString(pick(o, "quoteAsset", "QuoteAsset", "quote_asset")),
@@ -3569,6 +3573,7 @@ function orderListQuery(filter: OrderListFilters = {}): string {
   const params = new URLSearchParams();
   appendListFilter(params, "account", filter.account);
   appendListFilter(params, "source", filter.source);
+  appendListFilter(params, "venue", filter.venue);
   appendListFilter(params, "side", filter.side, "all");
   appendListFilter(params, "status", filter.status, "all");
   appendListFilter(params, "baseAsset", filter.baseAsset);
@@ -4076,6 +4081,8 @@ export interface TradesFilter extends PageRequest {
   quoteAsset?: string;
   side?: "all" | Order["side"];
   source?: string;
+  /** REST venue value: `any`, `none`, or `connection:<id>`. */
+  venue?: string;
   atMode?: string;
   atMin?: string;
   atMax?: string;
@@ -4100,6 +4107,7 @@ function tradeListQuery(filter: TradesFilter = {}): string {
   appendListFilter(params, "quoteAsset", filter.quoteAsset);
   appendListFilter(params, "side", filter.side, "all");
   appendListFilter(params, "source", filter.source);
+  appendListFilter(params, "venue", filter.venue);
   appendListFilter(params, "atMode", filter.atMode, "all");
   appendListFilter(params, "atMin", filter.atMin);
   appendListFilter(params, "atMax", filter.atMax);

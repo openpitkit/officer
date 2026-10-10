@@ -56,6 +56,51 @@ import { DEFAULT_SEARCH_DEBOUNCE_MS } from "@/lib/useDebounce";
 vi.mock("@/api/useOrders", () => ({ useOrdersPage: vi.fn() }));
 vi.mock("@/api/useTrades", () => ({ useTradesPage: vi.fn() }));
 vi.mock("@/api/useBalances", () => ({ useBalances: vi.fn() }));
+vi.mock("@/framework", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/framework")>("@/framework");
+  return {
+    ...actual,
+    ShareLinkButton: ({ href, title }: { href: string; title?: string }) => (
+      <a href={href} aria-label={title}>
+        {title}
+      </a>
+    ),
+    VenueFilter: ({
+      label,
+      value,
+      connections,
+      allLabel,
+      anyLabel,
+      noneLabel,
+      width,
+      onChange,
+    }: import("@/components/data/VenueFilter").VenueFilterProps) => (
+      <fieldset aria-label={label} style={{ width }}>
+        <legend>{label}</legend>
+        <output aria-label="Applied venue draft">{value}</output>
+        <button type="button" onClick={() => onChange("")}>
+          {allLabel}
+        </button>
+        <button type="button" onClick={() => onChange(VENUE_FILTER_ANY)}>
+          {anyLabel}
+        </button>
+        <button type="button" onClick={() => onChange(VENUE_FILTER_NONE)}>
+          {noneLabel}
+        </button>
+        {connections.map((connection) => (
+          <button
+            key={connection.id}
+            type="button"
+            onClick={() => onChange(venueConnectionFilterValue(connection.id))}
+          >
+            {connection.label}
+          </button>
+        ))}
+      </fieldset>
+    ),
+  };
+});
 // The page chrome renders PendingRestartBanner, which polls market data on
 // mount. Stub it to a settled, no-restart state so its async update does not
 // fire outside act() in synchronous renders.
@@ -67,7 +112,7 @@ vi.mock("@/api/useMarketData", () => ({
 }));
 // SensitiveDataBanner polls GET /trading.
 vi.mock("@/api/useTrading", () => ({
-  useTrading: () => ({
+  useTrading: vi.fn(() => ({
     load: {
       state: "ready",
       data: {
@@ -101,7 +146,7 @@ vi.mock("@/api/useTrading", () => ({
       error: null,
     },
     reload: () => {},
-  }),
+  })),
 }));
 vi.mock("@/components/TableControls", async () => {
   const actual = await vi.importActual<
@@ -142,6 +187,12 @@ vi.mock("@/components/TableControls", async () => {
 import { useBalances } from "@/api/useBalances";
 import { useOrdersPage } from "@/api/useOrders";
 import { useTradesPage } from "@/api/useTrades";
+import { useTrading } from "@/api/useTrading";
+import {
+  VENUE_FILTER_ANY,
+  VENUE_FILTER_NONE,
+  venueConnectionFilterValue,
+} from "@/components/data";
 
 function readyEmpty<T>(data: T): PollingResult<T> {
   return { load: { state: "ready", data, error: null }, reload: vi.fn() };
@@ -163,6 +214,8 @@ function readyPageWithTotal<T>(
 const useOrdersMock = vi.mocked(useOrdersPage);
 const useTradesMock = vi.mocked(useTradesPage);
 const useBalancesMock = vi.mocked(useBalances);
+const useTradingMock = vi.mocked(useTrading);
+const defaultTradingResult = useTradingMock.getMockImplementation()!();
 
 function lastOrderFilters(): OrderListFilters | undefined {
   const calls = useOrdersMock.mock.calls;
@@ -298,6 +351,7 @@ function renderOrders(initialEntry: string) {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  useTradingMock.mockReturnValue(defaultTradingResult);
   await i18n.changeLanguage("en");
   useOrdersMock.mockReturnValue(readyPage<Order>([]));
   useTradesMock.mockReturnValue(readyPage<Trade>([]));
@@ -3232,6 +3286,311 @@ describe("Orders filter, debounce, sort and pagination", () => {
 
     await waitFor(() => expect(lastOrderFilters()?.offset).toBe(50));
   });
+});
+
+describe("Orders venue list integration", () => {
+  const connectionLabel = "Alpaca · Paper · Primary Alpaca";
+  const sampleTrade: Trade = {
+    id: "trade-venue-1",
+    order: sampleOrder.id,
+    account: sampleOrder.account,
+    at: sampleOrder.at,
+    source: sampleOrder.source,
+    baseAsset: sampleOrder.baseAsset,
+    quoteAsset: sampleOrder.quoteAsset,
+    side: sampleOrder.side,
+    quantity: "1",
+    price: "100",
+    lockPrice: "",
+  };
+
+  for (const tab of ["orders", "trades"] as const) {
+    const filters = () =>
+      tab === "orders" ? lastOrderFilters() : lastTradeFilters();
+    const entry = (venue = "") =>
+      `/orders?tab=${tab}${venue ? `&venue=${encodeURIComponent(venue)}` : ""}`;
+    const seedRows = () => {
+      useOrdersMock.mockReturnValue(
+        readyPage([
+          { ...sampleOrder, venueConnection: "alpaca-paper" },
+          { ...sampleOrder, id: "unlinked-order" },
+          {
+            ...sampleOrder,
+            id: "unknown-order",
+            venueConnection: "new-connection",
+          },
+        ]),
+      );
+      useTradesMock.mockReturnValue(
+        readyPage([
+          { ...sampleTrade, venueConnection: "alpaca-paper" },
+          { ...sampleTrade, id: "unlinked-trade" },
+          {
+            ...sampleTrade,
+            id: "unknown-trade",
+            venueConnection: "new-connection",
+          },
+        ]),
+      );
+    };
+
+    it(`${tab}: shows linked, unlinked and unknown connection cells after Source`, () => {
+      seedRows();
+      renderOrders(entry());
+      const table = screen.getByRole("table");
+      const headers = within(table).getAllByRole("columnheader");
+      const sourceIndex = headers.findIndex((header) =>
+        header.textContent?.includes("Source"),
+      );
+      expect(headers[sourceIndex + 1]).toHaveTextContent("Venue");
+      const rows = within(table).getAllByRole("row").slice(1);
+      expect(
+        within(rows[0]).getAllByRole("cell")[sourceIndex + 1],
+      ).toHaveTextContent(connectionLabel);
+      expect(within(rows[0]).getAllByRole("cell")[sourceIndex + 1]).toHaveClass(
+        "whitespace-nowrap",
+      );
+      expect(
+        within(rows[1]).getAllByRole("cell")[sourceIndex + 1].textContent,
+      ).toBe(i18n.t("common:value.none"));
+      expect(
+        within(rows[2]).getAllByRole("cell")[sourceIndex + 1],
+      ).toHaveTextContent("new-connection");
+      expect(filters()).not.toHaveProperty("venue");
+    });
+
+    for (const [option, value] of [
+      ["Any venue", VENUE_FILTER_ANY],
+      ["Not through a venue", VENUE_FILTER_NONE],
+      [connectionLabel, venueConnectionFilterValue("alpaca-paper")],
+    ]) {
+      it(`${tab}: applies and clears ${option} through the advanced draft`, async () => {
+        const user = userEvent.setup();
+        useOrdersMock.mockReturnValue(readyPageWithTotal([sampleOrder], 100));
+        useTradesMock.mockReturnValue(readyPageWithTotal([sampleTrade], 100));
+        renderOrders(entry());
+        await user.click(screen.getAllByRole("button", { name: "Next" })[0]);
+        expect(filters()?.offset).toBeGreaterThan(0);
+        await user.click(screen.getByRole("button", { name: "More filters" }));
+        const dialog = screen.getByRole("dialog");
+        expect(
+          within(dialog).getByRole("group", { name: "Venue" }),
+        ).toHaveStyle({
+          width: "320px",
+        });
+        await user.click(within(dialog).getByRole("button", { name: option }));
+        expect(filters()).not.toHaveProperty("venue");
+        await user.click(
+          within(dialog).getByRole("button", { name: "Apply advanced filter" }),
+        );
+        expect(filters()).toMatchObject({ venue: value, offset: 0 });
+        expect(screen.getByText(`Venue: ${option}`)).toBeInTheDocument();
+        expect(
+          screen.getByRole("button", { name: "More filters 1" }),
+        ).toBeInTheDocument();
+        await user.click(screen.getAllByRole("button", { name: "Next" })[0]);
+        expect(filters()?.offset).toBeGreaterThan(0);
+        await user.click(
+          screen.getAllByRole("button", {
+            name: "Remove advanced filter",
+          })[0],
+        );
+        expect(filters()).not.toHaveProperty("venue");
+        expect(filters()?.offset).toBe(0);
+        expect(screen.queryByText(`Venue: ${option}`)).not.toBeInTheDocument();
+      });
+    }
+
+    it(`${tab}: normalizes venue=all out of requests, chips, count and share link`, () => {
+      renderOrders(entry("all"));
+      expect(filters()).not.toHaveProperty("venue");
+      expect(screen.queryByText(/^Venue:/)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "More filters" }),
+      ).toBeInTheDocument();
+      const share = screen.getByRole("link", {
+        name: /Copy a link to the current filter set/i,
+      });
+      expect(
+        new URL(
+          share.getAttribute("href")!,
+          window.location.origin,
+        ).searchParams.has("venue"),
+      ).toBe(false);
+    });
+
+    for (const action of tab === "orders"
+      ? (["all"] as const)
+      : (["all", "reset"] as const)) {
+      it(`${tab}: clears an applied venue with dialog ${action}`, async () => {
+        const user = userEvent.setup();
+        const value = venueConnectionFilterValue("alpaca-paper");
+        renderOrders(entry(value));
+        expect(filters()?.venue).toBe(value);
+        await user.click(
+          screen.getByRole("button", { name: "More filters 1" }),
+        );
+        const dialog = screen.getByRole("dialog");
+        await user.click(
+          action === "all"
+            ? within(
+                within(dialog).getByRole("group", { name: "Venue" }),
+              ).getByRole("button", { name: "All" })
+            : within(dialog).getByRole("button", {
+                name: "Remove advanced filter",
+              }),
+        );
+        expect(
+          within(dialog).getByLabelText("Applied venue draft").textContent,
+        ).toBe("");
+        expect(filters()?.venue).toBe(value);
+        const apply = within(dialog).getByRole("button", {
+          name: "Apply advanced filter",
+        });
+        expect(apply).toBeEnabled();
+        await user.click(apply);
+        expect(filters()).not.toHaveProperty("venue");
+        expect(screen.queryByText(/^Venue:/)).not.toBeInTheDocument();
+      });
+    }
+
+    if (tab === "orders") {
+      it("orders: dialog reset clears the venue draft but cannot be applied while the status draft is empty", async () => {
+        const user = userEvent.setup();
+        const value = venueConnectionFilterValue("alpaca-paper");
+        renderOrders(entry(value));
+        expect(filters()?.venue).toBe(value);
+        await user.click(
+          screen.getByRole("button", { name: "More filters 1" }),
+        );
+        const dialog = screen.getByRole("dialog");
+        await user.click(
+          within(dialog).getByRole("button", {
+            name: "Remove advanced filter",
+          }),
+        );
+        expect(
+          within(dialog).getByLabelText("Applied venue draft").textContent,
+        ).toBe("");
+        expect(filters()?.venue).toBe(value);
+        const apply = within(dialog).getByRole("button", {
+          name: "Apply advanced filter",
+        });
+        expect(apply).toBeDisabled();
+        await user.click(apply);
+        expect(filters()?.venue).toBe(value);
+      });
+    }
+
+    it(`${tab}: seeds venue from URL and includes it in the share link`, async () => {
+      const user = userEvent.setup();
+      const value = venueConnectionFilterValue("alpaca-paper");
+      renderOrders(entry(value));
+      expect(filters()?.venue).toBe(value);
+      expect(screen.getByText(`Venue: ${connectionLabel}`)).toBeInTheDocument();
+      const share = screen.getByRole("link", {
+        name: /Copy a link to the current filter set/i,
+      });
+      expect(
+        new URL(
+          share.getAttribute("href")!,
+          window.location.origin,
+        ).searchParams.get("venue"),
+      ).toBe(value);
+      await user.click(screen.getByRole("button", { name: "More filters 1" }));
+      expect(
+        within(screen.getByRole("dialog")).getByLabelText(
+          "Applied venue draft",
+        ),
+      ).toHaveTextContent(value);
+    });
+
+    it(`${tab}: hides column and field without connections but preserves the URL filter and chip`, async () => {
+      const user = userEvent.setup();
+      if (defaultTradingResult.load.state !== "ready")
+        throw new Error("Expected ready fixture");
+      useTradingMock.mockReturnValue(
+        readyEmpty({ ...defaultTradingResult.load.data, connections: [] }),
+      );
+      seedRows();
+      renderOrders(entry(venueConnectionFilterValue("missing-connection")));
+      expect(
+        screen.queryByRole("columnheader", { name: "Venue" }),
+      ).not.toBeInTheDocument();
+      expect(filters()?.venue).toBe(
+        venueConnectionFilterValue("missing-connection"),
+      );
+      expect(screen.getByText("Venue: missing-connection")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "More filters 1" }));
+      expect(
+        within(screen.getByRole("dialog")).queryByRole("group", {
+          name: "Venue",
+        }),
+      ).not.toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      await user.click(
+        screen.getAllByRole("button", { name: "Remove advanced filter" })[0],
+      );
+      expect(filters()).not.toHaveProperty("venue");
+    });
+
+    it(`${tab}: reports a trading load error and hides the column and field`, async () => {
+      const user = userEvent.setup();
+      useTradingMock.mockReturnValue({
+        load: { state: "error", data: null, error: "Trading unavailable" },
+        reload: vi.fn(),
+      });
+      seedRows();
+      renderOrders(entry());
+      expect(
+        screen.getByText(
+          "Trading connections could not be loaded: Trading unavailable",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("columnheader", { name: "Venue" }),
+      ).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "More filters" }));
+      expect(
+        within(screen.getByRole("dialog")).queryByRole("group", {
+          name: "Venue",
+        }),
+      ).not.toBeInTheDocument();
+    });
+
+    it(`${tab}: hides the column while trading loads`, () => {
+      useTradingMock.mockReturnValue({
+        load: { state: "loading", data: null, error: null },
+        reload: vi.fn(),
+      });
+      seedRows();
+      renderOrders(entry());
+      expect(
+        screen.queryByRole("columnheader", { name: "Venue" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it(`${tab}: labels an unknown provider explicitly and includes disabled connections`, () => {
+      if (defaultTradingResult.load.state !== "ready")
+        throw new Error("Expected ready fixture");
+      const snapshot = defaultTradingResult.load.data;
+      useTradingMock.mockReturnValue(
+        readyEmpty({
+          ...snapshot,
+          connections: snapshot.connections.map((connection) => ({
+            ...connection,
+            provider: "unknown-provider",
+            enabled: false,
+          })),
+        }),
+      );
+      seedRows();
+      renderOrders(entry(venueConnectionFilterValue("alpaca-paper")));
+      const label = "Unknown venue unknown-provider · Paper · Primary Alpaca";
+      expect(screen.getByRole("table")).toHaveTextContent(label);
+      expect(screen.getByText(`Venue: ${label}`)).toBeInTheDocument();
+    });
+  }
 });
 
 describe("Orders verify envelope toolbar", () => {

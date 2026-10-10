@@ -101,6 +101,29 @@ func statusFilterFromQuery(q url.Values) (store.StatusFilter, error) {
 	}
 }
 
+func venueFilterFromQuery(q url.Values) (store.VenueFilter, error) {
+	value := q.Get("venue")
+	switch value {
+	case "", "all":
+		return store.VenueFilter{}, nil
+	case "any":
+		return store.VenueFilter{Mode: store.VenueFilterAny}, nil
+	case "none":
+		return store.VenueFilter{Mode: store.VenueFilterNone}, nil
+	default:
+		if !strings.HasPrefix(value, "connection:") {
+			return store.VenueFilter{}, fmt.Errorf("invalid venue")
+		}
+		id, err := domain.ParseExternalID(strings.TrimPrefix(value, "connection:"))
+		if err != nil {
+			return store.VenueFilter{}, fmt.Errorf("invalid venue: %w", err)
+		}
+		return store.VenueFilter{
+			Mode: store.VenueFilterConnection, ConnectionID: id,
+		}, nil
+	}
+}
+
 func accountCountRangeFromQuery(q url.Values) (store.CountRangeFilter, error) {
 	return countRangeFromQuery(
 		q, "accountCountMode", "accountCountMin", "accountCountMax",
@@ -537,6 +560,10 @@ func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 }
 
 func orderListFilterFromQuery(q url.Values) (store.OrderListFilter, error) {
+	venue, err := venueFilterFromQuery(q)
+	if err != nil {
+		return store.OrderListFilter{}, err
+	}
 	baseAsset := store.ExactTextMatcher(q.Get("baseAsset"))
 	quoteAsset := store.ExactTextMatcher(q.Get("quoteAsset"))
 	side, err := orderSideFromQuery(q)
@@ -568,6 +595,7 @@ func orderListFilterFromQuery(q url.Values) (store.OrderListFilter, error) {
 		return store.OrderListFilter{}, err
 	}
 	return store.OrderListFilter{
+		Venue:      venue,
 		Account:    domain.AccountID(q.Get("account")),
 		Source:     domain.Source(q.Get("source")),
 		Side:       side,
@@ -954,6 +982,10 @@ func adjustmentListFilterFromQuery(q url.Values) (store.AdjustmentListFilter, er
 }
 
 func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
+	venue, err := venueFilterFromQuery(q)
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
 	account := store.ExactTextMatcher(q.Get("account"))
 	externalID, err := idFromQuery(q)
 	if err != nil {
@@ -994,6 +1026,7 @@ func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
 		return store.TradeListFilter{}, err
 	}
 	return store.TradeListFilter{
+		Venue:      venue,
 		Account:    account,
 		ExternalID: externalID,
 		BaseAsset:  baseAsset,

@@ -33,6 +33,8 @@ type OrderListRow struct {
 	Order        domain.Order
 	DisplayPrice string
 	Signed       bool
+	// VenueConnection is the linked connection's external id; zero when unlinked.
+	VenueConnection domain.ExternalID
 }
 
 // OrderListPage is a page of backend-enriched order rows.
@@ -64,9 +66,10 @@ func (s *Service) enrichOrderListPage(page store.OrderListPage) (OrderListPage, 
 			return OrderListPage{}, err
 		}
 		rows = append(rows, OrderListRow{
-			Order:        row.Order,
-			DisplayPrice: price,
-			Signed:       row.Signed,
+			Order:           row.Order,
+			DisplayPrice:    price,
+			Signed:          row.Signed,
+			VenueConnection: row.VenueConnection,
 		})
 	}
 	return OrderListPage{Rows: rows, Total: page.Total}, nil

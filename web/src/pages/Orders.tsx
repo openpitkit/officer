@@ -51,6 +51,7 @@ import {
   ShareLinkButton,
   TimeRangeFilter,
   ViewEntityButton,
+  VenueFilter,
   useOpenInNewTabHint,
   useOfficerApi,
   type ExecutionReportBody,
@@ -76,6 +77,12 @@ import type {
   VenueOrder,
 } from "@/api/types";
 import { useOrdersPage } from "@/api/useOrders";
+import {
+  normalizeVenueFilterValue,
+  VENUE_FILTER_ANY,
+  VENUE_FILTER_NONE,
+  venueFilterConnectionId,
+} from "@/components/data";
 import { useTrading } from "@/api/useTrading";
 import { useTradesPage } from "@/api/useTrades";
 import { operatorOptions } from "@/lib/dataControlLabels";
@@ -3313,6 +3320,7 @@ function OrderDetailDialog({
 // ---------------------------------------------------------------------------
 
 interface OrdersTableProps {
+  venueLabels?: ReadonlyMap<string, string>;
   orders: Order[];
   activeSort?: string;
   activeOrder?: SortOrder;
@@ -3324,6 +3332,7 @@ interface OrdersTableProps {
 }
 
 function OrdersTable({
+  venueLabels,
   orders,
   activeSort,
   activeOrder,
@@ -3470,6 +3479,13 @@ function OrdersTable({
               onSort={onSortChange}
             />
           </TableHead>
+          {venueLabels && (
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.venue")}>
+                {t("table.venue")}
+              </ColumnHeader>
+            </TableHead>
+          )}
           <TableHead>
             <SortableHeader
               field="at"
@@ -3592,6 +3608,13 @@ function OrdersTable({
                 {order.source}
               </Badge>
             </TableCell>
+            {venueLabels && (
+              <TableCell className="whitespace-nowrap text-xs text-muted-lt">
+                {order.venueConnection
+                  ? venueConnectionLabel(venueLabels, order.venueConnection)
+                  : tc("value.none")}
+              </TableCell>
+            )}
             <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
               {formatDateTime(order.at)}
             </TableCell>
@@ -3637,6 +3660,7 @@ function OrdersTable({
 // ---------------------------------------------------------------------------
 
 interface TradesTableProps {
+  venueLabels?: ReadonlyMap<string, string>;
   trades: Trade[];
   activeSort?: string;
   activeOrder?: SortOrder;
@@ -3651,6 +3675,7 @@ interface TradesTableProps {
 }
 
 function TradesTable({
+  venueLabels,
   trades,
   activeSort,
   activeOrder,
@@ -3792,6 +3817,13 @@ function TradesTable({
               onSort={onSortChange}
             />
           </TableHead>
+          {venueLabels && (
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.venue")}>
+                {t("table.venue")}
+              </ColumnHeader>
+            </TableHead>
+          )}
           <TableHead>
             <SortableHeader
               field="at"
@@ -3909,6 +3941,13 @@ function TradesTable({
                 {trade.source}
               </Badge>
             </TableCell>
+            {venueLabels && (
+              <TableCell className="whitespace-nowrap text-xs text-muted-lt">
+                {trade.venueConnection
+                  ? venueConnectionLabel(venueLabels, trade.venueConnection)
+                  : tc("value.none")}
+              </TableCell>
+            )}
             <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
               {formatDateTime(trade.at)}
             </TableCell>
@@ -4188,6 +4227,7 @@ function RangeFilterControls({
 type TabId = "orders" | "trades";
 
 type OrderAdvancedFilterDraft = {
+  venue: string;
   amountMode: RangeFilterMode;
   amountMin: string;
   amountMax: string;
@@ -4200,6 +4240,7 @@ type OrderAdvancedFilterDraft = {
 };
 
 type TradeAdvancedFilterDraft = {
+  venue: string;
   atMode: RangeFilterMode;
   atMin: string;
   atMax: string;
@@ -4330,6 +4371,15 @@ function OrderStatusFilterGroup({
   );
 }
 
+const VENUE_FILTER_WIDTH = 320;
+
+function venueConnectionLabel(
+  labels: ReadonlyMap<string, string> | undefined,
+  connectionId: string,
+): string {
+  return labels?.get(connectionId) ?? connectionId;
+}
+
 export function Orders() {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation("common");
@@ -4343,6 +4393,32 @@ export function Orders() {
   const tradingResult = useTrading();
   const tradingSnapshot =
     tradingResult.load.state === "ready" ? tradingResult.load.data : null;
+  const venueLabels = useMemo(() => {
+    if (!tradingSnapshot || tradingSnapshot.connections.length === 0) {
+      return undefined;
+    }
+    return new Map(
+      tradingSnapshot.connections.map((connection) => {
+        const provider = tradingSnapshot.providers.find(
+          (candidate) => candidate.type === connection.provider,
+        );
+        const venue = provider
+          ? provider.title
+          : t("unknownVenue", { provider: connection.provider });
+        return [
+          connection.id,
+          `${venue} · ${t(`trading:mode.${connection.mode}`)} · ${connection.label}`,
+        ];
+      }),
+    );
+  }, [tradingSnapshot, t]);
+  const venueConnections = useMemo(
+    () =>
+      venueLabels
+        ? Array.from(venueLabels, ([id, label]) => ({ id, label }))
+        : [],
+    [venueLabels],
+  );
   // A deep link from the Assets screen lands on the trades tab when asked
   // (?tab=trades) and seeds the matching base-asset filter on both tabs.
   const [tab, setTab] = useState<TabId>(
@@ -4351,11 +4427,13 @@ export function Orders() {
   const initialBaseAsset = params.get("baseAsset") ?? "";
   const initialAccount =
     globalAccountFilter.account || params.get("account") || "";
+  const initialVenue = normalizeVenueFilterValue(params.get("venue") ?? "");
 
   // Filter state - seeded from URL on mount
   const [orderAccount, setOrderAccount] = useState(initialAccount);
   const [orderAccountDraft, setOrderAccountDraft] = useState(initialAccount);
   const [orderSource, setOrderSource] = useState(params.get("source") ?? "");
+  const [orderVenue, setOrderVenue] = useState(initialVenue);
   const [orderSide, setOrderSide] = useState<"all" | OrderSide>(
     params.get("side") === "buy" || params.get("side") === "sell"
       ? (params.get("side") as OrderSide)
@@ -4419,6 +4497,7 @@ export function Orders() {
     params.get("id") ?? "",
   );
   const [tradeSource, setTradeSource] = useState(params.get("source") ?? "");
+  const [tradeVenue, setTradeVenue] = useState(initialVenue);
   const [tradeSide, setTradeSide] = useState<"all" | OrderSide>(
     params.get("side") === "buy" || params.get("side") === "sell"
       ? (params.get("side") as OrderSide)
@@ -4476,6 +4555,7 @@ export function Orders() {
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
   const [orderAdvancedDraft, setOrderAdvancedDraft] =
     useState<OrderAdvancedFilterDraft>({
+      venue: orderVenue,
       amountMode: orderAmountMode,
       amountMin: orderAmountMin,
       amountMax: orderAmountMax,
@@ -4488,6 +4568,7 @@ export function Orders() {
     });
   const [tradeAdvancedDraft, setTradeAdvancedDraft] =
     useState<TradeAdvancedFilterDraft>({
+      venue: tradeVenue,
       atMode: tradeAtMode,
       atMin: tradeAtMin,
       atMax: tradeAtMax,
@@ -4609,6 +4690,7 @@ export function Orders() {
       orderStatuses.length === 0 ? [...ALL_ORDER_STATUSES] : orderStatuses,
     );
     setOrderAdvancedDraft({
+      venue: orderVenue,
       amountMode: orderAmountMode,
       amountMin: orderAmountMin,
       amountMax: orderAmountMax,
@@ -4620,6 +4702,7 @@ export function Orders() {
       atMax: orderAtMax,
     });
     setTradeAdvancedDraft({
+      venue: tradeVenue,
       atMode: tradeAtMode,
       atMin: tradeAtMin,
       atMax: tradeAtMax,
@@ -4653,11 +4736,13 @@ export function Orders() {
       setOrderPriceMin(orderAdvancedDraft.priceMin);
       setOrderPriceMax(orderAdvancedDraft.priceMax);
       setOrderAtMode(orderAdvancedDraft.atMode);
+      setOrderVenue(orderAdvancedDraft.venue);
       setOrderAtMin(orderAdvancedDraft.atMin);
       setOrderAtMax(orderAdvancedDraft.atMax);
       setOrderPage(0);
     } else {
       setTradeAtMode(tradeAdvancedDraft.atMode);
+      setTradeVenue(tradeAdvancedDraft.venue);
       setTradeAtMin(tradeAdvancedDraft.atMin);
       setTradeAtMax(tradeAdvancedDraft.atMax);
       setTradeQuantityMode(tradeAdvancedDraft.quantityMode);
@@ -4841,6 +4926,9 @@ export function Orders() {
       sort: orderSort.sort,
       order: orderSort.order,
     };
+    if (orderVenue !== "") {
+      filter.venue = orderVenue;
+    }
     if (orderSide !== "all") {
       filter.side = orderSide;
     }
@@ -4882,6 +4970,7 @@ export function Orders() {
     debouncedOrderPriceMax,
     debouncedOrderPriceMin,
     normalizedOrderSource,
+    orderVenue,
     orderAccount,
     orderAmountMode,
     orderAtMode,
@@ -4906,6 +4995,9 @@ export function Orders() {
       sort: tradeSort.sort,
       order: tradeSort.order,
     };
+    if (tradeVenue !== "") {
+      filter.venue = tradeVenue;
+    }
     if (tradeSide !== "all") {
       filter.side = tradeSide;
     }
@@ -4982,6 +5074,7 @@ export function Orders() {
     debouncedTradeQuantityMax,
     debouncedTradeQuantityMin,
     normalizedTradeSource,
+    tradeVenue,
     tradeAtMode,
     tradeAccount,
     tradeBaseAsset,
@@ -5247,6 +5340,7 @@ export function Orders() {
       appendShareParam(query, "id", appliedTradeExternalId.trim());
       appendShareParam(query, "account", tradeAccount.trim());
       appendShareParam(query, "source", normalizedTradeSource);
+      appendShareParam(query, "venue", tradeVenue);
       appendShareParam(query, "side", tradeSide, "all");
       appendShareParam(query, "baseAsset", tradeBaseAsset.trim());
       appendShareParam(query, "quoteAsset", tradeQuoteAsset.trim());
@@ -5265,6 +5359,7 @@ export function Orders() {
     } else {
       appendShareParam(query, "account", orderAccount.trim());
       appendShareParam(query, "source", normalizedOrderSource);
+      appendShareParam(query, "venue", orderVenue);
       appendShareParam(query, "side", orderSide, "all");
       appendShareParam(query, "status", orderStatuses.join(","));
       appendShareParam(query, "baseAsset", orderBaseAsset.trim());
@@ -5284,6 +5379,8 @@ export function Orders() {
     appliedTradeExternalId,
     normalizedOrderSource,
     normalizedTradeSource,
+    orderVenue,
+    tradeVenue,
     orderAccount,
     orderAmountMax,
     orderAmountMin,
@@ -5369,6 +5466,27 @@ export function Orders() {
     const add = (key: string, label: string, onRemove: () => void) => {
       entries.push({ key, label, onRemove });
     };
+    const venue = tab === "orders" ? orderVenue : tradeVenue;
+    if (venue !== "") {
+      const connectionId = venueFilterConnectionId(venue);
+      const optionLabel =
+        venue === VENUE_FILTER_ANY
+          ? tc("filters.venueAny")
+          : venue === VENUE_FILTER_NONE
+            ? tc("filters.venueNone")
+            : connectionId !== undefined
+              ? venueConnectionLabel(venueLabels, connectionId)
+              : venue;
+      add("venue", `${tc("filters.venueLabel")}: ${optionLabel}`, () => {
+        if (tab === "orders") {
+          setOrderVenue("");
+          setOrderPage(0);
+        } else {
+          setTradeVenue("");
+          resetTradePage();
+        }
+      });
+    }
     if (tab === "orders") {
       if (orderAccount.trim() !== "") {
         add("account", `${t("table.account")}: ${orderAccount.trim()}`, () => {
@@ -5596,6 +5714,8 @@ export function Orders() {
     appliedTradeExternalId,
     normalizedOrderSource,
     normalizedTradeSource,
+    orderVenue,
+    tradeVenue,
     numberRangeValue,
     orderAccount,
     orderAmountMax,
@@ -5614,6 +5734,8 @@ export function Orders() {
     orderStatuses,
     statusIsActive,
     t,
+    tc,
+    venueLabels,
     tab,
     tradeAccount,
     tradeAtMax,
@@ -5640,11 +5762,13 @@ export function Orders() {
       tab === "orders"
         ? activeFilterChips.filter(
             (entry) =>
-              ["amount", "price", "at"].includes(entry.key) ||
+              ["venue", "amount", "price", "at"].includes(entry.key) ||
               (entry.key === "status" && !statusIsActive),
           )
         : activeFilterChips.filter((entry) =>
-            ["at", "quantity", "price", "lockPrice"].includes(entry.key),
+            ["venue", "at", "quantity", "price", "lockPrice"].includes(
+              entry.key,
+            ),
           ),
     [activeFilterChips, statusIsActive, tab],
   );
@@ -5812,6 +5936,11 @@ export function Orders() {
       }
     >
       <p className="text-xs text-muted-lt">{t("subtitle")}</p>
+      {tradingResult.load.state === "error" && (
+        <ErrorBanner
+          message={t("tradingLoadFailed", { error: tradingResult.load.error })}
+        />
+      )}
 
       {/* Tab toggle */}
       <Tabs
@@ -6208,6 +6337,23 @@ export function Orders() {
             </DialogHeader>
             {tab === "orders" ? (
               <div ref={advancedFilterDialogRef} className="grid gap-3">
+                {venueLabels && (
+                  <VenueFilter
+                    width={VENUE_FILTER_WIDTH}
+                    label={tc("filters.venueLabel")}
+                    value={orderAdvancedDraft.venue}
+                    connections={venueConnections}
+                    allLabel={tc("filters.all")}
+                    anyLabel={tc("filters.venueAny")}
+                    noneLabel={tc("filters.venueNone")}
+                    onChange={(venue) =>
+                      setOrderAdvancedDraft((current) => ({
+                        ...current,
+                        venue,
+                      }))
+                    }
+                  />
+                )}
                 <OrderStatusFilterGroup
                   selected={orderStatusesDraft}
                   onChange={setOrderStatusesDraft}
@@ -6290,6 +6436,23 @@ export function Orders() {
               </div>
             ) : (
               <div ref={advancedFilterDialogRef} className="grid gap-3">
+                {venueLabels && (
+                  <VenueFilter
+                    width={VENUE_FILTER_WIDTH}
+                    label={tc("filters.venueLabel")}
+                    value={tradeAdvancedDraft.venue}
+                    connections={venueConnections}
+                    allLabel={tc("filters.all")}
+                    anyLabel={tc("filters.venueAny")}
+                    noneLabel={tc("filters.venueNone")}
+                    onChange={(venue) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        venue,
+                      }))
+                    }
+                  />
+                )}
                 <div className="grid gap-3">
                   <div className="grid gap-1">
                     <FieldLabel>{t("filter.timeLabel")}</FieldLabel>
@@ -6419,6 +6582,7 @@ export function Orders() {
                   if (tab === "orders") {
                     setOrderStatusesDraft([]);
                     setOrderAdvancedDraft({
+                      venue: "",
                       amountMode: "all",
                       amountMin: "",
                       amountMax: "",
@@ -6431,6 +6595,7 @@ export function Orders() {
                     });
                   } else {
                     setTradeAdvancedDraft({
+                      venue: "",
                       atMode: "after",
                       atMin: "",
                       atMax: "",
@@ -6467,7 +6632,9 @@ export function Orders() {
 
         {/* Orders view */}
         <TabsContent value="orders" className="space-y-[var(--dens-row-gap)]">
-          {ordersResult.load.state === "loading" && <TableSkeleton cols={10} />}
+          {ordersResult.load.state === "loading" && (
+            <TableSkeleton cols={venueLabels ? 11 : 10} />
+          )}
           <StaleState {...ordersResult} />
           {ordersResult.load.state === "error" && (
             <ErrorState
@@ -6491,6 +6658,7 @@ export function Orders() {
               <>
                 {orderPager}
                 <OrdersTable
+                  venueLabels={venueLabels}
                   orders={pagedOrders}
                   activeSort={orderSort.sort}
                   activeOrder={orderSort.order}
@@ -6510,7 +6678,9 @@ export function Orders() {
 
         {/* Trades view */}
         <TabsContent value="trades" className="space-y-[var(--dens-row-gap)]">
-          {tradesResult.load.state === "loading" && <TableSkeleton cols={10} />}
+          {tradesResult.load.state === "loading" && (
+            <TableSkeleton cols={venueLabels ? 11 : 10} />
+          )}
           <StaleState {...tradesResult} />
           {tradesResult.load.state === "error" && (
             <ErrorState
@@ -6528,6 +6698,7 @@ export function Orders() {
               <>
                 {tradePager}
                 <TradesTable
+                  venueLabels={venueLabels}
                   trades={pagedTrades}
                   activeSort={tradeSort.sort}
                   activeOrder={tradeSort.order}

@@ -1,4 +1,6 @@
 {
+  "unknownVenue": "未知交易场所 {{provider}}",
+  "tradingLoadFailed": "无法加载交易连接：{{error}}",
   "title": "订单",
   "subtitle": "数据平面视图：流经 Officer 的订单、其生命周期事件及成交记录。点击订单行可查看事件时间线与成交明细。",
 
@@ -84,6 +86,7 @@
   },
 
   "table": {
+    "venue": "交易场所",
     "externalId": "ID",
     "account": "账户",
     "instrument": "标的",
@@ -100,6 +103,7 @@
     "displayPrice": "锁定价格",
     "signedIndicator": "此订单至少有一个已签名的事件。",
     "columnDescriptions": {
+      "venue": "此列显示订单关联的交易连接：交易场所、交易模式和连接名称。",
       "externalId": "此列显示由调用方提供或由 Officer 生成的不可变标识符。",
       "account": "此列显示提交订单或接收成交的账户。",
       "instrument": "此列显示该行交易的基础资产和计价资产。",

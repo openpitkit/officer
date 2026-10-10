@@ -23,3 +23,5 @@ export * from "./FilterOperators";
 export * from "./openInNewTabHint";
 export * from "./RowActions";
 export * from "./SortableHeader";
+export * from "./VenueFilter";
+export * from "./venueFilterValue";

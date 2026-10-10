@@ -1255,7 +1255,8 @@ type orderDTO struct {
 	DropCopy       bool   `json:"dropCopy"`
 	// Signed is the order-level rollup: whether at least one of the order's events
 	// carries a persisted Ed25519-signed attestation.
-	Signed bool `json:"signed"`
+	Signed          bool   `json:"signed"`
+	VenueConnection string `json:"venueConnection,omitempty"`
 }
 
 type commissionDTO struct {
@@ -1289,6 +1290,13 @@ func toOrderDTO(o domain.Order, displayPrice string, signed bool) orderDTO {
 		DropCopy:       o.DropCopy,
 		Signed:         signed,
 	}
+}
+
+// toOrderRowDTO maps a list row onto the order wire DTO.
+func toOrderRowDTO(row backend.OrderListRow) orderDTO {
+	dto := toOrderDTO(row.Order, row.DisplayPrice, row.Signed)
+	dto.VenueConnection = row.VenueConnection.String()
+	return dto
 }
 
 // eventAttestationDTO is the wire shape of an event's persisted signed
@@ -1626,19 +1634,20 @@ func toExecutionReportRequestDTO(
 // tradeDTO is the wire shape of one per-fill trade record. All monetary values
 // are exact decimal strings passed through verbatim.
 type tradeDTO struct {
-	At         time.Time      `json:"at"`
-	ExternalID string         `json:"id"`
-	Order      string         `json:"order"`
-	Account    string         `json:"account"`
-	Principal  string         `json:"principal,omitempty"`
-	BaseAsset  string         `json:"baseAsset"`
-	QuoteAsset string         `json:"quoteAsset"`
-	Side       string         `json:"side"`
-	Quantity   string         `json:"quantity"`
-	Price      string         `json:"price"`
-	LockPrice  string         `json:"lockPrice"`
-	Commission *commissionDTO `json:"commission,omitempty"`
-	Source     string         `json:"source"`
+	At              time.Time      `json:"at"`
+	ExternalID      string         `json:"id"`
+	Order           string         `json:"order"`
+	Account         string         `json:"account"`
+	Principal       string         `json:"principal,omitempty"`
+	BaseAsset       string         `json:"baseAsset"`
+	QuoteAsset      string         `json:"quoteAsset"`
+	Side            string         `json:"side"`
+	Quantity        string         `json:"quantity"`
+	Price           string         `json:"price"`
+	LockPrice       string         `json:"lockPrice"`
+	Commission      *commissionDTO `json:"commission,omitempty"`
+	Source          string         `json:"source"`
+	VenueConnection string         `json:"venueConnection,omitempty"`
 }
 
 // toTradeDTO maps a domain.Trade onto the wire DTO. Both the trade and its
@@ -1659,6 +1668,13 @@ func toTradeDTO(t domain.Trade) tradeDTO {
 		Commission: toCommissionDTO(t.Commission),
 		Source:     string(t.Source),
 	}
+}
+
+// toTradeRowDTO maps a list row onto the trade wire DTO.
+func toTradeRowDTO(row store.TradeListRow) tradeDTO {
+	dto := toTradeDTO(row.Trade)
+	dto.VenueConnection = row.VenueConnection.String()
+	return dto
 }
 
 func toCommissionDTO(c *domain.Commission) *commissionDTO {

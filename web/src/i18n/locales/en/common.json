@@ -33,6 +33,10 @@
     "decrement": "Decrease"
   },
   "filters": {
+    "venueLabel": "Venue",
+    "all": "All",
+    "venueAny": "Any venue",
+    "venueNone": "Not through a venue",
     "label": "Filters",
     "onlineLabel": "{{field}} · online",
     "onlineLoading": "Filtering {{field}}…",

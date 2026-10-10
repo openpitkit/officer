@@ -1939,6 +1939,103 @@ describe("limits client", () => {
 });
 
 describe("append-only list clients", () => {
+  describe.each(["orders", "trades"])("%s venue filtering", (list) => {
+    it.each(["any", "none", "connection:desk:primary"])(
+      "sends the venue filter %s",
+      async (venue) => {
+        vi.mocked(fetch).mockResolvedValueOnce(
+          jsonResponse({ [list]: [], total: 0 }),
+        );
+        const officerApi = api();
+        if (list === "orders") {
+          await officerApi.fetchOrdersPage({ venue });
+        } else {
+          await officerApi.fetchTradesPage({ venue });
+        }
+
+        const url = new URL(
+          String(vi.mocked(fetch).mock.calls[0][0]),
+          "http://test",
+        );
+        expect(url.pathname).toBe(`/app/api/v1/${list}`);
+        expect(url.searchParams.get("venue")).toBe(venue);
+      },
+    );
+
+    it.each([undefined, ""])(
+      "keeps the request unchanged with venue %s",
+      async (venue) => {
+        vi.mocked(fetch).mockResolvedValueOnce(
+          jsonResponse({ [list]: [], total: 0 }),
+        );
+        const officerApi = api();
+        const filter = {
+          account: "desk-alpha",
+          source: "panel",
+          limit: 25,
+          offset: 50,
+          ...(venue === undefined ? {} : { venue }),
+        };
+        if (list === "orders") {
+          await officerApi.fetchOrdersPage(filter);
+        } else {
+          await officerApi.fetchTradesPage(filter);
+        }
+
+        expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe(
+          `/app/api/v1/${list}?account=desk-alpha&source=panel&limit=25&offset=50`,
+        );
+      },
+    );
+
+    it("preserves venueConnection on linked list rows", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          [list]: [
+            {
+              id: "row-1",
+              leavesQuantity: "0",
+              venueConnection: "desk:primary",
+            },
+          ],
+          total: 1,
+        }),
+      );
+      const officerApi = api();
+      const result =
+        list === "orders"
+          ? await officerApi.fetchOrdersPage()
+          : await officerApi.fetchTradesPage();
+
+      expect(result.items[0]).toHaveProperty("venueConnection", "desk:primary");
+    });
+
+    it.each([undefined, "", null, 42])(
+      "omits venueConnection when the wire value is %s",
+      async (venueConnection) => {
+        vi.mocked(fetch).mockResolvedValueOnce(
+          jsonResponse({
+            [list]: [
+              {
+                id: "row-1",
+                leavesQuantity: "0",
+                ...(venueConnection === undefined ? {} : { venueConnection }),
+              },
+            ],
+            total: 1,
+          }),
+        );
+        const officerApi = api();
+        const result =
+          list === "orders"
+            ? await officerApi.fetchOrdersPage()
+            : await officerApi.fetchTradesPage();
+
+        expect(result.items[0]).not.toHaveProperty("venueConnection");
+      },
+    );
+  });
+
   it("normalizes adjustments, trades, and audit keyset envelopes", async () => {
     const officerApi = api();
     vi.mocked(fetch)

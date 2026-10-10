@@ -156,6 +156,28 @@ const (
 	CountFilterNone CountFilter = "none"
 )
 
+// VenueFilterMode selects how rows are narrowed by their order's venue link.
+type VenueFilterMode string
+
+const (
+	// VenueFilterAll leaves the venue link unrestricted.
+	VenueFilterAll VenueFilterMode = ""
+	// VenueFilterAny selects rows whose order is linked to a connection.
+	VenueFilterAny VenueFilterMode = "any"
+	// VenueFilterNone selects rows whose order has no venue link.
+	VenueFilterNone VenueFilterMode = "none"
+	// VenueFilterConnection selects rows linked to the given connection.
+	VenueFilterConnection VenueFilterMode = "connection"
+)
+
+// VenueFilter narrows list rows by the connection their order is linked to.
+// Connection mode requires ConnectionID; other modes require it to be zero.
+type VenueFilter struct {
+	Mode VenueFilterMode
+	// ConnectionID is the connection's external id, set only in connection mode.
+	ConnectionID domain.ExternalID
+}
+
 // CountRangeFilter narrows rows by an aggregate count value.
 type CountRangeFilter struct {
 	Min          *int
@@ -308,6 +330,7 @@ type AssetListPage struct {
 
 // OrderListFilter narrows order-list reads in the store.
 type OrderListFilter struct {
+	Venue      VenueFilter
 	Account    domain.AccountID
 	Source     domain.Source
 	ExternalID TextMatcher
@@ -328,6 +351,8 @@ type OrderListRow struct {
 	// Signed reports whether the order carries a persisted Ed25519-signed
 	// approval envelope (alg "ed25519"); false when unsigned or eSign-off.
 	Signed bool
+	// VenueConnection is the linked connection's external id; zero when unlinked.
+	VenueConnection domain.ExternalID
 }
 
 // OrderListPage is a paged order-list result.
@@ -512,6 +537,7 @@ type AdjustmentListPage struct {
 
 // TradeListFilter narrows the append-only trade list.
 type TradeListFilter struct {
+	Venue      VenueFilter
 	Account    TextMatcher
 	ExternalID domain.ExternalID
 	BaseAsset  TextMatcher
@@ -526,9 +552,16 @@ type TradeListFilter struct {
 	Page       PageSpec
 }
 
+// TradeListRow is a trade row plus list-only data.
+type TradeListRow struct {
+	Trade domain.Trade
+	// VenueConnection is the linked connection's external id; zero when unlinked.
+	VenueConnection domain.ExternalID
+}
+
 // TradeListPage is a paged trade-list result.
 type TradeListPage struct {
-	Rows  []domain.Trade
+	Rows  []TradeListRow
 	Total int
 }
 

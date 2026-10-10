@@ -105,9 +105,7 @@ func handleListOrders(svc backend.ControlPlane) http.HandlerFunc {
 		}
 		dtos := make([]orderDTO, 0, len(orders.Rows))
 		for _, o := range orders.Rows {
-			dtos = append(dtos, toOrderDTO(
-				o.Order, o.DisplayPrice, o.Signed,
-			))
+			dtos = append(dtos, toOrderRowDTO(o))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"orders": dtos,

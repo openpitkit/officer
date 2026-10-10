@@ -33,6 +33,10 @@
     "decrement": "Уменьшить"
   },
   "filters": {
+    "venueLabel": "Торговая площадка",
+    "all": "Все",
+    "venueAny": "Любая торговая площадка",
+    "venueNone": "Без торговой площадки",
     "label": "Фильтры",
     "onlineLabel": "{{field}} · онлайн",
     "onlineLoading": "Фильтрация {{field}}…",

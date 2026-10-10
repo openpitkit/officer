@@ -26,6 +26,42 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+func TestService_ListOrderRows_VenueConnection(t *testing.T) {
+	t.Parallel()
+	connection := domain.ExternalID("connection:any")
+	filter := store.OrderListFilter{Venue: store.VenueFilter{
+		Mode: store.VenueFilterConnection, ConnectionID: connection,
+	}}
+	order := domain.Order{ExternalID: mdID("order-venue")}
+	fn := &fakeNode{orderRowsPage: store.OrderListPage{
+		Rows: []store.OrderListRow{
+			{Order: order, VenueConnection: connection}, {Order: order},
+		}, Total: 2,
+	}}
+	svc, err := fwbackend.New(fn, nil, nil,
+		func([]byte, domain.Order) (string, error) { return "", nil },
+	)
+	if err != nil {
+		t.Fatalf("backend.New: %v", err)
+	}
+	page, err := svc.ListOrderRows(systemCtx(), filter)
+	if err != nil {
+		t.Fatalf("ListOrderRows: %v", err)
+	}
+	if fn.lastOrderFilter.Venue != filter.Venue {
+		t.Fatalf("venue filter = %+v, want %+v", fn.lastOrderFilter.Venue, filter.Venue)
+	}
+	if len(page.Rows) != 2 || page.Total != 2 {
+		t.Fatalf("list page = %+v, want 2 rows and total=2", page)
+	}
+	if page.Rows[0].VenueConnection != connection {
+		t.Fatalf("venue connection = %q, want %q", page.Rows[0].VenueConnection, connection)
+	}
+	if page.Rows[1].VenueConnection != "" {
+		t.Fatalf("unlinked venue connection = %q, want zero", page.Rows[1].VenueConnection)
+	}
+}
+
 func TestService_OrderPresentationUsesConfiguredSeam(t *testing.T) {
 	t.Parallel()
 	id := mdID("order-display")

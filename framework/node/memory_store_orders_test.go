@@ -31,6 +31,26 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+func TestMemoryRealmListRowsRejectVenueFilter(t *testing.T) {
+	r := &memoryRealm{}
+	ctx := context.Background()
+	for _, filter := range []store.VenueFilter{
+		{Mode: store.VenueFilterAny},
+		{Mode: store.VenueFilterNone},
+		{Mode: store.VenueFilterConnection, ConnectionID: "connection"},
+		{ConnectionID: "connection"},
+	} {
+		_, err := r.ListOrderRows(ctx, store.OrderListFilter{Venue: filter})
+		if !errors.Is(err, domain.ErrNotImplemented) {
+			t.Fatalf("ListOrderRows(%+v) error = %v, want ErrNotImplemented", filter, err)
+		}
+		_, err = r.ListTradeRows(ctx, store.TradeListFilter{Venue: filter})
+		if !errors.Is(err, domain.ErrNotImplemented) {
+			t.Fatalf("ListTradeRows(%+v) error = %v, want ErrNotImplemented", filter, err)
+		}
+	}
+}
+
 func (r *memoryRealm) CreateOrder(
 	_ context.Context, order domain.Order,
 ) (domain.Order, error) {
@@ -140,6 +160,10 @@ func (r *memoryRealm) ListOrders(
 func (r *memoryRealm) ListOrderRows(
 	ctx context.Context, filter store.OrderListFilter,
 ) (store.OrderListPage, error) {
+	if filter.Venue != (store.VenueFilter{}) {
+		return store.OrderListPage{}, fmt.Errorf(
+			"memory store: venue filter is not supported: %w", domain.ErrNotImplemented)
+	}
 	all, err := r.ListAllOrders(ctx, filter.Account, filter.Source)
 	if err != nil {
 		return store.OrderListPage{}, err
@@ -591,11 +615,15 @@ func (r *memoryRealm) ListAllTrades(
 func (r *memoryRealm) ListTradeRows(
 	ctx context.Context, filter store.TradeListFilter,
 ) (store.TradeListPage, error) {
+	if filter.Venue != (store.VenueFilter{}) {
+		return store.TradeListPage{}, fmt.Errorf(
+			"memory store: venue filter is not supported: %w", domain.ErrNotImplemented)
+	}
 	trades, err := r.ListAllTrades(ctx, "", "")
 	if err != nil {
 		return store.TradeListPage{}, err
 	}
-	out := make([]domain.Trade, 0, len(trades))
+	out := make([]store.TradeListRow, 0, len(trades))
 	for _, trade := range trades {
 		if !filter.ExternalID.IsZero() && trade.ExternalID != filter.ExternalID {
 			continue
@@ -611,7 +639,7 @@ func (r *memoryRealm) ListTradeRows(
 		if filter.Source != "" && trade.Source != filter.Source {
 			continue
 		}
-		out = append(out, trade)
+		out = append(out, store.TradeListRow{Trade: trade})
 	}
 	total := len(out)
 	if filter.Page.Limit > 0 {

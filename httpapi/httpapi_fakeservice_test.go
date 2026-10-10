@@ -61,6 +61,8 @@ type fakeService struct {
 	accountFilter         store.AccountListFilter
 	balanceFilter         store.BalanceListFilter
 	orderFilter           store.OrderListFilter
+	orderListCalls        int
+	tradeListCalls        int
 	limits                node.AccountLimits
 	policyRows            []store.PolicyListRow
 	policyFilter          store.PolicyListFilter
@@ -843,6 +845,7 @@ func (f *fakeService) ListOrders(
 func (f *fakeService) ListOrderRows(
 	_ context.Context, filter store.OrderListFilter,
 ) (backend.OrderListPage, error) {
+	f.orderListCalls++
 	f.orderFilter = filter
 	if f.ordersErr != nil {
 		return backend.OrderListPage{}, f.ordersErr
@@ -864,6 +867,7 @@ func (f *fakeService) ListTrades(
 func (f *fakeService) ListTradeRows(
 	_ context.Context, filter store.TradeListFilter,
 ) (store.TradeListPage, error) {
+	f.tradeListCalls++
 	f.tradeFilter = filter
 	if f.tradesErr != nil {
 		return store.TradeListPage{}, f.tradesErr
@@ -871,7 +875,11 @@ func (f *fakeService) ListTradeRows(
 	if f.tradePage != nil {
 		return *f.tradePage, nil
 	}
-	return store.TradeListPage{Rows: f.trades, Total: len(f.trades)}, nil
+	rows := make([]store.TradeListRow, 0, len(f.trades))
+	for _, trade := range f.trades {
+		rows = append(rows, store.TradeListRow{Trade: trade})
+	}
+	return store.TradeListPage{Rows: rows, Total: len(f.trades)}, nil
 }
 func (f *fakeService) Overview(_ context.Context, _ time.Time) (backend.Overview, error) {
 	return f.overview, f.statusErr

@@ -1958,6 +1958,7 @@ paths:
           schema:
             type: string
         - $ref: "#/components/parameters/SourceFilter"
+        - $ref: "#/components/parameters/VenueFilter"
         - name: side
           in: query
           schema:
@@ -2515,6 +2516,7 @@ paths:
             enum: [account, at, baseAsset, lockPrice, price, quantity, quoteAsset, side, source]
           description: Trade list sort key. Unknown keys are rejected.
         - $ref: "#/components/parameters/SourceFilter"
+        - $ref: "#/components/parameters/VenueFilter"
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -4589,6 +4591,22 @@ components:
         type: string
         enum: [panel, api, mcp, system]
 
+    VenueFilter:
+      name: venue
+      in: query
+      description: >
+        Filter by the order's linked trading connection: `any` selects orders
+        linked to any connection, `none` selects unlinked orders, and
+        `connection:<id>` selects a specific trading connection id from
+        GET /trading. For trades, the filter applies to the originating order.
+        The id is an opaque string and may contain colons; everything after
+        the first `connection:` prefix is the id.
+        Absent, empty or `all` means no restriction.
+        Any other value, including an empty connection id, returns
+        a 422 validation error.
+      schema:
+        type: string
+
     SortOrder:
       name: order
       in: query
@@ -6047,6 +6065,12 @@ components:
           description: >
             Order-level rollup: whether at least one of the order's events carries
             an Ed25519-signed attestation.
+        venueConnection:
+          description: >
+            Linked trading connection's external id from GET /trading. Present
+            only in GET /orders list rows when the order is linked to a trading
+            connection; omitted when unlinked and in other responses.
+          $ref: "#/components/schemas/Id"
 
     # Event attestation
 
@@ -6247,6 +6271,12 @@ components:
         source:
           type: string
           enum: [panel, api, mcp, system]
+        venueConnection:
+          description: >
+            Linked trading connection's external id from GET /trading. Present
+            only in GET /trades list rows when the originating order is linked
+            to a trading connection; omitted when unlinked and in other responses.
+          $ref: "#/components/schemas/Id"
 
     # Order check (pre-trade dry-run)
 

@@ -26,6 +26,13 @@ import { afterEach } from "vitest";
 import "@/i18n";
 import "@/test/registerDefaults";
 
+// jsdom lacks these APIs, and Radix Select calls them.
+const proto = window.HTMLElement.prototype;
+proto.hasPointerCapture = () => false;
+proto.setPointerCapture = () => {};
+proto.releasePointerCapture = () => {};
+proto.scrollIntoView = () => {};
+
 afterEach(() => {
   cleanup();
 });

@@ -103,6 +103,12 @@ export {
   TimeRangeFilter,
   useOpenInNewTabHint,
   ViewEntityButton,
+  VenueFilter,
+  VENUE_FILTER_ANY,
+  VENUE_FILTER_NONE,
+  normalizeVenueFilterValue,
+  venueConnectionFilterValue,
+  venueFilterConnectionId,
   type ActionButtonProps,
   type AutocompleteFilterFieldProps,
   type CopyIdButtonProps,
@@ -129,6 +135,7 @@ export {
   type SortDirection,
   type TextFilterProps,
   type TimeRangeFilterProps,
+  type VenueFilterProps,
 } from "../components/data";
 export {
   AddProviderButton,
