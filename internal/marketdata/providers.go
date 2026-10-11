@@ -98,8 +98,9 @@ func CoinbaseProvider() fwmarketdata.Provider {
 // AlpacaProvider describes the Alpaca connector.
 func AlpacaProvider() fwmarketdata.Provider {
 	return fwmarketdata.Provider{
-		Type:  domain.MarketDataProviderAlpaca,
-		Title: "Alpaca",
+		Type:            domain.MarketDataProviderAlpaca,
+		Title:           "Alpaca",
+		VerifiesSymbols: true,
 		Build: func(instance domain.MarketDataInstance) (fwmarketdata.Connector, error) {
 			return NewAlpacaConnector(instance)
 		},

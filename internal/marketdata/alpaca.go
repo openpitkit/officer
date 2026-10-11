@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -37,8 +38,10 @@ import (
 )
 
 const (
-	alpacaIEXStreamURL = "wss://stream.data.alpaca.markets/v2/iex"
+	alpacaIEXFeed      = "iex"
+	alpacaIEXStreamURL = "wss://stream.data.alpaca.markets/v2/" + alpacaIEXFeed
 	alpacaSymbolLimit  = 30
+	alpacaHTTPTimeout  = 10 * time.Second
 
 	defaultAlpacaReconnectMin = 250 * time.Millisecond
 	defaultAlpacaReconnectMax = 5 * time.Second
@@ -55,6 +58,7 @@ type alpacaConnector struct {
 	readTimeout  time.Duration
 	credentials  alpaca.Credentials
 	redact       *strings.Replacer
+	dataClient   *alpaca.Client
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -100,9 +104,10 @@ type alpacaControlEvent struct {
 	Code int    `json:"code"`
 }
 
-// NewAlpacaConnector builds an Alpaca IEX streaming connector from instance
-// credentials. They are parsed by the parser trading uses too, and its typed
-// validation error is returned unchanged.
+// NewAlpacaConnector builds an Alpaca connector from instance credentials: it
+// streams IEX quotes and verifies symbols on the market data host with the
+// same key. The credentials are parsed by the parser trading uses too, and its
+// typed validation error is returned unchanged.
 func NewAlpacaConnector(
 	instance domain.MarketDataInstance,
 ) (*alpacaConnector, error) {
@@ -122,6 +127,7 @@ func NewAlpacaConnector(
 		readTimeout:  defaultAlpacaReadTimeout,
 		credentials:  credentials,
 		redact:       redact,
+		dataClient:   alpaca.NewClient(alpaca.DataURL, credentials, &http.Client{Timeout: alpacaHTTPTimeout}),
 	}, nil
 }
 
@@ -179,6 +185,28 @@ func (c *alpacaConnector) References() (fwmarketdata.ProviderReferences, bool) {
 		DocsURL:    "https://docs.alpaca.markets/docs/real-time-stock-pricing-data",
 		SymbolsURL: "https://docs.alpaca.markets/docs/assets-1",
 	}, true
+}
+
+// VerifySymbol checks that external is a symbol the IEX feed has a trade for,
+// asked of the market data host with the source's own key. Exists means the
+// host answered for the symbol as typed; Suggestion carries the upper-cased
+// form when only that one was answered for; otherwise the symbol is not found,
+// which includes a symbol the host calls invalid. It does not judge how fresh
+// the trade is. A blank symbol, or text with a comma, which the request reads as
+// a symbol list, is not found without a request, and a failed lookup is
+// returned as an error, never as not found.
+func (c *alpacaConnector) VerifySymbol(
+	ctx context.Context, external string,
+) (fwmarketdata.SymbolVerification, error) {
+	symbol := strings.TrimSpace(external)
+	if symbol == "" || strings.Contains(symbol, ",") {
+		return fwmarketdata.SymbolVerification{}, nil
+	}
+	known, err := c.dataClient.LatestTradeSymbols(ctx, symbol, alpacaIEXFeed)
+	if err != nil {
+		return fwmarketdata.SymbolVerification{}, err
+	}
+	return verifySymbolFromSet(known, external), nil
 }
 
 func (c *alpacaConnector) Subscribe(

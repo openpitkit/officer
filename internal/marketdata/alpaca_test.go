@@ -34,6 +34,7 @@ import (
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/domain"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/alpaca"
 )
 
 func TestParseAlpacaCredentials(t *testing.T) {
@@ -446,6 +447,127 @@ func TestAlpacaDialRefusesRedirect(t *testing.T) {
 	}
 }
 
+// TestAlpacaVerifySymbol answers the latest-trade lookup as the data host does
+// and expects one request per symbol, on the IEX feed with the source's key,
+// and the answer mapped to its verification without Details.
+func TestAlpacaVerifySymbol(t *testing.T) {
+	t.Parallel()
+
+	const trade = `{"c":["@"],"i":21167,"p":342.28,"s":40,"t":"2026-10-14T17:49:34.509972513Z","x":"V","z":"C"}`
+	for _, tc := range []struct {
+		name     string
+		external string
+		symbol   string
+		status   int
+		body     string
+		want     fwmarketdata.SymbolVerification
+	}{
+		{"listed", "AAPL", "AAPL", http.StatusOK, `{"trades":{"AAPL":` + trade + `}}`, fwmarketdata.SymbolVerification{Exists: true}},
+		{"no trade", "AAPLX", "AAPLX", http.StatusOK, `{"trades":{}}`, fwmarketdata.SymbolVerification{}},
+		{"lower case", " aapl ", "aapl", http.StatusOK, `{"trades":{"AAPL":` + trade + `}}`, fwmarketdata.SymbolVerification{Suggestion: "AAPL"}},
+		{"invalid symbol", "BRK-B", "BRK-B", http.StatusBadRequest, `{"message":"code=400, message=invalid symbol: BRK-B"}`, fwmarketdata.SymbolVerification{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				query := r.URL.Query()
+				if r.Method != http.MethodGet || r.URL.Path != "/v2/stocks/trades/latest" ||
+					query.Get("symbols") != tc.symbol || query.Get("feed") != "iex" {
+					t.Errorf("request = %s %s", r.Method, r.URL.RequestURI())
+				}
+				if r.Header.Get("APCA-API-KEY-ID") != "key" || r.Header.Get("APCA-API-SECRET-KEY") != "secret" {
+					t.Error("request does not carry the source's key")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			got, err := newTestAlpacaDataConnector(t, server).VerifySymbol(context.Background(), tc.external)
+			if err != nil {
+				t.Fatalf("VerifySymbol(%q) err = %v", tc.external, err)
+			}
+			if got != tc.want {
+				t.Fatalf("VerifySymbol(%q) = %+v, want %+v", tc.external, got, tc.want)
+			}
+			if n := requests.Load(); n != 1 {
+				t.Fatalf("requests = %d, want 1", n)
+			}
+		})
+	}
+}
+
+// TestAlpacaVerifySymbolNotOneSymbolMakesNoRequest expects text that names no
+// single symbol - blank, or with a comma, which the request reads as a symbol
+// list - to be not found without asking the data host.
+func TestAlpacaVerifySymbolNotOneSymbolMakesNoRequest(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"trades":{}}`))
+	}))
+	defer server.Close()
+
+	connector := newTestAlpacaDataConnector(t, server)
+	for _, external := range []string{"", " ", " \t\n", ",", " , ", "AAPL,MSFT", "AAPL,"} {
+		got, err := connector.VerifySymbol(context.Background(), external)
+		if err != nil || got != (fwmarketdata.SymbolVerification{}) {
+			t.Fatalf("VerifySymbol(%q) = %+v, %v; want not found", external, got, err)
+		}
+		if n := requests.Load(); n != 0 {
+			t.Fatalf("VerifySymbol(%q) made %d requests, want 0", external, n)
+		}
+	}
+}
+
+// TestAlpacaVerifySymbolLookupFailure expects a failed lookup to be an error,
+// never a symbol that is not found, with no credential in its text.
+func TestAlpacaVerifySymbolLookupFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"auth refused", http.StatusUnauthorized, `<html><head><title>401 Authorization Required</title></head><body><center><h1>401 Authorization Required</h1></center><hr><center>nginx</center></body></html>`},
+		{"other bad request", http.StatusBadRequest, `{"message":"invalid feed: iex"}`},
+		{"no trades object", http.StatusOK, `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			got, err := newTestAlpacaDataConnector(t, server).VerifySymbol(context.Background(), "AAPL")
+			assertAlpacaLookupFailed(t, got, err)
+			var apiErr *alpaca.APIError
+			if tc.status != http.StatusOK && (!errors.As(err, &apiErr) || apiErr.Status != tc.status) {
+				t.Fatalf("err = %v, want the HTTP %d refusal", err, tc.status)
+			}
+		})
+	}
+	t.Run("transport failure", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		connector := newTestAlpacaDataConnector(t, server)
+		server.Close()
+
+		got, err := connector.VerifySymbol(context.Background(), "AAPL")
+		assertAlpacaLookupFailed(t, got, err)
+	})
+}
+
 // newTestAlpacaConnector builds a connector as production does, so its
 // credentials (key "key", secret "secret") and its redactor are set.
 func newTestAlpacaConnector(t *testing.T) *alpacaConnector {
@@ -457,6 +579,25 @@ func newTestAlpacaConnector(t *testing.T) *alpacaConnector {
 		t.Fatalf("NewAlpacaConnector: %v", err)
 	}
 	return connector
+}
+
+// newTestAlpacaDataConnector builds a connector as production does and points
+// its data-host client at server with the connector's own credentials.
+func newTestAlpacaDataConnector(t *testing.T, server *httptest.Server) *alpacaConnector {
+	t.Helper()
+	connector := newTestAlpacaConnector(t)
+	connector.dataClient = alpaca.NewClient(server.URL, connector.credentials, server.Client())
+	return connector
+}
+
+func assertAlpacaLookupFailed(t *testing.T, got fwmarketdata.SymbolVerification, err error) {
+	t.Helper()
+	if err == nil || got != (fwmarketdata.SymbolVerification{}) {
+		t.Fatalf("VerifySymbol = %+v, %v; want an error", got, err)
+	}
+	if strings.Contains(err.Error(), "key") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("error text carries a credential: %v", err)
+	}
 }
 
 func mustNormalizeAlpacaSubscriptions(

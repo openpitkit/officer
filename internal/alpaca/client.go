@@ -33,10 +33,13 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
-// PaperRESTURL and LiveRESTURL identify the separate Alpaca environments.
+// PaperRESTURL and LiveRESTURL are the trading hosts of the two separate
+// Alpaca environments, paper and live. DataURL is the market data host, which
+// paper and live keys both read from.
 const (
 	PaperRESTURL = "https://paper-api.alpaca.markets"
 	LiveRESTURL  = "https://api.alpaca.markets"
+	DataURL      = "https://data.alpaca.markets"
 )
 
 // Credentials identifies one account in one environment.
@@ -67,7 +70,9 @@ func ParseCredentials(raw string) (Credentials, error) {
 	return Credentials{APIKey: apiKey, APISecret: apiSecret}, nil
 }
 
-// APIError is an HTTP refusal. Code and Message are empty for other body shapes.
+// APIError is an HTTP refusal. Message is the body's message and Code its
+// numeric code; the trading host sends both, the data host sends a message
+// alone. Both stay empty for other body shapes.
 type APIError struct {
 	Status  int
 	Code    int
@@ -79,6 +84,9 @@ type APIError struct {
 func (e *APIError) Error() string {
 	if e.Message == "" {
 		return fmt.Sprintf("alpaca: HTTP %d", e.Status)
+	}
+	if !e.BodyDecoded {
+		return fmt.Sprintf("alpaca: HTTP %d: %s", e.Status, e.Message)
 	}
 	return fmt.Sprintf("alpaca: HTTP %d (code %d): %s", e.Status, e.Code, e.Message)
 }
@@ -172,9 +180,11 @@ func (c *Client) Request(ctx context.Context, method, path string, body, result 
 			Code    *int    `json:"code"`
 			Message *string `json:"message"`
 		}
-		if json.Unmarshal(payload, &fields) == nil && fields.Code != nil && fields.Message != nil {
-			apiErr.Code, apiErr.Message = *fields.Code, c.redact(*fields.Message)
-			apiErr.BodyDecoded = true
+		if json.Unmarshal(payload, &fields) == nil && fields.Message != nil {
+			apiErr.Message = c.redact(*fields.Message)
+			if fields.Code != nil {
+				apiErr.Code, apiErr.BodyDecoded = *fields.Code, true
+			}
 		}
 		return resp.StatusCode, apiErr
 	}
@@ -251,4 +261,31 @@ func (c *Client) Assets(ctx context.Context) ([]Asset, error) {
 		assets = append(assets, classAssets...)
 	}
 	return assets, nil
+}
+
+// LatestTradeSymbols asks the data host for the latest trade of symbol on a
+// stock feed and returns the symbols it answered for, spelled as the host
+// spells them. The set is empty when the feed has no trade for symbol, or when
+// the host refuses it with HTTP 400 as an invalid symbol. Any other refusal or
+// failure is returned as Request produced it, and a reply without a trades
+// object is an error.
+func (c *Client) LatestTradeSymbols(ctx context.Context, symbol, feed string) (map[string]struct{}, error) {
+	query := url.Values{"symbols": {symbol}, "feed": {feed}}
+	var reply struct {
+		// Trades is keyed by symbol; the trades themselves are not read.
+		Trades map[string]struct{} `json:"trades"`
+	}
+	_, err := c.Request(ctx, http.MethodGet, "/v2/stocks/trades/latest?"+query.Encode(), nil, &reply)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusBadRequest &&
+		strings.Contains(apiErr.Message, "invalid symbol") {
+		return map[string]struct{}{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if reply.Trades == nil {
+		return nil, errors.New("alpaca: latest trades are missing")
+	}
+	return reply.Trades, nil
 }

@@ -39,7 +39,7 @@ func TestFirstPartyRegistryOrderTitlesAndCapabilities(t *testing.T) {
 		{domain.MarketDataProviderBinance, "Binance", true, true},
 		{domain.MarketDataProviderKraken, "Kraken", true, true},
 		{domain.MarketDataProviderCoinbase, "Coinbase", true, true},
-		{domain.MarketDataProviderAlpaca, "Alpaca", false, false},
+		{domain.MarketDataProviderAlpaca, "Alpaca", true, false},
 		{domain.MarketDataProviderOKX, "OKX", true, true},
 		{domain.MarketDataProviderBybit, "Bybit", true, true},
 		{domain.MarketDataProviderOANDA, "OANDA", false, false},

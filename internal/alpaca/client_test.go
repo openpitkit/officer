@@ -29,6 +29,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -267,18 +268,93 @@ func TestAssetsTransportError(t *testing.T) {
 	assertNoCredentials(t, err.Error())
 }
 
+func TestLatestTradeSymbols(t *testing.T) {
+	const trade = `{"c":["@"],"i":21167,"p":342.28,"s":40,"t":"2026-10-14T17:49:34.509972513Z","x":"V","z":"C"}`
+	const unauthorized = `<html><head><title>401 Authorization Required</title></head><body><center><h1>401 Authorization Required</h1></center><hr><center>nginx</center></body></html>`
+	for _, tc := range []struct {
+		name, symbol, body, errorText string
+		status                        int
+		want                          map[string]struct{}
+	}{
+		{"host spelling", "aapl", `{"trades":{"AAPL":` + trade + `}}`, "", 200, map[string]struct{}{"AAPL": {}}},
+		{"no trade", "AAPLX", `{"trades":{}}`, "", 200, map[string]struct{}{}},
+		{"invalid symbol", "BRK-B", `{"message":"code=400, message=invalid symbol: BRK-B"}`, "", 400, map[string]struct{}{}},
+		{"escaped symbol", "A&B", `{"message":"code=400, message=invalid symbol: A&B"}`, "", 400, map[string]struct{}{}},
+		{"invalid feed", "AAPL", `{"message":"invalid feed: iex"}`, "alpaca: HTTP 400: invalid feed: iex", 400, nil},
+		{"invalid symbol on another status", "BRK-B", `{"message":"invalid symbol: BRK-B"}`, "alpaca: HTTP 422: invalid symbol: BRK-B", 422, nil},
+		{"unauthorized", "AAPL", unauthorized, "alpaca: HTTP 401", 401, nil},
+		{"missing trades", "AAPL", `{}`, "latest trades are missing", 200, nil},
+		{"null trades", "AAPL", `{"trades":null}`, "latest trades are missing", 200, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				query := r.URL.Query()
+				if r.Method != http.MethodGet || r.URL.Path != "/v2/stocks/trades/latest" || len(query) != 2 ||
+					query.Get("symbols") != tc.symbol || query.Get("feed") != "iex" {
+					t.Errorf("wrong latest trade request: %s %s", r.Method, r.URL.RequestURI())
+				}
+				if r.Header.Get("APCA-API-KEY-ID") != testCredentials.APIKey || r.Header.Get("APCA-API-SECRET-KEY") != testCredentials.APISecret {
+					t.Error("auth headers missing")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			got, err := NewClient(server.URL, testCredentials, server.Client()).LatestTradeSymbols(context.Background(), tc.symbol, "iex")
+			if n := requests.Load(); n != 1 {
+				t.Fatalf("requests = %d, want 1", n)
+			}
+			if tc.want == nil {
+				if err == nil {
+					t.Fatal("refused latest trade lookup accepted")
+				}
+				assertNoCredentials(t, err.Error())
+				if !strings.Contains(err.Error(), tc.errorText) {
+					t.Fatalf("wrong latest trade error: %v", err)
+				}
+				if tc.status != 200 {
+					var apiErr *APIError
+					if !errors.As(err, &apiErr) || apiErr.Status != tc.status {
+						t.Fatal("latest trade APIError not preserved")
+					}
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("symbols=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+
 type errorTransport struct{ err error }
 
 func (rt errorTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, rt.err }
 
 func TestRequestErrors(t *testing.T) {
-	for _, body := range []string{"not JSON", `{"message":"missing code"}`, `{"code":"bad","message":"bad"}`, "null"} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503); _, _ = w.Write([]byte(body)) }))
-		_, err := NewClient(server.URL, testCredentials, server.Client()).Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
+	for _, tc := range []struct {
+		body    string
+		code    int
+		message string
+		decoded bool
+		text    string
+	}{
+		{"not JSON", 0, "", false, "alpaca: HTTP 503"},
+		{`{"message":"missing code"}`, 0, "missing code", false, "alpaca: HTTP 503: missing code"},
+		{`{"code":"bad","message":"bad"}`, 0, "", false, "alpaca: HTTP 503"},
+		{"null", 0, "", false, "alpaca: HTTP 503"},
+		{`{"code":40410000,"message":"not found"}`, 40410000, "not found", true, "alpaca: HTTP 503 (code 40410000): not found"},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503); _, _ = w.Write([]byte(tc.body)) }))
+		status, err := NewClient(server.URL, testCredentials, server.Client()).Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
 		server.Close()
 		var apiErr *APIError
-		if !errors.As(err, &apiErr) || apiErr.Status != 503 || apiErr.Code != 0 || apiErr.Message != "" {
-			t.Fatal("unexpected body must yield status alone")
+		if status != 503 || !errors.As(err, &apiErr) || apiErr.Status != 503 || apiErr.Code != tc.code ||
+			apiErr.Message != tc.message || apiErr.BodyDecoded != tc.decoded || err.Error() != tc.text {
+			t.Fatalf("body %s: status %d, error %v (%#v)", tc.body, status, err, apiErr)
 		}
 	}
 	cause := errors.New("network failed")
@@ -299,19 +375,23 @@ func TestRequestErrors(t *testing.T) {
 }
 
 func TestInvariantCredentialsNeverLeak(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(403)
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": 1, "message": testCredentials.APISecret + " " + testCredentials.APIKey})
-	}))
-	defer server.Close()
-	_, _, err := NewClient(server.URL, testCredentials, server.Client()).Asset(context.Background(), "AAPL")
-	if err == nil {
-		t.Fatal("expected refusal")
+	leaked := testCredentials.APISecret + " " + testCredentials.APIKey
+	for _, body := range []map[string]any{{"code": 1, "message": leaked}, {"message": leaked}} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(403)
+			_ = json.NewEncoder(w).Encode(body)
+		}))
+		_, _, err := NewClient(server.URL, testCredentials, server.Client()).Asset(context.Background(), "AAPL")
+		server.Close()
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Message != "[redacted] [redacted]" {
+			t.Fatalf("refusal message not redacted: %v (%#v)", err, apiErr)
+		}
+		assertNoCredentials(t, err.Error())
 	}
-	assertNoCredentials(t, err.Error())
-	cause := errors.New(testCredentials.APISecret + " " + testCredentials.APIKey)
+	cause := errors.New(leaked)
 	client := NewClient("http://example.invalid", testCredentials, &http.Client{Transport: errorTransport{cause}})
-	_, err = client.Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
+	_, err := client.Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
 	if !errors.Is(err, cause) {
 		t.Fatal("wrapped cause lost")
 	}
