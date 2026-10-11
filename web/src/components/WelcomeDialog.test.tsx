@@ -140,7 +140,7 @@ function renderWelcome(onOpenChange = vi.fn()) {
   } as unknown as OfficerApi;
   render(
     <I18nextProvider i18n={i18n}>
-      <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+      <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
         <MemoryRouter>
           <ApiClientProvider config={{ baseUrl: "/app/api/v1" }} api={api}>
             <WelcomeDialog open onOpenChange={onOpenChange} />

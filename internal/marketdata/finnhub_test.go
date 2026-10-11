@@ -631,7 +631,7 @@ func TestWriteFinnhubSubscribeShape(t *testing.T) {
 	}
 }
 
-func TestParseFinnhubQuoteUpdates(t *testing.T) {
+func TestParseFinnhubFrameQuoteUpdates(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
@@ -639,7 +639,7 @@ func TestParseFinnhubQuoteUpdates(t *testing.T) {
 	})
 	payload := []byte(`{"type":"trade","data":[{"s":"AAPL","p":12345678901234567890.123456789,"t":1710000000123}]}`)
 
-	updates := parseFinnhubQuoteUpdates(payload, subs)
+	updates := parseFinnhubFrame(payload, subs).updates
 	if len(updates) != 1 {
 		t.Fatalf("len(updates) = %d, want 1", len(updates))
 	}
@@ -661,7 +661,7 @@ func TestParseFinnhubFrameIgnoresPing(t *testing.T) {
 	}
 }
 
-func TestParseFinnhubQuoteUpdatesRejectsInvalidFrames(t *testing.T) {
+func TestParseFinnhubFrameRejectsInvalidFrames(t *testing.T) {
 	t.Parallel()
 
 	subs := mustNormalizeFinnhubSubscriptions(t, []fwmarketdata.Subscription{
@@ -695,7 +695,7 @@ func TestParseFinnhubQuoteUpdatesRejectsInvalidFrames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if updates := parseFinnhubQuoteUpdates([]byte(tt.payload), subs); len(updates) != 0 {
+			if updates := parseFinnhubFrame([]byte(tt.payload), subs).updates; len(updates) != 0 {
 				t.Fatalf("updates = %+v, want none", updates)
 			}
 		})

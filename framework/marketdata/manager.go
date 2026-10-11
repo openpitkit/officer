@@ -66,8 +66,7 @@ type Manager struct {
 	sink      Sink
 	stopGrace time.Duration
 	// manualRefreshInterval keeps configured BYO marks alive inside the engine's
-	// freshness window. It is an instance field so tests can shorten it without
-	// changing process-wide timing.
+	// freshness window.
 	manualRefreshInterval time.Duration
 	// sinkProvider, when set, resolves the live engine sink on every push. The
 	// normal account, group, and asset paths preserve the engine and sink, while
@@ -1960,17 +1959,6 @@ func (m *Manager) retryPendingManualClears(ctx context.Context) {
 				err,
 			)
 		}
-	}
-}
-
-// manualQuote builds the one-shot quote carrying an instrument's operator-set
-// manual mark. AsOf is left zero so the sink publishes it as current and the
-// manager snapshot stamps it with receipt time, matching a fresh push.
-func manualQuote(instrument domain.MarketDataInstrument) QuoteUpdate {
-	return QuoteUpdate{
-		Base:  instrument.BaseAssetID,
-		Quote: instrument.QuoteAssetID,
-		Mark:  instrument.ManualPrice,
 	}
 }
 

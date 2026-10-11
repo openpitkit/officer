@@ -1124,7 +1124,6 @@ function AdvancedFilterDialog({
 // Create account dialog
 // ---------------------------------------------------------------------------
 
-// Exported for unit tests; rendered standalone inside Accounts otherwise.
 export function CreateAccountDialog({
   groupSuggestions,
   onCreated,

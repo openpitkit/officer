@@ -1548,18 +1548,10 @@ func adjustmentRejectFrom(
 
 // --- order translation ------------------------------------------------------
 
-// orderModelFrom maps a domain order onto a model.Order operation view:
-// instrument (base/quote), account (resolved to its stored engine id), side,
-// trade amount (quantity or volume), and the optional limit price (omitted for
-// market orders).
-func orderModelFrom(o domain.Order, res idResolver) (model.Order, error) {
-	account, err := res.account(o.Account)
-	if err != nil {
-		return model.Order{}, err
-	}
-	return orderModelFromAccount(o, account, res)
-}
-
+// orderModelFromAccount maps a domain order onto a model.Order operation view:
+// instrument (base/quote), the already resolved engine account id, side, trade
+// amount (quantity or volume), and the optional limit price (omitted for market
+// orders).
 func orderModelFromAccount(
 	o domain.Order,
 	account param.AccountID,

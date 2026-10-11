@@ -37,8 +37,7 @@ type FetchFunc func(ctx context.Context, subs []Subscription) ([]QuoteUpdate, er
 //
 // The poller keeps the last emitted quote per instrument so an unchanged value
 // is not re-emitted. A non-nil errFn observes fetch errors (for logging) without
-// stopping the loop. now defaults to time.Now and tick to a real ticker; both
-// are injectable for deterministic tests.
+// stopping the loop.
 type Poller struct {
 	fetch    FetchFunc
 	interval time.Duration

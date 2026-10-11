@@ -503,7 +503,7 @@ type executionLockSpy struct {
 
 func (*executionLockSpy) Close() {}
 
-func (*executionLockSpy) Name() string { return "officer-test-lock-spy" }
+func (*executionLockSpy) Name() string { return "execution-lock-spy" }
 
 func (*executionLockSpy) PolicyGroupID() model.PolicyGroupID {
 	return lockSpyPolicyGroupID

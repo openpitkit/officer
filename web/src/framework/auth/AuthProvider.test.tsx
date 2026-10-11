@@ -37,8 +37,18 @@ describe("AuthProvider", () => {
     unregisterRowAction("auth-open-action");
   });
 
-  it("allows every permission when no provider is mounted", () => {
-    render(<PermissionProbe />);
+  it("throws when no provider is mounted", () => {
+    expect(() => render(<PermissionProbe />)).toThrow(
+      "useAuth must be used within an AuthProvider",
+    );
+  });
+
+  it("allows every permission under a provider without overrides", () => {
+    render(
+      <AuthProvider>
+        <PermissionProbe />
+      </AuthProvider>,
+    );
 
     expect(screen.getByLabelText("permission").textContent).toBe("allowed");
   });

@@ -904,12 +904,6 @@ func writeFinnhubSubscribe(
 	return nil
 }
 
-func parseFinnhubQuoteUpdates(
-	payload []byte, subs []finnhubSubscription,
-) []fwmarketdata.QuoteUpdate {
-	return parseFinnhubFrame(payload, subs).updates
-}
-
 type finnhubFrameResult struct {
 	updates        []fwmarketdata.QuoteUpdate
 	statusError    string

@@ -12,8 +12,8 @@ The app is built with Vite and embedded into the Go binary via
 embedded build. It carries no risk logic; all validation is mirrored from the
 backend contract only to give fast form feedback.
 
-Client-side routing is provided by `react-router-dom`; the route registry is
-`src/appRoutes.ts`, and the sidebar reflects the active route.
+Client-side routing is provided by `react-router-dom`; routes are registered in
+`src/register.ts`, and the sidebar reflects the active route.
 
 ## Stack
 
@@ -115,9 +115,13 @@ and `unregisterScope`; locale namespaces use `registerLocaleResources` or
 unregistering removes it, and permission fields hide rendered routes, nav
 entries, pages, and row actions without removing them.
 
-Authorization is supplied by `AuthProvider`. The app mounts the allow-all
-default, while a host application can pass a custom `hasPermission` predicate or
-a complete `AuthContextValue`; renderers consume it through `useHasPermission`.
+Authorization is supplied by `AuthProvider`. It is required above every
+component or hook that reads authorization (`Sidebar`, `AppRoutes`,
+`RegistryRowActions`, `useAuth`, `useUser`, `useHasPermission`), which throw
+without it. Mounted without props it grants every permission; the app mounts it
+that way, while a host application can pass a custom `hasPermission` predicate
+or a complete `AuthContextValue`; renderers consume it through
+`useHasPermission`.
 
 The reference composition under `src/examples/customhost` imports only
 `@openpit/officer-web` for registry and auth surfaces. It adds a private page,

@@ -20,6 +20,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
 import { AppRoutes } from "./AppRoutes";
+import { AuthProvider } from "./auth/AuthProvider";
 import { registerRoute, unregisterRoute } from "./registries/routes";
 
 function LocationProbe() {
@@ -31,8 +32,10 @@ describe("AppRoutes", () => {
   it("keeps an unknown URL and renders a not-found page", () => {
     render(
       <MemoryRouter initialEntries={["/does-not-exist"]}>
-        <AppRoutes />
-        <LocationProbe />
+        <AuthProvider>
+          <AppRoutes />
+          <LocationProbe />
+        </AuthProvider>
       </MemoryRouter>,
     );
 
@@ -56,8 +59,10 @@ describe("AppRoutes", () => {
     });
     render(
       <MemoryRouter initialEntries={[source]}>
-        <AppRoutes />
-        <LocationProbe />
+        <AuthProvider>
+          <AppRoutes />
+          <LocationProbe />
+        </AuthProvider>
       </MemoryRouter>,
     );
 

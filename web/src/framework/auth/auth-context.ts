@@ -20,8 +20,6 @@
 
 import { createContext, useContext } from "react";
 
-import { allowAllAuth } from "./defaultAuth";
-
 /** A permission identifier. This package declares none. */
 export type Permission = string;
 
@@ -46,9 +44,10 @@ export const AuthContext = createContext<AuthContextValue | null>(null);
 /** Access the current auth strategy. */
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  // Existing page tests render registry-consuming components without providers;
-  // the application must therefore tolerate a missing provider as allow-all.
-  return ctx ?? allowAllAuth;
+  if (!ctx) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return ctx;
 }
 
 /** Access the current user, or null for the built-in default. */

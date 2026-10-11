@@ -123,7 +123,7 @@ type Config struct {
 // Load resolves the configuration for one invocation from the given
 // command-line arguments (excluding the program name and any subcommand) and an
 // environment lookup function. Passing os.LookupEnv wires it to the process
-// environment; tests pass a stub.
+// environment.
 //
 // Precedence is flags > environment > defaults. The recognized environment
 // variables are EnvHTTPAddr, EnvSQLitePath, EnvRuntimeLibraryPath,

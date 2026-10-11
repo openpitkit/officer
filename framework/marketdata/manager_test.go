@@ -1109,6 +1109,17 @@ func TestManagerManualRefreshTracksLiveUpdateAndClear(t *testing.T) {
 	}
 }
 
+// manualQuote builds the one-shot quote carrying an instrument's operator-set
+// manual mark. AsOf is left zero so the sink publishes it as current and the
+// manager snapshot stamps it with receipt time, matching a fresh push.
+func manualQuote(instrument domain.MarketDataInstrument) QuoteUpdate {
+	return QuoteUpdate{
+		Base:  instrument.BaseAssetID,
+		Quote: instrument.QuoteAssetID,
+		Mark:  instrument.ManualPrice,
+	}
+}
+
 func TestManagerManualClearIsAfterOldHeartbeatAndClearsSynthetic(t *testing.T) {
 	instanceID := testExternalID("byo-clear-order")
 	connector := newFakeConnector()

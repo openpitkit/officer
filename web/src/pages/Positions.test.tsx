@@ -219,10 +219,10 @@ function acceptedHaltedAdjustment(
 function renderPositions(initialEntry = "/positions") {
   return render(
     <I18nextProvider i18n={i18n}>
-      <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+      <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
         <DisplayPreferencesProvider
-          densityStorageKey="pit-officer-test-density"
-          tradeStyleStorageKey="pit-officer-test-trade-style"
+          densityStorageKey="pit-test-density"
+          tradeStyleStorageKey="pit-test-style"
         >
           <MemoryRouter initialEntries={[initialEntry]}>
             <SidebarProvider>

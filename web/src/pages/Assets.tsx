@@ -138,8 +138,7 @@ function errMessage(err: unknown): string {
 // Create asset dialog
 // ---------------------------------------------------------------------------
 
-// Exported for unit tests; rendered standalone inside Assets otherwise.
-export function CreateAssetDialog({
+function CreateAssetDialog({
   classSuggestions,
   onCreated,
 }: {

@@ -48,8 +48,8 @@ FROM audit au`
 // auditRestrictionColumn and auditUnownedPredicate address the account
 // snapshot in the account restriction. The unary plus keeps SQLite from
 // choosing idx_audit_account_code for the restriction's IN-like OR, which
-// returns rows out of (at, id) order and adds a temp B-tree sort; the ordered
-// idx_audit_at scan stays the plan unless an exact account filter applies.
+// returns rows out of (at, id) order and adds a temp B-tree sort; the
+// restriction on its own keeps the ordered idx_audit_at scan.
 const (
 	auditRestrictionColumn = "+au.account_code"
 	auditUnownedPredicate  = "+au.account_code = ''"
@@ -213,8 +213,10 @@ func (r *realmStore) ListAuditFiltered(
 }
 
 // buildAuditFilteredQuery assembles the ListAuditFiltered query and its bound
-// args for the newest n rows matching filter. Extracted so tests can EXPLAIN
-// the exact query the filtered path runs.
+// args for the newest n rows matching filter. Its index plan is a performance
+// contract: with only an account restriction it reads an audit index in
+// (at, id) order with no temporary sort; adding an exact account filter reads
+// idx_audit_account_code.
 func buildAuditFilteredQuery(
 	dictionaries *enumDictionaries, filter domain.AuditFilter, n int,
 ) (string, []any, error) {
@@ -302,8 +304,9 @@ func (r *realmStore) ListAuditRows(
 }
 
 // buildAuditListQuery assembles the audit list query and its bound args from
-// the pre-built filter clauses. Extracted so tests can EXPLAIN the exact query
-// the list path runs.
+// the pre-built filter clauses. Its index plan is a performance contract: the
+// browse views (no filter or the control category, with or without an account
+// restriction) read an audit index in (at, id) order with no temporary sort.
 func buildAuditListQuery(
 	clauses []string,
 	args []any,

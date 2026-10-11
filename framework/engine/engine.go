@@ -409,7 +409,9 @@ type ExecutionReportResult struct {
 
 // BuildFunc builds an engine from a seed snapshot. The local node calls it at
 // construction and for administrative rebuilds. Production wires it to the app
-// engine adapter bound to a runtime-library path. Tests substitute a fake.
+// engine adapter bound to a runtime-library path. A host replaces it like any
+// other part of the default composition: a SetNodeBuilder call after Register
+// passes its own BuildFunc to node.NewLocalNode.
 type BuildFunc func(snap Snapshot) (Engine, error)
 
 // DictionaryResolver is the optional live dictionary capability of an Engine

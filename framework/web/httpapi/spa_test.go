@@ -24,13 +24,11 @@ import (
 	"testing/fstest"
 )
 
-func TestSPAHandlerServesAppRouteManifestAsset(t *testing.T) {
-	const manifest = `{"routes":[{"id":"dashboard","path":"/","kind":"canonical"}]}`
+func TestSPAHandlerServesExistingAsset(t *testing.T) {
+	const favicon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg>`
 	handler, err := newSPAHandler(fstest.MapFS{
-		"index.html": {Data: []byte("<html>shell</html>")},
-		"app-route-manifest.json": {
-			Data: []byte(manifest),
-		},
+		"index.html":  {Data: []byte("<html>shell</html>")},
+		"favicon.svg": {Data: []byte(favicon)},
 	})
 	if err != nil {
 		t.Fatalf("newSPAHandler: %v", err)
@@ -39,16 +37,16 @@ func TestSPAHandlerServesAppRouteManifestAsset(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(
 		recorder,
-		httptest.NewRequest(http.MethodGet, "/app-route-manifest.json", nil),
+		httptest.NewRequest(http.MethodGet, "/favicon.svg", nil),
 	)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
-	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
-		t.Fatalf("Content-Type = %q, want application/json", got)
+	if got := recorder.Header().Get("Content-Type"); got != "image/svg+xml" {
+		t.Fatalf("Content-Type = %q, want image/svg+xml", got)
 	}
-	if got := recorder.Body.String(); got != manifest {
-		t.Fatalf("body = %q, want manifest asset", got)
+	if got := recorder.Body.String(); got != favicon {
+		t.Fatalf("body = %q, want favicon asset", got)
 	}
 }

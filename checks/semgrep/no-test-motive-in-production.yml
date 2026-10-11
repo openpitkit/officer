@@ -1,0 +1,58 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Production code exists for the product. A comment that says code exists so
+# tests can reach it marks a test seam in production source. Remove the seam
+# and move the need into the test, or state the product reason the code has.
+#
+# Scope is production sources - Go, TypeScript and JavaScript, the schema SQL,
+# the panel's stylesheet and HTML shell, and the embedded OpenAPI document;
+# test sources and the test-runner configuration are excluded.
+
+rules:
+  - id: no-test-motive-in-production
+    message: >-
+      Production code must not exist to serve tests. Move what only tests need
+      into the test sources, or state the product reason the code exists.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '(?im)\bso(?:(?:\s+(?:(?://+|#+|\*+|--)\s*)?)that)?(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:(?:the|our)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:(?:unit|e2e|integration|deterministic|backend|frontend|page|store|engine|go|web)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?tests(?:(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:suite|harness))?(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:(?:can|could|may|might|must|should|will|would)|do|does|need|needs|see|get)\b|\bso(?:(?:\s+(?:(?://+|#+|\*+|--)\s*)?)that)?(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:(?:a|an|the|our)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:unit|e2e|integration|deterministic|backend|frontend|page|store|engine|go|web)(?:\s+(?:(?://+|#+|\*+|--)\s*)?)test(?:(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:suite|harness))?(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:can|could|may|might|must|should|will|would)\b|\bso(?:(?:\s+(?:(?://+|#+|\*+|--)\s*)?)that)?(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:a|the)(?:\s+(?:(?://+|#+|\*+|--)\s*)?)test(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:suite|harness)(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:can|could|may|might|must|should|will|would)\b|\bso(?:(?:\s+(?:(?://+|#+|\*+|--)\s*)?)that)?(?:\s+(?:(?://+|#+|\*+|--)\s*)?)a(?:\s+(?:(?://+|#+|\*+|--)\s*)?)test(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:can|could|may|might|must|should|will|would)\b|\b(?:exported|extracted|exposed|kept|split|separated|public|visible)(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:only(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?for(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:the(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:(?:unit|e2e|integration|deterministic|backend|frontend|page|store|engine|go|web)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:tests\b|testing(?:(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:only|purposes?))?(?=[ \t]*(?:[.;,:)!?]|\*/|\z|\n(?![ \t]*(?://+|#+|\*(?!/)|--)[ \t]*[A-Za-z])))|test(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:only|purposes?|use)(?=[ \t]*(?:[.;,:)!?]|\*/|\z|\n(?![ \t]*(?://+|#+|\*(?!/)|--)[ \t]*[A-Za-z]))))|(?:[.;:!?]|//|#|\*|--)[ \t]*(?:(?:only(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:used(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?|used(?:\s+(?:(?://+|#+|\*+|--)\s*)?)only(?:\s+(?:(?://+|#+|\*+|--)\s*)?))for(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:(?:unit|e2e|integration|deterministic|backend|frontend|page|store|engine|go|web)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:tests\b|testing(?:(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:only|purposes?))?(?=[ \t]*(?:[.;,:)!?]|\*/|\z|\n(?![ \t]*(?://+|#+|\*(?!/)|--)[ \t]*[A-Za-z])))|test(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:only|purposes?|use)(?=[ \t]*(?:[.;,:)!?]|\*/|\z|\n(?![ \t]*(?://+|#+|\*(?!/)|--)[ \t]*[A-Za-z]))))|\b(?:for|by|from|in)(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:(?:the|our)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:[a-z]+(?:\s+(?:(?://+|#+|\*+|--)\s*)?)and(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:(?:unit|e2e|integration|deterministic|backend|frontend|page|store|engine|go|web)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?tests\b|(?:(?:[.;:!?]|//|#|\*|--)[ \t]*|\b(?:the|our)(?:\s+(?:(?://+|#+|\*+|--)\s*)?)|\b(?:unit|e2e|integration|deterministic|page|go|web)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))tests(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:(?:can|could|may|might|must|should|will|would)(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?(?:pass|substitute|inject|override|replace|stub|shorten|swap|render|call|drive|exercise|mock|fake|use|set|assert|read|reach|need|rely|control|freeze)\b|\b(?:allows?|enables?|helps?)(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:the(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?tests(?:\s+(?:(?://+|#+|\*+|--)\s*)?)to\b|\blets?(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:the(?:\s+(?:(?://+|#+|\*+|--)\s*)?))?tests(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:pass|substitute|inject|override|replace|stub|shorten|swap|render|call|drive|exercise|mock|fake|use|set|assert|read|reach|need|rely|control|freeze)\b|\btest-only\b|(?:[.;:!?]|//|#|\*|--)[ \t]*testing(?:\s+(?:(?://+|#+|\*+|--)\s*)?)only(?=[ \t]*(?:[.;,:)!?]|\*/|\z|\n(?![ \t]*(?://+|#+|\*(?!/)|--)[ \t]*[A-Za-z])))|\btestability\b|\btest(?:ing)?(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:hook|seam|double)s?\b|\b(?:playwright|e2e|end-to-end)(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:harness|tests?|suite|bench)\b|\btest(?:\s+(?:(?://+|#+|\*+|--)\s*)?)(?:harness|bench)\b|\bcross-repository(?:\s+(?:(?://+|#+|\*+|--)\s*)?)contract\b'
+    paths:
+      include:
+        - "**/*.go"
+        - "**/*.ts"
+        - "**/*.tsx"
+        - "**/*.js"
+        - "**/*.mjs"
+        - "**/*.sql"
+        - "**/*.css"
+        - /web/index.html
+        - /httpapi/openapi.yaml
+      exclude:
+        - "**/*_test.go"
+        - "**/*.test.ts"
+        - "**/*.test.tsx"
+        - /web/src/test
+        - /web/vitest.config.ts
+        - /web/node_modules
+        - /web/dist
+        - /web/lib
+        - .venv
+        - .ruff_cache
+        - __pycache__
+        - .tmp
+        - .git

@@ -79,7 +79,7 @@ describe("API provider injection", () => {
 
     renderWithInjectedApi(
       <MemoryRouter>
-        <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+        <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
           <WelcomeDialog open onOpenChange={vi.fn()} />
         </ThemeProvider>
       </MemoryRouter>,

@@ -49,6 +49,24 @@ is deferred until the account-lane auto-provisioning rework is complete.
 repository: it guards new `GetOrCreate` / `FirstOrCreate` call sites and does
 not cover any existing automatic-creation site.
 
+`no-test-motive-in-production`
+(`checks/semgrep/no-test-motive-in-production.yml`) is a heuristic over prose.
+It favours precision, because the product's own
+docs talk about paper, testnet and demo modes and a connection test: a singular
+"test" after "for" counts only with "only", "purposes" or "use", and "tests"
+counts as the subject of a seam verb only at the start of a clause, after
+"the" or "our", or after a test kind such as "unit" or "page". Known misses,
+which review still catches:
+
+- a bare infinitive after "lets" or "helps" outside the rule's verb list
+  ("lets tests advance time", "helps tests inject a fake clock");
+- a phrase between "so tests" and its modal ("so tests in the external package
+  can reach it");
+- "so tests" with a verb and no modal after a seam verb ("Exported so tests
+  exercise the parser").
+
+A miss or a false positive found in practice is a rule bug, fixed in the rule.
+
 ### Approval marker
 
 `unapproved-entity-autocreate` is not an absolute prohibition. The construct

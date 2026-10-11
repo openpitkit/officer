@@ -2869,11 +2869,11 @@ func TestTradeAmountFrom_InvalidInputs(t *testing.T) {
 	}
 }
 
-// TestOrderModelFrom_InvalidInputs checks the order mapper wraps
+// TestOrderModel_InvalidInputs checks the order mapper wraps
 // domain.ErrInvalid for a bad asset, a bad amount, and a bad limit price.
-func TestOrderModelFrom_InvalidInputs(t *testing.T) {
+func TestOrderModel_InvalidInputs(t *testing.T) {
 	t.Parallel()
-	res := testResolver("acc-1")
+	e := &openPitEngine{res: testResolver("acc-1")}
 	base := domain.Order{
 		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
@@ -2881,25 +2881,25 @@ func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 
 	badAsset := base
 	badAsset.BaseAsset = " "
-	if _, err := orderModelFrom(badAsset, res); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := e.OrderModel(badAsset); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for blank base asset, got %v", err)
 	}
 
 	badAmount := base
 	badAmount.AmountValue = "not-a-number"
-	if _, err := orderModelFrom(badAmount, res); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := e.OrderModel(badAmount); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad amount, got %v", err)
 	}
 
 	badPrice := base
 	badPrice.Price = "not-a-number"
-	if _, err := orderModelFrom(badPrice, res); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := e.OrderModel(badPrice); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad price, got %v", err)
 	}
 
 	badAccount := base
 	badAccount.Account = "ghost"
-	if _, err := orderModelFrom(badAccount, res); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := e.OrderModel(badAccount); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for unknown account, got %v", err)
 	}
 }

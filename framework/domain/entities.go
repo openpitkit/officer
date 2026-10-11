@@ -514,7 +514,7 @@ const (
 	MarketDataProviderOANDA = "oanda"
 	// MarketDataProviderFinnhub is the Finnhub market-data feed.
 	MarketDataProviderFinnhub = "finnhub"
-	// MarketDataProviderMock is the synthetic provider used for demos and tests.
+	// MarketDataProviderMock is the synthetic provider for demos.
 	MarketDataProviderMock = "mock"
 )
 

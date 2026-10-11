@@ -34,7 +34,6 @@ import {
 } from "lucide-react";
 
 import { registerAppRowActions, registerAppVocabulary } from "@/appDefaults";
-import { appRoutes } from "@/appRoutes";
 import {
   AboutNavEntry,
   NonReleaseNavEntry,
@@ -68,21 +67,6 @@ import {
   TradingConnectionsCard,
 } from "@/pages/dashboard/widgets";
 
-const appRouteComponents = {
-  dashboard: Dashboard,
-  accounts: Accounts,
-  assets: Assets,
-  policies: Limits,
-  positions: Positions,
-  orders: Orders,
-  "market-data": MarketData,
-  "trading-connections": TradingConnections,
-  audit: Audit,
-  "mcp-access": McpAccess,
-  "signing-keys": SigningKeys,
-  service: Service,
-} as const;
-
 // This module is the application's complete registration against the framework
 // extension points. Stable ids let consumers replace entries by re-registering
 // the id or remove entries through the matching unregister API.
@@ -94,19 +78,93 @@ export function registerOfficerDefaults(): void {
   // underlying/settlement order-size scopes.
   registerAppVocabulary();
 
-  // Route ids: dashboard, accounts, policies, limits-redirect, positions,
-  // orders, trading-redirect, market-data, trading-connections, audit,
-  // mcp-access, signing-keys, service.
-  for (const route of appRoutes) {
-    if ("redirectTo" in route) {
-      registerRoute(route);
-      continue;
-    }
-    registerRoute({
-      ...route,
-      Component: appRouteComponents[route.id],
-    });
-  }
+  // Route ids: dashboard, accounts, policies, limits-redirect, assets,
+  // positions, orders, trading-redirect, market-data, trading-connections,
+  // audit, mcp-access, signing-keys, service.
+  registerRoute({
+    id: "dashboard",
+    path: "/",
+    order: 10,
+    Component: Dashboard,
+  });
+  registerRoute({
+    id: "accounts",
+    path: "/accounts",
+    order: 20,
+    Component: Accounts,
+  });
+  registerRoute({
+    id: "policies",
+    path: "/policies",
+    order: 30,
+    Component: Limits,
+  });
+  registerRoute({
+    id: "limits-redirect",
+    path: "/limits",
+    order: 40,
+    redirectTo: "/policies",
+  });
+  registerRoute({
+    id: "assets",
+    path: "/assets",
+    order: 45,
+    Component: Assets,
+  });
+  registerRoute({
+    id: "positions",
+    path: "/positions",
+    order: 50,
+    Component: Positions,
+  });
+  registerRoute({
+    id: "orders",
+    path: "/orders",
+    order: 60,
+    Component: Orders,
+  });
+  registerRoute({
+    id: "trading-redirect",
+    path: "/trading",
+    order: 70,
+    redirectTo: "/orders",
+  });
+  registerRoute({
+    id: "market-data",
+    path: "/market-data",
+    order: 80,
+    Component: MarketData,
+  });
+  registerRoute({
+    id: "trading-connections",
+    path: "/trading-connections",
+    order: 85,
+    Component: TradingConnections,
+  });
+  registerRoute({
+    id: "audit",
+    path: "/audit",
+    order: 90,
+    Component: Audit,
+  });
+  registerRoute({
+    id: "mcp-access",
+    path: "/mcp-access",
+    order: 100,
+    Component: McpAccess,
+  });
+  registerRoute({
+    id: "signing-keys",
+    path: "/signing-keys",
+    order: 110,
+    Component: SigningKeys,
+  });
+  registerRoute({
+    id: "service",
+    path: "/service",
+    order: 120,
+    Component: Service,
+  });
 
   // Nav ids: dashboard, accounts, positions, orders, policies,
   // restart-required, audit, mcp-access, signing-keys, trading-connections,

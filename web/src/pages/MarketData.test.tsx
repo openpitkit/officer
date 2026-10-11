@@ -84,10 +84,10 @@ const sealedStorageLoad: LoadState<CredentialStorage> = {
 function renderMarketDataPage() {
   render(
     <I18nextProvider i18n={i18n}>
-      <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+      <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
         <DisplayPreferencesProvider
-          densityStorageKey="pit-officer-test-density"
-          tradeStyleStorageKey="pit-officer-test-trade-style"
+          densityStorageKey="pit-test-density"
+          tradeStyleStorageKey="pit-test-style"
         >
           <SidebarProvider>
             <MarketData />
@@ -410,14 +410,14 @@ describe("provider references", () => {
   it("hides symbol verification buttons when the feed cannot verify", () => {
     renderCard(
       ibInstance({
-        id: "alpaca-1",
-        provider: "alpaca",
-        label: "Alpaca",
+        id: "oanda-1",
+        provider: "oanda",
+        label: "OANDA",
         verifiesSymbols: false,
         searchesSymbols: false,
         instruments: [
           {
-            instanceId: "alpaca-1",
+            instanceId: "oanda-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",

@@ -30,9 +30,9 @@ import (
 const defaultMockInterval = time.Second
 
 // mockConnector emits synthetic quotes for each subscription on a fixed timer.
-// It is for demos and tests: the price walks deterministically per instrument
-// (a fixed base plus a tick counter), so a test with a known interval and tick
-// count can assert exact values.
+// It is a demo provider: the price walks deterministically per instrument (a
+// fixed base plus a tick counter), so a known interval and tick count produce
+// exact, reproducible prices.
 type mockConnector struct {
 	interval time.Duration
 	now      func() time.Time

@@ -16,8 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Package businesscsv owns Pit Officer's business-entity CSV and ZIP wire
-// format. It deliberately stays independent of HTTP so backend tests can drive
-// the same schemas through real service/store paths.
+// format.
 package businesscsv
 
 import (
