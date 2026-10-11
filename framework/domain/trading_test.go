@@ -283,6 +283,42 @@ func TestTradingAccessSubjectLabel(t *testing.T) {
 	}
 }
 
+func TestValidateTradingAccessWithoutFeeAccount(t *testing.T) {
+	t.Parallel()
+	account := TradingAccess{Account: "first", Connection: "connection"}
+	other := TradingAccess{Account: "other", Connection: "connection"}
+	group := TradingAccess{AccountGroup: "team", Connection: "connection"}
+	for _, test := range []struct {
+		name    string
+		access  TradingAccess
+		grants  []TradingAccess
+		refused bool
+	}{
+		{"group with nil grants", group, nil, true},
+		{"group with empty grants", group, []TradingAccess{}, true},
+		{"group beside another account", group, []TradingAccess{other}, true},
+		{"group re-put", group, []TradingAccess{group}, true},
+		{"account with nil grants", account, nil, false},
+		{"account with empty grants", account, []TradingAccess{}, false},
+		{"account beside another account", account, []TradingAccess{other}, true},
+		{"account beside a group", account, []TradingAccess{group}, true},
+		{"account re-put beside other grants", account, []TradingAccess{account, other}, false},
+		{"account beside a group of one code", TradingAccess{Account: "team", Connection: "connection"}, []TradingAccess{group}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateTradingAccessWithoutFeeAccount(test.access, test.grants)
+			if test.refused {
+				if err != ErrFeeAccountRequired {
+					t.Fatalf("error = %v, want bare ErrFeeAccountRequired", err)
+				}
+			} else if err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestValidateTradingRoute(t *testing.T) {
 	t.Parallel()
 	for _, route := range []string{`{}`, `{"time_in_force":"day"}`, `{ "nested": [1, null] }`} {

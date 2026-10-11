@@ -32,6 +32,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -4011,131 +4012,259 @@ func TestBackupTradingGroupAccessRoundTrip(t *testing.T) {
 	}
 }
 
-// TestBackupRestoreGroupGrantNeedsFeeAccount keeps the node's group grant rule
-// on restore. The archive is taken while the connection has a fee account and a
-// group grant; the grant is then revoked and, in most cases, the fee account
-// cleared. Restoring with insert_missing keeps the existing connection and
-// re-inserts the group grant, so the provider lookup decides the outcome.
-func TestBackupRestoreGroupGrantNeedsFeeAccount(t *testing.T) {
+// feeAccountLookup is a provider lookup for the seeded Alpaca connection that
+// answers required and err, and fails when asked about another provider.
+func feeAccountLookup(required bool, err error) func(string) (bool, error) {
+	return func(provider string) (bool, error) {
+		if provider != domain.TradingProviderAlpaca {
+			return false, errors.New("lookup asked about provider " + provider)
+		}
+		return required, err
+	}
+}
+
+// TestBackupRestoreGrantNeedsFeeAccount keeps the node's fee-account grant rule
+// on restore. The archive is taken while the connection has a fee account and
+// an extra grant beside acc-1's: a group grant or a second account grant. The
+// extra grant is then revoked and, in most cases, the fee account cleared.
+// Restoring with insert_missing keeps the existing connection and re-inserts
+// the extra grant, so the rule and the provider lookup decide the outcome.
+func TestBackupRestoreGrantNeedsFeeAccount(t *testing.T) {
 	ctx := context.Background()
 	errLookup := errors.New("test provider lookup failure")
-	lookup := func(required bool, err error) func(string) (bool, error) {
-		return func(provider string) (bool, error) {
-			if provider != domain.TradingProviderAlpaca {
-				return false, errors.New("lookup asked about provider " + provider)
-			}
-			return required, err
-		}
+	// notAsked fails the restore, and so the test, when it is asked at all.
+	notAsked := func(provider string) (bool, error) {
+		return false, errors.New("provider lookup asked about " + provider + ", want no lookup")
 	}
-	for _, test := range []struct {
-		name     string
-		clearFee bool
-		lookup   func(string) (bool, error)
-		// wantErr is the error context; empty means the restore succeeds.
-		wantErr string
-		wantIs  error
+	for _, extra := range []struct {
+		name string
+		// access is the extra grant; each run sets its connection.
+		access  domain.TradingAccess
+		subject string
 	}{
 		{
-			name:     "refused when the provider needs a fee account",
-			clearFee: true,
-			lookup:   lookup(true, nil),
-			wantErr:  "a group grant needs the connection's fee account",
-			wantIs:   domain.ErrFeeAccountRequired,
+			name:    "group grant",
+			access:  domain.TradingAccess{AccountGroup: "grp-1", VenueAccount: "group-venue"},
+			subject: "group:grp-1",
 		},
 		{
-			name:   "allowed while the connection keeps its fee account",
-			lookup: lookup(true, nil),
-		},
-		{
-			name:     "allowed without a fee account the provider does not need",
-			clearFee: true,
-			lookup:   lookup(false, nil),
-		},
-		{
-			name:     "no lookup fails closed",
-			clearFee: true,
-			wantErr:  "cannot check whether provider",
-		},
-		{
-			name:     "lookup failure fails the restore",
-			clearFee: true,
-			lookup:   lookup(false, errLookup),
-			wantErr:  `provider "alpaca"`,
-			wantIs:   errLookup,
+			name:    "second account grant",
+			access:  domain.TradingAccess{Account: "acc-2", VenueAccount: "venue-subaccount-2"},
+			subject: "acc-2",
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, rs := newRealmStore(t, "trading-group-fee")
-			connection, _ := seedTradingBackupState(t, ctx, rs)
-			desk := domain.TradingAccess{
-				AccountGroup: "grp-1", Connection: connection.ExternalID,
-				VenueAccount: "group-venue",
-			}
-			if err := rs.PutTradingAccess(ctx, desk); err != nil {
-				t.Fatalf("PutTradingAccess(group): %v", err)
-			}
-			archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
-			if err != nil {
-				t.Fatalf("ExportBackup: %v", err)
-			}
-			if err := rs.RemoveTradingAccess(
-				ctx, connection.ExternalID, "", "grp-1",
-			); err != nil {
-				t.Fatalf("RemoveTradingAccess(group): %v", err)
-			}
-			wantFee := connection.FeeAccount
-			if test.clearFee {
-				if err := rs.SetTradingConnectionFeeAccount(
-					ctx, connection.ExternalID, "",
-				); err != nil {
-					t.Fatalf("SetTradingConnectionFeeAccount(clear): %v", err)
-				}
-				wantFee = ""
-			}
-			before := snapshotBackupData(t, ctx, rs)
-
-			_, err = rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
-				Scope:                             backup.Scope{All: true},
-				Mode:                              backup.RestoreModeInsertMissing,
-				TradingProviderRequiresFeeAccount: test.lookup,
-			})
-			if test.wantErr != "" {
-				if err == nil {
-					t.Fatalf("RestoreBackup error = nil, want %q", test.wantErr)
-				}
-				if test.wantIs != nil && !errors.Is(err, test.wantIs) {
-					t.Fatalf("RestoreBackup error = %v, want %v", err, test.wantIs)
-				}
-				for _, want := range []string{connection.Label, test.wantErr} {
-					if !strings.Contains(err.Error(), want) {
-						t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+		for _, test := range []struct {
+			name     string
+			clearFee bool
+			// oneGrant restores the archive without the extra grant, so a
+			// single grant ends on the connection.
+			oneGrant bool
+			lookup   func(string) (bool, error)
+			// wantErr is the error context; empty means the restore succeeds.
+			wantErr string
+			wantIs  error
+		}{
+			{
+				name:     "refused when the provider needs a fee account",
+				clearFee: true,
+				lookup:   feeAccountLookup(true, nil),
+				wantErr:  `grant "` + extra.subject + `" needs the connection's fee account`,
+				wantIs:   domain.ErrFeeAccountRequired,
+			},
+			{
+				name:   "allowed while the connection keeps its fee account",
+				lookup: notAsked,
+			},
+			{
+				name:     "allowed without a fee account the provider does not need",
+				clearFee: true,
+				lookup:   feeAccountLookup(false, nil),
+			},
+			{
+				name:     "no lookup fails closed",
+				clearFee: true,
+				wantErr:  "cannot check whether provider",
+			},
+			{
+				name:     "lookup failure fails the restore",
+				clearFee: true,
+				lookup:   feeAccountLookup(false, errLookup),
+				wantErr:  `provider "alpaca"`,
+				wantIs:   errLookup,
+			},
+			{
+				name:     "a single grant restores without a lookup",
+				clearFee: true,
+				oneGrant: true,
+			},
+		} {
+			t.Run(extra.name+": "+test.name, func(t *testing.T) {
+				_, rs := newRealmStore(t, "trading-grant-fee")
+				connection, _ := seedTradingBackupState(t, ctx, rs)
+				access := extra.access
+				access.Connection = connection.ExternalID
+				if access.Account != "" {
+					if _, err := rs.CreateAccount(ctx, domain.Account{
+						Code: access.Account, Title: "Account 2",
+					}); err != nil {
+						t.Fatalf("CreateAccount(%s): %v", access.Account, err)
 					}
 				}
-				if after := snapshotBackupData(t, ctx, rs); !reflect.DeepEqual(after, before) {
-					t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+				if err := rs.PutTradingAccess(ctx, access); err != nil {
+					t.Fatalf("PutTradingAccess(%s): %v", extra.subject, err)
 				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("RestoreBackup: %v", err)
-			}
-			rows, err := rs.ListTradingAccessForConnection(ctx, connection.ExternalID)
-			want := []fwstore.TradingAccessListRow{
-				{Access: desk},
-				{Access: domain.TradingAccess{
+				archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
+				if err != nil {
+					t.Fatalf("ExportBackup: %v", err)
+				}
+				if err := rs.RemoveTradingAccess(
+					ctx, connection.ExternalID, access.Account, access.AccountGroup,
+				); err != nil {
+					t.Fatalf("RemoveTradingAccess(%s): %v", extra.subject, err)
+				}
+				wantFee := connection.FeeAccount
+				if test.clearFee {
+					if err := rs.SetTradingConnectionFeeAccount(
+						ctx, connection.ExternalID, "",
+					); err != nil {
+						t.Fatalf("SetTradingConnectionFeeAccount(clear): %v", err)
+					}
+					wantFee = ""
+				}
+				seeded := fwstore.TradingAccessListRow{Access: domain.TradingAccess{
 					Account: "acc-1", Connection: connection.ExternalID,
 					VenueAccount: "venue-subaccount-1",
-				}, Group: "grp-1"},
+				}, Group: "grp-1"}
+				// Group grants list before account grants.
+				wantGrants := []fwstore.TradingAccessListRow{seeded, {Access: access}}
+				if access.AccountGroup != "" {
+					wantGrants = []fwstore.TradingAccessListRow{{Access: access}, seeded}
+				}
+				if test.oneGrant {
+					archive.Data.TradingAccess = slices.DeleteFunc(
+						archive.Data.TradingAccess,
+						func(archived backup.TradingAccess) bool {
+							return archived.Account == access.Account &&
+								archived.AccountGroup == access.AccountGroup
+						},
+					)
+					wantGrants = []fwstore.TradingAccessListRow{seeded}
+				}
+				before := snapshotBackupData(t, ctx, rs)
+
+				_, err = rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+					Scope:                             backup.Scope{All: true},
+					Mode:                              backup.RestoreModeInsertMissing,
+					TradingProviderRequiresFeeAccount: test.lookup,
+				})
+				if test.wantErr != "" {
+					if err == nil {
+						t.Fatalf("RestoreBackup error = nil, want %q", test.wantErr)
+					}
+					if test.wantIs != nil && !errors.Is(err, test.wantIs) {
+						t.Fatalf("RestoreBackup error = %v, want %v", err, test.wantIs)
+					}
+					for _, want := range []string{connection.Label, test.wantErr} {
+						if !strings.Contains(err.Error(), want) {
+							t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+						}
+					}
+					if after := snapshotBackupData(t, ctx, rs); !reflect.DeepEqual(after, before) {
+						t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("RestoreBackup: %v", err)
+				}
+				rows, err := rs.ListTradingAccessForConnection(ctx, connection.ExternalID)
+				if err != nil || !reflect.DeepEqual(rows, wantGrants) {
+					t.Fatalf("restored grants = %+v, want %+v; err=%v", rows, wantGrants, err)
+				}
+				restored, found, err := rs.GetTradingConnection(ctx, connection.ExternalID)
+				if err != nil || !found || restored.FeeAccount != wantFee {
+					t.Fatalf("restored fee account = %q (found=%v, err=%v), want %q",
+						restored.FeeAccount, found, err, wantFee)
+				}
+			})
+		}
+	}
+}
+
+// TestBackupRestoreChecksEveryFeeLessConnection keeps checking the remaining
+// connections without a fee account after the provider lookup allows one. The
+// archive is taken while both connections have a fee account and grants to
+// acc-1 and acc-2; the acc-2 grants are then revoked and both fee accounts
+// cleared, so the insert_missing restore ends with two fee-less connections
+// holding two grants each. The lookup allows the connection whose label sorts
+// first and refuses the other.
+func TestBackupRestoreChecksEveryFeeLessConnection(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newRealmStore(t, "trading-fee-less-connections")
+	allowed, _ := seedTradingBackupState(t, ctx, rs)
+	refused, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider: "test-provider", Label: "Test provider", Mode: domain.TradingModePaper,
+		VenueIdentity: "venue-account-2", Credentials: tradingBackupSecret, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	if err := rs.SetTradingConnectionFeeAccount(ctx, refused.ExternalID, "acc-1"); err != nil {
+		t.Fatalf("SetTradingConnectionFeeAccount: %v", err)
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2", Title: "Account 2"}); err != nil {
+		t.Fatalf("CreateAccount(acc-2): %v", err)
+	}
+	// seedTradingBackupState already grants the allowed connection to acc-1.
+	for _, access := range []domain.TradingAccess{
+		{Account: "acc-2", Connection: allowed.ExternalID, VenueAccount: "venue-subaccount-2"},
+		{Account: "acc-1", Connection: refused.ExternalID, VenueAccount: "venue-subaccount-1"},
+		{Account: "acc-2", Connection: refused.ExternalID, VenueAccount: "venue-subaccount-2"},
+	} {
+		if err := rs.PutTradingAccess(ctx, access); err != nil {
+			t.Fatalf("PutTradingAccess(%+v): %v", access, err)
+		}
+	}
+	archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	for _, connection := range []domain.ExternalID{allowed.ExternalID, refused.ExternalID} {
+		if err := rs.RemoveTradingAccess(ctx, connection, "acc-2", ""); err != nil {
+			t.Fatalf("RemoveTradingAccess(%s, acc-2): %v", connection, err)
+		}
+		if err := rs.SetTradingConnectionFeeAccount(ctx, connection, ""); err != nil {
+			t.Fatalf("SetTradingConnectionFeeAccount(%s, clear): %v", connection, err)
+		}
+	}
+	before := snapshotBackupData(t, ctx, rs)
+
+	_, err = rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeInsertMissing,
+		TradingProviderRequiresFeeAccount: func(provider string) (bool, error) {
+			switch provider {
+			case allowed.Provider:
+				return false, nil
+			case refused.Provider:
+				return true, nil
 			}
-			if err != nil || !reflect.DeepEqual(rows, want) {
-				t.Fatalf("restored grants = %+v, want %+v; err=%v", rows, want, err)
-			}
-			restored, found, err := rs.GetTradingConnection(ctx, connection.ExternalID)
-			if err != nil || !found || restored.FeeAccount != wantFee {
-				t.Fatalf("restored fee account = %q (found=%v, err=%v), want %q",
-					restored.FeeAccount, found, err, wantFee)
-			}
-		})
+			return false, errors.New("lookup asked about provider " + provider)
+		},
+	})
+	if !errors.Is(err, domain.ErrFeeAccountRequired) {
+		t.Fatalf("RestoreBackup error = %v, want %v", err, domain.ErrFeeAccountRequired)
+	}
+	for _, want := range []string{refused.Label, `grant "acc-2" needs the connection's fee account`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), allowed.Label) {
+		t.Fatalf("RestoreBackup error = %q, want no mention of %q", err, allowed.Label)
+	}
+	if after := snapshotBackupData(t, ctx, rs); !reflect.DeepEqual(after, before) {
+		t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
 	}
 }
 

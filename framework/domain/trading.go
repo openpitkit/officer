@@ -268,6 +268,29 @@ func ValidateTradingAccess(access TradingAccess) error {
 	return nil
 }
 
+// ValidateTradingAccessWithoutFeeAccount applies the fee-account grant rule to
+// a grant on a connection whose provider needs a fee account to attribute
+// unlinked fees and which has none; grants are the connection's current grants.
+// A group grant is refused even as the first one, since a group can hold
+// several senders at any time. An account grant is refused when the
+// connection already holds a grant for another subject; a re-put of an
+// already granted subject is allowed. It returns ErrFeeAccountRequired
+// unwrapped.
+func ValidateTradingAccessWithoutFeeAccount(access TradingAccess, grants []TradingAccess) error {
+	if access.AccountGroup != "" {
+		return ErrFeeAccountRequired
+	}
+	for _, existing := range grants {
+		if existing.SameSubject(access) {
+			return nil
+		}
+	}
+	if len(grants) > 0 {
+		return ErrFeeAccountRequired
+	}
+	return nil
+}
+
 // ValidateTradingDestination validates a per-order trading destination.
 func ValidateTradingDestination(destination TradingDestination) error {
 	if destination.Connection.IsZero() {

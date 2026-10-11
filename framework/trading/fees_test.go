@@ -259,20 +259,23 @@ func TestFeeAccountTargets(t *testing.T) {
 	}
 }
 
-// TestFeeAccountThroughGroup sends through a group grant alone, with no fee
-// account: an unlinked fee is booked to the group's only member, and skipped
-// as ambiguous once the group has two members.
+// TestFeeAccountThroughGroup sends through a group grant alone: an unlinked fee
+// is booked to the connection's fee account whatever the group's size. A group
+// grant on an unlinked-fees provider needs that fee account, so this is the
+// only reachable group setup there.
 func TestFeeAccountThroughGroup(t *testing.T) {
 	for _, members := range [][]domain.AccountID{{"desk"}, {"desk", "other"}} {
 		t.Run(fmt.Sprintf("%d members", len(members)), func(t *testing.T) {
 			f, v := newFeeFixture(t)
+			f.fund("fees", "1000")
 			f.fund("other", "1000")
 			_, err := f.n.CreateGroup(testCtx, domain.AccountGroup{Code: "team"}, testCaller)
 			must(t, err)
 			for _, account := range members {
 				must(t, f.n.SetAccountGroup(testCtx, account, "team", domain.MissingAccountReject, testCaller))
 			}
-			must(t, f.st.PutTradingAccess(testCtx, domain.TradingAccess{AccountGroup: "team", Connection: f.connection.ExternalID}))
+			must(t, f.n.SetTradingConnectionFeeAccount(testCtx, f.connection.ExternalID, "fees", testCaller))
+			must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{AccountGroup: "team", Connection: f.connection.ExternalID}, true, testCaller))
 			must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
 			f.start()
 			f.send(f.submit("1"))
@@ -281,17 +284,10 @@ func TestFeeAccountThroughGroup(t *testing.T) {
 			v.mu.Unlock()
 			f.venue.push(trading.Event{Kind: trading.EventConnected})
 			f.flush()
-			feeAccountBalance(t, f, "other", "USD", "1000")
-			if len(members) == 1 {
-				feeAccountBalance(t, f, "desk", "USD", "997.875")
-				feeSkipRows(t, f, 0)
-				return
-			}
+			feeAccountBalance(t, f, "fees", "USD", "999.875")
 			feeAccountBalance(t, f, "desk", "USD", "998")
-			rows := feeSkipRows(t, f, 1)
-			if !strings.Contains(rows[0].Detail, "connection is used by 2 accounts") {
-				t.Fatalf("group fee skip reason = %+v", rows)
-			}
+			feeAccountBalance(t, f, "other", "USD", "1000")
+			feeSkipRows(t, f, 0)
 		})
 	}
 }
@@ -527,12 +523,14 @@ func TestFeeAccountReadFailuresRetry(t *testing.T) {
 	})
 }
 
+// feeAccessStore reports no fee account and accounts as the connection's users.
 type feeAccessStore struct {
 	trading.Store
+	accounts []domain.AccountID
 }
 
 func (st feeAccessStore) GetTradingFeeAccounts(context.Context, domain.ExternalID) (domain.AccountID, []domain.AccountID, error) {
-	return "", nil, nil
+	return "", st.accounts, nil
 }
 
 func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
@@ -550,8 +548,9 @@ func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
 				st = feeAccessStore{Store: f.st}
 				wantLog = "connection is used by 0 accounts"
 			case "two accounts":
-				f.fund("other", "1000")
-				must(t, f.st.PutTradingAccess(testCtx, domain.TradingAccess{Account: "other", Connection: f.connection.ExternalID}))
+				// The node refuses a second grant on a connection without a fee
+				// account, so the store reports one the runtime must still refuse.
+				st = feeAccessStore{Store: f.st, accounts: []domain.AccountID{"desk", "other"}}
 				wantLog = "connection is used by 2 accounts"
 			case "unmapped asset":
 				fee.Asset, wantLog = "EUR", "maps to 0 Officer assets"

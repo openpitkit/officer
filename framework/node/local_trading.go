@@ -165,24 +165,20 @@ func (n *localNode) PutTradingAccess(
 			return fmt.Errorf("trading connection %s: %w", access.Connection, domain.ErrNotFound)
 		}
 		if connection.FeeAccount == "" {
-			// A group can hold several senders at any time, so without a fee
-			// account its grant is refused even as the first one.
-			if access.AccountGroup != "" {
-				return domain.ErrFeeAccountRequired
+			// The group check runs before the grants are read.
+			if err := domain.ValidateTradingAccessWithoutFeeAccount(access, nil); err != nil {
+				return err
 			}
-			grants, err := n.realm.ListTradingAccessForConnection(ctx, access.Connection)
+			rows, err := n.realm.ListTradingAccessForConnection(ctx, access.Connection)
 			if err != nil {
 				return fmt.Errorf("read trading access: %w", err)
 			}
-			alreadyGranted := false
-			for _, existing := range grants {
-				if existing.Access.SameSubject(access) {
-					alreadyGranted = true
-					break
-				}
+			grants := make([]domain.TradingAccess, 0, len(rows))
+			for _, row := range rows {
+				grants = append(grants, row.Access)
 			}
-			if !alreadyGranted && len(grants) > 0 {
-				return domain.ErrFeeAccountRequired
+			if err := domain.ValidateTradingAccessWithoutFeeAccount(access, grants); err != nil {
+				return err
 			}
 		}
 	}

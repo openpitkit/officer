@@ -665,7 +665,15 @@ func (r *realmStore) ListTradingAccessForConnection(
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx,
+	return listTradingAccessForConnection(ctx, db, connection)
+}
+
+// listTradingAccessForConnection lists a connection's grants through q, so a
+// restore reads them inside its transaction.
+func listTradingAccessForConnection(
+	ctx context.Context, q sqlQueryer, connection domain.ExternalID,
+) ([]fwstore.TradingAccessListRow, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT COALESCE(a.code, ''), COALESCE(g.code, ''),
 		        COALESCE(member_of.code, ''), ta.venue_account
 		 FROM trading_access ta

@@ -341,6 +341,42 @@ func TestTradingAccessRejectsInvalidSubjectBeforeFeeRule(t *testing.T) {
 	}
 }
 
+// failTradingAccessReadRealm fails every read of a connection's grants.
+type failTradingAccessReadRealm struct {
+	store.RealmStore
+	err error
+}
+
+func (r *failTradingAccessReadRealm) ListTradingAccessForConnection(context.Context, domain.ExternalID) ([]store.TradingAccessListRow, error) {
+	return nil, r.err
+}
+
+func TestTradingAccessGroupRefusalPrecedesGrantRead(t *testing.T) {
+	ctx := context.Background()
+	n, realm, connection := newTradingFeeAccountNode(t)
+	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "team"}); err != nil {
+		t.Fatal(err)
+	}
+	readFailure := errors.New("grant read failed")
+	n.realm = &failTradingAccessReadRealm{RealmStore: realm, err: readFailure}
+	group := domain.TradingAccess{Connection: connection.ExternalID, AccountGroup: "team"}
+	if err := n.PutTradingAccess(ctx, group, true, testCaller); err != domain.ErrFeeAccountRequired {
+		t.Fatalf("group grant error = %v, want bare ErrFeeAccountRequired before the grant read", err)
+	}
+	account := domain.TradingAccess{Connection: connection.ExternalID, Account: "first"}
+	if err := n.PutTradingAccess(ctx, account, true, testCaller); !errors.Is(err, readFailure) || !strings.Contains(err.Error(), "read trading access") {
+		t.Fatalf("account grant error = %v, want the wrapped grant read failure", err)
+	}
+	grants, err := realm.ListTradingAccessForConnection(ctx, connection.ExternalID)
+	if err != nil || len(grants) != 0 {
+		t.Fatalf("refused grants were written: %+v, err=%v", grants, err)
+	}
+	rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionSetTrading}}, 10)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("refused grants were audited: %+v, err=%v", rows, err)
+	}
+}
+
 func TestTradingFeeAccountClearingRules(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

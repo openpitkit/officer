@@ -955,7 +955,7 @@ func (rt *restoreTx) restoreTrading(ctx context.Context, data backup.Data) error
 	if err := rt.restoreTradingAccess(ctx, data.TradingAccess); err != nil {
 		return err
 	}
-	if err := rt.validateGroupGrantFeeAccounts(ctx); err != nil {
+	if err := rt.validateTradingAccessFeeAccounts(ctx); err != nil {
 		return err
 	}
 	return rt.restoreVenueOrders(ctx, data.VenueOrders)
@@ -1114,54 +1114,87 @@ func (rt *restoreTx) restoreTradingAccess(
 	return nil
 }
 
-// validateGroupGrantFeeAccounts keeps the node's group grant rule on restore:
-// a connection whose provider needs a fee account must not hold a group grant
-// without one. It reads the final table state, so a target connection or grant
+// validateTradingAccessFeeAccounts keeps the node's fee-account grant rule on
+// restore: it replays the final grants of each connection without a fee
+// account through domain.ValidateTradingAccessWithoutFeeAccount, each against
+// the grants before it, and asks the provider lookup only when the rule
+// refuses one. It reads the final table state, so a target connection or grant
 // the restore kept counts like an archived one in every mode.
-func (rt *restoreTx) validateGroupGrantFeeAccounts(ctx context.Context) error {
+func (rt *restoreTx) validateTradingAccessFeeAccounts(ctx context.Context) error {
 	rows, err := rt.tx.QueryContext(
 		ctx,
-		`SELECT c.label, c.provider
+		`SELECT c.external_id, c.label, c.provider
 		 FROM trading_connection c
 		 WHERE c.fee_account_id IS NULL
 		   AND EXISTS (
-		     SELECT 1 FROM trading_access a
-		     WHERE a.connection_id = c.id AND a.account_group_id IS NOT NULL
+		     SELECT 1 FROM trading_access a WHERE a.connection_id = c.id
 		   )
 		 ORDER BY c.label`,
 	)
 	if err != nil {
-		return fmt.Errorf("store: restore trading group grants scan: %w", err)
+		return fmt.Errorf("store: restore trading connections without a fee account: %w", err)
 	}
-	connections, err := scanCodePairs(rows)
-	if err != nil {
-		return err
+	defer func() { _ = rows.Close() }()
+	type feeLessConnection struct {
+		id              domain.ExternalID
+		label, provider string
 	}
+	connections := make([]feeLessConnection, 0)
+	for rows.Next() {
+		var (
+			connection feeLessConnection
+			rawID      []byte
+		)
+		if err := rows.Scan(&rawID, &connection.label, &connection.provider); err != nil {
+			return fmt.Errorf("store: scan restored trading connection: %w", err)
+		}
+		if connection.id, err = domain.ExternalIDFromBytes(rawID); err != nil {
+			return fmt.Errorf("store: decode restored trading connection external id: %w", err)
+		}
+		connections = append(connections, connection)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: iterate restored trading connections: %w", err)
+	}
+
 	for _, connection := range connections {
-		label, provider := connection.a, connection.b
-		if rt.tradingProviderRequiresFeeAccount == nil {
-			return fmt.Errorf(
-				"store: restore trading connection %q holds a group grant "+
-					"without a fee account, and the restore cannot check "+
-					"whether provider %q needs one",
-				label, provider,
-			)
-		}
-		required, err := rt.tradingProviderRequiresFeeAccount(provider)
+		listed, err := listTradingAccessForConnection(ctx, rt.tx, connection.id)
 		if err != nil {
-			return fmt.Errorf(
-				"store: restore trading connection %q provider %q: %w",
-				label, provider, err,
-			)
+			return err
 		}
-		if required {
-			return fmt.Errorf(
-				"store: restore trading connection %q: a group grant needs "+
-					"the connection's fee account; the archived connection must "+
-					"carry it, or an insert_missing restore must keep an existing "+
-					"connection that has one: %w",
-				label, domain.ErrFeeAccountRequired,
-			)
+		grants := make([]domain.TradingAccess, 0, len(listed))
+		for _, row := range listed {
+			refused := domain.ValidateTradingAccessWithoutFeeAccount(row.Access, grants)
+			if refused == nil {
+				grants = append(grants, row.Access)
+				continue
+			}
+			subject := row.Access.SubjectLabel()
+			if rt.tradingProviderRequiresFeeAccount == nil {
+				return fmt.Errorf(
+					"store: restore trading connection %q without a fee account "+
+						"holds grant %q, and the restore cannot check whether "+
+						"provider %q needs one",
+					connection.label, subject, connection.provider,
+				)
+			}
+			required, err := rt.tradingProviderRequiresFeeAccount(connection.provider)
+			if err != nil {
+				return fmt.Errorf(
+					"store: restore trading connection %q provider %q: %w",
+					connection.label, connection.provider, err,
+				)
+			}
+			if required {
+				return fmt.Errorf(
+					"store: restore trading connection %q: grant %q needs the "+
+						"connection's fee account; the archived connection must "+
+						"carry it, or an insert_missing restore must keep an "+
+						"existing connection that has one: %w",
+					connection.label, subject, refused,
+				)
+			}
+			break
 		}
 	}
 	return nil

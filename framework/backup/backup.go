@@ -159,9 +159,10 @@ type RestoreOptions struct {
 	// TradingProviderRequiresFeeAccount reports whether a trading provider
 	// needs a connection fee account (its unlinked-fees capability) and fails
 	// for an unknown provider. The store asks it for every connection that
-	// ends the restore holding a group grant without a fee account, and fails
-	// closed when it is nil. It is an in-process restore seam and never part
-	// of the wire form.
+	// ends the restore without a fee account holding grants the node's
+	// fee-account rule refuses (a group grant, or grants to more than one
+	// subject), and fails closed when it is nil. It is an in-process restore
+	// seam and never part of the wire form.
 	TradingProviderRequiresFeeAccount func(provider string) (bool, error) `json:"-"`
 }
 

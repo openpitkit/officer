@@ -5505,11 +5505,12 @@ components:
         accounts_groups into the normalized scope. Applying a live-mode
         connection is refused with 403 live_trading_unavailable before writing;
         insert_missing skips a live connection whose external id already exists.
-        A restore that leaves an account-group trading access grant on a
-        connection without a fee account whose provider has unlinked fees is
-        refused with 409 fee_account_required; the archived connection must
-        carry the fee account, or an insert_missing restore must keep an
-        existing connection that has one (overwrite and replace_all take the
+        A restore that leaves, on a connection without a fee account whose
+        provider has unlinked fees, a group grant or grants to more than one
+        grantee is refused with
+        409 fee_account_required; the archived connection must carry the fee
+        account, or an insert_missing restore must keep an existing connection
+        that has one (overwrite and replace_all take the
         fee account from the archive).
       properties:
         all:
