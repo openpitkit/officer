@@ -73,7 +73,7 @@ func missingAccountRoutes() []missingAccountRoute {
 			name:   "accounts.adjustments",
 			method: http.MethodPost,
 			path:   "/api/v1/accounts/acc-1/adjustments",
-			body:   `{"asset":"USD","balance":{"mode":"absolute","value":"1"}}`,
+			body:   `{"type":"deposit","asset":"USD","balance":{"mode":"absolute","value":"1"}}`,
 			ok:     http.StatusCreated,
 		},
 		{

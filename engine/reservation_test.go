@@ -729,6 +729,7 @@ func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
 		accountID,
 		testOrderXID(0x01),
 		domain.AdjustmentRequest{
+			Type:              domain.AdjustmentTypeDeposit,
 			Asset:             "USDT",
 			AverageEntryPrice: "1",
 			RealizedPnl:       "0",

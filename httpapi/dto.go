@@ -899,7 +899,9 @@ type adjustmentBoundsDTO struct {
 }
 
 // adjustmentRequestDTO is the wire body of POST .../adjustments. All values are
-// exact decimal strings passed through verbatim. ID is the optional
+// exact decimal strings passed through verbatim. Type is the required
+// adjustment type, also passed through verbatim: the node refuses a missing or
+// unknown one, and the echoed request always carries it. ID is the optional
 // caller-supplied opaque public handle for the adjustment record; when omitted
 // the server generates and returns one. It is
 // write-only on create: a supplied id is accepted verbatim and must be unique
@@ -913,6 +915,7 @@ type adjustmentRequestDTO struct {
 	Incoming          *adjustmentAmountDTO `json:"incoming,omitempty"`
 	IncomingBounds    *adjustmentBoundsDTO `json:"incomingBounds,omitempty"`
 	ID                string               `json:"id,omitempty"`
+	Type              string               `json:"type"`
 	Asset             string               `json:"asset"`
 	AverageEntryPrice string               `json:"averageEntryPrice,omitempty"`
 	RealizedPnl       string               `json:"realizedPnl,omitempty"`
@@ -970,6 +973,7 @@ type adjustmentDTO struct {
 // Decimal values are carried through verbatim; never parsed to float.
 func fromAdjustmentRequestDTO(dto adjustmentRequestDTO) domain.AdjustmentRequest {
 	return domain.AdjustmentRequest{
+		Type:              domain.AdjustmentType(dto.Type),
 		Asset:             dto.Asset,
 		AverageEntryPrice: dto.AverageEntryPrice,
 		RealizedPnl:       dto.RealizedPnl,
@@ -1001,6 +1005,7 @@ func fromAdjustmentBoundsDTO(dto *adjustmentBoundsDTO) *domain.AdjustmentBounds 
 
 func toAdjustmentRequestDTO(req domain.AdjustmentRequest) adjustmentRequestDTO {
 	return adjustmentRequestDTO{
+		Type:              string(req.Type),
 		Asset:             req.Asset,
 		AverageEntryPrice: req.AverageEntryPrice,
 		RealizedPnl:       req.RealizedPnl,

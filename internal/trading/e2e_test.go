@@ -183,6 +183,7 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	fundingID, err := domain.NewExternalID()
 	must(err)
 	funding, err := n.ApplyAdjustment(ctx, "desk", fundingID, domain.AdjustmentRequest{
+		Type:  domain.AdjustmentTypeDeposit,
 		Asset: "USD", AverageEntryPrice: "1", RealizedPnl: "0",
 		Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "1000"},
 	}, domain.MissingAccountReject, caller)

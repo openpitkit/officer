@@ -147,7 +147,9 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 	}
 	if _, err := rs.AppendAdjustment(ctx, domain.AccountAdjustmentRecord{
 		Account: "acc-1", Asset: "USD", Source: domain.SourcePanel,
-		Request:  domain.AdjustmentRequest{Asset: "USD"},
+		Request: domain.AdjustmentRequest{
+			Type: domain.AdjustmentTypeDeposit, Asset: "USD",
+		},
 		Accepted: &domain.AdjustmentOutcomeAccepted{BalanceDelta: "1000", BalanceResult: "1000"},
 	}); err != nil {
 		t.Fatalf("AppendAdjustment: %v", err)
@@ -2346,6 +2348,87 @@ func TestBackupRestoreRejectsRowWithoutAt(t *testing.T) {
 	}
 }
 
+// TestBackupRestoreRejectsAdjustmentWithoutType pins that an archive adjustment
+// without a known type fails restore on every path: a new row, and a row
+// insert-missing would otherwise skip as already present.
+func TestBackupRestoreRejectsAdjustmentWithoutType(t *testing.T) {
+	existingID := domain.ExternalID("adj-existing")
+	tests := []struct {
+		name string
+		id   domain.ExternalID
+		typ  domain.AdjustmentType
+		mode backup.RestoreMode
+		want string
+	}{
+		{
+			name: "new row without type",
+			id:   "adj-new",
+			mode: backup.RestoreModeOverwrite,
+			want: "type is required",
+		},
+		{
+			name: "new row with unknown type",
+			id:   "adj-new",
+			typ:  "rebate",
+			mode: backup.RestoreModeOverwrite,
+			want: `type "rebate" must be one of`,
+		},
+		{
+			name: "skipped existing row without type",
+			id:   existingID,
+			mode: backup.RestoreModeInsertMissing,
+			want: "type is required",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, rs := seedAdjustmentFixtures(t)
+			existing := sampleAdjustment()
+			existing.ExternalID = existingID
+			if _, err := rs.AppendAdjustment(ctx, existing); err != nil {
+				t.Fatalf("AppendAdjustment: %v", err)
+			}
+			before := snapshotBackupData(t, ctx, rs)
+
+			rec := sampleAdjustment()
+			rec.ExternalID = test.id
+			rec.At = time.Now().UTC()
+			rec.Request.Type = test.typ
+			scope := backup.Scope{
+				Sections: []backup.Section{backup.SectionActivityHistory},
+			}
+			archive := backup.NewArchive(
+				time.Now().UTC(),
+				"test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)},
+				scope,
+				backup.Data{Adjustments: []domain.AccountAdjustmentRecord{rec}},
+				backup.CredentialFormPlaintext,
+			)
+			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: scope, Mode: test.mode,
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+			}
+			if got := domain.ValidationPointer(err); got != "" {
+				t.Fatalf("RestoreBackup error pointer = %q, want none for an archive refusal", got)
+			}
+			for _, want := range []string{
+				string(backup.SectionActivityHistory), test.id.String(), test.want,
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+				}
+			}
+			after := snapshotBackupData(t, ctx, rs)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("database changed after rejected restore:\n before=%+v\n after=%+v", before, after)
+			}
+		})
+	}
+}
+
 // TestListAuditOrdersSameSecondRowsOfDifferentPrecisionNewestFirst proves the
 // store's own ORDER BY at DESC is chronological straight from SQL. Restore is
 // the one write path where the caller supplies the row time: two audit rows in
@@ -2994,7 +3077,9 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 		}
 		if _, err := rs.AppendAdjustment(ctx, domain.AccountAdjustmentRecord{
 			Account: "extra-acc", Asset: "USD", Source: domain.SourcePanel,
-			Request:  domain.AdjustmentRequest{Asset: "USD"},
+			Request: domain.AdjustmentRequest{
+				Type: domain.AdjustmentTypeDeposit, Asset: "USD",
+			},
 			Accepted: &domain.AdjustmentOutcomeAccepted{BalanceDelta: "7", BalanceResult: "7"},
 		}); err != nil {
 			t.Fatalf("AppendAdjustment(extra): %v", err)
@@ -3399,6 +3484,7 @@ var backupExcludedTables = map[string]bool{
 	"order_amount_kind":        true, // immutable enum dictionary, seeded by Migrate
 	"order_status":             true, // immutable enum dictionary, seeded by Migrate
 	"adjustment_status":        true, // immutable enum dictionary, seeded by Migrate
+	"adjustment_type":          true, // immutable enum dictionary, seeded by Migrate
 	"audit_action":             true, // immutable enum dictionary, seeded by Migrate
 	"attestation_alg":          true, // immutable enum dictionary, seeded by Migrate
 	"attestation_request_type": true, // immutable enum dictionary, seeded by Migrate

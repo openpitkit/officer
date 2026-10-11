@@ -1072,6 +1072,7 @@ func TestService_SearchMarketDataSymbolsNotFound(t *testing.T) {
 
 func sampleAdjustmentRequest() domain.AdjustmentRequest {
 	return domain.AdjustmentRequest{
+		Type:  domain.AdjustmentTypeDeposit,
 		Asset: "USD",
 		Balance: &domain.AdjustmentAmount{
 			Mode: domain.AdjustmentModeDelta, Value: "100",

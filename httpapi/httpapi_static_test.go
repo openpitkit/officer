@@ -60,6 +60,21 @@ func TestServeOpenAPISpec(t *testing.T) {
 	if !strings.Contains(body, limitScopeQuery) {
 		t.Fatal("GET /limits scope filter does not reference LimitScope")
 	}
+	adjustmentTypeQuery := `        - name: type
+          in: query
+          description: >
+            Filter by adjustment type (see ` + "`AdjustmentType`" + `). Absent, empty or
+            ` + "`all`" + ` means no restriction. Any other value returns a 422
+            validation error.
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/AdjustmentType"
+              - type: string
+                enum: [all]
+            default: all`
+	if !strings.Contains(body, adjustmentTypeQuery) {
+		t.Fatal("GET /adjustments type filter does not reference AdjustmentType")
+	}
 	limitScopeDefinition := "    LimitScope:\n      type: string"
 	limitScopeEnum := `      enum: [broker, global, asset, account, account_group, account_asset,
         underlying_asset, settlement_asset, account_underlying_asset,

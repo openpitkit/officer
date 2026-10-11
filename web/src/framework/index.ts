@@ -242,6 +242,8 @@ export {
   type RouteEntry,
 } from "./registries/routes";
 export {
+  ADJUSTMENT_TYPES,
+  adjustmentTypeLabel,
   getAllowedScopes,
   getPolicies,
   getPolicyCatalogEntry,

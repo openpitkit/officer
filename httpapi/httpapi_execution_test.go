@@ -443,7 +443,7 @@ func TestApplyAdjustment_Created(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"asset":"USD","balance":{"mode":"delta","value":"100"}}`)
+		`{"type":"deposit","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
@@ -467,7 +467,7 @@ func TestApplyAdjustment_NoChangeReturnsNoContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"asset":"USD","balance":{"mode":"delta","value":"0"}}`)
+		`{"type":"deposit","asset":"USD","balance":{"mode":"delta","value":"0"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusNoContent {

@@ -69,6 +69,7 @@ import type {
   Adjustment,
   AdjustmentAmount,
   AdjustmentMode,
+  AdjustmentType,
   Balance,
   BalanceListFilters,
   BoundsPair,
@@ -78,6 +79,8 @@ import type {
 } from "@/api/types";
 import { useAdjustmentsPage } from "@/api/useAdjustments";
 import { useBalancesPage } from "@/api/useBalances";
+import { ADJUSTMENT_TYPES, adjustmentTypeLabel } from "@/api/vocabulary";
+import { AdjustmentTypeField } from "@/components/AdjustmentTypeField";
 import { Autocomplete } from "@/components/Autocomplete";
 import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import { sortDirection } from "@/lib/sortDirection";
@@ -324,6 +327,7 @@ function adjustmentCsvRow(adj: Adjustment): string[] {
     adj.account,
     adj.asset,
     adj.source,
+    adj.request.type,
     adj.status,
     adj.request.balance?.mode ?? "",
     adj.request.balance?.value ?? "",
@@ -1385,6 +1389,7 @@ function AdjustmentPanel({
   }, []);
   const [account, setAccount] = useState(initialAccount);
   const [asset, setAsset] = useState(initialAsset);
+  const [type, setType] = useState<AdjustmentType | "">("");
   const [available, setAvailable] =
     useState<AmountDraftState>(emptyAmountDraft);
   const [held, setHeld] = useState<AmountDraftState>(emptyAmountDraft);
@@ -1469,7 +1474,9 @@ function AdjustmentPanel({
     hasValue(realizedPnl) ||
     hasBoundsChange;
   const hasFilledField =
-    (!lockIdentity && (hasValue(account) || hasValue(asset))) || hasChanges;
+    (!lockIdentity && (hasValue(account) || hasValue(asset))) ||
+    type !== "" ||
+    hasChanges;
   const canSubmit =
     trimAccount !== "" &&
     trimAsset !== "" &&
@@ -1486,6 +1493,7 @@ function AdjustmentPanel({
       setAccount("");
       setAsset("");
     }
+    setType("");
     setAvailable(emptyAmountDraft());
     setHeld(emptyAmountDraft());
     setIncoming(emptyAmountDraft());
@@ -1506,6 +1514,10 @@ function AdjustmentPanel({
     }
     if (!trimAsset) {
       setError(t("dialog.error.assetRequired"));
+      return;
+    }
+    if (type === "") {
+      setError(t("dialog.error.typeRequired"));
       return;
     }
     if (!hasChanges) {
@@ -1529,6 +1541,7 @@ function AdjustmentPanel({
     setError(null);
     try {
       const body: Parameters<typeof createAdjustment>[1] = {
+        type,
         asset: trimAsset,
       };
       if (hasValue(available.value)) {
@@ -1677,6 +1690,12 @@ function AdjustmentPanel({
             />
           </div>
         </div>
+
+        <AdjustmentTypeField
+          value={type}
+          onChange={setType}
+          disabled={disabled}
+        />
 
         <div className="border border-border bg-bg">
           <div className="grid grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] gap-4 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted max-md:hidden">
@@ -2567,6 +2586,8 @@ interface AdjustDialogProps {
   onOpenChange: (open: boolean) => void;
   initialAccount: string;
   initialAsset: string;
+  /** Type to preseed from a clone; empty leaves the choice to the operator. */
+  initialType: AdjustmentType | "";
   /** Balance amount to preseed from a row (empty leaves the field disabled). */
   initialBalanceMode: AdjustmentMode;
   initialBalanceValue: string;
@@ -2593,6 +2614,7 @@ function AdjustDialog({
   onOpenChange,
   initialAccount,
   initialAsset,
+  initialType,
   initialBalanceMode,
   initialBalanceValue,
   initialHeldMode,
@@ -2629,6 +2651,7 @@ function AdjustDialog({
 
   const [account, setAccount] = useState(initialAccount);
   const [asset, setAsset] = useState(initialAsset);
+  const [type, setType] = useState<AdjustmentType | "">(initialType);
   const [avgPrice, setAvgPrice] = useState(initialAvgPrice ?? "");
   const [realizedPnl, setRealizedPnl] = useState(initialRealizedPnl ?? "");
   const [balance, setBalance] = useState<AmountFieldState>(() =>
@@ -2677,6 +2700,7 @@ function AdjustDialog({
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccount(initialAccount);
       setAsset(initialAsset);
+      setType(initialType);
       setAvgPrice(initialAvgPrice ?? "");
       setRealizedPnl(initialRealizedPnl ?? "");
       setBalance(seedAmount(initialBalanceMode, initialBalanceValue));
@@ -2698,6 +2722,7 @@ function AdjustDialog({
     open,
     initialAccount,
     initialAsset,
+    initialType,
     initialBalanceMode,
     initialBalanceValue,
     initialHeldMode,
@@ -2764,6 +2789,7 @@ function AdjustDialog({
   const resetAllFields = () => {
     setAccount("");
     setAsset("");
+    setType("");
     setAvgPrice("");
     setRealizedPnl("");
     setBalance(emptyAmount());
@@ -2788,6 +2814,10 @@ function AdjustDialog({
       setError(t("dialog.error.assetRequired"));
       return;
     }
+    if (type === "") {
+      setError(t("dialog.error.typeRequired"));
+      return;
+    }
     if (!hasModalChanges) {
       setError(t("panel.noChangesError"));
       return;
@@ -2800,7 +2830,10 @@ function AdjustDialog({
     setError(null);
     setOutcome(null);
     try {
-      const body: Parameters<typeof createAdjustment>[1] = { asset: trimAsset };
+      const body: Parameters<typeof createAdjustment>[1] = {
+        type,
+        asset: trimAsset,
+      };
       if (avgPrice.trim()) {
         body.averageEntryPrice = avgPrice.trim();
       }
@@ -2893,6 +2926,12 @@ function AdjustDialog({
                 />
               </div>
             </div>
+
+            <AdjustmentTypeField
+              value={type}
+              onChange={setType}
+              disabled={busy}
+            />
 
             <div className="space-y-1.5">
               <Label htmlFor="adj-realized-pnl">
@@ -3212,6 +3251,9 @@ function HistoryRow({
           {adj.source}
         </Badge>
       </TableCell>
+      <TableCell className="text-xs">
+        {adjustmentTypeLabel(t, adj.request.type)}
+      </TableCell>
       <TableCell className="nums text-xs text-muted-lt">
         {reqParts.length > 0 ? reqParts.join(" · ") : "-"}
       </TableCell>
@@ -3270,6 +3312,7 @@ const HISTORY_SORT_KEYS = new Set([
   "principal",
   "source",
   "status",
+  "type",
 ]);
 
 function sortFromParams(
@@ -3314,6 +3357,15 @@ export function Positions() {
     const source = searchParams.get("source");
     return SOURCES.includes(source as Source) ? (source as Source) : "__all__";
   });
+  // The history type as the link or the Type control states it, "" for every
+  // type. Only a known type narrows the history; any other value is reported
+  // instead of being read as every type.
+  const [typeParam, setTypeParam] = useState(() => {
+    const type = searchParams.get("type");
+    return type === null || type === "all" ? "" : type;
+  });
+  const typeFilter = ADJUSTMENT_TYPES.find((type) => type === typeParam);
+  const unknownTypeParam = typeParam !== "" && typeFilter === undefined;
   const [historyExternalId, setHistoryExternalId] = useState(
     searchParams.get("id") ?? "",
   );
@@ -3399,6 +3451,7 @@ export function Positions() {
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustAccount, setAdjustAccount] = useState("");
   const [adjustAsset, setAdjustAsset] = useState("");
+  const [adjustType, setAdjustType] = useState<AdjustmentType | "">("");
   const [adjustBalanceMode, setAdjustBalanceMode] =
     useState<AdjustmentMode>("absolute");
   const [adjustBalanceValue, setAdjustBalanceValue] = useState("");
@@ -3521,6 +3574,7 @@ export function Positions() {
     account: deferredAccount || undefined,
     asset: deferredAsset || undefined,
     source: deferredSource,
+    type: typeFilter,
     status: historyStatusFilter === "__all__" ? undefined : historyStatusFilter,
     ...requestHistoryAt,
     sort: historySort.sort,
@@ -3636,6 +3690,7 @@ export function Positions() {
     const req = adj.request;
     setAdjustAccount(adj.account);
     setAdjustAsset(adj.asset);
+    setAdjustType(req.type);
     setAdjustBalanceMode(req.balance?.mode ?? "absolute");
     setAdjustBalanceValue(req.balance?.value ?? "");
     setAdjustHeldMode(req.held?.mode);
@@ -3795,6 +3850,7 @@ export function Positions() {
         account: deferredAccount || undefined,
         asset: deferredAsset || undefined,
         source: deferredSource,
+        type: typeFilter,
         limit: MAX_LIST_LIMIT,
       });
       downloadCsv("position-adjustment-history.csv", [
@@ -3804,6 +3860,7 @@ export function Positions() {
           "account",
           "asset",
           "source",
+          "type",
           "status",
           "balance_mode",
           "balance_value",
@@ -3856,6 +3913,9 @@ export function Positions() {
     if (sourceFilter !== "__all__") {
       query.set("source", sourceFilter);
     }
+    if (typeParam !== "") {
+      query.set("type", typeParam);
+    }
     if (historyStatusFilter !== "__all__") {
       query.set("status", historyStatusFilter);
     }
@@ -3889,6 +3949,7 @@ export function Positions() {
     balanceSort,
     sourceFilter,
     tab,
+    typeParam,
   ]);
   const balances =
     balancesLoad.load.state === "ready" ? balancesLoad.load.data.items : [];
@@ -4010,6 +4071,20 @@ export function Positions() {
           value: sourceFilter,
           clear: () => {
             setSourceFilter("__all__");
+            resetHistoryPage();
+          },
+        }
+      : null,
+    tab === "history" && typeParam !== ""
+      ? {
+          key: "type",
+          label: t("history.typeLabel"),
+          value:
+            typeFilter === undefined
+              ? typeParam
+              : adjustmentTypeLabel(t, typeFilter),
+          clear: () => {
+            setTypeParam("");
             resetHistoryPage();
           },
         }
@@ -4152,7 +4227,7 @@ export function Positions() {
               size="sm"
               variant="outline"
               onClick={() => void exportHistory()}
-              disabled={historyExportBusy}
+              disabled={historyExportBusy || unknownTypeParam}
             >
               <Download className="h-3.5 w-3.5" />
               {historyExportBusy
@@ -4320,6 +4395,24 @@ export function Positions() {
                 ]}
                 onChange={(value) => {
                   setSourceFilter(value as Source | "__all__");
+                  resetHistoryPage();
+                }}
+              />
+            </div>
+            <div className="grid gap-1">
+              <FieldLabel>{t("history.typeLabel")}</FieldLabel>
+              <Segmented
+                ariaLabel={t("history.typeLabel")}
+                value={typeFilter ?? (typeParam === "" ? "__all__" : undefined)}
+                options={[
+                  { value: "__all__", label: t("history.sourceAll") },
+                  ...ADJUSTMENT_TYPES.map((type) => ({
+                    value: type,
+                    label: adjustmentTypeLabel(t, type),
+                  })),
+                ]}
+                onChange={(value) => {
+                  setTypeParam(value === "__all__" ? "" : value);
                   resetHistoryPage();
                 }}
               />
@@ -4538,17 +4631,23 @@ export function Positions() {
           </p>
 
           {historyExportError && <ErrorBanner message={historyExportError} />}
-          {adjustmentsLoad.load.state === "loading" && (
-            <TableSkeleton cols={9} />
+          {unknownTypeParam && (
+            <ErrorBanner
+              message={t("history.unknownType", { type: typeParam })}
+            />
           )}
-          <StaleState {...adjustmentsLoad} />
-          {adjustmentsLoad.load.state === "error" && (
+          {!unknownTypeParam && adjustmentsLoad.load.state === "loading" && (
+            <TableSkeleton cols={10} />
+          )}
+          {!unknownTypeParam && <StaleState {...adjustmentsLoad} />}
+          {!unknownTypeParam && adjustmentsLoad.load.state === "error" && (
             <ErrorState
               message={adjustmentsLoad.load.error}
               onRetry={adjustmentsLoad.reload}
             />
           )}
-          {adjustmentsLoad.load.state === "ready" &&
+          {!unknownTypeParam &&
+            adjustmentsLoad.load.state === "ready" &&
             (adjustmentsLoad.load.data.total === 0 ? (
               <EmptyState
                 title={t("history.empty.title")}
@@ -4641,6 +4740,26 @@ export function Positions() {
                         />
                       </TableHead>
                       <TableHead>
+                        <SortableHeader
+                          field="type"
+                          label={t("history.columns.type")}
+                          description={t("history.columnDescriptions.type")}
+                          direction={sortDirection(
+                            historySort.sort,
+                            historySort.order,
+                            "type",
+                          )}
+                          onSort={(field, next) => {
+                            setHistorySort(
+                              next === "none"
+                                ? {}
+                                : { sort: field, order: next },
+                            );
+                            resetHistoryPage();
+                          }}
+                        />
+                      </TableHead>
+                      <TableHead>
                         <ColumnHeader
                           description={t("history.columnDescriptions.request")}
                         >
@@ -4709,6 +4828,7 @@ export function Positions() {
         onOpenChange={setAdjustOpen}
         initialAccount={adjustAccount}
         initialAsset={adjustAsset}
+        initialType={adjustType}
         initialBalanceMode={adjustBalanceMode}
         initialBalanceValue={adjustBalanceValue}
         initialHeldMode={adjustHeldMode}

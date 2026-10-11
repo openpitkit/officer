@@ -16,6 +16,8 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 export {
+  ADJUSTMENT_TYPES,
+  adjustmentTypeLabel,
   getAllowedScopes,
   getPolicies,
   getPolicyCatalogEntry,

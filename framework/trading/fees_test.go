@@ -159,6 +159,7 @@ func TestFeeIntakeExactAssetsAndReplay(t *testing.T) {
 		BaseAsset: "ETHER", QuoteAsset: "USD", Enabled: false,
 	}))
 	must(t, f.adjustmentSink(testCtx, "desk", "seed-ether", domain.AdjustmentRequest{
+		Type:  domain.AdjustmentTypeDeposit,
 		Asset: "ETHER", Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "1"},
 	}))
 	v.fees = []trading.Fee{postedFee("USD-fee", "USD", "-0.123456789"), postedFee("crypto-fee", "ETH", "-0.000195"),
@@ -198,7 +199,23 @@ func TestFeeIntakeExactAssetsAndReplay(t *testing.T) {
 	feeBalance(t, f, "USD", "997.876543211")
 	feeBalance(t, f, "ETHER", "0.999805")
 	id := domain.ExternalID("trading:" + f.connection.ExternalID.String() + ":fee:USD-fee")
+	records, err := f.st.ListAdjustments(testCtx, "desk", "", 10)
+	must(t, err)
+	posted := 0
+	for _, record := range records {
+		if record.ExternalID != id {
+			continue
+		}
+		posted++
+		if record.Request.Type != domain.AdjustmentTypeVenueFee {
+			t.Fatalf("fee adjustment type = %q, want venue_fee", record.Request.Type)
+		}
+	}
+	if posted != 1 {
+		t.Fatalf("fee adjustments under %q = %d, want 1: %+v", id, posted, records)
+	}
 	if err := f.adjustmentSink(testCtx, "desk", id, domain.AdjustmentRequest{
+		Type:  domain.AdjustmentTypeVenueFee,
 		Asset: "USD", Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "-0.123456789"},
 	}); !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("fee adjustment id was not deterministic: %v", err)

@@ -16,6 +16,12 @@
     "account_underlying_asset": "账户 + 标的资产",
     "account_settlement_asset": "账户 + 结算资产"
   },
+  "adjustmentType": {
+    "venue_fee": "交易场所费用",
+    "deposit": "入金",
+    "withdrawal": "出金",
+    "correction": "手动更正"
+  },
   "kindHint": {
     "rate_limit": {
       "max_orders": "integer > 0, <= 1e9",

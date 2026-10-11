@@ -196,7 +196,8 @@ GROUPS = [
 # blocked/reason. Code is the immutable handle; title is the display name.
 # Balance adjustments use mode "absolute" on the `balance` field (absolute USD
 # value). For the underwater desks we also set a large negative `held` to model
-# locked losses.
+# locked losses. Every adjustment names its `type`: `deposit` for the funding
+# balances, `correction` for the locked losses.
 ACCOUNTS = [
     # --- Whales -------------------------------------------------------------
     {
@@ -205,7 +206,7 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Patriarch of the McMoneyface dynasty. Buys dips; is the dip.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "12500000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "12500000.00"}},
         ],
         "blocked": False,
     },
@@ -215,7 +216,7 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Technically we do rocket surgery. Financially, same thing.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "9800000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "9800000.00"}},
         ],
         "blocked": False,
     },
@@ -225,7 +226,7 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Wealth so old it predates fiat. Tips the sommelier in basis points.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "21000000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "21000000.00"}},
         ],
         "blocked": False,
     },
@@ -235,7 +236,7 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Deep pockets, shallow convictions. Buys conviction by the case.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "7400000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "7400000.00"}},
         ],
         "blocked": False,
     },
@@ -245,7 +246,7 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Started with a dollar and a dream. The dollar did the heavy lifting.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "15300000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "15300000.00"}},
         ],
         "blocked": False,
     },
@@ -256,7 +257,7 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "We never sell. Not once. Not ever. (We always sell at the bottom.)",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "3200000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "3200000.00"}},
         ],
         "blocked": False,
     },
@@ -266,7 +267,7 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "Late to every trade since inception. Holding the bag professionally.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "750000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "750000.00"}},
         ],
         "blocked": False,
     },
@@ -276,7 +277,7 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "Our research is flawless - six months after the fact.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "1100000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "1100000.00"}},
         ],
         "blocked": False,
     },
@@ -286,7 +287,7 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "Position sizing is for people who plan to be here next quarter.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "640000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "640000.00"}},
         ],
         "blocked": False,
     },
@@ -296,7 +297,7 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "Full-service firm: we supply the leverage, you supply the regret.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "980000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "980000.00"}},
         ],
         "blocked": False,
     },
@@ -306,7 +307,7 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "The market took something from us. We're getting it back, one fat finger at a time.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "430000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "430000.00"}},
         ],
         "blocked": False,
     },
@@ -320,7 +321,7 @@ ACCOUNTS = [
             "theoretical. Kept blocked as a cautionary exhibit for pre-trade risk."
         ),
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "500000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "500000.00"}},
         ],
         "blocked": True,
         "block_reason": "Trading halt - runaway-algorithm kill-switch activated.",
@@ -331,7 +332,7 @@ ACCOUNTS = [
         "group": "algos",
         "notes": "Quant shop. Occasionally trades on data that doesn't exist. The P&L agrees.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "2600000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "2600000.00"}},
         ],
         "blocked": False,
     },
@@ -341,7 +342,7 @@ ACCOUNTS = [
         "group": "algos",
         "notes": "100% win rate in simulation. Reality has filed a formal complaint.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "1750000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "1750000.00"}},
         ],
         "blocked": False,
     },
@@ -352,9 +353,9 @@ ACCOUNTS = [
         "group": "blowups",
         "notes": "Partners since 2019. Still partners. The margin desk is not a partner.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "85000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "85000.00"}},
             # Held models outstanding reserve from underwater positions.
-            {"asset": "USD", "held": {"mode": "absolute", "value": "-240000.00"}},
+            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-240000.00"}},
         ],
         "blocked": False,
     },
@@ -364,8 +365,8 @@ ACCOUNTS = [
         "group": "blowups",
         "notes": "Strategy document available on request. Results as advertised.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "42000.00"}},
-            {"asset": "USD", "held": {"mode": "absolute", "value": "-110000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "42000.00"}},
+            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-110000.00"}},
         ],
         "blocked": False,
     },
@@ -375,8 +376,8 @@ ACCOUNTS = [
         "group": "blowups",
         "notes": "Specialists in falling assets. The catching is going great; the holding, less so.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "60000.00"}},
-            {"asset": "USD", "held": {"mode": "absolute", "value": "-180000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "60000.00"}},
+            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-180000.00"}},
         ],
         "blocked": False,
     },
@@ -386,8 +387,8 @@ ACCOUNTS = [
         "group": "blowups",
         "notes": "Every position costs money to hold. They hold many positions.",
         "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "33000.00"}},
-            {"asset": "USD", "held": {"mode": "absolute", "value": "-90000.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "33000.00"}},
+            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-90000.00"}},
         ],
         "blocked": False,
     },
@@ -402,9 +403,9 @@ ACCOUNTS = [
         ),
         "balances": [
             # Nominal balance left from the estate.
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "1.00"}},
+            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "1.00"}},
             # Catastrophic negative held: the underwater desk, deep in the red.
-            {"asset": "USD", "held": {"mode": "absolute", "value": "-47300000.00"}},
+            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-47300000.00"}},
         ],
         "blocked": True,
         "block_reason": "Regulatory hold - pending liquidation proceedings.",
@@ -913,9 +914,9 @@ def seed(base: str) -> None:
         if acct.get("notes"):
             _put(base, f"/accounts/{url_id}/notes", {"notes": acct["notes"]})
 
-        # Balances
+        # Balances, each posted with the adjustment type its entry names.
         for adj in acct.get("balances", []):
-            body: dict[str, Any] = {"asset": adj["asset"]}
+            body: dict[str, Any] = {"type": adj["type"], "asset": adj["asset"]}
             if "balance" in adj:
                 body["balance"] = adj["balance"]
             if "held" in adj:

@@ -87,6 +87,7 @@
         "At": "2026-06-22T10:00:00Z",
         "ExternalID": "EREREREREREREREREREREQ",
         "Request": {
+          "type": "deposit",
           "asset": ""
         },
         "Accepted": {

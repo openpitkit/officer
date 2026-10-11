@@ -216,7 +216,9 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 		Asset:     "AAPL",
 		Principal: "operator",
 		Source:    domain.SourcePanel,
-		Request:   domain.AdjustmentRequest{Asset: "AAPL"},
+		Request: domain.AdjustmentRequest{
+			Type: domain.AdjustmentTypeCorrection, Asset: "AAPL",
+		},
 		Accepted: &domain.AdjustmentOutcomeAccepted{
 			BalanceDelta: "0", BalanceResult: "0",
 		},

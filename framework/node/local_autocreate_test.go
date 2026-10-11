@@ -225,6 +225,7 @@ func TestAutoCreateInheritsDefaultCurrencyWithoutAccountOverride(t *testing.T) {
 		"fresh",
 		"",
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: "USD",
 			Balance: &domain.AdjustmentAmount{
 				Mode: domain.AdjustmentModeAbsolute, Value: "10",
@@ -291,6 +292,7 @@ func TestAutoCreatePublishesAccountWithoutRebuild(t *testing.T) {
 		"fresh",
 		"",
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: assetCode,
 			Balance: &domain.AdjustmentAmount{
 				Mode: domain.AdjustmentModeAbsolute, Value: "10",

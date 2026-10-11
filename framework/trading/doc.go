@@ -49,7 +49,9 @@
 // in the received asset) as
 // separate account activities, typically at end of day. FeeReader takes them
 // through AdjustmentSink with a deterministic activity id when the fee asset
-// maps unambiguously. A connection's fee account receives every unlinked fee
+// maps unambiguously. The adjustment is typed venue_fee, and its external id,
+// trading:<connection>:fee:<fee id>, is the venue reference. A connection's
+// fee account receives every unlinked fee
 // whole, as posted, and may be any Officer account. Without a fee account, the
 // single Officer account that can send through the connection, directly or
 // through a granted group, receives fees. A group grant always needs the fee

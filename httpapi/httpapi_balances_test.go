@@ -575,3 +575,52 @@ func TestListAdjustments_PropagatesFilters(t *testing.T) {
 		t.Fatalf("envelope = %v", m)
 	}
 }
+
+// TestListAdjustments_TypeFilter checks a known type reaches the store filter,
+// while an absent, empty or `all` type leaves it unfiltered.
+func TestListAdjustments_TypeFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		want        domain.AdjustmentType
+	}{
+		{"absent", "", ""},
+		{"empty", "?type=", ""},
+		{"all", "?type=all", ""},
+		{"venue_fee", "?type=venue_fee", domain.AdjustmentTypeVenueFee},
+		{"withdrawal", "?type=withdrawal", domain.AdjustmentTypeWithdrawal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/api/v1/adjustments"+tc.query, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if svc.adjustmentFilter.Type != tc.want {
+				t.Fatalf("type = %q, want %q", svc.adjustmentFilter.Type, tc.want)
+			}
+		})
+	}
+}
+
+func TestListAdjustments_SortByType(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/adjustments?sort=type&order=desc", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.adjustmentFilter.Sort.Column != "type" || !svc.adjustmentFilter.Sort.Descending {
+		t.Fatalf("sort = %+v", svc.adjustmentFilter.Sort)
+	}
+}

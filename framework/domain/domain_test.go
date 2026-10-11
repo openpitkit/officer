@@ -194,6 +194,54 @@ func TestValidatePnlHaltReason(t *testing.T) {
 	}
 }
 
+func TestValidateAdjustmentType(t *testing.T) {
+	t.Parallel()
+
+	for _, typ := range []domain.AdjustmentType{
+		domain.AdjustmentTypeVenueFee,
+		domain.AdjustmentTypeDeposit,
+		domain.AdjustmentTypeWithdrawal,
+		domain.AdjustmentTypeCorrection,
+	} {
+		if err := domain.ValidateAdjustmentType(typ); err != nil {
+			t.Errorf("ValidateAdjustmentType(%q): %v", typ, err)
+		}
+	}
+
+	bad := []struct {
+		name       string
+		typ        domain.AdjustmentType
+		constraint string
+		want       string
+	}{
+		{"empty", "", "required", "type is required"},
+		{"unknown", "rebate", "unsupported_value", `type "rebate" must be one of`},
+		{"wrong case", "DEPOSIT", "unsupported_value", `type "DEPOSIT" must be one of`},
+	}
+	for _, tc := range bad {
+		t.Run("err/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := domain.ValidateAdjustmentType(tc.typ)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("expected ErrInvalid, got %v", err)
+			}
+			if got := domain.ValidationPointer(err); got != "/type" {
+				t.Fatalf("ValidationPointer = %q, want %q", got, "/type")
+			}
+			if got := domain.ValidationConstraint(err); got != tc.constraint {
+				t.Fatalf("ValidationConstraint = %q, want %q", got, tc.constraint)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, tc.want) {
+				t.Fatalf("error %q does not contain %q", msg, tc.want)
+			}
+			if !strings.Contains(msg, `"venue_fee", "deposit", "withdrawal" or "correction"`) {
+				t.Fatalf("error %q does not list the allowed values", msg)
+			}
+		})
+	}
+}
+
 func TestValidateTitle(t *testing.T) {
 	t.Parallel()
 

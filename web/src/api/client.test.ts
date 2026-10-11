@@ -2293,7 +2293,11 @@ describe("append-only list clients", () => {
               source: "panel",
               asset: "USD",
               status: "accepted",
-              request: { asset: "USD", realizedPnl: "-12.50" },
+              request: {
+                type: "correction",
+                asset: "USD",
+                realizedPnl: "-12.50",
+              },
               outcome: {
                 accepted: {
                   realizedPnlResult: { delta: "-12.50", result: "-12.50" },
@@ -2355,6 +2359,7 @@ describe("append-only list clients", () => {
       asset: "USD",
       assetMatch: "exact",
       source: "panel",
+      type: "venue_fee",
       status: "accepted",
       atMode: "after",
       atMin: "2026-06-24T00:00:00Z",
@@ -2404,6 +2409,7 @@ describe("append-only list clients", () => {
       items: [
         {
           id: "adj-1",
+          request: { type: "correction", asset: "USD" },
           accepted: {
             realizedPnlResult: { delta: "-12.50", result: "-12.50" },
             realizedPnlHaltReason: "arithmetic_overflow",
@@ -2435,6 +2441,7 @@ describe("append-only list clients", () => {
     expect(adjustmentUrl.searchParams.get("offset")).toBe("100");
     expect(adjustmentUrl.searchParams.get("id")).toBe("adj-1");
     expect(adjustmentUrl.searchParams.get("status")).toBe("accepted");
+    expect(adjustmentUrl.searchParams.get("type")).toBe("venue_fee");
     expect(tradeUrl.searchParams.get("quantityMode")).toBe("gte");
     expect(tradeUrl.searchParams.get("offset")).toBe("50");
     expect(tradeUrl.searchParams.get("id")).toBe("trd-1");
@@ -2455,7 +2462,7 @@ describe("append-only list clients", () => {
 
     const result = await api().createAdjustment(
       "desk-alpha",
-      { asset: "USD" },
+      { type: "deposit", asset: "USD" },
       "reject",
     );
 
@@ -2466,10 +2473,74 @@ describe("append-only list clients", () => {
     );
   });
 
+  it("posts the adjustment type and reads it back from the record", async () => {
+    const body = {
+      type: "withdrawal",
+      asset: "USD",
+      balance: { mode: "delta", value: "-25" },
+    } as const;
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        adjustment: {
+          id: "adj-2",
+          account: "desk-alpha",
+          at: "2026-06-24T00:00:00Z",
+          source: "panel",
+          status: "accepted",
+          request: body,
+          outcome: { accepted: { balanceDelta: "-25", balanceResult: "75" } },
+        },
+      }),
+    );
+
+    const result = await api().createAdjustment("desk-alpha", body, "reject");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/accounts/desk-alpha/adjustments?missingAccount=reject",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) }),
+    );
+    expect(result?.request).toMatchObject({ type: "withdrawal", asset: "USD" });
+  });
+
+  it.each([
+    ["missing", { asset: "USD" }],
+    ["unknown", { type: "fee", asset: "USD" }],
+    ["empty", { type: "", asset: "USD" }],
+    ["only under the PascalCase key", { Type: "deposit", asset: "USD" }],
+  ])("rejects an adjustment record whose type is %s", async (_, request) => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        adjustments: [
+          {
+            id: "adj-3",
+            account: "desk-alpha",
+            at: "2026-06-24T00:00:00Z",
+            source: "panel",
+            status: "accepted",
+            request,
+          },
+        ],
+        total: 1,
+      }),
+    );
+
+    const result = api().fetchAdjustmentsPage();
+
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "internal",
+      message: "Invalid or missing adjustment type in the API response",
+    });
+  });
+
   it("resends an adjustment with missingAccount=create after account creation is confirmed", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    await api().createAdjustment("desk-alpha", { asset: "USD" }, "create");
+    await api().createAdjustment(
+      "desk-alpha",
+      { type: "deposit", asset: "USD" },
+      "create",
+    );
 
     expect(fetch).toHaveBeenCalledWith(
       "/app/api/v1/accounts/desk-alpha/adjustments?missingAccount=create",
@@ -2492,7 +2563,11 @@ describe("append-only list clients", () => {
     );
 
     await expect(
-      api().createAdjustment("acc-1", { asset: "USD" }, "reject"),
+      api().createAdjustment(
+        "acc-1",
+        { type: "deposit", asset: "USD" },
+        "reject",
+      ),
     ).rejects.toMatchObject({
       name: "ApiError",
       code: "account_missing",

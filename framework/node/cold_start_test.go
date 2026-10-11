@@ -153,6 +153,7 @@ func TestLocalNode_AdjustmentUnderOperatorCallerOnColdStore(t *testing.T) {
 	}
 	rec, err := n.ApplyAdjustment(ctx, "cold", domain.ExternalID(""),
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: "USD",
 			Balance: &domain.AdjustmentAmount{
 				Mode:  domain.AdjustmentModeAbsolute,
@@ -187,6 +188,7 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 	}
 	if _, err := n.ApplyAdjustment(ctx, "cold", domain.ExternalID(""),
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: "USD",
 			Balance: &domain.AdjustmentAmount{
 				Mode:  domain.AdjustmentModeAbsolute,

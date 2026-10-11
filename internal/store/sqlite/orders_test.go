@@ -2150,6 +2150,7 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 				Asset:   "USD",
 				Source:  domain.SourcePanel,
 				Request: domain.AdjustmentRequest{
+					Type:        domain.AdjustmentTypeCorrection,
 					Asset:       "USD",
 					RealizedPnl: "10",
 				},

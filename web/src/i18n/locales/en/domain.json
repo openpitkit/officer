@@ -16,6 +16,12 @@
     "account_underlying_asset": "Account + underlying asset",
     "account_settlement_asset": "Account + settlement asset"
   },
+  "adjustmentType": {
+    "venue_fee": "Venue fee",
+    "deposit": "Deposit",
+    "withdrawal": "Withdrawal",
+    "correction": "Manual correction"
+  },
   "kindHint": {
     "rate_limit": {
       "max_orders": "integer > 0, <= 1e9",

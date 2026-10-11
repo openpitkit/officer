@@ -120,6 +120,11 @@ func (n *localNode) ApplyAdjustment(
 	req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
+	// Every adjustment that becomes a record carries its producer-stated type;
+	// a request without a known one changes nothing.
+	if err := domain.ValidateAdjustmentType(req.Type); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
 	if err := domain.ValidateAsset(req.Asset); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
@@ -267,7 +272,8 @@ func (n *localNode) ApplyAdjustment(
 			Account: account,
 			Asset:   req.Asset,
 			Detail: adjustmentDetail(
-				account, req.Asset, state.result.Accepted != nil,
+				account, req.Asset, req.Type, externalID,
+				state.result.Accepted != nil,
 			),
 		})
 		stored, recordErr := n.realm.RecordAccountAdjustment(
@@ -325,7 +331,12 @@ func (n *localNode) SetBalanceRealizedPnl(
 		ctx,
 		account,
 		domain.ExternalID(""),
-		domain.AdjustmentRequest{Asset: asset, RealizedPnl: realizedPnl},
+		domain.AdjustmentRequest{
+			// Setting realized P&L by hand is a correction of the books.
+			Type:        domain.AdjustmentTypeCorrection,
+			Asset:       asset,
+			RealizedPnl: realizedPnl,
+		},
 		missing,
 		caller,
 	)

@@ -127,11 +127,14 @@
     "sectionLabel": "调整历史",
     "sourceLabel": "来源",
     "sourceAll": "全部",
+    "typeLabel": "类型",
+    "unknownType": "链接指定了未知的调整类型：{{type}}。请选择类型以显示调整历史。",
     "columns": {
       "time": "时间",
       "account": "账户",
       "asset": "资产",
       "source": "来源",
+      "type": "类型",
       "request": "请求",
       "status": "状态",
       "outcome": "结果",
@@ -142,6 +145,7 @@
       "account": "此列显示调整目标账户。",
       "asset": "此列显示调整目标资产。",
       "source": "此列显示调整来自面板、REST、MCP 或其他来源。",
+      "type": "此列显示调整记录的类型：交易场所费用、入金、出金或手动更正。",
       "request": "此列显示请求的余额、冻结、待入账、平均价格或已实现盈亏变更。",
       "status": "此列显示调整被接受还是拒绝。",
       "outcome": "此列显示保存的结果或拒绝摘要。",
@@ -175,6 +179,7 @@
     "fields": {
       "account": "账户",
       "asset": "资产",
+      "type": "类型",
       "avgEntryPrice": "平均建仓价（可选）",
       "avgEntryPriceHint": "正小数。留空则保留当前值。",
       "realizedPnl": "已实现盈亏",
@@ -212,7 +217,8 @@
     },
     "error": {
       "accountRequired": "账户为必填项。",
-      "assetRequired": "资产为必填项。"
+      "assetRequired": "资产为必填项。",
+      "typeRequired": "请选择调整类型。"
     }
   }
 }

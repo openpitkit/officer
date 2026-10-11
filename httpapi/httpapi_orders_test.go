@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -896,6 +897,7 @@ func TestListAdjustments_BadQueryParams(t *testing.T) {
 	}{
 		{"unknown_sort", "?sort=unknown"},
 		{"invalid_status", "?status=bogus"},
+		{"invalid_type", "?type=bogus"},
 		{"invalid_time_mode", "?atMode=around&atMin=2026-01-02T03:04:05Z"},
 	}
 	for _, tc := range tests {
@@ -1084,7 +1086,7 @@ func TestApplyAdjustment_ValidationError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"asset":"USD","balance":{"mode":"delta","value":"x"}}`)
+	body := bytes.NewBufferString(`{"type":"deposit","asset":"USD","balance":{"mode":"delta","value":"x"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
@@ -1104,7 +1106,7 @@ func TestApplyAdjustment_ServiceError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"asset":"USD","balance":{"mode":"delta","value":"100"}}`)
+	body := bytes.NewBufferString(`{"type":"deposit","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
@@ -1131,7 +1133,7 @@ func TestApplyAdjustment_SuppliedExternalID(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(fmt.Sprintf(
-		`{"id":%q,"asset":"USD","balance":{"mode":"delta","value":"100"}}`,
+		`{"id":%q,"type":"deposit","asset":"USD","balance":{"mode":"delta","value":"100"}}`,
 		supplied.String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
@@ -1163,7 +1165,7 @@ func TestApplyAdjustment_AbsentExternalID(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"asset":"USD","balance":{"mode":"delta","value":"100"}}`)
+		`{"type":"deposit","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
@@ -1185,7 +1187,7 @@ func TestApplyAdjustment_DuplicateConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(fmt.Sprintf(
-		`{"id":%q,"asset":"USD","balance":{"mode":"delta","value":"100"}}`,
+		`{"id":%q,"type":"deposit","asset":"USD","balance":{"mode":"delta","value":"100"}}`,
 		extID("adj-dup").String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
@@ -1210,7 +1212,7 @@ func TestApplyAdjustment_OpaqueExternalID(t *testing.T) {
 	}
 	supplied := "not-valid"
 	body := bytes.NewBufferString(
-		`{"id":"` + supplied + `","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
+		`{"id":"` + supplied + `","type":"deposit","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
@@ -1219,6 +1221,35 @@ func TestApplyAdjustment_OpaqueExternalID(t *testing.T) {
 	}
 	if got := svc.adjustmentExternalID.String(); got != supplied {
 		t.Fatalf("externalId: want %q got %q", supplied, got)
+	}
+}
+
+// TestAdjustmentRequestDTO_Type checks the adjustment type travels verbatim both
+// ways: a wire body's type reaches the domain request as sent (an absent or
+// unknown one is not defaulted or checked here - the node refuses it), and a
+// record's type is echoed on its request.
+func TestAdjustmentRequestDTO_Type(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want domain.AdjustmentType
+	}{
+		{`{"type":"venue_fee","asset":"USD"}`, domain.AdjustmentTypeVenueFee},
+		{`{"type":"bogus","asset":"USD"}`, "bogus"},
+		{`{"asset":"USD"}`, ""},
+	} {
+		var dto adjustmentRequestDTO
+		if err := json.Unmarshal([]byte(tc.body), &dto); err != nil {
+			t.Fatal(err)
+		}
+		if got := fromAdjustmentRequestDTO(dto).Type; got != tc.want {
+			t.Fatalf("%s: type = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+	got := marshalDTOMap(t, toAdjustmentDTO(domain.AccountAdjustmentRecord{
+		Request: domain.AdjustmentRequest{Type: domain.AdjustmentTypeDeposit, Asset: "USD"},
+	}))
+	if request := nestedDTOMap(t, got, "request"); request["type"] != "deposit" {
+		t.Fatalf("echoed request type = %v", request["type"])
 	}
 }
 

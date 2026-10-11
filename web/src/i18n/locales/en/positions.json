@@ -127,11 +127,14 @@
     "sectionLabel": "Adjustment history",
     "sourceLabel": "Source",
     "sourceAll": "All",
+    "typeLabel": "Type",
+    "unknownType": "The link asks for an unknown adjustment type: {{type}}. Choose a type to show the history.",
     "columns": {
       "time": "Time",
       "account": "Account",
       "asset": "Asset",
       "source": "Source",
+      "type": "Type",
       "request": "Request",
       "status": "Status",
       "outcome": "Outcome",
@@ -142,6 +145,7 @@
       "account": "This column shows the account targeted by the adjustment.",
       "asset": "This column shows the asset targeted by the adjustment.",
       "source": "This column shows whether the adjustment came from the panel, REST, MCP, or another source.",
+      "type": "This column shows what the adjustment books: a venue fee, a deposit, a withdrawal, or a manual correction.",
       "request": "This column shows the requested balance, held, incoming, average-price, or realized-PnL change.",
       "status": "This column shows whether the adjustment was accepted or rejected.",
       "outcome": "This column shows the stored result or rejection summary.",
@@ -175,6 +179,7 @@
     "fields": {
       "account": "Account",
       "asset": "Asset",
+      "type": "Type",
       "avgEntryPrice": "Average entry price (optional)",
       "avgEntryPriceHint": "Positive decimal. Leave blank to keep the current value.",
       "realizedPnl": "Realized PnL",
@@ -212,7 +217,8 @@
     },
     "error": {
       "accountRequired": "Account is required.",
-      "assetRequired": "Asset is required."
+      "assetRequired": "Asset is required.",
+      "typeRequired": "Choose the adjustment type."
     }
   }
 }

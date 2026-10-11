@@ -489,6 +489,7 @@ var adjustmentSortKeys = map[string]struct{}{
 	"principal": {},
 	"source":    {},
 	"status":    {},
+	"type":      {},
 }
 
 var tradeSortKeys = map[string]struct{}{
@@ -763,6 +764,19 @@ func adjustmentStatusFromQuery(q url.Values) (*domain.AdjustmentStatus, error) {
 	}
 }
 
+func adjustmentTypeFromQuery(q url.Values) (domain.AdjustmentType, error) {
+	switch raw := q.Get("type"); raw {
+	case "", "all":
+		return "", nil
+	default:
+		adjustmentType := domain.AdjustmentType(raw)
+		if domain.ValidateAdjustmentType(adjustmentType) != nil {
+			return "", fmt.Errorf("invalid type")
+		}
+		return adjustmentType, nil
+	}
+}
+
 func orderStatusFromQuery(q url.Values) ([]domain.OrderStatus, error) {
 	rawValues := q["status"]
 	if len(rawValues) == 0 {
@@ -965,6 +979,10 @@ func adjustmentListFilterFromQuery(q url.Values) (store.AdjustmentListFilter, er
 	if err != nil {
 		return store.AdjustmentListFilter{}, err
 	}
+	adjustmentType, err := adjustmentTypeFromQuery(q)
+	if err != nil {
+		return store.AdjustmentListFilter{}, err
+	}
 	status, err := adjustmentStatusFromQuery(q)
 	if err != nil {
 		return store.AdjustmentListFilter{}, err
@@ -986,6 +1004,7 @@ func adjustmentListFilterFromQuery(q url.Values) (store.AdjustmentListFilter, er
 		Asset:      asset,
 		ExternalID: externalID,
 		Source:     source,
+		Type:       adjustmentType,
 		Status:     status,
 		At:         at,
 		Sort:       sortSpec,

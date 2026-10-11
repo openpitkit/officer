@@ -1949,6 +1949,18 @@ paths:
             type: string
             enum: [all, accepted, rejected]
             default: all
+        - name: type
+          in: query
+          description: >
+            Filter by adjustment type (see `AdjustmentType`). Absent, empty or
+            `all` means no restriction. Any other value returns a 422
+            validation error.
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/AdjustmentType"
+              - type: string
+                enum: [all]
+            default: all
         - name: atMode
           in: query
           schema:
@@ -1972,7 +1984,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [account, asset, at, principal, source, status]
+            enum: [account, asset, at, principal, source, status, type]
           description: Adjustment list sort key. Unknown keys are rejected.
         - $ref: "#/components/parameters/SourceFilter"
         - $ref: "#/components/parameters/SortOrder"
@@ -6088,10 +6100,19 @@ components:
           type: string
           description: Inclusive upper bound - exact decimal string.
 
+    AdjustmentType:
+      type: string
+      description: >
+        Reason for an adjustment, stated by its producer: `venue_fee` - a fee
+        or charge a trading venue booked; `deposit` - funds deposited into the
+        account; `withdrawal` - funds withdrawn from the account;
+        `correction` - a manual correction of the books.
+      enum: [venue_fee, deposit, withdrawal, correction]
+
     AdjustmentRequest:
       type: object
       additionalProperties: false
-      required: [asset]
+      required: [type, asset]
       properties:
         id:
           $ref: "#/components/schemas/Id"
@@ -6100,6 +6121,12 @@ components:
             Write-only on create: when omitted the server generates one and
             returns it under the record's `id`. A duplicate is a 409.
             Never a surrogate id.
+        type:
+          $ref: "#/components/schemas/AdjustmentType"
+          description: >
+            Required adjustment type; always present on the request echoed in
+            an adjustment record. A missing or unknown value returns a 422
+            validation error with pointer `/type`.
         asset:
           type: string
           description: Asset whose spot-funds balances are adjusted.

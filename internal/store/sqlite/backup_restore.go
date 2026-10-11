@@ -1544,6 +1544,17 @@ func (rt *restoreTx) restoreAdjustment(
 	if err != nil {
 		return err
 	}
+	// An archive adjustment without a known type is refused on every restore
+	// path, including one that would skip the row as already present.
+	typeID, err := adjustmentTypeID(rt.dictionaries, rec.Request.Type)
+	if err != nil {
+		return fmt.Errorf(
+			"store: restore %s adjustment %q type: %w",
+			backup.SectionActivityHistory,
+			rec.ExternalID,
+			restoreValidationError(err),
+		)
+	}
 	exists, err := rowExists(
 		ctx, rt.tx, `SELECT 1 FROM adjustment WHERE external_id = ?`, rec.ExternalID.Bytes(),
 	)
@@ -1592,10 +1603,10 @@ func (rt *restoreTx) restoreAdjustment(
 	if _, err := rt.tx.ExecContext(
 		ctx,
 		`INSERT OR REPLACE INTO adjustment
-		 (external_id, account_id, asset_id, principal_id, at, source_id, status_id, request, outcome)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (external_id, account_id, asset_id, principal_id, at, source_id, status_id, type_id, request, outcome)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ExternalID.Bytes(), accountID, assetID, principalID,
-		timeStr(rec.At), sourceID, statusID,
+		timeStr(rec.At), sourceID, statusID, typeID,
 		string(reqJSON), string(outcomeJSON),
 	); err != nil {
 		return fmt.Errorf("store: restore adjustment %q: %w", rec.ExternalID, err)

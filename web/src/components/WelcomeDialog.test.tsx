@@ -507,9 +507,13 @@ describe("WelcomeDialog", () => {
         "equity",
       );
       expect(createAdjustmentMock).toHaveBeenCalledTimes(9);
+      for (const [, body] of createAdjustmentMock.mock.calls) {
+        expect(body).toMatchObject({ type: "deposit" });
+      }
       expect(createAdjustmentMock).toHaveBeenCalledWith(
         "demo-main",
         {
+          type: "deposit",
           asset: "USD",
           balance: { mode: "absolute", value: "100000" },
           averageEntryPrice: "1",
@@ -519,6 +523,7 @@ describe("WelcomeDialog", () => {
       expect(createAdjustmentMock).toHaveBeenCalledWith(
         "demo-main",
         {
+          type: "deposit",
           asset: "AAPL",
           balance: { mode: "absolute", value: "100" },
           averageEntryPrice: "200",
@@ -528,6 +533,7 @@ describe("WelcomeDialog", () => {
       expect(createAdjustmentMock).toHaveBeenCalledWith(
         "demo-main",
         {
+          type: "deposit",
           asset: "NVDA",
           balance: { mode: "absolute", value: "50" },
           averageEntryPrice: "150",
@@ -537,6 +543,7 @@ describe("WelcomeDialog", () => {
       expect(createAdjustmentMock).toHaveBeenCalledWith(
         "demo-main",
         {
+          type: "deposit",
           asset: "SPCX",
           balance: { mode: "absolute", value: "10" },
           averageEntryPrice: "300",
@@ -546,6 +553,7 @@ describe("WelcomeDialog", () => {
       expect(createAdjustmentMock).toHaveBeenCalledWith(
         "demo-main",
         {
+          type: "deposit",
           asset: "META",
           balance: { mode: "absolute", value: "25" },
           averageEntryPrice: "500",
@@ -555,6 +563,7 @@ describe("WelcomeDialog", () => {
       expect(createAdjustmentMock).toHaveBeenCalledWith(
         "demo-main",
         {
+          type: "deposit",
           asset: "KO",
           balance: { mode: "absolute", value: "100" },
           averageEntryPrice: "70",

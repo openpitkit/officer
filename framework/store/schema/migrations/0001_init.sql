@@ -71,6 +71,11 @@ CREATE TABLE adjustment_status (
     code TEXT NOT NULL UNIQUE
 );
 
+CREATE TABLE adjustment_type (
+    id   {{PK}},
+    code TEXT NOT NULL UNIQUE
+);
+
 CREATE TABLE audit_action (
     id   {{PK}},
     code TEXT NOT NULL UNIQUE
@@ -256,8 +261,9 @@ CREATE UNIQUE INDEX uq_limit_spot_funds_pnl_bounds
     );
 
 -- Append-only history of spot-funds adjustments. request/outcome are opaque
--- JSON. principal is cleared (SET NULL) when the principal is removed; account
--- and asset cascade.
+-- JSON. type_id is the producer-stated reason and mirrors the type inside
+-- request. principal is cleared (SET NULL) when the principal is removed;
+-- account and asset cascade.
 CREATE TABLE adjustment (
     id           {{PK}},
     external_id  {{XID}} UNIQUE,
@@ -267,6 +273,7 @@ CREATE TABLE adjustment (
     at           TEXT    NOT NULL,
     source_id    INTEGER NOT NULL REFERENCES source_kind(id),
     status_id    INTEGER NOT NULL REFERENCES adjustment_status(id),
+    type_id      INTEGER NOT NULL REFERENCES adjustment_type(id),
     request      TEXT    NOT NULL,
     outcome      TEXT    NOT NULL
 );
@@ -276,6 +283,7 @@ CREATE INDEX idx_adjustments_asset ON adjustment (asset_id);
 CREATE INDEX idx_adjustments_principal ON adjustment (principal_id);
 CREATE INDEX idx_adjustments_source  ON adjustment (source_id, at DESC, id DESC);
 CREATE INDEX idx_adjustments_status ON adjustment (status_id, at DESC, id DESC);
+CREATE INDEX idx_adjustments_type ON adjustment (type_id, at DESC, id DESC);
 
 -- Orders recorded by Officer (including rejected ones). amount_value and price
 -- are exact {{DECIMAL}} values; their indexes order numerically. leaves_quantity

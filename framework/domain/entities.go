@@ -612,8 +612,54 @@ type AdjustmentBounds struct {
 	Upper string `json:"upper,omitempty"`
 }
 
+// AdjustmentType is the reason an adjustment was made, stated by its producer.
+type AdjustmentType string
+
+const (
+	// AdjustmentTypeVenueFee is a fee or charge a trading venue booked.
+	AdjustmentTypeVenueFee AdjustmentType = "venue_fee"
+	// AdjustmentTypeDeposit is funds deposited into the account.
+	AdjustmentTypeDeposit AdjustmentType = "deposit"
+	// AdjustmentTypeWithdrawal is funds withdrawn from the account.
+	AdjustmentTypeWithdrawal AdjustmentType = "withdrawal"
+	// AdjustmentTypeCorrection is a manual correction of the books.
+	AdjustmentTypeCorrection AdjustmentType = "correction"
+)
+
+// ValidateAdjustmentType returns ErrInvalid when t is empty or not a recognised
+// AdjustmentType value.
+func ValidateAdjustmentType(t AdjustmentType) error {
+	switch t {
+	case AdjustmentTypeVenueFee, AdjustmentTypeDeposit, AdjustmentTypeWithdrawal, AdjustmentTypeCorrection:
+		return nil
+	case "":
+		return invalidField(
+			"/type", "required",
+			fmt.Errorf(
+				"type is required, one of %q, %q, %q or %q: %w",
+				AdjustmentTypeVenueFee, AdjustmentTypeDeposit,
+				AdjustmentTypeWithdrawal, AdjustmentTypeCorrection, ErrInvalid,
+			),
+		)
+	default:
+		return invalidField(
+			"/type", "unsupported_value",
+			fmt.Errorf(
+				"type %q must be one of %q, %q, %q or %q: %w",
+				string(t), AdjustmentTypeVenueFee, AdjustmentTypeDeposit,
+				AdjustmentTypeWithdrawal, AdjustmentTypeCorrection, ErrInvalid,
+			),
+		)
+	}
+}
+
 // AdjustmentRequest is the payload of one spot-funds adjustment operation.
 type AdjustmentRequest struct {
+	// Type is the reason the producer states for the adjustment. Every
+	// adjustment that becomes a record carries one; engine-only requests
+	// (balance seeding, online-restore snapshots) never become records and leave
+	// it empty.
+	Type AdjustmentType `json:"type"`
 	// Asset identifies the asset being adjusted.
 	Asset string `json:"asset"`
 	// AverageEntryPrice is an optional replacement for the avg-entry field.

@@ -580,6 +580,7 @@ type AdjustmentListFilter struct {
 	Asset      TextMatcher
 	ExternalID domain.ExternalID
 	Source     domain.Source
+	Type       domain.AdjustmentType
 	Status     *domain.AdjustmentStatus
 	At         TimeRangeFilter
 	Sort       SortSpec

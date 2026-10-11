@@ -42,7 +42,7 @@ import (
 // when the reference was cleared or never set.
 const adjustmentSelect = `
 SELECT adj.external_id, a.code, ast.code, p.code,
-       adj.at, adj.source_id, adj.status_id, adj.request, adj.outcome
+       adj.at, adj.source_id, adj.status_id, adj.type_id, adj.request, adj.outcome
 FROM adjustment adj
 JOIN account  a   ON a.id   = adj.account_id
 JOIN asset    ast ON ast.id = adj.asset_id
@@ -76,6 +76,10 @@ func appendAdjustment(
 	rec domain.AccountAdjustmentRecord,
 ) (domain.AccountAdjustmentRecord, error) {
 	if err := requireSource("adjustment", rec.Source); err != nil {
+		return rec, err
+	}
+	typeID, err := adjustmentTypeID(dictionaries, rec.Request.Type)
+	if err != nil {
 		return rec, err
 	}
 	exec, ok := q.(sqlExecer)
@@ -126,10 +130,10 @@ func appendAdjustment(
 		ctx,
 		`INSERT INTO adjustment
 		 (external_id, account_id, asset_id, principal_id,
-		  at, source_id, status_id, request, outcome)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  at, source_id, status_id, type_id, request, outcome)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), accountID, assetID, principalID,
-		at, sourceID, statusID,
+		at, sourceID, statusID, typeID,
 		string(reqJSON), string(outcomeJSON),
 	); err != nil {
 		if isSQLiteUnique(err) {
@@ -363,13 +367,7 @@ LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 
 	queryArgs := append([]any{}, args...)
 	sortColumn := adjustmentListSortColumn(filter.Sort)
-	query := `
-SELECT adj.external_id, a.code, ast.code, p.code,
-       adj.at, adj.source_id, adj.status_id, adj.request, adj.outcome
-FROM adjustment adj
-JOIN account  a   ON a.id   = adj.account_id
-JOIN asset    ast ON ast.id = adj.asset_id
-LEFT JOIN principal p ON p.id = adj.principal_id` +
+	query := adjustmentSelect +
 		whereFromClauses(clauses) +
 		adjustmentListOrderBy(sortColumn, filter.Sort)
 	if filter.Page.Limit > 0 {
@@ -422,6 +420,16 @@ func adjustmentListClauses(
 		clauses = append(clauses, "adj.source_id = ?")
 		args = append(args, id)
 	}
+	if filter.Type != "" {
+		id, err := dictionaries.id(
+			adjustmentTypeTable, "adjustment type", string(filter.Type),
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		clauses = append(clauses, "adj.type_id = ?")
+		args = append(args, id)
+	}
 	if filter.Status != nil {
 		id, err := dictionaries.id(
 			adjustmentStatusTable, "adjustment status", string(*filter.Status),
@@ -444,6 +452,7 @@ func adjustmentListSortColumn(sort fwstore.SortSpec) string {
 		"principal": "COALESCE(p.code, '')",
 		"source":    "adj.source_id",
 		"status":    "adj.status_id",
+		"type":      "adj.type_id",
 	}
 	column := columns[sort.Column]
 	if column == "" {
@@ -474,11 +483,11 @@ func scanAdjustmentListRow(
 		accountCode, assetCode     string
 		principal                  sql.NullString
 		at, requestStr, outcomeStr string
-		sourceID, statusID         int64
+		sourceID, statusID, typeID int64
 	)
 	if err := rows.Scan(
 		&extID, &accountCode, &assetCode, &principal,
-		&at, &sourceID, &statusID, &requestStr, &outcomeStr,
+		&at, &sourceID, &statusID, &typeID, &requestStr, &outcomeStr,
 	); err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf(
 			"store: scan adjustment row: %w", err,
@@ -486,7 +495,7 @@ func scanAdjustmentListRow(
 	}
 	rec, err := adjustmentFromScanned(
 		dictionaries, extID, accountCode, assetCode, principal, at, sourceID, statusID,
-		requestStr, outcomeStr,
+		typeID, requestStr, outcomeStr,
 	)
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, err
@@ -503,6 +512,17 @@ func adjustmentStatus(rec domain.AccountAdjustmentRecord) domain.AdjustmentStatu
 		return domain.AdjustmentStatusRejected
 	}
 	return domain.AdjustmentStatusAccepted
+}
+
+// adjustmentTypeID validates the producer-stated type of an adjustment record
+// and resolves its dictionary id. A record without a known type is refused.
+func adjustmentTypeID(
+	dictionaries *enumDictionaries, t domain.AdjustmentType,
+) (int64, error) {
+	if err := domain.ValidateAdjustmentType(t); err != nil {
+		return 0, err
+	}
+	return dictionaries.id(adjustmentTypeTable, "adjustment type", string(t))
 }
 
 // adjustmentOutcomeEnvelope is the JSON envelope written to the outcome column.
@@ -539,17 +559,17 @@ func scanAdjustment(
 		accountCode, assetCode     string
 		principal                  sql.NullString
 		at, requestStr, outcomeStr string
-		sourceID, statusID         int64
+		sourceID, statusID, typeID int64
 	)
 	if err := rows.Scan(
 		&extID, &accountCode, &assetCode, &principal,
-		&at, &sourceID, &statusID, &requestStr, &outcomeStr,
+		&at, &sourceID, &statusID, &typeID, &requestStr, &outcomeStr,
 	); err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf("store: scan adjustment: %w", err)
 	}
 	return adjustmentFromScanned(
 		dictionaries, extID, accountCode, assetCode, principal, at, sourceID, statusID,
-		requestStr, outcomeStr,
+		typeID, requestStr, outcomeStr,
 	)
 }
 
@@ -562,6 +582,7 @@ func adjustmentFromScanned(
 	at string,
 	sourceID int64,
 	statusID int64,
+	typeID int64,
 	requestStr string,
 	outcomeStr string,
 ) (domain.AccountAdjustmentRecord, error) {
@@ -585,10 +606,23 @@ func adjustmentFromScanned(
 		return domain.AccountAdjustmentRecord{}, err
 	}
 
+	typeCode, err := dictionaries.code(adjustmentTypeTable, "adjustment type", typeID)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+
 	var req domain.AdjustmentRequest
 	if err := json.Unmarshal([]byte(requestStr), &req); err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf(
 			"store: unmarshal adjustment request: %w", err,
+		)
+	}
+	// type_id and the request type are written from one value; a divergence is
+	// a corrupt row and is never resolved in favour of either side.
+	if req.Type != domain.AdjustmentType(typeCode) {
+		return domain.AccountAdjustmentRecord{}, fmt.Errorf(
+			"store: adjustment %q stored type %q differs from request type %q",
+			xid, typeCode, req.Type,
 		)
 	}
 

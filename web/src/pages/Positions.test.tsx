@@ -36,7 +36,11 @@ import { useAccounts } from "@/api/useAccounts";
 import { useAdjustmentsPage } from "@/api/useAdjustments";
 import { useBalancesPage } from "@/api/useBalances";
 import { SidebarProvider } from "@/components/SidebarContext";
-import { ApiError, MAX_LIST_LIMIT } from "@/framework";
+import {
+  ApiError,
+  MAX_LIST_LIMIT,
+  type GlobalAdjustmentsFilter,
+} from "@/framework";
 import i18n from "@/i18n";
 import { Positions } from "@/pages/Positions";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
@@ -122,6 +126,11 @@ const fetchAssetsMock = vi.fn();
 
 function lastBalanceFilters(): BalanceListFilters | undefined {
   const calls = useBalancesMock.mock.calls;
+  return calls[calls.length - 1]?.[0];
+}
+
+function lastAdjustmentsFilter(): GlobalAdjustmentsFilter | undefined {
+  const calls = useAdjustmentsMock.mock.calls;
   return calls[calls.length - 1]?.[0];
 }
 
@@ -413,6 +422,7 @@ describe("Positions adjustment panel", () => {
     expect(scope.getByLabelText("Average entry price (optional)")).toHaveValue(
       "142.50",
     );
+    await user.click(scope.getByRole("button", { name: "Deposit" }));
 
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
@@ -423,6 +433,7 @@ describe("Positions adjustment panel", () => {
     expect(createAdjustmentMock).toHaveBeenCalledWith(
       "Bucks McMoneyface",
       {
+        type: "deposit",
         asset: "AAPL",
         balance: { mode: "absolute", value: "600" },
         held: { mode: "absolute", value: "10" },
@@ -450,6 +461,7 @@ describe("Positions adjustment panel", () => {
     const scope = within(panel);
 
     await user.type(scope.getByLabelText("Available adjustment amount"), "600");
+    await user.click(scope.getByRole("button", { name: "Deposit" }));
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
@@ -502,12 +514,14 @@ describe("Positions adjustment panel", () => {
     const panel = screen.getByRole("region", { name: "Adjustment" });
     const scope = within(panel);
     await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
+    await user.click(scope.getByRole("button", { name: "Manual correction" }));
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
     expect(createAdjustmentMock).toHaveBeenCalledWith(
       "Bucks McMoneyface",
       {
+        type: "correction",
         asset: "AAPL",
         realizedPnl: "-12.50",
       },
@@ -539,6 +553,7 @@ describe("Positions adjustment panel", () => {
       scope.getByLabelText("Average entry price (optional)"),
       "142.50",
     );
+    await user.click(scope.getByRole("button", { name: "Manual correction" }));
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
     const warning = await scope.findByRole("note", {
@@ -583,6 +598,7 @@ describe("Positions adjustment panel", () => {
     await user.click(screen.getByRole("option", { name: "delta" }));
     await user.type(scope.getByLabelText("Available adjustment amount"), "25");
     await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
+    await user.click(scope.getByRole("button", { name: "Deposit" }));
 
     const submit = scope.getByRole("button", { name: /submit adjustment/i });
     await user.click(submit);
@@ -595,6 +611,7 @@ describe("Positions adjustment panel", () => {
     expect(createAdjustmentMock).toHaveBeenLastCalledWith(
       "Bucks McMoneyface",
       {
+        type: "deposit",
         asset: "AAPL",
         balance: { mode: "delta", value: "25" },
         realizedPnl: "-12.50",
@@ -669,6 +686,7 @@ describe("Positions adjustment panel", () => {
     const scope = within(screen.getByRole("region", { name: "Adjustment" }));
     await user.type(scope.getByLabelText("Account"), "my");
     await user.type(scope.getByLabelText("Asset"), "AAPL");
+    await user.click(scope.getByRole("button", { name: "Deposit" }));
     const average = scope.getByLabelText(/average entry price/i);
     await user.type(average, "150");
 
@@ -706,6 +724,7 @@ describe("Positions adjustment panel", () => {
     const scope = within(screen.getByRole("region", { name: "Adjustment" }));
     await user.type(scope.getByLabelText("Account"), "my");
     await user.type(scope.getByLabelText("Asset"), "AAPL");
+    await user.click(scope.getByRole("button", { name: "Deposit" }));
     await user.type(scope.getByLabelText(/average entry price/i), "150");
     await user.type(
       scope.getByLabelText("Available adjustment amount"),
@@ -744,9 +763,12 @@ describe("Positions adjustment panel", () => {
     const asset = scope.getByLabelText("Asset");
     const amount = scope.getByLabelText("Available adjustment amount");
 
+    const deposit = scope.getByRole("button", { name: "Deposit" });
+
     await user.type(account, "my");
     await user.type(asset, "AAPL");
     await user.type(amount, "600");
+    await user.click(deposit);
     expect(resetAll).toBeEnabled();
 
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
@@ -754,6 +776,7 @@ describe("Positions adjustment panel", () => {
     expect(createAdjustmentMock).toHaveBeenCalledWith(
       "my",
       {
+        type: "deposit",
         asset: "AAPL",
         balance: { mode: "absolute", value: "600" },
       },
@@ -762,11 +785,13 @@ describe("Positions adjustment panel", () => {
     expect(account).toHaveValue("my");
     expect(asset).toHaveValue("AAPL");
     expect(amount).toHaveValue("600");
+    expect(deposit).toHaveAttribute("aria-pressed", "true");
 
     await user.click(resetAll);
     expect(account).toHaveValue("");
     expect(asset).toHaveValue("");
     expect(amount).toHaveValue("");
+    expect(deposit).toHaveAttribute("aria-pressed", "false");
     expect(resetAll).toBeDisabled();
     expect(
       scope.getByRole("button", { name: /submit adjustment/i }),
@@ -802,6 +827,7 @@ describe("Positions adjustment panel", () => {
     await user.type(scope.getByLabelText("Account"), "fresh-account");
     await user.type(scope.getByLabelText("Asset"), "AAPL");
     await user.type(scope.getByLabelText("Available adjustment amount"), "10");
+    await user.click(scope.getByRole("button", { name: "Deposit" }));
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
     const confirmDialog = await screen.findByRole("alertdialog", {
@@ -811,6 +837,7 @@ describe("Positions adjustment panel", () => {
       1,
       "fresh-account",
       {
+        type: "deposit",
         asset: "AAPL",
         balance: { mode: "absolute", value: "10" },
       },
@@ -827,10 +854,51 @@ describe("Positions adjustment panel", () => {
       2,
       "fresh-account",
       {
+        type: "deposit",
         asset: "AAPL",
         balance: { mode: "absolute", value: "10" },
       },
       "create",
+    );
+  });
+
+  it("refuses to submit without a type and sends the chosen one", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    const scope = within(screen.getByRole("region", { name: "Adjustment" }));
+    expect(
+      within(scope.getByRole("group", { name: "Type" })).queryAllByRole(
+        "button",
+        { pressed: true },
+      ),
+    ).toHaveLength(0);
+    await user.type(scope.getByLabelText("Available adjustment amount"), "600");
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+
+    expect(scope.getByRole("alert")).toHaveTextContent(
+      "Choose the adjustment type.",
+    );
+    expect(createAdjustmentMock).not.toHaveBeenCalled();
+
+    await user.click(scope.getByRole("button", { name: "Withdrawal" }));
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
+    expect(createAdjustmentMock).toHaveBeenCalledWith(
+      "Bucks McMoneyface",
+      {
+        type: "withdrawal",
+        asset: "AAPL",
+        balance: { mode: "absolute", value: "600" },
+      },
+      "reject",
     );
   });
 
@@ -1209,17 +1277,28 @@ describe("Positions business CSV", () => {
     );
   });
 
-  it("exports adjustment history with the selected source filter", async () => {
+  it("exports adjustment history with the selected source and type filters", async () => {
     const user = userEvent.setup();
     useAdjustmentsMock.mockReturnValue(
       readyPage<Adjustment>([
         acceptedAdjustment({
+          type: "deposit",
           asset: "AAPL",
           balance: { mode: "absolute", value: "10" },
         }),
       ]),
     );
-    renderPositions("/positions?tab=history&source=mcp");
+    fetchAdjustmentsMock.mockResolvedValue({
+      items: [
+        acceptedAdjustment({
+          type: "venue_fee",
+          asset: "AAPL",
+          balance: { mode: "delta", value: "-1.5" },
+        }),
+      ],
+      total: 1,
+    });
+    renderPositions("/positions?tab=history&source=mcp&type=venue_fee");
 
     await user.click(
       screen.getByRole("button", { name: /export history csv/i }),
@@ -1228,6 +1307,7 @@ describe("Positions business CSV", () => {
     await waitFor(() => expect(fetchAdjustmentsMock).toHaveBeenCalledTimes(1));
     expect(fetchAdjustmentsMock).toHaveBeenCalledWith({
       source: "mcp",
+      type: "venue_fee",
       limit: MAX_LIST_LIMIT,
       account: undefined,
       asset: undefined,
@@ -1242,7 +1322,8 @@ describe("Positions business CSV", () => {
       reader.addEventListener("error", () => reject(reader.error));
       reader.readAsText(blob);
     });
-    expect(body).toMatch(/^id,at,account,asset,/);
+    expect(body).toMatch(/^id,at,account,asset,source,type,status,/);
+    expect(body).toContain(",AAPL,panel,venue_fee,accepted,");
   });
 
   // A cell the operator's spreadsheet would execute on open is neutralized with
@@ -1261,6 +1342,7 @@ describe("Positions business CSV", () => {
           asset: "AAPL",
           status: "rejected",
           request: {
+            type: "correction",
             asset: "AAPL",
             balance: { mode: "absolute", value: "-10.5" },
           },
@@ -1542,6 +1624,7 @@ describe("Positions history row actions", () => {
     useAdjustmentsMock.mockReturnValue(
       readyPage<Adjustment>([
         acceptedAdjustment({
+          type: "deposit",
           asset: "AAPL",
           balance: { mode: "absolute", value: "10" },
         }),
@@ -1583,6 +1666,7 @@ describe("Positions history row actions", () => {
     useAdjustmentsMock.mockReturnValue(
       readyPage<Adjustment>([
         acceptedAdjustment({
+          type: "withdrawal",
           asset: "AAPL",
           balance: { mode: "delta", value: "25" },
           realizedPnl: "-12.50",
@@ -1594,12 +1678,18 @@ describe("Positions history row actions", () => {
     await user.click(
       screen.getByRole("button", { name: /clone adj-alpha-10/i }),
     );
-    await user.click(screen.getByRole("button", { name: /submit/i }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByRole("button", { name: "Withdrawal" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.click(dialog.getByRole("button", { name: /submit/i }));
 
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
     expect(createAdjustmentMock).toHaveBeenCalledWith(
       "Bucks McMoneyface",
       {
+        type: "withdrawal",
         asset: "AAPL",
         balance: { mode: "delta", value: "25" },
         realizedPnl: "-12.50",
@@ -1609,11 +1699,61 @@ describe("Positions history row actions", () => {
     expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
   });
 
+  it("refuses to submit the dialog without a type once it is cleared", async () => {
+    const user = userEvent.setup();
+    useAdjustmentsMock.mockReturnValue(
+      readyPage<Adjustment>([
+        acceptedAdjustment({
+          type: "deposit",
+          asset: "AAPL",
+          realizedPnl: "-12.50",
+        }),
+      ]),
+    );
+    renderPositions("/positions?tab=history");
+
+    await user.click(
+      screen.getByRole("button", { name: /clone adj-alpha-10/i }),
+    );
+    const dialog = within(screen.getByRole("dialog"));
+    await user.click(dialog.getByRole("button", { name: "Clear all" }));
+    expect(
+      within(dialog.getByRole("group", { name: "Type" })).queryAllByRole(
+        "button",
+        { pressed: true },
+      ),
+    ).toHaveLength(0);
+    await user.type(dialog.getByLabelText("Account"), "Bucks McMoneyface");
+    await user.type(dialog.getByLabelText("Asset"), "AAPL");
+    await user.type(dialog.getByLabelText("Realized PnL"), "-12.50");
+    await user.click(dialog.getByRole("button", { name: "Submit" }));
+
+    expect(dialog.getByRole("alert")).toHaveTextContent(
+      "Choose the adjustment type.",
+    );
+    expect(createAdjustmentMock).not.toHaveBeenCalled();
+
+    await user.click(dialog.getByRole("button", { name: "Manual correction" }));
+    await user.click(dialog.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
+    expect(createAdjustmentMock).toHaveBeenCalledWith(
+      "Bucks McMoneyface",
+      {
+        type: "correction",
+        asset: "AAPL",
+        realizedPnl: "-12.50",
+      },
+      "reject",
+    );
+  });
+
   it("offers to create a missing account from the adjust dialog and resubmits with create", async () => {
     const user = userEvent.setup();
     useAdjustmentsMock.mockReturnValue(
       readyPage<Adjustment>([
         acceptedAdjustment({
+          type: "deposit",
           asset: "AAPL",
           balance: { mode: "delta", value: "25" },
           realizedPnl: "-12.50",
@@ -1655,6 +1795,7 @@ describe("Positions history row actions", () => {
       2,
       "Bucks McMoneyface",
       {
+        type: "deposit",
         asset: "AAPL",
         balance: { mode: "delta", value: "25" },
         realizedPnl: "-12.50",
@@ -1668,6 +1809,7 @@ describe("Positions history row actions", () => {
       readyPage<Adjustment>([
         acceptedHaltedAdjustment(
           {
+            type: "correction",
             asset: "AAPL",
             averageEntryPrice: "142.50",
           },
@@ -1690,6 +1832,250 @@ describe("Positions history row actions", () => {
       scope.getByText(/authoritative initial PnL value is unavailable/i),
     ).toHaveClass("text-[var(--warn)]");
     expect(scope.getByText(/accepted/i)).toHaveClass("border-[var(--warn)]");
+  });
+});
+
+describe("Positions history adjustment type", () => {
+  function typeFilterGroup() {
+    return within(screen.getByRole("group", { name: "Type" }));
+  }
+
+  it("narrows history by the chosen type and sends no type for All", async () => {
+    const user = userEvent.setup();
+    const deposit: Adjustment = {
+      ...acceptedAdjustment({
+        type: "deposit",
+        asset: "AAPL",
+        balance: { mode: "delta", value: "100" },
+      }),
+      id: "adj-deposit",
+    };
+    const fee: Adjustment = {
+      ...acceptedAdjustment({
+        type: "venue_fee",
+        asset: "AAPL",
+        balance: { mode: "delta", value: "-1.5" },
+      }),
+      id: "adj-fee",
+    };
+    useAdjustmentsMock.mockImplementation((filter) =>
+      readyPage<Adjustment>(
+        [deposit, fee].filter(
+          (adj) =>
+            filter?.type === undefined || adj.request.type === filter.type,
+        ),
+      ),
+    );
+    renderPositions("/positions?tab=history");
+
+    expect(lastAdjustmentsFilter()?.type).toBeUndefined();
+    expect(
+      screen.getByRole("button", { name: /clone adj-deposit/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /clone adj-fee/i }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      typeFilterGroup().getByRole("button", { name: "Venue fee" }),
+    );
+
+    await waitFor(() =>
+      expect(lastAdjustmentsFilter()?.type).toBe("venue_fee"),
+    );
+    expect(
+      screen.queryByRole("button", { name: /clone adj-deposit/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /clone adj-fee/i }),
+    ).toBeInTheDocument();
+
+    await user.click(typeFilterGroup().getByRole("button", { name: "All" }));
+
+    await waitFor(() => expect(lastAdjustmentsFilter()?.type).toBeUndefined());
+    expect(
+      screen.getByRole("button", { name: /clone adj-deposit/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the type label right after the source column and sorts by type", async () => {
+    const user = userEvent.setup();
+    useAdjustmentsMock.mockReturnValue(
+      readyPage<Adjustment>([
+        acceptedAdjustment({
+          type: "venue_fee",
+          asset: "AAPL",
+          balance: { mode: "delta", value: "-1.5" },
+        }),
+      ]),
+    );
+    renderPositions("/positions?tab=history");
+
+    const headers = screen
+      .getAllByRole("columnheader")
+      .map((header) => header.textContent);
+    expect(headers.indexOf("Type")).toBe(headers.indexOf("Source") + 1);
+    const row = screen
+      .getAllByRole("row")
+      .find(
+        (candidate) =>
+          candidate.textContent?.includes("Bucks McMoneyface") &&
+          candidate.textContent?.includes("AAPL"),
+      );
+    expect(row).toBeDefined();
+    expect(
+      within(row as HTMLElement).getByText("Venue fee"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Sort by Type" }));
+
+    await waitFor(() =>
+      expect(lastAdjustmentsFilter()).toEqual(
+        expect.objectContaining({ sort: "type", order: "asc" }),
+      ),
+    );
+  });
+
+  it("restores the type filter and its sort from the URL and shares them back", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderPositions(
+      "/positions?tab=history&type=withdrawal&sort=type&order=desc",
+    );
+
+    await waitFor(() =>
+      expect(lastAdjustmentsFilter()).toMatchObject({
+        type: "withdrawal",
+        sort: "type",
+        order: "desc",
+      }),
+    );
+    expect(
+      typeFilterGroup().getByRole("button", { name: "Withdrawal" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /copy a link to the current filter set/i,
+      }),
+    );
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const url = new URL(writeText.mock.calls[0][0]);
+    expect(url.searchParams.get("type")).toBe("withdrawal");
+  });
+
+  it.each(["fee", "__all__"])(
+    "refuses the unknown type %s in the URL instead of loading every type",
+    async (type) => {
+      const user = userEvent.setup();
+      useAdjustmentsMock.mockReturnValue(
+        readyPage<Adjustment>([
+          acceptedAdjustment({
+            type: "deposit",
+            asset: "AAPL",
+            balance: { mode: "delta", value: "100" },
+          }),
+        ]),
+      );
+      renderPositions(`/positions?tab=history&type=${type}`);
+
+      expect(
+        screen.getByText(`unknown adjustment type: ${type}.`, { exact: false }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /clone adj-alpha-10/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /export history csv/i }),
+      ).toBeDisabled();
+      for (const option of typeFilterGroup().getAllByRole("button")) {
+        expect(option).toHaveAttribute("aria-pressed", "false");
+      }
+
+      await user.click(typeFilterGroup().getByRole("button", { name: "All" }));
+
+      expect(
+        screen.queryByText(/unknown adjustment type/i),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /clone adj-alpha-10/i }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /export history csv/i }),
+      ).toBeEnabled();
+      expect(lastAdjustmentsFilter()?.type).toBeUndefined();
+    },
+  );
+
+  it("clears an unknown type with Clear all", async () => {
+    const user = userEvent.setup();
+    useAdjustmentsMock.mockReturnValue(
+      readyPage<Adjustment>([
+        acceptedAdjustment({
+          type: "deposit",
+          asset: "AAPL",
+          balance: { mode: "delta", value: "100" },
+        }),
+      ]),
+    );
+    renderPositions("/positions?tab=history&type=fee&status=rejected");
+
+    expect(
+      screen.getByText(/unknown adjustment type: fee\./i),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /clear all filters/i }),
+    );
+
+    expect(
+      screen.queryByText(/unknown adjustment type/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /clone adj-alpha-10/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /export history csv/i }),
+    ).toBeEnabled();
+    expect(lastAdjustmentsFilter()?.type).toBeUndefined();
+  });
+
+  it.each([
+    "/positions?tab=history",
+    "/positions?tab=history&type=",
+    "/positions?tab=history&type=all",
+  ])("reads %s as every type", (entry) => {
+    renderPositions(entry);
+
+    expect(lastAdjustmentsFilter()?.type).toBeUndefined();
+    expect(
+      typeFilterGroup().getByRole("button", { name: "All" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByText(/unknown adjustment type/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears the type filter with Clear all", async () => {
+    const user = userEvent.setup();
+    renderPositions("/positions?tab=history&type=deposit");
+
+    expect(lastAdjustmentsFilter()?.type).toBe("deposit");
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /clear all filters/i }),
+    );
+
+    await waitFor(() => expect(lastAdjustmentsFilter()?.type).toBeUndefined());
+    expect(
+      typeFilterGroup().getByRole("button", { name: "All" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
   });
 });
 

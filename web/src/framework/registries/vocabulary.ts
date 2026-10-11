@@ -143,6 +143,24 @@ export function scopeLabel(t: TFunction, id: string): string {
   return isScope(id) ? t(`domain:scope.${id}`) : id;
 }
 
+/** Every adjustment type, in the order the panel offers them. */
+export const ADJUSTMENT_TYPES = [
+  "venue_fee",
+  "deposit",
+  "withdrawal",
+  "correction",
+] as const;
+
+/** What an adjustment books (mirrors domain.AdjustmentType): a fee or charge a
+ *  trading venue booked, a deposit, a withdrawal, or a manual correction of
+ *  the books. Every adjustment carries one; there is no default. Derived from
+ *  ADJUSTMENT_TYPES so the union and the list cannot drift apart. */
+export type AdjustmentType = (typeof ADJUSTMENT_TYPES)[number];
+
+export function adjustmentTypeLabel(t: TFunction, id: AdjustmentType): string {
+  return t(`domain:adjustmentType.${id}`);
+}
+
 export function kindHint(t: TFunction, policy: string, kind: string): string {
   return t(`domain:kindHint.${policy}.${kind}`);
 }

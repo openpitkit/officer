@@ -260,6 +260,7 @@ func (f *fixture) fund(account domain.AccountID, amount string) {
 	xid, err := domain.NewExternalID()
 	must(f.t, err)
 	_, err = f.n.ApplyAdjustment(testCtx, account, xid, domain.AdjustmentRequest{
+		Type:  domain.AdjustmentTypeDeposit,
 		Asset: "USD", AverageEntryPrice: "1", RealizedPnl: "0",
 		Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: amount},
 	}, domain.MissingAccountCreate, testCaller)

@@ -220,10 +220,12 @@ func seedAccountOperationalRows(
 		(scope, account_group_id, currency_asset_id, lower_bound)
 		VALUES ('account_group', ?, ?, '-2')`, groupID, quoteID)
 	exec(`INSERT INTO adjustment
-		(external_id, account_id, asset_id, at, source_id, status_id, request, outcome)
+		(external_id, account_id, asset_id, at, source_id, status_id, type_id, request, outcome)
 		VALUES (?, ?, ?, '2026-08-01T00:00:00Z',
 		 (SELECT id FROM source_kind WHERE code = 'panel'),
-		 (SELECT id FROM adjustment_status WHERE code = 'accepted'), '{}', '{}')`,
+		 (SELECT id FROM adjustment_status WHERE code = 'accepted'),
+		 (SELECT id FROM adjustment_type WHERE code = 'correction'),
+		 '{"type":"correction"}', '{}')`,
 		externalID(seed), accountID, baseID)
 	orderResult := exec(`INSERT INTO order_record
 		(external_id, account_id, base_asset_id, quote_asset_id, at, source_id,

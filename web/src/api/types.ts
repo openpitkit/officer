@@ -19,6 +19,8 @@
 // in api/client.ts so the UI does not depend on the JSON casing the Go handler
 // emits.
 
+import type { AdjustmentType } from "../framework/registries/vocabulary";
+
 // --- Legacy types (status/health endpoint, kept for backward compatibility) ---
 
 /** Health of a single node's engine adapter (mirrors engine.Health in Go). */
@@ -402,9 +404,13 @@ export interface AdjustmentRejected {
   details: string;
 }
 
+/** What an adjustment books; declared with ADJUSTMENT_TYPES, its one source. */
+export type { AdjustmentType };
+
 /** The request body captured on an adjustment record. */
 export interface AdjustmentRequest {
   id?: string;
+  type: AdjustmentType;
   asset: string;
   balance?: AdjustmentAmount;
   held?: AdjustmentAmount;

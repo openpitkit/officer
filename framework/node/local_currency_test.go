@@ -109,6 +109,7 @@ func TestLocalNode_CreateAssetPublishesLiveResolver(t *testing.T) {
 		account,
 		"",
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: "GOLD",
 			Balance: &domain.AdjustmentAmount{
 				Mode:  domain.AdjustmentModeAbsolute,
@@ -1579,6 +1580,7 @@ func TestLocalNode_SetAccountCurrencyCreatesAndPublishesMissingAsset(t *testing.
 				id,
 				"",
 				domain.AdjustmentRequest{
+					Type:  domain.AdjustmentTypeDeposit,
 					Asset: "CHF",
 					Balance: &domain.AdjustmentAmount{
 						Mode:  domain.AdjustmentModeAbsolute,

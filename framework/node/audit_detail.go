@@ -127,14 +127,23 @@ func groupSideDetail(code string) string {
 	return code
 }
 
-// adjustmentDetail renders one spot-funds adjustment and its accept/reject
-// disposition.
-func adjustmentDetail(id domain.AccountID, asset string, accepted bool) string {
+// adjustmentDetail renders one spot-funds adjustment, its type and its
+// accept/reject disposition. ref is printed only when the producer supplied
+// one (the source reference, such as a venue fee id); a store-minted id is not
+// a reference and is left out.
+func adjustmentDetail(
+	id domain.AccountID, asset string, typ domain.AdjustmentType,
+	ref domain.ExternalID, accepted bool,
+) string {
 	disposition := "rejected"
 	if accepted {
 		disposition = "accepted"
 	}
-	return fmt.Sprintf("adjustment account %s asset=%s %s", id, asset, disposition)
+	detail := fmt.Sprintf("adjustment account %s asset=%s type=%s", id, asset, typ)
+	if !ref.IsZero() {
+		detail += " id=" + ref.String()
+	}
+	return detail + " " + disposition
 }
 
 // setMcpAccessDetail renders one MCP command access toggle.

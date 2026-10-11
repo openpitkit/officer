@@ -539,6 +539,7 @@ const (
 	orderAmountKindTable        = schema.OrderAmountKindTable
 	orderStatusTable            = schema.OrderStatusTable
 	adjustmentStatusTable       = schema.AdjustmentStatusTable
+	adjustmentTypeTable         = schema.AdjustmentTypeTable
 	auditActionTable            = schema.AuditActionTable
 	attestationAlgTable         = schema.AttestationAlgTable
 	attestationRequestTypeTable = schema.AttestationRequestTypeTable

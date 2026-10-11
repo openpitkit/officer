@@ -27,6 +27,7 @@ import type {
   AdjustmentAmount,
   AdjustmentRejected,
   AdjustmentRequest,
+  AdjustmentType,
   SignedApproval,
   AssetClass,
   AssetClassListFilters,
@@ -122,6 +123,7 @@ import type {
   TextMatchMode,
   Trade,
 } from "../../api/types";
+import { ADJUSTMENT_TYPES } from "../registries/vocabulary";
 
 type Json = Record<string, unknown>;
 
@@ -424,9 +426,21 @@ function normalizeBoundsPair(v: unknown): BoundsPair | undefined {
   return result;
 }
 
+function normalizeAdjustmentType(v: unknown): AdjustmentType {
+  const type = ADJUSTMENT_TYPES.find((candidate) => candidate === v);
+  if (type === undefined) {
+    throw new ApiError(
+      "Invalid or missing adjustment type in the API response",
+      "internal",
+    );
+  }
+  return type;
+}
+
 function normalizeAdjustmentRequest(v: unknown): AdjustmentRequest {
   const o = isObject(v) ? v : {};
   const req: AdjustmentRequest = {
+    type: normalizeAdjustmentType(o.type),
     asset: asString(pick(o, "asset", "Asset")),
   };
   const id = pick(o, "id", "Id", "ID");
@@ -3249,6 +3263,7 @@ async function fetchBalances(
 
 export interface AdjustmentBody {
   id?: string;
+  type: AdjustmentType;
   asset: string;
   realizedPnl?: string;
   averageEntryPrice?: string;
@@ -3342,6 +3357,7 @@ export interface GlobalAdjustmentsFilter extends PageRequest {
   asset?: string;
   assetMatch?: TextMatchMode;
   source?: string;
+  type?: AdjustmentType;
   status?: string;
   atMode?: string;
   atMin?: string;
@@ -3378,6 +3394,7 @@ function adjustmentListQuery(filter: GlobalAdjustmentsFilter = {}): string {
   appendListFilter(params, "account", filter.account);
   appendListFilter(params, "asset", filter.asset);
   appendListFilter(params, "source", filter.source);
+  appendListFilter(params, "type", filter.type);
   appendListFilter(params, "status", filter.status, "all");
   appendListFilter(params, "atMode", filter.atMode, "all");
   appendListFilter(params, "atMin", filter.atMin);

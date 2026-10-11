@@ -16,8 +16,8 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Adjustments-group tests: append/list round-trip, external-id opacity,
-// opaque JSON preserved byte-for-byte, source filter, principal SET NULL after
-// principal delete, cascade on account delete.
+// opaque JSON preserved byte-for-byte, source filter, type refusal, filter and
+// sort, principal SET NULL after principal delete, cascade on account delete.
 
 package sqlite
 
@@ -56,6 +56,7 @@ func sampleAdjustment() domain.AccountAdjustmentRecord {
 		Principal: "operator",
 		Source:    domain.SourcePanel,
 		Request: domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeCorrection,
 			Asset: "AAPL",
 			Balance: &domain.AdjustmentAmount{
 				Mode:  domain.AdjustmentModeAbsolute,
@@ -111,6 +112,9 @@ func TestAdjustmentAppendListRoundTrip(t *testing.T) {
 		t.Fatalf("source = %q, want panel", got.Source)
 	}
 	// Request round-trip.
+	if got.Request.Type != domain.AdjustmentTypeCorrection {
+		t.Fatalf("request.type = %q, want correction", got.Request.Type)
+	}
 	if got.Request.Asset != "AAPL" || got.Request.Balance == nil {
 		t.Fatalf("request round-trip failed: %+v", got.Request)
 	}
@@ -144,6 +148,7 @@ func TestRecordAccountAdjustmentPersistsEngineBalanceInSameTx(t *testing.T) {
 			Asset:   "AAPL",
 			Source:  domain.SourcePanel,
 			Request: domain.AdjustmentRequest{
+				Type:        domain.AdjustmentTypeCorrection,
 				Asset:       "AAPL",
 				RealizedPnl: "-12.50",
 			},
@@ -204,7 +209,9 @@ func TestRecordAccountAdjustmentPreservesUnsetAndZeroRealizedPnl(t *testing.T) {
 				},
 				Adjustment: domain.AccountAdjustmentRecord{
 					Account: "acc-1", Asset: "AAPL", Source: domain.SourcePanel,
-					Request: domain.AdjustmentRequest{Asset: "AAPL"},
+					Request: domain.AdjustmentRequest{
+						Type: domain.AdjustmentTypeCorrection, Asset: "AAPL",
+					},
 					Accepted: &domain.AdjustmentOutcomeAccepted{
 						BalanceResult: "1", RealizedPnlResult: test.realizedPnl,
 					},
@@ -262,6 +269,7 @@ func TestRecordAccountAdjustmentPersistsHaltedRealizedPnlWithoutValue(t *testing
 				Adjustment: domain.AccountAdjustmentRecord{
 					Account: "acc-1", Asset: "AAPL", Source: domain.SourcePanel,
 					Request: domain.AdjustmentRequest{
+						Type:  domain.AdjustmentTypeCorrection,
 						Asset: "AAPL", RealizedPnlHaltReason: halt,
 					},
 					Accepted: &domain.AdjustmentOutcomeAccepted{
@@ -318,6 +326,7 @@ func TestRecordAccountAdjustmentDeletesEngineEmptyBalance(t *testing.T) {
 				Adjustment: domain.AccountAdjustmentRecord{
 					Account: "acc-1", Asset: "AAPL", Source: domain.SourcePanel,
 					Request: domain.AdjustmentRequest{
+						Type:  domain.AdjustmentTypeCorrection,
 						Asset: "AAPL", RealizedPnl: realizedPnl,
 					},
 					Accepted: &domain.AdjustmentOutcomeAccepted{
@@ -347,7 +356,9 @@ func TestAdjustmentRejectedOutcome(t *testing.T) {
 		Account: "acc-1",
 		Asset:   "AAPL",
 		Source:  domain.SourcePanel,
-		Request: domain.AdjustmentRequest{Asset: "AAPL"},
+		Request: domain.AdjustmentRequest{
+			Type: domain.AdjustmentTypeWithdrawal, Asset: "AAPL",
+		},
 		Rejected: &domain.AdjustmentOutcomeRejected{
 			Code:   "insufficient_funds",
 			Reason: "balance too low",
@@ -708,5 +719,162 @@ func TestAppendAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 	}
 	if got := len(stored.ExternalID.String()); got != domain.ExternalIDStringLen {
 		t.Fatalf("generated id len = %d, want %d", got, domain.ExternalIDStringLen)
+	}
+}
+
+// TestAppendAdjustmentRefusesMissingOrUnknownType verifies that a record whose
+// request carries no type, or an unknown one, is refused with ErrInvalid
+// blaming the type member and that no row is written.
+func TestAppendAdjustmentRefusesMissingOrUnknownType(t *testing.T) {
+	tests := []struct {
+		name       string
+		typ        domain.AdjustmentType
+		constraint string
+	}{
+		{name: "missing", constraint: "required"},
+		{name: "unknown", typ: "rebate", constraint: "unsupported_value"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, rs := seedAdjustmentFixtures(t)
+			rec := sampleAdjustment()
+			rec.Request.Type = test.typ
+			_, err := rs.AppendAdjustment(ctx, rec)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("AppendAdjustment(type %q) = %v, want ErrInvalid", test.typ, err)
+			}
+			if got := domain.ValidationPointer(err); got != "/type" {
+				t.Fatalf("AppendAdjustment error pointer = %q, want %q", got, "/type")
+			}
+			if got := domain.ValidationConstraint(err); got != test.constraint {
+				t.Fatalf("AppendAdjustment error constraint = %q, want %q", got, test.constraint)
+			}
+			if n := countRows(t, ctx, rs.(*realmStore), "adjustment"); n != 0 {
+				t.Fatalf("adjustment rows after refused append = %d, want 0", n)
+			}
+		})
+	}
+}
+
+// appendTypedAdjustments appends one sample adjustment per type, in order.
+func appendTypedAdjustments(
+	t *testing.T, ctx context.Context, rs fwstore.RealmStore, types ...domain.AdjustmentType,
+) {
+	t.Helper()
+	for _, typ := range types {
+		rec := sampleAdjustment()
+		rec.Request.Type = typ
+		if _, err := rs.AppendAdjustment(ctx, rec); err != nil {
+			t.Fatalf("AppendAdjustment(%s): %v", typ, err)
+		}
+	}
+}
+
+func TestAdjustmentListRowsTypeFilter(t *testing.T) {
+	ctx, rs := seedAdjustmentFixtures(t)
+	appendTypedAdjustments(t, ctx, rs,
+		domain.AdjustmentTypeDeposit,
+		domain.AdjustmentTypeWithdrawal,
+		domain.AdjustmentTypeDeposit,
+		domain.AdjustmentTypeCorrection,
+	)
+
+	page, err := rs.ListAdjustmentRows(ctx, fwstore.AdjustmentListFilter{
+		Type: domain.AdjustmentTypeDeposit,
+	})
+	if err != nil {
+		t.Fatalf("ListAdjustmentRows(deposit): %v", err)
+	}
+	if page.Total != 2 || len(page.Rows) != 2 {
+		t.Fatalf("deposit page total/len = %d/%d, want 2/2", page.Total, len(page.Rows))
+	}
+	for _, row := range page.Rows {
+		if row.Request.Type != domain.AdjustmentTypeDeposit {
+			t.Fatalf("type filter leaked row of type %q", row.Request.Type)
+		}
+	}
+
+	page, err = rs.ListAdjustmentRows(ctx, fwstore.AdjustmentListFilter{
+		Type: domain.AdjustmentTypeVenueFee,
+	})
+	if err != nil {
+		t.Fatalf("ListAdjustmentRows(venue_fee): %v", err)
+	}
+	if page.Total != 0 || len(page.Rows) != 0 {
+		t.Fatalf("venue_fee page total/len = %d/%d, want 0/0", page.Total, len(page.Rows))
+	}
+
+	all, err := rs.ListAdjustmentRows(ctx, fwstore.AdjustmentListFilter{})
+	if err != nil {
+		t.Fatalf("ListAdjustmentRows(all): %v", err)
+	}
+	if all.Total != 4 {
+		t.Fatalf("unfiltered total = %d, want 4", all.Total)
+	}
+
+	_, err = rs.ListAdjustmentRows(ctx, fwstore.AdjustmentListFilter{Type: "rebate"})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ListAdjustmentRows(unknown type) = %v, want ErrInvalid", err)
+	}
+}
+
+func TestAdjustmentListRowsSortByType(t *testing.T) {
+	ctx, rs := seedAdjustmentFixtures(t)
+	appendTypedAdjustments(t, ctx, rs,
+		domain.AdjustmentTypeWithdrawal,
+		domain.AdjustmentTypeCorrection,
+		domain.AdjustmentTypeVenueFee,
+		domain.AdjustmentTypeDeposit,
+	)
+
+	// Type sorts by its stable dictionary id, the same as source and status.
+	ascending := []domain.AdjustmentType{
+		domain.AdjustmentTypeVenueFee,
+		domain.AdjustmentTypeDeposit,
+		domain.AdjustmentTypeWithdrawal,
+		domain.AdjustmentTypeCorrection,
+	}
+	for _, descending := range []bool{false, true} {
+		page, err := rs.ListAdjustmentRows(ctx, fwstore.AdjustmentListFilter{
+			Sort: fwstore.SortSpec{Column: "type", Descending: descending},
+		})
+		if err != nil {
+			t.Fatalf("ListAdjustmentRows(sort type, desc=%v): %v", descending, err)
+		}
+		if len(page.Rows) != len(ascending) {
+			t.Fatalf("rows = %d, want %d", len(page.Rows), len(ascending))
+		}
+		for i, row := range page.Rows {
+			want := ascending[i]
+			if descending {
+				want = ascending[len(ascending)-1-i]
+			}
+			if row.Request.Type != want {
+				t.Fatalf("desc=%v row %d type = %q, want %q", descending, i, row.Request.Type, want)
+			}
+		}
+	}
+}
+
+// TestAdjustmentReadRefusesTypeColumnDivergingFromRequest verifies that a row
+// whose type column disagrees with the type inside its request JSON is
+// reported as corrupt rather than resolved in favour of either side.
+func TestAdjustmentReadRefusesTypeColumnDivergingFromRequest(t *testing.T) {
+	ctx, rs := seedAdjustmentFixtures(t)
+	appendTypedAdjustments(t, ctx, rs, domain.AdjustmentTypeDeposit)
+	if _, err := rs.(*realmStore).rawDB().ExecContext(
+		ctx,
+		`UPDATE adjustment
+		 SET type_id = (SELECT id FROM adjustment_type WHERE code = 'withdrawal')`,
+	); err != nil {
+		t.Fatalf("diverge type column: %v", err)
+	}
+
+	_, err := rs.ListAdjustments(ctx, "acc-1", "", 10)
+	if err == nil {
+		t.Fatal("ListAdjustments returned a row whose type column diverges from its request")
+	}
+	if want := `stored type "withdrawal" differs from request type "deposit"`; !strings.Contains(err.Error(), want) {
+		t.Fatalf("ListAdjustments error = %q, want it to contain %q", err, want)
 	}
 }

@@ -484,6 +484,8 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
         await createAdjustment(
           DEMO_ACCOUNT_ID,
           {
+            // The starting positions fund a fresh demo account.
+            type: "deposit",
             asset: position.asset,
             balance: { mode: "absolute", value: position.balance },
             averageEntryPrice: position.averageEntryPrice,

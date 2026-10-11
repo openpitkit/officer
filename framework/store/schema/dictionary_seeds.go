@@ -26,6 +26,7 @@ const (
 	OrderAmountKindTable        = "order_amount_kind"
 	OrderStatusTable            = "order_status"
 	AdjustmentStatusTable       = "adjustment_status"
+	AdjustmentTypeTable         = "adjustment_type"
 	AuditActionTable            = "audit_action"
 	AttestationAlgTable         = "attestation_alg"
 	AttestationRequestTypeTable = "attestation_request_type"
@@ -86,6 +87,12 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 		{AdjustmentStatusTable, []EnumCodeSeed{
 			{1, string(domain.AdjustmentStatusAccepted)},
 			{2, string(domain.AdjustmentStatusRejected)},
+		}},
+		{AdjustmentTypeTable, []EnumCodeSeed{
+			{1, string(domain.AdjustmentTypeVenueFee)},
+			{2, string(domain.AdjustmentTypeDeposit)},
+			{3, string(domain.AdjustmentTypeWithdrawal)},
+			{4, string(domain.AdjustmentTypeCorrection)},
 		}},
 		{AuditActionTable, []EnumCodeSeed{
 			{1, string(domain.AuditActionHydrate)},

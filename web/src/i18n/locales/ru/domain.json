@@ -16,6 +16,12 @@
     "account_underlying_asset": "Счёт + базовый актив",
     "account_settlement_asset": "Счёт + расчётный актив"
   },
+  "adjustmentType": {
+    "venue_fee": "Комиссия площадки",
+    "deposit": "Депозит",
+    "withdrawal": "Вывод",
+    "correction": "Ручная правка"
+  },
   "kindHint": {
     "rate_limit": {
       "max_orders": "целое число > 0, <= 1e9",

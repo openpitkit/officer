@@ -787,7 +787,7 @@ func TestTradingSendPaperEndToEnd(t *testing.T) {
 			id := f.setupSend(surface)
 			for _, account := range []string{"desk", "fees"} {
 				f.rest(http.MethodPost, "/accounts/"+account+"/adjustments?missingAccount=reject",
-					map[string]any{"asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+					map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 						"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
 			}
 			if surface == "REST" {
@@ -1014,7 +1014,7 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 			f := newTradingE2E(t, true)
 			id := f.createREST()
 			path := "/trading/connections/" + id
-			f.rest(http.MethodPost, "/accounts/fees/adjustments?missingAccount=reject", map[string]any{"asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+			f.rest(http.MethodPost, "/accounts/fees/adjustments?missingAccount=reject", map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 				"balance": map[string]any{"mode": "absolute", "value": "10"}}, http.StatusCreated)
 			f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "AAPL", "baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, http.StatusOK)
 			f.rest(http.MethodPut, path+"/fee-account", map[string]any{"account": "fees"}, http.StatusOK)
@@ -1064,6 +1064,18 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 				if !found || !value.Equal(decimal.RequireFromString("9.75")) {
 					t.Fatalf("fee balance = %+v, found %t", balance, found)
 				}
+				// The REST deposit on the same account is not a venue fee.
+				venueFees := tradingE2EDecode[struct {
+					Adjustments []struct {
+						ID      string
+						Request struct{ Type string }
+					}
+					Total int
+				}](t, f.rest(http.MethodGet, "/adjustments?type=venue_fee", nil, http.StatusOK))
+				if venueFees.Total != 1 || len(venueFees.Adjustments) != 1 ||
+					venueFees.Adjustments[0].ID != "trading:"+id+":fee:regulatory-fee" || venueFees.Adjustments[0].Request.Type != "venue_fee" {
+					t.Fatalf("venue_fee adjustments = %+v", venueFees)
+				}
 			} else {
 				f.wait("venue_fee_skipped audit", func() bool {
 					rows, err := f.realm.ListAuditFiltered(f.ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
@@ -1092,6 +1104,24 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 	}
 }
 
+// A REST adjustment without a type is refused as a validation problem at
+// /type, and nothing is recorded.
+func TestAdjustmentTypeRequiredEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, false)
+	problem := tradingE2EDecode[httpx.ProblemDetails](t, f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject",
+		map[string]any{"asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+			"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusUnprocessableEntity))
+	if len(problem.Errors) != 1 || problem.Errors[0].Code != "validation" ||
+		problem.Errors[0].Pointer != "/type" || problem.Errors[0].Constraint != "required" ||
+		!strings.Contains(problem.Detail, "type is required") {
+		t.Fatalf("missing type problem = %+v", problem)
+	}
+	listed := tradingE2EDecode[struct{ Total int }](t, f.rest(http.MethodGet, "/adjustments", nil, http.StatusOK))
+	if listed.Total != 0 {
+		t.Fatalf("refused adjustment recorded %d rows", listed.Total)
+	}
+}
+
 // group creates an account group and moves members into it.
 func (f *tradingE2E) group(code string, members ...string) {
 	f.t.Helper()
@@ -1107,7 +1137,7 @@ func TestTradingGroupAccessEndToEnd(t *testing.T) {
 	f.rest(http.MethodPost, "/accounts", map[string]any{"code": "outside", "currency": "USD"}, http.StatusCreated)
 	f.group("team", "desk", "other")
 	f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject",
-		map[string]any{"asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+		map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 			"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
 	id := f.createREST()
 	path := "/trading/connections/" + id
@@ -1425,7 +1455,7 @@ func TestTradingStreamFailureEndToEnd(t *testing.T) {
 			f.streamFault = tc.fault
 			f.venueMu.Unlock()
 			f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject",
-				map[string]any{"asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+				map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 					"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
 			id := f.setupSend("REST")
 			f.wait("degraded connection", func() bool { return f.health().State == "degraded" })

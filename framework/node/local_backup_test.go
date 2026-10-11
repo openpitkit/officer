@@ -246,6 +246,7 @@ func TestLocalNode_RestoreBackupPublishesInsertedAccountOnline(t *testing.T) {
 		"restored",
 		"",
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: "restored-asset",
 			Balance: &domain.AdjustmentAmount{
 				Mode:  domain.AdjustmentModeAbsolute,
@@ -304,6 +305,7 @@ func TestLocalNode_RestoreBackupSettingsOnlyPublishesInsertedAssetOnline(
 		"restored",
 		"",
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: "restored-asset",
 			Balance: &domain.AdjustmentAmount{
 				Mode:  domain.AdjustmentModeAbsolute,
@@ -458,6 +460,7 @@ func TestLocalNode_RestoreBackupAssetOnlyRuntimeDeltaPublishesOnline(
 		"restored",
 		"",
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: "restored-asset",
 			Balance: &domain.AdjustmentAmount{
 				Mode:  domain.AdjustmentModeAbsolute,

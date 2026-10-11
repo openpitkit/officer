@@ -817,6 +817,7 @@ var expectedSchemaTableNames = []string{
 	"account_group",
 	"adjustment",
 	"adjustment_status",
+	"adjustment_type",
 	"asset",
 	"asset_class",
 	"attestation_alg",
@@ -856,6 +857,7 @@ var expectedSchemaTableNames = []string{
 
 var nonClientDataSchemaTables = map[string]string{
 	"adjustment_status":        "closed-domain reference dictionary, not portable client data",
+	"adjustment_type":          "closed-domain reference dictionary, not portable client data",
 	"attestation_alg":          "closed-domain reference dictionary, not portable client data",
 	"attestation_mode":         "closed-domain reference dictionary, not portable client data",
 	"attestation_request_type": "closed-domain reference dictionary, not portable client data",
@@ -1003,6 +1005,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"at":           "At",
 			"source_id":    "Source",
 			"status_id":    "Accepted/Rejected",
+			"type_id":      "Request.Type",
 			"request":      "Request",
 			"outcome":      "Accepted/Rejected",
 		},
@@ -1772,6 +1775,7 @@ func seedClientDataDriftRealm(
 		Principal:  "operator",
 		Source:     domain.SourcePanel,
 		Request: domain.AdjustmentRequest{
+			Type:                  domain.AdjustmentTypeDeposit,
 			Asset:                 "USD",
 			AverageEntryPrice:     "101.23",
 			Balance:               adjustmentAmount(domain.AdjustmentModeDelta, "5.50"),
@@ -1805,6 +1809,7 @@ func seedClientDataDriftRealm(
 		Principal:  "operator",
 		Source:     domain.SourceAPI,
 		Request: domain.AdjustmentRequest{
+			Type:                  domain.AdjustmentTypeWithdrawal,
 			Asset:                 "USD",
 			AverageEntryPrice:     "102.34",
 			Balance:               adjustmentAmount(domain.AdjustmentModeDelta, "6.50"),

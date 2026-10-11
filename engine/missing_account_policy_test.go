@@ -71,6 +71,7 @@ func fundMissingAccount(
 		account,
 		domain.ExternalID(""),
 		domain.AdjustmentRequest{
+			Type:  domain.AdjustmentTypeDeposit,
 			Asset: "USDT",
 			Balance: &domain.AdjustmentAmount{
 				Mode:  domain.AdjustmentModeAbsolute,

@@ -128,6 +128,7 @@ func (w *worker) intakeFee(ctx context.Context, reader FeeReader, fee Fee, accou
 		return false
 	}
 	err = w.r.adjust(context.WithoutCancel(w.r.ctx), account, id, domain.AdjustmentRequest{
+		Type:    domain.AdjustmentTypeVenueFee,
 		Asset:   asset,
 		Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: fee.Amount},
 	})

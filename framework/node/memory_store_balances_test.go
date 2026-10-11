@@ -438,6 +438,10 @@ func sortBalanceRows(rows []store.BalanceListRow, spec store.SortSpec) {
 func (r *memoryRealm) AppendAdjustment(
 	_ context.Context, rec domain.AccountAdjustmentRecord,
 ) (domain.AccountAdjustmentRecord, error) {
+	// Mirror the SQLite store: a record without a known type is never written.
+	if err := domain.ValidateAdjustmentType(rec.Request.Type); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
 	if rec.ExternalID.IsZero() {
 		rec.ExternalID = r.nextExternalID()
 	} else {
@@ -506,6 +510,11 @@ func (r *memoryRealm) ListAdjustments(
 func (r *memoryRealm) ListAdjustmentRows(
 	ctx context.Context, filter store.AdjustmentListFilter,
 ) (store.AdjustmentListPage, error) {
+	if filter.Type != "" {
+		if err := domain.ValidateAdjustmentType(filter.Type); err != nil {
+			return store.AdjustmentListPage{}, err
+		}
+	}
 	records, err := r.ListAdjustments(ctx, "", "", len(r.adjustments))
 	if err != nil {
 		return store.AdjustmentListPage{}, err
@@ -521,6 +530,9 @@ func (r *memoryRealm) ListAdjustmentRows(
 			continue
 		}
 		if filter.Source != "" && rec.Source != filter.Source {
+			continue
+		}
+		if filter.Type != "" && rec.Request.Type != filter.Type {
 			continue
 		}
 		if filter.Status != nil && adjustmentStatus(rec) != *filter.Status {
