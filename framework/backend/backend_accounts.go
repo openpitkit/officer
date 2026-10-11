@@ -55,6 +55,60 @@ func (s *Service) ListAccountRows(
 	return s.node.ListAccountRows(ctx, filter)
 }
 
+// AccountListRow is an account list row with its effective block: the
+// account's own block joined with its current group's.
+type AccountListRow struct {
+	store.AccountListRow
+	// Block is the row's effective block state.
+	Block domain.AccountBlockState
+}
+
+// AccountListPage is a paged account-list result whose rows carry their
+// effective block.
+type AccountListPage struct {
+	Rows  []AccountListRow
+	Total int
+}
+
+// AccountRowReader is the two reads ListAccountRowsWithBlocks joins.
+// ControlPlane satisfies it.
+type AccountRowReader interface {
+	ListAccountRows(
+		ctx context.Context, filter store.AccountListFilter,
+	) (store.AccountListPage, error)
+	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
+}
+
+// ListAccountRowsWithBlocks reads one account-list page and resolves every
+// row's effective block. The engine rejects every order from a member of a
+// blocked group, while the account row carries only the account's own latched
+// flag, so the group tier is joined in on every account read path.
+//
+// The rows are read first and the groups second, the groups even for an empty
+// page. Both errors are returned unwrapped, so a caller that maps an error's
+// text into its response reports exactly what the failed read returned.
+func ListAccountRowsWithBlocks(
+	ctx context.Context, r AccountRowReader, filter store.AccountListFilter,
+) (AccountListPage, error) {
+	page, err := r.ListAccountRows(ctx, filter)
+	if err != nil {
+		return AccountListPage{}, err
+	}
+	groups, err := r.ListGroups(ctx)
+	if err != nil {
+		return AccountListPage{}, err
+	}
+	blocks := domain.NewGroupBlockIndex(groups)
+	rows := make([]AccountListRow, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		rows = append(rows, AccountListRow{
+			AccountListRow: row,
+			Block:          blocks.Resolve(row.Account),
+		})
+	}
+	return AccountListPage{Rows: rows, Total: page.Total}, nil
+}
+
 // CreateAccount validates the account metadata and creates the account.
 func (s *Service) CreateAccount(
 	ctx context.Context, account domain.Account,

@@ -27,21 +27,6 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
-// groupBlocks reads the realm's groups so an account list can report the
-// effective block. The engine rejects every order from a member of a blocked
-// group, while the account row carries only the account's own latched flag, so
-// the group tier is joined in on every account read path. Only the list path
-// needs the whole dictionary; accountBlock resolves a single account.
-func groupBlocks(
-	ctx context.Context, svc backend.ControlPlane,
-) (domain.GroupBlockIndex, error) {
-	groups, err := svc.ListGroups(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return domain.NewGroupBlockIndex(groups), nil
-}
-
 func handleListAccounts(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := accountListFilterFromQuery(r.URL.Query())
@@ -49,19 +34,14 @@ func handleListAccounts(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteValidationErr(w, err)
 			return
 		}
-		accounts, err := svc.ListAccountRows(r.Context(), filter)
+		accounts, err := backend.ListAccountRowsWithBlocks(r.Context(), svc, filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		blocks, err := groupBlocks(r.Context(), svc)
-		if err != nil {
-			httpx.WriteErr(w, err)
-			return
-		}
-		dtos := make([]accountDTO, 0, len(accounts.Rows))
+		dtos := make([]httpx.AccountDTO, 0, len(accounts.Rows))
 		for _, row := range accounts.Rows {
-			dtos = append(dtos, toAccountRowDTO(row, blocks.Resolve(row.Account)))
+			dtos = append(dtos, httpx.ToAccountRowDTO(row.AccountListRow, row.Block))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"accounts": dtos,
@@ -115,7 +95,7 @@ func handleGetAccount(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
-			"account": toAccountDTO(account, block),
+			"account": httpx.ToAccountDTO(account, block),
 			"limits":  toAccountLimitsDTO(limits),
 		})
 	}
@@ -242,7 +222,7 @@ func writeAccountBody(
 		httpx.WriteErr(w, err)
 		return
 	}
-	httpx.WriteJSON(w, status, map[string]any{"account": toAccountDTO(account, block)})
+	httpx.WriteJSON(w, status, map[string]any{"account": httpx.ToAccountDTO(account, block)})
 }
 
 // accountBlock resolves one account's effective block. An account in no group

@@ -43,6 +43,17 @@ Two shapes, decided by what failed:
 Money and size values cross the wire as exact decimal strings, not as IEEE 754
 floats.
 
+The order, trade, account and group lists bound their filter values, in REST
+and in the MCP list tools alike; a character here is a Unicode code point. A
+decimal bound is written in at most 64 characters and must be representable in
+the engine's decimal: at most 28 fractional digits, trailing zeros aside, and
+its digits, read as one integer, at most 79228162514264337593543950335. A zero
+written with an exponent - its e-part less its fractional digits - outside
+-92..28 is refused. A text filter takes at most 16 fragments and 4096
+characters across them, the longest text Officer stores, and an order status
+list names no status twice. REST answers a value outside these limits with
+`422` and code `validation`, the MCP list tools with `validation: <message>`.
+
 ## MCP tools
 
 The tool catalog is served by the API and shown in the operator panel. It
@@ -60,8 +71,49 @@ that error (see Errors) - including a value Officer rejects (`validation`) and
 a refused trading access (`forbidden`). A `destination_ambiguous` error also
 lists its candidate connections. Plain text comes back only from a check the
 tool makes before it calls Officer - a required argument left empty, or an
-argument the tool parses itself - and from the MCP gate's own refusals: an
-unauthorized caller, a failed command-access check, and a disabled command.
+argument the tool parses itself, except in the list tools (below) - and from
+the MCP gate's own refusals: an unauthorized caller, a failed command-access
+check, and a disabled command.
+
+### List tools
+
+`list_orders`, `list_trades`, `list_accounts` and `list_groups` are read-only
+and enabled by default. Each returns one page of the rows the matching REST
+list returns, under the same key with the total:
+`{"orders": [...], "total": N}`, and likewise `trades`, `accounts` and
+`groups`.
+
+They take the filters the REST lists apply and check them with the core
+list-filter rules, the limits under Values included; each tool's description
+names its filters and sort columns.
+REST checks the same values in its own query parser, so its spellings differ -
+an omitted argument here stands for REST's `all` - and so do its 422 texts.
+The JSON shapes:
+
+- text match: `{fragments, anchorStart, anchorEnd}`;
+- count, decimal and time ranges:
+  `{min, max, equal, notEqual, minExclusive, maxExclusive}`, decimals as exact
+  decimal strings and times as RFC 3339; a time range has no `equal` or
+  `notEqual`;
+- sort: `{column, descending}`.
+
+The trading-connection filter is
+`venue: {"mode": "any" | "none" | "connection", "connection": "<id>"}`: rows
+through at least one connection, through none, or through the named one
+(`connection` goes with that mode only). The link it reads is an order's own
+venue link, the venue link of a trade's order, an account's own grant or its
+group's, and a group's own grant.
+
+Paging takes `limit` (default 50, capped at 500) and a 1-based `page`; `total`
+counts the matching rows before paging. On the first page `list_groups` also
+returns the default group when it matches the filters, outside the limit and
+the total.
+
+A value Officer rejects answers `validation: <message>`, including the tools'
+own argument checks, such as a time that is not RFC 3339 or a negative limit or
+page. An argument that does not decode into its type, such as a string for
+`limit`, is rejected by the MCP layer before the tool runs and comes back as a
+protocol error, not as a tool result.
 
 ## Trading
 

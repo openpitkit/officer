@@ -20,45 +20,22 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	frameworkmcp "go.openpit.dev/officer/framework/mcp"
-	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 func TestServerToolSnapshot(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
 	defer cancel()
-
-	server, err := frameworkmcp.Build(
-		officerToolRegistry(), &fakeSource{}, nil, httpx.AllowAll{}, operatorCaller(),
-	)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
-	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- server.Run(ctx, serverTransport)
-	}()
-
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
-	session, err := client.Connect(ctx, clientTransport)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	defer func() {
-		_ = session.Close()
-		cancel()
-		if err := <-serverErr; err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatalf("server run: %v", err)
-		}
-	}()
+	session, closeSession := officerSession(t, ctx, &fakeSource{})
+	defer closeSession()
 
 	list, err := session.ListTools(ctx, nil)
 	if err != nil {
@@ -97,6 +74,50 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "get_audit",
 			description: "Return recent control-plane audit entries (default 50, " +
 				"max 500). Read-only - no secrets, no order-flow control.",
+		},
+		{
+			name: "list_orders",
+			description: listToolDescription(
+				"Return one page of orders; each row is the order row of the REST order list.",
+				"account (exact account code), source, side (buy | sell), status (order "+
+					"statuses), baseAsset and quoteAsset (text match), amount and price "+
+					"(decimal range), at (time range)",
+				"account, amountValue, at, baseAsset, price, quoteAsset, side, source, status",
+			),
+		},
+		{
+			name: "list_trades",
+			description: listToolDescription(
+				"Return one page of trades; each row is the trade row of the REST trade list.",
+				"account, baseAsset and quoteAsset (text match), id (exact trade id), side "+
+					"(buy | sell), source, at (time range), quantity, price and lockPrice "+
+					"(decimal range)",
+				"account, at, baseAsset, lockPrice, price, quantity, quoteAsset, side, source",
+			),
+		},
+		{
+			name: "list_accounts",
+			description: listToolDescription(
+				"Return one page of accounts; each row is the account row of the REST "+
+					"account list, its block joined with its group's.",
+				"group (exact group code; an empty string selects accounts in no group), "+
+					"code (code or title) and blockReason (text match), status (active | "+
+					"blocked), position (open-position count range), pnl (P&L bounds in "+
+					"pnl.currency) with includeUnsetPnl and includeHaltedPnl",
+				"blockReason, code, group, positionCount, status, title, venueAccess",
+			),
+		},
+		{
+			name: "list_groups",
+			description: listToolDescription(
+				"Return one page of account groups; each row is the group row of the REST "+
+					"group list. The first page also carries the default group when it "+
+					"matches the filters, outside the limit and the total.",
+				"code (code or title), notes and blockReason (text match), status (active "+
+					"| blocked), position (open-position count range), account "+
+					"(member-account count range)",
+				"accountCount, blockReason, code, notes, positionCount, status, title, venueAccess",
+			),
 		},
 		{
 			name: "check_order",
@@ -315,6 +336,31 @@ func TestServerToolSnapshot(t *testing.T) {
 			}
 		}
 	})
+	t.Run("output-schemas-have-no-opaque-objects", func(t *testing.T) {
+		for _, tool := range list.Tools {
+			if paths := opaqueObjects(t, "", tool.OutputSchema); len(paths) > 0 {
+				t.Errorf("%s: output schema has opaque objects at %v", tool.Name, paths)
+			}
+		}
+	})
+	t.Run("list-orders-time-as-string", func(t *testing.T) {
+		tool, ok := gotByName["list_orders"]
+		if !ok {
+			t.Fatal("list_orders not advertised")
+		}
+		orders := tool.OutputSchema.Properties["orders"]
+		if orders == nil || orders.Items == nil {
+			t.Fatalf("%s output schema has no orders items", tool.Name)
+		}
+		at := orders.Items.Properties["at"]
+		if at == nil {
+			t.Fatalf("%s output schema has no orders[].at", tool.Name)
+		}
+		if at.Type != "string" || at.Format != "date-time" {
+			raw, _ := json.Marshal(at)
+			t.Fatalf("%s orders[].at schema = %s, want a date-time string", tool.Name, raw)
+		}
+	})
 	for _, w := range want {
 		got, ok := gotByName[w.name]
 		if !ok {
@@ -397,4 +443,54 @@ func TestServerToolSnapshot(t *testing.T) {
 			}
 		}
 	}
+}
+
+// opaqueObjects returns the paths under s of every object schema with no
+// properties that admits no additional property either: what the inference
+// gives a struct whose fields are all unexported, such as time.Time, and a
+// schema no marshalled value of it can match.
+func opaqueObjects(t *testing.T, path string, s *jsonschema.Schema) []string {
+	t.Helper()
+	if s == nil {
+		return nil
+	}
+	var found []string
+	isObject := s.Type == "object" || slices.Contains(s.Types, "object")
+	if isObject && len(s.Properties) == 0 && isFalseSchema(t, s.AdditionalProperties) {
+		found = append(found, path)
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Properties)) {
+		found = append(found, opaqueObjects(t, path+"."+name, s.Properties[name])...)
+	}
+	found = append(found, opaqueObjects(t, path+"[]", s.Items)...)
+	if !isFalseSchema(t, s.AdditionalProperties) {
+		found = append(found, opaqueObjects(t, path+"{}", s.AdditionalProperties)...)
+	}
+	return found
+}
+
+// isFalseSchema reports whether s is the schema that admits nothing, as it
+// arrives over the wire.
+func isFalseSchema(t *testing.T, s *jsonschema.Schema) bool {
+	t.Helper()
+	if s == nil {
+		return false
+	}
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	return string(raw) == `{"not":{}}`
+}
+
+// listToolDescription spells out a list tool description: the tool's own
+// lead, filters and sort columns around the text the four list tools share.
+func listToolDescription(lead, filters, sortColumns string) string {
+	return lead + " Read-only - no secrets, no order-flow control. Filters: " +
+		filters + "; venue is the trading-connection filter: mode any (through " +
+		"at least one trading connection), none (through no connection) or " +
+		"connection (through the connection whose id is in connection). Sort " +
+		"columns: " + sortColumns + ". Paging: limit rows per page (default 50, " +
+		"capped at 500) and a 1-based page; total counts the matching rows " +
+		"before paging. An invalid value fails with a validation error."
 }

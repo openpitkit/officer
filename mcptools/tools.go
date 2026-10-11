@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -36,8 +37,10 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
-const auditDefaultLimit = 50
-const auditMaxLimit = 500
+// listDefaultLimit and listMaxLimit are the default and the cap of the rows a
+// read tool returns: get_audit's entries and the list tools' page size.
+const listDefaultLimit = 50
+const listMaxLimit = 500
 
 const healthToolName = "health"
 const healthToolDescription = "Report Pit Officer deployment health: per-node " +
@@ -158,6 +161,46 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		true,
 		true,
 	), getAuditHandler)
+	registerTool(reg, descriptor(
+		listOrdersToolName,
+		"List orders",
+		listOrdersToolDescription,
+		"List orders with filters, including the trading-connection filter, sorting and paging.",
+		false,
+		false,
+		true,
+		true,
+	), listOrdersHandler)
+	registerTool(reg, descriptor(
+		listTradesToolName,
+		"List trades",
+		listTradesToolDescription,
+		"List trades with filters, including the trading-connection filter, sorting and paging.",
+		false,
+		false,
+		true,
+		true,
+	), listTradesHandler)
+	registerTool(reg, descriptor(
+		listAccountsToolName,
+		"List accounts",
+		listAccountsToolDescription,
+		"List accounts with filters, including the trading-connection filter, sorting and paging.",
+		false,
+		false,
+		true,
+		true,
+	), listAccountsHandler)
+	registerTool(reg, descriptor(
+		listGroupsToolName,
+		"List groups",
+		listGroupsToolDescription,
+		"List account groups with filters, including the trading-connection filter, sorting and paging.",
+		false,
+		false,
+		true,
+		true,
+	), listGroupsHandler)
 	registerTool(reg, descriptor(
 		checkOrderToolName,
 		"Check order",
@@ -322,7 +365,20 @@ func registerTool[In, Out any](
 	handler func(frameworkmcp.Source) frameworkmcp.ToolBody[In, Out],
 ) {
 	d.Register = func(server *sdkmcp.Server, deps frameworkmcp.RegisterDeps) {
-		tool := &sdkmcp.Tool{Name: d.Name, Description: d.Description}
+		outputSchema, err := outputSchemaFor[Out]()
+		if err != nil {
+			// Register has no error path (frameworkmcp.ToolDescriptor), and
+			// sdkmcp.AddTool already panics on this same failure - a schema it
+			// cannot infer for In or Out - so a schema failure stays the one
+			// failure mode registration has: a programming error, loud at
+			// server build.
+			panic(fmt.Errorf("adding tool %q: %w", d.Name, err))
+		}
+		tool := &sdkmcp.Tool{
+			Name:         d.Name,
+			Description:  d.Description,
+			OutputSchema: outputSchema,
+		}
 		// A composition that offers clients accounts leaves the input schema
 		// to the SDK, which infers it from In.
 		if !deps.Source.AccountFeatures().Accounts() {
@@ -387,6 +443,86 @@ func oneAccountInputSchema[In any]() *jsonschema.Schema {
 		schema.AdditionalProperties = nil
 	}
 	return schema
+}
+
+// outputSchemaFor returns the output schema the SDK infers for Out
+// (jsonschema.For, as sdkmcp.AddTool would), with every time.Time advertised
+// as the RFC 3339 string it marshals to. The inference sees only time.Time's
+// unexported fields and would advertise an object with no properties, which
+// no marshalled time matches, so a client that validates structured content
+// against the schema would reject every result carrying a time.
+func outputSchemaFor[Out any]() (*jsonschema.Schema, error) {
+	schema, err := jsonschema.For[Out]()
+	if err != nil {
+		return nil, err
+	}
+	if err := timesAsStrings(reflect.TypeFor[Out](), schema); err != nil {
+		return nil, fmt.Errorf("output schema of %v: %w", reflect.TypeFor[Out](), err)
+	}
+	return schema, nil
+}
+
+// timesAsStrings walks t alongside s, the schema jsonschema.For inferred for
+// t, the way the inference built it - through pointers, struct fields by
+// their JSON names, slice and array items and map values - and rewrites the
+// subschema of every time.Time into a date-time string, keeping its
+// description and the null a pointer allows.
+func timesAsStrings(t reflect.Type, s *jsonschema.Schema) error {
+	if s == nil {
+		return fmt.Errorf("no schema for %v", t)
+	}
+	nullable := false
+	for t.Kind() == reflect.Pointer {
+		nullable = true
+		t = t.Elem()
+	}
+	switch {
+	case t == reflect.TypeFor[time.Time]():
+		*s = jsonschema.Schema{Description: s.Description, Format: "date-time"}
+		if nullable {
+			s.Types = []string{"null", "string"}
+		} else {
+			s.Type = "string"
+		}
+	case t.Kind() == reflect.Struct:
+		for i := range t.NumField() {
+			field := t.Field(i)
+			name, ok := schemaFieldName(field)
+			if !ok {
+				continue
+			}
+			if err := timesAsStrings(field.Type, s.Properties[name]); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+		}
+	case t.Kind() == reflect.Slice, t.Kind() == reflect.Array:
+		return timesAsStrings(t.Elem(), s.Items)
+	case t.Kind() == reflect.Map:
+		return timesAsStrings(t.Elem(), s.AdditionalProperties)
+	}
+	return nil
+}
+
+// schemaFieldName returns the property name jsonschema.For gives a struct
+// field, which is the name encoding/json gives it: the first element of the
+// json tag, or the Go name when that is empty. ok is false for a field the
+// inference leaves out - an unexported one or one tagged "-".
+func schemaFieldName(f reflect.StructField) (string, bool) {
+	if !f.IsExported() {
+		return "", false
+	}
+	tag, ok := f.Tag.Lookup("json")
+	if !ok {
+		return f.Name, true
+	}
+	name, _, found := strings.Cut(tag, ",")
+	if name == "-" && !found {
+		return "", false
+	}
+	if name == "" {
+		return f.Name, true
+	}
+	return name, true
 }
 
 type healthInput struct{}
@@ -1029,10 +1165,10 @@ func getAuditHandler(
 	) (string, getAuditOutput, error) {
 		n := in.Limit
 		if n <= 0 {
-			n = auditDefaultLimit
+			n = listDefaultLimit
 		}
-		if n > auditMaxLimit {
-			n = auditMaxLimit
+		if n > listMaxLimit {
+			n = listMaxLimit
 		}
 		filter := domain.AuditFilter{
 			Account: domain.AccountID(strings.TrimSpace(in.Account)),

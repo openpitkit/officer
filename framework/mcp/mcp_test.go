@@ -32,6 +32,7 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 )
 
@@ -561,6 +562,34 @@ func (s *guardSource) ListGroups(context.Context) (
 	error,
 ) {
 	return nil, nil
+}
+
+func (s *guardSource) ListAccountRows(
+	context.Context,
+	store.AccountListFilter,
+) (store.AccountListPage, error) {
+	return store.AccountListPage{}, nil
+}
+
+func (s *guardSource) ListGroupRows(
+	context.Context,
+	store.GroupListFilter,
+) (store.GroupListPage, error) {
+	return store.GroupListPage{}, nil
+}
+
+func (s *guardSource) ListOrderRows(
+	context.Context,
+	store.OrderListFilter,
+) (backend.OrderListPage, error) {
+	return backend.OrderListPage{}, nil
+}
+
+func (s *guardSource) ListTradeRows(
+	context.Context,
+	store.TradeListFilter,
+) (store.TradeListPage, error) {
+	return store.TradeListPage{}, nil
 }
 
 func (s *guardSource) ListLimits(context.Context, domain.AccountID) (

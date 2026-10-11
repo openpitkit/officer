@@ -18,8 +18,8 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -227,13 +227,14 @@ func pageSpecFromQuery(q url.Values) (store.PageSpec, error) {
 		offset = value
 	} else if raw := q.Get("page"); raw != "" {
 		value, err := strconv.Atoi(raw)
-		if err != nil || value <= 0 {
+		if err != nil {
 			return store.PageSpec{}, fmt.Errorf("invalid page")
 		}
-		if value-1 > math.MaxInt/limit {
+		page, err := store.PageAt(limit, value)
+		if err != nil {
 			return store.PageSpec{}, fmt.Errorf("invalid page")
 		}
-		offset = (value - 1) * limit
+		offset = page.Offset
 	}
 	return store.PageSpec{Limit: limit, Offset: offset}, nil
 }
@@ -316,7 +317,7 @@ func decimalRangeFromQuery(
 		if err != nil {
 			return store.DecimalRangeFilter{}, err
 		}
-		if minDec.GreaterThan(maxDec) {
+		if decimalGreater(minDec, maxDec) {
 			return store.DecimalRangeFilter{}, domain.NewValidationError(
 				"/"+modeKey, "range", fmt.Sprintf("invalid %s range", modeKey),
 			)
@@ -349,6 +350,31 @@ func decimalBoundFromQuery(
 		)
 	}
 	return raw, value, nil
+}
+
+// decimalGreater reports whether a is greater than b. decimal.Decimal.Cmp
+// rescales one operand by ten to the gap between their exponents, which a
+// bound such as 1e2147483647 makes enormous, so the signs and the places of
+// the leading digits decide first and Cmp only closes a gap no wider than the
+// operands' own digits.
+func decimalGreater(a, b decimal.Decimal) bool {
+	if a.Sign() != b.Sign() {
+		return a.Sign() > b.Sign()
+	}
+	if a.Sign() == 0 {
+		return false
+	}
+	if aPlace, bPlace := leadingDigitPlace(a), leadingDigitPlace(b); aPlace != bPlace {
+		return (aPlace > bPlace) == (a.Sign() > 0)
+	}
+	return a.GreaterThan(b)
+}
+
+// leadingDigitPlace returns the exponent of the least power of ten above the
+// magnitude of the non-zero d: its digit count plus its exponent.
+func leadingDigitPlace(d decimal.Decimal) int64 {
+	coefficient := d.Coefficient()
+	return int64(len(coefficient.Abs(coefficient).String())) + int64(d.Exponent())
 }
 
 func timeRangeFromQuery(
@@ -414,43 +440,10 @@ func timeFromQuery(q url.Values, key string) (time.Time, error) {
 	return value.UTC(), nil
 }
 
-var accountSortKeys = map[string]struct{}{
-	"blockReason":   {},
-	"code":          {},
-	"group":         {},
-	"positionCount": {},
-	"status":        {},
-	"title":         {},
-	"venueAccess":   {},
-}
-
 var assetSortKeys = map[string]struct{}{
 	"assetClass": {},
 	"code":       {},
 	"title":      {},
-}
-
-var orderSortKeys = map[string]struct{}{
-	"account":     {},
-	"amountValue": {},
-	"at":          {},
-	"baseAsset":   {},
-	"price":       {},
-	"quoteAsset":  {},
-	"side":        {},
-	"source":      {},
-	"status":      {},
-}
-
-var groupSortKeys = map[string]struct{}{
-	"accountCount":  {},
-	"blockReason":   {},
-	"code":          {},
-	"notes":         {},
-	"positionCount": {},
-	"status":        {},
-	"title":         {},
-	"venueAccess":   {},
 }
 
 var assetClassSortKeys = map[string]struct{}{
@@ -492,18 +485,6 @@ var adjustmentSortKeys = map[string]struct{}{
 	"type":      {},
 }
 
-var tradeSortKeys = map[string]struct{}{
-	"account":    {},
-	"at":         {},
-	"baseAsset":  {},
-	"lockPrice":  {},
-	"price":      {},
-	"quantity":   {},
-	"quoteAsset": {},
-	"side":       {},
-	"source":     {},
-}
-
 func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 	code, err := textMatcherFromQuery(q, "code", "codeMatch")
 	if err != nil {
@@ -521,7 +502,7 @@ func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 	if err != nil {
 		return store.AccountListFilter{}, err
 	}
-	sortSpec, err := sortSpecFromQuery(q, accountSortKeys)
+	sortSpec, err := sortSpecFromQuery(q, store.AccountSortKeys())
 	if err != nil {
 		return store.AccountListFilter{}, err
 	}
@@ -560,9 +541,12 @@ func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 		filter.GroupCode = &group
 	}
 	if err := filter.Validate(); err != nil {
-		return store.AccountListFilter{}, domain.NewValidationError(
-			"/pnlCurrency", "required", err.Error(),
-		)
+		if errors.Is(err, store.ErrCurrencyRequired) {
+			return store.AccountListFilter{}, domain.NewValidationError(
+				"/pnlCurrency", "required", err.Error(),
+			)
+		}
+		return store.AccountListFilter{}, err
 	}
 	return filter, nil
 }
@@ -594,7 +578,7 @@ func orderListFilterFromQuery(q url.Values) (store.OrderListFilter, error) {
 	if err != nil {
 		return store.OrderListFilter{}, err
 	}
-	sortSpec, err := sortSpecFromQuery(q, orderSortKeys)
+	sortSpec, err := sortSpecFromQuery(q, store.OrderSortKeys())
 	if err != nil {
 		return store.OrderListFilter{}, err
 	}
@@ -602,7 +586,7 @@ func orderListFilterFromQuery(q url.Values) (store.OrderListFilter, error) {
 	if err != nil {
 		return store.OrderListFilter{}, err
 	}
-	return store.OrderListFilter{
+	filter := store.OrderListFilter{
 		Venue:      venue,
 		Account:    domain.AccountID(q.Get("account")),
 		Source:     domain.Source(q.Get("source")),
@@ -615,7 +599,11 @@ func orderListFilterFromQuery(q url.Values) (store.OrderListFilter, error) {
 		At:         at,
 		Sort:       sortSpec,
 		Page:       page,
-	}, nil
+	}
+	if err := filter.Validate(); err != nil {
+		return store.OrderListFilter{}, err
+	}
+	return filter, nil
 }
 
 func balanceListFilterFromQuery(q url.Values) (store.BalanceListFilter, error) {
@@ -827,7 +815,7 @@ func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
-	sortSpec, err := sortSpecFromQuery(q, groupSortKeys)
+	sortSpec, err := sortSpecFromQuery(q, store.GroupSortKeys())
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
@@ -839,7 +827,7 @@ func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
-	return store.GroupListFilter{
+	filter := store.GroupListFilter{
 		Code:        code,
 		Notes:       notes,
 		BlockReason: blockReason,
@@ -849,7 +837,11 @@ func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
 		Venue:       venue,
 		Sort:        sortSpec,
 		Page:        page,
-	}, nil
+	}
+	if err := filter.Validate(); err != nil {
+		return store.GroupListFilter{}, err
+	}
+	return filter, nil
 }
 
 func assetClassListFilterFromQuery(q url.Values) (store.AssetClassListFilter, error) {
@@ -1048,7 +1040,7 @@ func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
 	if err != nil {
 		return store.TradeListFilter{}, err
 	}
-	sortSpec, err := sortSpecFromQuery(q, tradeSortKeys)
+	sortSpec, err := sortSpecFromQuery(q, store.TradeSortKeys())
 	if err != nil {
 		return store.TradeListFilter{}, err
 	}
@@ -1056,7 +1048,7 @@ func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
 	if err != nil {
 		return store.TradeListFilter{}, err
 	}
-	return store.TradeListFilter{
+	filter := store.TradeListFilter{
 		Venue:      venue,
 		Account:    account,
 		ExternalID: externalID,
@@ -1070,7 +1062,11 @@ func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
 		LockPrice:  lockPrice,
 		Sort:       sortSpec,
 		Page:       page,
-	}, nil
+	}
+	if err := filter.Validate(); err != nil {
+		return store.TradeListFilter{}, err
+	}
+	return filter, nil
 }
 
 func auditListFilterFromQuery(q url.Values) (store.AuditListFilter, error) {

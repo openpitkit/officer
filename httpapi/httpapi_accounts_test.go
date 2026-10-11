@@ -31,6 +31,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 func TestListAccounts(t *testing.T) {
@@ -206,8 +207,8 @@ func TestListAccountsAndGroups_VenueAccessJSON(t *testing.T) {
 		}
 	}
 	for name, dto := range map[string]any{
-		"account": toAccountDTO(domain.Account{Code: "acc-granted"}, domain.AccountBlockState{}),
-		"group":   toGroupDTO(domain.AccountGroup{Code: "desk-granted"}),
+		"account": httpx.ToAccountDTO(domain.Account{Code: "acc-granted"}, domain.AccountBlockState{}),
+		"group":   httpx.ToGroupDTO(domain.AccountGroup{Code: "desk-granted"}),
 	} {
 		data, err := json.Marshal(dto)
 		if err != nil {

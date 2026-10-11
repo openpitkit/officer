@@ -1686,6 +1686,177 @@ func TestValidateMarketDataMark(t *testing.T) {
 	}
 }
 
+// --- ParseEngineDecimal ---
+
+func TestParseEngineDecimal(t *testing.T) {
+	t.Parallel()
+
+	const largest = "79228162514264337593543950335" // 2^96 - 1
+	ok := []struct {
+		value    string
+		want     string
+		exponent int32
+	}{
+		{"0", "0", 0},
+		{"-0", "0", 0},
+		{"0.000", "0", 0},
+		{"42", "42", 0},
+		{"+42", "42", 0},
+		{"-1.5", "-1.5", -1},
+		{"100.50", "100.5", -1},
+		{largest, largest, 0},
+		{"-" + largest, "-" + largest, 0},
+		{largest + ".000", largest, 0},
+		{"7.9228162514264337593543950335", "7.9228162514264337593543950335", -28},
+		{"0.0000000000000000000000000001", "0.0000000000000000000000000001", -28},
+		{"0.00000000000000000000000000010", "0.0000000000000000000000000001", -28},
+		{"1e28", "10000000000000000000000000000", 0},
+		{"7.9E28", "79000000000000000000000000000", 0},
+		{"100e-30", "0.0000000000000000000000000001", -28},
+		{"1000000000000000000000000000000e-30", "1", 0},
+		{"0.00", "0", 0},
+		// A zero takes the exponents a passing non-zero value can be written
+		// with, from -(28 + 64) to 28: 29 fractional zeros pass as they do
+		// after a 1.
+		{"0." + strings.Repeat("0", 29), "0", 0},
+		{"1." + strings.Repeat("0", 29), "1", 0},
+		{"0e28", "0", 0},
+		{"0e-92", "0", 0},
+		// The value 1 at the length limit, 64 characters.
+		{"1." + strings.Repeat("0", 62), "1", 0},
+	}
+	for _, tc := range ok {
+		t.Run("ok/"+tc.value, func(t *testing.T) {
+			t.Parallel()
+			got, err := domain.ParseEngineDecimal(tc.value)
+			if err != nil {
+				t.Fatalf("ParseEngineDecimal(%q): unexpected error: %v", tc.value, err)
+			}
+			// The exponent comes first: printing a decimal at a huge exponent
+			// would itself build the number this function must never build.
+			if got.Exponent() != tc.exponent {
+				t.Fatalf("ParseEngineDecimal(%q) exponent = %d, want %d", tc.value, got.Exponent(), tc.exponent)
+			}
+			if got.String() != tc.want {
+				t.Fatalf("ParseEngineDecimal(%q) = %s, want %s", tc.value, got, tc.want)
+			}
+		})
+	}
+
+	// The length limit counts characters, so 64 two-byte runes reach the parse.
+	notDecimal := []string{
+		"", "abc", "1.2.3", "1,5", "NaN", "Inf", "1e", "--1", "1.5e-2147483648", strings.Repeat("é", 64),
+	}
+	for _, value := range notDecimal {
+		t.Run("not-decimal/"+value, func(t *testing.T) {
+			t.Parallel()
+			_, err := domain.ParseEngineDecimal(value)
+			want := fmt.Sprintf("%q is not a valid decimal: invalid", value)
+			if !errors.Is(err, domain.ErrInvalid) || err.Error() != want {
+				t.Fatalf("ParseEngineDecimal(%q) = %v, want %q wrapping ErrInvalid", value, err, want)
+			}
+		})
+	}
+
+	outside := []string{
+		"79228162514264337593543950336",
+		"-79228162514264337593543950336",
+		"7.9228162514264337593543950336",
+		"0.00000000000000000000000000001",
+		"0.00000000000000000000000000011",
+		"16e-29",
+		"100e-31",
+		"1e29",
+		"8e28",
+		"1e2147483647",
+		"1e-2147483648",
+	}
+	for _, value := range outside {
+		t.Run("outside/"+value, func(t *testing.T) {
+			t.Parallel()
+			_, err := domain.ParseEngineDecimal(value)
+			want := fmt.Sprintf("%q is outside the engine decimal range: invalid", value)
+			if !errors.Is(err, domain.ErrInvalid) || err.Error() != want {
+				t.Fatalf("ParseEngineDecimal(%q) = %v, want %q wrapping ErrInvalid", value, err, want)
+			}
+		})
+	}
+
+	// A zero fits at any exponent, but is held as written to exponents from
+	// -(28 + 64) to 28; its written exponent is the e-part less the fractional
+	// digits.
+	zeroOutside := []struct {
+		value    string
+		exponent int32
+	}{
+		{"0e29", 29},
+		{"0e-93", -93},
+		{"0.0e-92", -93},
+		{"0e2147483647", 2147483647},
+		{"0e-2147483648", -2147483648},
+	}
+	for _, tc := range zeroOutside {
+		t.Run("zero-outside/"+tc.value, func(t *testing.T) {
+			t.Parallel()
+			_, err := domain.ParseEngineDecimal(tc.value)
+			want := fmt.Sprintf("%q has written exponent %d, outside [-92, 28]: invalid", tc.value, tc.exponent)
+			if !errors.Is(err, domain.ErrInvalid) || err.Error() != want {
+				t.Fatalf("ParseEngineDecimal(%q) = %v, want %q wrapping ErrInvalid", tc.value, err, want)
+			}
+		})
+	}
+
+	// The length is checked before the parse, and its error does not repeat
+	// the value: the value 1 and a non-decimal, each written in 65 characters.
+	tooLong := []string{"1." + strings.Repeat("0", 63), strings.Repeat("x", 65)}
+	for _, value := range tooLong {
+		t.Run("too-long/"+value, func(t *testing.T) {
+			t.Parallel()
+			_, err := domain.ParseEngineDecimal(value)
+			const want = "65 code points, at most 64: invalid"
+			if !errors.Is(err, domain.ErrInvalid) || err.Error() != want {
+				t.Fatalf("ParseEngineDecimal(%q) = %v, want %q wrapping ErrInvalid", value, err, want)
+			}
+		})
+	}
+}
+
+// TestParseEngineDecimalIsBoundedByLength proves the work never follows the
+// exponent, and that a value past the length limit is refused before it is
+// parsed: each value must be refused well inside the time budget, where
+// building ten to the exponent, or dropping the zeros of a long value one by
+// one, would take far longer.
+func TestParseEngineDecimalIsBoundedByLength(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{"largest-exponent", "1e2147483647"},
+		{"smallest-exponent", "1e-2147483648"},
+		{"zero-at-largest-exponent", "0e2147483647"},
+		// The value 1, written in 500,009 characters.
+		{"long-in-range-value", "1" + strings.Repeat("0", 500000) + "e-500000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := domain.ParseEngineDecimal(tc.value)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, domain.ErrInvalid) {
+					t.Fatalf("ParseEngineDecimal(%.24q) error = %v, want one wrapping ErrInvalid", tc.value, err)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("ParseEngineDecimal(%.24q) did not return within a second", tc.value)
+			}
+		})
+	}
+}
+
 func TestDestinationSentinels(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

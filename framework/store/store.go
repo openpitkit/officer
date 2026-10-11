@@ -39,7 +39,11 @@ package store
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
+	"unicode/utf8"
+
+	"github.com/shopspring/decimal"
 
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
@@ -112,9 +116,46 @@ type TextMatcher struct {
 	AnchorEnd   bool
 }
 
+// The bounds TextMatcher.Validate holds a list filter's matcher to.
+const (
+	// TextMatcherMaxFragments is the most fragments a TextMatcher takes. It
+	// bounds the wildcards of the LIKE pattern the store matches rows against.
+	TextMatcherMaxFragments = 16
+	// TextMatcherMaxRunes is the most code points a TextMatcher's fragments
+	// hold together: the longest text the domain stores. No stored code, title,
+	// notes or block reason is longer, so a longer filter can match nothing.
+	TextMatcherMaxRunes = max(domain.MaxNotesRunes, domain.MaxReasonRunes)
+)
+
 // Empty reports whether the matcher has no literal fragments or anchors.
 func (m TextMatcher) Empty() bool {
 	return len(m.Fragments) == 0 && !m.AnchorStart && !m.AnchorEnd
+}
+
+// Validate reports whether the matcher is within the list-filter bounds: at
+// most TextMatcherMaxFragments fragments, holding at most TextMatcherMaxRunes
+// code points together, so the store never matches rows against an unbounded
+// pattern. field names the filter in the returned error. It is the core rule
+// the MCP list tools and REST apply, through their list filter's Validate,
+// before the read; REST does not check it while it parses the query.
+func (m TextMatcher) Validate(field string) error {
+	if len(m.Fragments) > TextMatcherMaxFragments {
+		return fmt.Errorf(
+			"%s: %d fragments, at most %d: %w",
+			field, len(m.Fragments), TextMatcherMaxFragments, domain.ErrInvalid,
+		)
+	}
+	runes := 0
+	for _, fragment := range m.Fragments {
+		runes += utf8.RuneCountInString(fragment)
+	}
+	if runes > TextMatcherMaxRunes {
+		return fmt.Errorf(
+			"%s: %d code points, at most %d: %w",
+			field, runes, TextMatcherMaxRunes, domain.ErrInvalid,
+		)
+	}
+	return nil
 }
 
 // ExactTextMatcher returns a matcher that requires value verbatim, anchored at
@@ -143,6 +184,19 @@ const (
 	// StatusFilterBlocked selects rows that are blocked.
 	StatusFilterBlocked StatusFilter = "blocked"
 )
+
+// validateStatus reports whether status is one of the StatusFilter constants.
+// The list filters that carry a status call it from their Validate; REST
+// checks the same value while it parses the query, so a rule change has to
+// reach both.
+func validateStatus(status StatusFilter) error {
+	switch status {
+	case StatusFilterAll, StatusFilterActive, StatusFilterBlocked:
+		return nil
+	default:
+		return fmt.Errorf("status: unknown value %q: %w", status, domain.ErrInvalid)
+	}
+}
 
 // CountFilter narrows rows by whether an aggregate count is zero or non-zero.
 type CountFilter string
@@ -181,6 +235,28 @@ type VenueFilter struct {
 	ConnectionID domain.ExternalID
 }
 
+// Validate reports whether the filter is well formed: connection mode names a
+// connection id, every other mode names none, and the mode is one of the
+// VenueFilterMode constants. It is the one place these rules are decided: a
+// protocol calls it, through its list filter's Validate, before the read, and
+// a connector calls it before it builds its query.
+func (f VenueFilter) Validate() error {
+	if f.Mode != VenueFilterConnection && !f.ConnectionID.IsZero() {
+		return fmt.Errorf("store: venue connection id requires connection mode: %w", domain.ErrInvalid)
+	}
+	switch f.Mode {
+	case VenueFilterAll, VenueFilterAny, VenueFilterNone:
+		return nil
+	case VenueFilterConnection:
+		if f.ConnectionID.IsZero() {
+			return fmt.Errorf("store: venue connection mode requires a connection id: %w", domain.ErrInvalid)
+		}
+		return nil
+	default:
+		return fmt.Errorf("store: unknown venue filter mode %q: %w", f.Mode, domain.ErrInvalid)
+	}
+}
+
 // CountRangeFilter narrows rows by an aggregate count value.
 type CountRangeFilter struct {
 	Min          *int
@@ -196,9 +272,30 @@ func (f CountRangeFilter) Empty() bool {
 	return f.Min == nil && f.Max == nil && f.Equal == nil && f.NotEqual == nil
 }
 
+// Validate reports whether the bounds can select a count: every set bound is
+// not negative, and Min does not exceed Max when both are set. field names the
+// filter in the returned error. It is the core rule the MCP list tools and
+// REST apply, through their list filter's Validate, before the read; REST also
+// checks the same values while it parses the query, so a rule change has to
+// reach both.
+func (f CountRangeFilter) Validate(field string) error {
+	for _, bound := range []struct {
+		name  string
+		value *int
+	}{{"min", f.Min}, {"max", f.Max}, {"equal", f.Equal}, {"notEqual", f.NotEqual}} {
+		if bound.value != nil && *bound.value < 0 {
+			return fmt.Errorf("%s.%s: %d is negative: %w", field, bound.name, *bound.value, domain.ErrInvalid)
+		}
+	}
+	if f.Min != nil && f.Max != nil && *f.Min > *f.Max {
+		return fmt.Errorf("%s: min %d is greater than max %d: %w", field, *f.Min, *f.Max, domain.ErrInvalid)
+	}
+	return nil
+}
+
 // DecimalRangeFilter narrows rows by a plain decimal value. Bounds are exact
-// decimal strings validated upstream; the connector compares them numerically
-// (the column carries a numeric collation), never an encoded key.
+// decimal strings that Validate checks; the connector compares them
+// numerically (the column carries a numeric collation), never an encoded key.
 type DecimalRangeFilter struct {
 	Min          *string
 	Max          *string
@@ -211,6 +308,41 @@ type DecimalRangeFilter struct {
 // Empty returns true when the decimal value is unrestricted.
 func (f DecimalRangeFilter) Empty() bool {
 	return f.Min == nil && f.Max == nil && f.Equal == nil && f.NotEqual == nil
+}
+
+// Validate reports whether the bounds form a decimal range: every set bound is
+// a decimal the engine can hold, written in at most 64 characters
+// (domain.ParseEngineDecimal), and Min does not exceed Max numerically when
+// both are set. field names the filter in the returned error. It is the core
+// rule the MCP list tools and REST apply, through their list filter's
+// Validate, before the read. REST also checks the decimal syntax and the order
+// of a between range while it parses the query, so a change to those has to
+// reach both; the engine range and the written length are decided here alone.
+func (f DecimalRangeFilter) Validate(field string) error {
+	var minValue, maxValue decimal.Decimal
+	for _, bound := range []struct {
+		name  string
+		value *string
+		into  *decimal.Decimal
+	}{
+		{"min", f.Min, &minValue}, {"max", f.Max, &maxValue},
+		{"equal", f.Equal, nil}, {"notEqual", f.NotEqual, nil},
+	} {
+		if bound.value == nil {
+			continue
+		}
+		parsed, err := domain.ParseEngineDecimal(*bound.value)
+		if err != nil {
+			return fmt.Errorf("%s.%s: %w", field, bound.name, err)
+		}
+		if bound.into != nil {
+			*bound.into = parsed
+		}
+	}
+	if f.Min != nil && f.Max != nil && minValue.GreaterThan(maxValue) {
+		return fmt.Errorf("%s: min %s is greater than max %s: %w", field, *f.Min, *f.Max, domain.ErrInvalid)
+	}
+	return nil
 }
 
 // DenominatedDecimalRangeFilter narrows rows by a decimal value that is only
@@ -256,6 +388,21 @@ func (f TimeRangeFilter) Empty() bool {
 	return f.Min == nil && f.Max == nil
 }
 
+// Validate reports whether the bounds form a time range: Min is not after Max
+// when both are set. field names the filter in the returned error. It is the
+// core rule the MCP list tools and REST apply, through their list filter's
+// Validate, before the read; REST also checks the same values while it parses
+// the query, so a rule change has to reach both.
+func (f TimeRangeFilter) Validate(field string) error {
+	if f.Min != nil && f.Max != nil && f.Min.After(*f.Max) {
+		return fmt.Errorf(
+			"%s: min %s is after max %s: %w", field,
+			f.Min.Format(time.RFC3339Nano), f.Max.Format(time.RFC3339Nano), domain.ErrInvalid,
+		)
+	}
+	return nil
+}
+
 // SortSpec describes a whitelisted table sort key.
 type SortSpec struct {
 	Column     string
@@ -267,6 +414,22 @@ func (s SortSpec) Empty() bool {
 	return s.Column == ""
 }
 
+// Validate reports whether the sort names a column the list read accepts: an
+// empty Column keeps the natural order, and any other must be in keys, the
+// list's closed key set (AccountSortKeys and its siblings). It is the core
+// rule the MCP list tools and REST apply, through their list filter's
+// Validate, before the read; REST also checks the same column while it parses
+// the query, so a rule change has to reach both.
+func (s SortSpec) Validate(keys map[string]struct{}) error {
+	if s.Column == "" {
+		return nil
+	}
+	if _, ok := keys[s.Column]; !ok {
+		return fmt.Errorf("sort: unknown column %q: %w", s.Column, domain.ErrInvalid)
+	}
+	return nil
+}
+
 // PageSpec describes a server-side page window.
 type PageSpec struct {
 	Limit  int
@@ -276,6 +439,39 @@ type PageSpec struct {
 // Empty returns true when no LIMIT/OFFSET should be applied.
 func (p PageSpec) Empty() bool {
 	return p.Limit <= 0 && p.Offset <= 0
+}
+
+// Validate reports whether the page window is not negative: Limit and Offset
+// are both zero or more. It is the core rule the MCP list tools and REST
+// apply, through their list filter's Validate, before the read; REST also
+// checks the same values while it parses the query, so a rule change has to
+// reach both.
+func (p PageSpec) Validate() error {
+	if p.Limit < 0 {
+		return fmt.Errorf("page.limit: %d is negative: %w", p.Limit, domain.ErrInvalid)
+	}
+	if p.Offset < 0 {
+		return fmt.Errorf("page.offset: %d is negative: %w", p.Offset, domain.ErrInvalid)
+	}
+	return nil
+}
+
+// PageAt returns the window of the 1-based page of limit rows: Offset is
+// (page-1)*limit. Both arguments must be positive, and a page whose offset
+// would overflow int is invalid. It is the page-to-offset rule that REST's page
+// query parameter and the MCP list tools' page argument share; each caller
+// keeps its own defaults and cap and settles limit before the call.
+func PageAt(limit, page int) (PageSpec, error) {
+	if limit <= 0 {
+		return PageSpec{}, fmt.Errorf("limit: %d is not positive: %w", limit, domain.ErrInvalid)
+	}
+	if page <= 0 {
+		return PageSpec{}, fmt.Errorf("page: %d is not positive: %w", page, domain.ErrInvalid)
+	}
+	if page-1 > math.MaxInt/limit {
+		return PageSpec{}, fmt.Errorf("page: too large: %w", domain.ErrInvalid)
+	}
+	return PageSpec{Limit: limit, Offset: (page - 1) * limit}, nil
 }
 
 // AccountListFilter narrows account-list reads in the store.
@@ -304,7 +500,17 @@ type AccountListFilter struct {
 	Restriction domain.AccountRestriction
 }
 
-// Validate rejects P&L selection without an explicit denomination.
+// Validate reports whether the filter is one the account list read accepts:
+// P&L selection names its denomination and its bounds form a decimal range,
+// status is a StatusFilter constant, the position and venue filters are well
+// formed, the sort column is in AccountSortKeys, the page window is not
+// negative, and the code and block reason matchers are within the TextMatcher
+// bounds. The currency rules come first, so a filter that breaks one of them
+// reports it whatever else it breaks. It is the core rule set the MCP list
+// tool, REST and the store's account list read apply before the read; REST
+// also checks the same values while it parses the query, except the engine
+// decimal range and the TextMatcher bounds, which it leaves to this rule set,
+// so a change to a shared rule has to reach both.
 func (f AccountListFilter) Validate() error {
 	if err := f.Pnl.Validate("pnl"); err != nil {
 		return err
@@ -312,7 +518,43 @@ func (f AccountListFilter) Validate() error {
 	if (f.IncludeUnsetPnl || f.IncludeHaltedPnl) && f.Pnl.Currency == "" {
 		return fmt.Errorf("pnl: %w", ErrCurrencyRequired)
 	}
-	return nil
+	if err := f.Pnl.Range.Validate("pnl"); err != nil {
+		return err
+	}
+	if err := validateStatus(f.Status); err != nil {
+		return err
+	}
+	if err := f.Position.Validate("position"); err != nil {
+		return err
+	}
+	if err := f.Venue.Validate(); err != nil {
+		return err
+	}
+	if err := f.Sort.Validate(AccountSortKeys()); err != nil {
+		return err
+	}
+	if err := f.Page.Validate(); err != nil {
+		return err
+	}
+	if err := f.Code.Validate("code"); err != nil {
+		return err
+	}
+	return f.BlockReason.Validate("blockReason")
+}
+
+// AccountSortKeys returns the closed set of SortSpec columns that the account
+// list read accepts, the one set every protocol validates against. Each call
+// returns a fresh map.
+func AccountSortKeys() map[string]struct{} {
+	return map[string]struct{}{
+		"blockReason":   {},
+		"code":          {},
+		"group":         {},
+		"positionCount": {},
+		"status":        {},
+		"title":         {},
+		"venueAccess":   {},
+	}
 }
 
 // AccountListRow is an account row plus list-only aggregates.
@@ -366,6 +608,89 @@ type OrderListFilter struct {
 	// value restricts nothing. The control plane sets it from its account
 	// scope and replaces any value the caller supplies.
 	Restriction domain.AccountRestriction
+}
+
+// Validate reports whether the filter is one the order list read accepts: the
+// venue filter is well formed, side is unset or an order side, every status is
+// an order lifecycle state named once, the amount, price and time ranges are
+// well formed, the sort column is in OrderSortKeys, the page window is not
+// negative, and the base and quote asset matchers are within the TextMatcher
+// bounds (ExternalID is not bounded: the order list read does not apply it).
+// It is the core rule set the MCP list tool and REST apply before the read;
+// REST also checks the same values while it parses the query, except a
+// repeated status, the engine decimal range and the TextMatcher bounds, which
+// it leaves to this rule set, so a change to a shared rule has to reach both.
+func (f OrderListFilter) Validate() error {
+	if err := f.Venue.Validate(); err != nil {
+		return err
+	}
+	if err := validateSide(f.Side); err != nil {
+		return err
+	}
+	// Only supported statuses enter seen and a repeat ends the loop, so the
+	// set never outgrows the supported statuses, however long the list is.
+	seen := map[domain.OrderStatus]struct{}{}
+	for _, status := range f.Status {
+		if !domain.OrderStatusSupported(status) {
+			return fmt.Errorf("status: unknown value %q: %w", status, domain.ErrInvalid)
+		}
+		if _, repeated := seen[status]; repeated {
+			return fmt.Errorf("status: %q is repeated: %w", status, domain.ErrInvalid)
+		}
+		seen[status] = struct{}{}
+	}
+	if err := f.Amount.Validate("amount"); err != nil {
+		return err
+	}
+	if err := f.Price.Validate("price"); err != nil {
+		return err
+	}
+	if err := f.At.Validate("at"); err != nil {
+		return err
+	}
+	if err := f.Sort.Validate(OrderSortKeys()); err != nil {
+		return err
+	}
+	if err := f.Page.Validate(); err != nil {
+		return err
+	}
+	if err := f.BaseAsset.Validate("baseAsset"); err != nil {
+		return err
+	}
+	return f.QuoteAsset.Validate("quoteAsset")
+}
+
+// validateSide reports whether side is unset or one of the domain order sides.
+// The order and trade list filters call it from their Validate; REST checks
+// the same value while it parses the query, so a rule change has to reach
+// both.
+func validateSide(side *domain.OrderSide) error {
+	if side == nil {
+		return nil
+	}
+	switch *side {
+	case domain.OrderSideBuy, domain.OrderSideSell:
+		return nil
+	default:
+		return fmt.Errorf("side: unknown value %q: %w", *side, domain.ErrInvalid)
+	}
+}
+
+// OrderSortKeys returns the closed set of SortSpec columns that the order list
+// read accepts, the one set every protocol validates against. Each call returns
+// a fresh map.
+func OrderSortKeys() map[string]struct{} {
+	return map[string]struct{}{
+		"account":     {},
+		"amountValue": {},
+		"at":          {},
+		"baseAsset":   {},
+		"price":       {},
+		"quoteAsset":  {},
+		"side":        {},
+		"source":      {},
+		"status":      {},
+	}
 }
 
 // OrderListRow is an order row plus list-only data.
@@ -475,6 +800,58 @@ type GroupListFilter struct {
 	// restricts nothing. The control plane sets it from its account scope and
 	// replaces any value the caller supplies.
 	Restriction domain.AccountRestriction
+}
+
+// Validate reports whether the filter is one the account-group list read
+// accepts: status is a StatusFilter constant, the position, account and venue
+// filters are well formed, the sort column is in GroupSortKeys, the page
+// window is not negative, and the code, notes and block reason matchers are
+// within the TextMatcher bounds. It is the core rule set the MCP list tool and
+// REST apply before the read; REST also checks the same values while it
+// parses the query, except the TextMatcher bounds, which it leaves to this
+// rule set, so a change to a shared rule has to reach both.
+func (f GroupListFilter) Validate() error {
+	if err := validateStatus(f.Status); err != nil {
+		return err
+	}
+	if err := f.Position.Validate("position"); err != nil {
+		return err
+	}
+	if err := f.Account.Validate("account"); err != nil {
+		return err
+	}
+	if err := f.Venue.Validate(); err != nil {
+		return err
+	}
+	if err := f.Sort.Validate(GroupSortKeys()); err != nil {
+		return err
+	}
+	if err := f.Page.Validate(); err != nil {
+		return err
+	}
+	if err := f.Code.Validate("code"); err != nil {
+		return err
+	}
+	if err := f.Notes.Validate("notes"); err != nil {
+		return err
+	}
+	return f.BlockReason.Validate("blockReason")
+}
+
+// GroupSortKeys returns the closed set of SortSpec columns that the
+// account-group list read accepts, the one set every protocol validates
+// against. Each call returns a fresh map.
+func GroupSortKeys() map[string]struct{} {
+	return map[string]struct{}{
+		"accountCount":  {},
+		"blockReason":   {},
+		"code":          {},
+		"notes":         {},
+		"positionCount": {},
+		"status":        {},
+		"title":         {},
+		"venueAccess":   {},
+	}
 }
 
 // GroupListRow is a group row plus list-only aggregates.
@@ -622,6 +999,66 @@ type TradeListFilter struct {
 	// value restricts nothing. The control plane sets it from its account
 	// scope and replaces any value the caller supplies.
 	Restriction domain.AccountRestriction
+}
+
+// Validate reports whether the filter is one the trade list read accepts: the
+// venue filter is well formed, side is unset or an order side, the time,
+// quantity, price and lock price ranges are well formed, the sort column is in
+// TradeSortKeys, the page window is not negative, and the account, base asset
+// and quote asset matchers are within the TextMatcher bounds. It is the core
+// rule set the MCP list tool and REST apply before the read; REST also checks
+// the same values while it parses the query, except the engine decimal range
+// and the TextMatcher bounds, which it leaves to this rule set, so a change to
+// a shared rule has to reach both.
+func (f TradeListFilter) Validate() error {
+	if err := f.Venue.Validate(); err != nil {
+		return err
+	}
+	if err := validateSide(f.Side); err != nil {
+		return err
+	}
+	if err := f.At.Validate("at"); err != nil {
+		return err
+	}
+	if err := f.Quantity.Validate("quantity"); err != nil {
+		return err
+	}
+	if err := f.Price.Validate("price"); err != nil {
+		return err
+	}
+	if err := f.LockPrice.Validate("lockPrice"); err != nil {
+		return err
+	}
+	if err := f.Sort.Validate(TradeSortKeys()); err != nil {
+		return err
+	}
+	if err := f.Page.Validate(); err != nil {
+		return err
+	}
+	if err := f.Account.Validate("account"); err != nil {
+		return err
+	}
+	if err := f.BaseAsset.Validate("baseAsset"); err != nil {
+		return err
+	}
+	return f.QuoteAsset.Validate("quoteAsset")
+}
+
+// TradeSortKeys returns the closed set of SortSpec columns that the trade list
+// read accepts, the one set every protocol validates against. Each call returns
+// a fresh map.
+func TradeSortKeys() map[string]struct{} {
+	return map[string]struct{}{
+		"account":    {},
+		"at":         {},
+		"baseAsset":  {},
+		"lockPrice":  {},
+		"price":      {},
+		"quantity":   {},
+		"quoteAsset": {},
+		"side":       {},
+		"source":     {},
+	}
 }
 
 // TradeListRow is a trade row plus list-only data.

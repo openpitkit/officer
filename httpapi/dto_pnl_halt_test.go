@@ -23,18 +23,19 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 func TestPnlHaltReasonDTOsSerializeRequiredAndOptionalFields(t *testing.T) {
 	t.Run("account required", func(t *testing.T) {
-		got := marshalDTOMap(t, toAccountDTO(domain.Account{
+		got := marshalDTOMap(t, httpx.ToAccountDTO(domain.Account{
 			PnlHaltReason: domain.PnlHaltReasonMissingInitialPnl,
 		}, domain.AccountBlockState{}))
 		if got["pnlHaltReason"] != "missing_initial_pnl" {
 			t.Fatalf("pnlHaltReason = %v", got["pnlHaltReason"])
 		}
 
-		empty := marshalDTOMap(t, toAccountDTO(
+		empty := marshalDTOMap(t, httpx.ToAccountDTO(
 			domain.Account{}, domain.AccountBlockState{},
 		))
 		if value, ok := empty["pnlHaltReason"]; !ok || value != "" {

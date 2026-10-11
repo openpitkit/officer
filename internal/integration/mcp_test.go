@@ -30,6 +30,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
@@ -113,6 +114,30 @@ func (f *fakeSource) ListGroups(
 	_ context.Context,
 ) ([]domain.AccountGroup, error) {
 	return f.groups, f.listGroupsErr
+}
+
+func (f *fakeSource) ListAccountRows(
+	_ context.Context, _ store.AccountListFilter,
+) (store.AccountListPage, error) {
+	return store.AccountListPage{}, nil
+}
+
+func (f *fakeSource) ListGroupRows(
+	_ context.Context, _ store.GroupListFilter,
+) (store.GroupListPage, error) {
+	return store.GroupListPage{}, nil
+}
+
+func (f *fakeSource) ListOrderRows(
+	_ context.Context, _ store.OrderListFilter,
+) (backend.OrderListPage, error) {
+	return backend.OrderListPage{}, nil
+}
+
+func (f *fakeSource) ListTradeRows(
+	_ context.Context, _ store.TradeListFilter,
+) (store.TradeListPage, error) {
+	return store.TradeListPage{}, nil
 }
 
 func (f *fakeSource) ListLimits(
@@ -815,6 +840,26 @@ func (c *captureNSource) GetAccountState(_ context.Context, _ domain.AccountID) 
 func (c *captureNSource) ListGroups(_ context.Context) (
 	[]domain.AccountGroup, error) {
 	return nil, nil
+}
+func (c *captureNSource) ListAccountRows(
+	_ context.Context, _ store.AccountListFilter,
+) (store.AccountListPage, error) {
+	return store.AccountListPage{}, nil
+}
+func (c *captureNSource) ListGroupRows(
+	_ context.Context, _ store.GroupListFilter,
+) (store.GroupListPage, error) {
+	return store.GroupListPage{}, nil
+}
+func (c *captureNSource) ListOrderRows(
+	_ context.Context, _ store.OrderListFilter,
+) (backend.OrderListPage, error) {
+	return backend.OrderListPage{}, nil
+}
+func (c *captureNSource) ListTradeRows(
+	_ context.Context, _ store.TradeListFilter,
+) (store.TradeListPage, error) {
+	return store.TradeListPage{}, nil
 }
 func (c *captureNSource) ListLimits(_ context.Context, _ domain.AccountID) (
 	node.AccountLimits, error) {

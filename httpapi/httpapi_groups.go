@@ -96,9 +96,9 @@ func handleListGroups(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]groupDTO, 0, len(groups.Rows))
+		dtos := make([]httpx.GroupDTO, 0, len(groups.Rows))
 		for _, row := range groups.Rows {
-			dtos = append(dtos, toGroupRowDTO(row))
+			dtos = append(dtos, httpx.ToGroupRowDTO(row))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"groups": dtos,
@@ -154,14 +154,14 @@ func handleGetGroup(svc backend.ControlPlane) http.HandlerFunc {
 			writeGroupErr(w, err)
 			return
 		}
-		dtos := make([]accountDTO, 0, len(accounts))
+		dtos := make([]httpx.AccountDTO, 0, len(accounts))
 		for _, a := range accounts {
 			// Every member resolves against this very group, so the block joins
 			// without a second read.
-			dtos = append(dtos, toAccountDTO(a, domain.ResolveAccountBlock(a, group)))
+			dtos = append(dtos, httpx.ToAccountDTO(a, domain.ResolveAccountBlock(a, group)))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
-			"group":    toGroupDTO(group),
+			"group":    httpx.ToGroupDTO(group),
 			"accounts": dtos,
 		})
 	}
@@ -197,7 +197,7 @@ func handleUpdateGroup(svc backend.ControlPlane) http.HandlerFunc {
 			writeGroupErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"group": toGroupDTO(group)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"group": httpx.ToGroupDTO(group)})
 	}
 }
 
@@ -240,7 +240,7 @@ func handleSetDefaultGroupCurrency(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
-			"group": toGroupDTO(domain.AccountGroup{
+			"group": httpx.ToGroupDTO(domain.AccountGroup{
 				Code:     "",
 				Currency: req.Currency,
 			}),
@@ -345,7 +345,7 @@ func writeGroup(w http.ResponseWriter, svc backend.ControlPlane, r *http.Request
 		writeGroupErr(w, err)
 		return
 	}
-	httpx.WriteJSON(w, status, map[string]any{"group": toGroupDTO(group)})
+	httpx.WriteJSON(w, status, map[string]any{"group": httpx.ToGroupDTO(group)})
 }
 
 // --- spot funds -------------------------------------------------------------

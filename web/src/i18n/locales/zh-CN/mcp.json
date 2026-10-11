@@ -50,6 +50,18 @@
     "get_audit": {
       "description": "读取控制面近期审计日志条目。"
     },
+    "list_orders": {
+      "description": "列出订单，支持筛选（包括按交易连接筛选）、排序和分页。"
+    },
+    "list_trades": {
+      "description": "列出成交，支持筛选（包括按交易连接筛选）、排序和分页。"
+    },
+    "list_accounts": {
+      "description": "列出账户，支持筛选（包括按交易连接筛选）、排序和分页。"
+    },
+    "list_groups": {
+      "description": "列出账户组，支持筛选（包括按交易连接筛选）、排序和分页。"
+    },
     "check_order": {
       "description": "对订单执行非变更性的盘前模拟校验（通过/拒绝 + 原因），不改变任何状态。"
     },

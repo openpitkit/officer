@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 func TestListOrdersAndTrades_VenueFilter(t *testing.T) {
@@ -157,9 +158,9 @@ func TestListOrdersAndTrades_VenueConnectionJSON(t *testing.T) {
 			if _, present := unlinked["venueConnection"]; present {
 				t.Fatalf("unlinked row carries venueConnection: %v", unlinked)
 			}
-			var dto any = toOrderDTO(order, "101.25", true)
+			var dto any = httpx.ToOrderDTO(order, "101.25", true)
 			if endpoint == "trades" {
-				dto = toTradeDTO(trade)
+				dto = httpx.ToTradeDTO(trade)
 			}
 			data, err := json.Marshal(dto)
 			if err != nil {

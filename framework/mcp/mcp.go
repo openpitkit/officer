@@ -31,6 +31,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/mcp/catalog"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
@@ -58,6 +59,29 @@ type Source interface {
 	// row carries only its own latched block, so the tool surface joins the
 	// group tier in to report the effective one.
 	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
+	// ListAccountRows returns one page of account rows matching the core list
+	// filter, with the total before paging.
+	ListAccountRows(
+		ctx context.Context, filter store.AccountListFilter,
+	) (store.AccountListPage, error)
+	// ListGroupRows returns one page of account group rows matching the core
+	// list filter, as store.Store.ListGroupRows defines it: on the first page
+	// the synthetic default group is pinned first, outside the paging window,
+	// and Total counts only the real groups matching the filter.
+	ListGroupRows(
+		ctx context.Context, filter store.GroupListFilter,
+	) (store.GroupListPage, error)
+	// ListOrderRows returns one page of order rows matching the core list
+	// filter, with the total before paging. Each row carries the backend's
+	// display price, signed flag and venue link.
+	ListOrderRows(
+		ctx context.Context, filter store.OrderListFilter,
+	) (backend.OrderListPage, error)
+	// ListTradeRows returns one page of trade rows matching the core list
+	// filter, with the total before paging.
+	ListTradeRows(
+		ctx context.Context, filter store.TradeListFilter,
+	) (store.TradeListPage, error)
 	// ListLimits returns the typed barriers filtered by account code.
 	ListLimits(ctx context.Context, account domain.AccountID) (
 		node.AccountLimits, error)
@@ -658,6 +682,30 @@ func (s controlPlaneSource) ListGroups(
 	ctx context.Context,
 ) ([]domain.AccountGroup, error) {
 	return s.cp.ListGroups(ctx)
+}
+
+func (s controlPlaneSource) ListAccountRows(
+	ctx context.Context, filter store.AccountListFilter,
+) (store.AccountListPage, error) {
+	return s.cp.ListAccountRows(ctx, filter)
+}
+
+func (s controlPlaneSource) ListGroupRows(
+	ctx context.Context, filter store.GroupListFilter,
+) (store.GroupListPage, error) {
+	return s.cp.ListGroupRows(ctx, filter)
+}
+
+func (s controlPlaneSource) ListOrderRows(
+	ctx context.Context, filter store.OrderListFilter,
+) (backend.OrderListPage, error) {
+	return s.cp.ListOrderRows(ctx, filter)
+}
+
+func (s controlPlaneSource) ListTradeRows(
+	ctx context.Context, filter store.TradeListFilter,
+) (store.TradeListPage, error) {
+	return s.cp.ListTradeRows(ctx, filter)
 }
 
 func (s controlPlaneSource) ListLimits(

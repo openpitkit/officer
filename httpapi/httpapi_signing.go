@@ -326,7 +326,7 @@ func handleConfirmExecution(svc backend.ControlPlane) http.HandlerFunc {
 			r.Context(), svc, order.ExternalID,
 		)
 		httpx.WriteJSON(w, http.StatusOK, orderMutationResponseDTO{
-			Order: toOrderDTO(
+			Order: httpx.ToOrderDTO(
 				order, presentation.displayPrice, presentation.signed,
 			),
 			SignedAttestation: att.Token,
@@ -360,7 +360,7 @@ func handleCancelOrder(svc backend.ControlPlane) http.HandlerFunc {
 			r.Context(), svc, order.ExternalID,
 		)
 		httpx.WriteJSON(w, http.StatusOK, orderMutationResponseDTO{
-			Order: toOrderDTO(
+			Order: httpx.ToOrderDTO(
 				order, presentation.displayPrice, presentation.signed,
 			),
 			SignedAttestation: att.Token,

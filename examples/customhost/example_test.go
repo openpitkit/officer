@@ -405,6 +405,34 @@ func (s *customHostSource) ListGroups(context.Context) (
 	return nil, nil
 }
 
+func (s *customHostSource) ListAccountRows(
+	context.Context,
+	store.AccountListFilter,
+) (store.AccountListPage, error) {
+	return store.AccountListPage{}, nil
+}
+
+func (s *customHostSource) ListGroupRows(
+	context.Context,
+	store.GroupListFilter,
+) (store.GroupListPage, error) {
+	return store.GroupListPage{}, nil
+}
+
+func (s *customHostSource) ListOrderRows(
+	context.Context,
+	store.OrderListFilter,
+) (backend.OrderListPage, error) {
+	return backend.OrderListPage{}, nil
+}
+
+func (s *customHostSource) ListTradeRows(
+	context.Context,
+	store.TradeListFilter,
+) (store.TradeListPage, error) {
+	return store.TradeListPage{}, nil
+}
+
 func (s *customHostSource) ListLimits(context.Context, domain.AccountID) (
 	node.AccountLimits,
 	error,

@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 	"unicode"
@@ -850,6 +851,92 @@ func ValidateDecimal(value string) error {
 		return fmt.Errorf("%q is not a valid decimal: %w", value, ErrInvalid)
 	}
 	return nil
+}
+
+// The engine holds a decimal as rust_decimal's Decimal (OpenPit depends on
+// rust_decimal 1.41): a 96-bit unsigned mantissa with a scale of at most 28
+// fractional digits, so its largest magnitude is 2^96 - 1,
+// 79228162514264337593543950335.
+const (
+	// engineDecimalMaxScale is the most fractional digits an engine decimal
+	// holds.
+	engineDecimalMaxScale = 28
+	// engineDecimalMantissaBits is the width of an engine decimal's mantissa.
+	engineDecimalMantissaBits = 96
+	// engineDecimalMaxLength is the longest value, in characters, that
+	// ParseEngineDecimal accepts. Any engine decimal is written in at most 31
+	// characters in plain notation (sign, 29 digits, point); 64 leaves room
+	// for exponent notation and a few redundant zeros, so every later parse
+	// of an accepted value - the store's DECIMAL collation re-parses a list
+	// bound for each row it compares - is bounded by a constant.
+	engineDecimalMaxLength = 64
+)
+
+// ParseEngineDecimal parses value as a decimal the engine can hold and returns
+// it for the caller to compare. It fails with an error wrapping ErrInvalid when
+// value is written in more than 64 characters, when it is not a decimal (the
+// syntax ValidateDecimal accepts), when it has more than 28 fractional digits
+// once trailing fractional zeros are dropped, when its digits at that scale,
+// read as one integer, exceed 79228162514264337593543950335, or when it is a
+// zero written with an exponent outside [-(28 + 64), 28], the exponents an
+// accepted non-zero value can be written with. Its work is bounded by the
+// length of value, never by its exponent. A caller may keep an accepted value
+// as written, as the store keeps a list bound, so the value is bounded as
+// written and not only as a number, and every later parse of it is bounded by
+// a constant. The decimal it returns carries the scale above (a zero carries
+// none), so comparing two results never rescales either by more than the
+// engine's own scale range.
+func ParseEngineDecimal(value string) (decimal.Decimal, error) {
+	if length := utf8.RuneCountInString(value); length > engineDecimalMaxLength {
+		return decimal.Decimal{}, fmt.Errorf(
+			"%d code points, at most %d: %w", length, engineDecimalMaxLength, ErrInvalid,
+		)
+	}
+	parsed, err := decimal.NewFromString(value)
+	if err != nil {
+		return decimal.Decimal{}, fmt.Errorf("%q is not a valid decimal: %w", value, ErrInvalid)
+	}
+	outside := fmt.Errorf("%q is outside the engine decimal range: %w", value, ErrInvalid)
+	mantissa, exponent := parsed.Coefficient(), parsed.Exponent()
+	if mantissa.Sign() == 0 {
+		// Every zero fits the engine, but comparing a zero as written rescales
+		// by its written exponent, so a zero is held to the exponents a
+		// non-zero value that passes can be written with: none above 28, and
+		// none below -(28 + 64), as such a value reaches a scale of 28 by
+		// dropping trailing zeros, fewer than the characters it is written in.
+		const minExponent = -(engineDecimalMaxScale + engineDecimalMaxLength)
+		if exponent < minExponent || exponent > engineDecimalMaxScale {
+			return decimal.Decimal{}, fmt.Errorf(
+				"%q has written exponent %d, outside [%d, %d]: %w",
+				value, exponent, minExponent, engineDecimalMaxScale, ErrInvalid,
+			)
+		}
+		return decimal.New(0, 0), nil
+	}
+	if exponent > engineDecimalMaxScale {
+		return decimal.Decimal{}, outside
+	}
+	// The length bounds the digits, so the trailing fractional zeros drop one
+	// by one in a few steps.
+	ten := big.NewInt(10)
+	for exponent < 0 {
+		quotient, digit := new(big.Int).QuoRem(mantissa, ten, new(big.Int))
+		if digit.Sign() != 0 {
+			break
+		}
+		mantissa, exponent = quotient, exponent+1
+	}
+	if exponent < -engineDecimalMaxScale {
+		return decimal.Decimal{}, outside
+	}
+	if exponent > 0 {
+		mantissa.Mul(mantissa, new(big.Int).Exp(ten, big.NewInt(int64(exponent)), nil))
+		exponent = 0
+	}
+	if mantissa.BitLen() > engineDecimalMantissaBits {
+		return decimal.Decimal{}, outside
+	}
+	return decimal.NewFromBigInt(mantissa, exponent), nil
 }
 
 // ValidateMarketDataInstance validates the context-independent shape of a

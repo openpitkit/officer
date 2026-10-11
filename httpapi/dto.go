@@ -35,7 +35,9 @@ import (
 
 // The DTOs below are the JSON wire contract of the HTTP surface. They carry the
 // camelCase tags the dashboard SPA expects. Domain and control-plane types
-// carry no JSON tags; this package owns the encoding and the mapping.
+// carry no JSON tags; this package owns the encoding and the mapping. The
+// account, group, order and trade row DTOs are shared with the MCP tools and
+// live in framework/web/httpapi (list_dto.go).
 
 type venueOrderDTO struct {
 	Connection    string          `json:"connection"`
@@ -88,44 +90,6 @@ type storeHealthDTO struct {
 	Path          string `json:"path"`
 	SchemaVersion int    `json:"schemaVersion"`
 	Reachable     bool   `json:"reachable"`
-}
-
-// accountDTO is the wire shape of a single account. An account is a dictionary
-// record: its public handle is the code, paired with a mutable title.
-// The engine account id and the store surrogate id are never serialized.
-//
-// The blocked/blockReason/blockSource triple is the EFFECTIVE kill-switch
-// state: the account's own block joined with its group's, so a consumer that
-// reads only blocked gets the answer to "can this account trade right now".
-// The per-tier fields carry the two independent underlying blocks.
-type accountDTO struct {
-	Code              string             `json:"code"`
-	Title             string             `json:"title"`
-	Pnl               string             `json:"pnl"`
-	PnlHaltReason     string             `json:"pnlHaltReason"`
-	Group             string             `json:"group"`
-	Currency          string             `json:"currency"`
-	EffectiveCurrency string             `json:"effectiveCurrency"`
-	CurrencyOrigin    string             `json:"currencyOrigin"`
-	CurrencyCascade   currencyCascadeDTO `json:"currencyCascade"`
-	Notes             string             `json:"notes"`
-	PositionCount     int                `json:"positionCount"`
-	// VenueAccess is set on GET /accounts list rows only: a grant on at least
-	// one trading connection, the account's own or its group's.
-	VenueAccess        *bool  `json:"venueAccess,omitempty"`
-	BlockReason        string `json:"blockReason"`
-	BlockSource        string `json:"blockSource"`
-	AccountBlockReason string `json:"accountBlockReason"`
-	GroupBlockReason   string `json:"groupBlockReason"`
-	Blocked            bool   `json:"blocked"`
-	AccountBlocked     bool   `json:"accountBlocked"`
-	GroupBlocked       bool   `json:"groupBlocked"`
-}
-
-type currencyCascadeDTO struct {
-	Account string `json:"account"`
-	Group   string `json:"group"`
-	Default string `json:"default"`
 }
 
 // assetDTO is the wire shape of a single asset dictionary record. Its public
@@ -267,46 +231,6 @@ func toStatusDTO(status backend.Status) statusDTO {
 		},
 		Healthy: status.Healthy,
 	}
-}
-
-// toAccountDTO maps a domain.Account onto the wire DTO. The account's public
-// handle is its code; the engine account id is never serialized. block is the
-// account joined with its group, resolved by the caller, which owns the group
-// read; the account row alone carries only the account's own latched flag.
-func toAccountDTO(a domain.Account, block domain.AccountBlockState) accountDTO {
-	return accountDTO{
-		Code:              string(a.Code),
-		Title:             a.Title,
-		Pnl:               a.Pnl,
-		PnlHaltReason:     string(a.PnlHaltReason),
-		Group:             a.GroupCode,
-		Currency:          a.Currency,
-		EffectiveCurrency: a.EffectiveCurrency,
-		CurrencyOrigin:    a.CurrencyOrigin,
-		CurrencyCascade: currencyCascadeDTO{
-			Account: a.Currency,
-			Group:   a.GroupCurrency,
-			Default: a.DefaultCurrency,
-		},
-		Notes:              a.Notes,
-		BlockReason:        block.Reason,
-		BlockSource:        string(block.Source),
-		AccountBlockReason: block.AccountReason,
-		GroupBlockReason:   block.GroupReason,
-		Blocked:            block.Blocked,
-		AccountBlocked:     block.AccountBlocked,
-		GroupBlocked:       block.GroupBlocked,
-	}
-}
-
-// toAccountRowDTO maps a list row onto the account wire DTO.
-func toAccountRowDTO(
-	row store.AccountListRow, block domain.AccountBlockState,
-) accountDTO {
-	dto := toAccountDTO(row.Account, block)
-	dto.PositionCount = row.PositionCount
-	dto.VenueAccess = &row.VenueAccess
-	return dto
 }
 
 // toAssetDTO maps a domain.Asset onto the wire DTO.
@@ -800,47 +724,6 @@ func toMarketDataQuoteDTO(quote *domain.MarketDataQuote) *marketDataQuoteDTO {
 	}
 }
 
-// --- group ------------------------------------------------------------------
-
-// groupDTO is the wire shape of a single account group. A group is a dictionary
-// record: its public handle is the code, paired with a mutable title.
-// The engine group id and the store surrogate id are never serialized.
-type groupDTO struct {
-	Code          string `json:"code"`
-	Title         string `json:"title"`
-	Currency      string `json:"currency"`
-	Notes         string `json:"notes"`
-	AccountCount  int    `json:"accountCount"`
-	PositionCount int    `json:"positionCount"`
-	// VenueAccess is set on GET /groups list rows only: a grant on at least one
-	// trading connection to the group itself.
-	VenueAccess *bool  `json:"venueAccess,omitempty"`
-	BlockReason string `json:"blockReason"`
-	Blocked     bool   `json:"blocked"`
-}
-
-// toGroupDTO maps a domain.AccountGroup onto the wire DTO. The group's public
-// handle is its code; the engine group id is never serialized.
-func toGroupDTO(g domain.AccountGroup) groupDTO {
-	return groupDTO{
-		Code:        g.Code,
-		Title:       g.Title,
-		Currency:    g.Currency,
-		Notes:       g.Notes,
-		BlockReason: g.BlockReason,
-		Blocked:     g.Blocked,
-	}
-}
-
-// toGroupRowDTO maps a list row onto the group wire DTO.
-func toGroupRowDTO(row store.GroupListRow) groupDTO {
-	dto := toGroupDTO(row.Group)
-	dto.AccountCount = row.AccountCount
-	dto.PositionCount = row.PositionCount
-	dto.VenueAccess = &row.VenueAccess
-	return dto
-}
-
 // --- balance ----------------------------------------------------------------
 
 // balanceDTO is the wire shape of one per-(account, asset) holdings snapshot.
@@ -1088,77 +971,6 @@ func toAdjustmentRealizedPnlResultDTO(
 
 // --- order ------------------------------------------------------------------
 
-// orderDTO is the wire shape of one Officer-side order record. An order is a
-// machine record: its public handle is the opaque external id; no surrogate or
-// engine id is serialized. DisplayPrice is the human-readable pre-trade lock
-// price derived from the opaque lock blob by the engine seam; the raw lock is
-// never serialized. All monetary and size values are
-// exact decimal strings passed through verbatim.
-type orderDTO struct {
-	At                  time.Time       `json:"at"`
-	ID                  string          `json:"id"`
-	Account             string          `json:"account"`
-	Principal           string          `json:"principal,omitempty"`
-	BaseAsset           string          `json:"baseAsset"`
-	QuoteAsset          string          `json:"quoteAsset"`
-	Side                string          `json:"side"`
-	AmountKind          string          `json:"amountKind"`
-	AmountValue         string          `json:"amountValue"`
-	CommissionSubtotals []commissionDTO `json:"commissionSubtotals"`
-	// LeavesQuantity is the persisted remaining open base quantity (exact decimal
-	// string). It is read from the stored order/report data as-is.
-	LeavesQuantity string `json:"leavesQuantity"`
-	Price          string `json:"price"`
-	Status         string `json:"status"`
-	Source         string `json:"source"`
-	DisplayPrice   string `json:"displayPrice"`
-	DropCopy       bool   `json:"dropCopy"`
-	// Signed is the order-level rollup: whether at least one of the order's events
-	// carries a persisted Ed25519-signed attestation.
-	Signed          bool   `json:"signed"`
-	VenueConnection string `json:"venueConnection,omitempty"`
-}
-
-type commissionDTO struct {
-	Amount   string `json:"amount"`
-	Currency string `json:"currency"`
-}
-
-// toOrderDTO maps a backend-enriched domain order onto the wire DTO.
-// displayPrice comes from the backend's engine seam; this transport mapper
-// never decodes the opaque lock. signed reports whether the order carries at
-// least one Ed25519-signed event attestation.
-func toOrderDTO(o domain.Order, displayPrice string, signed bool) orderDTO {
-	return orderDTO{
-		At:          o.At,
-		ID:          o.ExternalID.String(),
-		Account:     string(o.Account),
-		Principal:   o.Principal,
-		BaseAsset:   o.BaseAsset,
-		QuoteAsset:  o.QuoteAsset,
-		Side:        string(o.Side),
-		AmountKind:  string(o.AmountKind),
-		AmountValue: o.AmountValue,
-		CommissionSubtotals: toCommissionDTOs(
-			o.CommissionSubtotals,
-		),
-		LeavesQuantity: o.Leaves,
-		Price:          o.Price,
-		Status:         string(o.Status),
-		Source:         string(o.Source),
-		DisplayPrice:   displayPrice,
-		DropCopy:       o.DropCopy,
-		Signed:         signed,
-	}
-}
-
-// toOrderRowDTO maps a list row onto the order wire DTO.
-func toOrderRowDTO(row backend.OrderListRow) orderDTO {
-	dto := toOrderDTO(row.Order, row.DisplayPrice, row.Signed)
-	dto.VenueConnection = row.VenueConnection.String()
-	return dto
-}
-
 // eventAttestationDTO is the wire shape of an event's persisted signed
 // attestation envelope. SignedEnvelope is the exact base64url envelope bytes;
 // the rest is the envelope metadata. Signed reports whether the envelope carries an Ed25519
@@ -1241,7 +1053,7 @@ type attestationResultDTO struct {
 	FillQuantity   string                `json:"fillQuantity"`
 	FillPrice      string                `json:"fillPrice"`
 	FillLockPrice  string                `json:"fillLockPrice"`
-	Commission     *commissionDTO        `json:"commission"`
+	Commission     *httpx.CommissionDTO  `json:"commission"`
 	LeavesQuantity string                `json:"leavesQuantity"`
 	OrderStatus    string                `json:"orderStatus"`
 	Blocks         []attestationBlockDTO `json:"blocks"`
@@ -1410,7 +1222,7 @@ type orderEventDTO struct {
 	LeavesQuantity  string                     `json:"leavesQuantity,omitempty"`
 	OrderStatus     string                     `json:"orderStatus,omitempty"`
 	ExecutionReport *executionReportRequestDTO `json:"executionReport,omitempty"`
-	Commission      *commissionDTO             `json:"commission,omitempty"`
+	Commission      *httpx.CommissionDTO       `json:"commission,omitempty"`
 	Signed          bool                       `json:"signed"`
 }
 
@@ -1419,19 +1231,19 @@ type orderEventDTO struct {
 // empty/false/null values remain distinguishable. The opaque engine lock is
 // never exposed.
 type executionReportRequestDTO struct {
-	ID             string         `json:"id"`
-	BaseAsset      string         `json:"baseAsset"`
-	QuoteAsset     string         `json:"quoteAsset"`
-	FillQuantity   string         `json:"fillQuantity"`
-	FillPrice      string         `json:"fillPrice"`
-	LeavesQuantity string         `json:"leavesQuantity"`
-	LockPrice      string         `json:"lockPrice"`
-	Commission     *commissionDTO `json:"commission"`
-	Order          string         `json:"order"`
-	Account        string         `json:"account"`
-	Side           string         `json:"side"`
-	OrderStatus    string         `json:"orderStatus"`
-	Force          bool           `json:"force"`
+	ID             string               `json:"id"`
+	BaseAsset      string               `json:"baseAsset"`
+	QuoteAsset     string               `json:"quoteAsset"`
+	FillQuantity   string               `json:"fillQuantity"`
+	FillPrice      string               `json:"fillPrice"`
+	LeavesQuantity string               `json:"leavesQuantity"`
+	LockPrice      string               `json:"lockPrice"`
+	Commission     *httpx.CommissionDTO `json:"commission"`
+	Order          string               `json:"order"`
+	Account        string               `json:"account"`
+	Side           string               `json:"side"`
+	OrderStatus    string               `json:"orderStatus"`
+	Force          bool                 `json:"force"`
 }
 
 // toOrderEventDTO maps a domain.OrderEvent onto the wire DTO. Both the event and
@@ -1457,7 +1269,7 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 		LeavesQuantity:  e.Payload.LeavesQuantity,
 		OrderStatus:     e.Payload.OrderStatus,
 		ExecutionReport: toExecutionReportRequestDTO(e.Payload.ExecutionReport),
-		Commission:      toCommissionDTO(e.Payload.Commission),
+		Commission:      httpx.ToCommissionDTO(e.Payload.Commission),
 	}
 	if e.Attestation != nil {
 		dto.Alg = e.Attestation.Alg
@@ -1480,79 +1292,13 @@ func toExecutionReportRequestDTO(
 		FillPrice:      in.FillPrice,
 		LeavesQuantity: in.LeavesQuantity,
 		LockPrice:      in.LockPrice,
-		Commission:     toCommissionDTO(in.Commission),
+		Commission:     httpx.ToCommissionDTO(in.Commission),
 		Order:          in.Order.String(),
 		Account:        string(in.Account),
 		Side:           string(in.Side),
 		OrderStatus:    string(in.OrderStatus),
 		Force:          in.Force,
 	}
-}
-
-// --- trade ------------------------------------------------------------------
-
-// tradeDTO is the wire shape of one per-fill trade record. All monetary values
-// are exact decimal strings passed through verbatim.
-type tradeDTO struct {
-	At              time.Time      `json:"at"`
-	ExternalID      string         `json:"id"`
-	Order           string         `json:"order"`
-	Account         string         `json:"account"`
-	Principal       string         `json:"principal,omitempty"`
-	BaseAsset       string         `json:"baseAsset"`
-	QuoteAsset      string         `json:"quoteAsset"`
-	Side            string         `json:"side"`
-	Quantity        string         `json:"quantity"`
-	Price           string         `json:"price"`
-	LockPrice       string         `json:"lockPrice"`
-	Commission      *commissionDTO `json:"commission,omitempty"`
-	Source          string         `json:"source"`
-	VenueConnection string         `json:"venueConnection,omitempty"`
-}
-
-// toTradeDTO maps a domain.Trade onto the wire DTO. Both the trade and its
-// originating order are addressed by opaque external ids; no surrogate id appears.
-func toTradeDTO(t domain.Trade) tradeDTO {
-	return tradeDTO{
-		At:         t.At,
-		ExternalID: t.ExternalID.String(),
-		Order:      t.Order.String(),
-		Account:    string(t.Account),
-		Principal:  t.Principal,
-		BaseAsset:  t.BaseAsset,
-		QuoteAsset: t.QuoteAsset,
-		Side:       string(t.Side),
-		Quantity:   t.Quantity,
-		Price:      t.Price,
-		LockPrice:  t.LockPrice,
-		Commission: toCommissionDTO(t.Commission),
-		Source:     string(t.Source),
-	}
-}
-
-// toTradeRowDTO maps a list row onto the trade wire DTO.
-func toTradeRowDTO(row store.TradeListRow) tradeDTO {
-	dto := toTradeDTO(row.Trade)
-	dto.VenueConnection = row.VenueConnection.String()
-	return dto
-}
-
-func toCommissionDTO(c *domain.Commission) *commissionDTO {
-	if c == nil {
-		return nil
-	}
-	return &commissionDTO{Amount: c.Amount, Currency: c.Currency}
-}
-
-func toCommissionDTOs(in []domain.Commission) []commissionDTO {
-	if in == nil {
-		return []commissionDTO{}
-	}
-	out := make([]commissionDTO, 0, len(in))
-	for _, c := range in {
-		out = append(out, *toCommissionDTO(&c))
-	}
-	return out
 }
 
 // executionResultDTO is the wire shape of one execution-report outcome: the
@@ -1605,10 +1351,10 @@ type executionReportResponseDTO struct {
 // workflow shortcut Officer recorded. SignedAttestation is present on success;
 // signing or attestation persistence failures fail the request.
 type orderMutationResponseDTO struct {
-	Order             orderDTO `json:"order"`
-	SignedAttestation string   `json:"signedAttestation,omitempty"`
-	AttestationKeyID  string   `json:"attestationKeyId,omitempty"`
-	Signed            bool     `json:"signed"`
+	Order             httpx.OrderDTO `json:"order"`
+	SignedAttestation string         `json:"signedAttestation,omitempty"`
+	AttestationKeyID  string         `json:"attestationKeyId,omitempty"`
+	Signed            bool           `json:"signed"`
 }
 
 // toExecutionResultDTO maps an engine.ExecutionReportResult onto the wire DTO.

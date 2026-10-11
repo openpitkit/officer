@@ -322,23 +322,30 @@ func ValidateAssetClassID(id string) error {
 	return nil
 }
 
+// MaxNotesRunes is the most code points notes hold, the bound ValidateNotes
+// enforces.
+const MaxNotesRunes = 4096
+
 // ValidateNotes returns ErrInvalid when notes contain invalid UTF-8 or exceed
-// 4096 code points.
+// MaxNotesRunes code points.
 func ValidateNotes(notes string) error {
 	if !utf8.ValidString(notes) {
 		return invalidField("/notes", "format", fmt.Errorf("notes contain invalid UTF-8: %w", ErrInvalid))
 	}
-	if utf8.RuneCountInString(notes) > 4096 {
-		return invalidField("/notes", "max_length", fmt.Errorf("notes exceed 4096 code points: %w", ErrInvalid))
+	if utf8.RuneCountInString(notes) > MaxNotesRunes {
+		return invalidField(
+			"/notes", "max_length",
+			fmt.Errorf("notes exceed %d code points: %w", MaxNotesRunes, ErrInvalid),
+		)
 	}
 	return nil
 }
 
-// maxReasonRunes is the length bound of a free-form reason and isReasonRune its
-// per-rune rule. ValidateReason and NormalizeReason are both written in terms of
-// them so the write-side normalizer cannot drift from the rule the read side
-// enforces.
-const maxReasonRunes = 4096
+// MaxReasonRunes is the most code points a free-form reason holds, and
+// isReasonRune is its per-rune rule. ValidateReason and NormalizeReason are both
+// written in terms of them so the write-side normalizer cannot drift from the
+// rule the read side enforces.
+const MaxReasonRunes = 4096
 
 func isReasonRune(r rune) bool { return unicode.IsPrint(r) }
 
@@ -352,11 +359,11 @@ func ValidateReason(reason string) error {
 	if !utf8.ValidString(reason) {
 		return invalidField("/reason", "format", fmt.Errorf("reason contains invalid UTF-8: %w", ErrInvalid))
 	}
-	if utf8.RuneCountInString(reason) > maxReasonRunes {
+	if utf8.RuneCountInString(reason) > MaxReasonRunes {
 		return invalidField(
 			"/reason", "max_length",
 			fmt.Errorf(
-				"reason exceeds %d code points: %w", maxReasonRunes, ErrInvalid,
+				"reason exceeds %d code points: %w", MaxReasonRunes, ErrInvalid,
 			),
 		)
 	}
@@ -393,7 +400,7 @@ func NormalizeReason(reason string) string {
 	}, reason)
 	runes := 0
 	for i := range printable {
-		if runes == maxReasonRunes {
+		if runes == MaxReasonRunes {
 			return printable[:i]
 		}
 		runes++

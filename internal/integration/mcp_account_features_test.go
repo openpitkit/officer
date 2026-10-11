@@ -126,6 +126,9 @@ func TestInputSchemasByAccountFeatures(t *testing.T) {
 		{"revoke_trading_access", nil, true, ""},
 		{"set_trading_fee_account", []string{"account"}, false, ""},
 		{"list_trading_destinations", []string{"account"}, false, ""},
+		{"list_orders", nil, false, ""},
+		{"list_trades", nil, false, ""},
+		{"list_groups", nil, false, ""},
 	}
 	everyAccount := listToolsFor(t, &fakeSource{})
 	oneAccount := listToolsFor(t, &fakeSource{accountFeatures: oneAccountFeatures})

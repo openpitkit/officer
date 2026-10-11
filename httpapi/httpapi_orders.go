@@ -103,9 +103,9 @@ func handleListOrders(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]orderDTO, 0, len(orders.Rows))
+		dtos := make([]httpx.OrderDTO, 0, len(orders.Rows))
 		for _, o := range orders.Rows {
-			dtos = append(dtos, toOrderRowDTO(o))
+			dtos = append(dtos, httpx.ToOrderRowDTO(o))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"orders": dtos,
@@ -133,14 +133,14 @@ func handleGetOrder(svc backend.ControlPlane) http.HandlerFunc {
 		for _, e := range detail.Events {
 			events = append(events, toOrderEventDTO(e))
 		}
-		trades := make([]tradeDTO, 0, len(detail.Trades))
+		trades := make([]httpx.TradeDTO, 0, len(detail.Trades))
 		for _, t := range detail.Trades {
-			trades = append(trades, toTradeDTO(t))
+			trades = append(trades, httpx.ToTradeDTO(t))
 		}
 		// signed is the order-level rollup (any event carries a signed
 		// attestation); per-event attestation metadata rides on each event DTO.
 		body := map[string]any{
-			"order": toOrderDTO(
+			"order": httpx.ToOrderDTO(
 				detail.Order, detail.DisplayPrice, detail.Signed(),
 			),
 			"events": events,
@@ -332,7 +332,7 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 			FillQuantity:   p.Result.FillQuantity,
 			FillPrice:      p.Result.FillPrice,
 			FillLockPrice:  p.Result.FillLockPrice,
-			Commission:     toCommissionDTO(p.Result.Commission),
+			Commission:     httpx.ToCommissionDTO(p.Result.Commission),
 			LeavesQuantity: p.Result.LeavesQuantity,
 			OrderStatus:    p.Result.OrderStatus,
 			Blocks:         blocks,
@@ -429,13 +429,13 @@ func orderMutationResponseFromPayload(
 		status = p.Result.OrderStatus
 	}
 	return &orderMutationResponseDTO{
-		Order: orderDTO{
+		Order: httpx.OrderDTO{
 			ID:                  event.Order.String(),
 			Account:             p.AccountID,
 			Side:                p.Side,
 			AmountKind:          p.AmountKind,
 			AmountValue:         p.Quantity,
-			CommissionSubtotals: toCommissionDTOs(nil),
+			CommissionSubtotals: httpx.ToCommissionDTOs(nil),
 			Price:               p.LimitPrice,
 			Status:              status,
 			DisplayPrice:        "",
@@ -458,14 +458,14 @@ func handleApplyExecutionReport(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			ID             string         `json:"id"`
-			Quantity       string         `json:"quantity"`
-			Price          string         `json:"price"`
-			LeavesQuantity string         `json:"leavesQuantity"`
-			LockPrice      string         `json:"lockPrice"`
-			Commission     *commissionDTO `json:"commission"`
-			Status         string         `json:"status"`
-			Force          bool           `json:"force"`
+			ID             string               `json:"id"`
+			Quantity       string               `json:"quantity"`
+			Price          string               `json:"price"`
+			LeavesQuantity string               `json:"leavesQuantity"`
+			LockPrice      string               `json:"lockPrice"`
+			Commission     *httpx.CommissionDTO `json:"commission"`
+			Status         string               `json:"status"`
+			Force          bool                 `json:"force"`
 		}
 		if !httpx.DecodeBody(w, r, &req) {
 			return

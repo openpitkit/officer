@@ -1289,11 +1289,14 @@ func (l venueLinks) exists() string {
 	return "EXISTS (SELECT 1 FROM " + l.from + " WHERE " + l.match + ")"
 }
 
+// appendVenueFilter narrows the listed rows by filter over links. Whether the
+// filter is well formed is VenueFilter.Validate's decision; this builds the
+// query of each mode.
 func appendVenueFilter(
 	clauses *[]string, args *[]any, links venueLinks, filter fwstore.VenueFilter,
 ) error {
-	if filter.Mode != fwstore.VenueFilterConnection && !filter.ConnectionID.IsZero() {
-		return fmt.Errorf("store: venue connection id requires connection mode: %w", domain.ErrInvalid)
+	if err := filter.Validate(); err != nil {
+		return err
 	}
 	switch filter.Mode {
 	case fwstore.VenueFilterAll:
@@ -1303,9 +1306,6 @@ func appendVenueFilter(
 	case fwstore.VenueFilterNone:
 		*clauses = append(*clauses, "NOT "+links.exists())
 	case fwstore.VenueFilterConnection:
-		if filter.ConnectionID.IsZero() {
-			return fmt.Errorf("store: venue connection mode requires a connection id: %w", domain.ErrInvalid)
-		}
 		*clauses = append(*clauses,
 			"EXISTS (SELECT 1 FROM "+links.from+" "+
 				"JOIN trading_connection venue_filter_connection "+
@@ -1314,7 +1314,8 @@ func appendVenueFilter(
 				" AND venue_filter_connection.external_id = ?)")
 		*args = append(*args, filter.ConnectionID.Bytes())
 	default:
-		return fmt.Errorf("store: unknown venue filter mode %q: %w", filter.Mode, domain.ErrInvalid)
+		// Validate admitted a mode this connector builds no query for.
+		return fmt.Errorf("store: venue filter mode %q has no query", filter.Mode)
 	}
 	return nil
 }

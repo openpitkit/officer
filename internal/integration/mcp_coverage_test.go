@@ -28,6 +28,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
@@ -115,6 +116,30 @@ func (s *setMDErrSource) ListGroups(
 	context.Context,
 ) ([]domain.AccountGroup, error) {
 	return nil, nil
+}
+
+func (s *setMDErrSource) ListAccountRows(
+	context.Context, store.AccountListFilter,
+) (store.AccountListPage, error) {
+	return store.AccountListPage{}, nil
+}
+
+func (s *setMDErrSource) ListGroupRows(
+	context.Context, store.GroupListFilter,
+) (store.GroupListPage, error) {
+	return store.GroupListPage{}, nil
+}
+
+func (s *setMDErrSource) ListOrderRows(
+	context.Context, store.OrderListFilter,
+) (backend.OrderListPage, error) {
+	return backend.OrderListPage{}, nil
+}
+
+func (s *setMDErrSource) ListTradeRows(
+	context.Context, store.TradeListFilter,
+) (store.TradeListPage, error) {
+	return store.TradeListPage{}, nil
 }
 
 func (s *setMDErrSource) ListLimits(

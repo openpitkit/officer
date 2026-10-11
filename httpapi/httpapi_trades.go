@@ -37,9 +37,9 @@ func handleListTrades(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]tradeDTO, 0, len(page.Rows))
+		dtos := make([]httpx.TradeDTO, 0, len(page.Rows))
 		for _, row := range page.Rows {
-			dtos = append(dtos, toTradeRowDTO(row))
+			dtos = append(dtos, httpx.ToTradeRowDTO(row))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"trades": dtos,

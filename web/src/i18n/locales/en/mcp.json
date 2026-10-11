@@ -50,6 +50,18 @@
     "get_audit": {
       "description": "Read recent control-plane audit-log entries."
     },
+    "list_orders": {
+      "description": "List orders with filters, including the trading-connection filter, sorting and paging."
+    },
+    "list_trades": {
+      "description": "List trades with filters, including the trading-connection filter, sorting and paging."
+    },
+    "list_accounts": {
+      "description": "List accounts with filters, including the trading-connection filter, sorting and paging."
+    },
+    "list_groups": {
+      "description": "List account groups with filters, including the trading-connection filter, sorting and paging."
+    },
     "check_order": {
       "description": "Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons); changes no state."
     },
