@@ -29,6 +29,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   Account,
+  CredentialStorage,
   Group,
   TradingConnection,
   TradingProvider,
@@ -122,6 +123,7 @@ const provider: TradingProvider = {
 };
 const api = {
   fetchTrading: vi.fn(),
+  fetchCredentialStorage: vi.fn(),
   fetchAccounts: vi.fn(),
   fetchGroups: vi.fn(),
   fetchAccountState: vi.fn(),
@@ -143,6 +145,7 @@ const api = {
   createAsset: vi.fn(),
 };
 let snapshot: TradingSnapshot;
+let credentialStorage: CredentialStorage;
 let accounts: string[];
 let groups: string[];
 
@@ -161,6 +164,7 @@ function connection(
     feeAccount: "",
     instruments: [],
     access: [],
+    diagnostics: [],
     ...overrides,
   };
 }
@@ -194,6 +198,14 @@ function updateConnection(id: string, patch: Partial<TradingConnection>) {
     ),
   };
   return snapshot;
+}
+
+function storage(sealed: boolean): CredentialStorage {
+  return {
+    credentialsSealed: sealed,
+    plaintextTradingKeys: !sealed,
+    plaintextMarketDataKeys: false,
+  };
 }
 
 function renderTrading() {
@@ -243,10 +255,11 @@ beforeEach(async () => {
   snapshot = {
     providers: [provider],
     connections: [connection()],
-    credentialsSealed: true,
   };
+  credentialStorage = storage(true);
   accounts = ["alpha", "beta", "fees"];
   api.fetchTrading.mockImplementation(async () => snapshot);
+  api.fetchCredentialStorage.mockImplementation(async () => credentialStorage);
   api.fetchMarketData.mockResolvedValue({
     providers: [],
     instances: [],
@@ -462,6 +475,7 @@ describe("Trading connections", () => {
         title: "Alpaca paper",
         titleId: title.id,
         error: "Venue is offline",
+        errorTone: "danger",
         links: expect.objectContaining({
           siteUrl: "https://alpaca.markets",
           docsUrl: "https://docs.alpaca.markets/us/docs/paper-trading",
@@ -489,6 +503,77 @@ describe("Trading connections", () => {
     await user.click(settings);
     expect(
       screen.getByRole("dialog", { name: "Edit settings" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a degraded connection's warn state, error and diagnostics", async () => {
+    snapshot.connections = [
+      connection({
+        enabled: true,
+        state: "degraded",
+        error: "Trade updates refused",
+        diagnostics: [
+          {
+            level: "error",
+            code: "connection_error",
+            kind: "provider",
+            title: "Trade-updates stream unavailable",
+            detail: "The venue closed the stream.",
+            actions: [],
+            at: "2026-10-13T08:00:00Z",
+          },
+        ],
+      }),
+    ];
+    renderTrading();
+    const scope = await card();
+    expect(scope.getByText("Degraded", { exact: true })).toHaveClass(
+      "text-[var(--warn)]",
+    );
+    expect(
+      scope.queryByText("Running", { exact: true }),
+    ).not.toBeInTheDocument();
+    expect(venueWiring.header).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        error: "Trade updates refused",
+        errorTone: "warn",
+      }),
+    );
+    expect(scope.getByText("Trade updates refused")).toBeInTheDocument();
+    expect(
+      within(scope.getByRole("region", { name: "Problems" })).getByText(
+        "Trade-updates stream unavailable",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a running connection's diagnostics in its panel", async () => {
+    snapshot.connections = [
+      connection({
+        enabled: true,
+        state: "running",
+        diagnostics: [
+          {
+            level: "warn",
+            code: "connection_error",
+            kind: "provider",
+            title: "Trade-updates stream reconnected",
+            detail: "The venue closed the stream once.",
+            actions: [],
+            at: "2026-10-13T08:00:00Z",
+          },
+        ],
+      }),
+    ];
+    renderTrading();
+    const scope = await card();
+    expect(scope.getByText("Running", { exact: true })).toHaveClass(
+      "text-[var(--ok)]",
+    );
+    expect(
+      within(scope.getByRole("region", { name: "Problems" })).getByText(
+        "Trade-updates stream reconnected",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -1048,10 +1133,10 @@ describe("Trading connections", () => {
   });
 
   it.each([false, true])(
-    "shows the unsealed warning only when credentialsSealed is false (%s)",
+    "shows the unsealed warning only when credential storage is unsealed (sealed %s)",
     async (sealed) => {
       const user = userEvent.setup();
-      snapshot.credentialsSealed = sealed;
+      credentialStorage = storage(sealed);
       renderTrading();
       await user.click(
         (await card()).getByRole("button", { name: "Edit settings" }),
@@ -1059,33 +1144,11 @@ describe("Trading connections", () => {
       const dialog = within(
         screen.getByRole("dialog", { name: "Edit settings" }),
       );
-      const warning = dialog.queryByRole("heading", {
-        name: "Keys will be stored unencrypted",
-      });
+      const warningText = "Keys will be stored unencrypted";
       if (sealed) {
-        expect(warning).not.toBeInTheDocument();
-        expect(
-          dialog.queryByRole("link", { name: "How to set a master key" }),
-        ).not.toBeInTheDocument();
+        expect(dialog.queryByText(warningText)).not.toBeInTheDocument();
       } else {
-        expect(warning).toBeInTheDocument();
-        expect(dialog.getByRole("alert")).toHaveTextContent(
-          "Anyone who can read the database or a backup can trade on this account.",
-        );
-        expect(
-          dialog.getByText(
-            "A lost master key makes the database unopenable - back the key up before you set it.",
-          ),
-        ).toBeInTheDocument();
-        const link = dialog.getByRole("link", {
-          name: "How to set a master key",
-        });
-        expect(link).toHaveAttribute(
-          "href",
-          "https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key",
-        );
-        expect(link).toHaveAttribute("target", "_blank");
-        expect(link).toHaveAttribute("rel", "noopener noreferrer");
+        expect(dialog.getByRole("alert")).toHaveTextContent(warningText);
       }
       expect(dialog.getByLabelText("API key", { exact: true })).toBeEnabled();
       expect(
@@ -3706,10 +3769,10 @@ describe("Add trading connection dialog", () => {
     { sealed: false, warning: true },
     { sealed: true, warning: false },
   ])(
-    "keeps key inputs enabled when credentialsSealed is $sealed",
+    "keeps key inputs enabled when credential storage sealed is $sealed",
     async ({ sealed, warning }) => {
       const user = userEvent.setup();
-      snapshot.credentialsSealed = sealed;
+      credentialStorage = storage(sealed);
       renderTrading();
       const dialog = await openCreateConnection(user);
       const warningText = "Keys will be stored unencrypted";
@@ -3722,6 +3785,24 @@ describe("Add trading connection dialog", () => {
       expect(dialog.getByLabelText("API secret")).toBeEnabled();
     },
   );
+
+  it("shows a failed credential storage load and keeps key entry enabled", async () => {
+    const user = userEvent.setup();
+    api.fetchCredentialStorage.mockRejectedValue(
+      new ApiError("Credential storage unavailable", "internal"),
+    );
+    renderTrading();
+    const dialog = await openCreateConnection(user);
+    expect(dialog.getByRole("alert")).toHaveTextContent(
+      "Could not check whether stored keys are encrypted: Credential storage unavailable",
+    );
+    expect(
+      dialog.queryByText("Keys will be stored unencrypted"),
+    ).not.toBeInTheDocument();
+    await user.type(dialog.getByLabelText("API key"), "paper-key");
+    await user.type(dialog.getByLabelText("API secret"), "paper-secret");
+    expect(dialog.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
 
   it("requires the label and both keys before creating", async () => {
     const user = userEvent.setup();

@@ -18,40 +18,27 @@
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { useTrading } from "@/api/useTrading";
+import { useCredentialStorage } from "@/api/useCredentialStorage";
+import { MasterKeyLink } from "@/components/MasterKeyLink";
+import { Notice } from "@/components/Notice";
 
-/** Report unsealed sensitive data and share the polled trading load. */
-// eslint-disable-next-line react-refresh/only-export-components -- Shared hook.
-export function useUnencryptedSensitiveData() {
-  const { load: trading } = useTrading();
-  const unencrypted =
-    trading.state === "ready" &&
-    !trading.data.credentialsSealed &&
-    trading.data.connections.length > 0;
-  return { unencrypted, trading };
-}
-
+/** Warns on every page while stored keys of any kind sit in plain text. */
 export function SensitiveDataBanner() {
   const { t } = useTranslation();
-  const { unencrypted } = useUnencryptedSensitiveData();
+  const { load } = useCredentialStorage();
 
-  if (!unencrypted) return null;
+  if (
+    load.state !== "ready" ||
+    !(load.data.plaintextTradingKeys || load.data.plaintextMarketDataKeys)
+  )
+    return null;
 
   return (
-    <div className="flex flex-wrap items-start gap-3 rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-sm text-[var(--danger)]">
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <p className="font-semibold">{t("sensitiveData.title")}</p>
-        <p className="text-xs">{t("sensitiveData.detail")}</p>
-        <a
-          href="https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs underline"
-        >
-          {t("sensitiveData.masterKeyLink")}
-        </a>
-      </div>
-    </div>
+    <Notice tone="danger" icon={AlertTriangle} title={t("sensitiveData.title")}>
+      <p>{t("sensitiveData.detail")}</p>
+      <p>
+        <MasterKeyLink />
+      </p>
+    </Notice>
   );
 }

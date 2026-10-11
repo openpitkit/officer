@@ -99,6 +99,8 @@ type fakeService struct {
 	checkResult           domain.CheckResult
 	overview              backend.Overview
 	serviceInfo           backend.ServiceInfo
+	credentialStorage     backend.CredentialStorage
+	credentialStorageErr  error
 	backupArchive         backup.Archive
 	backupFilename        string
 	backupSummary         backup.RestoreSummary
@@ -906,6 +908,9 @@ func (f *fakeService) Overview(_ context.Context, _ time.Time) (backend.Overview
 }
 func (f *fakeService) ServiceInfo(_ context.Context) (backend.ServiceInfo, error) {
 	return f.serviceInfo, f.statusErr
+}
+func (f *fakeService) CredentialStorage(_ context.Context) (backend.CredentialStorage, error) {
+	return f.credentialStorage, f.credentialStorageErr
 }
 func (f *fakeService) RestartMarketData(_ context.Context) error {
 	return f.stateErr

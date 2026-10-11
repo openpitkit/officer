@@ -46,6 +46,7 @@ import type {
   CheckResult,
   CheckWouldBlock,
   Commission,
+  CredentialStorage,
   EngineHealth,
   ExecutionBlock,
   ExecutionOutcome,
@@ -71,8 +72,8 @@ import type {
   VenueSendOutcome,
   PaperSendResult,
   OrderDetail,
-  MarketDataDiagnostic,
-  MarketDataDiagnosticAction,
+  Diagnostic,
+  DiagnosticAction,
   MarketDataInstrument,
   MarketDataInstance,
   MarketDataProvider,
@@ -1252,7 +1253,12 @@ function normalizeTradingMode(v: unknown): TradingMode {
 }
 
 function normalizeTradingConnectionState(v: unknown): TradingConnectionState {
-  if (v === "running" || v === "unavailable" || v === "stopped") {
+  if (
+    v === "running" ||
+    v === "degraded" ||
+    v === "unavailable" ||
+    v === "stopped"
+  ) {
     return v;
   }
   throw new ApiError(
@@ -1323,6 +1329,12 @@ function normalizeTradingConnection(v: unknown): TradingConnection {
       "internal",
     );
   }
+  if (!Array.isArray(o.diagnostics)) {
+    throw new ApiError(
+      "Invalid or missing trading connection diagnostics in the API response",
+      "internal",
+    );
+  }
   const secrets = isObject(o.secrets) ? o.secrets : {};
   const connection: TradingConnection = {
     id: asString(o.id),
@@ -1332,6 +1344,7 @@ function normalizeTradingConnection(v: unknown): TradingConnection {
     enabled: asBool(o.enabled),
     venueIdentity: asString(o.venueIdentity),
     state: normalizeTradingConnectionState(o.state),
+    diagnostics: o.diagnostics.map(normalizeDiagnostic),
     secrets: {
       apiKey: asBool(secrets.apiKey),
       apiSecret: asBool(secrets.apiSecret),
@@ -1370,16 +1383,9 @@ function normalizeTradingSnapshot(v: unknown): TradingSnapshot {
       "internal",
     );
   }
-  if (typeof o.credentialsSealed !== "boolean") {
-    throw new ApiError(
-      "Invalid or missing trading credentialsSealed in the API response",
-      "internal",
-    );
-  }
   return {
     providers: o.providers.map(normalizeTradingProvider),
     connections: o.connections.map(normalizeTradingConnection),
-    credentialsSealed: o.credentialsSealed,
   };
 }
 
@@ -1570,11 +1576,9 @@ function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
   return instrument;
 }
 
-function normalizeMarketDataDiagnosticAction(
-  v: unknown,
-): MarketDataDiagnosticAction {
+function normalizeDiagnosticAction(v: unknown): DiagnosticAction {
   const o = isObject(v) ? v : {};
-  const action: MarketDataDiagnosticAction = {
+  const action: DiagnosticAction = {
     type: asString(pick(o, "type", "Type")),
   };
   const target = pick(o, "target", "Target");
@@ -1584,9 +1588,9 @@ function normalizeMarketDataDiagnosticAction(
   return action;
 }
 
-function normalizeMarketDataDiagnostic(v: unknown): MarketDataDiagnostic {
+function normalizeDiagnostic(v: unknown): Diagnostic {
   const o = isObject(v) ? v : {};
-  const diag: MarketDataDiagnostic = {
+  const diag: Diagnostic = {
     level: asString(pick(o, "level", "Level")),
     code: asString(pick(o, "code", "Code")),
     kind: asString(pick(o, "kind", "Kind")),
@@ -1594,7 +1598,7 @@ function normalizeMarketDataDiagnostic(v: unknown): MarketDataDiagnostic {
     detail: asString(pick(o, "detail", "Detail")),
     actions: normalizeArray(
       pick(o, "actions", "Actions"),
-      normalizeMarketDataDiagnosticAction,
+      normalizeDiagnosticAction,
     ),
     at: asString(pick(o, "at", "At")),
   };
@@ -1651,7 +1655,7 @@ function normalizeMarketDataInstance(v: unknown): MarketDataInstance {
     ),
     diagnostics: normalizeArray(
       pick(o, "diagnostics", "Diagnostics"),
-      normalizeMarketDataDiagnostic,
+      normalizeDiagnostic,
     ),
   };
   const settings = pick(o, "settings", "Settings");
@@ -1828,6 +1832,30 @@ function normalizeServiceInfo(v: unknown): ServiceInfo {
     info.buildClean = rawClean;
   }
   return info;
+}
+
+function normalizeCredentialStorage(v: unknown): CredentialStorage {
+  if (!isObject(v)) {
+    throw new ApiError(
+      "Credential storage is missing from the API response",
+      "internal",
+    );
+  }
+  const flag = (field: keyof CredentialStorage): boolean => {
+    const value = v[field];
+    if (typeof value !== "boolean") {
+      throw new ApiError(
+        `Invalid or missing credential storage ${field} in the API response`,
+        "internal",
+      );
+    }
+    return value;
+  };
+  return {
+    credentialsSealed: flag("credentialsSealed"),
+    plaintextTradingKeys: flag("plaintextTradingKeys"),
+    plaintextMarketDataKeys: flag("plaintextMarketDataKeys"),
+  };
 }
 
 function normalizeServiceLogs(v: unknown): ServiceLogs {
@@ -2359,6 +2387,16 @@ async function fetchServiceInfo(
 ): Promise<ServiceInfo> {
   return normalizeServiceInfo(
     await client.request(`${client.baseUrl}/service`, { signal }),
+  );
+}
+
+/** GET /credential-storage. */
+async function fetchCredentialStorage(
+  client: ApiClient,
+  signal?: AbortSignal,
+): Promise<CredentialStorage> {
+  return normalizeCredentialStorage(
+    await client.request(`${client.baseUrl}/credential-storage`, { signal }),
   );
 }
 
@@ -4583,6 +4621,7 @@ export function createOfficerApi(client: ApiClient) {
     verifyMarketDataSymbol: bind(verifyMarketDataSymbol),
     searchMarketDataSymbols: bind(searchMarketDataSymbols),
     fetchServiceInfo: bind(fetchServiceInfo),
+    fetchCredentialStorage: bind(fetchCredentialStorage),
     fetchServiceLogs: bind(fetchServiceLogs),
     restartService: bind(restartService),
     stopService: bind(stopService),

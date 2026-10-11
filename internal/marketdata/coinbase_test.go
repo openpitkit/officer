@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -304,7 +305,7 @@ func TestCoinbaseDiagnoseUnknownSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}
-	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol ||
+	if len(findings) != 1 || findings[0].Code != health.CodeUnknownSymbol ||
 		findings[0].Instrument != "BAD-USD" {
 		t.Fatalf("findings = %+v", findings)
 	}
@@ -396,7 +397,7 @@ func TestCoinbaseConnector_CloseStopsSubscription(t *testing.T) {
 		},
 		readTimeout: time.Hour,
 		report:      func(bool, string) {},
-		diagReport:  func(fwmarketdata.Diagnostic) {},
+		diagReport:  func(health.Diagnostic) {},
 	}
 	out, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "BTC-USD", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USD")},

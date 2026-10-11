@@ -28,11 +28,13 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 )
 
 // DecodeBody decodes exactly one non-null JSON value into dst, rejecting any
@@ -396,71 +398,125 @@ func pathString(r *http.Request, key, msg string) (string, error) {
 	return decoded, nil
 }
 
-// WriteErr maps a domain sentinel error to the appropriate HTTP status and JSON
-// error body.
-func WriteErr(w http.ResponseWriter, err error) {
-	var assetMissing domain.AssetMissingError
+// PublicError is the form of an error that a client sees. WriteErr and the
+// MCP tools both report errors through DescribeErr, so one error carries the
+// same code and message on both surfaces.
+type PublicError struct {
+	// Status is the HTTP status of the REST response.
+	Status int
+	// Code is the stable wire code a client matches on.
+	Code string
+	// Message is the client-visible text. It never carries the cause of an
+	// upstream or internal failure.
+	Message string
+}
+
+// DescribeErr maps err to its public form. It is the one ordered
+// classification of domain sentinels and typed domain errors, shared by
+// WriteErr and the MCP tools; the first matching case wins. A domain error
+// keeps its message: its sentinel text where wrapper text must not reach the
+// client, its full text otherwise. An upstream provider failure maps to
+// upstream with a neutral message and its cause is logged as a warning; any
+// other error maps to internal with "internal error" and its cause is logged
+// as an error. Callers do not log err again.
+func DescribeErr(err error) PublicError {
+	var currencyBlocked domain.CurrencyChangeBlockedError
 	switch {
 	case errors.Is(err, domain.ErrTooLarge):
-		WriteErrMsg(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
+		return PublicError{http.StatusRequestEntityTooLarge, "too_large", err.Error()}
 	case errors.Is(err, domain.ErrInvalid):
-		WriteValidationErr(w, err)
+		return PublicError{http.StatusUnprocessableEntity, "validation", err.Error()}
 	case errors.Is(err, domain.ErrLiveTradingUnavailable):
-		WriteErrMsg(w, http.StatusForbidden, "live_trading_unavailable", domain.ErrLiveTradingUnavailable.Error())
+		return PublicError{http.StatusForbidden, "live_trading_unavailable", domain.ErrLiveTradingUnavailable.Error()}
 	case errors.Is(err, domain.ErrTradingModeMismatch):
-		WriteErrMsg(w, http.StatusConflict, "trading_mode_mismatch", domain.ErrTradingModeMismatch.Error())
+		return PublicError{http.StatusConflict, "trading_mode_mismatch", domain.ErrTradingModeMismatch.Error()}
 	case errors.Is(err, domain.ErrFeeAccountRequired):
-		WriteErrMsg(w, http.StatusConflict, "fee_account_required", domain.ErrFeeAccountRequired.Error())
+		return PublicError{http.StatusConflict, "fee_account_required", domain.ErrFeeAccountRequired.Error()}
 	case errors.Is(err, domain.ErrAccountsNotManaged):
-		WriteErrMsg(w, http.StatusConflict, "accounts_not_managed", err.Error())
+		return PublicError{http.StatusConflict, "accounts_not_managed", err.Error()}
 	case errors.Is(err, domain.ErrVenueOrderManaged):
-		WriteErrMsg(w, http.StatusConflict, "venue_order_managed", domain.ErrVenueOrderManaged.Error())
+		return PublicError{http.StatusConflict, "venue_order_managed", domain.ErrVenueOrderManaged.Error()}
 	case errors.Is(err, domain.ErrNoDestination):
-		WriteErrMsg(w, http.StatusConflict, "no_destination", domain.ErrNoDestination.Error())
+		return PublicError{http.StatusConflict, "no_destination", domain.ErrNoDestination.Error()}
 	case errors.Is(err, domain.ErrDestinationAmbiguous):
-		writeDestinationAmbiguousErr(w, err)
+		return PublicError{http.StatusConflict, "destination_ambiguous", domain.ErrDestinationAmbiguous.Error()}
 	case errors.Is(err, domain.ErrForbidden):
-		WriteErrMsg(w, http.StatusForbidden, "forbidden", domain.ErrForbidden.Error())
+		return PublicError{http.StatusForbidden, "forbidden", domain.ErrForbidden.Error()}
 	// A rejected missing account is matched before the generic not-found case so
 	// it keeps its own code and its structured account field.
 	case errors.Is(err, domain.ErrAccountMissing):
-		writeAccountMissingErr(w, err)
-	case errors.As(err, &assetMissing):
-		WriteJSON(w, http.StatusNotFound, map[string]any{
+		return PublicError{http.StatusNotFound, "account_missing", err.Error()}
+	case errors.As(err, new(domain.AssetMissingError)):
+		return PublicError{http.StatusNotFound, "asset_missing", err.Error()}
+	case errors.Is(err, domain.ErrNotFound):
+		return PublicError{http.StatusNotFound, "not_found", err.Error()}
+	case errors.Is(err, domain.ErrAlreadyExists):
+		return PublicError{http.StatusConflict, "conflict", err.Error()}
+	case errors.Is(err, domain.ErrHasDependents):
+		return PublicError{http.StatusConflict, "has_dependents", domain.ErrHasDependents.Error()}
+	case errors.Is(err, domain.ErrTerminalOrder):
+		return PublicError{http.StatusConflict, "terminal_order", domain.ErrTerminalOrder.Error()}
+	case errors.Is(err, domain.ErrExecutionReportRequired):
+		return PublicError{http.StatusConflict, "execution_report_required", err.Error()}
+	case errors.Is(err, domain.ErrApprovalRequired):
+		return PublicError{http.StatusConflict, "approval_required", err.Error()}
+	case errors.As(err, &currencyBlocked):
+		// Only these scopes have a structured target on the wire; any other
+		// scope reports a plain conflict.
+		switch currencyBlocked.Scope {
+		case domain.ScopeAccount, domain.ScopeAccountGroup:
+			return PublicError{http.StatusConflict, "currency_change_blocked", err.Error()}
+		}
+		return PublicError{http.StatusConflict, "conflict", err.Error()}
+	case errors.Is(err, domain.ErrConflict):
+		return PublicError{http.StatusConflict, "conflict", err.Error()}
+	case errors.Is(err, domain.ErrEngineRestarting):
+		return PublicError{http.StatusServiceUnavailable, "engine_restarting", err.Error()}
+	case errors.Is(err, domain.ErrNotImplemented):
+		return PublicError{http.StatusNotImplemented, "not_implemented", err.Error()}
+	case errors.Is(err, domain.ErrUpstream):
+		slog.Warn("upstream provider request failed", "error", err)
+		return PublicError{http.StatusBadGateway, "upstream",
+			"The provider couldn't complete the request. " +
+				"Check your provider access and the request, then try again."}
+	default:
+		slog.Error("unhandled internal error serving request", "error", err)
+		return PublicError{http.StatusInternalServerError, "internal", "internal error"}
+	}
+}
+
+// WriteErr writes the response that DescribeErr maps err to. A code that
+// carries structured members on REST gets them next to its code and message:
+// the RFC 9457 problem body for validation, candidates for
+// destination_ambiguous, account for account_missing, asset for
+// asset_missing, dependents for has_dependents and the blocked target for
+// currency_change_blocked.
+func WriteErr(w http.ResponseWriter, err error) {
+	public := DescribeErr(err)
+	switch public.Code {
+	case "validation":
+		WriteValidationErr(w, err)
+	case "destination_ambiguous":
+		writeDestinationAmbiguousErr(w, public, err)
+	case "account_missing":
+		writeAccountMissingErr(w, public, err)
+	case "asset_missing":
+		// DescribeErr reports this code only when err holds the typed error.
+		var assetMissing domain.AssetMissingError
+		errors.As(err, &assetMissing)
+		WriteJSON(w, public.Status, map[string]any{
 			"error": map[string]any{
-				"code":    "asset_missing",
-				"message": err.Error(),
+				"code":    public.Code,
+				"message": public.Message,
 				"asset":   assetMissing.Asset,
 			},
 		})
-	case errors.Is(err, domain.ErrNotFound):
-		WriteErrMsg(w, http.StatusNotFound, "not_found", err.Error())
-	case errors.Is(err, domain.ErrAlreadyExists):
-		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
-	case errors.Is(err, domain.ErrHasDependents):
-		writeHasDependentsErr(w, err)
-	case errors.Is(err, domain.ErrTerminalOrder):
-		WriteErrMsg(w, http.StatusConflict, "terminal_order", domain.ErrTerminalOrder.Error())
-	case errors.Is(err, domain.ErrExecutionReportRequired):
-		WriteErrMsg(w, http.StatusConflict, "execution_report_required", err.Error())
-	case errors.Is(err, domain.ErrApprovalRequired):
-		WriteErrMsg(w, http.StatusConflict, "approval_required", err.Error())
-	case isCurrencyChangeBlocked(err):
-		writeCurrencyChangeBlockedErr(w, err)
-	case errors.Is(err, domain.ErrConflict):
-		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
-	case errors.Is(err, domain.ErrEngineRestarting):
-		WriteErrMsg(w, http.StatusServiceUnavailable, "engine_restarting", err.Error())
-	case errors.Is(err, domain.ErrNotImplemented):
-		WriteErrMsg(w, http.StatusNotImplemented, "not_implemented", err.Error())
-	case errors.Is(err, domain.ErrUpstream):
-		slog.Warn("upstream provider request failed", "error", err)
-		WriteErrMsg(w, http.StatusBadGateway, "upstream",
-			"The provider couldn't complete the request. "+
-				"Check your provider access and the request, then try again.")
+	case "has_dependents":
+		writeHasDependentsErr(w, public, err)
+	case "currency_change_blocked":
+		writeCurrencyChangeBlockedErr(w, public, err)
 	default:
-		slog.Error("unhandled internal error serving request", "error", err)
-		WriteErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
+		WriteErrMsg(w, public.Status, public.Code, public.Message)
 	}
 }
 
@@ -477,32 +533,199 @@ type TradingDestinationDTO struct {
 	Error        string             `json:"error,omitempty"`
 }
 
-// ToTradingDestinationDTOs encodes destinations, including an error only for
-// unavailable destinations. An empty input produces an empty JSON array.
+// ToTradingDestinationDTOs encodes destinations with the error the backend
+// reports. An empty input produces an empty JSON array.
 func ToTradingDestinationDTOs(in []backend.TradingDestinationStatus) []TradingDestinationDTO {
 	out := make([]TradingDestinationDTO, 0, len(in))
 	for _, d := range in {
-		candidate := TradingDestinationDTO{
+		out = append(out, TradingDestinationDTO{
 			Connection: d.Connection.String(), Label: d.Label, Provider: d.Provider,
-			Mode: d.Mode, Enabled: d.Enabled, VenueAccount: d.VenueAccount, State: d.State,
-		}
-		if d.State == "unavailable" {
-			candidate.Error = d.Unavailable
-		}
-		out = append(out, candidate)
+			Mode: d.Mode, Enabled: d.Enabled, VenueAccount: d.VenueAccount,
+			State: d.State, Error: d.Error,
+		})
 	}
 	return out
 }
 
-func writeDestinationAmbiguousErr(w http.ResponseWriter, err error) {
+// TradingDTO is the wire representation of the trading runtime state, shared
+// by the REST and MCP reports of it.
+type TradingDTO struct {
+	Providers   []TradingProviderDTO   `json:"providers"`
+	Connections []TradingConnectionDTO `json:"connections"`
+}
+
+// TradingProviderDTO is one trading provider and the capabilities it offers.
+type TradingProviderDTO struct {
+	Type            string `json:"type"`
+	Title           string `json:"title"`
+	VenueAccounts   bool   `json:"venueAccounts"`
+	VerifiesSymbols bool   `json:"verifiesSymbols"`
+	SearchesSymbols bool   `json:"searchesSymbols"`
+	UnlinkedFees    bool   `json:"unlinkedFees"`
+}
+
+// TradingConnectionDTO is one trading connection with its runtime state, the
+// presence of its secrets, its instruments and its grants.
+type TradingConnectionDTO struct {
+	ID            string                 `json:"id"`
+	Provider      string                 `json:"provider"`
+	Label         string                 `json:"label"`
+	Mode          domain.TradingMode     `json:"mode"`
+	Enabled       bool                   `json:"enabled"`
+	VenueIdentity string                 `json:"venueIdentity"`
+	FeeAccount    string                 `json:"feeAccount"`
+	State         string                 `json:"state"`
+	Error         string                 `json:"error,omitempty"`
+	Diagnostics   []DiagnosticDTO        `json:"diagnostics"`
+	Secrets       map[string]bool        `json:"secrets"`
+	Instruments   []TradingInstrumentDTO `json:"instruments"`
+	Access        []TradingAccessDTO     `json:"access"`
+}
+
+// TradingInstrumentDTO is one instrument of a trading connection.
+type TradingInstrumentDTO struct {
+	ExternalSymbol string `json:"externalSymbol"`
+	BaseAsset      string `json:"baseAsset"`
+	QuoteAsset     string `json:"quoteAsset"`
+	Enabled        bool   `json:"enabled"`
+}
+
+// TradingAccessDTO is one grant of a connection. Exactly one of Account and
+// AccountGroup names the subject; Group is the granted account's current group
+// membership, empty for a group grant and for an account outside any group.
+type TradingAccessDTO struct {
+	Account      string `json:"account"`
+	AccountGroup string `json:"accountGroup"`
+	VenueAccount string `json:"venueAccount"`
+	Group        string `json:"group"`
+}
+
+// ToTradingDTO encodes the trading runtime state. Empty provider and
+// connection lists produce empty JSON arrays.
+func ToTradingDTO(status backend.TradingStatus) TradingDTO {
+	out := TradingDTO{
+		Providers:   make([]TradingProviderDTO, 0, len(status.Providers)),
+		Connections: make([]TradingConnectionDTO, 0, len(status.Connections)),
+	}
+	for _, p := range status.Providers {
+		out.Providers = append(out.Providers, TradingProviderDTO{
+			Type: p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
+			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
+			UnlinkedFees: p.UnlinkedFees,
+		})
+	}
+	for _, c := range status.Connections {
+		out.Connections = append(out.Connections, ToTradingConnectionDTO(c))
+	}
+	return out
+}
+
+// ToTradingConnectionDTO encodes one trading connection with the error and
+// diagnostics the backend reports; no diagnostics give an empty JSON array.
+func ToTradingConnectionDTO(c backend.TradingConnectionStatus) TradingConnectionDTO {
+	out := TradingConnectionDTO{
+		ID: c.ExternalID.String(), Provider: c.Provider, Label: c.Label,
+		Mode: c.Mode, Enabled: c.Enabled, VenueIdentity: c.VenueIdentity,
+		FeeAccount: c.FeeAccount.String(), State: c.State, Error: c.Error,
+		Diagnostics: ToDiagnosticDTOs(c.Diagnostics),
+		Secrets:     make(map[string]bool, len(c.Secrets)),
+		Instruments: make([]TradingInstrumentDTO, 0, len(c.Instruments)),
+		Access:      make([]TradingAccessDTO, 0, len(c.Access)),
+	}
+	for key, present := range c.Secrets {
+		out.Secrets[key] = present
+	}
+	for _, i := range c.Instruments {
+		out.Instruments = append(out.Instruments, TradingInstrumentDTO{
+			ExternalSymbol: i.ExternalSymbol, BaseAsset: i.BaseAsset,
+			QuoteAsset: i.QuoteAsset, Enabled: i.Enabled,
+		})
+	}
+	for _, row := range c.Access {
+		out.Access = append(out.Access, TradingAccessDTO{
+			Account: row.Access.Account.String(), AccountGroup: row.Access.AccountGroup,
+			VenueAccount: row.Access.VenueAccount, Group: row.Group,
+		})
+	}
+	return out
+}
+
+// DiagnosticActionDTO is one operator action a diagnostic offers.
+type DiagnosticActionDTO struct {
+	Type   string `json:"type"`
+	Target string `json:"target,omitempty"`
+}
+
+// DiagnosticDTO is the wire representation of one health diagnostic.
+type DiagnosticDTO struct {
+	Level       string                `json:"level"`
+	Code        string                `json:"code"`
+	Kind        string                `json:"kind"`
+	Title       string                `json:"title"`
+	Detail      string                `json:"detail"`
+	Remediation string                `json:"remediation,omitempty"`
+	Instrument  string                `json:"instrument,omitempty"`
+	Actions     []DiagnosticActionDTO `json:"actions,omitempty"`
+	At          string                `json:"at"`
+}
+
+// ToDiagnosticDTOs encodes diagnostics. No diagnostics produce an empty
+// non-nil slice; a diagnostic without actions carries no actions member.
+func ToDiagnosticDTOs(diags []health.Diagnostic) []DiagnosticDTO {
+	out := make([]DiagnosticDTO, 0, len(diags))
+	for _, diag := range diags {
+		var actions []DiagnosticActionDTO
+		if len(diag.Actions) > 0 {
+			actions = make([]DiagnosticActionDTO, 0, len(diag.Actions))
+			for _, a := range diag.Actions {
+				actions = append(actions, DiagnosticActionDTO{
+					Type:   a.Type,
+					Target: a.Target,
+				})
+			}
+		}
+		out = append(out, DiagnosticDTO{
+			Level:       diag.Level,
+			Code:        diag.Code,
+			Kind:        diag.Kind,
+			Title:       diag.Title,
+			Detail:      diag.Detail,
+			Remediation: diag.Remediation,
+			Instrument:  diag.Instrument,
+			Actions:     actions,
+			At:          diag.At.Format(time.RFC3339Nano),
+		})
+	}
+	return out
+}
+
+// CredentialStorageDTO is the wire representation of how stored credentials
+// sit at rest, shared by the REST and MCP reports of it. It never carries a
+// credential or a key name, and all three flags are always present.
+type CredentialStorageDTO struct {
+	CredentialsSealed       bool `json:"credentialsSealed"`
+	PlaintextTradingKeys    bool `json:"plaintextTradingKeys"`
+	PlaintextMarketDataKeys bool `json:"plaintextMarketDataKeys"`
+}
+
+// ToCredentialStorageDTO encodes a credential storage report.
+func ToCredentialStorageDTO(storage backend.CredentialStorage) CredentialStorageDTO {
+	return CredentialStorageDTO{
+		CredentialsSealed:       storage.Sealed,
+		PlaintextTradingKeys:    storage.PlaintextTradingKeys,
+		PlaintextMarketDataKeys: storage.PlaintextMarketDataKeys,
+	}
+}
+
+func writeDestinationAmbiguousErr(w http.ResponseWriter, public PublicError, err error) {
 	var destinations []backend.TradingDestinationStatus
 	var typed *backend.DestinationAmbiguousError
 	if errors.As(err, &typed) {
 		destinations = typed.Candidates
 	}
-	WriteJSON(w, http.StatusConflict, map[string]any{
+	WriteJSON(w, public.Status, map[string]any{
 		"error": map[string]any{
-			"code": "destination_ambiguous", "message": domain.ErrDestinationAmbiguous.Error(),
+			"code": public.Code, "message": public.Message,
 			"candidates": ToTradingDestinationDTOs(destinations),
 		},
 	})
@@ -563,7 +786,7 @@ func writeProblem(w http.ResponseWriter, status int, detail string, item Problem
 	}
 }
 
-func writeHasDependentsErr(w http.ResponseWriter, err error) {
+func writeHasDependentsErr(w http.ResponseWriter, public PublicError, err error) {
 	var typed domain.HasDependentsError
 	if !errors.As(err, &typed) {
 		typed = domain.HasDependentsError{}
@@ -575,10 +798,10 @@ func writeHasDependentsErr(w http.ResponseWriter, err error) {
 			"count": dep.Count,
 		})
 	}
-	WriteJSON(w, http.StatusConflict, map[string]any{
+	WriteJSON(w, public.Status, map[string]any{
 		"error": map[string]any{
-			"code":       "has_dependents",
-			"message":    domain.ErrHasDependents.Error(),
+			"code":       public.Code,
+			"message":    public.Message,
 			"dependents": dependents,
 		},
 	})
@@ -587,34 +810,29 @@ func writeHasDependentsErr(w http.ResponseWriter, err error) {
 // writeAccountMissingErr reports a request that named an unknown account and
 // asked to reject it. The account code travels as its own envelope field so a
 // client matches on structure rather than on the human-readable message.
-func writeAccountMissingErr(w http.ResponseWriter, err error) {
+func writeAccountMissingErr(w http.ResponseWriter, public PublicError, err error) {
 	var typed domain.AccountMissingError
 	if !errors.As(err, &typed) {
 		typed = domain.AccountMissingError{}
 	}
-	WriteJSON(w, http.StatusNotFound, map[string]any{
+	WriteJSON(w, public.Status, map[string]any{
 		"error": map[string]any{
-			"code":    "account_missing",
-			"message": err.Error(),
+			"code":    public.Code,
+			"message": public.Message,
 			"account": typed.Account.String(),
 		},
 	})
 }
 
-func isCurrencyChangeBlocked(err error) bool {
+// writeCurrencyChangeBlockedErr adds the blocked target to the error body.
+// DescribeErr reports currency_change_blocked only for a typed
+// CurrencyChangeBlockedError of the account or account group scope.
+func writeCurrencyChangeBlockedErr(w http.ResponseWriter, public PublicError, err error) {
 	var typed domain.CurrencyChangeBlockedError
-	return errors.As(err, &typed)
-}
-
-func writeCurrencyChangeBlockedErr(w http.ResponseWriter, err error) {
-	var typed domain.CurrencyChangeBlockedError
-	if !errors.As(err, &typed) {
-		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
-		return
-	}
+	errors.As(err, &typed)
 	errorBody := map[string]any{
-		"code":    "currency_change_blocked",
-		"message": err.Error(),
+		"code":    public.Code,
+		"message": public.Message,
 	}
 	switch typed.Scope {
 	case domain.ScopeAccount:
@@ -627,14 +845,11 @@ func writeCurrencyChangeBlockedErr(w http.ResponseWriter, err error) {
 		errorBody["group"] = typed.TargetID
 		errorBody["path"] = "groups." + typed.TargetID + ".currency"
 		errorBody["constraint"] = "all_members_economically_empty"
-	default:
-		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
-		return
 	}
 	if errors.Is(typed, domain.ErrCurrencyValuedLimit) {
 		errorBody["constraint"] = "currency_valued_limit"
 	}
-	WriteJSON(w, http.StatusConflict, map[string]any{"error": errorBody})
+	WriteJSON(w, public.Status, map[string]any{"error": errorBody})
 }
 
 // WriteValidationErr writes a syntactically valid request constraint failure.

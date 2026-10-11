@@ -141,8 +141,9 @@ func TestWriteErrDestinationCandidates(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	WriteErr(rec, fmt.Errorf("wrapped: %w", &backend.DestinationAmbiguousError{Candidates: []backend.TradingDestinationStatus{
-		{Connection: id, Label: "Paper", Provider: "alpaca", Mode: domain.TradingModePaper, Enabled: true, VenueAccount: "sub-1", State: "running", Unavailable: "must be omitted"},
-		{Connection: id, Label: "Unavailable", Provider: "alpaca", Mode: domain.TradingModePaper, State: "unavailable", Unavailable: "keys unavailable"},
+		{Connection: id, Label: "Paper", Provider: "alpaca", Mode: domain.TradingModePaper, Enabled: true, VenueAccount: "sub-1", State: "running"},
+		{Connection: id, Label: "Unavailable", Provider: "alpaca", Mode: domain.TradingModePaper, State: "unavailable", Error: "keys unavailable"},
+		{Connection: id, Label: "Degraded", Provider: "alpaca", Mode: domain.TradingModePaper, State: "degraded", Error: "stream refused"},
 	}}))
 	if rec.Code != 409 {
 		t.Fatalf("status=%d", rec.Code)
@@ -156,7 +157,7 @@ func TestWriteErrDestinationCandidates(t *testing.T) {
 		t.Fatalf("body=%s", rec.Body)
 	}
 	candidates := e["candidates"].([]any)
-	if len(candidates) != 2 {
+	if len(candidates) != 3 {
 		t.Fatalf("candidates=%v", candidates)
 	}
 	first := candidates[0].(map[string]any)
@@ -166,6 +167,10 @@ func TestWriteErrDestinationCandidates(t *testing.T) {
 	second := candidates[1].(map[string]any)
 	if len(second) != 8 || second["error"] != "keys unavailable" {
 		t.Fatalf("candidate=%v", second)
+	}
+	third := candidates[2].(map[string]any)
+	if len(third) != 8 || third["state"] != "degraded" || third["error"] != "stream refused" {
+		t.Fatalf("candidate=%v", third)
 	}
 }
 

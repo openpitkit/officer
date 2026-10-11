@@ -22,10 +22,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	"go.openpit.dev/officer/framework/store"
 )
 
@@ -98,10 +100,30 @@ type Runtime struct {
 	wg          sync.WaitGroup
 }
 
-// ConnectionState reports why a held worker cannot reach its venue.
-// Unavailable is empty while the worker is available.
-type ConnectionState struct {
-	Unavailable string
+// ConnectionState is the health of a held worker's venue connection.
+type ConnectionState string
+
+const (
+	// ConnectionRunning means the worker runs and its connector reports no
+	// failure.
+	ConnectionRunning ConnectionState = "running"
+	// ConnectionDegraded means the worker runs and still sends, but its
+	// connector reports a stream failure; Error is the latest one.
+	ConnectionDegraded ConnectionState = "degraded"
+	// ConnectionUnavailable means the worker cannot reach its venue and
+	// refuses sends; Error says why.
+	ConnectionUnavailable ConnectionState = "unavailable"
+)
+
+// ConnectionStatus is a held worker's state with its error and diagnostics.
+// Error is empty while State is ConnectionRunning; otherwise it carries the
+// unavailable error or the connector's latest failure message, empty only if
+// a connector breaks its contract to send a non-empty one. Diagnostics are
+// oldest first, at most 20 (the cap health.Record applies).
+type ConnectionStatus struct {
+	State       ConnectionState
+	Error       string
+	Diagnostics []health.Diagnostic
 }
 
 type worker struct {
@@ -114,6 +136,16 @@ type worker struct {
 	reconcileAllPending bool
 	feeCursor           string
 	unavailable         error // Protected by Runtime.mu.
+	// streamFailed is set while the connector's latest status report is a
+	// failure, and streamErr is that report's message. Both protected by
+	// Runtime.mu.
+	streamFailed bool
+	streamErr    string
+	diagnostics  []health.Diagnostic // Protected by Runtime.mu.
+	// retired is set by stop when it removes the worker from
+	// Runtime.workers; a retired worker drops its connector's reports.
+	// Protected by Runtime.mu.
+	retired bool
 }
 
 type task struct {
@@ -199,16 +231,69 @@ func (r *Runtime) start(ctx context.Context) error {
 			w.pending[link.ClientOrderID] = struct{}{}
 		}
 		w.connector, err = r.registry.Build(c)
-		if err == nil {
-			w.events, err = w.connector.Subscribe(runCtx)
-			if err == nil && w.events == nil {
-				err = errors.New("trading: Subscribe returned no event channel")
-			}
-		}
 		if err != nil {
-			w.unavailable = err
-			r.logger.Error("trading connection unavailable",
-				"connection", c.ExternalID, "error", w.unavailable)
+			// Every rebuild, including the one that saving credentials
+			// makes, fails for an unregistered provider, so its
+			// remediation promises no retry.
+			if _, registered := r.registry.Lookup(c.Provider); !registered {
+				w.setUnavailable(err, health.Diagnostic{
+					Code:  health.CodeUnsupportedProvider,
+					Kind:  health.DiagKindConfig,
+					Title: "Unsupported trading provider",
+					Remediation: "Officer refuses sends through this " +
+						"connection. This Officer build has no such trading " +
+						"provider, so the connection cannot run until one " +
+						"is registered.",
+				})
+				continue
+			}
+			w.setUnavailable(err, health.Diagnostic{
+				Code:  health.CodeInvalidProviderConfig,
+				Kind:  health.DiagKindConfig,
+				Title: "Invalid connection configuration",
+				Remediation: "Officer refuses sends through this connection. " +
+					"Save corrected credentials, or disable and re-enable " +
+					"the connection, to retry. If the error names no " +
+					"configuration problem, this is an internal issue - " +
+					"please report it.",
+			})
+			continue
+		}
+		// Wire the reporters before Subscribe, as market data does. Both
+		// take Runtime.mu themselves, and no lock is held while Subscribe
+		// runs, so a connector that reports synchronously cannot deadlock.
+		// Status lives on the worker, not in a map keyed by connection, so
+		// a report that arrives before the worker is published is kept.
+		// Stop retires the worker, so a report from a previous
+		// generation's connector is dropped, neither recorded nor logged.
+		if sr, ok := w.connector.(health.StatusReporting); ok {
+			sr.SetStatusReporter(w.reportStatus)
+		}
+		if dr, ok := w.connector.(health.DiagnosticReporting); ok {
+			dr.SetDiagnosticReporter(w.reportDiagnostic)
+		}
+		w.events, err = w.connector.Subscribe(runCtx)
+		switch {
+		case err != nil:
+			w.setUnavailable(err, health.Diagnostic{
+				Code:  health.CodeConnectionError,
+				Kind:  health.DiagKindEnvironment,
+				Title: "Venue stream failed to start",
+				Remediation: "Officer refuses sends through this connection. " +
+					"Check that the venue is reachable and that the " +
+					"connection's credentials are valid, then disable and " +
+					"re-enable the connection to retry.",
+			})
+		case w.events == nil:
+			// A connector defect, not the venue or the environment.
+			w.setUnavailable(errors.New("trading: Subscribe returned no event channel"), health.Diagnostic{
+				Code:  health.CodeInternalError,
+				Kind:  health.DiagKindProvider,
+				Title: "Internal error",
+				Remediation: "Officer refuses sends through this connection. " +
+					"This is an internal issue in the venue connector; " +
+					"please report it.",
+			})
 		}
 	}
 	r.mu.Lock()
@@ -244,6 +329,9 @@ func (r *Runtime) stop() {
 	r.cancel()
 	workers := r.workers
 	r.workers = nil
+	for _, w := range workers {
+		w.retired = true
+	}
 	r.mu.Unlock()
 	r.wg.Wait()
 	for _, w := range workers {
@@ -269,23 +357,38 @@ func (r *Runtime) Restart() error {
 	return nil
 }
 
-// ConnectionStates snapshots every worker held by the running generation.
+// ConnectionStatuses snapshots every worker held by the running generation.
 // Connections without workers and stopped runtimes are absent from the map.
-func (r *Runtime) ConnectionStates() map[domain.ExternalID]ConnectionState {
+// An unavailable worker is ConnectionUnavailable even while its connector
+// also reports a stream failure. Each status owns its Diagnostics and their
+// Actions.
+func (r *Runtime) ConnectionStatuses() map[domain.ExternalID]ConnectionStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.started || r.ctx.Err() != nil {
-		return map[domain.ExternalID]ConnectionState{}
+		return map[domain.ExternalID]ConnectionStatus{}
 	}
-	states := make(map[domain.ExternalID]ConnectionState, len(r.workers))
+	statuses := make(map[domain.ExternalID]ConnectionStatus, len(r.workers))
 	for id, w := range r.workers {
-		state := ConnectionState{}
-		if w.unavailable != nil {
-			state.Unavailable = w.unavailable.Error()
+		// A copy down to the Actions, so a later in-place At refresh by
+		// health.Record cannot race the caller and a caller's write
+		// cannot reach the worker's diagnostics.
+		status := ConnectionStatus{
+			State:       ConnectionRunning,
+			Diagnostics: slices.Clone(w.diagnostics),
 		}
-		states[id] = state
+		for i := range status.Diagnostics {
+			status.Diagnostics[i].Actions = slices.Clone(status.Diagnostics[i].Actions)
+		}
+		switch {
+		case w.unavailable != nil:
+			status.State, status.Error = ConnectionUnavailable, w.unavailable.Error()
+		case w.streamFailed:
+			status.State, status.Error = ConnectionDegraded, w.streamErr
+		}
+		statuses[id] = status
 	}
-	return states
+	return statuses
 }
 
 // PreCheck checks a draft's destination and optional venue rules, without
@@ -431,10 +534,14 @@ func (w *worker) run() {
 			if !ok {
 				w.events = nil
 				if w.r.ctx.Err() == nil {
-					w.r.mu.Lock()
-					w.unavailable = errors.New("trading: venue event stream closed")
-					w.r.mu.Unlock()
-					w.log(slog.LevelError, "", "venue event stream closed", nil)
+					w.setUnavailable(errors.New("trading: venue event stream closed"), health.Diagnostic{
+						Code:  health.CodeConnectionError,
+						Kind:  health.DiagKindProvider,
+						Title: "Venue stream closed",
+						Remediation: "Officer refuses sends through this " +
+							"connection until it restarts. Disable and " +
+							"re-enable the connection to restart it.",
+					})
 				}
 				continue
 			}
@@ -664,4 +771,56 @@ func (w *worker) log(level slog.Level, coid, message string, err error) {
 		"connection", w.connection.ExternalID,
 		"client_order_id", coid,
 		"error", err)
+}
+
+// setUnavailable makes the worker refuse sends with err and records diag at
+// level DiagError with err's text as its Detail.
+func (w *worker) setUnavailable(err error, diag health.Diagnostic) {
+	w.r.mu.Lock()
+	defer w.r.mu.Unlock()
+	w.unavailable = err
+	diag.Level, diag.Detail = health.DiagError, err.Error()
+	w.recordLocked(diag)
+}
+
+// reportStatus is the worker's health.StatusReporter. A failure degrades the
+// worker without gating sends, whatever its message; ok clears it and keeps
+// the diagnostics. A retired worker drops the report.
+func (w *worker) reportStatus(ok bool, errMsg string) {
+	w.r.mu.Lock()
+	defer w.r.mu.Unlock()
+	if w.retired {
+		return
+	}
+	if ok {
+		w.streamFailed, w.streamErr = false, ""
+		return
+	}
+	w.streamFailed, w.streamErr = true, errMsg
+	w.recordLocked(health.Diagnostic{
+		Level:  health.DiagError,
+		Code:   health.CodeConnectionError,
+		Kind:   health.DiagKindEnvironment,
+		Title:  "Venue stream error",
+		Detail: errMsg,
+		Remediation: "Officer keeps reconnecting. Check that the venue is " +
+			"reachable and that the connection's credentials are valid.",
+	})
+}
+
+// reportDiagnostic is the worker's health.DiagnosticReporter. A retired
+// worker drops the report.
+func (w *worker) reportDiagnostic(diag health.Diagnostic) {
+	w.r.mu.Lock()
+	defer w.r.mu.Unlock()
+	if w.retired {
+		return
+	}
+	w.recordLocked(diag)
+}
+
+// recordLocked records diag in the worker's diagnostics. The caller holds
+// Runtime.mu.
+func (w *worker) recordLocked(diag health.Diagnostic) {
+	w.diagnostics = health.Record(w.r.logger, w.diagnostics, diag, "connection", w.connection.ExternalID)
 }

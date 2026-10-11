@@ -32,6 +32,7 @@ is a command or under `internal/`, and cannot be imported:
 - `framework/businesscsv` - the business-entity CSV and ZIP format.
 - `framework/domain` - the transport-agnostic value types.
 - `framework/engine` - the seam between the control plane and an engine.
+- `framework/health` - the diagnostic model shared by market data and trading.
 - `framework/marketdata` - market-data connectors, providers, and registry.
 - `framework/mcp` - the MCP tool registry and the guard around every tool call.
 - `framework/mcp/catalog` - the MCP command catalogue, without the MCP SDK.

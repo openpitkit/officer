@@ -18,6 +18,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
@@ -137,7 +139,7 @@ func assertTradingWire(t *testing.T, got json.RawMessage, want string) {
 }
 
 func TestTradingToolsSuccess(t *testing.T) {
-	const connection = `{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"","state":"running","secrets":{"key":true},"instruments":[],"access":[]}`
+	const connection = `{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"","state":"running","diagnostics":[],"secrets":{"key":true},"instruments":[],"access":[]}`
 	cases := []struct {
 		name  string
 		input map[string]any
@@ -145,7 +147,7 @@ func TestTradingToolsSuccess(t *testing.T) {
 		calls []string
 		args  []any
 	}{
-		{"get_trading", map[string]any{}, `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[` + connection + `],"credentialsSealed":false}`, []string{"get"}, nil},
+		{"get_trading", map[string]any{}, `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[` + connection + `]}`, []string{"get"}, nil},
 		{"create_trading_connection", map[string]any{"provider": "alpaca", "label": "Paper", "mode": "paper", "credentials": map[string]any{"z": "secret-value", "a": "first-value"}, "enabled": true}, `{"connection":` + connection + `}`, []string{"create", "get"}, []any{domain.TradingConnection{Provider: "alpaca", Label: "Paper", Mode: domain.TradingModePaper, Credentials: `{"a":"first-value","z":"secret-value"}`, Enabled: true}}},
 		{"update_trading_connection", map[string]any{"connection": "conn", "label": "Paper", "credentials": map[string]any{"z": "secret-value", "a": "first-value"}}, `{"connection":` + connection + `}`, []string{"update", "get"}, []any{"conn", "Paper", `{"a":"first-value","z":"secret-value"}`}},
 		{"set_trading_connection_enabled", map[string]any{"connection": "conn", "enabled": false}, `{"connection":"conn","enabled":false}`, []string{"enable"}, []any{"conn", false}},
@@ -179,13 +181,13 @@ func TestTradingOptionalAndEmptyShapes(t *testing.T) {
 	t.Run("get-empty", func(t *testing.T) {
 		res := callTool[map[string]any](t, &tradingSource{}, "get_trading", map[string]any{})
 		requireNotToolError(t, res.IsError)
-		assertTradingWire(t, res.Wire, `{"providers":[],"connections":[],"credentialsSealed":false}`)
+		assertTradingWire(t, res.Wire, `{"providers":[],"connections":[]}`)
 	})
 	t.Run("populated-connection", func(t *testing.T) {
 		src := tradingFixture()
 		c := &src.status.Connections[0]
 		c.State = "unavailable"
-		c.Unavailable = "offline"
+		c.Error = "offline"
 		c.FeeAccount = domain.AccountID("fees")
 		c.Instruments = []domain.TradingInstrument{{ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}}
 		c.Access = []store.TradingAccessListRow{
@@ -193,13 +195,52 @@ func TestTradingOptionalAndEmptyShapes(t *testing.T) {
 			{Access: domain.TradingAccess{Account: domain.AccountID("acc"), VenueAccount: "remote"}, Group: "desks"},
 			{Access: domain.TradingAccess{Account: domain.AccountID("solo")}},
 		}
-		src.status.CredentialsSealed = true
 		res := callTool[map[string]any](t, src, "get_trading", map[string]any{})
 		requireNotToolError(t, res.IsError)
-		assertTradingWire(t, res.Wire, `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"fees","state":"unavailable","error":"offline","secrets":{"key":true},"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[`+
+		assertTradingWire(t, res.Wire, `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"fees","state":"unavailable","error":"offline","diagnostics":[],"secrets":{"key":true},"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[`+
 			`{"account":"","accountGroup":"desks","venueAccount":"","group":""},`+
 			`{"account":"acc","accountGroup":"","venueAccount":"remote","group":"desks"},`+
-			`{"account":"solo","accountGroup":"","venueAccount":"","group":""}]}],"credentialsSealed":true}`)
+			`{"account":"solo","accountGroup":"","venueAccount":"","group":""}]}]}`)
+	})
+	t.Run("degraded-connection-matches-rest", func(t *testing.T) {
+		src := tradingFixture()
+		c := &src.status.Connections[0]
+		c.State, c.Error = "degraded", "trade updates: stream refused"
+		c.Diagnostics = []health.Diagnostic{{
+			At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Level: health.DiagWarn,
+			Code: health.CodeConnectionError, Kind: health.DiagKindEnvironment,
+			Title: "Trade updates stream refused", Detail: "stream refused",
+			Remediation: "Check the keys.",
+			Actions:     []health.DiagnosticAction{{Type: health.ActionOpenSymbols, Target: "AAPL"}},
+		}}
+		res := callTool[map[string]any](t, src, "get_trading", map[string]any{})
+		requireNotToolError(t, res.IsError)
+		var got struct{ Connections []json.RawMessage }
+		if err := json.Unmarshal(res.Wire, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Connections) != 1 {
+			t.Fatalf("connections = %s, want one", res.Wire)
+		}
+		// The client decodes structured content into a map, so both sides are
+		// compared in the canonical encoding of that map.
+		rest, err := json.Marshal(httpx.ToTradingConnectionDTO(*c))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var restValue any
+		if err := json.Unmarshal(rest, &restValue); err != nil {
+			t.Fatal(err)
+		}
+		if rest, err = json.Marshal(restValue); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got.Connections[0], rest) {
+			t.Fatalf("MCP connection = %s, want the REST encoding %s", got.Connections[0], rest)
+		}
+		assertTradingWire(t, got.Connections[0], `{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"","state":"degraded","error":"trade updates: stream refused","diagnostics":[`+
+			`{"level":"warn","code":"connection_error","kind":"environment","title":"Trade updates stream refused","detail":"stream refused","remediation":"Check the keys.","actions":[{"type":"open_symbols","target":"AAPL"}],"at":"2026-01-02T03:04:05Z"}],`+
+			`"secrets":{"key":true},"instruments":[],"access":[]}`)
 	})
 	t.Run("verification-details", func(t *testing.T) {
 		src := tradingFixture()
@@ -235,7 +276,7 @@ func TestTradingOptionalAndEmptyShapes(t *testing.T) {
 	t.Run("destination-error", func(t *testing.T) {
 		src := tradingFixture()
 		src.destinations[0].State = "unavailable"
-		src.destinations[0].Unavailable = "offline"
+		src.destinations[0].Error = "offline"
 		res := callTool[map[string]any](t, src, "list_trading_destinations", map[string]any{"account": "acc", "mode": "live"})
 		requireNotToolError(t, res.IsError)
 		assertTradingWire(t, res.Wire, `{"destinations":[{"connection":"conn","label":"Paper","provider":"alpaca","mode":"paper","enabled":true,"venueAccount":"","state":"unavailable","error":"offline"}]}`)
@@ -332,7 +373,7 @@ func TestTradingRequiredFields(t *testing.T) {
 			}
 			res := callTool[map[string]any](t, src, tool.name, map[string]any{"connection": "conn", "account": "acc", "accountGroup": "desks"})
 			requireToolError(t, res.IsError)
-			if got, want := textContent(res.Content), strings.ReplaceAll(tool.name, "_", " ")+" failed: "+src.err.Error(); got != want {
+			if got, want := textContent(res.Content), "validation: "+src.err.Error(); got != want {
 				t.Fatalf("refusal: %q, want %q", got, want)
 			}
 			if !reflect.DeepEqual(src.calls, []string{tool.call}) || !reflect.DeepEqual(src.arguments, tool.args) {
@@ -358,12 +399,6 @@ func TestTradingCredentialsStayWriteOnly(t *testing.T) {
 				if failure == "snapshot" {
 					src.snapshotErr = fmt.Errorf("snapshot error %s", secret)
 				}
-				src.status.Connections[0].State = "unavailable"
-				src.status.Connections[0].Unavailable = "venue rejected " + secret + "-long"
-				src.status.Connections[0].Access = []store.TradingAccessListRow{
-					{Access: domain.TradingAccess{AccountGroup: secret}},
-					{Access: domain.TradingAccess{Account: domain.AccountID(secret), VenueAccount: secret}, Group: secret},
-				}
 				res := callTool[map[string]any](t, src, name, input)
 				wire, err := json.Marshal(res)
 				if err != nil {
@@ -376,8 +411,12 @@ func TestTradingCredentialsStayWriteOnly(t *testing.T) {
 					requireNotToolError(t, res.IsError)
 				} else {
 					requireToolError(t, res.IsError)
-					if failure == "service" && !strings.HasPrefix(textContent(res.Content), "live_trading_unavailable: ") {
-						t.Fatal("typed prefix lost during redaction")
+					want := "internal: internal error"
+					if failure == "service" {
+						want = "live_trading_unavailable: live trading unavailable"
+					}
+					if got := textContent(res.Content); got != want {
+						t.Fatalf("refusal: %q, want %q", got, want)
 					}
 				}
 			})
@@ -402,13 +441,10 @@ func TestTradingCredentialEscaping(t *testing.T) {
 			}
 			res := callTool[map[string]any](t, src, name, input)
 			requireToolError(t, res.IsError)
-			text := textContent(res.Content)
-			encoded, err := json.Marshal(secret)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(text, secret) || strings.Contains(text, string(encoded[1:len(encoded)-1])) || !strings.Contains(text, "[REDACTED]") {
-				t.Fatal("credential escaped into the error text")
+			// A Source error that is not a domain error keeps its text, and
+			// the credential in it, out of the tool error.
+			if got := textContent(res.Content); got != "internal: internal error" {
+				t.Fatalf("credential escaped into the error text: %q", got)
 			}
 		})
 	}
@@ -504,8 +540,8 @@ func TestTradingInvalidInputs(t *testing.T) {
 			}
 			res := callTool[map[string]any](t, src, name, input)
 			requireToolError(t, res.IsError)
-			if !strings.Contains(textContent(res.Content), "missing from the snapshot") {
-				t.Fatal("missing snapshot was not refused")
+			if got := textContent(res.Content); got != "internal: internal error" {
+				t.Fatalf("missing snapshot was not refused: %q", got)
 			}
 		})
 	}
@@ -547,8 +583,8 @@ func TestGetOrderVenueShape(t *testing.T) {
 		src := &fakeSource{orderDetail: domain.OrderDetail{Venue: &domain.VenueOrder{Route: "[]"}}}
 		res := callTool[map[string]any](t, src, "get_order", map[string]any{"id": "order"})
 		requireToolError(t, res.IsError)
-		if textContent(res.Content) != "stored venue order route is invalid" {
-			t.Fatal("invalid route not refused")
+		if got := textContent(res.Content); got != "internal: internal error" {
+			t.Fatalf("invalid route error = %q, want internal: internal error", got)
 		}
 	})
 }
@@ -634,7 +670,7 @@ func TestTradingTypedRefusals(t *testing.T) {
 			src.err = fmt.Errorf("venue refused: %w", tc.err)
 			res := callTool[map[string]any](t, src, "check_trading_connection", map[string]any{"connection": "conn"})
 			requireToolError(t, res.IsError)
-			if textContent(res.Content) != tc.prefix+src.err.Error() {
+			if textContent(res.Content) != tc.prefix+tc.err.Error() {
 				t.Fatalf("typed refusal: %q", textContent(res.Content))
 			}
 		})
@@ -644,7 +680,7 @@ func TestTradingTypedRefusals(t *testing.T) {
 		src.err = fmt.Errorf("group grant: %w", domain.ErrFeeAccountRequired)
 		res := callTool[map[string]any](t, src, "grant_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"})
 		requireToolError(t, res.IsError)
-		if textContent(res.Content) != "fee_account_required: "+src.err.Error() {
+		if textContent(res.Content) != "fee_account_required: "+domain.ErrFeeAccountRequired.Error() {
 			t.Fatalf("group grant refusal: %q", textContent(res.Content))
 		}
 	})
@@ -654,7 +690,7 @@ func TestTradingTypedRefusals(t *testing.T) {
 			src := &approvalFakeSource{confirmErr: err, cancelErr: err}
 			res := callTool[map[string]any](t, src, name, map[string]any{"id": "order"})
 			requireToolError(t, res.IsError)
-			if textContent(res.Content) != "venue_order_managed: "+err.Error() {
+			if textContent(res.Content) != "venue_order_managed: "+domain.ErrVenueOrderManaged.Error() {
 				t.Fatalf("venue refusal: %q", textContent(res.Content))
 			}
 		})
@@ -690,8 +726,7 @@ func TestTradingSourceFailures(t *testing.T) {
 			src.snapshotErr = src.err
 			res := callTool[map[string]any](t, src, tc.name, tc.input)
 			requireToolError(t, res.IsError)
-			expected := strings.ReplaceAll(tc.name, "_", " ") + " failed: offline"
-			if textContent(res.Content) != expected {
+			if textContent(res.Content) != "internal: internal error" {
 				t.Fatalf("failure: %q", textContent(res.Content))
 			}
 		})

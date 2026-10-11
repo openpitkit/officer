@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ import (
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
@@ -36,7 +38,7 @@ import (
 type tradingTestRuntime struct {
 	TradingRuntime
 	providers                                  []trading.Provider
-	states                                     map[domain.ExternalID]trading.ConnectionState
+	states                                     map[domain.ExternalID]trading.ConnectionStatus
 	identity                                   string
 	checkErr, restartErr, verifyErr, searchErr error
 	checks                                     []domain.TradingConnection
@@ -47,7 +49,7 @@ type tradingTestRuntime struct {
 }
 
 func (rt *tradingTestRuntime) Providers() []trading.Provider { return rt.providers }
-func (rt *tradingTestRuntime) ConnectionStates() map[domain.ExternalID]trading.ConnectionState {
+func (rt *tradingTestRuntime) ConnectionStatuses() map[domain.ExternalID]trading.ConnectionStatus {
 	return rt.states
 }
 func (rt *tradingTestRuntime) CheckAccount(_ context.Context, c domain.TradingConnection) (trading.AccountInfo, error) {
@@ -389,6 +391,20 @@ func TestTradingUpdate(t *testing.T) {
 	}
 }
 
+func TestTradingUpdateKeepsCredentialIntegersExact(t *testing.T) {
+	s, n, _ := newTradingTestService(t)
+	n.connections = []domain.TradingConnection{tradingTestConnection()}
+	n.connections[0].Credentials = `{"apiKey":"test-key-value","apiSecret":"test-secret-value","stored":9007199254740993}`
+	// 2^53+1 is the smallest integer a float64 round trip rewrites.
+	if err := s.UpdateTradingConnectionSettings(systemCtx(), "connection-1", "", `{"apiKey":"new-key","updated":9007199254740993}`); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"apiKey":"new-key","apiSecret":"test-secret-value","stored":9007199254740993,"updated":9007199254740993}`
+	if got := n.connections[0].Credentials; got != want {
+		t.Fatalf("credentials = %s, want %s", got, want)
+	}
+}
+
 func TestTradingCreateRefusesFeeAccountBeforeVenue(t *testing.T) {
 	s, n, rt := newTradingTestService(t)
 	c := tradingTestConnection()
@@ -448,16 +464,123 @@ func TestTradingStatusRedactsOverlappingCredentials(t *testing.T) {
 	// Array order makes the former short-first replacement deterministic.
 	c.Credentials = `{"values":["overlap","overlap-long"],"empty":""}`
 	n.connections = []domain.TradingConnection{c}
-	rt.states = map[domain.ExternalID]trading.ConnectionState{
-		c.ExternalID: {Unavailable: "denied overlap-long overlap"},
+	rt.states = map[domain.ExternalID]trading.ConnectionStatus{
+		c.ExternalID: {State: trading.ConnectionUnavailable, Error: "denied overlap-long overlap"},
 	}
 	status, err := s.GetTrading(systemCtx())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := status.Connections[0].Unavailable; got != "denied [redacted] [redacted]" {
+	if got := status.Connections[0].Error; got != "denied [redacted] [redacted]" {
 		t.Fatalf("overlapping credential redaction = %q", got)
 	}
+}
+
+// tradingTestEchoed is a credential value whose raw, JSON-escaped (HTML-escaped
+// or not), URL query-escaped and URL path-escaped spellings all differ.
+const tradingTestEchoed = `echo "q" \ <a&b> +c/d`
+
+// tradingTestEchoedCredentials stores tradingTestEchoed as the apiSecret.
+const tradingTestEchoedCredentials = `{"apiKey":"test-key-value","apiSecret":"echo \"q\" \\ <a&b> +c/d"}`
+
+type tradingTestSpelling struct{ form, text string }
+
+// tradingTestEchoedSpellings spells tradingTestEchoed in each form the backend
+// redacts. No row contains another, so each form is checked on its own.
+var tradingTestEchoedSpellings = []tradingTestSpelling{
+	{"raw", `echo "q" \ <a&b> +c/d`},
+	{"json", `echo \"q\" \\ \u003ca\u0026b\u003e +c/d`},
+	{"json_unescaped_html", `echo \"q\" \\ <a&b> +c/d`},
+	{"url_query", `echo+%22q%22+%5C+%3Ca%26b%3E+%2Bc%2Fd`},
+	{"url_path", `echo%20%22q%22%20%5C%20%3Ca&b%3E%20+c%2Fd`},
+}
+
+func tradingTestAssertRedacted(t *testing.T, where, text string, spellings []tradingTestSpelling) {
+	t.Helper()
+	for _, spelling := range spellings {
+		if strings.Contains(text, spelling.text) {
+			t.Fatalf("%s keeps the %s spelling: %q", where, spelling.form, text)
+		}
+	}
+	if !strings.Contains(text, "[redacted]") {
+		t.Fatalf("%s lacks the redaction placeholder: %q", where, text)
+	}
+}
+
+func TestTradingRedactsCredentialSpellings(t *testing.T) {
+	spellings := tradingTestEchoedSpellings
+	for _, spelling := range spellings {
+		t.Run(spelling.form, func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			c := tradingTestConnection()
+			c.Credentials = tradingTestEchoedCredentials
+			n.connections = []domain.TradingConnection{c}
+			cause := errors.New("venue echoed " + spelling.text)
+			rt.checkErr, rt.verifyErr, rt.searchErr = cause, cause, cause
+			echoed := func() []health.Diagnostic {
+				return []health.Diagnostic{{
+					Level: health.DiagError, Code: health.CodeConnectionError,
+					Kind:        health.DiagKindEnvironment,
+					Title:       "title " + spelling.text,
+					Detail:      "detail " + spelling.text,
+					Remediation: "remediation " + spelling.text,
+					Instrument:  "instrument " + spelling.text,
+					Actions: []health.DiagnosticAction{{
+						Type: health.ActionOpenSymbols, Target: "target " + spelling.text,
+					}},
+				}}
+			}
+			rt.states = map[domain.ExternalID]trading.ConnectionStatus{c.ExternalID: {
+				State: trading.ConnectionDegraded, Error: cause.Error(),
+				Diagnostics: echoed(),
+			}}
+			status, err := s.GetTrading(systemCtx())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := status.Connections[0]
+			tradingTestAssertRedacted(t, "connection error", got.Error, spellings)
+			if len(got.Diagnostics) != 1 || len(got.Diagnostics[0].Actions) != 1 {
+				t.Fatalf("diagnostics = %+v, want one with one action", got.Diagnostics)
+			}
+			diag := got.Diagnostics[0]
+			for where, text := range map[string]string{
+				"diagnostic title": diag.Title, "diagnostic detail": diag.Detail,
+				"diagnostic remediation":   diag.Remediation,
+				"diagnostic instrument":    diag.Instrument,
+				"diagnostic action target": diag.Actions[0].Target,
+			} {
+				tradingTestAssertRedacted(t, where, text, spellings)
+			}
+			if runtime := rt.states[c.ExternalID].Diagnostics; !reflect.DeepEqual(runtime, echoed()) {
+				t.Fatalf("runtime diagnostics were written: %+v", runtime)
+			}
+			_, checkErr := s.CheckTradingConnection(context.Background(), "connection-1")
+			_, verifyErr := s.VerifyTradingSymbol(context.Background(), "connection-1", "AAPL")
+			_, searchErr := s.SearchTradingSymbols(context.Background(), "connection-1", "AAPL")
+			for operation, err := range map[string]error{"check": checkErr, "verify": verifyErr, "search": searchErr} {
+				if !errors.Is(err, domain.ErrUpstream) {
+					t.Fatalf("%s error = %v, want upstream", operation, err)
+				}
+				tradingTestAssertRedacted(t, operation+" error", err.Error(), spellings)
+			}
+		})
+	}
+}
+
+func TestTradingRedactsTrimmedCredential(t *testing.T) {
+	s, n, rt := newTradingTestService(t)
+	c := tradingTestConnection()
+	c.Credentials = `{"apiKey":"test-key-value","apiSecret":" \techo \"q\" \\ <a&b> +c/d \n"}`
+	n.connections = []domain.TradingConnection{c}
+	// The provider trims the stored value before use, so the venue echoes the
+	// trimmed one.
+	rt.checkErr = errors.New("venue echoed " + url.QueryEscape(tradingTestEchoed))
+	_, err := s.CheckTradingConnection(context.Background(), "connection-1")
+	if !errors.Is(err, domain.ErrUpstream) {
+		t.Fatalf("upstream error = %v", err)
+	}
+	tradingTestAssertRedacted(t, "upstream error", err.Error(), tradingTestEchoedSpellings)
 }
 
 func TestTradingCreateCredentialRefusalIsValidation(t *testing.T) {
@@ -598,40 +721,81 @@ func TestTradingStatus(t *testing.T) {
 	n.access = []domain.TradingAccess{{Account: "acct-1", Connection: c.ExternalID}, {AccountGroup: "desk", Connection: c.ExternalID, VenueAccount: "remote-1"}}
 	n.groups = map[domain.AccountID]string{"acct-1": "desk"}
 	wantAccess := []store.TradingAccessListRow{{Access: n.access[0], Group: "desk"}, {Access: n.access[1]}}
-	rt.states = map[domain.ExternalID]trading.ConnectionState{c.ExternalID: {}, "connection-2": {Unavailable: "denied test-secret-value nested-secret"}}
-	for _, sealed := range []bool{true, false} {
-		n.sealed = sealed
-		got, err := s.GetTrading(systemCtx())
-		if err != nil {
-			t.Fatal(err)
+	rt.states = map[domain.ExternalID]trading.ConnectionStatus{c.ExternalID: {State: trading.ConnectionRunning}, "connection-2": {State: trading.ConnectionUnavailable, Error: "denied test-secret-value nested-secret"}}
+	got, err := s.GetTrading(systemCtx())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendering := fmt.Sprintf("%#v", got)
+	for _, secret := range []string{"test-secret-value", "test-key-value", "nested-secret"} {
+		if strings.Contains(rendering, secret) {
+			t.Fatal("status leaked credential value")
 		}
-		rendering := fmt.Sprintf("%#v", got)
-		for _, secret := range []string{"test-secret-value", "test-key-value", "nested-secret"} {
-			if strings.Contains(rendering, secret) {
-				t.Fatal("status leaked credential value")
+	}
+	if got.Connections[0].State != "running" || got.Connections[1].State != "unavailable" || got.Connections[2].State != "stopped" {
+		t.Fatal("runtime states were not mapped")
+	}
+	if got.Connections[1].Error != "denied [redacted] [redacted]" {
+		t.Fatalf("unavailable reason = %q", got.Connections[1].Error)
+	}
+	if !reflect.DeepEqual(got.Connections[0].Secrets, map[string]bool{"apiKey": true, "apiSecret": true, "nested": true}) {
+		t.Fatal("secret key presence is wrong")
+	}
+	if got.Connections[0].FeeAccount != "fee-account" || !reflect.DeepEqual(got.Connections[0].Instruments, n.instruments) {
+		t.Fatal("status lost configuration")
+	}
+	if !reflect.DeepEqual(got.Connections[0].Access, wantAccess) {
+		t.Fatalf("status access = %+v, want every grant with the granted account's group %+v", got.Connections[0].Access, wantAccess)
+	}
+	if len(got.Providers) != 1 || got.Providers[0] != (TradingProvider{Type: "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}) {
+		t.Fatal("provider capabilities were not mapped")
+	}
+}
+
+func TestTradingStatusRuntimeHealth(t *testing.T) {
+	first := health.Diagnostic{
+		At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Level: health.DiagWarn,
+		Code: health.CodeConnectionError, Kind: health.DiagKindEnvironment,
+		Title: "Trade updates stream refused", Detail: "stream refused",
+		Actions: []health.DiagnosticAction{{Type: health.ActionRestart}},
+	}
+	second := health.Diagnostic{
+		At: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC), Level: health.DiagError,
+		Code: health.CodeInternalError, Kind: health.DiagKindProvider,
+		Title: "Stream closed", Detail: "closed by venue",
+	}
+	for _, tc := range []struct {
+		name   string
+		status *trading.ConnectionStatus
+		state  string
+		err    string
+		diags  []health.Diagnostic
+	}{
+		{"running", &trading.ConnectionStatus{State: trading.ConnectionRunning, Diagnostics: []health.Diagnostic{first}}, "running", "", []health.Diagnostic{first}},
+		{"degraded", &trading.ConnectionStatus{State: trading.ConnectionDegraded, Error: "stream refused", Diagnostics: []health.Diagnostic{first, second}}, "degraded", "stream refused", []health.Diagnostic{first, second}},
+		{"unavailable", &trading.ConnectionStatus{State: trading.ConnectionUnavailable, Error: "offline"}, "unavailable", "offline", []health.Diagnostic{}},
+		{"stopped", nil, "stopped", "", []health.Diagnostic{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			c := tradingTestConnection()
+			n.connections = []domain.TradingConnection{c}
+			rt.states = map[domain.ExternalID]trading.ConnectionStatus{}
+			if tc.status != nil {
+				rt.states[c.ExternalID] = *tc.status
 			}
-		}
-		if got.CredentialsSealed != sealed {
-			t.Fatal("sealed flag did not pass through")
-		}
-		if got.Connections[0].State != "running" || got.Connections[1].State != "unavailable" || got.Connections[2].State != "stopped" {
-			t.Fatal("runtime states were not mapped")
-		}
-		if got.Connections[1].Unavailable != "denied [redacted] [redacted]" {
-			t.Fatalf("unavailable reason = %q", got.Connections[1].Unavailable)
-		}
-		if !reflect.DeepEqual(got.Connections[0].Secrets, map[string]bool{"apiKey": true, "apiSecret": true, "nested": true}) {
-			t.Fatal("secret key presence is wrong")
-		}
-		if got.Connections[0].FeeAccount != "fee-account" || !reflect.DeepEqual(got.Connections[0].Instruments, n.instruments) {
-			t.Fatal("status lost configuration")
-		}
-		if !reflect.DeepEqual(got.Connections[0].Access, wantAccess) {
-			t.Fatalf("status access = %+v, want every grant with the granted account's group %+v", got.Connections[0].Access, wantAccess)
-		}
-		if len(got.Providers) != 1 || got.Providers[0] != (TradingProvider{Type: "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}) {
-			t.Fatal("provider capabilities were not mapped")
-		}
+			got, err := s.GetTrading(systemCtx())
+			if err != nil {
+				t.Fatal(err)
+			}
+			connection := got.Connections[0]
+			if connection.State != tc.state || connection.Error != tc.err {
+				t.Fatalf("state, error = %q, %q, want %q, %q", connection.State, connection.Error, tc.state, tc.err)
+			}
+			if !reflect.DeepEqual(connection.Diagnostics, tc.diags) {
+				t.Fatalf("diagnostics = %+v, want %+v in order", connection.Diagnostics, tc.diags)
+			}
+		})
 	}
 }
 
@@ -725,7 +889,7 @@ func TestTradingDestinations(t *testing.T) {
 	// returns whole: AccountGroup set, Account empty.
 	n.groups = map[domain.AccountID]string{"acct-1": "desk"}
 	n.access = []domain.TradingAccess{{Account: "acct-1", Connection: "connection-1", VenueAccount: "remote-1"}, {AccountGroup: "desk", Connection: "connection-2", VenueAccount: "remote-2"}, {Account: "acct-1", Connection: "connection-3"}}
-	rt.states = map[domain.ExternalID]trading.ConnectionState{"connection-1": {}, "connection-2": {Unavailable: "offline"}}
+	rt.states = map[domain.ExternalID]trading.ConnectionStatus{"connection-1": {State: trading.ConnectionDegraded, Error: "stream refused"}, "connection-2": {State: trading.ConnectionUnavailable, Error: "offline"}}
 	for _, tc := range []struct {
 		mode domain.TradingMode
 		want []domain.ExternalID
@@ -746,10 +910,13 @@ func TestTradingDestinations(t *testing.T) {
 			t.Fatalf("destinations mode=%s = %v", tc.mode, ids)
 		}
 		for _, d := range got {
-			if d.Connection == "connection-2" && (d.Unavailable != "offline" || d.State != "unavailable" || d.VenueAccount != "remote-2") {
+			if d.Connection == "connection-1" && (d.Error != "stream refused" || d.State != "degraded") {
+				t.Fatalf("degraded destination = %+v, want its runtime error", d)
+			}
+			if d.Connection == "connection-2" && (d.Error != "offline" || d.State != "unavailable" || d.VenueAccount != "remote-2") {
 				t.Fatal("destination lost binding or runtime status")
 			}
-			if d.Connection == "connection-3" && (d.Enabled || d.State != "stopped") {
+			if d.Connection == "connection-3" && (d.Enabled || d.State != "stopped" || d.Error != "") {
 				t.Fatal("disabled destination was not preserved")
 			}
 		}

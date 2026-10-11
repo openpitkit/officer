@@ -20,6 +20,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"go.openpit.dev/officer/framework/auth"
@@ -376,7 +377,10 @@ func TestSubmitDropCopyOrderDuplicateSuppliedIDConflicts(t *testing.T) {
 
 func TestSubmitDropCopyOrderBackendErrorPreservesEngineMessage(t *testing.T) {
 	const sdkError = "engine: execute pre-trade: failed to access field 'limit price': invalid"
-	src := &approvalFakeSource{submitErr: errors.New(sdkError)}
+	src := &approvalFakeSource{submitErr: fmt.Errorf(
+		"engine: execute pre-trade: failed to access field 'limit price': %w",
+		domain.ErrInvalid,
+	)}
 
 	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
@@ -386,8 +390,7 @@ func TestSubmitDropCopyOrderBackendErrorPreservesEngineMessage(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("want IsError=true for a drop-copy admission error")
 	}
-	if got := textContent(res.Content); got !=
-		"submit drop-copy order failed: "+sdkError {
+	if got := textContent(res.Content); got != "validation: "+sdkError {
 		t.Fatalf("MCP error = %q, want engine message", got)
 	}
 }

@@ -717,8 +717,15 @@ export interface Overview {
 
 /** Venue environment used by a trading connection. */
 export type TradingMode = "paper" | "live";
-/** Runtime availability of a configured trading connection. */
-export type TradingConnectionState = "running" | "unavailable" | "stopped";
+/** Runtime state of a configured trading connection: `running` sends and
+ *  receives venue updates; `degraded` sends while its venue stream is failing
+ *  and reconnecting; `unavailable` cannot reach the venue and refuses sends;
+ *  `stopped` has no worker, so it does not send either. */
+export type TradingConnectionState =
+  | "running"
+  | "degraded"
+  | "unavailable"
+  | "stopped";
 
 /** Trading venue capabilities advertised by Officer. */
 export interface TradingProvider {
@@ -773,6 +780,10 @@ export interface TradingConnection {
   venueIdentity: string;
   state: TradingConnectionState;
   error?: string;
+  /** Operator-facing diagnostics of the connection, oldest first (the last is
+   *  the latest), kept after the connection recovers; empty when there are
+   *  none. Same shape market-data instances carry. */
+  diagnostics: Diagnostic[];
   /** Presence flags only; credential values are write-only. */
   secrets: { apiKey: boolean; apiSecret: boolean };
   instruments: TradingInstrument[];
@@ -781,12 +792,21 @@ export interface TradingConnection {
   feeAccount: string;
 }
 
-/** Current trading providers, connections and credential storage mode. */
+/** Current trading providers and connections. */
 export interface TradingSnapshot {
   providers: TradingProvider[];
   connections: TradingConnection[];
-  /** True: keys are sealed under the master key; false: stored unencrypted. */
+}
+
+/** How stored credentials sit at rest, decided by the core for the whole
+ *  installation. Both plaintext flags are false while credentials are sealed. */
+export interface CredentialStorage {
+  /** Credentials written now are sealed under the master key. */
   credentialsSealed: boolean;
+  /** Not sealed, and at least one trading connection holds a key. */
+  plaintextTradingKeys: boolean;
+  /** Not sealed, and at least one market-data source holds a key. */
+  plaintextMarketDataKeys: boolean;
 }
 
 /** Venue identity and status returned by a connection check. */
@@ -907,12 +927,12 @@ export interface MarketDataInstrument {
   inverseQuote?: MarketDataQuote;
 }
 
-export interface MarketDataDiagnosticAction {
+export interface DiagnosticAction {
   type: string;
   target?: string;
 }
 
-export interface MarketDataDiagnostic {
+export interface Diagnostic {
   level: string;
   code: string;
   kind: string;
@@ -920,7 +940,7 @@ export interface MarketDataDiagnostic {
   detail: string;
   remediation?: string;
   instrument?: string;
-  actions: MarketDataDiagnosticAction[];
+  actions: DiagnosticAction[];
   at: string;
 }
 
@@ -947,7 +967,7 @@ export interface MarketDataInstance {
    *  the live-search control without making a call). */
   searchesSymbols: boolean;
   instruments: MarketDataInstrument[];
-  diagnostics: MarketDataDiagnostic[];
+  diagnostics: Diagnostic[];
   references?: MarketDataReferences;
 }
 

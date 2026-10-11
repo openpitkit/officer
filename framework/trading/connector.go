@@ -119,6 +119,12 @@ type Event struct {
 // owns credentials; its errors and venue text must never contain credentials.
 // Every event about an Officer order must carry the ClientOrderID supplied to
 // Send. The runtime keys venue orders by that id, not by the venue order id.
+//
+// A connector may implement health.StatusReporting and
+// health.DiagnosticReporting; the runtime wires both before Subscribe. A
+// failed stream (re)connect reports ok=false, and a confirmed (re)connect
+// reports ok=true. A failure report carries a short, non-empty,
+// credential-free message.
 type Connector interface {
 	// Subscribe starts a self-reconnecting stream. Every (re)connect emits
 	// EventConnected; cancellation or Close ends and closes the channel.

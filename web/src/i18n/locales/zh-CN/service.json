@@ -75,7 +75,12 @@
     "noCommands": "未定义命令。"
   },
   "backup": {
-    "unencryptedWarning": "此备份将包含未加密的敏感数据：交易连接的 API 密钥在未配置主密钥的情况下存储，并以明文形式写入归档。请妥善保管文件，或先设置主密钥。",
+    "plaintextKeys": {
+      "title": "此备份将包含明文密钥",
+      "trading": "交易连接的 API 密钥将以未加密形式写入归档。",
+      "marketData": "行情数据源的 API 密钥和令牌将以未加密形式写入归档。",
+      "advice": "请妥善保管文件，或先设置主密钥。"
+    },
     "tradingSectionsHint": "交易连接包含账户和分组、订单和成交；订单和成交包含交易连接。",
     "tradingAccountsHint": "交易数据将针对所有账户导出和恢复。",
     "tradingCredentialsUnavailable": "无法恢复 <connections/> 的 API 密钥。这些交易连接已恢复为禁用状态：请在<tradingLink>交易连接</tradingLink>中重新输入密钥。",

@@ -414,4 +414,18 @@ describe("venue blocks", () => {
       expect(container.querySelector("p")).not.toBeInTheDocument();
     }
   });
+
+  it("shows the header error as a warning with the warn tone", () => {
+    render(
+      <VenueCardHeader
+        providerType="alpaca"
+        title="Trading account"
+        error="Trade updates refused"
+        errorTone="warn"
+      />,
+    );
+    const error = screen.getByText("Trade updates refused");
+    expect(error).toHaveClass("text-[var(--warn)]");
+    expect(error).not.toHaveClass("text-[var(--danger)]");
+  });
 });

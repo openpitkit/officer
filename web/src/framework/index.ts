@@ -67,6 +67,7 @@ export {
   TabsTrigger,
   TabsContent,
 } from "../components/ui/tabs";
+export { Notice, type NoticeProps } from "../components/Notice";
 export {
   ActionButton,
   BlockButton,
@@ -164,6 +165,10 @@ export {
   RevokeAccessDialog,
   VenueAccessList,
   VenueAccessDialog,
+  UnsealedKeysWarning,
+  DiagnosticPanel,
+  type DiagnosticPanelProps,
+  type UnsealedKeysWarningProps,
   type LinkButtonProps,
   type WarnHintProps,
   type AccessBlockedHintProps,
@@ -191,11 +196,13 @@ export {
   type VenueProviderOption,
 } from "../components/venues";
 export {
+  DashboardIssueCount,
   DashboardItemChips,
   DashboardNote,
   DashboardSourceError,
   DashboardSourceRow,
   DashboardStatusCard,
+  type DashboardIssueCountProps,
   type DashboardItem,
   type DashboardItemChipsProps,
   type DashboardNoteProps,

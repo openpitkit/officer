@@ -36,7 +36,7 @@ func handleGetTrading(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": toTradingDTO(status)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": httpx.ToTradingDTO(status)})
 	}
 }
 
@@ -116,7 +116,7 @@ func handleCreateTradingConnection(svc backend.ControlPlane) http.HandlerFunc {
 		}
 		for _, connection := range status.Connections {
 			if connection.ExternalID == created.ExternalID {
-				httpx.WriteJSON(w, http.StatusCreated, map[string]any{"connection": toTradingConnectionDTO(connection)})
+				httpx.WriteJSON(w, http.StatusCreated, map[string]any{"connection": httpx.ToTradingConnectionDTO(connection)})
 				return
 			}
 		}
@@ -166,7 +166,7 @@ func handleUpdateTradingConnectionSettings(svc backend.ControlPlane) http.Handle
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": toTradingDTO(status)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": httpx.ToTradingDTO(status)})
 	}
 }
 
@@ -257,7 +257,7 @@ func handleUpsertTradingInstrument(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": toTradingDTO(status)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": httpx.ToTradingDTO(status)})
 	}
 }
 
@@ -391,7 +391,7 @@ func handlePutTradingAccess(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": toTradingDTO(status)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": httpx.ToTradingDTO(status)})
 	}
 }
 
@@ -461,7 +461,7 @@ func handleSetTradingFeeAccount(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": toTradingDTO(status)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trading": httpx.ToTradingDTO(status)})
 	}
 }
 

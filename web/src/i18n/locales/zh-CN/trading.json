@@ -10,6 +10,7 @@
   },
   "state": {
     "running": "运行中",
+    "degraded": "降级运行",
     "unavailable": "不可用",
     "stopped": "已停止"
   },
@@ -53,11 +54,6 @@
   },
   "settings": {
     "description": "将字段留空以保留已保存的值。"
-  },
-  "unsealed": {
-    "title": "密钥将以未加密形式保存",
-    "description": "Officer 未配置主密钥，因此这些 API 密钥会以明文写入数据库。任何能够读取数据库或备份的人都可以使用此账户进行交易。请设置主密钥以加密保存这些密钥。",
-    "caution": "主密钥丢失后将无法打开数据库 - 请在设置前备份主密钥。"
   },
   "instruments": {
     "title": "工具",

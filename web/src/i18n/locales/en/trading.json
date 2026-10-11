@@ -10,6 +10,7 @@
   },
   "state": {
     "running": "Running",
+    "degraded": "Degraded",
     "unavailable": "Unavailable",
     "stopped": "Stopped"
   },
@@ -53,11 +54,6 @@
   },
   "settings": {
     "description": "Leave fields blank to keep the stored values."
-  },
-  "unsealed": {
-    "title": "Keys will be stored unencrypted",
-    "description": "Officer runs without a master key, so these API keys are written to its database in plain text. Anyone who can read the database or a backup can trade on this account. Set a master key to store them sealed.",
-    "caution": "A lost master key makes the database unopenable - back the key up before you set it."
   },
   "instruments": {
     "title": "Instruments",

@@ -250,8 +250,8 @@ func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 		}
 		res := callTool[map[string]any](t, src, getAccountStateToolName, map[string]any{})
 		requireToolError(t, res.IsError)
-		if got := textContent(res.Content); got != src.accStateErr.Error() {
-			t.Fatalf("error text = %q, want the Source's %q", got, src.accStateErr)
+		if got, want := textContent(res.Content), "not_found: "+src.accStateErr.Error(); got != want {
+			t.Fatalf("error text = %q, want the Source's %q", got, want)
 		}
 	})
 	t.Run("get_account_state_resolved", func(t *testing.T) {
@@ -344,10 +344,9 @@ func TestRelaxedInputRefusalsWithOneAccount(t *testing.T) {
 	})
 }
 
-// TestSourceRefusalReachesAgent covers the read tools that replace a Source
-// failure with a bare message: a refusal, invalid input (the account scope's
-// own included) or an absent or hidden resource, reaches the agent with the
-// Source's message.
+// TestSourceRefusalReachesAgent covers the read tools: a refusal, invalid
+// input (the account scope's own included) or an absent or hidden resource,
+// reaches the agent with the Source's message under the code REST answers.
 func TestSourceRefusalReachesAgent(t *testing.T) {
 	t.Parallel()
 	t.Run("get_audit", func(t *testing.T) {
@@ -357,8 +356,8 @@ func TestSourceRefusalReachesAgent(t *testing.T) {
 		res := callTool[map[string]any](t, src, getAuditToolName,
 			map[string]any{"account": "other"})
 		requireToolError(t, res.IsError)
-		if got := textContent(res.Content); got != src.listAuditErr.Error() {
-			t.Fatalf("error text = %q, want the Source's %q", got, src.listAuditErr)
+		if got, want := textContent(res.Content), "validation: "+src.listAuditErr.Error(); got != want {
+			t.Fatalf("error text = %q, want the Source's %q", got, want)
 		}
 	})
 	t.Run("get_limits", func(t *testing.T) {
@@ -368,8 +367,8 @@ func TestSourceRefusalReachesAgent(t *testing.T) {
 		res := callTool[map[string]any](t, src, getLimitsToolName,
 			map[string]any{"account": "other"})
 		requireToolError(t, res.IsError)
-		if got := textContent(res.Content); got != src.listLimitsErr.Error() {
-			t.Fatalf("error text = %q, want the Source's %q", got, src.listLimitsErr)
+		if got, want := textContent(res.Content), "not_found: "+src.listLimitsErr.Error(); got != want {
+			t.Fatalf("error text = %q, want the Source's %q", got, want)
 		}
 	})
 }

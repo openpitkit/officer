@@ -20,6 +20,7 @@ package trading_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -62,7 +63,7 @@ func TestRuntimeRestartPicksUpConnection(t *testing.T) {
 	f.start()
 	c := f.addConnection("later", "created after start", true)
 	dest := domain.TradingDestination{Connection: c.ExternalID, Route: "{}"}
-	if _, held := f.runtime.ConnectionStates()[c.ExternalID]; held {
+	if _, held := f.runtime.ConnectionStatuses()[c.ExternalID]; held {
 		t.Fatal("new connection got a worker before Restart")
 	}
 	order := f.submit("1")
@@ -70,8 +71,8 @@ func TestRuntimeRestartPicksUpConnection(t *testing.T) {
 		t.Fatalf("Send before Restart=%v", err)
 	}
 	must(t, f.runtime.Restart())
-	if state, held := f.runtime.ConnectionStates()[c.ExternalID]; !held || state.Unavailable != "" {
-		t.Fatalf("new connection has no available worker after Restart: held=%v state=%+v", held, state)
+	if status, held := f.runtime.ConnectionStatuses()[c.ExternalID]; !held || status.State != trading.ConnectionRunning {
+		t.Fatalf("new connection has no available worker after Restart: held=%v status=%+v", held, status)
 	}
 	must(t, f.runtime.PreCheck(testCtx, f.draft("1"), dest))
 	link, err := f.runtime.Send(testCtx, order.ExternalID, dest)
@@ -86,7 +87,7 @@ func TestRuntimeRestartAppliesEnabled(t *testing.T) {
 	id := f.connection.ExternalID
 	must(t, f.st.SetTradingConnectionEnabled(testCtx, id, false))
 	f.start()
-	if _, held := f.runtime.ConnectionStates()[id]; held {
+	if _, held := f.runtime.ConnectionStatuses()[id]; held {
 		t.Fatal("disabled connection without links has a worker")
 	}
 	must(t, f.st.SetTradingConnectionEnabled(testCtx, id, true))
@@ -96,14 +97,14 @@ func TestRuntimeRestartAppliesEnabled(t *testing.T) {
 	must(t, f.runtime.Restart())
 	must(t, f.runtime.PreCheck(testCtx, f.draft("1"), f.dest))
 	must(t, f.st.SetTradingConnectionEnabled(testCtx, id, false))
-	if _, held := f.runtime.ConnectionStates()[id]; !held {
+	if _, held := f.runtime.ConnectionStatuses()[id]; !held {
 		t.Fatal("disabling removed the worker before Restart")
 	}
 	if err := f.runtime.PreCheck(testCtx, f.draft("1"), f.dest); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("disabled worker allowed PreCheck=%v", err)
 	}
 	must(t, f.runtime.Restart())
-	if _, held := f.runtime.ConnectionStates()[id]; held {
+	if _, held := f.runtime.ConnectionStatuses()[id]; held {
 		t.Fatal("disabled connection without links kept a worker after Restart")
 	}
 	must(t, f.st.SetTradingConnectionEnabled(testCtx, id, true))
@@ -112,7 +113,7 @@ func TestRuntimeRestartAppliesEnabled(t *testing.T) {
 	link := f.send(order)
 	must(t, f.st.SetTradingConnectionEnabled(testCtx, id, false))
 	must(t, f.runtime.Restart())
-	if _, held := f.runtime.ConnectionStates()[id]; !held {
+	if _, held := f.runtime.ConnectionStatuses()[id]; !held {
 		t.Fatal("disabled connection with open venue order lost its worker")
 	}
 	if _, err := f.runtime.Send(testCtx, f.submit("1").ExternalID, f.dest); !errors.Is(err, domain.ErrConflict) {
@@ -131,7 +132,7 @@ func TestRuntimeRestartAppliesEnabled(t *testing.T) {
 		t.Fatal("filled venue order is still open")
 	}
 	must(t, f.runtime.Restart())
-	if _, held := f.runtime.ConnectionStates()[id]; !held {
+	if _, held := f.runtime.ConnectionStatuses()[id]; !held {
 		t.Fatal("disabled connection with a finished venue link lost its worker")
 	}
 }
@@ -227,7 +228,7 @@ func TestRuntimeStartReadFailures(t *testing.T) {
 			f.venue.mu.Lock()
 			builds := f.venue.builds
 			f.venue.mu.Unlock()
-			if builds != 0 || len(r.ConnectionStates()) != 0 {
+			if builds != 0 || len(r.ConnectionStatuses()) != 0 {
 				t.Fatal("failed store read started a partial generation")
 			}
 			st.fail = ""
@@ -252,8 +253,8 @@ func TestRuntimeRestartReadFailure(t *testing.T) {
 	if !errors.Is(err, errStartupRead) || err == errStartupRead {
 		t.Fatalf("Restart did not wrap its store read failure: %v", err)
 	}
-	if states := r.ConnectionStates(); len(states) != 0 {
-		t.Fatalf("failed Restart still exposes connection states: %+v", states)
+	if statuses := r.ConnectionStatuses(); len(statuses) != 0 {
+		t.Fatalf("failed Restart still exposes connection statuses: %+v", statuses)
 	}
 	f.venue.mu.Lock()
 	builds, closes := f.venue.builds, f.venue.closes
@@ -269,19 +270,19 @@ func TestRuntimeRestartReadFailure(t *testing.T) {
 	must(t, r.PreCheck(testCtx, f.draft("1"), f.dest))
 }
 
-func TestRuntimeConnectionStatesAfterContextCancellation(t *testing.T) {
+func TestRuntimeConnectionStatusesAfterContextCancellation(t *testing.T) {
 	f := newFixture(t)
 	f.newRuntime()
 	ctx, cancel := context.WithCancel(testCtx)
 	defer cancel()
 	must(t, f.runtime.Start(ctx))
-	if states := f.runtime.ConnectionStates(); len(states) != 1 {
-		t.Fatalf("running connection states: %+v", states)
+	if statuses := f.runtime.ConnectionStatuses(); len(statuses) != 1 {
+		t.Fatalf("running connection statuses: %+v", statuses)
 	}
 	order := f.submit("1")
 	cancel()
-	if states := f.runtime.ConnectionStates(); len(states) != 0 {
-		t.Fatalf("cancelled generation still exposes connection states: %+v", states)
+	if statuses := f.runtime.ConnectionStatuses(); len(statuses) != 0 {
+		t.Fatalf("cancelled generation still exposes connection statuses: %+v", statuses)
 	}
 	if err := f.runtime.PreCheck(testCtx, f.draft("1"), f.dest); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("PreCheck after context cancellation=%v", err)
@@ -367,13 +368,13 @@ func TestRuntimeSendStoppedDuringDestinationRead(t *testing.T) {
 	}
 }
 
-func TestRuntimeConnectionStates(t *testing.T) {
+func TestRuntimeConnectionStatuses(t *testing.T) {
 	for _, failure := range []string{"build", "subscribe"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newFixture(t)
 			f.newRuntime()
-			if len(f.runtime.ConnectionStates()) != 0 {
-				t.Fatal("unstarted runtime has connection states")
+			if len(f.runtime.ConnectionStatuses()) != 0 {
+				t.Fatal("unstarted runtime has connection statuses")
 			}
 			v := newVenue()
 			cause := errors.New("authentication failed")
@@ -388,35 +389,36 @@ func TestRuntimeConnectionStates(t *testing.T) {
 			disabled := f.addConnection("fake", "disabled without links", false)
 			must(t, f.st.SetTradingConnectionEnabled(testCtx, disabled.ExternalID, false))
 			must(t, f.runtime.Start(testCtx))
-			states := f.runtime.ConnectionStates()
-			if state, held := states[f.connection.ExternalID]; !held || state.Unavailable != "" {
-				t.Fatalf("running worker state: held=%v state=%+v", held, state)
+			statuses := f.runtime.ConnectionStatuses()
+			if status, held := statuses[f.connection.ExternalID]; !held || status.State != trading.ConnectionRunning {
+				t.Fatalf("running worker status: held=%v status=%+v", held, status)
 			}
-			if state, held := states[bad.ExternalID]; !held || !strings.Contains(state.Unavailable, cause.Error()) {
-				t.Fatalf("unavailable worker state: held=%v state=%+v", held, state)
+			if status, held := statuses[bad.ExternalID]; !held || status.State != trading.ConnectionUnavailable || !strings.Contains(status.Error, cause.Error()) {
+				t.Fatalf("unavailable worker status: held=%v status=%+v", held, status)
 			}
-			if _, held := states[disabled.ExternalID]; held || len(states) != 2 {
-				t.Fatalf("workers without links in state map: %+v", states)
+			if _, held := statuses[disabled.ExternalID]; held || len(statuses) != 2 {
+				t.Fatalf("workers without links in status map: %+v", statuses)
 			}
-			for _, state := range states {
-				if strings.Contains(state.Unavailable, "do-not-log-") {
-					t.Fatalf("state leaked credentials: %+v", state)
+			for _, status := range statuses {
+				if strings.Contains(fmt.Sprintf("%+v", status), "do-not-log-") {
+					t.Fatalf("status leaked credentials: %+v", status)
 				}
 			}
-			delete(states, f.connection.ExternalID)
-			if _, held := f.runtime.ConnectionStates()[f.connection.ExternalID]; !held {
-				t.Fatal("caller changed the runtime's state map")
+			delete(statuses, f.connection.ExternalID)
+			if _, held := f.runtime.ConnectionStatuses()[f.connection.ExternalID]; !held {
+				t.Fatal("caller changed the runtime's status map")
 			}
 			f.venue.mu.Lock()
 			connector := f.venue.current
 			f.venue.mu.Unlock()
 			connector.closeEvents()
 			waitFor(t, func() bool {
-				return strings.Contains(f.runtime.ConnectionStates()[f.connection.ExternalID].Unavailable, "venue event stream closed")
-			}, "closed event stream state")
+				status := f.runtime.ConnectionStatuses()[f.connection.ExternalID]
+				return status.State == trading.ConnectionUnavailable && strings.Contains(status.Error, "venue event stream closed")
+			}, "closed event stream status")
 			f.runtime.Stop()
-			if len(f.runtime.ConnectionStates()) != 0 {
-				t.Fatal("stopped runtime still exposes connection states")
+			if len(f.runtime.ConnectionStatuses()) != 0 {
+				t.Fatal("stopped runtime still exposes connection statuses")
 			}
 			v.mu.Lock()
 			closes := v.closes
@@ -456,7 +458,7 @@ func TestRuntimeCallsDuringStart(t *testing.T) {
 	orderID := f.submit("1").ExternalID
 	calls := make(chan error, 1)
 	go func() {
-		if len(f.runtime.ConnectionStates()) != 0 {
+		if len(f.runtime.ConnectionStatuses()) != 0 {
 			calls <- errors.New("partially built generation was published")
 			return
 		}
@@ -549,7 +551,7 @@ func TestRuntimeConcurrentLifecycleAndSend(t *testing.T) {
 	go func() { restarted <- f.runtime.Restart() }()
 	secondStop := make(chan struct{})
 	go func() { f.runtime.Stop(); close(secondStop) }()
-	if len(f.runtime.ConnectionStates()) != 0 {
+	if len(f.runtime.ConnectionStatuses()) != 0 {
 		t.Fatal("stopping generation still exposes workers")
 	}
 	if err := f.runtime.PreCheck(testCtx, f.draft("1"), f.dest); !errors.Is(err, domain.ErrConflict) {

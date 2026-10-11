@@ -17,7 +17,6 @@
   "actions": {
     "addInstance": "添加来源",
     "deleteInstance": "删除来源",
-    "restart": "重启数据源",
     "sendPrice": "发送价格"
   },
   "create": {
@@ -165,26 +164,6 @@
     "updateIntervalTooltip": "距上次更新的间隔"
   },
   "emptyInstances": "未配置行情数据来源",
-  "diagnostics": {
-    "title": "问题",
-    "summary": "当前：{{count}}",
-    "collapsedSummary": "问题：{{count}}",
-    "collapse": "收起",
-    "expand": "打开",
-    "actions": "问题操作",
-    "levelError": "错误",
-    "levelWarn": "警告",
-    "levelInfo": "信息",
-    "groupActionNeeded": "需要操作",
-    "groupProvider": "连接 / 提供方",
-    "howToFix": "解决方法：",
-    "actionRestart": "重启数据源",
-    "actionDocs": "提供方文档",
-    "actionSymbols": "有效代码列表",
-    "actionRemove": "删除工具",
-    "actionRemoveTarget": "删除 {{target}}",
-    "actionLogs": "服务日志"
-  },
   "verify": {
     "unsupported": "此提供方无法校验代码",
     "unavailable": "该代码没有新鲜价格"

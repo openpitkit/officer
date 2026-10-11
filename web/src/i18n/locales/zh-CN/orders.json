@@ -205,6 +205,7 @@
         "loadingTargets": "正在加载目标…",
         "disabled": "已禁用",
         "unavailable": "不可用：{{error}}",
+        "degraded": "降级运行：{{error}}",
         "noTargets": "账户 {{account}} 没有可用的{{mode}}目标。",
         "timeInForce": "有效期",
         "chooseTimeInForce": "选择有效期",

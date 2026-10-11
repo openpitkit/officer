@@ -38,6 +38,13 @@ import (
 const serverName = "pit-officer"
 
 // Source is the Pit Officer-facing seam the MCP surface reads from.
+//
+// The built-in tools report an error a Source method returns through the
+// shared REST mapping, httpapi.DescribeErr: the same code and client-visible
+// message as REST, with internal causes only in the server log. A Source
+// therefore keeps secrets out of the text that mapping publishes. A host tool
+// that returns a Source error itself publishes its text as is, so it maps the
+// error through httpapi.DescribeErr first.
 type Source interface {
 	// Status returns the node's engine and store health.
 	Status(ctx context.Context) (Status, error)
@@ -70,6 +77,10 @@ type Source interface {
 	) error
 	// GetTrading returns provider capabilities and connection status snapshots.
 	GetTrading(ctx context.Context) (backend.TradingStatus, error)
+	// CredentialStorage reports whether stored credentials are sealed and,
+	// when they are not, whether trading connections or market-data sources
+	// hold keys in plain text.
+	CredentialStorage(ctx context.Context) (backend.CredentialStorage, error)
 	// CreateTradingConnection stores a connection, assigning an id when empty.
 	CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error)
 	// UpdateTradingConnectionSettings updates label and write-only credentials;
@@ -753,6 +764,10 @@ func attestationFromBackend(att backend.Attestation) Attestation {
 
 func (s controlPlaneSource) GetTrading(ctx context.Context) (backend.TradingStatus, error) {
 	return s.cp.GetTrading(ctx)
+}
+
+func (s controlPlaneSource) CredentialStorage(ctx context.Context) (backend.CredentialStorage, error) {
+	return s.cp.CredentialStorage(ctx)
 }
 
 func (s controlPlaneSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {

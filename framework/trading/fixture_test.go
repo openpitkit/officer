@@ -33,6 +33,7 @@ import (
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
@@ -72,6 +73,8 @@ type fakeVenue struct {
 	sendErr      error
 	preErr       error
 	subscribeErr error
+	nilEvents    bool   // Subscribe returns neither a channel nor an error.
+	onSubscribe  func() // Runs in Subscribe, after the reporters are wired.
 	onSend       func(context.Context, trading.Order) error
 	onPreCheck   func(context.Context, trading.Order) error
 	current      *fakeConnector
@@ -80,6 +83,9 @@ type fakeConnector struct {
 	venue     *fakeVenue
 	events    chan trading.Event
 	closeOnce sync.Once
+	// The runtime's reporters, protected by venue.mu.
+	status   health.StatusReporter
+	diagnose health.DiagnosticReporter
 }
 
 func newVenue() *fakeVenue { return &fakeVenue{snapshots: make(map[string]trading.Snapshot)} }
@@ -97,15 +103,31 @@ func (v *fakeVenue) build(domain.TradingConnection) (trading.Connector, error) {
 }
 func (c *fakeConnector) Subscribe(ctx context.Context) (<-chan trading.Event, error) {
 	c.venue.mu.Lock()
-	err := c.venue.subscribeErr
+	err, nilEvents, hook := c.venue.subscribeErr, c.venue.nilEvents, c.venue.onSubscribe
 	c.venue.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if err != nil {
 		return nil, err
+	}
+	if nilEvents {
+		return nil, nil
 	}
 	go func() { <-ctx.Done(); c.closeEvents() }()
 	return c.events, nil
 }
 func (c *fakeConnector) closeEvents() { c.closeOnce.Do(func() { close(c.events) }) }
+func (c *fakeConnector) SetStatusReporter(report health.StatusReporter) {
+	c.venue.mu.Lock()
+	c.status = report
+	c.venue.mu.Unlock()
+}
+func (c *fakeConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
+	c.venue.mu.Lock()
+	c.diagnose = report
+	c.venue.mu.Unlock()
+}
 func (c *fakeConnector) Close() {
 	c.closeEvents()
 	c.venue.mu.Lock()
@@ -170,6 +192,18 @@ func (v *fakeVenue) counts() (sends, lookups int) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return len(v.sends), v.lookups
+}
+
+// reporters returns the reporters the runtime wired into the venue's current
+// connector, to call as its stream goroutine would.
+func (v *fakeVenue) reporters(t *testing.T) (health.StatusReporter, health.DiagnosticReporter) {
+	t.Helper()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.current == nil || v.current.status == nil || v.current.diagnose == nil {
+		t.Fatal("runtime wired no reporters into the connector")
+	}
+	return v.current.status, v.current.diagnose
 }
 
 type fixture struct {
@@ -372,3 +406,5 @@ func (f *fixture) assertReleased(order domain.Order) {
 var _ io.Writer = (*safeBuffer)(nil)
 var _ trading.Connector = (*fakeConnector)(nil)
 var _ trading.PreChecker = (*fakeConnector)(nil)
+var _ health.StatusReporting = (*fakeConnector)(nil)
+var _ health.DiagnosticReporting = (*fakeConnector)(nil)

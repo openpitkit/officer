@@ -32,6 +32,7 @@ import (
 
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -511,7 +512,7 @@ func TestFinnhubDiagnoseReportsUnknownSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}
-	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol ||
+	if len(findings) != 1 || findings[0].Code != health.CodeUnknownSymbol ||
 		findings[0].Instrument != "BAD" {
 		t.Fatalf("findings = %+v, want unknown symbol", findings)
 	}
@@ -715,7 +716,7 @@ func TestFinnhubConnector_PingDoesNotReportUnparsable(t *testing.T) {
 		},
 		err: context.Canceled,
 	}
-	var diagnostics []fwmarketdata.Diagnostic
+	var diagnostics []health.Diagnostic
 	connector := &finnhubConnector{
 		dial: func(context.Context, string) (finnhubConn, error) {
 			return conn, nil
@@ -724,7 +725,7 @@ func TestFinnhubConnector_PingDoesNotReportUnparsable(t *testing.T) {
 		reconnectMin: time.Millisecond,
 		reconnectMax: time.Millisecond,
 		token:        "token",
-		diagReport: func(diag fwmarketdata.Diagnostic) {
+		diagReport: func(diag health.Diagnostic) {
 			diagnostics = append(diagnostics, diag)
 		},
 	}
@@ -752,7 +753,7 @@ func TestFinnhubConnector_UnparsableDiagnosticOmitsDebugSample(t *testing.T) {
 		},
 		err: context.Canceled,
 	}
-	var diagnostics []fwmarketdata.Diagnostic
+	var diagnostics []health.Diagnostic
 	connector := &finnhubConnector{
 		dial: func(context.Context, string) (finnhubConn, error) {
 			return conn, nil
@@ -761,7 +762,7 @@ func TestFinnhubConnector_UnparsableDiagnosticOmitsDebugSample(t *testing.T) {
 		reconnectMin: time.Millisecond,
 		reconnectMax: time.Millisecond,
 		token:        "token",
-		diagReport: func(diag fwmarketdata.Diagnostic) {
+		diagReport: func(diag health.Diagnostic) {
 			diagnostics = append(diagnostics, diag)
 		},
 	}
@@ -774,7 +775,7 @@ func TestFinnhubConnector_UnparsableDiagnosticOmitsDebugSample(t *testing.T) {
 		t.Fatalf("diagnostics = %+v, want one debug diagnostic", diagnostics)
 	}
 	diag := diagnostics[0]
-	if diag.Code != CodeUnparsableData ||
+	if diag.Code != health.CodeUnparsableData ||
 		strings.Contains(diag.Detail, "TEMP DEBUG") ||
 		strings.Contains(diag.Detail, "payload_sample") ||
 		strings.Contains(diag.Detail, `"payload":3`) {

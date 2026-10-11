@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -231,7 +232,7 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 	var (
 		statusOK bool
 		status   string
-		diags    []fwmarketdata.Diagnostic
+		diags    []health.Diagnostic
 	)
 	connector := &binanceConnector{
 		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
@@ -241,7 +242,7 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 			statusOK = ok
 			status = errMsg
 		},
-		diagReport: func(diag fwmarketdata.Diagnostic) {
+		diagReport: func(diag health.Diagnostic) {
 			diags = append(diags, diag)
 		},
 	}
@@ -254,7 +255,7 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 	if status != "binance: no valid symbols" {
 		t.Fatalf("status = %q, want no valid symbols", status)
 	}
-	if len(diags) != 1 || diags[0].Code != CodeUnknownSymbol {
+	if len(diags) != 1 || diags[0].Code != health.CodeUnknownSymbol {
 		t.Fatalf("diags = %+v, want one unknown-symbol diagnostic", diags)
 	}
 }
@@ -283,7 +284,7 @@ func TestBinanceConnector_DiagnoseUnknownSymbolSuggestsExternalPrefix(t *testing
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}
-	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol {
+	if len(findings) != 1 || findings[0].Code != health.CodeUnknownSymbol {
 		t.Fatalf("findings = %+v, want one unknown_symbol", findings)
 	}
 	remediation := findings[0].Remediation

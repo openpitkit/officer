@@ -205,6 +205,7 @@
         "loadingTargets": "Загрузка целей…",
         "disabled": "Отключено",
         "unavailable": "Недоступно: {{error}}",
+        "degraded": "Работает со сбоями: {{error}}",
         "noTargets": "Для счёта {{account}} нет целей в режиме {{mode}}.",
         "timeInForce": "Срок действия",
         "chooseTimeInForce": "Выберите срок действия",

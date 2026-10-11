@@ -153,6 +153,55 @@ func TestListMarketData_ServiceError(t *testing.T) {
 	}
 }
 
+// TestMarketDataInstanceDTOSecrets pins the secret markers a market-data
+// instance carries on the wire, list and create alike, for every provider
+// branch, the Alpaca aliases, and stored credentials that hold no secret or are
+// not a JSON object.
+func TestMarketDataInstanceDTOSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		provider    string
+		credentials string
+		want        string
+	}{
+		{"alpaca", domain.MarketDataProviderAlpaca, `{"apiKey":"k","apiSecret":"s"}`, `{"apiKey":true,"apiSecret":true}`},
+		{"alpaca-aliases", domain.MarketDataProviderAlpaca, `{"key":"k","secret":"s"}`, `{"apiKey":true,"apiSecret":true}`},
+		{"alpaca-key-only", domain.MarketDataProviderAlpaca, `{"apiKey":"k"}`, `{"apiKey":true,"apiSecret":false}`},
+		{"alpaca-secret-alias-only", domain.MarketDataProviderAlpaca, `{"secret":"s"}`, `{"apiKey":false,"apiSecret":true}`},
+		{"alpaca-blank", domain.MarketDataProviderAlpaca, `{"apiKey":" ","apiSecret":""}`, `null`},
+		{"oanda", domain.MarketDataProviderOANDA, `{"token":"t","accountID":"a"}`, `{"token":true}`},
+		{"finnhub", domain.MarketDataProviderFinnhub, `{"token":"t"}`, `{"token":true}`},
+		{"finnhub-number-token", domain.MarketDataProviderFinnhub, `{"token":1}`, `null`},
+		{"ib", domain.MarketDataProviderIB, `{"host":"127.0.0.1","port":4002}`, `null`},
+		{"bybit", domain.MarketDataProviderBybit, `{"token":"t"}`, `null`},
+		{"empty", domain.MarketDataProviderFinnhub, ``, `null`},
+		{"blank", domain.MarketDataProviderFinnhub, "  ", `null`},
+		{"empty-object", domain.MarketDataProviderFinnhub, `{}`, `null`},
+		{"json-null", domain.MarketDataProviderFinnhub, `null`, `null`},
+		{"json-string", domain.MarketDataProviderFinnhub, `"t"`, `null`},
+		{"json-array", domain.MarketDataProviderFinnhub, `["t"]`, `null`},
+		{"truncated", domain.MarketDataProviderFinnhub, `{"token":`, `null`},
+		{"trailing-value", domain.MarketDataProviderFinnhub, `{"token":"t"} {}`, `null`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dto := toMarketDataInstanceDTO(backend.MarketDataInstanceStatus{
+				Instance: domain.MarketDataInstance{
+					ExternalID:  extID("md-1"),
+					Provider:    tc.provider,
+					Credentials: tc.credentials,
+				},
+			})
+			got, err := json.Marshal(dto.Secrets)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("secrets = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 // --- POST /market-data/restart ----------------------------------------------
 
 func TestRestartMarketData_OK(t *testing.T) {

@@ -17,7 +17,6 @@
   "actions": {
     "addInstance": "Add source",
     "deleteInstance": "Delete source",
-    "restart": "Restart feeds",
     "sendPrice": "Send price"
   },
   "create": {
@@ -165,26 +164,6 @@
     "updateIntervalTooltip": "Interval since the previous update"
   },
   "emptyInstances": "No market-data sources configured",
-  "diagnostics": {
-    "title": "Problems",
-    "summary": "{{count}} active",
-    "collapsedSummary": "Problems: {{count}}",
-    "collapse": "Collapse",
-    "expand": "Open",
-    "actions": "Problem actions",
-    "levelError": "error",
-    "levelWarn": "warn",
-    "levelInfo": "info",
-    "groupActionNeeded": "Action needed",
-    "groupProvider": "Connection / provider",
-    "howToFix": "How to fix:",
-    "actionRestart": "Restart feeds",
-    "actionDocs": "Provider docs",
-    "actionSymbols": "Valid symbols",
-    "actionRemove": "Remove instrument",
-    "actionRemoveTarget": "Remove {{target}}",
-    "actionLogs": "Service logs"
-  },
   "verify": {
     "unsupported": "This provider can't verify symbols",
     "unavailable": "No fresh price for symbol"

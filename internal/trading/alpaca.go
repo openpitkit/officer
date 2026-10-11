@@ -31,6 +31,7 @@ import (
 
 	"github.com/shopspring/decimal"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/alpaca"
 )
@@ -54,14 +55,23 @@ type alpacaConnector struct {
 	done        chan struct{}
 	feeMu       sync.Mutex
 	feeSymbols  map[string]string
+	// reportStatus and reportDiag are the owner's reporters, set before
+	// Subscribe and required by it.
+	reportStatus health.StatusReporter
+	reportDiag   health.DiagnosticReporter
+	// redact is the connection's credential redactor, the one the backend
+	// boundary applies too.
+	redact *strings.Replacer
 }
 
 var (
-	_ fwtrading.Connector      = (*alpacaConnector)(nil)
-	_ fwtrading.PreChecker     = (*alpacaConnector)(nil)
-	_ fwtrading.AccountChecker = (*alpacaConnector)(nil)
-	_ fwtrading.SymbolSearcher = (*alpacaConnector)(nil)
-	_ fwtrading.SymbolVerifier = (*alpacaConnector)(nil)
+	_ fwtrading.Connector        = (*alpacaConnector)(nil)
+	_ fwtrading.PreChecker       = (*alpacaConnector)(nil)
+	_ fwtrading.AccountChecker   = (*alpacaConnector)(nil)
+	_ fwtrading.SymbolSearcher   = (*alpacaConnector)(nil)
+	_ fwtrading.SymbolVerifier   = (*alpacaConnector)(nil)
+	_ health.StatusReporting     = (*alpacaConnector)(nil)
+	_ health.DiagnosticReporting = (*alpacaConnector)(nil)
 )
 
 // NewAlpacaConnector selects paper or live endpoints explicitly from Mode.
@@ -89,10 +99,14 @@ func newAlpacaConnector(connection domain.TradingConnection, restURL, streamURL 
 		// The credentials object is the request's credentials member.
 		return nil, domain.WithValidationPointer("/credentials"+domain.ValidationPointer(err), err)
 	}
+	_, redact, err := fwtrading.CredentialRedactor(connection.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("alpaca: %w", err)
+	}
 	return &alpacaConnector{
 		client:      alpaca.NewClient(restURL, credentials, &http.Client{Timeout: alpacaHTTPTimeout}),
 		credentials: credentials, streamURL: streamURL,
-		externalID: connection.ExternalID,
+		externalID: connection.ExternalID, redact: redact,
 	}, nil
 }
 

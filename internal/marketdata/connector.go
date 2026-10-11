@@ -32,36 +32,8 @@ import (
 	"strings"
 	"time"
 
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
-)
-
-const (
-	DiagError = "error"
-	DiagWarn  = "warn"
-	DiagInfo  = "info"
-
-	// Diagnostic kinds - who resolves the problem.
-	DiagKindConfig      = "config"      // operator configuration
-	DiagKindEnvironment = "environment" // network/region/reachability
-	DiagKindProvider    = "provider"    // provider-side or internal
-
-	// Diagnostic codes.
-	CodeUnknownSymbol         = "unknown_symbol"
-	CodeNoEnabledInstruments  = "no_enabled_instruments"
-	CodeUnsupportedProvider   = "unsupported_provider"
-	CodeInvalidProviderConfig = "invalid_provider_config"
-	CodeConnectionError       = "connection_error"
-	CodeNoData                = "no_data"
-	CodeDataFreshness         = "data_freshness"
-	CodeInternalError         = "internal_error"
-	CodeSelfDiagnosisFailed   = "self_diagnosis_failed"
-	CodeUnparsableData        = "unparsable_data"
-
-	// Action types - the UI maps these to buttons.
-	ActionRestart          = "restart"
-	ActionOpenDocs         = "open_docs"
-	ActionOpenSymbols      = "open_symbols"
-	ActionRemoveInstrument = "remove_instrument"
 )
 
 const symbolSearchLimit = 50
@@ -261,11 +233,11 @@ func splitSymbolPair(value string) (base, quote string, ok bool) {
 	return base, quote, true
 }
 
-func providerUnknownSymbolDiag(provider, external string) fwmarketdata.Diagnostic {
-	return fwmarketdata.Diagnostic{
-		Level:      DiagError,
-		Code:       CodeUnknownSymbol,
-		Kind:       DiagKindConfig,
+func providerUnknownSymbolDiag(provider, external string) health.Diagnostic {
+	return health.Diagnostic{
+		Level:      health.DiagError,
+		Code:       health.CodeUnknownSymbol,
+		Kind:       health.DiagKindConfig,
 		Instrument: external,
 		Title:      fmt.Sprintf("Symbol %q not found on %s", external, provider),
 		Detail: fmt.Sprintf(
@@ -274,9 +246,9 @@ func providerUnknownSymbolDiag(provider, external string) fwmarketdata.Diagnosti
 			provider,
 		),
 		Remediation: "Remove this instrument and add one with a valid provider symbol. See the valid symbols list.",
-		Actions: []fwmarketdata.DiagnosticAction{
-			{Type: ActionRemoveInstrument, Target: external},
-			{Type: ActionOpenSymbols},
+		Actions: []health.DiagnosticAction{
+			{Type: health.ActionRemoveInstrument, Target: external},
+			{Type: health.ActionOpenSymbols},
 		},
 	}
 }
@@ -392,7 +364,7 @@ func (t *unparsableTracker) recordParsed() {
 	t.framesParsed++
 }
 
-func (t *unparsableTracker) recordUnparsed(report func(fwmarketdata.Diagnostic)) {
+func (t *unparsableTracker) recordUnparsed(report func(health.Diagnostic)) {
 	if t.reported {
 		return
 	}
@@ -401,13 +373,13 @@ func (t *unparsableTracker) recordUnparsed(report func(fwmarketdata.Diagnostic))
 		return
 	}
 	t.reported = true
-	report(fwmarketdata.Diagnostic{
-		Level:       DiagError,
-		Code:        CodeUnparsableData,
-		Kind:        DiagKindProvider,
+	report(health.Diagnostic{
+		Level:       health.DiagError,
+		Code:        health.CodeUnparsableData,
+		Kind:        health.DiagKindProvider,
 		Title:       "Receiving data but cannot parse it",
 		Detail:      "The source is sending data but Officer could not decode it (likely a format mismatch).",
 		Remediation: "This is an internal issue, not your configuration - please report it.",
-		Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}},
+		Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 	})
 }

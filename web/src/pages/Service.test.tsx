@@ -27,7 +27,11 @@ import i18n from "@/i18n";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
-import type { ServiceInfo, TradingSnapshot } from "@/api/types";
+import type {
+  CredentialStorage,
+  ServiceInfo,
+  TradingSnapshot,
+} from "@/api/types";
 import {
   BackupCard,
   DatabaseCard,
@@ -47,6 +51,7 @@ const exportBackupMock = vi.fn();
 const resetDatabaseMock = vi.fn();
 const restoreBackupMock = vi.fn();
 const fetchTradingMock = vi.fn<() => Promise<TradingSnapshot>>();
+const fetchCredentialStorageMock = vi.fn<() => Promise<CredentialStorage>>();
 const serviceInfo: ServiceInfo = {
   name: "Pit Officer",
   engineVersion: "0.9.0",
@@ -56,7 +61,6 @@ const serviceInfo: ServiceInfo = {
 };
 const tradingSnapshot: TradingSnapshot = {
   providers: [],
-  credentialsSealed: false,
   connections: [
     {
       id: "alpaca-1",
@@ -70,12 +74,34 @@ const tradingSnapshot: TradingSnapshot = {
       feeAccount: "",
       instruments: [],
       access: [],
+      diagnostics: [],
     },
   ],
 };
 
-const exportWarning =
-  "This backup will contain sensitive data unencrypted: API keys of trading connections are stored without a master key and go into the archive in plain text. Keep the file private, or set a master key first.";
+const warningTitle = "This backup will contain keys in plain text";
+const tradingKeysLine =
+  "API keys of trading connections go into the archive unencrypted.";
+const marketDataKeysLine =
+  "API keys and tokens of market-data sources go into the archive unencrypted.";
+const warningAdvice = "Keep the file private, or set a master key first.";
+
+const sealedStorage: CredentialStorage = {
+  credentialsSealed: true,
+  plaintextTradingKeys: false,
+  plaintextMarketDataKeys: false,
+};
+
+function unsealedStorage(
+  plaintextTradingKeys: boolean,
+  plaintextMarketDataKeys: boolean,
+): CredentialStorage {
+  return {
+    credentialsSealed: false,
+    plaintextTradingKeys,
+    plaintextMarketDataKeys,
+  };
+}
 
 function renderBackupCard() {
   return render(
@@ -89,6 +115,7 @@ function renderBackupCard() {
         exportBackup: exportBackupMock,
         restoreBackup: restoreBackupMock,
         fetchTrading: fetchTradingMock,
+        fetchCredentialStorage: fetchCredentialStorageMock,
       },
     },
   );
@@ -139,6 +166,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
   fetchTradingMock.mockResolvedValue({ ...tradingSnapshot, connections: [] });
+  fetchCredentialStorageMock.mockResolvedValue(sealedStorage);
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
     value: vi.fn(() => "blob:backup"),
@@ -189,6 +217,7 @@ describe("ServiceCard", () => {
             .fn()
             .mockResolvedValue({ lines: ["Service log"] }),
           fetchTrading: fetchTradingMock,
+          fetchCredentialStorage: fetchCredentialStorageMock,
         },
       },
     );
@@ -246,6 +275,7 @@ describe("Service", () => {
         api: {
           fetchServiceInfo: vi.fn().mockResolvedValue(serviceInfo),
           fetchTrading: fetchTradingMock,
+          fetchCredentialStorage: fetchCredentialStorageMock,
           getMcpCommands: vi.fn().mockResolvedValue([]),
           fetchServiceLogs: vi
             .fn()
@@ -309,7 +339,6 @@ describe("BackupCard", () => {
     try {
       await act(async () => {});
       expect(fetchTradingMock).toHaveBeenCalledTimes(1);
-      expect(screen.getByText(exportWarning)).toBeInTheDocument();
       const allAccounts = screen.getByRole("checkbox", {
         name: "All accounts and groups",
       });
@@ -320,7 +349,6 @@ describe("BackupCard", () => {
         await vi.advanceTimersByTimeAsync(5000);
       });
       expect(fetchTradingMock).toHaveBeenCalledTimes(2);
-      expect(screen.getByText(exportWarning)).toBeInTheDocument();
       expect(allAccounts).toBeDisabled();
 
       fetchTradingMock.mockResolvedValue({
@@ -331,7 +359,6 @@ describe("BackupCard", () => {
         await vi.advanceTimersByTimeAsync(5000);
       });
       expect(fetchTradingMock).toHaveBeenCalledTimes(3);
-      expect(screen.queryByText(exportWarning)).not.toBeInTheDocument();
       expect(allAccounts).toBeEnabled();
     } finally {
       unmount();
@@ -339,8 +366,8 @@ describe("BackupCard", () => {
     }
   });
 
-  it("warns about unencrypted trading keys without blocking export", async () => {
-    fetchTradingMock.mockResolvedValue(tradingSnapshot);
+  it("warns about plain-text trading keys without blocking export", async () => {
+    fetchCredentialStorageMock.mockResolvedValue(unsealedStorage(true, false));
     exportBackupMock.mockResolvedValue({
       blob: new Blob(["backup"]),
       filename: "backup.zip",
@@ -348,70 +375,121 @@ describe("BackupCard", () => {
     const user = userEvent.setup();
     renderBackupCard();
 
-    expect(await screen.findByText(exportWarning)).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: "How to set a master key" });
-    expect(link).toHaveAttribute(
-      "href",
-      "https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key",
-    );
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(await screen.findByText(warningTitle)).toBeInTheDocument();
+    expect(screen.getByText(tradingKeysLine)).toBeInTheDocument();
+    expect(screen.queryByText(marketDataKeysLine)).not.toBeInTheDocument();
+    expect(screen.getByText(warningAdvice)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "How to set a master key" }),
+    ).toBeInTheDocument();
     const button = screen.getByRole("button", { name: "Export" });
     expect(button).toBeEnabled();
     await user.click(button);
     await waitFor(() => expect(exportBackupMock).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole("tab", { name: "Restore" }));
-    expect(screen.queryByText(exportWarning)).not.toBeInTheDocument();
+    expect(screen.queryByText(warningTitle)).not.toBeInTheDocument();
   });
 
-  it.each([
-    ["sealed", { ...tradingSnapshot, credentialsSealed: true }],
-    ["no connections", { ...tradingSnapshot, connections: [] }],
-  ])("does not warn when %s", async (_, snapshot) => {
-    fetchTradingMock.mockResolvedValue(snapshot);
-    await act(async () => {
-      renderBackupCard();
-    });
-    expect(fetchTradingMock).toHaveBeenCalled();
-    expect(screen.queryByText(exportWarning)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
-  });
-
-  it("does not warn while trading is loading", () => {
-    fetchTradingMock.mockReturnValue(new Promise(() => {}));
+  it("warns about plain-text market-data keys when their settings are exported", async () => {
+    fetchCredentialStorageMock.mockResolvedValue(unsealedStorage(false, true));
     renderBackupCard();
-    expect(screen.queryByText(exportWarning)).not.toBeInTheDocument();
+
+    expect(await screen.findByText(warningTitle)).toBeInTheDocument();
+    expect(screen.getByText(marketDataKeysLine)).toBeInTheDocument();
+    expect(screen.queryByText(tradingKeysLine)).not.toBeInTheDocument();
+    expect(screen.getByText(warningAdvice)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "How to set a master key" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
   });
 
-  it("does not warn when trading fails to load", async () => {
-    fetchTradingMock.mockRejectedValue(new Error("trading unavailable"));
-    await act(async () => {
-      renderBackupCard();
-    });
-    expect(fetchTradingMock).toHaveBeenCalled();
-    expect(screen.queryByText(exportWarning)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
+  it("names both kinds of plain-text keys", async () => {
+    fetchCredentialStorageMock.mockResolvedValue(unsealedStorage(true, true));
+    renderBackupCard();
+
+    expect(await screen.findByText(warningTitle)).toBeInTheDocument();
+    expect(screen.getByText(tradingKeysLine)).toBeInTheDocument();
+    expect(screen.getByText(marketDataKeysLine)).toBeInTheDocument();
+    expect(screen.getByText(warningAdvice)).toBeInTheDocument();
   });
 
-  it("warns only when the effective export scope includes trading", async () => {
-    fetchTradingMock.mockResolvedValue(tradingSnapshot);
+  it("does not warn about market-data keys when their settings are not exported", async () => {
+    fetchCredentialStorageMock.mockResolvedValue(unsealedStorage(false, true));
     const user = userEvent.setup();
     renderBackupCard();
-    expect(await screen.findByText(exportWarning)).toBeInTheDocument();
+    expect(await screen.findByText(marketDataKeysLine)).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "All data" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "Market-data settings" }),
+    );
+    expect(screen.queryByText(warningTitle)).not.toBeInTheDocument();
+    expect(screen.queryByText(marketDataKeysLine)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
+  });
+
+  it("does not warn when credentials are sealed", async () => {
+    fetchTradingMock.mockResolvedValue(tradingSnapshot);
+    await act(async () => {
+      renderBackupCard();
+    });
+    expect(fetchCredentialStorageMock).toHaveBeenCalled();
+    expect(screen.queryByText(warningTitle)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
+  });
+
+  it("does not warn while credential storage is loading", async () => {
+    fetchCredentialStorageMock.mockReturnValue(new Promise(() => {}));
+    await act(async () => {
+      renderBackupCard();
+    });
+    expect(screen.queryByText(warningTitle)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
+  });
+
+  it("explains a failed credential storage load without blocking export", async () => {
+    fetchCredentialStorageMock.mockRejectedValue(
+      new Error("credential storage unavailable"),
+    );
+    const user = userEvent.setup();
+    await act(async () => {
+      renderBackupCard();
+    });
+    const unknown =
+      "Could not check whether stored keys are encrypted: credential storage unavailable";
+    expect(screen.getByRole("alert")).toHaveTextContent(unknown);
+    expect(screen.queryByText(warningTitle)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
+
     await user.click(screen.getByRole("checkbox", { name: "All data" }));
     await user.click(
       screen.getByRole("checkbox", { name: "Trading connections" }),
     );
-    expect(screen.queryByText(exportWarning)).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("checkbox", { name: "Market-data settings" }),
+    );
+    expect(screen.queryByText(unknown)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
+  });
+
+  it("warns about trading keys only when the effective export scope includes trading", async () => {
+    fetchCredentialStorageMock.mockResolvedValue(unsealedStorage(true, false));
+    const user = userEvent.setup();
+    renderBackupCard();
+    expect(await screen.findByText(tradingKeysLine)).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "All data" }));
-    expect(screen.getByText(exportWarning)).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("checkbox", { name: "Trading connections" }),
+    );
+    expect(screen.queryByText(warningTitle)).not.toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "All data" }));
-    expect(screen.queryByText(exportWarning)).not.toBeInTheDocument();
+    expect(screen.getByText(tradingKeysLine)).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "All data" }));
+    expect(screen.queryByText(warningTitle)).not.toBeInTheDocument();
     await user.click(
       screen.getByRole("checkbox", { name: "Orders, trades, adjustments" }),
     );
-    expect(screen.getByText(exportWarning)).toBeInTheDocument();
+    expect(screen.getByText(tradingKeysLine)).toBeInTheDocument();
   });
 
   it.each(["Export", "Restore"])(
@@ -545,10 +623,7 @@ describe("BackupCard", () => {
   });
 
   it("exports all accounts with trading connections and restores narrowing when deselected", async () => {
-    fetchTradingMock.mockResolvedValue({
-      ...tradingSnapshot,
-      credentialsSealed: true,
-    });
+    fetchTradingMock.mockResolvedValue(tradingSnapshot);
     exportBackupMock.mockResolvedValue({
       blob: new Blob(["backup"]),
       filename: "backup.zip",
@@ -618,7 +693,13 @@ describe("BackupCard", () => {
     );
     const user = userEvent.setup();
     renderBackupCard();
-    await screen.findByText(exportWarning);
+    // Trading has loaded with a connection once the export tab locks the
+    // account selector to all accounts.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: "All accounts and groups" }),
+      ).toBeDisabled(),
+    );
     await user.click(screen.getByRole("tab", { name: "Restore" }));
     await user.click(screen.getByRole("checkbox", { name: "All data" }));
     const allAccounts = screen.getByRole("checkbox", {

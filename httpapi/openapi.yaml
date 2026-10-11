@@ -4615,6 +4615,28 @@ paths:
               schema:
                 type: string
 
+  /credential-storage:
+    get:
+      operationId: getCredentialStorage
+      summary: Whether stored credentials are sealed or hold plaintext keys
+      description: >
+        Reports whether stored credentials are sealed under the master key and,
+        when they are not, whether trading connections or market-data sources
+        hold keys in plain text. The response never carries credential values
+        or key names.
+      tags: [dashboard]
+      responses:
+        "200":
+          description: Credential storage state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialStorage"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
 # =============================================================================
 # Components
 # =============================================================================
@@ -7059,6 +7081,29 @@ components:
           type: integer
           description: Number of lines returned.
 
+    CredentialStorage:
+      type: object
+      additionalProperties: false
+      description: >
+        How stored credentials sit at rest. It never carries a credential value
+        or a key name; every flag is present even when false, and both
+        plaintext flags are false while credentials are sealed.
+      required: [credentialsSealed, plaintextTradingKeys, plaintextMarketDataKeys]
+      properties:
+        credentialsSealed:
+          type: boolean
+          description: Credentials written now are sealed under the master key.
+        plaintextTradingKeys:
+          type: boolean
+          description: >-
+            Credentials are not sealed and at least one trading connection holds
+            a key.
+        plaintextMarketDataKeys:
+          type: boolean
+          description: >-
+            Credentials are not sealed and at least one market-data source holds
+            a key.
+
     # User settings
 
     UserSettings:
@@ -7135,7 +7180,15 @@ components:
 
     TradingState:
       type: string
-      enum: [running, unavailable, stopped]
+      enum: [running, degraded, unavailable, stopped]
+      description: |
+        Runtime state of a trading connection.
+        - `running`: the connection runs, sends and receives venue updates.
+        - `degraded`: the connection runs and sends, but its venue stream is
+          failing and reconnecting.
+        - `unavailable`: the connection cannot reach the venue and refuses
+          sends.
+        - `stopped`: no worker runs for the connection.
 
     TradingCredentials:
       type: object
@@ -7203,7 +7256,7 @@ components:
     TradingConnection:
       type: object
       additionalProperties: false
-      required: [id, provider, label, mode, enabled, venueIdentity, feeAccount, state, secrets, instruments, access]
+      required: [id, provider, label, mode, enabled, venueIdentity, feeAccount, state, diagnostics, secrets, instruments, access]
       properties:
         id:
           $ref: "#/components/schemas/Id"
@@ -7227,7 +7280,12 @@ components:
           $ref: "#/components/schemas/TradingState"
         error:
           type: string
-          description: Omitted unless unavailable and a reason is present.
+          description: Present when state is degraded or unavailable.
+        diagnostics:
+          type: array
+          description: Operator-facing diagnostics of the connection, oldest first; empty when there are none.
+          items:
+            $ref: "#/components/schemas/Diagnostic"
         secrets:
           type: object
           additionalProperties:
@@ -7266,15 +7324,13 @@ components:
           $ref: "#/components/schemas/TradingState"
         error:
           type: string
-          description: Omitted unless unavailable and a reason is present.
+          description: Present when state is degraded or unavailable.
 
     Trading:
       type: object
       additionalProperties: false
-      description: >
-        Collections are always present, including empty arrays;
-        credentialsSealed is present even when false.
-      required: [providers, connections, credentialsSealed]
+      description: Collections are always present, including empty arrays.
+      required: [providers, connections]
       properties:
         providers:
           type: array
@@ -7284,8 +7340,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TradingConnection"
-        credentialsSealed:
-          type: boolean
 
     TradingResponse:
       type: object
@@ -7742,7 +7796,7 @@ components:
           type: array
           description: Operator-facing diagnostics for this instance.
           items:
-            $ref: "#/components/schemas/MarketDataDiagnostic"
+            $ref: "#/components/schemas/Diagnostic"
 
     MarketDataReferences:
       type: object
@@ -7754,8 +7808,9 @@ components:
           type: string
           description: URL to a provider symbol catalogue.
 
-    MarketDataDiagnostic:
+    Diagnostic:
       type: object
+      description: One operator-facing health diagnostic of a market-data instance or a trading connection.
       required: [level, code, kind, title, detail, at]
       properties:
         level:
@@ -7783,14 +7838,15 @@ components:
           type: array
           description: Suggested operator actions.
           items:
-            $ref: "#/components/schemas/MarketDataDiagnosticAction"
+            $ref: "#/components/schemas/DiagnosticAction"
         at:
           type: string
           format: date-time
           description: When the diagnostic was recorded.
 
-    MarketDataDiagnosticAction:
+    DiagnosticAction:
       type: object
+      description: One operator action a diagnostic offers.
       required: [type]
       properties:
         type:

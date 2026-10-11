@@ -145,7 +145,7 @@ func (scopeTradingRuntime) Providers() []trading.Provider {
 	}}
 }
 
-func (scopeTradingRuntime) ConnectionStates() map[domain.ExternalID]trading.ConnectionState {
+func (scopeTradingRuntime) ConnectionStatuses() map[domain.ExternalID]trading.ConnectionStatus {
 	return nil
 }
 

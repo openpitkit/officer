@@ -183,8 +183,8 @@ func (s *setMDErrSource) CancelOrder(
 
 // TestSetMarketDataInstrumentSourceFailure covers the path where the gate
 // passes, both required fields are present, but the source mutation returns an
-// error: the handler must surface the "set market-data instrument failed" tool
-// error.
+// error that is not a domain error: the handler must surface it as an internal
+// error, as REST does.
 func TestSetMarketDataInstrumentSourceFailure(t *testing.T) {
 	t.Parallel()
 	src := &setMDErrSource{setMDErr: errors.New("store write rejected")}
@@ -192,7 +192,7 @@ func TestSetMarketDataInstrumentSourceFailure(t *testing.T) {
 		InstanceExternalID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
 	})
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "set market-data instrument failed" {
+	if got := textContent(res.Content); got != "internal: internal error" {
 		t.Fatalf("unexpected error text: %q", got)
 	}
 }
@@ -258,6 +258,10 @@ func TestHandlerNilSource(t *testing.T) {
 
 func (s *setMDErrSource) GetTrading(ctx context.Context) (backend.TradingStatus, error) {
 	return backend.TradingStatus{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) CredentialStorage(ctx context.Context) (backend.CredentialStorage, error) {
+	return backend.CredentialStorage{}, domain.ErrNotImplemented
 }
 
 func (s *setMDErrSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {

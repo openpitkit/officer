@@ -20,13 +20,16 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	"go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -68,7 +71,7 @@ type MarketDataInstanceStatus struct {
 	SearchesSymbols bool
 	State           string
 	Error           string
-	Diagnostics     []marketdata.Diagnostic
+	Diagnostics     []health.Diagnostic
 }
 
 // MarketDataStatus is the operator-facing market-data control-plane snapshot.
@@ -853,12 +856,12 @@ func mergeMarketDataCredentials(existing, update string) (string, error) {
 	}
 	merged := make(map[string]any)
 	if existing != "" {
-		if err := json.Unmarshal([]byte(existing), &merged); err != nil {
+		if err := decodeCredentialsJSON(existing, &merged); err != nil {
 			return "", fmt.Errorf("market-data stored credentials: %w", domain.ErrInvalid)
 		}
 	}
 	var incoming map[string]any
-	if err := json.Unmarshal([]byte(update), &incoming); err != nil {
+	if err := decodeCredentialsJSON(update, &incoming); err != nil {
 		return "", fmt.Errorf("market-data credentials: %w", domain.ErrInvalid)
 	}
 	for key, value := range incoming {
@@ -877,6 +880,69 @@ func mergeMarketDataCredentials(existing, update string) (string, error) {
 		return "", fmt.Errorf("market-data credentials: %w", err)
 	}
 	return string(out), nil
+}
+
+// decodeCredentialsJSON decodes raw as exactly one JSON value, as strictly as
+// json.Unmarshal, but keeps numbers as json.Number: a float64 round trip
+// would rewrite an integer above 2^53 that the merge must carry unchanged.
+func decodeCredentialsJSON(raw string, out *map[string]any) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("credentials continue after the JSON value")
+	}
+	return nil
+}
+
+// MarketDataSecrets reports which secret credentials a market-data source
+// stores, by name and never by value: the Alpaca apiKey (alias key) and
+// apiSecret (alias secret), and the OANDA and Finnhub token. It is nil for any
+// other provider, whose credentials it never reads, and when the stored
+// credentials are empty or hold no secret. It fails only when the credentials
+// of one of those three providers are not a JSON object.
+func MarketDataSecrets(instance domain.MarketDataInstance) (map[string]bool, error) {
+	switch instance.Provider {
+	case domain.MarketDataProviderAlpaca, domain.MarketDataProviderOANDA,
+		domain.MarketDataProviderFinnhub:
+	default:
+		// A provider without a secret may store any valid JSON, such
+		// as null, so its credentials are never read.
+		return nil, nil
+	}
+	raw := strings.TrimSpace(instance.Credentials)
+	if raw == "" {
+		return nil, nil
+	}
+	var credentials map[string]any
+	// The decode error stays unwrapped: it can quote part of a
+	// credential value.
+	if err := decodeCredentialsJSON(raw, &credentials); err != nil || credentials == nil {
+		return nil, fmt.Errorf("stored market-data credentials are not a JSON object: %w", domain.ErrInvalid)
+	}
+	secrets := make(map[string]bool)
+	switch instance.Provider {
+	case domain.MarketDataProviderAlpaca:
+		secrets["apiKey"] = stringCredentialPresent(credentials, "apiKey") ||
+			stringCredentialPresent(credentials, "key")
+		secrets["apiSecret"] = stringCredentialPresent(credentials, "apiSecret") ||
+			stringCredentialPresent(credentials, "secret")
+	case domain.MarketDataProviderOANDA, domain.MarketDataProviderFinnhub:
+		secrets["token"] = stringCredentialPresent(credentials, "token")
+	}
+	if !holdsSecret(secrets) {
+		return nil, nil
+	}
+	return secrets, nil
+}
+
+// stringCredentialPresent reports whether the credential under key is a
+// non-blank string.
+func stringCredentialPresent(credentials map[string]any, key string) bool {
+	value, ok := credentials[key].(string)
+	return ok && strings.TrimSpace(value) != ""
 }
 
 func validateMarketDataInstance(registry *marketdata.Registry, instance domain.MarketDataInstance) error {

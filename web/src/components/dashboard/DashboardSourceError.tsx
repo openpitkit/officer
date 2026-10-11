@@ -32,13 +32,17 @@ export interface DashboardSourceErrorProps {
   /** Title of the source's latest diagnostic; shown after a dash when there
    *  is no error text. */
   diagnostic?: string;
+  /** `warn` for a source that still works but reports a problem; `danger`
+   *  by default. */
+  variant?: "danger" | "warn";
 }
 
-/** Danger chip for a failed dashboard source, its cause clipped to fit. */
+/** Chip for a failed or degraded dashboard source, its cause clipped to fit. */
 export function DashboardSourceError({
   title,
   error,
   diagnostic,
+  variant = "danger",
 }: DashboardSourceErrorProps) {
   const detail = error
     ? `: ${clip(error)}`
@@ -46,7 +50,7 @@ export function DashboardSourceError({
       ? ` - ${clip(diagnostic)}`
       : "";
   return (
-    <Badge variant="danger">
+    <Badge variant={variant}>
       {title}
       {detail}
     </Badge>

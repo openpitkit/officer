@@ -54,16 +54,27 @@ Non-mutating tools are enabled by default. Every tool that changes state ships
 disabled, stays disabled until an operator enables it by name, and refuses the
 call while it is off.
 
+An error Officer reports for a tool call answers a text of the form
+`<code>: <message>`, with the same code and message the REST API answers for
+that error (see Errors) - including a value Officer rejects (`validation`) and
+a refused trading access (`forbidden`). A `destination_ambiguous` error also
+lists its candidate connections. Plain text comes back only from a check the
+tool makes before it calls Officer - a required argument left empty, or an
+argument the tool parses itself - and from the MCP gate's own refusals: an
+unauthorized caller, a failed command-access check, and a disabled command.
+
 ## Trading
 
 Trading credentials are JSON objects accepted on write; no trading route or
 MCP tool returns them. A backup export carries the stored credentials according
 to its `credentialForm`: sealed under a master key, plaintext without one, as with
 market-data credentials. Modes are `paper` and `live`; live connection creation
-is refused until the live-trading token exists. `GET /trading` reports
-`credentialsSealed`, which tells whether stored keys are sealed. An instrument
-mapping whose base or quote asset Officer does not know is refused with
-`asset_missing`, naming the asset; Officer never creates the asset itself.
+is refused until the live-trading token exists. `GET /credential-storage` and
+the MCP tool `get_credential_storage` report whether stored credentials are
+sealed under the master key and, when they are not, whether trading connections
+or market-data sources hold keys in plain text.
+An instrument mapping whose base or quote asset Officer does not know is refused
+with `asset_missing`, naming the asset; Officer never creates the asset itself.
 
 A venue-linked order is managed by its venue connection. Manual execution
 reports, confirm and cancel refuse it with `venue_order_managed`. Trading MCP

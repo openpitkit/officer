@@ -35,6 +35,7 @@ import (
 	"unsafe"
 
 	"github.com/scmhub/ibapi"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -64,8 +65,8 @@ const (
 type ibConnector struct {
 	newClient  func(ibapi.EWrapper) ibClient
 	sleep      func(context.Context, time.Duration) error
-	report     fwmarketdata.StatusReporter
-	diagReport fwmarketdata.DiagnosticReporter
+	report     health.StatusReporter
+	diagReport health.DiagnosticReporter
 	now        func() time.Time
 
 	cfg            ibConfig
@@ -195,7 +196,7 @@ type ibWrapper struct {
 	ibapi.Wrapper
 
 	reportStatus func(bool, string)
-	reportDiag   func(fwmarketdata.Diagnostic)
+	reportDiag   func(health.Diagnostic)
 	now          func() time.Time
 
 	readyOnce sync.Once
@@ -388,7 +389,7 @@ func unsafeReflectValue(value reflect.Value) reflect.Value {
 }
 
 // SetStatusReporter installs the runtime connection status callback.
-func (c *ibConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
+func (c *ibConnector) SetStatusReporter(report health.StatusReporter) {
 	c.report = report
 }
 
@@ -399,33 +400,33 @@ func (c *ibConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the structured diagnostic callback.
-func (c *ibConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
+func (c *ibConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *ibConnector) reportDiag(diag fwmarketdata.Diagnostic) {
+func (c *ibConnector) reportDiag(diag health.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
 // Diagnose returns no-data findings for the active IB subscriptions.
-func (c *ibConnector) Diagnose(context.Context) ([]fwmarketdata.Diagnostic, error) {
+func (c *ibConnector) Diagnose(context.Context) ([]health.Diagnostic, error) {
 	c.subsMu.Lock()
 	subs := append([]ibSubscription(nil), c.subs...)
 	c.subsMu.Unlock()
 
-	findings := make([]fwmarketdata.Diagnostic, 0, len(subs))
+	findings := make([]health.Diagnostic, 0, len(subs))
 	for _, sub := range subs {
-		findings = append(findings, fwmarketdata.Diagnostic{
-			Level:       DiagWarn,
-			Code:        CodeNoData,
-			Kind:        DiagKindProvider,
+		findings = append(findings, health.Diagnostic{
+			Level:       health.DiagWarn,
+			Code:        health.CodeNoData,
+			Kind:        health.DiagKindProvider,
 			Title:       "No IB quote received",
 			Detail:      "Interactive Brokers has not emitted a quote for this subscription.",
 			Remediation: "Check TWS/Gateway contract resolution, market-data permissions, and the requested marketDataType.",
 			Instrument:  sub.External,
-			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 		})
 	}
 	return findings, nil
@@ -502,7 +503,7 @@ func (c *ibConnector) SearchSymbols(
 				err = errors.Join(err, disconnectErr)
 				return
 			}
-			// Registry searches use a fresh connector without a DiagnosticReporter,
+			// Registry searches use a fresh connector without a diagnostic reporter,
 			// so this cleanup failure stays on the process logger.
 			slog.Error(
 				"disconnect ib symbol search client",
@@ -647,14 +648,14 @@ func (c *ibConnector) stream(
 			if err != nil && !errors.Is(err, context.Canceled) {
 				err = errors.Join(err, disconnectErr)
 			}
-			c.reportDiag(fwmarketdata.Diagnostic{
-				Level:       DiagError,
-				Code:        CodeConnectionError,
-				Kind:        DiagKindProvider,
+			c.reportDiag(health.Diagnostic{
+				Level:       health.DiagError,
+				Code:        health.CodeConnectionError,
+				Kind:        health.DiagKindProvider,
 				Title:       "Interactive Brokers disconnect failed",
 				Detail:      disconnectErr.Error(),
 				Remediation: "Check that TWS/Gateway released the client ID, then Restart feeds.",
-				Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+				Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 			})
 		}
 	}()
@@ -738,7 +739,7 @@ func newIBWrapper(
 	out chan<- fwmarketdata.QuoteUpdate,
 	now func() time.Time,
 	reportStatus func(bool, string),
-	reportDiag func(fwmarketdata.Diagnostic),
+	reportDiag func(health.Diagnostic),
 ) *ibWrapper {
 	subMap := make(map[ibapi.TickerID]ibSubscription, len(subs))
 	quotes := make(map[ibapi.TickerID]ibPartialQuote, len(subs))
@@ -795,49 +796,49 @@ func (w *ibWrapper) Error(
 		return
 	}
 
-	diag := fwmarketdata.Diagnostic{
-		Level:       DiagError,
-		Code:        CodeConnectionError,
-		Kind:        DiagKindProvider,
+	diag := health.Diagnostic{
+		Level:       health.DiagError,
+		Code:        health.CodeConnectionError,
+		Kind:        health.DiagKindProvider,
 		Title:       "Interactive Brokers error",
 		Detail:      fmt.Sprintf("IB API error %d: %s", code, detail),
 		Remediation: "Check the TWS/Gateway API settings, market-data permissions, and contract configuration.",
-		Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+		Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 	}
 	switch {
 	case ibInformationalError(code):
-		diag.Level = DiagInfo
+		diag.Level = health.DiagInfo
 		diag.Routine = true
 		diag.Title = "IB connection status"
 		diag.Remediation = ""
 		diag.Actions = nil
 	case ibRecoverableConnectionError(code):
-		diag.Level = DiagWarn
+		diag.Level = health.DiagWarn
 		diag.Title = "IB connection interrupted"
 		diag.Remediation = "Wait for TWS/Gateway connectivity to recover, or Restart feeds if the status does not clear."
 	case ibMarketDataUnavailableError(code):
-		diag.Level = DiagWarn
-		diag.Code = CodeNoData
-		diag.Kind = DiagKindConfig
+		diag.Level = health.DiagWarn
+		diag.Code = health.CodeNoData
+		diag.Kind = health.DiagKindConfig
 		diag.Title = "IB market data unavailable"
 		diag.Remediation = "Check account entitlements and the requested market-data type, then Restart feeds."
 	case code == 326:
-		diag.Level = DiagWarn
-		diag.Kind = DiagKindConfig
+		diag.Level = health.DiagWarn
+		diag.Kind = health.DiagKindConfig
 		diag.Title = "IB client ID already in use"
 		diag.Remediation = "Configure a unique clientId for this Officer IB provider instance, then Restart feeds."
 	}
 	if sub, ok := w.subscription(reqID); ok {
 		diag.Instrument = sub.External
 		if code == 200 {
-			diag.Code = CodeUnknownSymbol
-			diag.Kind = DiagKindConfig
+			diag.Code = health.CodeUnknownSymbol
+			diag.Kind = health.DiagKindConfig
 			diag.Title = "IB contract not found"
 			diag.Detail = fmt.Sprintf("IB did not resolve contract %q: %s", sub.External, detail)
 			diag.Remediation = "Adjust the external symbol or the IB contract override, then Restart feeds."
-			diag.Actions = []fwmarketdata.DiagnosticAction{
-				{Type: ActionRemoveInstrument, Target: sub.External},
-				{Type: ActionOpenDocs},
+			diag.Actions = []health.DiagnosticAction{
+				{Type: health.ActionRemoveInstrument, Target: sub.External},
+				{Type: health.ActionOpenDocs},
 			}
 		}
 	}
@@ -973,14 +974,14 @@ func (w *ibWrapper) reportTickNoData(reqID ibapi.TickerID, tickType ibapi.TickTy
 	sub, hasSub := w.subs[reqID]
 	w.mu.Unlock()
 
-	diag := fwmarketdata.Diagnostic{
-		Level:       DiagWarn,
-		Code:        CodeNoData,
-		Kind:        DiagKindProvider,
+	diag := health.Diagnostic{
+		Level:       health.DiagWarn,
+		Code:        health.CodeNoData,
+		Kind:        health.DiagKindProvider,
 		Title:       "IB tick has no data",
 		Detail:      fmt.Sprintf("IB returned no data for %s.", ibapi.TickName(tickType)),
 		Remediation: "Check IB market-data permissions and contract availability.",
-		Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionOpenDocs}},
+		Actions:     []health.DiagnosticAction{{Type: health.ActionOpenDocs}},
 	}
 	if hasSub {
 		diag.Instrument = sub.External
@@ -1013,26 +1014,26 @@ func (w *ibWrapper) MarketDataType(reqID ibapi.TickerID, marketDataType int64) {
 		name = fmt.Sprintf("unknown(%d)", marketDataType)
 	}
 	if marketDataType == int64(ibapi.REALTIME) {
-		w.reportDiag(fwmarketdata.Diagnostic{
-			Level:      DiagInfo,
+		w.reportDiag(health.Diagnostic{
+			Level:      health.DiagInfo,
 			Routine:    true,
-			Code:       CodeDataFreshness,
-			Kind:       DiagKindProvider,
+			Code:       health.CodeDataFreshness,
+			Kind:       health.DiagKindProvider,
 			Title:      "IB market data type: realtime",
 			Detail:     "Interactive Brokers is serving realtime market data.",
 			Instrument: w.instrumentName(reqID),
 		})
 		return
 	}
-	w.reportDiag(fwmarketdata.Diagnostic{
-		Level:       DiagWarn,
-		Code:        CodeDataFreshness,
-		Kind:        DiagKindProvider,
+	w.reportDiag(health.Diagnostic{
+		Level:       health.DiagWarn,
+		Code:        health.CodeDataFreshness,
+		Kind:        health.DiagKindProvider,
 		Title:       "IB market data is not realtime",
 		Detail:      "Interactive Brokers is serving " + name + " market data.",
 		Remediation: "Check account entitlements or the requested marketDataType in provider credentials.",
 		Instrument:  w.instrumentName(reqID),
-		Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionOpenDocs}},
+		Actions:     []health.DiagnosticAction{{Type: health.ActionOpenDocs}},
 	})
 }
 

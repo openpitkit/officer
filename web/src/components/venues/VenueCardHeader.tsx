@@ -20,7 +20,13 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
+
+const ERROR_TONE_CLASS = {
+  danger: "text-[var(--danger)]",
+  warn: "text-[var(--warn)]",
+} as const;
 
 /** Presentation-only header content assembled by the owning page. */
 export interface VenueCardHeaderProps {
@@ -34,6 +40,9 @@ export interface VenueCardHeaderProps {
   badges?: ReactNode;
   /** Already formatted error text; only non-empty strings show the paragraph. */
   error?: string;
+  /** `warn` for a source that still works but reports a problem; `danger`
+   *  by default. */
+  errorTone?: "danger" | "warn";
   links?: { siteUrl?: string; docsUrl?: string; symbolsUrl?: string };
   actions?: ReactNode;
 }
@@ -46,6 +55,7 @@ export function VenueCardHeader({
   description,
   badges,
   error,
+  errorTone = "danger",
   links,
   actions,
 }: VenueCardHeaderProps) {
@@ -76,7 +86,12 @@ export function VenueCardHeader({
               </div>
             )}
           {error !== undefined && error !== "" && (
-            <p className="mt-1.5 break-words text-xs text-[var(--danger)]">
+            <p
+              className={cn(
+                "mt-1.5 break-words text-xs",
+                ERROR_TONE_CLASS[errorTone],
+              )}
+            >
               {error}
             </p>
           )}

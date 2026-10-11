@@ -127,5 +127,26 @@
   },
   "emptyInstruments": "未配置工具",
   "emptyConnections": "没有交易连接",
-  "venueAccount": "交易场所账户"
+  "venueAccount": "交易场所账户",
+  "unsealed": {
+    "title": "密钥将以未加密形式保存",
+    "description": "Officer 未配置主密钥，因此这些密钥会以明文写入数据库。任何能够读取数据库或备份的人都可以使用这些密钥，在密钥允许的情况下还可以用于交易。请设置主密钥以加密保存这些密钥。",
+    "caution": "主密钥丢失后将无法打开数据库 - 请在设置前备份主密钥。"
+  },
+  "diagnostics": {
+    "title": "问题",
+    "summary": "当前：{{count}}",
+    "collapsedSummary": "问题：{{count}}",
+    "collapse": "收起",
+    "expand": "打开",
+    "actions": "问题操作",
+    "levelError": "错误",
+    "levelWarn": "警告",
+    "levelInfo": "信息",
+    "groupActionNeeded": "需要操作",
+    "groupProvider": "连接 / 提供方",
+    "howToFix": "解决方法：",
+    "actionRemoveTarget": "删除 {{target}}",
+    "actionLogs": "服务日志"
+  }
 }

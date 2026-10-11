@@ -20,3 +20,4 @@ export * from "./DashboardNote";
 export * from "./DashboardSourceRow";
 export * from "./DashboardItemChips";
 export * from "./DashboardSourceError";
+export * from "./DashboardIssueCount";

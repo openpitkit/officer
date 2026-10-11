@@ -156,6 +156,7 @@ func TestCatalogParity(t *testing.T) {
 	want = append(want,
 		catalog.CatalogCommand{Name: "send_paper_order", Title: "Send paper order", AgentDescription: "Check, hold and send an order to a paper venue.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
 		catalog.CatalogCommand{Name: "get_trading", Title: "Get trading", AgentDescription: "Read trading providers and connections.", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
+		catalog.CatalogCommand{Name: "get_credential_storage", Title: "Get credential storage", AgentDescription: "Read whether stored credentials are sealed and which hold plaintext keys.", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 		catalog.CatalogCommand{Name: "create_trading_connection", Title: "Create trading connection", AgentDescription: "Create a trading connection with write-only credentials.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
 		catalog.CatalogCommand{Name: "update_trading_connection", Title: "Update trading connection", AgentDescription: "Update a trading connection label or write-only credentials.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
 		catalog.CatalogCommand{Name: "set_trading_connection_enabled", Title: "Set trading connection enabled", AgentDescription: "Enable or disable a trading connection.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
@@ -197,7 +198,7 @@ func TestImplementedDescriptorOrder(t *testing.T) {
 		"confirm_execution",
 		"cancel",
 	}
-	want = append(want, "send_paper_order", "get_trading", "create_trading_connection", "update_trading_connection", "set_trading_connection_enabled", "check_trading_connection", "set_trading_instrument", "delete_trading_instrument", "verify_trading_symbol", "search_trading_symbols", "grant_trading_access", "revoke_trading_access", "set_trading_fee_account", "clear_trading_fee_account", "list_trading_destinations")
+	want = append(want, "send_paper_order", "get_trading", "get_credential_storage", "create_trading_connection", "update_trading_connection", "set_trading_connection_enabled", "check_trading_connection", "set_trading_instrument", "delete_trading_instrument", "verify_trading_symbol", "search_trading_symbols", "grant_trading_access", "revoke_trading_access", "set_trading_fee_account", "clear_trading_fee_account", "list_trading_destinations")
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("implemented tool order mismatch\nwant: %#v\ngot:  %#v", want, got)
 	}

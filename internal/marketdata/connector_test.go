@@ -20,6 +20,7 @@ package marketdata
 import (
 	"context"
 	"errors"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"io"
 	"strings"
@@ -96,14 +97,14 @@ func TestProviderUnknownSymbolDiag(t *testing.T) {
 	t.Parallel()
 
 	diag := providerUnknownSymbolDiag("Provider", "BAD")
-	if diag.Code != CodeUnknownSymbol || diag.Kind != DiagKindConfig {
+	if diag.Code != health.CodeUnknownSymbol || diag.Kind != health.DiagKindConfig {
 		t.Fatalf("diag = %+v", diag)
 	}
 	if diag.Instrument != "BAD" {
 		t.Fatalf("instrument = %q, want BAD", diag.Instrument)
 	}
-	if len(diag.Actions) != 2 || diag.Actions[0].Type != ActionRemoveInstrument ||
-		diag.Actions[0].Target != "BAD" || diag.Actions[1].Type != ActionOpenSymbols {
+	if len(diag.Actions) != 2 || diag.Actions[0].Type != health.ActionRemoveInstrument ||
+		diag.Actions[0].Target != "BAD" || diag.Actions[1].Type != health.ActionOpenSymbols {
 		t.Fatalf("actions = %+v", diag.Actions)
 	}
 }
@@ -344,8 +345,8 @@ func TestUnparsableTrackerReportsOnceAfterThreshold(t *testing.T) {
 	t.Parallel()
 
 	var tracker unparsableTracker
-	var diagnostics []fwmarketdata.Diagnostic
-	report := func(diag fwmarketdata.Diagnostic) { diagnostics = append(diagnostics, diag) }
+	var diagnostics []health.Diagnostic
+	report := func(diag health.Diagnostic) { diagnostics = append(diagnostics, diag) }
 
 	tracker.recordUnparsed(report)
 	tracker.recordUnparsed(report)
@@ -354,7 +355,7 @@ func TestUnparsableTrackerReportsOnceAfterThreshold(t *testing.T) {
 	}
 	tracker.recordUnparsed(report)
 	tracker.recordUnparsed(report)
-	if len(diagnostics) != 1 || diagnostics[0].Code != CodeUnparsableData {
+	if len(diagnostics) != 1 || diagnostics[0].Code != health.CodeUnparsableData {
 		t.Fatalf("diagnostics = %+v, want one unparsable_data", diagnostics)
 	}
 }
@@ -363,8 +364,8 @@ func TestUnparsableTrackerDoesNotReportAfterParsedFrame(t *testing.T) {
 	t.Parallel()
 
 	var tracker unparsableTracker
-	var diagnostics []fwmarketdata.Diagnostic
-	report := func(diag fwmarketdata.Diagnostic) { diagnostics = append(diagnostics, diag) }
+	var diagnostics []health.Diagnostic
+	report := func(diag health.Diagnostic) { diagnostics = append(diagnostics, diag) }
 
 	tracker.recordParsed()
 	for i := 0; i < unparsableThreshold+1; i++ {

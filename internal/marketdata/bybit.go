@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -48,8 +49,8 @@ type bybitConnector struct {
 	dial         func(context.Context, string) (bybitConn, error)
 	sleep        func(context.Context, time.Duration) error
 	fetchSymbols func(context.Context, string) (map[string]struct{}, error)
-	report       fwmarketdata.StatusReporter
-	diagReport   fwmarketdata.DiagnosticReporter
+	report       health.StatusReporter
+	diagReport   health.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	pingInterval time.Duration
@@ -160,7 +161,7 @@ func (c liveBybitConn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *bybitConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
+func (c *bybitConnector) SetStatusReporter(report health.StatusReporter) {
 	c.report = report
 }
 
@@ -171,11 +172,11 @@ func (c *bybitConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *bybitConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
+func (c *bybitConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *bybitConnector) reportDiag(diag fwmarketdata.Diagnostic) {
+func (c *bybitConnector) reportDiag(diag health.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
@@ -219,7 +220,7 @@ func (c *bybitConnector) SearchSymbols(
 
 // Diagnose returns a diagnostic for each stored Bybit subscription whose symbol
 // is not listed by the provider catalogue for the configured category.
-func (c *bybitConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
+func (c *bybitConnector) Diagnose(ctx context.Context) ([]health.Diagnostic, error) {
 	diagCtx, cancel := context.WithTimeout(ctx, bybitDiagnoseTimeout)
 	defer cancel()
 
@@ -227,7 +228,7 @@ func (c *bybitConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnosti
 	if err != nil {
 		return nil, err
 	}
-	var findings []fwmarketdata.Diagnostic
+	var findings []health.Diagnostic
 	for _, sub := range c.subs {
 		if _, ok := known[sub.symbol]; ok {
 			continue
@@ -299,14 +300,14 @@ func (c *bybitConnector) validateSymbols(
 
 	known, err := c.fetchSymbols(validateCtx, c.category)
 	if err != nil {
-		c.reportDiag(fwmarketdata.Diagnostic{
-			Level:       DiagWarn,
-			Code:        CodeSelfDiagnosisFailed,
-			Kind:        DiagKindProvider,
+		c.reportDiag(health.Diagnostic{
+			Level:       health.DiagWarn,
+			Code:        health.CodeSelfDiagnosisFailed,
+			Kind:        health.DiagKindProvider,
 			Title:       "Self-diagnosis failed",
 			Detail:      "symbol validation unavailable: " + err.Error(),
 			Remediation: "Couldn't validate against the provider; try Restart feeds.",
-			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 		})
 		return subs
 	}

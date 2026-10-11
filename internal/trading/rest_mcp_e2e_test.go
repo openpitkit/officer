@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -89,12 +90,17 @@ type tradingE2E struct {
 	venueMu        sync.Mutex
 	fees           []map[string]string
 	accountError   bool
+	accountRefusal string
 	requests       map[string]int
 	streams        chan struct{}
 	pendingStreams int
 	stream         *websocket.Conn
-	posts          []map[string]string
-	venueOrder     map[string]string
+	// streamFault, when set, makes the venue fail every stream handshake
+	// after the auth frame: "unauthorized" refuses it, "close" closes the
+	// connection with a reason that echoes the credentials.
+	streamFault string
+	posts       []map[string]string
+	venueOrder  map[string]string
 }
 
 func tradingE2EMust(t *testing.T, err error) {
@@ -132,7 +138,30 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 				return
 			}
 			defer func() { _ = conn.CloseNow() }()
-			if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
+			if !readAuth(t, ctx, conn) {
+				return
+			}
+			f.venueMu.Lock()
+			fault := f.streamFault
+			f.venueMu.Unlock()
+			if fault != "" {
+				switch fault {
+				case "unauthorized":
+					sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":"unauthorized","action":"authenticate"}}`)
+				case "close":
+					_ = conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker")
+				default:
+					t.Errorf("unknown stream fault %q", fault)
+				}
+				// A refused attempt releases one waiter; retries find
+				// the slot taken and do not block.
+				select {
+				case f.streams <- struct{}{}:
+				default:
+				}
+				return
+			}
+			if !completeHandshake(t, ctx, conn) {
 				return
 			}
 			f.venueMu.Lock()
@@ -144,6 +173,17 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 				return
 			}
 			_, _, _ = conn.Read(ctx)
+			return
+		}
+		f.venueMu.Lock()
+		refusal := f.accountRefusal
+		f.venueMu.Unlock()
+		// A set refusal answers before the gate below, so it can echo
+		// credentials other than the shared markers.
+		if refusal != "" && r.URL.Path == "/v2/account" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 40110000, "message": refusal})
 			return
 		}
 		primary := r.Header.Get("APCA-API-KEY-ID") == "test-key-marker" && r.Header.Get("APCA-API-SECRET-KEY") == "test-secret-marker"
@@ -381,15 +421,19 @@ type tradingE2EConnection struct {
 	Secrets       map[string]bool            `json:"secrets"`
 	Instruments   []domain.TradingInstrument `json:"instruments"`
 	Access        []domain.TradingAccess     `json:"access"`
+	State         string                     `json:"state"`
+	Error         string                     `json:"error"`
+	Diagnostics   []struct {
+		Level, Code, Kind, Title, Detail string
+	} `json:"diagnostics"`
 }
 
 type tradingE2ECreated struct {
 	Connection tradingE2EConnection `json:"connection"`
 }
 type tradingE2ESnapshot struct {
-	Providers         []json.RawMessage      `json:"providers"`
-	Connections       []tradingE2EConnection `json:"connections"`
-	CredentialsSealed *bool                  `json:"credentialsSealed"`
+	Providers   []json.RawMessage      `json:"providers"`
+	Connections []tradingE2EConnection `json:"connections"`
 }
 type tradingE2ETrading struct {
 	Trading tradingE2ESnapshot `json:"trading"`
@@ -423,9 +467,9 @@ func (f *tradingE2E) createREST() string {
 	return c.ID
 }
 
-func tradingE2EAssertSnapshot(t *testing.T, s tradingE2ESnapshot, id string, sealed bool) {
+func tradingE2EAssertSnapshot(t *testing.T, s tradingE2ESnapshot, id string) {
 	t.Helper()
-	if s.CredentialsSealed == nil || *s.CredentialsSealed != sealed || len(s.Providers) != 1 || len(s.Connections) != 1 {
+	if len(s.Providers) != 1 || len(s.Connections) != 1 {
 		t.Fatalf("trading snapshot shape = %+v", s)
 	}
 	c := s.Connections[0]
@@ -433,6 +477,17 @@ func tradingE2EAssertSnapshot(t *testing.T, s tradingE2ESnapshot, id string, sea
 		len(c.Instruments) != 1 || c.Instruments[0].ExternalSymbol != "AAPL" || c.Instruments[0].BaseAsset != "AAPL" || c.Instruments[0].QuoteAsset != "USD" || !c.Instruments[0].Enabled ||
 		len(c.Access) != 1 || c.Access[0].Account != "desk" {
 		t.Fatalf("configured connection = %+v", c)
+	}
+}
+
+// tradingE2EAssertStorage checks the installation's credential-storage fact as
+// served on the wire, once a trading connection holding keys exists. A map
+// makes a missing or extra field fail too.
+func tradingE2EAssertStorage(t *testing.T, got map[string]bool, sealed bool) {
+	t.Helper()
+	want := map[string]bool{"credentialsSealed": sealed, "plaintextTradingKeys": !sealed, "plaintextMarketDataKeys": false}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential storage = %v, want %v", got, want)
 	}
 }
 
@@ -459,6 +514,7 @@ func TestTradingRESTEndToEnd(t *testing.T) {
 		t.Run(fmt.Sprintf("sealed=%t", sealed), func(t *testing.T) {
 			f := newTradingE2E(t, sealed)
 			id := f.createREST()
+			tradingE2EAssertStorage(t, tradingE2EDecode[map[string]bool](t, f.rest(http.MethodGet, "/credential-storage", nil, http.StatusOK)), sealed)
 			path := "/trading/connections/" + id
 			check := tradingE2EDecode[struct {
 				Check struct {
@@ -489,7 +545,7 @@ func TestTradingRESTEndToEnd(t *testing.T) {
 			}
 			f.rest(http.MethodPut, path+"/access", map[string]any{"account": "desk"}, http.StatusOK)
 			tradingE2EAssertDestinations(t, tradingE2EDecode[tradingE2EDestinations](t, f.rest(http.MethodGet, "/accounts/desk/trading-destinations?mode=paper", nil, http.StatusOK)), id)
-			tradingE2EAssertSnapshot(t, tradingE2EDecode[tradingE2ETrading](t, f.rest(http.MethodGet, "/trading", nil, http.StatusOK)).Trading, id, sealed)
+			tradingE2EAssertSnapshot(t, tradingE2EDecode[tradingE2ETrading](t, f.rest(http.MethodGet, "/trading", nil, http.StatusOK)).Trading, id)
 			f.assertVenueReads()
 		})
 	}
@@ -521,6 +577,7 @@ func TestTradingMCPEndToEnd(t *testing.T) {
 	}
 	c := tradingE2EStructured[tradingE2ECreated](t, f.mcp("create_trading_connection", input, false)).Connection
 	tradingE2EAssertCreated(t, c)
+	tradingE2EAssertStorage(t, tradingE2EStructured[map[string]bool](t, f.mcp("get_credential_storage", map[string]any{}, false)), true)
 	id := c.ID
 	check := tradingE2EStructured[struct {
 		VenueIdentity string
@@ -546,7 +603,7 @@ func TestTradingMCPEndToEnd(t *testing.T) {
 	}
 	f.mcp("grant_trading_access", map[string]any{"connection": id, "account": "desk", "venueAccount": ""}, false)
 	tradingE2EAssertDestinations(t, tradingE2EStructured[tradingE2EDestinations](t, f.mcp("list_trading_destinations", map[string]any{"account": "desk", "mode": "paper"}, false)), id)
-	tradingE2EAssertSnapshot(t, tradingE2EStructured[tradingE2ESnapshot](t, f.mcp("get_trading", map[string]any{}, false)), id, true)
+	tradingE2EAssertSnapshot(t, tradingE2EStructured[tradingE2ESnapshot](t, f.mcp("get_trading", map[string]any{}, false)), id)
 	f.assertVenueReads()
 }
 
@@ -601,7 +658,7 @@ func TestTradingBlankCredentialEndToEnd(t *testing.T) {
 		t.Fatalf("blank secret MCP content = %v", result.Content)
 	}
 	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok ||
-		!strings.HasPrefix(text.Text, "create trading connection failed: ") || !strings.Contains(text.Text, "apiSecret is required") {
+		text.Text != "validation: trading: build connector: alpaca: apiSecret is required" {
 		t.Fatalf("blank secret MCP error = %v", result.Content)
 	}
 	connections, err := f.realm.ListTradingConnections(f.ctx)
@@ -1229,5 +1286,202 @@ func TestTradingSecretsEndToEnd(t *testing.T) {
 			}
 			tradingE2ENoSecrets(t, "slog", []byte(logs))
 		})
+	}
+}
+
+func TestTradingCredentialSpellingsEndToEnd(t *testing.T) {
+	credentials := map[string]string{"apiKey": "echo-key-marker", "apiSecret": `e2e "s" \ <x&y> +u/v`}
+	stored, err := json.Marshal(credentials)
+	tradingE2EMust(t, err)
+	// The apiSecret in each form the backend redacts. No row contains another,
+	// so each form is checked on its own.
+	spellings := []struct{ form, text string }{
+		{"raw", `e2e "s" \ <x&y> +u/v`},
+		{"json", `e2e \"s\" \\ \u003cx\u0026y\u003e +u/v`},
+		{"json_unescaped_html", `e2e \"s\" \\ <x&y> +u/v`},
+		{"url_query", `e2e+%22s%22+%5C+%3Cx%26y%3E+%2Bu%2Fv`},
+		{"url_path", `e2e%20%22s%22%20%5C%20%3Cx&y%3E%20+u%2Fv`},
+	}
+	for _, spelling := range spellings {
+		t.Run(spelling.form, func(t *testing.T) {
+			f := newTradingE2E(t, false)
+			// Stored directly and disabled: the fake venue's credential gate
+			// and stream know only the shared markers.
+			connection, err := f.realm.CreateTradingConnection(f.ctx, domain.TradingConnection{
+				Provider: domain.TradingProviderAlpaca, Label: "Echo", Mode: domain.TradingModePaper,
+				VenueIdentity: "echo-account", Credentials: string(stored)})
+			tradingE2EMust(t, err)
+			id := connection.ExternalID.String()
+			f.venueMu.Lock()
+			f.accountRefusal = "denied " + spelling.text
+			f.venueMu.Unlock()
+			for _, name := range []string{"check_trading_connection", "create_trading_connection"} {
+				f.rest(http.MethodPut, "/mcp-access/"+name, map[string]any{"enabled": true}, http.StatusOK)
+			}
+			create := tradingE2ECreateInput("Echo", "paper")
+			create["credentials"] = credentials
+			surfaces := map[string]string{
+				"REST check":  string(f.rest(http.MethodPost, "/trading/connections/"+id+"/check", map[string]any{}, http.StatusBadGateway)),
+				"REST create": string(f.rest(http.MethodPost, "/trading/connections", create, http.StatusBadGateway)),
+			}
+			for name, input := range map[string]map[string]any{
+				"check_trading_connection":  {"connection": id},
+				"create_trading_connection": create,
+			} {
+				text, ok := f.mcp(name, input, true).Content[0].(*sdkmcp.TextContent)
+				if !ok {
+					t.Fatalf("MCP %s returned no text", name)
+				}
+				surfaces["MCP "+name] = text.Text
+			}
+			f.close()
+			logs := f.logs.String()
+			surfaces["slog"] = logs
+			for where, text := range surfaces {
+				for _, s := range spellings {
+					if strings.Contains(text, s.text) {
+						t.Fatalf("%s keeps the %s spelling of the secret", where, s.form)
+					}
+				}
+			}
+			// The slog text handler quotes the logged error, escaping a leaked
+			// spelling once more.
+			for _, s := range spellings {
+				quoted := strconv.Quote(s.text)
+				if strings.Contains(logs, quoted[1:len(quoted)-1]) {
+					t.Fatalf("slog keeps the %s spelling of the secret, quoted", s.form)
+				}
+			}
+			warningFound := false
+			for line := range strings.SplitSeq(logs, "\n") {
+				if strings.Contains(line, `level=WARN msg="upstream provider request failed"`) &&
+					strings.Contains(line, "alpaca: HTTP 401 (code 40110000): denied [redacted]") {
+					warningFound = true
+				}
+			}
+			if !warningFound {
+				t.Fatal("WriteErr warning with the redacted venue refusal was not captured")
+			}
+		})
+	}
+}
+
+// health reads the only trading connection from GET /trading.
+func (f *tradingE2E) health() tradingE2EConnection {
+	f.t.Helper()
+	connections := tradingE2EDecode[tradingE2ETrading](f.t, f.rest(http.MethodGet, "/trading", nil, http.StatusOK)).Trading.Connections
+	if len(connections) != 1 {
+		f.t.Fatalf("connections = %+v", connections)
+	}
+	return connections[0]
+}
+
+// connectionSurfaces returns the only trading connection as GET /trading and
+// MCP get_trading serve it, each re-encoded with sorted keys. A reconnecting
+// stream refreshes its diagnostic's time, so it reads until two REST reads
+// around the MCP read agree.
+func (f *tradingE2E) connectionSurfaces() (viaREST, viaMCP string) {
+	f.t.Helper()
+	canonical := func(connections []json.RawMessage) string {
+		f.t.Helper()
+		if len(connections) != 1 {
+			f.t.Fatalf("connections = %d, want 1", len(connections))
+		}
+		var value any
+		tradingE2EMust(f.t, json.Unmarshal(connections[0], &value))
+		raw, err := json.Marshal(value)
+		tradingE2EMust(f.t, err)
+		return string(raw)
+	}
+	readREST := func() string {
+		f.t.Helper()
+		return canonical(tradingE2EDecode[struct {
+			Trading struct{ Connections []json.RawMessage }
+		}](f.t, f.rest(http.MethodGet, "/trading", nil, http.StatusOK)).Trading.Connections)
+	}
+	for range 10 {
+		before := readREST()
+		viaMCP = canonical(tradingE2EStructured[struct{ Connections []json.RawMessage }](f.t,
+			f.mcp("get_trading", map[string]any{}, false)).Connections)
+		if readREST() == before {
+			return before, viaMCP
+		}
+	}
+	f.t.Fatal("trading connection changed between every pair of reads")
+	return "", ""
+}
+
+// A venue stream that refuses authorization, or closes during the
+// handshake, degrades the connection on REST and MCP alike with its cause
+// and a connection_error diagnostic, and sends through it are still accepted.
+func TestTradingStreamFailureEndToEnd(t *testing.T) {
+	for _, tc := range []struct{ fault, cause string }{
+		{"unauthorized", "alpaca: stream authorization refused"},
+		{"close", "StatusPolicyViolation"},
+	} {
+		t.Run(tc.fault, func(t *testing.T) {
+			f := newTradingE2E(t, false)
+			f.venueMu.Lock()
+			f.streamFault = tc.fault
+			f.venueMu.Unlock()
+			f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject",
+				map[string]any{"asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+					"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
+			id := f.setupSend("REST")
+			f.wait("degraded connection", func() bool { return f.health().State == "degraded" })
+			viaREST, viaMCP := f.connectionSurfaces()
+			if viaREST != viaMCP {
+				t.Fatalf("REST connection %s differs from MCP %s", viaREST, viaMCP)
+			}
+			tradingE2ENoSecrets(t, "degraded connection", []byte(viaREST))
+			got := tradingE2EDecode[tradingE2EConnection](t, []byte(viaREST))
+			if got.State != "degraded" || !strings.Contains(got.Error, tc.cause) {
+				t.Fatalf("degraded connection = %+v, want error naming %q", got, tc.cause)
+			}
+			found := false
+			for _, diag := range got.Diagnostics {
+				found = found || (diag.Code == "connection_error" && diag.Detail == got.Error)
+			}
+			if !found {
+				t.Fatalf("diagnostics = %+v, want connection_error with the error", got.Diagnostics)
+			}
+			raw := f.sendPaper("REST", tradingE2ESendInput(id), http.StatusCreated, "")
+			sent := tradingE2EDecode[struct {
+				Verdict   string
+				VenueSend struct{ Status string }
+			}](t, raw)
+			f.venueMu.Lock()
+			posts := len(f.posts)
+			f.venueMu.Unlock()
+			if sent.Verdict != "accept" || sent.VenueSend.Status != "acknowledged" || posts != 1 {
+				t.Fatalf("send through a degraded connection = %s, venue posts %d", raw, posts)
+			}
+		})
+	}
+}
+
+// A trade update the connector cannot read shows on REST and MCP alike as an
+// unparsable_data diagnostic while the connection stays running.
+func TestTradingUnparsableUpdateEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, false)
+	f.createREST()
+	f.venueMu.Lock()
+	stream := f.stream
+	f.venueMu.Unlock()
+	if !sendFrame(t, f.ctx, stream, websocket.MessageText, `{"stream":"trade_updates","data":{"event":42}}`) {
+		t.Fatal("broken update stream failed")
+	}
+	f.wait("unparsable_data diagnostic", func() bool { return len(f.health().Diagnostics) != 0 })
+	viaREST, viaMCP := f.connectionSurfaces()
+	if viaREST != viaMCP {
+		t.Fatalf("REST connection %s differs from MCP %s", viaREST, viaMCP)
+	}
+	got := tradingE2EDecode[tradingE2EConnection](t, []byte(viaREST))
+	if got.State != "running" || got.Error != "" || len(got.Diagnostics) != 1 {
+		t.Fatalf("connection after a broken update = %+v", got)
+	}
+	if diag := got.Diagnostics[0]; diag.Code != "unparsable_data" || diag.Level != "error" ||
+		diag.Kind != "provider" || diag.Title != alpacaUnparsableTitle || diag.Detail != alpacaHeaderUnreadable {
+		t.Fatalf("broken update diagnostic = %+v", diag)
 	}
 }

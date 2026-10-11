@@ -233,6 +233,11 @@ type ControlPlane interface {
 	) (store.TradeListPage, error)
 	Overview(ctx context.Context, since time.Time) (Overview, error)
 	ServiceInfo(ctx context.Context) (ServiceInfo, error)
+	// CredentialStorage reports whether stored credentials are sealed
+	// under the master key and, when they are not, whether trading
+	// connections or market-data sources hold keys in plain text. It never
+	// returns a credential.
+	CredentialStorage(ctx context.Context) (CredentialStorage, error)
 	GenerateSigningKey(ctx context.Context) (domain.SigningKey, error)
 	ImportSigningKey(ctx context.Context, material, format string) (domain.SigningKey, error)
 	ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error)

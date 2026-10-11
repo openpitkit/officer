@@ -20,6 +20,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useMarketData } from "@/api/useMarketData";
+import { Notice } from "@/components/Notice";
 import { CompactStaleState } from "@/components/PageStates";
 import { Button } from "@/components/ui/button";
 import { useOfficerApi } from "@/framework";
@@ -45,25 +46,27 @@ export function PendingRestartBanner() {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-card border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-sm text-text">
-      <Info className="h-4 w-4 shrink-0 text-[var(--warn)]" />
-      <div className="min-w-0 flex-1">
-        <p className="font-semibold text-text">{t("restart.requiredTitle")}</p>
-        <p className="text-xs text-muted-lt">{t("restart.requiredDetail")}</p>
-        <CompactStaleState load={load} />
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          void restart();
-        }}
-        disabled={busy}
-      >
-        <RotateCcw />
-        {t("restart.button")}
-      </Button>
-    </div>
+    <Notice
+      tone="warn"
+      icon={Info}
+      title={t("restart.requiredTitle")}
+      action={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void restart();
+          }}
+          disabled={busy}
+        >
+          <RotateCcw />
+          {t("restart.button")}
+        </Button>
+      }
+    >
+      <p>{t("restart.requiredDetail")}</p>
+      <CompactStaleState load={load} />
+    </Notice>
   );
 }

@@ -38,10 +38,19 @@ const tradingCredentials = `{"apiKey":"test-key-marker","apiSecret":"test-secret
 
 func testAlpacaConnector(t *testing.T, server *httptest.Server) *alpacaConnector {
 	t.Helper()
-	c, err := newAlpacaConnector(domain.TradingConnection{ExternalID: "test-connection", Credentials: tradingCredentials}, server.URL, "ws"+strings.TrimPrefix(server.URL, "http")+"/stream")
+	return testAlpacaConnectorWith(t, server, tradingCredentials)
+}
+
+// testAlpacaConnectorWith builds a connector to server from the given stored
+// credentials.
+func testAlpacaConnectorWith(t *testing.T, server *httptest.Server, credentials string) *alpacaConnector {
+	t.Helper()
+	c, err := newAlpacaConnector(domain.TradingConnection{ExternalID: "test-connection", Credentials: credentials}, server.URL, "ws"+strings.TrimPrefix(server.URL, "http")+"/stream")
 	if err != nil {
 		t.Fatal("connector construction failed")
 	}
+	// The runtime always installs both reporters before Subscribe.
+	recordAlpacaReports(c)
 	t.Cleanup(c.Close)
 	return c
 }

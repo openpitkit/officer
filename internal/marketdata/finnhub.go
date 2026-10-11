@@ -32,6 +32,7 @@ import (
 
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -69,8 +70,8 @@ type finnhubConnector struct {
 	search        func(context.Context, string, string) ([]finnhubSearchResult, error)
 	cryptoSymbols func(context.Context, string, string) ([]finnhubCryptoSymbol, error)
 	now           func() time.Time
-	report        fwmarketdata.StatusReporter
-	diagReport    fwmarketdata.DiagnosticReporter
+	report        health.StatusReporter
+	diagReport    health.DiagnosticReporter
 	reconnectMin  time.Duration
 	reconnectMax  time.Duration
 	readTimeout   time.Duration
@@ -177,7 +178,7 @@ func (c liveFinnhubConn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *finnhubConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
+func (c *finnhubConnector) SetStatusReporter(report health.StatusReporter) {
 	c.report = report
 }
 
@@ -188,11 +189,11 @@ func (c *finnhubConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *finnhubConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
+func (c *finnhubConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *finnhubConnector) reportDiag(diag fwmarketdata.Diagnostic) {
+func (c *finnhubConnector) reportDiag(diag health.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
@@ -469,12 +470,12 @@ func (c *finnhubConnector) ToleratesSilence() bool { return true }
 // Diagnose flags only configured symbols Finnhub does not recognize. A known
 // symbol that is merely silent (closed market, illiquid pair) is expected and
 // is left to the on-demand verify button, so it produces no recurring warning.
-func (c *finnhubConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
+func (c *finnhubConnector) Diagnose(ctx context.Context) ([]health.Diagnostic, error) {
 	c.subsMu.Lock()
 	subs := append([]finnhubSubscription(nil), c.subs...)
 	c.subsMu.Unlock()
 
-	var findings []fwmarketdata.Diagnostic
+	var findings []health.Diagnostic
 	for _, sub := range subs {
 		matches, err := c.SearchSymbols(ctx, fwmarketdata.SymbolSearchQuery{Query: sub.symbol})
 		if err != nil {

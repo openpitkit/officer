@@ -338,7 +338,7 @@ func TestHealthSourceFailure(t *testing.T) {
 	src := &fakeSource{statusErr: fmt.Errorf("db offline")}
 	res := callHealth(t, src)
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "officer status unavailable" {
+	if got := textContent(res.Content); got != "internal: internal error" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 }
@@ -393,9 +393,8 @@ func TestGetAccountStateNotFound(t *testing.T) {
 	src := &fakeSource{account: domain.Account{Code: "other"}}
 	res := callGetAccountState(t, src, "acc-1")
 	requireToolError(t, res.IsError)
-	txt := textContent(res.Content)
-	if txt == "" || txt == "get account state failed" {
-		t.Errorf("expected not-found message, got %q", txt)
+	if got := textContent(res.Content); got != `not_found: account "acc-1": not found` {
+		t.Errorf("unexpected error text: %q", got)
 	}
 }
 
@@ -406,7 +405,7 @@ func TestGetAccountStateSourceFailure(t *testing.T) {
 	}
 	res := callGetAccountState(t, src, "acc-1")
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "get account state failed" {
+	if got := textContent(res.Content); got != "internal: internal error" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 }
@@ -420,7 +419,7 @@ func TestGetAccountStateInvalidID(t *testing.T) {
 	res := callGetAccountState(t, src, ".")
 	requireToolError(t, res.IsError)
 	got := textContent(res.Content)
-	if !strings.Contains(got, "reserved path segment") {
+	if got != `validation: account id "." is a reserved path segment: invalid` {
 		t.Errorf("expected the domain message, got %q", got)
 	}
 }
@@ -568,7 +567,7 @@ func TestGetAccountStateGroupReadFailure(t *testing.T) {
 	}
 	res := callGetAccountState(t, src, "acc-6")
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "resolve account block failed" {
+	if got := textContent(res.Content); got != "internal: internal error" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 	if got := res.StructuredContent.Account; got.Code != "" {
@@ -688,7 +687,7 @@ func TestGetLimitsSourceFailure(t *testing.T) {
 	src := &fakeSource{listLimitsErr: fmt.Errorf("store down")}
 	res := callGetLimits(t, src, "")
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "list limits failed" {
+	if got := textContent(res.Content); got != "internal: internal error" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 }
@@ -784,7 +783,7 @@ func TestGetAuditSourceFailure(t *testing.T) {
 	src := &fakeSource{listAuditErr: fmt.Errorf("db down")}
 	res := callGetAudit(t, src, 10)
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "list audit failed" {
+	if got := textContent(res.Content); got != "internal: internal error" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 }
@@ -1045,25 +1044,24 @@ func TestGetOrderMissingID(t *testing.T) {
 	}
 }
 
-// TestGetOrderNotFound: an unknown external id maps onto a not-found tool error
-// naming the handle, distinct from the generic failure message.
+// TestGetOrderNotFound: an unknown external id maps onto the not_found code
+// with the source's message, as over REST.
 func TestGetOrderNotFound(t *testing.T) {
 	src := &fakeSource{getOrderErr: fmt.Errorf("order: %w", domain.ErrNotFound)}
 	res := callGetOrder(t, src, "b3JkZXItZXh0ZXJuYWwteA")
 	requireToolError(t, res.IsError)
-	txt := textContent(res.Content)
-	if !strings.Contains(txt, "not found") {
-		t.Errorf("expected not-found message, got %q", txt)
+	if got := textContent(res.Content); got != "not_found: order: not found" {
+		t.Errorf("unexpected error text: %q", got)
 	}
 }
 
-// TestGetOrderSourceFailure: a non-not-found source error surfaces the generic
-// failure message.
+// TestGetOrderSourceFailure: a source error that is not a domain error surfaces
+// as an internal error, as over REST.
 func TestGetOrderSourceFailure(t *testing.T) {
 	src := &fakeSource{getOrderErr: fmt.Errorf("store down")}
 	res := callGetOrder(t, src, "b3JkZXItZXh0ZXJuYWwteQ")
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "get order failed" {
+	if got := textContent(res.Content); got != "internal: internal error" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 }
@@ -1135,7 +1133,7 @@ func TestCheckOrderMissingAccount(t *testing.T) {
 }
 
 // TestCheckOrderSourceFailure: a Source failure that is not a refusal reaches
-// the agent as the bare tool message, never as the internal one.
+// the agent as the internal code REST answers, never with its cause.
 func TestCheckOrderSourceFailure(t *testing.T) {
 	t.Parallel()
 	src := &fakeSource{checkErr: fmt.Errorf("boom")}
@@ -1144,8 +1142,8 @@ func TestCheckOrderSourceFailure(t *testing.T) {
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 	})
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "check order failed" {
-		t.Fatalf("error text = %q, want the bare %q", got, "check order failed")
+	if got := textContent(res.Content); got != "internal: internal error" {
+		t.Fatalf("error text = %q, want %q", got, "internal: internal error")
 	}
 }
 
@@ -1198,6 +1196,10 @@ func (s *fakeSource) GetTrading(ctx context.Context) (backend.TradingStatus, err
 	return backend.TradingStatus{}, domain.ErrNotImplemented
 }
 
+func (s *fakeSource) CredentialStorage(ctx context.Context) (backend.CredentialStorage, error) {
+	return backend.CredentialStorage{}, domain.ErrNotImplemented
+}
+
 func (s *fakeSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {
 	return domain.TradingConnection{}, domain.ErrNotImplemented
 }
@@ -1248,6 +1250,10 @@ func (s *fakeSource) ListTradingDestinations(ctx context.Context, account domain
 
 func (s *captureNSource) GetTrading(ctx context.Context) (backend.TradingStatus, error) {
 	return backend.TradingStatus{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) CredentialStorage(ctx context.Context) (backend.CredentialStorage, error) {
+	return backend.CredentialStorage{}, domain.ErrNotImplemented
 }
 
 func (s *captureNSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {

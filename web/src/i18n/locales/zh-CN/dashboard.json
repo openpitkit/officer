@@ -1,6 +1,7 @@
 {
   "title": "仪表盘",
   "refreshAriaLabel": "刷新仪表盘",
+  "issues": "{{count}} 个问题",
   "counts": {
     "accounts": "账户",
     "groups": "分组",
@@ -33,8 +34,7 @@
     "moreOk": "+{{count}} 正常",
     "instanceError": "错误",
     "instanceNotApplied": "未应用",
-    "restartRequired": "需要重启",
-    "issues": "{{count}} 个问题"
+    "restartRequired": "需要重启"
   },
   "trading": {
     "title": "交易连接",

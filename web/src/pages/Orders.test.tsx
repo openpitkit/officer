@@ -79,7 +79,21 @@ vi.mock("@/api/useMarketData", () => ({
     reload: () => {},
   }),
 }));
-// SensitiveDataBanner polls GET /trading.
+// SensitiveDataBanner polls GET /credential-storage.
+vi.mock("@/api/useCredentialStorage", () => ({
+  useCredentialStorage: () => ({
+    load: {
+      state: "ready",
+      data: {
+        credentialsSealed: true,
+        plaintextTradingKeys: false,
+        plaintextMarketDataKeys: false,
+      },
+      error: null,
+    },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/useTrading", () => ({
   useTrading: vi.fn(() => ({
     load: {
@@ -107,10 +121,10 @@ vi.mock("@/api/useTrading", () => ({
             secrets: { apiKey: true, apiSecret: true },
             instruments: [],
             access: [],
+            diagnostics: [],
             feeAccount: "",
           },
         ],
-        credentialsSealed: true,
       },
       error: null,
     },
@@ -4093,6 +4107,53 @@ describe("Orders venue sending", () => {
     } finally {
       focusSpy.mockRestore();
     }
+  });
+
+  it("keeps a degraded destination selectable and notes its error", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([
+      alpacaDestination,
+      {
+        ...alpacaDestination,
+        connection: "alpaca-degraded",
+        label: "Degraded Alpaca",
+        venueAccount: "PA-2",
+        state: "degraded",
+        error: "Trade updates refused",
+      },
+    ]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+
+    const target = await within(dialog).findByRole("combobox", {
+      name: "Target",
+    });
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    try {
+      await user.click(target);
+      const targets = await screen.findByRole("listbox");
+      expect(
+        within(targets).getByRole("option", { name: /Primary Alpaca/ }),
+      ).not.toHaveTextContent("Degraded");
+      const degraded = within(targets).getByRole("option", {
+        name: /Degraded Alpaca.*PA-2.*Degraded: Trade updates refused/,
+      });
+      expect(degraded).not.toHaveAttribute("data-disabled");
+      await user.click(degraded);
+    } finally {
+      focusSpy.mockRestore();
+    }
+    expect(target).toHaveTextContent(
+      /Degraded Alpaca.*Degraded: Trade updates refused/,
+    );
+    await chooseTimeInForce(user, dialog, "GTC - Good till cancelled");
+    expect(
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+    ).toBeEnabled();
   });
 
   it("explains missing paper and live targets and links to setup", async () => {

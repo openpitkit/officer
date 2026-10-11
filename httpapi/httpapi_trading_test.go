@@ -30,13 +30,15 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 const tradingSecret = "k8-known-credential-value"
 const tradingPath = "/trading/connections/connection-1"
-const freshTradingJSON = `{"id":"connection-1","provider":"alpaca","label":"Paper","mode":"paper","enabled":false,"venueIdentity":"venue-1","feeAccount":"","state":"stopped","secrets":{"key":true},"instruments":[],"access":[]}`
+const freshTradingJSON = `{"id":"connection-1","provider":"alpaca","label":"Paper","mode":"paper","enabled":false,"venueIdentity":"venue-1","feeAccount":"","state":"stopped","diagnostics":[],"secrets":{"key":true},"instruments":[],"access":[]}`
 
 func tradingFixture(t *testing.T) *fakeService {
 	t.Helper()
@@ -95,7 +97,7 @@ func assertTradingJSON(t *testing.T, rec *httptest.ResponseRecorder, status int,
 }
 
 func TestTradingRoutesSuccess(t *testing.T) {
-	snapshot := `{"trading":{"providers":[],"connections":[` + freshTradingJSON + `],"credentialsSealed":false}}`
+	snapshot := `{"trading":{"providers":[],"connections":[` + freshTradingJSON + `]}}`
 	for _, tc := range []struct {
 		name, method, path, body, response, call string
 		status                                   int
@@ -332,16 +334,15 @@ func TestTradingCredentialsObject(t *testing.T) {
 
 func TestTradingOptionalFieldsAndEmptyCollections(t *testing.T) {
 	svc := &fakeService{}
-	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/trading", ""), 200, `{"trading":{"providers":[],"connections":[],"credentialsSealed":false}}`)
+	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/trading", ""), 200, `{"trading":{"providers":[],"connections":[]}}`)
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/accounts/acc-1/trading-destinations", ""), 200, `{"destinations":[]}`)
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/search-symbols", `{"query":"x"}`), 200, `{"supported":false,"matches":[]}`)
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/verify-symbol", `{"externalSymbol":"x"}`), 200, `{"verification":{"supported":false,"exists":false,"tradable":false}}`)
 	svc = tradingFixture(t)
 	svc.tradingStatus.Providers = []backend.TradingProvider{{Type: "alpaca", Title: "Alpaca", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}}
-	svc.tradingStatus.CredentialsSealed = true
 	c := &svc.tradingStatus.Connections[0]
 	c.State = "unavailable"
-	c.Unavailable = "keys unavailable"
+	c.Error = "keys unavailable"
 	c.FeeAccount = "fees"
 	c.Instruments = []domain.TradingInstrument{{ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}}
 	c.Access = []store.TradingAccessListRow{
@@ -355,17 +356,47 @@ func TestTradingOptionalFieldsAndEmptyCollections(t *testing.T) {
 		`{"account":"","accountGroup":"desk","venueAccount":"sub-g","group":""},`+
 		`{"account":"acc-1","accountGroup":"","venueAccount":"sub-1","group":"desk"},`+
 		`{"account":"acc-2","accountGroup":"","venueAccount":"","group":""}]`, 1)
-	assertTradingJSON(t, rec, 200, `{"trading":{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[`+expected+`],"credentialsSealed":true}}`)
+	providers := `{"type":"alpaca","title":"Alpaca","venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}`
+	assertTradingJSON(t, rec, 200, `{"trading":{"providers":[`+providers+`],"connections":[`+expected+`]}}`)
 	svc.tradingDestinations[0].State = "unavailable"
-	svc.tradingDestinations[0].Unavailable = "keys unavailable"
+	svc.tradingDestinations[0].Error = "keys unavailable"
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/accounts/acc-1/trading-destinations?mode=live", ""), 200, `{"destinations":[{"connection":"connection-1","label":"Paper","provider":"alpaca","mode":"paper","enabled":false,"venueAccount":"","state":"unavailable","error":"keys unavailable"}]}`)
 	svc.tradingVerification.Details = "listed"
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/verify-symbol", `{"externalSymbol":"AAPL"}`), 200, `{"verification":{"supported":true,"exists":true,"tradable":true,"details":"listed"}}`)
 	svc.tradingSearch.Matches[0] = trading.SymbolMatch{Symbol: "AAPL", Name: "Apple", Class: "equity", Exchange: "NASDAQ", Tradable: true}
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/search-symbols", `{"query":"apple"}`), 200, `{"supported":true,"matches":[{"symbol":"AAPL","name":"Apple","class":"equity","exchange":"NASDAQ","tradable":true}]}`)
-	c.State = "running"
-	if strings.Contains(callTrading(t, svc, "/api/v1", "GET", "/trading", "").Body.String(), `"error"`) {
-		t.Fatal("running connection exposes unavailable error")
+	c.State, c.Error = "running", ""
+	running := strings.Replace(expected, `"state":"unavailable","error":"keys unavailable"`, `"state":"running"`, 1)
+	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/trading", ""), 200, `{"trading":{"providers":[`+providers+`],"connections":[`+running+`]}}`)
+}
+
+// TestTradingDegradedConnectionWire serialises a degraded connection with two
+// diagnostics, the second carrying an instrument and an action target.
+func TestTradingDegradedConnectionWire(t *testing.T) {
+	svc := tradingFixture(t)
+	c := &svc.tradingStatus.Connections[0]
+	c.State, c.Error = "degraded", "trade updates: stream refused"
+	c.Diagnostics = []health.Diagnostic{
+		{
+			At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Level: health.DiagWarn,
+			Code: health.CodeConnectionError, Kind: health.DiagKindEnvironment,
+			Title: "Trade updates stream refused", Detail: "stream refused",
+			Remediation: "Check the keys.",
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
+		},
+		{
+			At: time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC), Level: health.DiagError,
+			Code: health.CodeUnknownSymbol, Kind: health.DiagKindConfig,
+			Title: "Unknown symbol", Detail: "AAPL is not listed", Instrument: "AAPL",
+			Actions: []health.DiagnosticAction{{Type: health.ActionOpenSymbols, Target: "AAPL"}},
+		},
+	}
+	expected := strings.Replace(freshTradingJSON, `"state":"stopped","diagnostics":[]`,
+		`"state":"degraded","error":"trade updates: stream refused","diagnostics":[`+
+			`{"level":"warn","code":"connection_error","kind":"environment","title":"Trade updates stream refused","detail":"stream refused","remediation":"Check the keys.","actions":[{"type":"restart"}],"at":"2026-01-02T03:04:05Z"},`+
+			`{"level":"error","code":"unknown_symbol","kind":"config","title":"Unknown symbol","detail":"AAPL is not listed","instrument":"AAPL","actions":[{"type":"open_symbols","target":"AAPL"}],"at":"2026-01-02T03:04:06Z"}]`, 1)
+	for _, mount := range []string{"/api/v1", "/app/api/v1"} {
+		assertTradingJSON(t, callTrading(t, svc, mount, "GET", "/trading", ""), 200, `{"trading":{"providers":[],"connections":[`+expected+`]}}`)
 	}
 }
 
@@ -607,15 +638,14 @@ func TestOpenAPITradingContract(t *testing.T) {
 		t.Fatal("backup restore must document 409 fee_account_required for a group grant without a fee account")
 	}
 	for _, snippet := range []string{
-		"required: [providers, connections, credentialsSealed]",
-		"required: [id, provider, label, mode, enabled, venueIdentity, feeAccount, state, secrets, instruments, access]",
+		"required: [providers, connections]",
 		"required: [provider, label, mode, credentials, enabled]",
 		"required: [connection, venueAccount, route, clientOrderId, sendAttempted, createdAt]",
 		"required: [symbol, tradable]", "required: [supported, exists, tradable]",
 		"TradingCredentials:\n      type: object", "route:\n          type: object",
 		"enum: [acknowledged, refused, unknown]", "SendPaperOrderRequest:",
 		"SendPaperOrderResponse:", "required: [route]", "/orders/send-live", "comes with the live-trading token.",
-		"enum: [paper, live]", "enum: [running, unavailable, stopped]",
+		"enum: [paper, live]", "enum: [running, degraded, unavailable, stopped]",
 		"live_trading_unavailable", "trading_mode_mismatch", "fee_account_required",
 		"venue_order_managed", "no_destination", "destination_ambiguous",
 		"required: [candidates]", "tradingCredentialsUnavailable:",
@@ -638,8 +668,12 @@ func TestOpenAPITradingContract(t *testing.T) {
 		name  string
 		value any
 	}{
-		{"TradingAccess", tradingAccessDTO{}},
+		{"TradingAccess", httpx.TradingAccessDTO{}},
 		{"BackupTradingAccess", backup.TradingAccess{}},
+		{"TradingConnection", httpx.TradingConnectionDTO{}},
+		{"TradingDestination", httpx.TradingDestinationDTO{}},
+		{"Diagnostic", httpx.DiagnosticDTO{}},
+		{"DiagnosticAction", httpx.DiagnosticActionDTO{}},
 	} {
 		wantRequired, wantProperties := jsonMembers(reflect.TypeOf(schema.value))
 		gotRequired, gotProperties := openAPISchemaMembers(t, spec, schema.name)

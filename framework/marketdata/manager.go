@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 )
 
 // Store is the read seam the manager needs. It reads the complete configured
@@ -171,7 +172,7 @@ type InstanceRuntimeStatus struct {
 	References      *ProviderReferences
 	VerifiesSymbols bool
 	SearchesSymbols bool
-	Diagnostics     []Diagnostic
+	Diagnostics     []health.Diagnostic
 }
 
 // QuoteSnapshot carries a last accepted quote with its resolved engine asset pair.
@@ -186,10 +187,6 @@ const (
 	StateOK    = "ok"
 	StateError = "error"
 )
-
-// diagBufferCap bounds the per-instance diagnostic buffer; the oldest entries
-// are dropped beyond it.
-const diagBufferCap = 20
 
 // diagnoseGrace is the idle window after Subscribe before the framework checks
 // whether any data has arrived and (if not) triggers one-shot self-diagnosis.
@@ -507,14 +504,14 @@ func (m *Manager) startInstanceLocked(
 	if err != nil {
 		msg := fmt.Sprintf("read instruments: %v", err)
 		m.statuses[instanceID] = InstanceRuntimeStatus{State: StateError, Error: msg}
-		m.recordDiagLocked(instanceID, Diagnostic{
-			Level:       DiagError,
-			Code:        CodeInternalError,
-			Kind:        DiagKindProvider,
+		m.recordDiagLocked(instanceID, health.Diagnostic{
+			Level:       health.DiagError,
+			Code:        health.CodeInternalError,
+			Kind:        health.DiagKindProvider,
 			Title:       "Internal error",
 			Detail:      msg,
 			Remediation: "Try Restart feeds; if it persists, contact support.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 		})
 		return
 	}
@@ -529,14 +526,14 @@ func (m *Manager) startInstanceLocked(
 			State: StateError,
 			Error: "no enabled instruments",
 		}
-		m.recordDiagLocked(instanceID, Diagnostic{
-			Level:       DiagError,
-			Code:        CodeNoEnabledInstruments,
-			Kind:        DiagKindConfig,
+		m.recordDiagLocked(instanceID, health.Diagnostic{
+			Level:       health.DiagError,
+			Code:        health.CodeNoEnabledInstruments,
+			Kind:        health.DiagKindConfig,
 			Title:       "No instruments enabled",
 			Detail:      fmt.Sprintf("Provider %q has no enabled instruments.", instance.Provider),
 			Remediation: "Add or enable at least one instrument, then Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 		})
 		return
 	}
@@ -546,10 +543,10 @@ func (m *Manager) startInstanceLocked(
 		if errors.Is(err, ErrUnsupportedProvider) {
 			msg := fmt.Sprintf("unsupported provider type %q", instance.Provider)
 			m.statuses[instanceID] = InstanceRuntimeStatus{State: StateError, Error: msg}
-			m.recordDiagLocked(instanceID, Diagnostic{
-				Level:       DiagError,
-				Code:        CodeUnsupportedProvider,
-				Kind:        DiagKindConfig,
+			m.recordDiagLocked(instanceID, health.Diagnostic{
+				Level:       health.DiagError,
+				Code:        health.CodeUnsupportedProvider,
+				Kind:        health.DiagKindConfig,
 				Title:       "Unsupported provider",
 				Detail:      fmt.Sprintf("Provider type %q is not supported.", instance.Provider),
 				Remediation: "Choose a supported provider.",
@@ -559,14 +556,14 @@ func (m *Manager) startInstanceLocked(
 
 		msg := fmt.Sprintf("connector config: %v", err)
 		m.statuses[instanceID] = InstanceRuntimeStatus{State: StateError, Error: msg}
-		m.recordDiagLocked(instanceID, Diagnostic{
-			Level:       DiagError,
-			Code:        CodeInvalidProviderConfig,
-			Kind:        DiagKindConfig,
+		m.recordDiagLocked(instanceID, health.Diagnostic{
+			Level:       health.DiagError,
+			Code:        health.CodeInvalidProviderConfig,
+			Kind:        health.DiagKindConfig,
 			Title:       "Invalid provider configuration",
 			Detail:      fmt.Sprintf("Provider %q: connector config: %v", instance.Provider, err),
 			Remediation: "Update this provider's credentials or settings, then Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 		})
 		return
 	}
@@ -587,12 +584,12 @@ func (m *Manager) startInstanceLocked(
 	// goroutine route correctly from the first instant. Both reporters lock mu
 	// themselves; they are only called from the background goroutine, never
 	// synchronously from Set* or Subscribe, so there is no re-entrant lock.
-	if sr, ok := connector.(StatusReporting); ok {
+	if sr, ok := connector.(health.StatusReporting); ok {
 		sr.SetStatusReporter(m.reporterFor(instanceID, generation))
 	}
-	if dr, ok := connector.(DiagnosticReporting); ok {
+	if dr, ok := connector.(health.DiagnosticReporting); ok {
 		id := instanceID
-		dr.SetDiagnosticReporter(func(diag Diagnostic) {
+		dr.SetDiagnosticReporter(func(diag health.Diagnostic) {
 			m.recordDiagForGeneration(generation, id, diag)
 		})
 	}
@@ -611,14 +608,14 @@ func (m *Manager) startInstanceLocked(
 			State: StateError, Error: msg, References: refs,
 			VerifiesSymbols: verifiesSymbols, SearchesSymbols: searchesSymbols,
 		}
-		m.recordDiagLocked(instanceID, Diagnostic{
-			Level:       DiagError,
-			Code:        CodeConnectionError,
-			Kind:        DiagKindEnvironment,
+		m.recordDiagLocked(instanceID, health.Diagnostic{
+			Level:       health.DiagError,
+			Code:        health.CodeConnectionError,
+			Kind:        health.DiagKindEnvironment,
 			Title:       "Subscription failed",
 			Detail:      msg,
 			Remediation: "Check the source is reachable, then Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 		})
 		return
 	}
@@ -699,14 +696,14 @@ func (m *Manager) startInstanceLocked(
 			// Diagnose off-lock; recordDiag locks internally.
 			findings, err := d.Diagnose(ctx)
 			if err != nil {
-				m.recordDiagForGeneration(generation, id, Diagnostic{
-					Level:       DiagError,
-					Code:        CodeSelfDiagnosisFailed,
-					Kind:        DiagKindProvider,
+				m.recordDiagForGeneration(generation, id, health.Diagnostic{
+					Level:       health.DiagError,
+					Code:        health.CodeSelfDiagnosisFailed,
+					Kind:        health.DiagKindProvider,
 					Title:       "Self-diagnosis failed",
 					Detail:      err.Error(),
 					Remediation: "Couldn't validate against the provider; try Restart feeds.",
-					Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+					Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 				})
 				return
 			}
@@ -718,16 +715,16 @@ func (m *Manager) startInstanceLocked(
 				if st, ok := connector.(SilenceTolerant); ok && st.ToleratesSilence() {
 					return
 				}
-				m.recordDiagForGeneration(generation, id, Diagnostic{
-					Level: DiagWarn,
-					Code:  CodeNoData,
-					Kind:  DiagKindProvider,
+				m.recordDiagForGeneration(generation, id, health.Diagnostic{
+					Level: health.DiagWarn,
+					Code:  health.CodeNoData,
+					Kind:  health.DiagKindProvider,
 					Title: "No market data",
 					Detail: "Connected and the configured symbols are valid, " +
 						"but no quotes are arriving.",
 					Remediation: "This is not a configuration problem. Try Restart feeds; " +
 						"if it persists it is a provider or system issue - contact support.",
-					Actions: []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+					Actions: []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 				})
 				return
 			}
@@ -736,14 +733,14 @@ func (m *Manager) startInstanceLocked(
 			}
 			return
 		}
-		m.recordDiagForGeneration(generation, id, Diagnostic{
-			Level:       DiagWarn,
-			Code:        CodeNoData,
-			Kind:        DiagKindProvider,
+		m.recordDiagForGeneration(generation, id, health.Diagnostic{
+			Level:       health.DiagWarn,
+			Code:        health.CodeNoData,
+			Kind:        health.DiagKindProvider,
 			Title:       "No market data",
 			Detail:      "No quotes are arriving and this provider offers no self-diagnosis.",
 			Remediation: "Try Restart feeds; if it persists, contact support.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 		})
 	}()
 }
@@ -863,11 +860,11 @@ func (m *Manager) runStartupManualActions(
 	}
 }
 
-// reporterFor builds a per-instance StatusReporter that writes the connector's
+// reporterFor builds a per-instance status reporter that writes the connector's
 // runtime connection state into m.statuses under mu. The connector invokes it
 // from its background goroutine, so it must take mu itself. A callback for an
 // older run is dropped even when a timed-out Stop has already started a new run.
-func (m *Manager) reporterFor(instanceID string, generation uint64) StatusReporter {
+func (m *Manager) reporterFor(instanceID string, generation uint64) health.StatusReporter {
 	return func(ok bool, errMsg string) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -884,20 +881,20 @@ func (m *Manager) reporterFor(instanceID string, generation uint64) StatusReport
 		status.State = StateError
 		status.Error = errMsg
 		m.statuses[instanceID] = status
-		m.recordDiagLocked(instanceID, Diagnostic{
-			Level:       DiagError,
-			Code:        CodeConnectionError,
-			Kind:        DiagKindEnvironment,
+		m.recordDiagLocked(instanceID, health.Diagnostic{
+			Level:       health.DiagError,
+			Code:        health.CodeConnectionError,
+			Kind:        health.DiagKindEnvironment,
 			Title:       "Connection error",
 			Detail:      errMsg,
 			Remediation: "The source may be unreachable or geo-blocked. Check network/region, then Restart feeds.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 		})
 	}
 }
 
 func (m *Manager) recordDiagForGeneration(
-	generation uint64, instanceID string, diag Diagnostic,
+	generation uint64, instanceID string, diag health.Diagnostic,
 ) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -907,53 +904,16 @@ func (m *Manager) recordDiagForGeneration(
 	m.recordDiagLocked(instanceID, diag)
 }
 
-// recordDiagLocked appends a diagnostic for instanceID and emits one slog
-// record at the matching level (Routine→Debug; DiagError→Error; DiagWarn→Warn;
-// everything else→Info). Callers must hold mu. A nil m.statuses (no live run)
-// drops the write. At is set to time.Now().UTC() when zero. Consecutive
-// identical (Code, Instrument, Detail) entries are deduped (refreshing At
-// only) so reconnect/backoff loops cannot flood the buffer or the log; only
-// the most recent diagBufferCap entries are kept.
-func (m *Manager) recordDiagLocked(instanceID string, diag Diagnostic) {
+// recordDiagLocked records diag into instanceID's diagnostic buffer through
+// health.Record, which dedupes, logs (with an "instance" attribute) and caps
+// the buffer. Callers must hold mu. A nil m.statuses (no live run) drops the
+// write.
+func (m *Manager) recordDiagLocked(instanceID string, diag health.Diagnostic) {
 	if m.statuses == nil {
 		return
 	}
-	if diag.At.IsZero() {
-		diag.At = time.Now().UTC()
-	}
 	status := m.statuses[instanceID]
-	if n := len(status.Diagnostics); n > 0 {
-		last := &status.Diagnostics[n-1]
-		if last.Code == diag.Code &&
-			last.Instrument == diag.Instrument &&
-			last.Detail == diag.Detail {
-			last.At = diag.At
-			m.statuses[instanceID] = status
-			return
-		}
-	}
-	// Emit exactly one log record per new (non-deduped) diagnostic.
-	attrs := []any{"instance", instanceID, "code", diag.Code}
-	if diag.Instrument != "" {
-		attrs = append(attrs, "instrument", diag.Instrument)
-	}
-	if diag.Detail != "" {
-		attrs = append(attrs, "detail", diag.Detail)
-	}
-	switch {
-	case diag.Routine:
-		m.logger.Debug(diag.Title, attrs...)
-	case diag.Level == DiagError:
-		m.logger.Error(diag.Title, attrs...)
-	case diag.Level == DiagWarn:
-		m.logger.Warn(diag.Title, attrs...)
-	default:
-		m.logger.Info(diag.Title, attrs...)
-	}
-	status.Diagnostics = append(status.Diagnostics, diag)
-	if len(status.Diagnostics) > diagBufferCap {
-		status.Diagnostics = status.Diagnostics[len(status.Diagnostics)-diagBufferCap:]
-	}
+	status.Diagnostics = health.Record(m.logger, status.Diagnostics, diag, "instance", instanceID)
 	m.statuses[instanceID] = status
 }
 
@@ -1003,14 +963,14 @@ func (m *Manager) drain(
 		}
 		sink := m.currentSink()
 		if sink == nil {
-			m.recordDiagForGeneration(generation, instanceID, Diagnostic{
-				Level:       DiagWarn,
-				Code:        CodeInternalError,
-				Kind:        DiagKindProvider,
+			m.recordDiagForGeneration(generation, instanceID, health.Diagnostic{
+				Level:       health.DiagWarn,
+				Code:        health.CodeInternalError,
+				Kind:        health.DiagKindProvider,
 				Title:       "Failed to push quote to engine",
 				Detail:      ErrNilSink.Error(),
 				Remediation: "Usually transient; if persistent, Restart feeds or contact support.",
-				Actions:     []DiagnosticAction{{Type: ActionRestart}},
+				Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 			})
 		} else {
 			directApplied := m.pushToSink(generation, instanceID, sink, update)
@@ -1185,14 +1145,14 @@ func (m *Manager) pushToSink(
 	generation uint64, instanceID string, sink Sink, update QuoteUpdate,
 ) bool {
 	if err := sink.Push(update); err != nil {
-		m.recordDiagForGeneration(generation, instanceID, Diagnostic{
-			Level:       DiagWarn,
-			Code:        CodeInternalError,
-			Kind:        DiagKindProvider,
+		m.recordDiagForGeneration(generation, instanceID, health.Diagnostic{
+			Level:       health.DiagWarn,
+			Code:        health.CodeInternalError,
+			Kind:        health.DiagKindProvider,
 			Title:       "Failed to push quote to engine",
 			Detail:      err.Error(),
 			Remediation: "Usually transient; if persistent, Restart feeds or contact support.",
-			Actions:     []DiagnosticAction{{Type: ActionRestart}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 		})
 		return false
 	}
@@ -1417,7 +1377,7 @@ func (m *Manager) InstanceStatuses() map[string]InstanceRuntimeStatus {
 	out := make(map[string]InstanceRuntimeStatus, len(m.statuses))
 	for id, status := range m.statuses {
 		if status.Diagnostics != nil {
-			diags := make([]Diagnostic, len(status.Diagnostics))
+			diags := make([]health.Diagnostic, len(status.Diagnostics))
 			copy(diags, status.Diagnostics)
 			status.Diagnostics = diags
 		}
@@ -1655,10 +1615,10 @@ func (m *Manager) retireUnknownManualQuote(
 	}
 	m.retireManualQuoteLocked(identity)
 	m.mu.Unlock()
-	m.recordDiagForGeneration(update.manualGeneration, instanceID, Diagnostic{
-		Level:      DiagWarn,
-		Code:       CodeInternalError,
-		Kind:       DiagKindConfig,
+	m.recordDiagForGeneration(update.manualGeneration, instanceID, health.Diagnostic{
+		Level:      health.DiagWarn,
+		Code:       health.CodeInternalError,
+		Kind:       health.DiagKindConfig,
 		Title:      "Manual quote identity retired",
 		Instrument: instrument,
 		Detail: fmt.Sprintf(
@@ -1792,10 +1752,10 @@ func manualQuoteForState(
 func (m *Manager) recordManualReconciliationPending(
 	generation uint64, instanceID, instrument string, err error,
 ) {
-	m.recordDiagForGeneration(generation, instanceID, Diagnostic{
-		Level:       DiagWarn,
-		Code:        CodeInternalError,
-		Kind:        DiagKindProvider,
+	m.recordDiagForGeneration(generation, instanceID, health.Diagnostic{
+		Level:       health.DiagWarn,
+		Code:        health.CodeInternalError,
+		Kind:        health.DiagKindProvider,
 		Title:       "Manual quote reconciliation pending",
 		Detail:      err.Error(),
 		Remediation: "The saved configuration will be retried automatically.",
@@ -1852,14 +1812,14 @@ func (m *Manager) refreshManualMarksOnce(ctx context.Context) {
 		}
 		instruments, err := m.store.ListEnabledMarketDataInstruments(ctx, instance)
 		if err != nil {
-			m.recordDiagForGeneration(generation, instanceID, Diagnostic{
-				Level:       DiagWarn,
-				Code:        CodeInternalError,
-				Kind:        DiagKindProvider,
+			m.recordDiagForGeneration(generation, instanceID, health.Diagnostic{
+				Level:       health.DiagWarn,
+				Code:        health.CodeInternalError,
+				Kind:        health.DiagKindProvider,
 				Title:       "Failed to refresh manual marks",
 				Detail:      err.Error(),
 				Remediation: "Usually transient; if persistent, Restart feeds or contact support.",
-				Actions:     []DiagnosticAction{{Type: ActionRestart}},
+				Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 			})
 			continue
 		}

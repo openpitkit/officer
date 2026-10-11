@@ -44,17 +44,21 @@ import type {
   RestoreMode,
   ServiceInfo,
 } from "@/api/types";
+import { useCredentialStorage } from "@/api/useCredentialStorage";
 import { useService } from "@/api/useService";
 import { useServiceLogs } from "@/api/useServiceLogs";
 import { useMcpAccess } from "@/api/useMcpAccess";
+import { useTrading } from "@/api/useTrading";
 import { ConnectAgent } from "@/components/ConnectAgent";
+import { MasterKeyLink } from "@/components/MasterKeyLink";
+import { Notice } from "@/components/Notice";
 import {
   CompactStaleState,
+  ErrorBanner,
   ErrorState,
   StaleState,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
-import { useUnencryptedSensitiveData } from "@/components/SensitiveDataBanner";
 import { StatRow } from "@/components/StatRow";
 import { StatusDot } from "@/components/StatusDot";
 import { Badge } from "@/components/ui/badge";
@@ -287,7 +291,8 @@ export function BackupCard() {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
   const { exportBackup, restoreBackup } = useOfficerApi();
-  const { unencrypted, trading: tradingLoad } = useUnencryptedSensitiveData();
+  const { load: tradingLoad } = useTrading();
+  const { load: credentialStorage } = useCredentialStorage();
   const [workflow, setWorkflow] = useState<BackupWorkflow>("export");
   const [all, setAll] = useState(true);
   const [sections, setSections] = useState<BackupSection[]>(backupSections);
@@ -305,11 +310,20 @@ export function BackupCard() {
   const [summary, setSummary] = useState<BackupRestoreSummary | null>(null);
   const [downloaded, setDownloaded] = useState("");
   const tradingSelected = all || sections.includes("trading");
+  const marketDataSelected = all || sections.includes("market_data_settings");
   const exportAllAccounts =
     workflow === "export" &&
     tradingSelected &&
     tradingLoad.state === "ready" &&
     tradingLoad.data.connections.length > 0;
+  const plaintextTradingExport =
+    tradingSelected &&
+    credentialStorage.state === "ready" &&
+    credentialStorage.data.plaintextTradingKeys;
+  const plaintextMarketDataExport =
+    marketDataSelected &&
+    credentialStorage.state === "ready" &&
+    credentialStorage.data.plaintextMarketDataKeys;
 
   const resetScopeControls = () => {
     setAll(true);
@@ -463,24 +477,32 @@ export function BackupCard() {
                 />
                 {t("backup.zip")}
               </label>
-              {unencrypted && tradingSelected && (
-                <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-xs text-[var(--danger)]">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <div>
-                      <p>{t("backup.unencryptedWarning")}</p>
-                      <a
-                        href="https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline"
-                      >
-                        {tc("sensitiveData.masterKeyLink")}
-                      </a>
-                    </div>
-                  </div>
-                </div>
+              {(plaintextTradingExport || plaintextMarketDataExport) && (
+                <Notice
+                  tone="danger"
+                  icon={AlertTriangle}
+                  title={t("backup.plaintextKeys.title")}
+                >
+                  {plaintextTradingExport && (
+                    <p>{t("backup.plaintextKeys.trading")}</p>
+                  )}
+                  {plaintextMarketDataExport && (
+                    <p>{t("backup.plaintextKeys.marketData")}</p>
+                  )}
+                  <p>{t("backup.plaintextKeys.advice")}</p>
+                  <p>
+                    <MasterKeyLink />
+                  </p>
+                </Notice>
               )}
+              {credentialStorage.state === "error" &&
+                (tradingSelected || marketDataSelected) && (
+                  <ErrorBanner
+                    message={tc("sensitiveData.unknown", {
+                      error: credentialStorage.error,
+                    })}
+                  />
+                )}
               <Button
                 type="button"
                 size="sm"
@@ -1190,7 +1212,6 @@ export function ServiceCard({
 export function Service() {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
-  const { t: tm } = useTranslation("marketData");
   const { load, reload } = useService();
   const { restartMarketData, restartService, stopService } = useOfficerApi();
   const location = useLocation();
@@ -1270,7 +1291,7 @@ export function Service() {
             ) : (
               <RotateCcw className="h-3.5 w-3.5" />
             )}
-            {tm("actions.restart")}
+            {tc("actions.restartFeeds")}
           </Button>
           <Button
             variant="ghost"

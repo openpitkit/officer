@@ -70,6 +70,9 @@
     },
     "report_fill": {
       "description": "Report an execution fill to the engine (post-trade)."
+    },
+    "get_credential_storage": {
+      "description": "Read whether stored credentials are sealed and which hold plaintext keys."
     }
   },
   "connect": {

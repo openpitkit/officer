@@ -70,6 +70,9 @@
     },
     "report_fill": {
       "description": "向引擎报告交易成交情况（盘后）。"
+    },
+    "get_credential_storage": {
+      "description": "读取已保存的凭据是否已加密，以及哪些凭据以明文形式保存密钥。"
     }
   },
   "connect": {

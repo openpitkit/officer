@@ -20,6 +20,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeSigningKeysStatus } from "@/api/client";
 import type {
   BackupArchive,
+  CredentialStorage,
   TradingAccessSubject,
   TradingSnapshot,
   VenueOrder,
@@ -164,6 +165,7 @@ describe("trading client", () => {
         group: "",
       },
     ],
+    diagnostics: [],
     feeAccount: "",
   };
   const trading: TradingSnapshot = {
@@ -178,7 +180,6 @@ describe("trading client", () => {
       },
     ],
     connections: [connection],
-    credentialsSealed: true,
   };
   const venueOrder: VenueOrder = {
     connection: connection.id,
@@ -212,16 +213,15 @@ describe("trading client", () => {
   };
 
   it.each([
-    [true, true, "desk/1 #paper"],
-    [false, false, ""],
+    [true, "desk/1 #paper"],
+    [false, ""],
   ] as const)(
-    "normalizes the trading snapshot with flags %s/%s and feeAccount %s",
-    async (credentialsSealed, unlinkedFees, feeAccount) => {
+    "normalizes the trading snapshot with unlinkedFees %s and feeAccount %s",
+    async (unlinkedFees, feeAccount) => {
       const snapshot = {
         ...trading,
         providers: [{ ...trading.providers[0], unlinkedFees }],
         connections: [{ ...connection, feeAccount }],
-        credentialsSealed,
       };
       const signal = new AbortController().signal;
       vi.mocked(fetch).mockResolvedValue(
@@ -293,7 +293,7 @@ describe("trading client", () => {
     },
   );
 
-  describe.each(["instruments", "access"] as const)(
+  describe.each(["instruments", "access", "diagnostics"] as const)(
     "connection %s",
     (field) => {
       it.each([undefined, null, {}, "invalid"])(
@@ -314,20 +314,6 @@ describe("trading client", () => {
           await expect(result).rejects.toMatchObject({ code: "internal" });
         },
       );
-    },
-  );
-
-  it.each([undefined, null, "false", 0])(
-    "rejects missing or non-boolean credentialsSealed %s",
-    async (credentialsSealed) => {
-      vi.mocked(fetch).mockResolvedValue(
-        jsonResponse({ trading: { ...trading, credentialsSealed } }),
-      );
-
-      const result = api().fetchTrading();
-
-      await expect(result).rejects.toBeInstanceOf(ApiError);
-      await expect(result).rejects.toMatchObject({ code: "internal" });
     },
   );
 
@@ -516,22 +502,18 @@ describe("trading client", () => {
     );
   });
 
-  it.each([true, false])(
-    "upserts an instrument and unwraps the snapshot with credentialsSealed %s",
-    async (credentialsSealed) => {
-      const snapshot = { ...trading, credentialsSealed };
-      const body = connection.instruments[0];
-      vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading: snapshot }));
+  it("upserts an instrument and unwraps the snapshot", async () => {
+    const body = connection.instruments[0];
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading }));
 
-      expect(await api().upsertTradingInstrument(connection.id, body)).toEqual(
-        snapshot,
-      );
-      expect(fetch).toHaveBeenCalledWith(
-        "/app/api/v1/trading/connections/paper%2Fdesk%20%231/instruments",
-        expect.objectContaining({ method: "PUT", body: JSON.stringify(body) }),
-      );
-    },
-  );
+    expect(await api().upsertTradingInstrument(connection.id, body)).toEqual(
+      trading,
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/trading/connections/paper%2Fdesk%20%231/instruments",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(body) }),
+    );
+  });
 
   it("deletes an instrument with an encoded symbol and accepts 204", async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
@@ -792,6 +774,24 @@ describe("trading client", () => {
     await expect(result).rejects.toMatchObject({ code: "internal" });
   });
 
+  it("accepts a degraded destination with its error", async () => {
+    const destination = {
+      connection: connection.id,
+      label: connection.label,
+      provider: "alpaca",
+      mode: "paper",
+      enabled: true,
+      venueAccount: "",
+      state: "degraded",
+      error: "trade updates refused",
+    };
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ destinations: [destination] }),
+    );
+
+    expect(await api().fetchTradingDestinations("desk")).toEqual([destination]);
+  });
+
   it("preserves empty connection collections and unavailable errors", async () => {
     const unavailable = {
       ...connection,
@@ -808,7 +808,6 @@ describe("trading client", () => {
         trading: {
           providers: [],
           connections: [unavailable, stopped],
-          credentialsSealed: false,
         },
       }),
     );
@@ -816,7 +815,33 @@ describe("trading client", () => {
     expect(await api().fetchTrading()).toEqual({
       providers: [],
       connections: [unavailable, stopped],
-      credentialsSealed: false,
+    });
+  });
+
+  it("normalizes a degraded connection with its error and diagnostics", async () => {
+    const diagnostic = {
+      level: "error",
+      code: "connection_error",
+      kind: "provider",
+      title: "Trade updates refused",
+      detail: "The venue closed the trade-updates stream.",
+      remediation: "Check the API key permissions.",
+      actions: [{ type: "open_docs" }],
+      at: "2026-10-13T08:00:00Z",
+    };
+    const degraded = {
+      ...connection,
+      state: "degraded",
+      error: "trade updates refused",
+      diagnostics: [diagnostic],
+    };
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ trading: { providers: [], connections: [degraded] } }),
+    );
+
+    expect(await api().fetchTrading()).toEqual({
+      providers: [],
+      connections: [degraded],
     });
   });
 
@@ -1152,6 +1177,65 @@ describe("trading client", () => {
         code: "fee_account_required",
         status: 409,
         message,
+      });
+    },
+  );
+});
+
+describe("credential storage client", () => {
+  const storage: CredentialStorage = {
+    credentialsSealed: false,
+    plaintextTradingKeys: true,
+    plaintextMarketDataKeys: false,
+  };
+
+  it("reads the installation's credential storage", async () => {
+    const signal = new AbortController().signal;
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ ...storage, extra: "ignored" }),
+    );
+
+    expect(await api().fetchCredentialStorage(signal)).toEqual(storage);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/credential-storage",
+      expect.objectContaining({ method: "GET", body: undefined, signal }),
+    );
+  });
+
+  describe.each([
+    "credentialsSealed",
+    "plaintextTradingKeys",
+    "plaintextMarketDataKeys",
+  ] as const)("field %s", (field) => {
+    it.each([undefined, null, "false", 0])(
+      "rejects a missing or non-boolean value %s",
+      async (value) => {
+        vi.mocked(fetch).mockResolvedValue(
+          jsonResponse({ ...storage, [field]: value }),
+        );
+
+        const result = api().fetchCredentialStorage();
+
+        await expect(result).rejects.toBeInstanceOf(ApiError);
+        await expect(result).rejects.toMatchObject({
+          code: "internal",
+          message: `Invalid or missing credential storage ${field} in the API response`,
+        });
+      },
+    );
+  });
+
+  it.each([null, [], "invalid", false])(
+    "rejects a non-object body %s",
+    async (body) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(body));
+
+      const result = api().fetchCredentialStorage();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message: "Credential storage is missing from the API response",
       });
     },
   );

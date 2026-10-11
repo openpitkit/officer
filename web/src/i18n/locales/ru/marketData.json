@@ -17,7 +17,6 @@
   "actions": {
     "addInstance": "Добавить источник",
     "deleteInstance": "Удалить источник",
-    "restart": "Перезапустить фиды",
     "sendPrice": "Отправить цену"
   },
   "create": {
@@ -165,26 +164,6 @@
     "updateIntervalTooltip": "Интервал с предыдущего обновления"
   },
   "emptyInstances": "Источники рыночных данных не настроены",
-  "diagnostics": {
-    "title": "Проблемы",
-    "summary": "Активно: {{count}}",
-    "collapsedSummary": "Проблем: {{count}}",
-    "collapse": "Свернуть",
-    "expand": "Открыть",
-    "actions": "Действия по проблемам",
-    "levelError": "ошибка",
-    "levelWarn": "предупреждение",
-    "levelInfo": "инфо",
-    "groupActionNeeded": "Требуется действие",
-    "groupProvider": "Соединение / провайдер",
-    "howToFix": "Как исправить:",
-    "actionRestart": "Перезапустить фиды",
-    "actionDocs": "Документация провайдера",
-    "actionSymbols": "Список символов",
-    "actionRemove": "Удалить инструмент",
-    "actionRemoveTarget": "Удалить {{target}}",
-    "actionLogs": "Логи сервиса"
-  },
   "verify": {
     "unsupported": "Этот провайдер не умеет проверять символы",
     "unavailable": "Нет свежей цены для символа"

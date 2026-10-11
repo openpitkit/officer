@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -47,8 +48,8 @@ type krakenConnector struct {
 	dial         func(context.Context, string) (krakenConn, error)
 	sleep        func(context.Context, time.Duration) error
 	fetchSymbols func(ctx context.Context) (map[string]struct{}, error)
-	report       fwmarketdata.StatusReporter
-	diagReport   fwmarketdata.DiagnosticReporter
+	report       health.StatusReporter
+	diagReport   health.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	readTimeout  time.Duration
@@ -133,7 +134,7 @@ func (c liveKrakenConn) Close(code websocket.StatusCode, reason string) error {
 	return c.conn.Close(code, reason)
 }
 
-func (c *krakenConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
+func (c *krakenConnector) SetStatusReporter(report health.StatusReporter) {
 	c.report = report
 }
 
@@ -143,17 +144,17 @@ func (c *krakenConnector) reportStatus(ok bool, errMsg string) {
 	}
 }
 
-func (c *krakenConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
+func (c *krakenConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *krakenConnector) reportDiag(diag fwmarketdata.Diagnostic) {
+func (c *krakenConnector) reportDiag(diag health.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
 }
 
-func (c *krakenConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
+func (c *krakenConnector) Diagnose(ctx context.Context) ([]health.Diagnostic, error) {
 	diagCtx, cancel := context.WithTimeout(ctx, krakenDiagnoseTimeout)
 	defer cancel()
 
@@ -162,7 +163,7 @@ func (c *krakenConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnost
 		return nil, err
 	}
 
-	var findings []fwmarketdata.Diagnostic
+	var findings []health.Diagnostic
 	for _, sub := range c.subs {
 		if _, ok := known[sub.symbol]; !ok {
 			findings = append(findings, krakenUnknownSymbolDiag(sub, known))
@@ -282,14 +283,14 @@ func (c *krakenConnector) validateSymbols(
 
 	known, err := c.fetchSymbols(validateCtx)
 	if err != nil {
-		c.reportDiag(fwmarketdata.Diagnostic{
-			Level:       DiagWarn,
-			Code:        CodeSelfDiagnosisFailed,
-			Kind:        DiagKindProvider,
+		c.reportDiag(health.Diagnostic{
+			Level:       health.DiagWarn,
+			Code:        health.CodeSelfDiagnosisFailed,
+			Kind:        health.DiagKindProvider,
 			Title:       "Self-diagnosis failed",
 			Detail:      "symbol validation unavailable: " + err.Error(),
 			Remediation: "Couldn't validate against the provider; try Restart feeds.",
-			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 		})
 		return subs
 	}
@@ -307,24 +308,24 @@ func (c *krakenConnector) validateSymbols(
 
 func krakenUnknownSymbolDiag(
 	sub krakenSubscription, known map[string]struct{},
-) fwmarketdata.Diagnostic {
+) health.Diagnostic {
 	remediation := "Remove this instrument and add one with a valid Kraken WS symbol" +
 		" (e.g. BTC/USD). See the valid symbols list."
 	suggestions := symbolPrefixSuggestionsFromSet(known, sub.External)
 	if len(suggestions) > 0 {
 		remediation += " Did you mean: " + strings.Join(suggestions, ", ") + "?"
 	}
-	return fwmarketdata.Diagnostic{
-		Level:       DiagError,
-		Code:        CodeUnknownSymbol,
-		Kind:        DiagKindConfig,
+	return health.Diagnostic{
+		Level:       health.DiagError,
+		Code:        health.CodeUnknownSymbol,
+		Kind:        health.DiagKindConfig,
 		Instrument:  sub.External,
 		Title:       fmt.Sprintf("Symbol %q not found on Kraken", sub.External),
 		Detail:      fmt.Sprintf("The configured external symbol %q is not a Kraken WS ticker symbol.", sub.External),
 		Remediation: remediation,
-		Actions: []fwmarketdata.DiagnosticAction{
-			{Type: ActionRemoveInstrument, Target: sub.External},
-			{Type: ActionOpenSymbols},
+		Actions: []health.DiagnosticAction{
+			{Type: health.ActionRemoveInstrument, Target: sub.External},
+			{Type: health.ActionOpenSymbols},
 		},
 	}
 }
@@ -374,14 +375,14 @@ func (c *krakenConnector) stream(
 				framesReceived++
 				if framesReceived >= unparsableThreshold && framesParsed == 0 {
 					unparsableReported = true
-					c.reportDiag(fwmarketdata.Diagnostic{
-						Level:       DiagError,
-						Code:        CodeUnparsableData,
-						Kind:        DiagKindProvider,
+					c.reportDiag(health.Diagnostic{
+						Level:       health.DiagError,
+						Code:        health.CodeUnparsableData,
+						Kind:        health.DiagKindProvider,
 						Title:       "Receiving data but cannot parse it",
 						Detail:      "The source is sending data but Officer could not decode it (likely a format mismatch).",
 						Remediation: "This is an internal issue, not your configuration - please report it.",
-						Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}},
+						Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}},
 					})
 				}
 			}

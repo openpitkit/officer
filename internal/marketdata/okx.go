@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -47,8 +48,8 @@ type okxConnector struct {
 	dial         func(context.Context, string) (okxConn, error)
 	sleep        func(context.Context, time.Duration) error
 	fetchSymbols func(context.Context) (map[string]struct{}, error)
-	report       fwmarketdata.StatusReporter
-	diagReport   fwmarketdata.DiagnosticReporter
+	report       health.StatusReporter
+	diagReport   health.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	pingInterval time.Duration
@@ -136,7 +137,7 @@ func (c liveOKXConn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *okxConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
+func (c *okxConnector) SetStatusReporter(report health.StatusReporter) {
 	c.report = report
 }
 
@@ -147,11 +148,11 @@ func (c *okxConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *okxConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
+func (c *okxConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *okxConnector) reportDiag(diag fwmarketdata.Diagnostic) {
+func (c *okxConnector) reportDiag(diag health.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
@@ -194,7 +195,7 @@ func (c *okxConnector) SearchSymbols(
 
 // Diagnose returns a diagnostic for each stored OKX subscription whose
 // instrument id is not listed by the provider catalogue.
-func (c *okxConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic, error) {
+func (c *okxConnector) Diagnose(ctx context.Context) ([]health.Diagnostic, error) {
 	diagCtx, cancel := context.WithTimeout(ctx, okxDiagnoseTimeout)
 	defer cancel()
 
@@ -202,7 +203,7 @@ func (c *okxConnector) Diagnose(ctx context.Context) ([]fwmarketdata.Diagnostic,
 	if err != nil {
 		return nil, err
 	}
-	var findings []fwmarketdata.Diagnostic
+	var findings []health.Diagnostic
 	for _, sub := range c.subs {
 		if _, ok := known[sub.instID]; ok {
 			continue
@@ -273,14 +274,14 @@ func (c *okxConnector) validateSymbols(
 
 	known, err := c.fetchSymbols(validateCtx)
 	if err != nil {
-		c.reportDiag(fwmarketdata.Diagnostic{
-			Level:       DiagWarn,
-			Code:        CodeSelfDiagnosisFailed,
-			Kind:        DiagKindProvider,
+		c.reportDiag(health.Diagnostic{
+			Level:       health.DiagWarn,
+			Code:        health.CodeSelfDiagnosisFailed,
+			Kind:        health.DiagKindProvider,
 			Title:       "Self-diagnosis failed",
 			Detail:      "symbol validation unavailable: " + err.Error(),
 			Remediation: "Couldn't validate against the provider; try Restart feeds.",
-			Actions:     []fwmarketdata.DiagnosticAction{{Type: ActionRestart}, {Type: ActionOpenDocs}},
+			Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 		})
 		return subs
 	}

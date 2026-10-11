@@ -266,6 +266,7 @@ function connection(
     secrets: { apiKey: true, apiSecret: true },
     instruments: [],
     access: [],
+    diagnostics: [],
     feeAccount: "",
     ...fields,
   };
@@ -283,11 +284,24 @@ function tradingInstrument(
   };
 }
 
+function tradingDiagnostic(
+  title: string,
+): TradingConnection["diagnostics"][number] {
+  return {
+    level: "error",
+    code: "connection_error",
+    kind: "provider",
+    title,
+    detail: "",
+    actions: [],
+    at: "2026-10-13T08:00:00Z",
+  };
+}
+
 function renderTradingCard(connections: TradingConnection[]) {
   const data: TradingSnapshot = {
     providers: [],
     connections,
-    credentialsSealed: true,
   };
   const load = { state: "ready" as const, data, error: null };
   useTradingMock.mockReturnValue({ load, reload: vi.fn() });
@@ -374,6 +388,71 @@ describe("TradingConnectionsCard", () => {
     ).toEqual({ title: "Unavailable", error: "Venue offline" });
     expect(screen.queryByText("Running")).not.toBeInTheDocument();
     expect(vi.mocked(DashboardItemChips)).not.toHaveBeenCalled();
+  });
+
+  it("passes an unavailable connection's latest diagnostic to the error chip", () => {
+    renderTradingCard([
+      connection("Alpaca live", {
+        state: "unavailable",
+        error: "Venue offline",
+        diagnostics: [tradingDiagnostic("Old"), tradingDiagnostic("Latest")],
+      }),
+    ]);
+
+    expect(
+      lastProps<DashboardSourceErrorProps>(vi.mocked(DashboardSourceError)),
+    ).toEqual({
+      title: "Unavailable",
+      error: "Venue offline",
+      diagnostic: "Latest",
+    });
+  });
+
+  it("passes a degraded connection's error and latest diagnostic to the warn chip", () => {
+    renderTradingCard([
+      connection("Alpaca paper", {
+        state: "degraded",
+        error: "Trade updates refused",
+        instruments: [tradingInstrument("AAA")],
+        diagnostics: [tradingDiagnostic("Old"), tradingDiagnostic("Latest")],
+      }),
+    ]);
+
+    expect(
+      lastProps<DashboardSourceErrorProps>(vi.mocked(DashboardSourceError)),
+    ).toEqual({
+      variant: "warn",
+      title: "Degraded",
+      error: "Trade updates refused",
+      diagnostic: "Latest",
+    });
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    expect(vi.mocked(DashboardItemChips)).not.toHaveBeenCalled();
+  });
+
+  it("counts a running connection's diagnostics without nesting a panel in the card", () => {
+    const consoleError = vi.spyOn(console, "error");
+    try {
+      renderTradingCard([
+        connection("Alpaca paper", {
+          instruments: [tradingInstrument("AAA")],
+          diagnostics: [tradingDiagnostic("Gap"), tradingDiagnostic("Lag")],
+        }),
+      ]);
+
+      expect(screen.getByText("Running")).toHaveClass("text-[var(--ok)]");
+      expect(screen.getByText("2 issue(s)")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("region", { name: "Problems" }),
+      ).not.toBeInTheDocument();
+      expect(
+        consoleError.mock.calls.filter((args) =>
+          String(args[0]).includes("cannot be a descendant of"),
+        ),
+      ).toEqual([]);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("warns about an enabled connection that is stopped", () => {

@@ -264,7 +264,7 @@ func TestSendPaperOrderAutomaticDestination(t *testing.T) {
 				second.ExternalID, second.Label = "second", "Another paper"
 				n.connections = append(n.connections, second)
 				n.access = append(n.access, domain.TradingAccess{Account: "acct-1", Connection: "second", VenueAccount: "remote-2"})
-				rt.states = map[domain.ExternalID]trading.ConnectionState{"second": {Unavailable: "offline"}}
+				rt.states = map[domain.ExternalID]trading.ConnectionStatus{"second": {State: trading.ConnectionUnavailable, Error: "offline"}}
 			}
 			switch name {
 			case "disabled_and_live":
@@ -687,6 +687,42 @@ func TestSendPaperOrderSendRedacts(t *testing.T) {
 				}
 				if stage == "unavailable" && (n.cancels != 1 || signer.payload.RejectReason != got.Send.Error) {
 					t.Fatalf("cancel reason=%q send=%+v", signer.payload.RejectReason, got.Send)
+				}
+			})
+		}
+	}
+}
+
+func TestSendPaperOrderRedactsCredentialSpellings(t *testing.T) {
+	spellings := tradingTestEchoedSpellings
+	for _, spelling := range spellings {
+		for _, stage := range []string{"precheck", "send", "not_sent"} {
+			t.Run(spelling.form+"/"+stage, func(t *testing.T) {
+				s, n, rt, signer := newPaperSendTestService(t)
+				n.connections[0].Credentials = tradingTestEchoedCredentials
+				cause := errors.New("venue echoed " + spelling.text)
+				switch stage {
+				case "precheck":
+					rt.preCheckErr = cause
+				case "send":
+					rt.sendErr = cause
+				case "not_sent":
+					rt.sendErr = fmt.Errorf("%w: %w", trading.ErrNotSent, cause)
+				}
+				got, err := s.SendPaperOrder(systemCtx(), paperSendTestOrder(), SendDestination{Route: "{}"})
+				if stage == "precheck" {
+					if !errors.Is(err, cause) || !errors.Is(err, domain.ErrUpstream) {
+						t.Fatalf("pre-check error = %v", err)
+					}
+					tradingTestAssertRedacted(t, "pre-check error", err.Error(), spellings)
+					return
+				}
+				if err != nil || got.Send == nil {
+					t.Fatalf("send = %+v, err = %v", got.Send, err)
+				}
+				tradingTestAssertRedacted(t, "send error", got.Send.Error, spellings)
+				if stage == "not_sent" {
+					tradingTestAssertRedacted(t, "cancellation reason", signer.payload.RejectReason, spellings)
 				}
 			})
 		}

@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -251,6 +250,9 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 	registerTool(reg, descriptor("get_trading", "Get trading",
 		"Read trading providers and connections. Read-only - credentials are never exposed.",
 		"Read trading providers and connections.", false, false, true, true), getTradingHandler)
+	registerTool(reg, descriptor("get_credential_storage", "Get credential storage",
+		"Report whether stored credentials are sealed under the master key and, when they are not, whether trading connections or market-data sources hold keys in plain text. Read-only - credentials are never exposed.",
+		"Read whether stored credentials are sealed and which hold plaintext keys.", false, false, true, true), getCredentialStorageHandler)
 	registerTool(reg, descriptor("create_trading_connection", "Create trading connection",
 		"Create a trading connection with write-only credentials. Mutates Officer control-plane config; protected and disabled by default.",
 		"Create a trading connection with write-only credentials.", true, true, true, false), createTradingConnectionHandler)
@@ -909,7 +911,7 @@ func healthHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[healthInput, h
 	) (string, healthOutput, error) {
 		status, err := src.Status(ctx)
 		if err != nil {
-			return "", healthOutput{}, fmt.Errorf("officer status unavailable")
+			return "", healthOutput{}, toolError(err)
 		}
 		out := toHealthOutput(status)
 		return summarizeHealth(out), out, nil
@@ -932,17 +934,11 @@ func getAccountStateHandler(
 		}
 		acc, limits, err := src.GetAccountState(ctx, id)
 		if err != nil {
-			// A rejected or unknown id is the caller's mistake to correct, not
-			// an outage to retry, so the Source's message must reach the agent.
-			if isRefusal(err) {
-				return "", getAccountStateOutput{}, err
-			}
-			return "", getAccountStateOutput{}, fmt.Errorf("get account state failed")
+			return "", getAccountStateOutput{}, toolError(err)
 		}
 		block, err := accountBlock(ctx, src, acc)
 		if err != nil {
-			return "", getAccountStateOutput{},
-				fmt.Errorf("resolve account block failed")
+			return "", getAccountStateOutput{}, toolError(err)
 		}
 		out := getAccountStateOutput{
 			Account: toAccountDTO(acc, block),
@@ -971,10 +967,7 @@ func getLimitsHandler(
 		account := domain.AccountID(strings.TrimSpace(in.Account))
 		limits, err := src.ListLimits(ctx, account)
 		if err != nil {
-			if isRefusal(err) {
-				return "", getLimitsOutput{}, err
-			}
-			return "", getLimitsOutput{}, fmt.Errorf("list limits failed")
+			return "", getLimitsOutput{}, toolError(err)
 		}
 		out := getLimitsOutput{Limits: toLimitsDTO(limits)}
 		return fmt.Sprintf("%d limit(s)", limitsCount(limits)), out, nil
@@ -995,10 +988,7 @@ func getOrderHandler(
 		}
 		detail, err := src.GetOrder(ctx, id)
 		if err != nil {
-			if isNotFound(err) {
-				return "", getOrderOutput{}, fmt.Errorf("order %q not found", id)
-			}
-			return "", getOrderOutput{}, fmt.Errorf("get order failed")
+			return "", getOrderOutput{}, toolError(err)
 		}
 		out := getOrderOutput{
 			Order:    toOrderDTO(detail),
@@ -1008,7 +998,7 @@ func getOrderHandler(
 		if detail.Venue != nil {
 			venue, err := toVenueOrderDTO(*detail.Venue)
 			if err != nil {
-				return "", getOrderOutput{}, err
+				return "", getOrderOutput{}, toolError(err)
 			}
 			out.VenueOrder = &venue
 		}
@@ -1050,10 +1040,7 @@ func getAuditHandler(
 		}
 		rows, err := src.ListAuditFiltered(ctx, filter, n)
 		if err != nil {
-			if isRefusal(err) {
-				return "", getAuditOutput{}, err
-			}
-			return "", getAuditOutput{}, fmt.Errorf("list audit failed")
+			return "", getAuditOutput{}, toolError(err)
 		}
 		out := getAuditOutput{Entries: toAuditDTOs(rows)}
 		return fmt.Sprintf("%d audit entry/entries", len(rows)), out, nil
@@ -1086,10 +1073,7 @@ func checkOrderHandler(
 		}
 		result, err := src.CheckOrder(ctx, probe)
 		if err != nil {
-			if isRefusal(err) {
-				return "", checkOrderOutput{}, err
-			}
-			return "", checkOrderOutput{}, fmt.Errorf("check order failed")
+			return "", checkOrderOutput{}, toolError(err)
 		}
 		// The Source checked the composition's one account when none was named.
 		account = features.AccountFor(account)
@@ -1121,7 +1105,7 @@ func setMarketDataInstrumentHandler(
 		if err := src.SetMarketDataInstrumentEnabled(
 			ctx, instanceID, externalSymbol, in.Enabled,
 		); err != nil {
-			return "", setMarketDataInstrumentOutput{}, fmt.Errorf("set market-data instrument failed")
+			return "", setMarketDataInstrumentOutput{}, toolError(err)
 		}
 		out := setMarketDataInstrumentOutput{
 			InstanceExternalID: instanceID,
@@ -1185,7 +1169,7 @@ func submitOrderHandler(
 		mode := strings.TrimSpace(in.Mode)
 		res, err := src.SubmitOrderToken(ctx, o, mode, missing)
 		if err != nil {
-			return "", submitOrderOutput{}, fmt.Errorf("submit order failed: %s", err)
+			return "", submitOrderOutput{}, toolError(err)
 		}
 		out := submitOrderOutput{
 			SignedApproval:  res.Token,
@@ -1248,9 +1232,7 @@ func submitDropCopyOrderHandler(
 		}
 		res, err := src.SubmitDropCopyOrder(ctx, o, missing)
 		if err != nil {
-			return "", submitDropCopyOrderOutput{}, fmt.Errorf(
-				"submit drop-copy order failed: %w", err,
-			)
+			return "", submitDropCopyOrderOutput{}, toolError(err)
 		}
 		out := submitDropCopyOrderOutput{
 			OrderExternalID: res.OrderExternalID,
@@ -1277,10 +1259,7 @@ func confirmExecutionHandler(
 		}
 		order, att, err := src.ConfirmExecution(ctx, orderExternalID)
 		if err != nil {
-			if errors.Is(err, domain.ErrVenueOrderManaged) {
-				return "", confirmExecutionOutput{}, tradingToolError("confirm execution", err, nil)
-			}
-			return "", confirmExecutionOutput{}, fmt.Errorf("confirm execution failed: %s", err)
+			return "", confirmExecutionOutput{}, toolError(err)
 		}
 		out := confirmExecutionOutput{
 			OrderExternalID:   order.ExternalID.String(),
@@ -1315,10 +1294,7 @@ func cancelHandler(
 			strings.TrimSpace(in.Reason),
 		)
 		if err != nil {
-			if errors.Is(err, domain.ErrVenueOrderManaged) {
-				return "", cancelOutput{}, tradingToolError("cancel", err, nil)
-			}
-			return "", cancelOutput{}, fmt.Errorf("cancel failed: %s", err)
+			return "", cancelOutput{}, toolError(err)
 		}
 		out := cancelOutput{
 			OrderExternalID:   order.ExternalID.String(),
@@ -1360,53 +1336,6 @@ func summarizeHealth(out healthOutput) string {
 	return "officer degraded"
 }
 
-type tradingDTO struct {
-	Providers         []tradingProviderDTO   `json:"providers"`
-	Connections       []tradingConnectionDTO `json:"connections"`
-	CredentialsSealed bool                   `json:"credentialsSealed"`
-}
-
-type tradingProviderDTO struct {
-	Type            string `json:"type"`
-	Title           string `json:"title"`
-	VenueAccounts   bool   `json:"venueAccounts"`
-	VerifiesSymbols bool   `json:"verifiesSymbols"`
-	SearchesSymbols bool   `json:"searchesSymbols"`
-	UnlinkedFees    bool   `json:"unlinkedFees"`
-}
-
-type tradingConnectionDTO struct {
-	ID            string                 `json:"id"`
-	Provider      string                 `json:"provider"`
-	Label         string                 `json:"label"`
-	Mode          domain.TradingMode     `json:"mode"`
-	Enabled       bool                   `json:"enabled"`
-	VenueIdentity string                 `json:"venueIdentity"`
-	FeeAccount    string                 `json:"feeAccount"`
-	State         string                 `json:"state"`
-	Error         string                 `json:"error,omitempty"`
-	Secrets       map[string]bool        `json:"secrets"`
-	Instruments   []tradingInstrumentDTO `json:"instruments"`
-	Access        []tradingAccessDTO     `json:"access"`
-}
-
-type tradingInstrumentDTO struct {
-	ExternalSymbol string `json:"externalSymbol"`
-	BaseAsset      string `json:"baseAsset"`
-	QuoteAsset     string `json:"quoteAsset"`
-	Enabled        bool   `json:"enabled"`
-}
-
-// tradingAccessDTO is one grant of a connection. Exactly one of Account and
-// AccountGroup names the subject; Group is the granted account's current group
-// membership, empty for a group grant and for an account outside any group.
-type tradingAccessDTO struct {
-	Account      string `json:"account"`
-	AccountGroup string `json:"accountGroup"`
-	VenueAccount string `json:"venueAccount"`
-	Group        string `json:"group"`
-}
-
 type venueOrderDTO struct {
 	Connection    string         `json:"connection"`
 	VenueAccount  string         `json:"venueAccount"`
@@ -1415,55 +1344,6 @@ type venueOrderDTO struct {
 	VenueOrderID  string         `json:"venueOrderId,omitempty"`
 	SendAttempted bool           `json:"sendAttempted"`
 	CreatedAt     string         `json:"createdAt"`
-}
-
-func toTradingDTO(status backend.TradingStatus) tradingDTO {
-	out := tradingDTO{
-		Providers:         make([]tradingProviderDTO, 0, len(status.Providers)),
-		Connections:       make([]tradingConnectionDTO, 0, len(status.Connections)),
-		CredentialsSealed: status.CredentialsSealed,
-	}
-	for _, p := range status.Providers {
-		out.Providers = append(out.Providers, tradingProviderDTO{
-			Type: p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
-			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
-			UnlinkedFees: p.UnlinkedFees,
-		})
-	}
-	for _, c := range status.Connections {
-		out.Connections = append(out.Connections, toTradingConnectionDTO(c))
-	}
-	return out
-}
-
-func toTradingConnectionDTO(c backend.TradingConnectionStatus) tradingConnectionDTO {
-	out := tradingConnectionDTO{
-		ID: c.ExternalID.String(), Provider: c.Provider, Label: c.Label,
-		Mode: c.Mode, Enabled: c.Enabled, VenueIdentity: c.VenueIdentity,
-		FeeAccount: c.FeeAccount.String(), State: c.State,
-		Secrets:     make(map[string]bool, len(c.Secrets)),
-		Instruments: make([]tradingInstrumentDTO, 0, len(c.Instruments)),
-		Access:      make([]tradingAccessDTO, 0, len(c.Access)),
-	}
-	if c.State == "unavailable" {
-		out.Error = c.Unavailable
-	}
-	for key, present := range c.Secrets {
-		out.Secrets[key] = present
-	}
-	for _, i := range c.Instruments {
-		out.Instruments = append(out.Instruments, tradingInstrumentDTO{
-			ExternalSymbol: i.ExternalSymbol, BaseAsset: i.BaseAsset,
-			QuoteAsset: i.QuoteAsset, Enabled: i.Enabled,
-		})
-	}
-	for _, row := range c.Access {
-		out.Access = append(out.Access, tradingAccessDTO{
-			Account: row.Access.Account.String(), AccountGroup: row.Access.AccountGroup,
-			VenueAccount: row.Access.VenueAccount, Group: row.Group,
-		})
-	}
-	return out
 }
 
 func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
@@ -1485,7 +1365,7 @@ func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
 }
 
 type tradingConnectionOutput struct {
-	Connection tradingConnectionDTO `json:"connection"`
+	Connection httpx.TradingConnectionDTO `json:"connection"`
 }
 type tradingConnectionInput struct {
 	Connection string `json:"connection" jsonschema:"Trading connection id"`
@@ -1594,121 +1474,51 @@ type listTradingDestinationsOutput struct {
 	Destinations []httpx.TradingDestinationDTO `json:"destinations"`
 }
 
-func tradingToolError(operation string, err error, redact func(string) string) error {
-	code := ""
-	switch {
-	case errors.Is(err, domain.ErrLiveTradingUnavailable):
-		code = "live_trading_unavailable"
-	case errors.Is(err, domain.ErrTradingModeMismatch):
-		code = "trading_mode_mismatch"
-	case errors.Is(err, domain.ErrFeeAccountRequired):
-		code = "fee_account_required"
-	case errors.Is(err, domain.ErrVenueOrderManaged):
-		code = "venue_order_managed"
-	case errors.Is(err, domain.ErrNoDestination):
-		code = "no_destination"
-	case errors.Is(err, domain.ErrDestinationAmbiguous):
-		code = "destination_ambiguous"
-	case errors.As(err, new(domain.AssetMissingError)):
-		code = "asset_missing"
-	}
-	message := err.Error()
+// toolError reports err, an error from the Source, as "<code>: <message>" with
+// the code and message REST answers for it. REST returns the candidates of an
+// ambiguous destination as a member; the text lists them instead.
+func toolError(err error) error {
+	public := httpx.DescribeErr(err)
+	message := public.Message
 	var ambiguous *backend.DestinationAmbiguousError
-	if errors.As(err, &ambiguous) {
+	if public.Code == "destination_ambiguous" && errors.As(err, &ambiguous) {
 		for _, c := range ambiguous.Candidates {
 			message += fmt.Sprintf("; %s (%s)", c.Connection.String(), c.Label)
 		}
 	}
-	if redact != nil {
-		message = redact(message)
-	}
-	if code != "" {
-		return fmt.Errorf("%s: %s", code, message)
-	}
-	return fmt.Errorf("%s failed: %s", operation, message)
+	return fmt.Errorf("%s: %s", public.Code, message)
 }
 
-func tradingConnectionSnapshot(ctx context.Context, src frameworkmcp.Source, id string) (tradingConnectionDTO, error) {
+func tradingConnectionSnapshot(ctx context.Context, src frameworkmcp.Source, id string) (httpx.TradingConnectionDTO, error) {
 	status, err := src.GetTrading(ctx)
 	if err != nil {
-		return tradingConnectionDTO{}, err
+		return httpx.TradingConnectionDTO{}, err
 	}
 	for _, c := range status.Connections {
 		if c.ExternalID.String() == id {
-			return toTradingConnectionDTO(c), nil
+			return httpx.ToTradingConnectionDTO(c), nil
 		}
 	}
-	return tradingConnectionDTO{}, fmt.Errorf("trading connection is missing from the snapshot")
+	return httpx.TradingConnectionDTO{}, fmt.Errorf("trading connection is missing from the snapshot")
 }
 
-func tradingCredentialRedactor(credentials map[string]any) func(string) string {
-	var values []string
-	var collect func(any)
-	collect = func(value any) {
-		switch v := value.(type) {
-		case string:
-			// A blank value holds no secret; redacting it would garble the
-			// whitespace of every message that names the refused member.
-			if strings.TrimSpace(v) != "" {
-				values = append(values, v)
-				encoded, _ := json.Marshal(v)
-				values = append(values, string(encoded[1:len(encoded)-1]))
-			}
-		case map[string]any:
-			for _, child := range v {
-				collect(child)
-			}
-		case []any:
-			for _, child := range v {
-				collect(child)
-			}
-		}
-	}
-	collect(credentials)
-	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
-	var pairs []string
-	for _, value := range values {
-		pairs = append(pairs, value, "[REDACTED]")
-	}
-	return strings.NewReplacer(pairs...).Replace
-}
-
-func redactTradingConnection(c tradingConnectionDTO, redact func(string) string) tradingConnectionDTO {
-	c.ID = redact(c.ID)
-	c.Provider = redact(c.Provider)
-	c.Label = redact(c.Label)
-	c.VenueIdentity = redact(c.VenueIdentity)
-	c.FeeAccount = redact(c.FeeAccount)
-	c.State = redact(c.State)
-	c.Error = redact(c.Error)
-	c.Mode = domain.TradingMode(redact(string(c.Mode)))
-	secrets := make(map[string]bool, len(c.Secrets))
-	for key, value := range c.Secrets {
-		secrets[redact(key)] = value
-	}
-	c.Secrets = secrets
-	for i := range c.Instruments {
-		item := &c.Instruments[i]
-		item.ExternalSymbol = redact(item.ExternalSymbol)
-		item.BaseAsset = redact(item.BaseAsset)
-		item.QuoteAsset = redact(item.QuoteAsset)
-	}
-	for i := range c.Access {
-		c.Access[i].Account = redact(c.Access[i].Account)
-		c.Access[i].AccountGroup = redact(c.Access[i].AccountGroup)
-		c.Access[i].VenueAccount = redact(c.Access[i].VenueAccount)
-		c.Access[i].Group = redact(c.Access[i].Group)
-	}
-	return c
-}
-
-func getTradingHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[struct{}, tradingDTO] {
-	return func(ctx context.Context, _ *sdkmcp.ServerSession, in struct{}) (string, tradingDTO, error) {
+func getTradingHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[struct{}, httpx.TradingDTO] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, in struct{}) (string, httpx.TradingDTO, error) {
 		status, err := src.GetTrading(ctx)
 		if err != nil {
-			return "", tradingDTO{}, tradingToolError("get trading", err, nil)
+			return "", httpx.TradingDTO{}, toolError(err)
 		}
-		return "trading connections", toTradingDTO(status), nil
+		return "trading connections", httpx.ToTradingDTO(status), nil
+	}
+}
+
+func getCredentialStorageHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[struct{}, httpx.CredentialStorageDTO] {
+	return func(ctx context.Context, _ *sdkmcp.ServerSession, _ struct{}) (string, httpx.CredentialStorageDTO, error) {
+		storage, err := src.CredentialStorage(ctx)
+		if err != nil {
+			return "", httpx.CredentialStorageDTO{}, toolError(err)
+		}
+		return "credential storage", httpx.ToCredentialStorageDTO(storage), nil
 	}
 }
 func createTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[createTradingConnectionInput, tradingConnectionOutput] {
@@ -1736,17 +1546,16 @@ func createTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBo
 		if err != nil {
 			return "", tradingConnectionOutput{}, fmt.Errorf("credentials must be a JSON object")
 		}
-		redact := tradingCredentialRedactor(in.Credentials)
 		connection := domain.TradingConnection{ExternalID: domain.ExternalID(in.ID), Provider: in.Provider, Label: in.Label, Mode: in.Mode, Credentials: string(credentials), Enabled: *in.Enabled}
 		created, err := src.CreateTradingConnection(ctx, connection)
 		if err != nil {
-			return "", tradingConnectionOutput{}, tradingToolError("create trading connection", err, redact)
+			return "", tradingConnectionOutput{}, toolError(err)
 		}
 		snapshot, err := tradingConnectionSnapshot(ctx, src, created.ExternalID.String())
 		if err != nil {
-			return "", tradingConnectionOutput{}, tradingToolError("create trading connection", err, redact)
+			return "", tradingConnectionOutput{}, toolError(err)
 		}
-		return "trading connection created", tradingConnectionOutput{Connection: redactTradingConnection(snapshot, redact)}, nil
+		return "trading connection created", tradingConnectionOutput{Connection: snapshot}, nil
 	}
 }
 func updateTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[updateTradingConnectionInput, tradingConnectionOutput] {
@@ -1771,15 +1580,14 @@ func updateTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBo
 			}
 			credentials = string(raw)
 		}
-		redact := tradingCredentialRedactor(in.Credentials)
 		if err := src.UpdateTradingConnectionSettings(ctx, connection, label, credentials); err != nil {
-			return "", tradingConnectionOutput{}, tradingToolError("update trading connection", err, redact)
+			return "", tradingConnectionOutput{}, toolError(err)
 		}
 		snapshot, err := tradingConnectionSnapshot(ctx, src, connection)
 		if err != nil {
-			return "", tradingConnectionOutput{}, tradingToolError("update trading connection", err, redact)
+			return "", tradingConnectionOutput{}, toolError(err)
 		}
-		return "trading connection updated", tradingConnectionOutput{Connection: redactTradingConnection(snapshot, redact)}, nil
+		return "trading connection updated", tradingConnectionOutput{Connection: snapshot}, nil
 	}
 }
 func checkTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[tradingConnectionInput, checkTradingConnectionOutput] {
@@ -1790,7 +1598,7 @@ func checkTradingConnectionHandler(src frameworkmcp.Source) frameworkmcp.ToolBod
 
 		info, err := src.CheckTradingConnection(ctx, in.Connection)
 		if err != nil {
-			return "", checkTradingConnectionOutput{}, tradingToolError("check trading connection", err, nil)
+			return "", checkTradingConnectionOutput{}, toolError(err)
 		}
 		return "trading connection checked", checkTradingConnectionOutput{VenueIdentity: info.Identity, VenueStatus: info.Status}, nil
 	}
@@ -1804,7 +1612,7 @@ func setTradingConnectionEnabledHandler(src frameworkmcp.Source) frameworkmcp.To
 			return "", setTradingConnectionEnabledInput{}, fmt.Errorf("enabled is required")
 		}
 		if err := src.SetTradingConnectionEnabled(ctx, in.Connection, *in.Enabled); err != nil {
-			return "", setTradingConnectionEnabledInput{}, tradingToolError("set trading connection enabled", err, nil)
+			return "", setTradingConnectionEnabledInput{}, toolError(err)
 		}
 		return "set trading connection enabled", in, nil
 	}
@@ -1827,7 +1635,7 @@ func setTradingInstrumentHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[
 			return "", setTradingInstrumentInput{}, fmt.Errorf("enabled is required")
 		}
 		if err := src.UpsertTradingInstrument(ctx, domain.TradingInstrument{Connection: domain.ExternalID(in.Connection), ExternalSymbol: in.ExternalSymbol, BaseAsset: in.BaseAsset, QuoteAsset: in.QuoteAsset, Enabled: *in.Enabled}); err != nil {
-			return "", setTradingInstrumentInput{}, tradingToolError("set trading instrument", err, nil)
+			return "", setTradingInstrumentInput{}, toolError(err)
 		}
 		return "set trading instrument", in, nil
 	}
@@ -1841,7 +1649,7 @@ func deleteTradingInstrumentHandler(src frameworkmcp.Source) frameworkmcp.ToolBo
 			return "", tradingSymbolInput{}, fmt.Errorf("externalSymbol is required")
 		}
 		if err := src.DeleteTradingInstrument(ctx, in.Connection, in.ExternalSymbol); err != nil {
-			return "", tradingSymbolInput{}, tradingToolError("delete trading instrument", err, nil)
+			return "", tradingSymbolInput{}, toolError(err)
 		}
 		return "delete trading instrument", in, nil
 	}
@@ -1860,7 +1668,7 @@ func grantTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[gr
 			return "", grantTradingAccessInput{}, fmt.Errorf("account or accountGroup is required")
 		}
 		if err := src.PutTradingAccess(ctx, domain.TradingAccess{Connection: domain.ExternalID(in.Connection), Account: domain.AccountID(in.Account), AccountGroup: in.AccountGroup, VenueAccount: in.VenueAccount}); err != nil {
-			return "", grantTradingAccessInput{}, tradingToolError("grant trading access", err, nil)
+			return "", grantTradingAccessInput{}, toolError(err)
 		}
 		return "grant trading access", in, nil
 	}
@@ -1879,7 +1687,7 @@ func revokeTradingAccessHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[r
 			return "", revokeTradingAccessInput{}, fmt.Errorf("account or accountGroup is required")
 		}
 		if err := src.RemoveTradingAccess(ctx, domain.ExternalID(in.Connection), domain.AccountID(in.Account), in.AccountGroup); err != nil {
-			return "", revokeTradingAccessInput{}, tradingToolError("revoke trading access", err, nil)
+			return "", revokeTradingAccessInput{}, toolError(err)
 		}
 		return "revoke trading access", in, nil
 	}
@@ -1897,7 +1705,7 @@ func setTradingFeeAccountHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[
 		// is named here as the composition's one account, as over REST.
 		account := features.AccountFor(domain.AccountID(in.Account))
 		if err := src.SetTradingFeeAccount(ctx, domain.ExternalID(in.Connection), account); err != nil {
-			return "", tradingAccountInput{}, tradingToolError("set trading fee account", err, nil)
+			return "", tradingAccountInput{}, toolError(err)
 		}
 		in.Account = string(account)
 		return "set trading fee account", in, nil
@@ -1909,7 +1717,7 @@ func clearTradingFeeAccountHandler(src frameworkmcp.Source) frameworkmcp.ToolBod
 			return "", tradingConnectionInput{}, fmt.Errorf("connection is required")
 		}
 		if err := src.SetTradingFeeAccount(ctx, domain.ExternalID(in.Connection), ""); err != nil {
-			return "", tradingConnectionInput{}, tradingToolError("clear trading fee account", err, nil)
+			return "", tradingConnectionInput{}, toolError(err)
 		}
 		return "clear trading fee account", in, nil
 	}
@@ -1925,7 +1733,7 @@ func verifyTradingSymbolHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[t
 
 		result, err := src.VerifyTradingSymbol(ctx, in.Connection, in.ExternalSymbol)
 		if err != nil {
-			return "", verifyTradingSymbolOutput{}, tradingToolError("verify trading symbol", err, nil)
+			return "", verifyTradingSymbolOutput{}, toolError(err)
 		}
 		return "trading symbol verified", verifyTradingSymbolOutput{Supported: result.Supported, Exists: result.Exists, Tradable: result.Tradable, Details: result.Details}, nil
 	}
@@ -1941,7 +1749,7 @@ func searchTradingSymbolsHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[
 
 		result, err := src.SearchTradingSymbols(ctx, in.Connection, in.Query)
 		if err != nil {
-			return "", searchTradingSymbolsOutput{}, tradingToolError("search trading symbols", err, nil)
+			return "", searchTradingSymbolsOutput{}, toolError(err)
 		}
 		out := searchTradingSymbolsOutput{Supported: result.Supported, Matches: make([]tradingSymbolMatchDTO, 0, len(result.Matches))}
 		for _, m := range result.Matches {
@@ -1963,7 +1771,7 @@ func listTradingDestinationsHandler(src frameworkmcp.Source) frameworkmcp.ToolBo
 		}
 		destinations, err := src.ListTradingDestinations(ctx, domain.AccountID(in.Account), in.Mode)
 		if err != nil {
-			return "", listTradingDestinationsOutput{}, tradingToolError("list trading destinations", err, nil)
+			return "", listTradingDestinationsOutput{}, toolError(err)
 		}
 		out := listTradingDestinationsOutput{Destinations: httpx.ToTradingDestinationDTOs(destinations)}
 		return "trading destinations", out, nil
@@ -2031,7 +1839,7 @@ func sendPaperOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[sendPa
 		}
 		result, err := src.SendPaperOrder(ctx, o, dest)
 		if err != nil {
-			return "", sendPaperOrderOutput{}, tradingToolError("send paper order", err, nil)
+			return "", sendPaperOrderOutput{}, toolError(err)
 		}
 		tok := result.Token
 		out := sendPaperOrderOutput{
@@ -2043,7 +1851,7 @@ func sendPaperOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[sendPa
 			if result.Send.Order != nil {
 				link, err := toVenueOrderDTO(*result.Send.Order)
 				if err != nil {
-					return "", sendPaperOrderOutput{}, err
+					return "", sendPaperOrderOutput{}, toolError(err)
 				}
 				out.VenueSend.VenueOrder = &link
 			}
@@ -2057,16 +1865,4 @@ func sendPaperOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[sendPa
 		}
 		return fmt.Sprintf("order %s: %s", tok.OrderExternalID, outcome), out, nil
 	}
-}
-
-func isNotFound(err error) bool {
-	return errors.Is(err, domain.ErrNotFound)
-}
-
-// isRefusal reports whether err is the Source refusing the request rather than
-// failing to serve it: invalid input, the account scope's refusal included, or
-// a resource that does not exist or is hidden from the caller. Its message is
-// the caller's to act on, so it must reach the agent.
-func isRefusal(err error) bool {
-	return errors.Is(err, domain.ErrInvalid) || isNotFound(err)
 }

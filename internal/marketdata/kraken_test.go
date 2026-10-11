@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -348,12 +349,12 @@ func TestKrakenConnector_VerifySymbolFetchError(t *testing.T) {
 func TestKrakenConnector_ValidateSymbolsDropsUnknown(t *testing.T) {
 	t.Parallel()
 
-	var diags []fwmarketdata.Diagnostic
+	var diags []health.Diagnostic
 	connector := &krakenConnector{
 		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
 			return map[string]struct{}{"BTC/USD": {}, "DOGE/USD": {}}, nil
 		},
-		diagReport: func(diag fwmarketdata.Diagnostic) {
+		diagReport: func(diag health.Diagnostic) {
 			diags = append(diags, diag)
 		},
 	}
@@ -370,7 +371,7 @@ func TestKrakenConnector_ValidateSymbolsDropsUnknown(t *testing.T) {
 	if len(valid) != 1 || valid[0].symbol != "BTC/USD" {
 		t.Fatalf("valid = %+v, want only BTC/USD", valid)
 	}
-	if len(diags) != 1 || diags[0].Code != CodeUnknownSymbol {
+	if len(diags) != 1 || diags[0].Code != health.CodeUnknownSymbol {
 		t.Fatalf("diags = %+v, want one unknown_symbol", diags)
 	}
 	remediation := diags[0].Remediation
@@ -404,7 +405,7 @@ func TestKrakenConnector_DiagnoseUnknownSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}
-	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol {
+	if len(findings) != 1 || findings[0].Code != health.CodeUnknownSymbol {
 		t.Fatalf("findings = %+v, want one unknown_symbol", findings)
 	}
 	remediation := findings[0].Remediation

@@ -25,6 +25,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +36,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/shopspring/decimal"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 )
 
@@ -363,12 +366,180 @@ func TestStreamHealthyConnection(t *testing.T) {
 	}
 }
 
-func TestStreamFailureLogs(t *testing.T) {
-	var logs lockedLogBuffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	defer slog.SetDefault(previous)
+// alpacaStatus is one stream status report.
+type alpacaStatus struct {
+	ok      bool
+	message string
+}
+
+// alpacaReports records what a connector reports to its owner.
+type alpacaReports struct {
+	mu          sync.Mutex
+	statuses    []alpacaStatus
+	diagnostics []health.Diagnostic
+}
+
+// recordAlpacaReports installs a fresh recorder as both reporters of c.
+func recordAlpacaReports(c *alpacaConnector) *alpacaReports {
+	r := &alpacaReports{}
+	c.SetStatusReporter(r.status)
+	c.SetDiagnosticReporter(r.diagnostic)
+	return r
+}
+
+func (r *alpacaReports) status(ok bool, message string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.statuses = append(r.statuses, alpacaStatus{ok, message})
+}
+
+func (r *alpacaReports) diagnostic(diag health.Diagnostic) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.diagnostics = append(r.diagnostics, diag)
+}
+
+func (r *alpacaReports) snapshot() ([]alpacaStatus, []health.Diagnostic) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.statuses), slices.Clone(r.diagnostics)
+}
+
+// streamStatuses installs a status reporter on c that delivers its first
+// reports; the rest are dropped.
+func streamStatuses(c *alpacaConnector) <-chan alpacaStatus {
+	statuses := make(chan alpacaStatus, 8)
+	c.SetStatusReporter(func(ok bool, message string) {
+		select {
+		case statuses <- alpacaStatus{ok, message}:
+		default:
+		}
+	})
+	return statuses
+}
+
+func nextStatus(t *testing.T, statuses <-chan alpacaStatus) alpacaStatus {
+	t.Helper()
+	select {
+	case status := <-statuses:
+		return status
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream status timeout")
+	}
+	return alpacaStatus{}
+}
+
+func TestStreamRedactsOverlappingCredentials(t *testing.T) {
+	for _, tc := range []struct{ name, key, secret, message string }{
+		{"key contains secret", "overlap-long", "overlap", "refused overlap-long overlap"},
+		{"secret contains key", "overlap", "overlap-long", "refused overlap-long overlap"},
+		// The venue echoes the key URL-escaped, and the raw secret is a
+		// prefix of that spelling.
+		{"escaped key contains secret", "prefix/very-long-suffix", "prefix", "refused prefix%2Fvery-long-suffix prefix"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn := acceptAlpaca(t, w, r)
+				if conn == nil {
+					return
+				}
+				defer func() { _ = conn.CloseNow() }()
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if _, _, err := conn.Read(ctx); err != nil {
+					t.Error("auth frame missing")
+					return
+				}
+				sendFrame(t, ctx, conn, websocket.MessageText, `{"action":"error","data":{"error_message":"`+tc.message+`"}}`)
+			}))
+			defer server.Close()
+			c := testAlpacaConnectorWith(t, server, `{"apiKey":"`+tc.key+`","apiSecret":"`+tc.secret+`"}`)
+			statuses := streamStatuses(c)
+			events := subscribeAlpaca(t, c)
+			want := "alpaca: stream server error: refused [redacted] [redacted]"
+			if status := nextStatus(t, statuses); status.ok || status.message != want {
+				t.Fatalf("status = %+v, want %q", status, want)
+			}
+			assertClosed(t, c, events)
+		})
+	}
+}
+
+func TestStreamReportsUnparsableOncePerConnection(t *testing.T) {
 	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn := acceptAlpaca(t, w, r)
+		if conn == nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
+			return
+		}
+		for range 3 {
+			for _, raw := range []string{"{", `{"stream":"trade_updates","data":{"event":42}}`} {
+				if !sendFrame(t, ctx, conn, websocket.MessageText, raw) {
+					return
+				}
+			}
+		}
+		if !sendFrame(t, ctx, conn, websocket.MessageText, updateFrame("fill", "1", "1", "1")) {
+			return
+		}
+		if attempt > 1 {
+			_, _, _ = conn.Read(ctx)
+		}
+	}))
+	defer server.Close()
+	c := testAlpacaConnector(t, server)
+	reports := recordAlpacaReports(c)
+	events := subscribeAlpaca(t, c)
+	for range 2 {
+		if nextEvent(t, events).Kind != fwtrading.EventConnected {
+			t.Fatal("Connected missing")
+		}
+		if nextEvent(t, events).Kind != fwtrading.EventFill {
+			t.Fatal("fill after the malformed frames missing")
+		}
+	}
+	assertClosed(t, c, events)
+	_, diagnostics := reports.snapshot()
+	frame := *alpacaUnparsable(health.DiagWarn, alpacaFrameUnreadable, alpacaSkipped)
+	header := *alpacaUnparsable(health.DiagError, alpacaHeaderUnreadable, alpacaDropped)
+	if want := []health.Diagnostic{frame, header, frame, header}; !reflect.DeepEqual(diagnostics, want) {
+		t.Fatalf("diagnostics = %+v, want each site once per connection", diagnostics)
+	}
+}
+
+// captureStreamLogs routes the default logger, at debug level, to the
+// returned buffer until the test ends.
+func captureStreamLogs(t *testing.T) *lockedLogBuffer {
+	t.Helper()
+	logs := &lockedLogBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return logs
+}
+
+// assertStreamLogsNothing fails on any connector log line but the debug line
+// about closing the connection: failures and unreadable data are reported.
+func assertStreamLogsNothing(t *testing.T, logs *lockedLogBuffer) {
+	t.Helper()
+	for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+		if line != "" && !strings.Contains(line, `msg="alpaca: close stream connection"`) {
+			t.Fatalf("connector logged instead of reporting: %s", line)
+		}
+	}
+}
+
+func TestStreamFailureReports(t *testing.T) {
+	logs := captureStreamLogs(t)
+	var attempts atomic.Int32
+	timestamp := `"timestamp":"2026-09-01T10:00:00.123456789Z",`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempt := attempts.Add(1)
 		conn := acceptAlpaca(t, w, r)
@@ -381,52 +552,87 @@ func TestStreamFailureLogs(t *testing.T) {
 		if !readAuth(t, ctx, conn) {
 			return
 		}
-		if attempt == 1 {
-			if !sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":[]}}`) {
+		if attempt == 2 {
+			_ = conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker")
+			return
+		}
+		if attempt > 2 {
+			if completeHandshake(t, ctx, conn) {
+				_, _, _ = conn.Read(ctx)
+			}
+			return
+		}
+		if !sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":[]}}`) ||
+			!sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":"authorized"}}`) {
+			return
+		}
+		if _, _, err := conn.Read(ctx); err != nil {
+			t.Error("listen frame missing")
+			return
+		}
+		for _, raw := range []string{
+			`{"stream":"listening","data":{"streams":"trade_updates"}}`,
+			`{"stream":"listening","data":{"streams":["trade_updates"]}}`,
+			"{",
+			`{"stream":"trade_updates","data":{"event":42}}`,
+			`{"stream":"trade_updates","data":{"event":"fill","order":{}}}`,
+			strings.Replace(updateFrame("fill", "1", "1", "1"), timestamp, `"timestamp":"bad",`, 1),
+			strings.Replace(updateFrame("fill", "1", "1", "1"), timestamp, "", 1),
+			updateFrame("fill", "bad", "1", "1"),
+			`{"stream":"trade_updates","data":{"event":"new","order":{"id":"venue"}}}`,
+			`{"action":"error","data":{"error_message":"venue unavailable test-secret-marker test-key-marker"}}`,
+		} {
+			if !sendFrame(t, ctx, conn, websocket.MessageText, raw) {
 				return
 			}
 		}
-		if !completeHandshake(t, ctx, conn) {
-			return
-		}
-		if attempt == 1 {
-			for _, raw := range []string{"{", `{"stream":"trade_updates","data":[]}`, `{"stream":"trade_updates","data":{"event":42}}`, `{"stream":"trade_updates","data":{"event":"fill","order":{}}}`, updateFrame("fill", "bad", "1", "1"), `{"action":"error","data":{"error_message":"venue unavailable test-secret-marker test-key-marker"}}`} {
-				if !sendFrame(t, ctx, conn, websocket.MessageText, raw) {
-					return
-				}
-			}
-			return
-		}
-		_, _, _ = conn.Read(ctx)
 	}))
 	defer server.Close()
 	c := testAlpacaConnector(t, server)
+	reports := recordAlpacaReports(c)
 	events := subscribeAlpaca(t, c)
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("Connected missing")
 	}
-	if nextEvent(t, events).Kind != fwtrading.EventOrder {
-		t.Fatal("invalid fill did not reconcile")
+	for _, fill := range []string{"body", "timestamp", "decimals"} {
+		if event := nextEvent(t, events); event.Kind != fwtrading.EventOrder || event.Ref.VenueOrderID != "venue" {
+			t.Fatalf("fill with unreadable %s did not reconcile", fill)
+		}
 	}
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("reconnect missing")
 	}
 	assertClosed(t, c, events)
-	text := logs.String()
-	if !strings.Contains(text, "ignoring trade update with invalid header") || !strings.Contains(text, "ignoring trade update without ord ref") {
-		t.Fatal("ignored updates were not logged")
+	statuses, diagnostics := reports.snapshot()
+	want := []struct{ level, detail, remediation string }{
+		{health.DiagWarn, alpacaAuthUnreadable, alpacaSkipped},
+		{health.DiagWarn, alpacaListenUnreadable, alpacaSkipped},
+		{health.DiagWarn, alpacaFrameUnreadable, alpacaSkipped},
+		{health.DiagError, alpacaHeaderUnreadable, alpacaDropped},
+		{health.DiagError, alpacaRefUnreadable, alpacaDropped},
+		{health.DiagWarn, alpacaFillUnreadable, alpacaReconciled},
+		{health.DiagWarn, alpacaFillUntimed, alpacaReconciled},
+		{health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
 	}
-	if !strings.Contains(text, "level=WARN") || !strings.Contains(text, "venue unavailable") || !strings.Contains(text, "error=") {
-		t.Fatal("stream failure lost warning level or venue cause")
+	if len(diagnostics) != len(want) {
+		t.Fatalf("diagnostics = %+v, want %d", diagnostics, len(want))
 	}
-	if strings.Contains(text, "test-secret-marker") || strings.Contains(text, "test-key-marker") {
-		t.Fatal("credentials leaked into stream log")
-	}
-	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
-		if !strings.Contains(line, "connection=test-connection") {
-			t.Fatal("stream log lacks connection external id")
+	for i, w := range want {
+		if !reflect.DeepEqual(diagnostics[i], *alpacaUnparsable(w.level, w.detail, w.remediation)) {
+			t.Fatalf("diagnostic %d = %+v, want %s %q", i, diagnostics[i], w.level, w.detail)
 		}
 	}
+	if len(statuses) != 4 || !statuses[0].ok || statuses[1].ok || statuses[2].ok || !statuses[3].ok ||
+		!strings.Contains(statuses[1].message, "venue unavailable") ||
+		!strings.Contains(statuses[2].message, "StatusPolicyViolation") {
+		t.Fatalf("statuses = %+v, want ok, both venue causes, ok", statuses)
+	}
+	for _, status := range statuses {
+		if strings.Contains(status.message, "test-secret-marker") || strings.Contains(status.message, "test-key-marker") {
+			t.Fatal("credentials leaked into a status report")
+		}
+	}
+	assertStreamLogsNothing(t, logs)
 }
 
 func TestStreamBoundedDecimals(t *testing.T) {
@@ -468,7 +674,7 @@ func TestStreamUnusableUpdateReconciles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { assertStreamReconciles(t, tc.raw) })
 	}
 	for _, raw := range []string{`{}`, `{"event":"fill","timestamp":"bad"}`, `{"event":"canceled","order":{"id":"","client_order_id":""}}`} {
-		if _, ok := (&alpacaConnector{}).parseAlpacaTradeUpdate(json.RawMessage(raw)); ok {
+		if _, ok, _ := (&alpacaConnector{}).parseAlpacaTradeUpdate(json.RawMessage(raw)); ok {
 			t.Fatal("update without a usable ref was emitted")
 		}
 	}
@@ -641,10 +847,7 @@ func (b *lockedLogBuffer) Write(p []byte) (int, error) {
 func (b *lockedLogBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buffer.String() }
 
 func TestStreamUnauthorized(t *testing.T) {
-	var logs lockedLogBuffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	defer slog.SetDefault(previous)
+	logs := captureStreamLogs(t)
 	attempts := make(chan time.Time, 4)
 	var count atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -671,6 +874,19 @@ func TestStreamUnauthorized(t *testing.T) {
 	}))
 	defer server.Close()
 	c := testAlpacaConnector(t, server)
+	reports := recordAlpacaReports(c)
+	// The ok report holds the stream until the test has seen that
+	// Connected is not delivered before it.
+	reported, release := make(chan struct{}), make(chan struct{})
+	releaseStream := sync.OnceFunc(func() { close(release) })
+	defer releaseStream()
+	c.SetStatusReporter(func(ok bool, message string) {
+		reports.status(ok, message)
+		if ok {
+			close(reported)
+			<-release
+		}
+	})
 	events := subscribeAlpaca(t, c)
 	var first, second time.Time
 	select {
@@ -691,16 +907,108 @@ func TestStreamUnauthorized(t *testing.T) {
 	if second.Sub(first) < alpacaReconnectMax-50*time.Millisecond {
 		t.Fatal("unauthorized retry did not use max backoff")
 	}
+	select {
+	case <-reported:
+	case <-time.After(time.Second):
+		t.Fatal("authorized retry reported no ok status")
+	}
+	select {
+	case <-events:
+		t.Fatal("Connected delivered before the ok status report")
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseStream()
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("authorized retry did not connect")
 	}
 	assertClosed(t, c, events)
-	text := logs.String()
-	if !strings.Contains(text, "level=ERROR") || !strings.Contains(text, "authorization refused") || !strings.Contains(text, "connection=test-connection") {
-		t.Fatal("unauthorized was not logged at error level")
+	statuses, diagnostics := reports.snapshot()
+	want := []alpacaStatus{{false, "alpaca: stream authorization refused"}, {true, ""}}
+	if !reflect.DeepEqual(statuses, want) || len(diagnostics) != 0 {
+		t.Fatalf("reports = %+v, %+v, want statuses %+v", statuses, diagnostics, want)
 	}
-	if strings.Contains(text, "test-secret-marker") || strings.Contains(text, "test-key-marker") {
-		t.Fatal("credentials leaked into stream log")
+	assertStreamLogsNothing(t, logs)
+}
+
+func TestStreamRequiresReporters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+	defer server.Close()
+	for _, missing := range []string{"status", "diagnostic"} {
+		c := testAlpacaConnector(t, server)
+		if missing == "status" {
+			c.SetStatusReporter(nil)
+		} else {
+			c.SetDiagnosticReporter(nil)
+		}
+		if events, err := c.Subscribe(context.Background()); err == nil || events != nil {
+			t.Fatalf("Subscribe without a %s reporter accepted", missing)
+		}
+	}
+}
+
+func TestStreamTradeUpdateProblems(t *testing.T) {
+	data := func(frame string) string {
+		var parsed alpacaFrame
+		if json.Unmarshal([]byte(frame), &parsed) != nil {
+			t.Fatal("invalid fixture")
+		}
+		return string(parsed.Data)
+	}
+	timestamp := `"timestamp":"2026-09-01T10:00:00.123456789Z",`
+	good := updateFrame("fill", "1", "1", "1")
+	notional := func(qty string) string {
+		return `{"event":"fill","order":{"id":"venue","client_order_id":"client",` + qty +
+			`"filled_qty":"0.5"},` + timestamp + `"qty":"0.5","price":"200"}`
+	}
+	notionalFill := notional(`"qty":null,"notional":"100",`)
+	for _, tc := range []struct {
+		name, raw                  string
+		emit                       fwtrading.EventKind
+		level, detail, remediation string
+	}{
+		{"null", `null`, "", health.DiagError, alpacaHeaderUnreadable, alpacaDropped},
+		{"no event", `{"order":{"id":"venue"}}`, "", health.DiagError, alpacaHeaderUnreadable, alpacaDropped},
+		{"numeric event", `{"event":42,"order":{"id":"venue"}}`, "", health.DiagError, alpacaHeaderUnreadable, alpacaDropped},
+		{"order not an object", `{"event":"fill","order":7}`, "", health.DiagError, alpacaRefUnreadable, alpacaDropped},
+		{"no order ids", `{"event":"canceled","order":{"id":"","client_order_id":""}}`, "", health.DiagError, alpacaRefUnreadable, alpacaDropped},
+		{"unreadable body", data(strings.Replace(good, timestamp, `"timestamp":"bad",`, 1)), fwtrading.EventOrder, health.DiagWarn, alpacaFillUnreadable, alpacaReconciled},
+		{"no timestamp", data(strings.Replace(good, timestamp, "", 1)), fwtrading.EventOrder, health.DiagWarn, alpacaFillUntimed, alpacaReconciled},
+		{"bad decimals", data(updateFrame("fill", "bad", "1", "1")), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"notional order", notionalFill, fwtrading.EventOrder, "", "", ""},
+		{"notional order without qty", notional(`"notional":"100",`), fwtrading.EventOrder, "", "", ""},
+		{"null qty without notional", notional(`"qty":null,`), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"empty notional", notional(`"qty":null,"notional":"",`), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"notional with bad qty", notional(`"qty":"bad","notional":"100",`), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"unreadable notional", notional(`"qty":null,"notional":"bad",`), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"zero notional", notional(`"qty":null,"notional":"0",`), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"notional with bad price", strings.Replace(notionalFill, `"price":"200"`, `"price":"bad"`, 1), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"notional with bad fill qty", strings.Replace(notionalFill, `"qty":"0.5"`, `"qty":"bad"`, 1), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"notional with bad filled qty", strings.Replace(notionalFill, `"filled_qty":"0.5"`, `"filled_qty":"bad"`, 1), fwtrading.EventOrder, health.DiagWarn, alpacaFillDecimals, alpacaReconciled},
+		{"notional without timestamp", strings.Replace(notionalFill, timestamp, "", 1), fwtrading.EventOrder, health.DiagWarn, alpacaFillUntimed, alpacaReconciled},
+		{"notional with unreadable body", strings.Replace(notionalFill, timestamp, `"timestamp":"bad",`, 1), fwtrading.EventOrder, health.DiagWarn, alpacaFillUnreadable, alpacaReconciled},
+		{"good fill", data(good), fwtrading.EventFill, "", "", ""},
+		{"terminal", data(updateFrame("canceled", "", "", "")), fwtrading.EventOrder, "", "", ""},
+		{"unknown event", `{"event":"new","order":{"id":"venue"}}`, "", "", "", ""},
+		{"unknown malformed", `{"event":"future_event","order":7}`, "", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event, ok, problem := (&alpacaConnector{}).parseAlpacaTradeUpdate(json.RawMessage(tc.raw))
+			if ok != (tc.emit != "") || event.Kind != tc.emit {
+				t.Fatalf("emitted %t %q, want %q", ok, event.Kind, tc.emit)
+			}
+			if ok && (event.Ref.VenueOrderID != "venue" || event.Ref.ClientOrderID != "client") {
+				t.Fatalf("emitted ref = %+v", event.Ref)
+			}
+			if tc.detail == "" {
+				if problem != nil {
+					t.Fatalf("readable or unknown update reported %+v", *problem)
+				}
+				return
+			}
+			if problem == nil || !reflect.DeepEqual(*problem, *alpacaUnparsable(tc.level, tc.detail, tc.remediation)) {
+				t.Fatalf("problem = %+v, want %s %q", problem, tc.level, tc.detail)
+			}
+		})
 	}
 }
 
@@ -733,6 +1041,7 @@ func TestStreamWaitsForListenAck(t *testing.T) {
 	}))
 	defer server.Close()
 	c := testAlpacaConnector(t, server)
+	reports := recordAlpacaReports(c)
 	events := subscribeAlpaca(t, c)
 	select {
 	case <-listening:
@@ -744,9 +1053,15 @@ func TestStreamWaitsForListenAck(t *testing.T) {
 		t.Fatal("Connected before trade_updates listen ack")
 	case <-time.After(50 * time.Millisecond):
 	}
+	if statuses, _ := reports.snapshot(); len(statuses) != 0 {
+		t.Fatalf("statuses before trade_updates listen ack = %+v", statuses)
+	}
 	close(release)
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("listen ack did not connect")
+	}
+	if statuses, _ := reports.snapshot(); !reflect.DeepEqual(statuses, []alpacaStatus{{true, ""}}) {
+		t.Fatalf("statuses after Connected = %+v, want one ok", statuses)
 	}
 	assertClosed(t, c, events)
 }
@@ -802,7 +1117,11 @@ func TestStreamLifecycle(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 	defer server.Close()
 	c := testAlpacaConnector(t, server)
+	statuses := streamStatuses(c)
 	events := subscribeAlpaca(t, c)
+	if status := nextStatus(t, statuses); status.ok || status.message == "" {
+		t.Fatalf("dial failure status = %+v, want a failure with its cause", status)
+	}
 	if _, err := c.Subscribe(context.Background()); err == nil {
 		t.Fatal("second subscription accepted")
 	}
@@ -833,7 +1152,7 @@ func FuzzAlpacaTradeUpdate(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, raw string) {
 		c := &alpacaConnector{}
-		event, ok := c.parseAlpacaTradeUpdate(json.RawMessage(raw))
+		event, ok, _ := c.parseAlpacaTradeUpdate(json.RawMessage(raw))
 		if !ok || event.Kind != fwtrading.EventFill {
 			return
 		}

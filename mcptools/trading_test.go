@@ -28,55 +28,34 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
-func TestTradingToolError(t *testing.T) {
+func TestToolError(t *testing.T) {
+	candidates := &backend.DestinationAmbiguousError{Candidates: []backend.TradingDestinationStatus{
+		{Connection: domain.ExternalID("first"), Label: "First paper"},
+		{Connection: domain.ExternalID("second"), Label: "Second paper"},
+	}}
 	cases := []struct {
-		name   string
-		err    error
-		prefix string
+		name string
+		err  error
+		want string
 	}{
-		{"live", domain.ErrLiveTradingUnavailable, "live_trading_unavailable: "},
-		{"mode", domain.ErrTradingModeMismatch, "trading_mode_mismatch: "},
-		{"fee", domain.ErrFeeAccountRequired, "fee_account_required: "},
-		{"managed", domain.ErrVenueOrderManaged, "venue_order_managed: "},
-		{"none", domain.ErrNoDestination, "no_destination: "},
-		{"ambiguous", domain.ErrDestinationAmbiguous, "destination_ambiguous: "},
-		{"asset", domain.NewAssetMissingError("USDT"), "asset_missing: "},
-		{"ordinary", errors.New("offline"), "send failed: "},
+		{"live", fmt.Errorf("refused: %w", domain.ErrLiveTradingUnavailable), "live_trading_unavailable: live trading unavailable"},
+		{"managed", fmt.Errorf("refused: %w", domain.ErrVenueOrderManaged), "venue_order_managed: the order is managed by its trading venue"},
+		{"asset", fmt.Errorf("refused: %w", domain.NewAssetMissingError("USDT")), `asset_missing: refused: asset "USDT" does not exist`},
+		{"validation", fmt.Errorf("limit price: %w", domain.ErrInvalid), "validation: limit price: invalid"},
+		{"not-found", fmt.Errorf("order: %w", domain.ErrNotFound), "not_found: order: not found"},
+		{"candidates", fmt.Errorf("choose: %w", candidates), "destination_ambiguous: several destinations; name one; first (First paper); second (Second paper)"},
+		{"bare-ambiguous", fmt.Errorf("choose: %w", domain.ErrDestinationAmbiguous), "destination_ambiguous: several destinations; name one"},
+		{"candidates-only-when-ambiguous", fmt.Errorf("%w: %w", domain.ErrInvalid, candidates), "validation: invalid: several destinations; name one"},
+		{"uncovered", errors.New("offline"), "internal: internal error"},
+		{"upstream", fmt.Errorf("alpaca: HTTP 401: %w", domain.ErrUpstream), "upstream: The provider couldn't complete the request. Check your provider access and the request, then try again."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wrapped := fmt.Errorf("refused: %w", tc.err)
-			if got := tradingToolError("send", wrapped, nil).Error(); got != tc.prefix+wrapped.Error() {
-				t.Fatalf("error: %q", got)
+			if got := toolError(tc.err).Error(); got != tc.want {
+				t.Fatalf("error = %q, want %q", got, tc.want)
 			}
 		})
 	}
-	t.Run("candidates", func(t *testing.T) {
-		err := fmt.Errorf("choose: %w", &backend.DestinationAmbiguousError{Candidates: []backend.TradingDestinationStatus{
-			{Connection: domain.ExternalID("first"), Label: "First paper"},
-			{Connection: domain.ExternalID("second"), Label: "Second paper"},
-		}})
-		got := tradingToolError("send", err, nil).Error()
-		if !strings.HasPrefix(got, "destination_ambiguous: "+err.Error()) || !strings.Contains(got, "first (First paper)") || !strings.Contains(got, "second (Second paper)") {
-			t.Fatalf("candidate refusal: %q", got)
-		}
-	})
-	t.Run("redaction-preserves-code", func(t *testing.T) {
-		err := fmt.Errorf("live_trading_unavailable: %w", domain.ErrLiveTradingUnavailable)
-		redact := tradingCredentialRedactor(map[string]any{"key": "live_trading_unavailable"})
-		got := tradingToolError("create", err, redact).Error()
-		if got != "live_trading_unavailable: [REDACTED]: live trading unavailable" {
-			t.Fatalf("redacted prefix: %q", got)
-		}
-	})
-	t.Run("redaction-skips-blank-values", func(t *testing.T) {
-		err := errors.New("alpaca: apiSecret is required")
-		redact := tradingCredentialRedactor(map[string]any{"apiKey": "key-value", "apiSecret": " "})
-		got := tradingToolError("create trading connection", err, redact).Error()
-		if got != "create trading connection failed: alpaca: apiSecret is required" {
-			t.Fatalf("blank credential redaction: %q", got)
-		}
-	})
 }
 
 func TestUpdateTradingConnectionInputObjects(t *testing.T) {

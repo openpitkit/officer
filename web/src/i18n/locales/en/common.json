@@ -1,8 +1,10 @@
 {
   "sensitiveData": {
     "title": "Sensitive data is stored unencrypted",
-    "detail": "Officer runs without a master key: API keys of trading connections are kept in plain text in its database and in backups. Set a master key to store them sealed.",
-    "masterKeyLink": "How to set a master key"
+    "detail": "Officer runs without a master key: stored API keys and tokens are kept in plain text in its database and in backups. Set a master key to store them sealed.",
+    "masterKeyLink": "How to set a master key",
+    "unknown": "Could not check whether stored keys are encrypted: {{error}}",
+    "checking": "Checking whether stored keys are encrypted…"
   },
   "language": {
     "label": "Language",
@@ -10,6 +12,7 @@
   },
   "actions": {
     "refresh": "Refresh",
+    "restartFeeds": "Restart feeds",
     "retry": "Retry",
     "cancel": "Cancel",
     "clear": "Clear",

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -189,7 +190,7 @@ func TestBybitConnector_ControlFramesDoNotReportUnparsable(t *testing.T) {
 		},
 		err: context.Canceled,
 	}
-	var diagnostics []fwmarketdata.Diagnostic
+	var diagnostics []health.Diagnostic
 	connector := &bybitConnector{
 		dial: func(context.Context, string) (bybitConn, error) {
 			return conn, nil
@@ -198,7 +199,7 @@ func TestBybitConnector_ControlFramesDoNotReportUnparsable(t *testing.T) {
 		readTimeout:  time.Hour,
 		category:     "spot",
 		report:       func(bool, string) {},
-		diagReport: func(diag fwmarketdata.Diagnostic) {
+		diagReport: func(diag health.Diagnostic) {
 			diagnostics = append(diagnostics, diag)
 		},
 	}
@@ -232,7 +233,7 @@ func TestBybitConnector_CloseStopsSubscription(t *testing.T) {
 		readTimeout:  time.Hour,
 		category:     "spot",
 		report:       func(bool, string) {},
-		diagReport:   func(fwmarketdata.Diagnostic) {},
+		diagReport:   func(health.Diagnostic) {},
 	}
 	out, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},
@@ -338,7 +339,7 @@ func TestBybitDiagnoseUnknownSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}
-	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol ||
+	if len(findings) != 1 || findings[0].Code != health.CodeUnknownSymbol ||
 		findings[0].Instrument != "BADUSDT" {
 		t.Fatalf("findings = %+v", findings)
 	}

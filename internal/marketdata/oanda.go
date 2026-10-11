@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -71,8 +72,8 @@ var oandaHTTPClient = &http.Client{
 type oandaConnector struct {
 	stream       func(context.Context, string, string) (io.ReadCloser, error)
 	sleep        func(context.Context, time.Duration) error
-	report       fwmarketdata.StatusReporter
-	diagReport   fwmarketdata.DiagnosticReporter
+	report       health.StatusReporter
+	diagReport   health.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	idleTimeout  time.Duration
@@ -176,7 +177,7 @@ func streamOANDA(
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *oandaConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
+func (c *oandaConnector) SetStatusReporter(report health.StatusReporter) {
 	c.report = report
 }
 
@@ -187,11 +188,11 @@ func (c *oandaConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *oandaConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
+func (c *oandaConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *oandaConnector) reportDiag(diag fwmarketdata.Diagnostic) {
+func (c *oandaConnector) reportDiag(diag health.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}

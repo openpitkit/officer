@@ -1,6 +1,7 @@
 {
   "title": "Панель",
   "refreshAriaLabel": "Обновить панель",
+  "issues": "{{count}} проблем(а)",
   "counts": {
     "accounts": "Счета",
     "groups": "Группы",
@@ -33,8 +34,7 @@
     "moreOk": "+{{count}} ОК",
     "instanceError": "Ошибка",
     "instanceNotApplied": "Не применено",
-    "restartRequired": "Нужен перезапуск",
-    "issues": "{{count}} проблем(а)"
+    "restartRequired": "Нужен перезапуск"
   },
   "trading": {
     "title": "Торговые подключения",

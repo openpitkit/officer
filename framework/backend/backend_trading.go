@@ -29,6 +29,7 @@ import (
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 )
@@ -51,9 +52,17 @@ type TradingConnectionStatus struct {
 	// FeeAccount is the connection's fee account; empty when it has none or
 	// when the account scope does not show it to the caller.
 	FeeAccount domain.AccountID
-	// State is running, unavailable or stopped, independently of Enabled.
-	State       string
-	Unavailable string
+	// State is running, degraded, unavailable or stopped, independently of
+	// Enabled.
+	State string
+	// Error is the runtime's failure text for a degraded or unavailable
+	// connection; the runtime keeps it empty while running, and it is empty
+	// when stopped. Credential values in it are redacted.
+	Error string
+	// Diagnostics is the runtime's diagnostic buffer, oldest first, empty
+	// when stopped. Credential values in every human-readable text of a
+	// diagnostic and in each action target are redacted.
+	Diagnostics []health.Diagnostic
 	Secrets     map[string]bool
 	Instruments []domain.TradingInstrument
 	// Access lists the connection's grants the account scope shows the caller,
@@ -63,9 +72,8 @@ type TradingConnectionStatus struct {
 
 // TradingStatus is the credential-free control-plane view of trading.
 type TradingStatus struct {
-	Providers         []TradingProvider
-	Connections       []TradingConnectionStatus
-	CredentialsSealed bool
+	Providers   []TradingProvider
+	Connections []TradingConnectionStatus
 }
 
 // TradingDestinationStatus joins an account's effective grant, its own or its
@@ -78,7 +86,9 @@ type TradingDestinationStatus struct {
 	Enabled      bool
 	VenueAccount string
 	State        string
-	Unavailable  string
+	// Error follows TradingConnectionStatus.Error: set for degraded and
+	// unavailable, redacted.
+	Error string
 }
 
 // SendDestination selects a connection and its connector-read route JSON.
@@ -163,8 +173,7 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 		return TradingStatus{}, err
 	}
 	status := TradingStatus{
-		Connections:       make([]TradingConnectionStatus, 0, len(connections)),
-		CredentialsSealed: s.node.CredentialsSealed(),
+		Connections: make([]TradingConnectionStatus, 0, len(connections)),
 	}
 	for _, p := range s.trading.Providers() {
 		status.Providers = append(status.Providers, TradingProvider{
@@ -173,7 +182,7 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			UnlinkedFees: p.UnlinkedFees,
 		})
 	}
-	states := s.trading.ConnectionStates()
+	states := s.trading.ConnectionStatuses()
 	for _, c := range connections {
 		instruments, err := s.node.ListTradingInstruments(ctx, c.ExternalID)
 		if err != nil {
@@ -189,14 +198,17 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			feeAccount = ""
 		}
 		state, reason := tradingConnectionState(c.ExternalID, states)
-		secrets, reason, err := tradingCredentialStatus(c.Credentials, reason)
+		secrets, redact, err := trading.CredentialRedactor(c.Credentials)
 		if err != nil {
 			return TradingStatus{}, err
 		}
 		status.Connections = append(status.Connections, TradingConnectionStatus{
 			ExternalID: c.ExternalID, Provider: c.Provider, Label: c.Label,
 			VenueIdentity: c.VenueIdentity, Mode: c.Mode, Enabled: c.Enabled,
-			FeeAccount: feeAccount, State: state, Unavailable: reason,
+			FeeAccount: feeAccount, State: state,
+			Error: redact.Replace(reason),
+			Diagnostics: redactTradingDiagnostics(
+				redact, states[c.ExternalID].Diagnostics),
 			Secrets: secrets, Instruments: instruments, Access: access,
 		})
 	}
@@ -246,7 +258,7 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 	// venue reports a validation error naming the member, not an upstream one.
 	if pointer := domain.ValidationPointer(err); errors.Is(err, domain.ErrInvalid) &&
 		(pointer == "/credentials" || strings.HasPrefix(pointer, "/credentials/")) {
-		_, message, redactErr := tradingCredentialStatus(c.Credentials, err.Error())
+		message, redactErr := redactTradingCredentials(c.Credentials, err.Error())
 		if redactErr != nil {
 			return domain.TradingConnection{}, redactErr
 		}
@@ -597,7 +609,7 @@ func (s *Service) ListTradingDestinations(ctx context.Context, account domain.Ac
 	if err != nil {
 		return nil, err
 	}
-	states := s.trading.ConnectionStates()
+	states := s.trading.ConnectionStatuses()
 	destinations := make([]TradingDestinationStatus, 0, len(access))
 	for _, a := range access {
 		c, err := s.tradingConnection(ctx, a.Connection.String())
@@ -608,14 +620,14 @@ func (s *Service) ListTradingDestinations(ctx context.Context, account domain.Ac
 			continue
 		}
 		state, reason := tradingConnectionState(c.ExternalID, states)
-		_, reason, err = tradingCredentialStatus(c.Credentials, reason)
+		reason, err = redactTradingCredentials(c.Credentials, reason)
 		if err != nil {
 			return nil, err
 		}
 		destinations = append(destinations, TradingDestinationStatus{
 			Connection: c.ExternalID, Label: c.Label, Provider: c.Provider,
 			Mode: c.Mode, Enabled: c.Enabled, VenueAccount: a.VenueAccount,
-			State: state, Unavailable: reason,
+			State: state, Error: reason,
 		})
 	}
 	sort.Slice(destinations, func(i, j int) bool { return destinations[i].Label < destinations[j].Label })
@@ -673,7 +685,7 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 		if err != nil {
 			return VenueSendResult{}, err
 		}
-		_, redact, err = tradingCredentialRedactor(connection.Credentials)
+		_, redact, err = trading.CredentialRedactor(connection.Credentials)
 		if err != nil {
 			return VenueSendResult{}, err
 		}
@@ -718,7 +730,7 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 		if err != nil {
 			return VenueSendResult{}, err
 		}
-		_, redact, err = tradingCredentialRedactor(connection.Credentials)
+		_, redact, err = trading.CredentialRedactor(connection.Credentials)
 		if err != nil {
 			return VenueSendResult{}, err
 		}
@@ -835,22 +847,42 @@ func (s *Service) restartTradingLocked() error {
 }
 
 func tradingUpstreamError(operation string, connection domain.TradingConnection, cause error) error {
-	_, message, err := tradingCredentialStatus(connection.Credentials, cause.Error())
+	message, err := redactTradingCredentials(connection.Credentials, cause.Error())
 	if err != nil {
 		return err
 	}
 	return fmt.Errorf("trading: %s failed: %s: %w", operation, message, domain.ErrUpstream)
 }
 
-func tradingConnectionState(id domain.ExternalID, states map[domain.ExternalID]trading.ConnectionState) (string, string) {
-	state, running := states[id]
-	if !running {
+func tradingConnectionState(id domain.ExternalID, statuses map[domain.ExternalID]trading.ConnectionStatus) (string, string) {
+	status, held := statuses[id]
+	if !held {
 		return "stopped", ""
 	}
-	if state.Unavailable != "" {
-		return "unavailable", state.Unavailable
+	return string(status.State), status.Error
+}
+
+// redactTradingDiagnostics returns copies of diags, actions included, with
+// redact applied to every human-readable text and action target. It never
+// writes diags. No diagnostics give an empty non-nil slice.
+func redactTradingDiagnostics(redact *strings.Replacer, diags []health.Diagnostic) []health.Diagnostic {
+	out := make([]health.Diagnostic, 0, len(diags))
+	for _, d := range diags {
+		d.Title = redact.Replace(d.Title)
+		d.Detail = redact.Replace(d.Detail)
+		d.Remediation = redact.Replace(d.Remediation)
+		d.Instrument = redact.Replace(d.Instrument)
+		if len(d.Actions) > 0 {
+			actions := make([]health.DiagnosticAction, 0, len(d.Actions))
+			for _, a := range d.Actions {
+				a.Target = redact.Replace(a.Target)
+				actions = append(actions, a)
+			}
+			d.Actions = actions
+		}
+		out = append(out, d)
 	}
-	return "running", ""
+	return out
 }
 
 type redactedTradingError struct {
@@ -861,61 +893,10 @@ type redactedTradingError struct {
 func (e *redactedTradingError) Error() string { return e.text }
 func (e *redactedTradingError) Unwrap() error { return e.cause }
 
-func tradingCredentialStatus(credentials, reason string) (map[string]bool, string, error) {
-	secrets, redact, err := tradingCredentialRedactor(credentials)
+func redactTradingCredentials(credentials, text string) (string, error) {
+	_, redact, err := trading.CredentialRedactor(credentials)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
-	return secrets, redact.Replace(reason), nil
-}
-
-func tradingCredentialRedactor(credentials string) (map[string]bool, *strings.Replacer, error) {
-	var values map[string]any
-	if err := json.Unmarshal([]byte(credentials), &values); err != nil || values == nil {
-		return nil, nil, fmt.Errorf("stored trading credentials are not a JSON object: %w", domain.ErrInvalid)
-	}
-	secrets := make(map[string]bool)
-	var credentialStrings []string
-	var redact func(any)
-	redact = func(value any) {
-		switch v := value.(type) {
-		case string:
-			// A blank value holds no secret; redacting it would garble the
-			// whitespace of every message that names the refused member.
-			if strings.TrimSpace(v) != "" {
-				credentialStrings = append(credentialStrings, v)
-			}
-		case []any:
-			for _, item := range v {
-				redact(item)
-			}
-		case map[string]any:
-			for _, item := range v {
-				redact(item)
-			}
-		}
-	}
-	for key, value := range values {
-		set := value != nil
-		switch v := value.(type) {
-		case string:
-			set = strings.TrimSpace(v) != ""
-		case []any:
-			set = len(v) > 0
-		case map[string]any:
-			set = len(v) > 0
-		}
-		if set {
-			secrets[key] = true
-		}
-		redact(value)
-	}
-	sort.Slice(credentialStrings, func(i, j int) bool {
-		return len(credentialStrings[i]) > len(credentialStrings[j])
-	})
-	pairs := make([]string, 0, len(credentialStrings)*2)
-	for _, value := range credentialStrings {
-		pairs = append(pairs, value, "[redacted]")
-	}
-	return secrets, strings.NewReplacer(pairs...), nil
+	return redact.Replace(text), nil
 }

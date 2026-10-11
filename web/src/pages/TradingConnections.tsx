@@ -17,15 +17,19 @@
 
 import { useEffect, useId, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
+import { RefreshCw, Settings } from "lucide-react";
 
 import type {
+  CredentialStorage,
   TradingAccessSubject,
   TradingConnection,
   TradingConnectionCheck,
+  TradingConnectionState,
   TradingProvider,
   TradingSymbolVerification,
 } from "@/api/types";
+import { useCredentialStorage } from "@/api/useCredentialStorage";
+import type { LoadState } from "@/api/usePolling";
 import { useTrading } from "@/api/useTrading";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ClearableInput } from "@/components/ClearableInput";
@@ -35,6 +39,7 @@ import {
   AccessBlockedHint,
   accessGrantBlock,
   AddProviderButton,
+  DiagnosticPanel,
   ProviderGuideDialog,
   VenueCardHeader,
   SymbolSearchPanel,
@@ -46,6 +51,7 @@ import {
   DeleteInstrumentDialog,
   LinkButton,
   RevokeAccessDialog,
+  UnsealedKeysWarning,
   VenueAccessList,
   type AccessGrantBlock,
   type InstrumentDraftFields,
@@ -83,6 +89,16 @@ import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
 } from "@/lib/useDebounce";
+
+const CONNECTION_STATE_BADGE: Record<
+  TradingConnectionState,
+  "ok" | "warn" | "danger" | "neutral"
+> = {
+  running: "ok",
+  degraded: "warn",
+  unavailable: "danger",
+  stopped: "neutral",
+};
 
 const TRADING_PROVIDER_GUIDES: Record<
   string,
@@ -145,41 +161,14 @@ type AccountSuggestionLookup = {
 
 type AccessSubjectKind = "account" | "group";
 
-/** Warns about unsealed credentials without restricting key entry. */
-export function UnsealedKeysWarning() {
-  const { t } = useTranslation("trading");
-  const { t: tc } = useTranslation();
-  return (
-    <div
-      role="alert"
-      className="space-y-2 rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] p-3 text-sm text-[var(--danger)]"
-    >
-      <h3 className="flex items-center gap-2 font-bold">
-        <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-        {t("unsealed.title")}
-      </h3>
-      <p>{t("unsealed.description")}</p>
-      <a
-        href="https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="underline underline-offset-4"
-      >
-        {tc("sensitiveData.masterKeyLink")}
-      </a>
-      <p className="text-xs">{t("unsealed.caution")}</p>
-    </div>
-  );
-}
-
 function AddTradingConnectionDialog({
   provider,
-  credentialsSealed,
+  credentialStorage,
   onClose,
   onCreated,
 }: {
   provider: TradingProvider;
-  credentialsSealed: boolean;
+  credentialStorage: LoadState<CredentialStorage>;
   onClose: () => void;
   onCreated: (connectionId: string) => void;
 }) {
@@ -274,7 +263,7 @@ function AddTradingConnectionDialog({
             />
             <p className="text-xs text-muted">{t("create.liveNote")}</p>
           </fieldset>
-          {!credentialsSealed && <UnsealedKeysWarning />}
+          <UnsealedKeysWarning storage={credentialStorage} />
           <div className="space-y-3">
             <h2 className="text-sm font-bold">
               {t("create.prepareAccount", { provider: provider.title })}
@@ -356,12 +345,12 @@ function AddTradingConnectionDialog({
 
 function ConnectionSettingsDialog({
   connection,
-  credentialsSealed,
+  credentialStorage,
   onClose,
   reload,
 }: {
   connection: TradingConnection;
-  credentialsSealed: boolean;
+  credentialStorage: LoadState<CredentialStorage>;
   onClose: () => void;
   reload: () => void;
 }) {
@@ -433,7 +422,7 @@ function ConnectionSettingsDialog({
               disabled={busy}
             />
           </div>
-          {!credentialsSealed && <UnsealedKeysWarning />}
+          <UnsealedKeysWarning storage={credentialStorage} />
           <div className="space-y-2">
             <Label htmlFor={`${id}-api-key`}>{tv("settings.apiKey")}</Label>
             <Input
@@ -1108,13 +1097,13 @@ function ConnectionInstrumentsSection({
 function ConnectionCard({
   connection,
   provider,
-  credentialsSealed,
+  credentialStorage,
   focusOnMount,
   reload,
 }: {
   connection: TradingConnection;
   provider: TradingProvider;
-  credentialsSealed: boolean;
+  credentialStorage: LoadState<CredentialStorage>;
   focusOnMount: boolean;
   reload: () => void;
 }) {
@@ -1354,15 +1343,7 @@ function ConnectionCard({
           <>
             <Badge variant="neutral">{provider.title}</Badge>
             <Badge>{t(`mode.${connection.mode}`)}</Badge>
-            <Badge
-              variant={
-                connection.state === "running"
-                  ? "ok"
-                  : connection.state === "unavailable"
-                    ? "danger"
-                    : "neutral"
-              }
-            >
+            <Badge variant={CONNECTION_STATE_BADGE[connection.state]}>
               {t(`state.${connection.state}`)}
             </Badge>
             <Badge variant={connection.enabled ? "ok" : "neutral"}>
@@ -1374,9 +1355,8 @@ function ConnectionCard({
             </Badge>
           </>
         }
-        error={
-          connection.state === "unavailable" ? connection.error : undefined
-        }
+        error={connection.error}
+        errorTone={connection.state === "degraded" ? "warn" : "danger"}
         links={TRADING_PROVIDER_GUIDES[connection.provider]}
         actions={
           <>
@@ -1539,11 +1519,12 @@ function ConnectionCard({
             }}
           />
         )}
+        <DiagnosticPanel items={connection.diagnostics} />
       </CardContent>
       {settingsOpen && (
         <ConnectionSettingsDialog
           connection={connection}
-          credentialsSealed={credentialsSealed}
+          credentialStorage={credentialStorage}
           onClose={() => setSettingsOpen(false)}
           reload={reload}
         />
@@ -1574,6 +1555,7 @@ export function TradingConnections() {
   const { t: tc } = useTranslation();
   const { t: tv } = useTranslation("venues");
   const { load, reload } = useTrading();
+  const { load: credentialStorage } = useCredentialStorage();
   const [addOpen, setAddOpen] = useState(false);
   const [selectedProvider, setSelectedProvider] =
     useState<TradingProvider | null>(null);
@@ -1627,7 +1609,7 @@ export function TradingConnections() {
                 key={connection.id}
                 connection={connection}
                 provider={provider}
-                credentialsSealed={load.data.credentialsSealed}
+                credentialStorage={credentialStorage}
                 focusOnMount={connection.id === focusConnectionId}
                 reload={reload}
               />
@@ -1662,7 +1644,7 @@ export function TradingConnections() {
         <AddTradingConnectionDialog
           key={selectedProvider.type}
           provider={selectedProvider}
-          credentialsSealed={snapshot.credentialsSealed}
+          credentialStorage={credentialStorage}
           onClose={() => setSelectedProvider(null)}
           onCreated={(connectionId) => {
             setFocusConnectionId(connectionId);

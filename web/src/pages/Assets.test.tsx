@@ -44,11 +44,16 @@ const navigateMock = vi.fn();
 
 vi.mock("@/api/useAssets", () => ({ useAssets: vi.fn() }));
 vi.mock("@/api/useAssetClasses", () => ({ useAssetClasses: vi.fn() }));
-vi.mock("@/api/useTrading", () => ({
-  useTrading: () => ({
+// SensitiveDataBanner polls GET /credential-storage.
+vi.mock("@/api/useCredentialStorage", () => ({
+  useCredentialStorage: () => ({
     load: {
       state: "ready",
-      data: { providers: [], connections: [], credentialsSealed: true },
+      data: {
+        credentialsSealed: true,
+        plaintextTradingKeys: false,
+        plaintextMarketDataKeys: false,
+      },
       error: null,
     },
     reload: () => {},

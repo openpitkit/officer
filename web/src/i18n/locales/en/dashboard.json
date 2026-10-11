@@ -1,6 +1,7 @@
 {
   "title": "Dashboard",
   "refreshAriaLabel": "Refresh dashboard",
+  "issues": "{{count}} issue(s)",
   "counts": {
     "accounts": "Accounts",
     "groups": "Groups",
@@ -33,8 +34,7 @@
     "moreOk": "+{{count}} OK",
     "instanceError": "Error",
     "instanceNotApplied": "Not applied",
-    "restartRequired": "Restart needed",
-    "issues": "{{count}} issue(s)"
+    "restartRequired": "Restart needed"
   },
   "trading": {
     "title": "Trading connections",

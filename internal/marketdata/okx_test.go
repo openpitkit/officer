@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -232,7 +233,7 @@ func TestOKXConnector_SubscribeAckDoesNotReportUnparsable(t *testing.T) {
 		},
 		err: context.Canceled,
 	}
-	var diagnostics []fwmarketdata.Diagnostic
+	var diagnostics []health.Diagnostic
 	connector := &okxConnector{
 		dial: func(context.Context, string) (okxConn, error) {
 			return conn, nil
@@ -240,7 +241,7 @@ func TestOKXConnector_SubscribeAckDoesNotReportUnparsable(t *testing.T) {
 		sleep:        func(context.Context, time.Duration) error { return nil },
 		reconnectMin: time.Millisecond,
 		reconnectMax: time.Millisecond,
-		diagReport: func(diag fwmarketdata.Diagnostic) {
+		diagReport: func(diag health.Diagnostic) {
 			diagnostics = append(diagnostics, diag)
 		},
 	}
@@ -293,7 +294,7 @@ func TestOKXDiagnoseUnknownSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}
-	if len(findings) != 1 || findings[0].Code != CodeUnknownSymbol ||
+	if len(findings) != 1 || findings[0].Code != health.CodeUnknownSymbol ||
 		findings[0].Instrument != "BAD-USDT" {
 		t.Fatalf("findings = %+v", findings)
 	}
@@ -496,7 +497,7 @@ func TestOKXConnector_CloseStopsSubscription(t *testing.T) {
 		pingInterval: time.Hour,
 		readTimeout:  time.Hour,
 		report:       func(bool, string) {},
-		diagReport:   func(fwmarketdata.Diagnostic) {},
+		diagReport:   func(health.Diagnostic) {},
 	}
 	out, err := connector.Subscribe(context.Background(), []fwmarketdata.Subscription{
 		{External: "BTC-USDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},

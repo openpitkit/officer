@@ -94,7 +94,7 @@ type TradingRuntime interface {
 	CheckAccount(context.Context, domain.TradingConnection) (trading.AccountInfo, error)
 	VerifySymbol(context.Context, domain.TradingConnection, string) (trading.SymbolVerification, error)
 	SearchSymbols(context.Context, domain.TradingConnection, string) ([]trading.SymbolMatch, error)
-	ConnectionStates() map[domain.ExternalID]trading.ConnectionState
+	ConnectionStatuses() map[domain.ExternalID]trading.ConnectionStatus
 	PreCheck(context.Context, domain.Order, domain.TradingDestination) error
 	Send(context.Context, domain.ExternalID, domain.TradingDestination) (domain.VenueOrder, error)
 	Restart() error

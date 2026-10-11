@@ -32,5 +32,7 @@ export * from "./AccessBlockedHint";
 export * from "./RevokeAccessDialog";
 export * from "./VenueAccessList";
 export * from "./VenueAccessDialog";
+export * from "./UnsealedKeysWarning";
+export * from "./DiagnosticPanel";
 export * from "./useSymbolSearch";
 export * from "./useRowVerification";

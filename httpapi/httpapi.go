@@ -68,6 +68,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, log
 	register(registry, "health.get", http.MethodGet, "/health", handleV1Health)
 	register(registry, "status.get", http.MethodGet, "/status", handleV1Status(svc))
 	register(registry, "service.get", http.MethodGet, "/service", handleServiceInfo(svc))
+	register(registry, "credential-storage.get", http.MethodGet, "/credential-storage", handleGetCredentialStorage(svc))
 	// The log tail is optional: only the serve path supplies it, so the routes
 	// register only when a source is present.
 	if logs != nil {

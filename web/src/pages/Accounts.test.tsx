@@ -56,6 +56,21 @@ vi.mock("@/api/useAccounts", async () => ({
 }));
 vi.mock("@/api/useGroups", () => ({ useGroupsPage: vi.fn() }));
 vi.mock("@/api/useTrading", () => ({ useTrading: vi.fn() }));
+// SensitiveDataBanner polls GET /credential-storage.
+vi.mock("@/api/useCredentialStorage", () => ({
+  useCredentialStorage: () => ({
+    load: {
+      state: "ready",
+      data: {
+        credentialsSealed: true,
+        plaintextTradingKeys: false,
+        plaintextMarketDataKeys: false,
+      },
+      error: null,
+    },
+    reload: () => {},
+  }),
+}));
 // The venue select is the library widget, tested on its own.
 vi.mock("@/framework", async () => {
   const actual =
@@ -127,7 +142,6 @@ const revokeTradingAccessMock = vi.fn();
 const fetchAccountStateMock = vi.fn();
 const tradingSnapshot: TradingSnapshot = {
   providers: [],
-  credentialsSealed: true,
   connections: [
     {
       id: "alpaca-1",
@@ -141,6 +155,7 @@ const tradingSnapshot: TradingSnapshot = {
       feeAccount: "",
       instruments: [],
       access: [],
+      diagnostics: [],
     },
   ],
 };
@@ -522,7 +537,6 @@ const accessSnapshot: TradingSnapshot = {
       unlinkedFees: false,
     },
   ],
-  credentialsSealed: true,
   connections: [
     {
       ...tradingSnapshot.connections[0],

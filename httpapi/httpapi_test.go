@@ -66,6 +66,7 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"GET /health",
 		"GET /status",
 		"GET /service",
+		"GET /credential-storage",
 		"GET /overview",
 		"POST /backup/export",
 		"POST /backup/restore",

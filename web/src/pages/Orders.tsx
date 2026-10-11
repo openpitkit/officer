@@ -1224,6 +1224,16 @@ function SubmitOrderDialog({
                                       })}
                                 </>
                               )}
+                              {selectable &&
+                                destination.state === "degraded" && (
+                                  <>
+                                    {" "}
+                                    -{" "}
+                                    {t("addOrder.dialog.venue.degraded", {
+                                      error: destination.error,
+                                    })}
+                                  </>
+                                )}
                             </SelectItem>
                           );
                         })}

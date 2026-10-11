@@ -23,12 +23,15 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  CredentialStorage,
   MarketDataInstance,
   MarketDataStatus,
   MarketDataSymbolMatch,
 } from "@/api/types";
+import type { LoadState } from "@/api/usePolling";
 
 import { SidebarProvider } from "@/components/SidebarContext";
+import { ApiError } from "@/framework";
 import i18n from "@/i18n";
 import {
   CreateInstanceDialog,
@@ -60,6 +63,23 @@ const updateSettingsMock = vi.fn();
 const deleteInstrumentMock = vi.fn();
 const deleteInstanceMock = vi.fn();
 const searchMock = vi.fn();
+const fetchCredentialStorageMock = vi.fn();
+const createInstanceMock = vi.fn();
+
+function storage(sealed: boolean): CredentialStorage {
+  return {
+    credentialsSealed: sealed,
+    plaintextTradingKeys: false,
+    plaintextMarketDataKeys: !sealed,
+  };
+}
+
+// Direct dialog renders take the page's credential storage load as a prop.
+const sealedStorageLoad: LoadState<CredentialStorage> = {
+  state: "ready",
+  data: storage(true),
+  error: null,
+};
 
 function renderMarketDataPage() {
   render(
@@ -77,14 +97,11 @@ function renderMarketDataPage() {
     </I18nextProvider>,
     {
       api: {
+        createMarketDataInstance: createInstanceMock,
         deleteMarketDataInstance: deleteInstanceMock,
         deleteMarketDataInstrument: deleteInstrumentMock,
         fetchMarketData: fetchMarketDataMock,
-        fetchTrading: vi.fn().mockResolvedValue({
-          providers: [],
-          connections: [],
-          credentialsSealed: true,
-        }),
+        fetchCredentialStorage: fetchCredentialStorageMock,
         searchMarketDataSymbols: searchMock,
         updateMarketDataInstanceSettings: updateSettingsMock,
         upsertMarketDataInstrument: upsertMock,
@@ -166,6 +183,8 @@ beforeEach(async () => {
   deleteInstrumentMock.mockResolvedValue(undefined);
   deleteInstanceMock.mockResolvedValue(undefined);
   searchMock.mockResolvedValue({ supported: true, matches: [] });
+  fetchCredentialStorageMock.mockResolvedValue(storage(true));
+  createInstanceMock.mockResolvedValue(ibInstance());
 });
 
 describe("MD instrument block texts", () => {
@@ -416,79 +435,70 @@ describe("provider references", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("keeps diagnostics for every provider in a bounded scroll panel", async () => {
-    const user = userEvent.setup();
-    renderCard(
-      ibInstance({
-        id: "binance-1",
-        provider: "binance",
-        label: "Binance",
-        searchesSymbols: false,
-        references: { docsUrl: "https://docs.example.com" },
-        diagnostics: [
-          {
-            level: "error",
-            code: "bad-symbol",
-            kind: "config",
-            title: "Bad symbol",
-            detail: "BTCUSD is not valid for this feed.",
-            actions: [{ type: "restart" }, { type: "open_docs" }],
-            at: "2026-06-22T16:05:00Z",
-          },
-          {
-            level: "error",
-            code: "connect",
-            kind: "provider",
-            title: "Connection error",
-            detail: "The provider is unreachable.",
-            actions: [{ type: "restart" }, { type: "open_docs" }],
-            at: "2026-06-22T16:06:00Z",
-          },
-        ],
-      }),
-    );
-
-    const panel = screen.getByRole("region", { name: "Problems" });
-    expect(panel).toHaveClass("max-h-96", "overflow-y-auto", "pr-1");
-    expect(within(panel).getByText("Action needed")).toBeInTheDocument();
-    expect(
-      within(panel).getByText("Connection / provider"),
-    ).toBeInTheDocument();
-    expect(
-      within(panel).queryByRole("button", { name: "Restart feeds" }),
-    ).not.toBeInTheDocument();
-    const actionBar = screen.getByRole("toolbar", {
-      name: "Problem actions",
+  describe("diagnostics wiring", () => {
+    const docsUrl = "https://docs.example.com";
+    const instance = ibInstance({
+      id: "binance-1",
+      provider: "binance",
+      label: "Binance",
+      searchesSymbols: false,
+      references: { docsUrl },
+      diagnostics: [
+        {
+          level: "error",
+          code: "bad-symbol",
+          kind: "config",
+          title: "Bad symbol",
+          detail: "BTCUSD is not valid for this feed.",
+          actions: [
+            { type: "restart" },
+            { type: "remove_instrument", target: "BTCUSD" },
+            { type: "open_docs" },
+          ],
+          at: "2026-06-22T16:05:00Z",
+        },
+      ],
     });
-    expect(
-      within(actionBar).getAllByRole("button", { name: "Restart feeds" }),
-    ).toHaveLength(1);
-    expect(
-      within(actionBar)
-        .getAllByRole("link", { name: "Provider docs" })
-        .filter(
-          (link) => link.getAttribute("href") === "https://docs.example.com",
-        ),
-    ).toHaveLength(1);
-    expect(
-      within(actionBar).getAllByRole("link", { name: "Service logs" }),
-    ).toHaveLength(1);
 
-    await user.click(screen.getByRole("button", { name: /collapse/i }));
+    function toolbar() {
+      return within(screen.getByRole("toolbar", { name: "Problem actions" }));
+    }
 
-    expect(
-      screen.queryByRole("region", { name: "Problems" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Problems: 2/i }),
-    ).toBeInTheDocument();
+    it("passes the card's restart, remove and docs targets to the panel", async () => {
+      const user = userEvent.setup();
+      const onRestart = vi.fn();
+      const onDeleteInstrument = vi.fn();
+      renderCard(instance, { onRestart, onDeleteInstrument });
 
-    await user.click(screen.getByRole("button", { name: /Problems: 2/i }));
+      await user.click(
+        toolbar().getByRole("button", { name: "Restart feeds" }),
+      );
+      expect(onRestart).toHaveBeenCalledOnce();
 
-    expect(screen.getByRole("region", { name: "Problems" })).toHaveClass(
-      "max-h-96",
-      "overflow-y-auto",
-    );
+      await user.click(
+        toolbar().getByRole("button", { name: "Remove BTCUSD" }),
+      );
+      expect(onDeleteInstrument).toHaveBeenCalledExactlyOnceWith(
+        instance,
+        "BTCUSD",
+      );
+      expect(onDeleteInstrument.mock.calls[0][0]).toBe(instance);
+
+      expect(
+        toolbar().getByRole("link", { name: "Provider docs" }),
+      ).toHaveAttribute("href", docsUrl);
+    });
+
+    it("disables the panel's action buttons while the card is busy", () => {
+      renderCard(instance, { busy: true });
+
+      expect(
+        toolbar().getByRole("button", { name: "Restart feeds" }),
+      ).toBeDisabled();
+      expect(
+        toolbar().getByRole("button", { name: "Remove BTCUSD" }),
+      ).toBeDisabled();
+    });
   });
 
   it("shows IB connection settings without the advanced block when creating a source", () => {
@@ -497,6 +507,7 @@ describe("provider references", () => {
         <CreateInstanceDialog
           provider={{ type: "ib", title: "Interactive Brokers" }}
           existingLabels={[]}
+          credentialStorage={sealedStorageLoad}
           busy={false}
           onOpenChange={vi.fn()}
           onCreate={vi.fn().mockResolvedValue(true)}
@@ -523,6 +534,7 @@ describe("provider references", () => {
         <CreateInstanceDialog
           provider={{ type: "ib", title: "Interactive Brokers" }}
           existingLabels={[]}
+          credentialStorage={sealedStorageLoad}
           busy={false}
           onOpenChange={vi.fn()}
           onCreate={onCreate}
@@ -1237,6 +1249,7 @@ describe("IB advanced section removed", () => {
           instance={ibInstance()}
           busy={false}
           existingLabels={[]}
+          credentialStorage={sealedStorageLoad}
           onOpenChange={vi.fn()}
           onSave={vi.fn().mockResolvedValue(true)}
         />
@@ -1271,6 +1284,7 @@ describe("IB advanced section removed", () => {
           instance={ibInstance()}
           busy={false}
           existingLabels={[]}
+          credentialStorage={sealedStorageLoad}
           onOpenChange={vi.fn()}
           onSave={onSave}
         />
@@ -1473,5 +1487,177 @@ describe("source deletion", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(deleteInstanceMock).toHaveBeenCalledWith("ib-1");
+  });
+});
+
+describe("unsealed key warning", () => {
+  const warningText = "Keys will be stored unencrypted";
+
+  // Every provider whose settings take keys, with the fields that make it
+  // savable, the credentials those fields produce, and the keys an existing
+  // source of that provider has stored.
+  const keyedProviders: {
+    type: string;
+    title: string;
+    fields: Record<string, string>;
+    credentials: string;
+    secrets: Record<string, boolean>;
+  }[] = [
+    {
+      type: "alpaca",
+      title: "Alpaca",
+      fields: { "API key": "usable-key", "API secret": "usable-secret" },
+      credentials: '{"apiKey":"usable-key","apiSecret":"usable-secret"}',
+      secrets: { apiKey: true, apiSecret: true },
+    },
+    {
+      type: "oanda",
+      title: "OANDA",
+      fields: { Token: "usable-token", "Account ID": "001-001" },
+      credentials:
+        '{"token":"usable-token","accountID":"001-001","environment":"practice"}',
+      secrets: { token: true },
+    },
+    {
+      type: "finnhub",
+      title: "Finnhub",
+      fields: { Token: "usable-token" },
+      credentials: '{"token":"usable-token"}',
+      secrets: { token: true },
+    },
+  ];
+  const keyedCases = keyedProviders.flatMap((provider) => [
+    { ...provider, sealed: false, warning: true },
+    { ...provider, sealed: true, warning: false },
+  ]);
+
+  function expectWarning(dialog: ReturnType<typeof within>, warning: boolean) {
+    if (warning) {
+      expect(dialog.getByRole("alert")).toHaveTextContent(warningText);
+    } else {
+      expect(dialog.queryByText(warningText)).not.toBeInTheDocument();
+    }
+  }
+
+  async function fillEnabled(
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: ReturnType<typeof within>,
+    fields: Record<string, string>,
+  ) {
+    for (const [label, value] of Object.entries(fields)) {
+      const input = dialog.getByLabelText(label);
+      expect(input).toBeEnabled();
+      await user.type(input, value);
+    }
+  }
+
+  async function openCreateSource(
+    user: ReturnType<typeof userEvent.setup>,
+    provider: string,
+  ) {
+    fetchMarketDataMock.mockResolvedValue({
+      ...status(ibInstance()),
+      providers: [
+        { type: "ib", title: "Interactive Brokers" },
+        ...keyedProviders.map(({ type, title }) => ({ type, title })),
+      ],
+    });
+    renderMarketDataPage();
+    await screen.findByRole("heading", { name: "IB Gateway" });
+    await user.click(
+      screen.getByRole("button", { name: /Add a market-data source/ }),
+    );
+    const guide = screen.getByRole("dialog", { name: "Sources" });
+    await user.click(
+      within(guide).getByRole("button", { name: new RegExp(`^${provider}`) }),
+    );
+    return within(
+      screen.getByRole("dialog", { name: `Add ${provider} source` }),
+    );
+  }
+
+  it.each(keyedCases)(
+    "warns on $title source creation only when credential storage is unsealed (sealed $sealed)",
+    async ({ type, title, fields, credentials, sealed, warning }) => {
+      const user = userEvent.setup();
+      fetchCredentialStorageMock.mockResolvedValue(storage(sealed));
+      const dialog = await openCreateSource(user, title);
+      expectWarning(dialog, warning);
+      await fillEnabled(user, dialog, fields);
+      await user.click(dialog.getByRole("button", { name: "Create" }));
+      expect(createInstanceMock).toHaveBeenCalledExactlyOnceWith({
+        provider: type,
+        label: title,
+        credentials,
+        enabled: true,
+      });
+    },
+  );
+
+  it.each(keyedCases)(
+    "warns in $title source settings only when credential storage is unsealed (sealed $sealed)",
+    async ({ type, title, fields, credentials, secrets, sealed, warning }) => {
+      const user = userEvent.setup();
+      fetchCredentialStorageMock.mockResolvedValue(storage(sealed));
+      const instance = ibInstance({
+        id: `${type}-1`,
+        provider: type,
+        label: title,
+        settings: {},
+        secrets,
+      });
+      fetchMarketDataMock.mockResolvedValue({
+        ...status(instance),
+        providers: [{ type, title }],
+      });
+      renderMarketDataPage();
+      await screen.findByRole("heading", { name: title });
+      await user.click(screen.getByRole("button", { name: "Edit settings" }));
+      const dialog = within(
+        screen.getByRole("dialog", { name: "Edit source settings" }),
+      );
+      expectWarning(dialog, warning);
+      await fillEnabled(user, dialog, fields);
+      await user.click(dialog.getByRole("button", { name: "Save" }));
+      expect(updateSettingsMock).toHaveBeenCalledExactlyOnceWith(`${type}-1`, {
+        label: title,
+        credentials,
+      });
+    },
+  );
+
+  it("never warns on keyless source creation", async () => {
+    const user = userEvent.setup();
+    fetchCredentialStorageMock.mockResolvedValue(storage(false));
+    const dialog = await openCreateSource(user, "Interactive Brokers");
+    expect(dialog.getByLabelText("Host")).toBeInTheDocument();
+    expectWarning(dialog, false);
+  });
+
+  it("never warns in keyless source settings", async () => {
+    const user = userEvent.setup();
+    fetchCredentialStorageMock.mockResolvedValue(storage(false));
+    renderMarketDataPage();
+    await screen.findByRole("heading", { name: "IB Gateway" });
+    await user.click(screen.getByRole("button", { name: "Edit settings" }));
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Edit source settings" }),
+    );
+    expect(dialog.getByLabelText("Host")).toBeInTheDocument();
+    expectWarning(dialog, false);
+  });
+
+  it("shows a failed credential storage load and keeps key entry enabled", async () => {
+    const user = userEvent.setup();
+    fetchCredentialStorageMock.mockRejectedValue(
+      new ApiError("Credential storage unavailable", "internal"),
+    );
+    const dialog = await openCreateSource(user, "Finnhub");
+    expect(dialog.getByRole("alert")).toHaveTextContent(
+      "Could not check whether stored keys are encrypted: Credential storage unavailable",
+    );
+    expect(dialog.queryByText(warningText)).not.toBeInTheDocument();
+    await user.type(dialog.getByLabelText("Token"), "usable-token");
+    expect(dialog.getByRole("button", { name: "Create" })).toBeEnabled();
   });
 });

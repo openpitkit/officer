@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 
 import type { LoadState } from "@/api/usePolling";
 import {
+  DashboardIssueCount,
   DashboardItemChips,
   DashboardNote,
   DashboardSourceError,
@@ -155,6 +156,17 @@ describe("DashboardItemChips", () => {
   });
 });
 
+describe("DashboardIssueCount", () => {
+  it("shows the count of issues as a warning", () => {
+    render(<DashboardIssueCount count={2} />);
+
+    expect(screen.getByText("2 issue(s)")).toHaveClass(
+      "text-xs",
+      "text-[var(--warn)]",
+    );
+  });
+});
+
 describe("DashboardSourceError", () => {
   it("clips the error text after a colon", () => {
     render(
@@ -193,5 +205,27 @@ describe("DashboardSourceError", () => {
     render(<DashboardSourceError title="Error Feed one" />);
 
     expect(screen.getByText("Error Feed one")).toBeInTheDocument();
+  });
+
+  it("is a danger chip by default", () => {
+    render(<DashboardSourceError title="Error Feed one" />);
+
+    expect(screen.getByText("Error Feed one")).toHaveClass(
+      "text-[var(--danger)]",
+    );
+  });
+
+  it("is a warning chip with the warn variant", () => {
+    render(
+      <DashboardSourceError
+        variant="warn"
+        title="Degraded"
+        error="Trade updates refused"
+      />,
+    );
+
+    const chip = screen.getByText("Degraded: Trade updates refused");
+    expect(chip).toHaveClass("text-[var(--warn)]");
+    expect(chip).not.toHaveClass("text-[var(--danger)]");
   });
 });

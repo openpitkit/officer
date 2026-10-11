@@ -650,6 +650,10 @@ func (s *guardSource) GetTrading(ctx context.Context) (backend.TradingStatus, er
 	return backend.TradingStatus{}, domain.ErrNotImplemented
 }
 
+func (s *guardSource) CredentialStorage(ctx context.Context) (backend.CredentialStorage, error) {
+	return backend.CredentialStorage{}, domain.ErrNotImplemented
+}
+
 func (s *guardSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {
 	return domain.TradingConnection{}, domain.ErrNotImplemented
 }

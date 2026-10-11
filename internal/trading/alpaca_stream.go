@@ -24,11 +24,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/shopspring/decimal"
+	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 )
 
@@ -40,6 +40,54 @@ const (
 
 var errAlpacaUnauthorized = errors.New("alpaca: stream authorization refused")
 
+// The stream's unparsable_data diagnostics share one title, carry a fixed
+// detail per site and never embed frame content.
+const (
+	alpacaUnparsableTitle = "Unreadable data on the venue stream"
+
+	alpacaFrameUnreadable  = "A stream message could not be decoded."
+	alpacaAuthUnreadable   = "The stream authorization reply could not be decoded."
+	alpacaListenUnreadable = "The stream subscription reply could not be decoded."
+	alpacaHeaderUnreadable = "A trade update had no readable event type."
+	alpacaRefUnreadable    = "A trade update had no usable order reference."
+	alpacaFillUnreadable   = "A fill update could not be decoded."
+	alpacaFillUntimed      = "A fill update had no timestamp."
+	alpacaFillDecimals     = "A fill update had an unreadable quantity or price."
+
+	alpacaSkipped = "Officer skipped the message and kept reading the " +
+		"stream. This is a venue or Officer issue, not your configuration " +
+		"- please report it if it repeats."
+	alpacaDropped = "Officer dropped the update; a fill it carried is not " +
+		"reconciled until the next stream reconnect. This is a venue or " +
+		"Officer issue, not your configuration - please report it."
+	alpacaReconciled = "Officer reconciles the order from the venue's " +
+		"order and fill history instead. This is a venue or Officer issue, " +
+		"not your configuration - please report it if it repeats."
+)
+
+// alpacaUnparsable builds the unparsable_data diagnostic of one stream site.
+func alpacaUnparsable(level, detail, remediation string) *health.Diagnostic {
+	return &health.Diagnostic{
+		Level: level, Code: health.CodeUnparsableData,
+		Kind: health.DiagKindProvider, Title: alpacaUnparsableTitle,
+		Detail: detail, Remediation: remediation,
+	}
+}
+
+// SetStatusReporter installs the owner's stream status reporter. It must be
+// called before Subscribe.
+func (c *alpacaConnector) SetStatusReporter(report health.StatusReporter) {
+	c.reportStatus = report
+}
+
+// SetDiagnosticReporter installs the owner's diagnostic reporter. It must be
+// called before Subscribe.
+func (c *alpacaConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
+	c.reportDiag = report
+}
+
+// Subscribe requires both reporters: the stream reports its state and the
+// venue data it cannot read through them instead of logging.
 func (c *alpacaConnector) Subscribe(ctx context.Context) (<-chan fwtrading.Event, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -48,6 +96,9 @@ func (c *alpacaConnector) Subscribe(ctx context.Context) (<-chan fwtrading.Event
 	}
 	if c.done != nil {
 		return nil, errors.New("alpaca: stream already subscribed")
+	}
+	if c.reportStatus == nil || c.reportDiag == nil {
+		return nil, errors.New("alpaca: stream requires a status and a diagnostic reporter")
 	}
 	ctx, c.cancel = context.WithCancel(ctx)
 	c.done = make(chan struct{})
@@ -85,11 +136,9 @@ func (c *alpacaConnector) run(ctx context.Context, out chan<- fwtrading.Event) {
 			delay = alpacaReconnectMin
 		}
 		if errors.Is(err, errAlpacaUnauthorized) {
-			slog.Error("alpaca: stream authorization refused", "connection", c.externalID, "error", c.redactStreamMessage(err.Error()))
 			delay = alpacaReconnectMax
-		} else {
-			slog.Warn("alpaca: stream failed, reconnecting", "connection", c.externalID, "error", c.redactStreamMessage(err.Error()))
 		}
+		c.reportStatus(false, c.redactStreamMessage(err.Error()))
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -110,7 +159,7 @@ type alpacaFrame struct {
 	Data   json.RawMessage `json:"data"`
 }
 
-func (c *alpacaConnector) readAlpacaFrame(ctx context.Context, conn *websocket.Conn) (alpacaFrame, error) {
+func (c *alpacaConnector) readAlpacaFrame(ctx context.Context, conn *websocket.Conn, report func(*health.Diagnostic)) (alpacaFrame, error) {
 	for {
 		_, payload, err := conn.Read(ctx)
 		if err != nil {
@@ -118,7 +167,7 @@ func (c *alpacaConnector) readAlpacaFrame(ctx context.Context, conn *websocket.C
 		}
 		var frame alpacaFrame
 		if json.Unmarshal(payload, &frame) != nil || (frame.Stream == "" && frame.Action == "") {
-			slog.Debug("alpaca: ignoring unparsable stream frame", "connection", c.externalID)
+			report(alpacaUnparsable(health.DiagWarn, alpacaFrameUnreadable, alpacaSkipped))
 			continue
 		}
 		if frame.Action == "error" {
@@ -143,6 +192,16 @@ func writeAlpacaFrame(ctx context.Context, conn *websocket.Conn, frame any) erro
 }
 
 func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event) (healthy bool, err error) {
+	// Each unparsable site reports once per connection, so a venue sending
+	// malformed frames cannot turn every frame into a report. A site's
+	// detail is fixed and identifies it.
+	reported := make(map[string]bool)
+	report := func(diag *health.Diagnostic) {
+		if !reported[diag.Detail] {
+			reported[diag.Detail] = true
+			c.reportDiag(*diag)
+		}
+	}
 	handshakeCtx, cancel := context.WithTimeout(ctx, alpacaHandshakeTimeout)
 	defer cancel()
 	conn, _, err := websocket.Dial(handshakeCtx, c.streamURL, &websocket.DialOptions{
@@ -167,7 +226,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 		return false, err
 	}
 	for {
-		frame, err := c.readAlpacaFrame(handshakeCtx, conn)
+		frame, err := c.readAlpacaFrame(handshakeCtx, conn, report)
 		if err != nil {
 			return false, err
 		}
@@ -178,7 +237,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 			Status string `json:"status"`
 		}
 		if json.Unmarshal(frame.Data, &data) != nil {
-			slog.Debug("alpaca: ignoring unparsable authorization", "connection", c.externalID)
+			report(alpacaUnparsable(health.DiagWarn, alpacaAuthUnreadable, alpacaSkipped))
 			continue
 		}
 		if data.Status == "unauthorized" {
@@ -199,7 +258,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 		return false, err
 	}
 	for {
-		frame, err := c.readAlpacaFrame(handshakeCtx, conn)
+		frame, err := c.readAlpacaFrame(handshakeCtx, conn, report)
 		if err != nil {
 			return false, err
 		}
@@ -210,7 +269,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 			Streams []string `json:"streams"`
 		}
 		if json.Unmarshal(frame.Data, &data) != nil {
-			slog.Debug("alpaca: ignoring unparsable listen acknowledgement", "connection", c.externalID)
+			report(alpacaUnparsable(health.DiagWarn, alpacaListenUnreadable, alpacaSkipped))
 			continue
 		}
 		listening := false
@@ -224,6 +283,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 		}
 	}
 	cancel()
+	c.reportStatus(true, "")
 	select {
 	case <-ctx.Done():
 		return healthy, ctx.Err()
@@ -234,14 +294,17 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 		healthy = healthy || time.Since(connectedAt) > alpacaReconnectMax
 	}()
 	for {
-		frame, err := c.readAlpacaFrame(ctx, conn)
+		frame, err := c.readAlpacaFrame(ctx, conn, report)
 		if err != nil {
 			return healthy, err
 		}
 		if frame.Stream != "trade_updates" {
 			continue
 		}
-		event, ok := c.parseAlpacaTradeUpdate(frame.Data)
+		event, ok, problem := c.parseAlpacaTradeUpdate(frame.Data)
+		if problem != nil {
+			report(problem)
+		}
 		if !ok {
 			continue
 		}
@@ -254,23 +317,25 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 	}
 }
 
+// redactStreamMessage redacts every spelling of every credential of the
+// connection with the redactor the backend boundary applies too, so a
+// credential inside a longer credential's escaped spelling leaves no fragment.
 func (c *alpacaConnector) redactStreamMessage(message string) string {
-	for _, value := range []string{c.credentials.APISecret, c.credentials.APIKey} {
-		if value != "" {
-			message = strings.ReplaceAll(message, value, "[redacted]")
-		}
-	}
-	return message
+	return c.redact.Replace(message)
 }
 
-func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading.Event, bool) {
+// parseAlpacaTradeUpdate maps one trade update to the event to emit, if any,
+// and returns the unparsable_data diagnostic of an update it could not fully
+// read: dropped (no event) or reconciled (an order event in place of a fill).
+// An unknown event type is ignored, and a readable fill of a notional order
+// is reconciled, without a diagnostic.
+func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading.Event, bool, *health.Diagnostic) {
 	var header struct {
 		Event *string         `json:"event"`
 		Order json.RawMessage `json:"order"`
 	}
 	if json.Unmarshal(raw, &header) != nil || header.Event == nil {
-		slog.Debug("alpaca: ignoring trade update with invalid header", "connection", c.externalID)
-		return fwtrading.Event{}, false
+		return fwtrading.Event{}, false, alpacaUnparsable(health.DiagError, alpacaHeaderUnreadable, alpacaDropped)
 	}
 	terminal := false
 	switch *header.Event {
@@ -278,12 +343,11 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		terminal = true
 	case "fill", "partial_fill":
 	default:
-		return fwtrading.Event{}, false
+		return fwtrading.Event{}, false, nil
 	}
 	var reference map[string]json.RawMessage
 	if json.Unmarshal(header.Order, &reference) != nil {
-		slog.Debug("alpaca: ignoring trade update without ord ref", "connection", c.externalID)
-		return fwtrading.Event{}, false
+		return fwtrading.Event{}, false, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)
 	}
 	var ref fwtrading.OrderRef
 	if err := json.Unmarshal(reference["id"], &ref.VenueOrderID); err != nil {
@@ -293,12 +357,11 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		ref.ClientOrderID = ""
 	}
 	if ref.VenueOrderID == "" && ref.ClientOrderID == "" {
-		slog.Debug("alpaca: ignoring trade update without ord ref", "connection", c.externalID)
-		return fwtrading.Event{}, false
+		return fwtrading.Event{}, false, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)
 	}
 	event := fwtrading.Event{Kind: fwtrading.EventOrder, Ref: ref}
 	if terminal {
-		return event, true
+		return event, true, nil
 	}
 	var update struct {
 		Order     alpacaOrder `json:"order"`
@@ -307,20 +370,32 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		Quantity  string      `json:"qty"`
 	}
 	if json.Unmarshal(raw, &update) != nil {
-		slog.Debug("alpaca: reconciling unparsable trade update", "connection", c.externalID)
-		return event, true
+		return event, true, alpacaUnparsable(health.DiagWarn, alpacaFillUnreadable, alpacaReconciled)
 	}
 	if update.Timestamp.IsZero() {
-		slog.Debug("alpaca: reconciling fill without timestamp", "connection", c.externalID)
-		return event, true
+		return event, true, alpacaUnparsable(health.DiagWarn, alpacaFillUntimed, alpacaReconciled)
 	}
 	qty, err := parseAlpacaDecimal(update.Order.Quantity, "order.qty", true)
 	cum, cumErr := parseAlpacaDecimal(update.Order.FilledQuantity, "order.filled_qty", false)
 	_, fillErr := parseAlpacaDecimal(update.Quantity, "qty", true)
 	_, priceErr := parseAlpacaDecimal(update.Price, "price", true)
+	// A notional (dollar-amount) order has no qty, absent or null, and states
+	// its size as a notional instead, which is read in place of the qty; every
+	// other field is read as for a quantity order. Officer sends quantity
+	// orders only: the order was placed elsewhere on the account.
+	var notional string
+	isNotional := (reference["qty"] == nil || string(reference["qty"]) == "null") &&
+		json.Unmarshal(reference["notional"], &notional) == nil
+	if isNotional {
+		_, err = parseAlpacaDecimal(notional, "order.notional", true)
+	}
 	if err != nil || cumErr != nil || fillErr != nil || priceErr != nil {
-		slog.Debug("alpaca: reconciling invalid fill decimals", "connection", c.externalID)
-		return event, true
+		return event, true, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)
+	}
+	// Without the order quantity a notional order's fill cannot be mapped,
+	// so it is reconciled; the shape is documented, not unreadable.
+	if isNotional {
+		return event, true, nil
 	}
 	leaves := qty.Sub(cum)
 	if leaves.IsNegative() {
@@ -332,5 +407,5 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		CumQuantity: update.Order.FilledQuantity, LeavesQuantity: leaves.String(),
 		Final: *header.Event == "fill", At: update.Timestamp,
 	}
-	return event, true
+	return event, true, nil
 }

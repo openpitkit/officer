@@ -9,6 +9,7 @@ go.openpit.dev/officer/framework/backup
 go.openpit.dev/officer/framework/businesscsv
 go.openpit.dev/officer/framework/domain
 go.openpit.dev/officer/framework/engine
+go.openpit.dev/officer/framework/health
 go.openpit.dev/officer/framework/marketdata
 go.openpit.dev/officer/framework/mcp
 go.openpit.dev/officer/framework/mcp/catalog

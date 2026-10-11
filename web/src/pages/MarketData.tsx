@@ -16,10 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import {
-  ChevronDown,
-  ChevronUp,
   ExternalLink,
-  Logs,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -28,18 +25,19 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 
 import type {
-  MarketDataDiagnostic,
+  CredentialStorage,
   MarketDataInstance,
   MarketDataProvider,
   MarketDataSymbolMatch,
   MarketDataSymbolVerification,
 } from "@/api/types";
+import { useCredentialStorage } from "@/api/useCredentialStorage";
 import { useMarketData } from "@/api/useMarketData";
+import type { LoadState } from "@/api/usePolling";
 import { validateAsset } from "@/api/validate";
 import { Page } from "@/components/Page";
 import {
@@ -54,6 +52,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   AddProviderButton,
   DeleteInstrumentDialog,
+  DiagnosticPanel,
   InstrumentDraftRow,
   InstrumentsTable,
   ProviderGuideDialog,
@@ -62,6 +61,7 @@ import {
   useRowVerification,
   VerifyResult,
   type FailedVerificationOutcome,
+  UnsealedKeysWarning,
   VenueCardHeader,
 } from "@/components/venues";
 import {
@@ -203,7 +203,6 @@ interface PairUsage {
 }
 
 type PairUsageMap = Record<string, PairUsage[]>;
-type DiagnosticAction = MarketDataDiagnostic["actions"][number];
 
 // secType set surfaced in the IB contract editor.
 const IB_SEC_TYPES = ["STK", "CASH", "CRYPTO", "FUT", "IND", "OPT"] as const;
@@ -287,7 +286,6 @@ const FINNHUB_DASHBOARD_URL = "https://finnhub.io/dashboard";
 
 const MARKET_DATA_DIALOG_CONTENT_CLASS =
   "max-h-[90vh] max-w-[40rem] overflow-y-auto";
-const MARKET_DATA_DIAGNOSTICS_PANEL_CLASS = "max-h-96 overflow-y-auto pr-1";
 
 const PROVIDERS_WITH_SETTINGS = new Set([
   IB_PROVIDER,
@@ -653,12 +651,6 @@ function displayedPriceLabel(
   return (
     syntheticPriceLabel(instrument.quote, instrument.inverseQuote) || received
   );
-}
-
-function diagnosticLevelVariant(level: string): "danger" | "warn" | "neutral" {
-  if (level === "error") return "danger";
-  if (level === "warn") return "warn";
-  return "neutral";
 }
 
 // Derivative detail line for a resolved FUT/OPT contract: "<expiry> <strike><right>".
@@ -1166,12 +1158,14 @@ function ProviderSettingsFields({
   providerType,
   draft,
   instance,
+  credentialStorage,
   busy,
   onChange,
 }: {
   providerType: string;
   draft: ProviderSettingsDraft;
   instance?: MarketDataInstance;
+  credentialStorage: LoadState<CredentialStorage>;
   busy: boolean;
   onChange: (patch: ProviderSettingsDraft) => void;
 }) {
@@ -1250,6 +1244,7 @@ function ProviderSettingsFields({
   if (providerType === ALPACA_PROVIDER) {
     return (
       <div className="space-y-3">
+        <UnsealedKeysWarning storage={credentialStorage} />
         <Button asChild variant="outline" size="sm" className="w-fit">
           <a
             href={ALPACA_DASHBOARD_URL}
@@ -1314,6 +1309,7 @@ function ProviderSettingsFields({
   if (providerType === OANDA_PROVIDER) {
     return (
       <div className="space-y-3">
+        <UnsealedKeysWarning storage={credentialStorage} />
         <Button asChild variant="outline" size="sm" className="w-fit">
           <a href={OANDA_TOKEN_URL} target="_blank" rel="noopener noreferrer">
             <ExternalLink className="h-3 w-3" />
@@ -1367,6 +1363,7 @@ function ProviderSettingsFields({
   if (providerType === FINNHUB_PROVIDER) {
     return (
       <div className="space-y-3">
+        <UnsealedKeysWarning storage={credentialStorage} />
         <Button asChild variant="outline" size="sm" className="w-fit">
           <a
             href={FINNHUB_DASHBOARD_URL}
@@ -1454,12 +1451,14 @@ function StateToggleField({
 export function CreateInstanceDialog({
   provider,
   existingLabels,
+  credentialStorage,
   busy,
   onOpenChange,
   onCreate,
 }: {
   provider: MarketDataProvider | null;
   existingLabels: string[];
+  credentialStorage: LoadState<CredentialStorage>;
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onCreate: (form: InstanceForm) => Promise<boolean>;
@@ -1580,6 +1579,7 @@ export function CreateInstanceDialog({
               <ProviderSettingsFields
                 providerType={provider.type}
                 draft={settingsDraft}
+                credentialStorage={credentialStorage}
                 busy={busy}
                 onChange={(patch) =>
                   setSettingsDraft((prev) => ({ ...prev, ...patch }))
@@ -1620,69 +1620,6 @@ export function CreateInstanceDialog({
   );
 }
 
-function DiagnosticGroup({
-  title,
-  items,
-}: {
-  title: string;
-  items: MarketDataDiagnostic[];
-}) {
-  const { t } = useTranslation("marketData");
-  if (items.length === 0) return null;
-  return (
-    <div>
-      <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
-        {title}
-      </p>
-      <div className="space-y-2">
-        {items.map((d) => (
-          <div
-            key={[
-              d.code,
-              d.kind,
-              d.level,
-              d.instrument ?? "",
-              d.title,
-              d.detail,
-              d.at,
-            ].join("|")}
-            className="rounded-card border border-border bg-surface p-3 text-sm"
-          >
-            <div className="flex flex-wrap items-start gap-2">
-              <Badge
-                variant={diagnosticLevelVariant(d.level)}
-                className="mt-px shrink-0"
-              >
-                {d.level === "error"
-                  ? t("diagnostics.levelError")
-                  : d.level === "warn"
-                    ? t("diagnostics.levelWarn")
-                    : t("diagnostics.levelInfo")}
-              </Badge>
-              <span className="font-semibold text-text">{d.title}</span>
-              {d.instrument && (
-                <Badge variant="neutral" className="shrink-0 font-mono text-xs">
-                  {d.instrument}
-                </Badge>
-              )}
-              <span className="nums ml-auto shrink-0 text-xs text-muted">
-                {formatDateTime(d.at)}
-              </span>
-            </div>
-            <p className="mt-1.5 text-text">{d.detail}</p>
-            {d.remediation && (
-              <p className="mt-1.5 text-xs text-muted">
-                <span className="font-medium">{t("diagnostics.howToFix")}</span>{" "}
-                {d.remediation}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function resolvedMatchKey(match: MarketDataSymbolMatch): string {
   return [
     match.symbol,
@@ -1697,221 +1634,6 @@ function resolvedMatchKey(match: MarketDataSymbolMatch): string {
     match.localSymbol ?? "",
     match.tradingClass ?? "",
   ].join("|");
-}
-
-function diagnosticActionKey(action: DiagnosticAction): string {
-  return `${action.type}:${action.target ?? ""}`;
-}
-
-function diagnosticSummaryVariant(
-  items: MarketDataDiagnostic[],
-): "danger" | "neutral" | "warn" {
-  if (items.some((item) => item.level === "error")) {
-    return "danger";
-  }
-  if (items.some((item) => item.level === "warn")) {
-    return "warn";
-  }
-  return "neutral";
-}
-
-function diagnosticActions(items: MarketDataDiagnostic[]): DiagnosticAction[] {
-  const seen = new Set<string>();
-  const actions: DiagnosticAction[] = [];
-  for (const item of items) {
-    for (const action of item.actions) {
-      if (action.type === "remove_instrument" && action.target === undefined) {
-        continue;
-      }
-      const key = diagnosticActionKey(action);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      actions.push(action);
-    }
-  }
-  return actions;
-}
-
-function DiagnosticActions({
-  actions,
-  instance,
-  busy,
-  onRestart,
-  onDeleteInstrument,
-}: {
-  actions: DiagnosticAction[];
-  instance: MarketDataInstance;
-  busy: boolean;
-  onRestart: () => void;
-  onDeleteInstrument: (
-    instance: MarketDataInstance,
-    externalSymbol: string,
-  ) => void;
-}) {
-  const { t } = useTranslation("marketData");
-  return (
-    <div
-      role="toolbar"
-      aria-label={t("diagnostics.actions")}
-      className="flex flex-wrap gap-2 border-t border-border pt-2"
-    >
-      {actions.map((action) => {
-        if (action.type === "restart") {
-          return (
-            <Button
-              key={diagnosticActionKey(action)}
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={onRestart}
-            >
-              {t("diagnostics.actionRestart")}
-            </Button>
-          );
-        }
-        if (action.type === "open_docs" && instance.references?.docsUrl) {
-          return (
-            <a
-              key={diagnosticActionKey(action)}
-              href={instance.references.docsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-8 items-center rounded-card border border-border bg-transparent px-3 text-xs transition-colors hover:bg-surface-hover"
-            >
-              <ExternalLink className="mr-1 h-3 w-3" />
-              {t("diagnostics.actionDocs")}
-            </a>
-          );
-        }
-        if (action.type === "open_symbols" && instance.references?.symbolsUrl) {
-          return (
-            <a
-              key={diagnosticActionKey(action)}
-              href={instance.references.symbolsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-8 items-center rounded-card border border-border bg-transparent px-3 text-xs transition-colors hover:bg-surface-hover"
-            >
-              <ExternalLink className="mr-1 h-3 w-3" />
-              {t("diagnostics.actionSymbols")}
-            </a>
-          );
-        }
-        if (
-          action.type === "remove_instrument" &&
-          action.target !== undefined
-        ) {
-          const target = action.target;
-          return (
-            <Button
-              key={diagnosticActionKey(action)}
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => onDeleteInstrument(instance, target)}
-            >
-              {t("diagnostics.actionRemoveTarget", { target })}
-            </Button>
-          );
-        }
-        return null;
-      })}
-      <Button asChild variant="outline" size="sm">
-        <Link to="/service#logs">
-          <Logs className="mr-1 h-3 w-3" />
-          {t("diagnostics.actionLogs")}
-        </Link>
-      </Button>
-    </div>
-  );
-}
-
-function DiagnosticPanel({
-  items,
-  instance,
-  busy,
-  onRestart,
-  onDeleteInstrument,
-  children,
-}: {
-  items: MarketDataDiagnostic[];
-  instance: MarketDataInstance;
-  busy: boolean;
-  onRestart: () => void;
-  onDeleteInstrument: (
-    instance: MarketDataInstance,
-    externalSymbol: string,
-  ) => void;
-  children: ReactNode;
-}) {
-  const { t } = useTranslation("marketData");
-  const [collapsed, setCollapsed] = useState(false);
-  const actions = diagnosticActions(items);
-  const summaryVariant = diagnosticSummaryVariant(items);
-
-  if (collapsed) {
-    return (
-      <button
-        type="button"
-        aria-expanded={false}
-        onClick={() => setCollapsed(false)}
-        className="flex w-full items-center justify-between gap-3 rounded-card border border-border bg-surface px-3 py-2 text-left text-sm transition-colors hover:bg-surface-hover"
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <Badge variant={summaryVariant} className="shrink-0">
-            {items.length}
-          </Badge>
-          <span className="truncate font-medium text-text">
-            {t("diagnostics.collapsedSummary", { count: items.length })}
-          </span>
-        </span>
-        <span className="inline-flex items-center gap-1 text-xs text-muted">
-          {t("diagnostics.expand")}
-          <ChevronDown className="h-3 w-3" />
-        </span>
-      </button>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={summaryVariant}>{items.length}</Badge>
-        <span className="text-sm font-medium text-text">
-          {t("diagnostics.summary", { count: items.length })}
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="ml-auto"
-          aria-expanded={true}
-          onClick={() => setCollapsed(true)}
-        >
-          {t("diagnostics.collapse")}
-          <ChevronUp />
-        </Button>
-      </div>
-      <div
-        role="region"
-        aria-label={t("diagnostics.title")}
-        className={MARKET_DATA_DIAGNOSTICS_PANEL_CLASS}
-      >
-        <div className="space-y-4">{children}</div>
-      </div>
-      <DiagnosticActions
-        actions={actions}
-        instance={instance}
-        busy={busy}
-        onRestart={onRestart}
-        onDeleteInstrument={onDeleteInstrument}
-      />
-    </div>
-  );
 }
 
 // Verification verdict or a transport-failure sentinel for an inline outcome.
@@ -1940,12 +1662,14 @@ export function InstanceSettingsDialog({
   instance,
   busy,
   existingLabels,
+  credentialStorage,
   onOpenChange,
   onSave,
 }: {
   instance: MarketDataInstance | null;
   busy: boolean;
   existingLabels: string[];
+  credentialStorage: LoadState<CredentialStorage>;
   onOpenChange: (open: boolean) => void;
   onSave: (
     instance: MarketDataInstance,
@@ -2037,6 +1761,7 @@ export function InstanceSettingsDialog({
                   providerType={instance.provider}
                   draft={settingsDraft}
                   instance={instance}
+                  credentialStorage={credentialStorage}
                   busy={busy}
                   onChange={(patch) =>
                     setSettingsDraft((prev) => ({ ...prev, ...patch }))
@@ -2740,33 +2465,15 @@ export function InstanceCard({
           }
         />
 
-        {instance.diagnostics.length > 0 &&
-          (() => {
-            const configGroup = instance.diagnostics.filter(
-              (d) => d.kind === "config",
-            );
-            const providerGroup = instance.diagnostics.filter(
-              (d) => d.kind === "environment" || d.kind === "provider",
-            );
-            return (
-              <DiagnosticPanel
-                items={instance.diagnostics}
-                instance={instance}
-                busy={busy}
-                onRestart={onRestart}
-                onDeleteInstrument={onDeleteInstrument}
-              >
-                <DiagnosticGroup
-                  title={t("diagnostics.groupActionNeeded")}
-                  items={configGroup}
-                />
-                <DiagnosticGroup
-                  title={t("diagnostics.groupProvider")}
-                  items={providerGroup}
-                />
-              </DiagnosticPanel>
-            );
-          })()}
+        <DiagnosticPanel
+          items={instance.diagnostics}
+          references={instance.references}
+          busy={busy}
+          onRestart={onRestart}
+          onRemoveInstrument={(externalSymbol) =>
+            onDeleteInstrument(instance, externalSymbol)
+          }
+        />
       </CardContent>
     </Card>
   );
@@ -2822,6 +2529,7 @@ export function MarketData() {
   const { t } = useTranslation("marketData");
   const { t: tc } = useTranslation();
   const { load, reload } = useMarketData();
+  const { load: credentialStorage } = useCredentialStorage();
   const {
     createMarketDataInstance,
     deleteMarketDataInstance,
@@ -3024,7 +2732,7 @@ export function MarketData() {
             disabled={busy}
           >
             <RotateCcw />
-            {t("actions.restart")}
+            {tc("actions.restartFeeds")}
           </Button>
           <Button type="button" variant="ghost" size="sm" onClick={reload}>
             <RefreshCw />
@@ -3070,6 +2778,7 @@ export function MarketData() {
         key={selectedProvider?.type ?? "create-none"}
         provider={selectedProvider}
         existingLabels={existingLabels}
+        credentialStorage={credentialStorage}
         busy={busy}
         onOpenChange={(open) => {
           if (!open) {
@@ -3083,6 +2792,7 @@ export function MarketData() {
         instance={settingsInstance}
         busy={busy}
         existingLabels={existingLabels}
+        credentialStorage={credentialStorage}
         onOpenChange={(open) => {
           if (!open) {
             setSettingsInstance(null);

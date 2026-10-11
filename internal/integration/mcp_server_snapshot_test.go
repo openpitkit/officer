@@ -157,6 +157,10 @@ func TestServerToolSnapshot(t *testing.T) {
 		struct {
 			name        string
 			description string
+		}{name: "get_credential_storage", description: "Report whether stored credentials are sealed under the master key and, when they are not, whether trading connections or market-data sources hold keys in plain text. Read-only - credentials are never exposed."},
+		struct {
+			name        string
+			description string
 		}{name: "create_trading_connection", description: "Create a trading connection with write-only credentials. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string

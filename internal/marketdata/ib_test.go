@@ -33,6 +33,7 @@ import (
 	"github.com/scmhub/ibapi"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -267,13 +268,13 @@ func TestIBWrapperTickPriceClearsNoQuoteAndReportsNoData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := make(chan fwmarketdata.QuoteUpdate, 4)
-	diags := make(chan fwmarketdata.Diagnostic, 2)
+	diags := make(chan health.Diagnostic, 2)
 	subs := []ibSubscription{{
 		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
 	wrapper := newIBWrapper(
-		ctx, subs, out, time.Now, nil, func(diag fwmarketdata.Diagnostic) { diags <- diag },
+		ctx, subs, out, time.Now, nil, func(diag health.Diagnostic) { diags <- diag },
 	)
 
 	wrapper.TickPrice(1, ibapi.BID, 181.11, ibapi.TickAttrib{})
@@ -295,7 +296,7 @@ func TestIBWrapperTickPriceClearsNoQuoteAndReportsNoData(t *testing.T) {
 	}
 	select {
 	case diag := <-diags:
-		if diag.Code != CodeNoData || diag.Instrument != "AAPL" {
+		if diag.Code != health.CodeNoData || diag.Instrument != "AAPL" {
 			t.Fatalf("diag = %+v", diag)
 		}
 	case <-time.After(time.Second):
@@ -434,7 +435,7 @@ func TestIBConnectorDiagnoseReportsActiveSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}
-	if len(findings) != 1 || findings[0].Code != CodeNoData ||
+	if len(findings) != 1 || findings[0].Code != health.CodeNoData ||
 		findings[0].Instrument != "AAPL" {
 		t.Fatalf("findings = %+v", findings)
 	}
@@ -724,12 +725,12 @@ func TestIBWrapperReportsContractErrorDiagnostic(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	diags := make(chan fwmarketdata.Diagnostic, 1)
+	diags := make(chan health.Diagnostic, 1)
 	subs := []ibSubscription{{
 		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
-	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag fwmarketdata.Diagnostic) {
+	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag health.Diagnostic) {
 		diags <- diag
 	})
 
@@ -737,7 +738,7 @@ func TestIBWrapperReportsContractErrorDiagnostic(t *testing.T) {
 
 	select {
 	case diag := <-diags:
-		if diag.Code != CodeUnknownSymbol || diag.Kind != DiagKindConfig ||
+		if diag.Code != health.CodeUnknownSymbol || diag.Kind != health.DiagKindConfig ||
 			diag.Instrument != "AAPL" {
 			t.Fatalf("diag = %+v", diag)
 		}
@@ -751,12 +752,12 @@ func TestIBWrapperReportsMarketDataTypeFreshness(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	diags := make(chan fwmarketdata.Diagnostic, 2)
+	diags := make(chan health.Diagnostic, 2)
 	subs := []ibSubscription{{
 		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
-	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag fwmarketdata.Diagnostic) {
+	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag health.Diagnostic) {
 		diags <- diag
 	})
 
@@ -764,12 +765,12 @@ func TestIBWrapperReportsMarketDataTypeFreshness(t *testing.T) {
 	wrapper.MarketDataType(1, int64(ibapi.DELAYED_FROZEN))
 
 	realtime := <-diags
-	if realtime.Level != DiagInfo || realtime.Code != CodeDataFreshness ||
+	if realtime.Level != health.DiagInfo || realtime.Code != health.CodeDataFreshness ||
 		realtime.Instrument != "AAPL" {
 		t.Fatalf("realtime diag = %+v", realtime)
 	}
 	delayed := <-diags
-	if delayed.Level != DiagWarn || delayed.Code != CodeDataFreshness ||
+	if delayed.Level != health.DiagWarn || delayed.Code != health.CodeDataFreshness ||
 		delayed.Instrument != "AAPL" {
 		t.Fatalf("delayed diag = %+v", delayed)
 	}
@@ -797,12 +798,12 @@ func TestIBWrapperClassifiesIBErrorDiagnostics(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	diags := make(chan fwmarketdata.Diagnostic, 4)
+	diags := make(chan health.Diagnostic, 4)
 	subs := []ibSubscription{{
 		Subscription: fwmarketdata.Subscription{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
 		reqID:        1,
 	}}
-	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag fwmarketdata.Diagnostic) {
+	wrapper := newIBWrapper(ctx, subs, nil, time.Now, nil, func(diag health.Diagnostic) {
 		diags <- diag
 	})
 
@@ -812,20 +813,20 @@ func TestIBWrapperClassifiesIBErrorDiagnostics(t *testing.T) {
 	wrapper.Error(-1, 0, 326, "Client ID already in use", "")
 
 	info := <-diags
-	if info.Level != DiagInfo || info.Code != CodeConnectionError {
+	if info.Level != health.DiagInfo || info.Code != health.CodeConnectionError {
 		t.Fatalf("info diag = %+v", info)
 	}
 	recoverable := <-diags
-	if recoverable.Level != DiagWarn || recoverable.Code != CodeConnectionError {
+	if recoverable.Level != health.DiagWarn || recoverable.Code != health.CodeConnectionError {
 		t.Fatalf("recoverable diag = %+v", recoverable)
 	}
 	noData := <-diags
-	if noData.Level != DiagWarn || noData.Code != CodeNoData ||
-		noData.Kind != DiagKindConfig || noData.Instrument != "AAPL" {
+	if noData.Level != health.DiagWarn || noData.Code != health.CodeNoData ||
+		noData.Kind != health.DiagKindConfig || noData.Instrument != "AAPL" {
 		t.Fatalf("no-data diag = %+v", noData)
 	}
 	clientID := <-diags
-	if clientID.Level != DiagWarn || clientID.Kind != DiagKindConfig {
+	if clientID.Level != health.DiagWarn || clientID.Kind != health.DiagKindConfig {
 		t.Fatalf("client-id diag = %+v", clientID)
 	}
 

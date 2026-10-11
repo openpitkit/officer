@@ -31,6 +31,7 @@ import { useMarketData } from "@/api/useMarketData";
 import { useMcpAccess } from "@/api/useMcpAccess";
 import { useTrading } from "@/api/useTrading";
 import {
+  DashboardIssueCount,
   DashboardItemChips,
   DashboardNote,
   DashboardSourceError,
@@ -201,10 +202,19 @@ export function TradingConnectionsCard() {
         return enabled.map((connection) => (
           <DashboardSourceRow key={connection.id} label={connection.label}>
             <Badge>{t(`trading:mode.${connection.mode}`)}</Badge>
+            {connection.state === "degraded" && (
+              <DashboardSourceError
+                variant="warn"
+                title={t("trading:state.degraded")}
+                error={connection.error}
+                diagnostic={connection.diagnostics.at(-1)?.title}
+              />
+            )}
             {connection.state === "unavailable" && (
               <DashboardSourceError
                 title={t("trading:state.unavailable")}
                 error={connection.error}
+                diagnostic={connection.diagnostics.at(-1)?.title}
               />
             )}
             {connection.state === "stopped" && (
@@ -221,6 +231,9 @@ export function TradingConnectionsCard() {
                   limit={ITEM_CHIP_LIMIT}
                   moreLabel={(count) => t("trading.more", { count })}
                 />
+                {connection.diagnostics.length > 0 && (
+                  <DashboardIssueCount count={connection.diagnostics.length} />
+                )}
               </>
             )}
           </DashboardSourceRow>
@@ -317,11 +330,7 @@ export function MarketDataCard() {
                     moreLabel={(count) => t("marketData.moreOk", { count })}
                   />
                   {inst.diagnostics.length > 0 && (
-                    <span className="text-xs text-[var(--warn)]">
-                      {t("marketData.issues", {
-                        count: inst.diagnostics.length,
-                      })}
-                    </span>
+                    <DashboardIssueCount count={inst.diagnostics.length} />
                   )}
                 </DashboardSourceRow>
               );

@@ -818,6 +818,56 @@ func TestService_UpdateMarketDataInstanceSettingsMergesBlankSecret(t *testing.T)
 	}
 }
 
+func TestService_UpdateMarketDataInstanceSettingsKeepsIntegersExact(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService(t)
+	fn.mdInstances = []domain.MarketDataInstance{
+		{
+			ExternalID:  mdID("alpaca-1"),
+			Provider:    domain.MarketDataProviderAlpaca,
+			Label:       "Alpaca",
+			Credentials: `{"apiKey":"old-key","apiSecret":"old-secret","stored":9007199254740993}`,
+		},
+	}
+
+	// 2^53+1 is the smallest integer a float64 round trip rewrites.
+	err := svc.UpdateMarketDataInstanceSettings(
+		systemCtx(),
+		mdID("alpaca-1").String(),
+		"",
+		`{"apiKey":"new-key","updated":9007199254740993}`,
+	)
+	if err != nil {
+		t.Fatalf("UpdateMarketDataInstanceSettings: %v", err)
+	}
+	want := `{"apiKey":"new-key","apiSecret":"old-secret","stored":9007199254740993,"updated":9007199254740993}`
+	if got := fn.mdInstances[0].Credentials; got != want {
+		t.Fatalf("Credentials = %s, want %s", got, want)
+	}
+}
+
+func TestService_UpdateMarketDataInstanceSettingsRejectsTrailingCredentials(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService(t)
+	before := domain.MarketDataInstance{
+		ExternalID:  mdID("alpaca-1"),
+		Provider:    domain.MarketDataProviderAlpaca,
+		Label:       "Alpaca",
+		Credentials: `{"apiKey":"old-key","apiSecret":"old-secret"}`,
+	}
+	fn.mdInstances = []domain.MarketDataInstance{before}
+
+	err := svc.UpdateMarketDataInstanceSettings(
+		systemCtx(), mdID("alpaca-1").String(), "", `{"apiKey":"new-key"} {}`,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("UpdateMarketDataInstanceSettings error = %v, want ErrInvalid", err)
+	}
+	if fn.mdInstances[0] != before {
+		t.Fatalf("refused update changed instance: %+v", fn.mdInstances[0])
+	}
+}
+
 func TestService_UpdateMarketDataInstanceSettingsRejectsDuplicateLabel(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)

@@ -656,6 +656,10 @@ func (s *customHostSource) GetTrading(ctx context.Context) (backend.TradingStatu
 	return backend.TradingStatus{}, domain.ErrNotImplemented
 }
 
+func (s *customHostSource) CredentialStorage(ctx context.Context) (backend.CredentialStorage, error) {
+	return backend.CredentialStorage{}, domain.ErrNotImplemented
+}
+
 func (s *customHostSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {
 	return domain.TradingConnection{}, domain.ErrNotImplemented
 }

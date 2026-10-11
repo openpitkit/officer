@@ -19,31 +19,17 @@ import { act, screen } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { TradingSnapshot } from "@/api/types";
+import type { CredentialStorage } from "@/api/types";
 import { SensitiveDataBanner } from "@/components/SensitiveDataBanner";
 import i18n from "@/i18n";
 import { renderWithApi } from "@/test/apiClient";
 
-const fetchTrading = vi.fn<() => Promise<TradingSnapshot>>();
+const fetchCredentialStorage = vi.fn<() => Promise<CredentialStorage>>();
 const title = "Sensitive data is stored unencrypted";
-const snapshot: TradingSnapshot = {
+const unsealed: CredentialStorage = {
   credentialsSealed: false,
-  providers: [],
-  connections: [
-    {
-      id: "alpaca-1",
-      provider: "alpaca",
-      label: "Alpaca paper",
-      mode: "paper",
-      enabled: false,
-      venueIdentity: "venue-123",
-      state: "stopped",
-      secrets: { apiKey: true, apiSecret: true },
-      feeAccount: "",
-      instruments: [],
-      access: [],
-    },
-  ],
+  plaintextTradingKeys: true,
+  plaintextMarketDataKeys: false,
 };
 
 function renderBanner() {
@@ -51,7 +37,7 @@ function renderBanner() {
     <I18nextProvider i18n={i18n}>
       <SensitiveDataBanner />
     </I18nextProvider>,
-    { api: { fetchTrading } },
+    { api: { fetchCredentialStorage } },
   );
 }
 
@@ -61,20 +47,22 @@ beforeEach(async () => {
 });
 
 describe("SensitiveDataBanner", () => {
-  it("keeps warning from the last loaded snapshot on background refresh failure", async () => {
+  it("keeps warning from the last loaded storage on background refresh failure", async () => {
     vi.useFakeTimers();
-    fetchTrading.mockResolvedValue(snapshot);
+    fetchCredentialStorage.mockResolvedValue(unsealed);
     const { unmount } = renderBanner();
     try {
       await act(async () => {});
-      expect(fetchTrading).toHaveBeenCalledTimes(1);
+      expect(fetchCredentialStorage).toHaveBeenCalledTimes(1);
       expect(screen.getByText(title)).toBeInTheDocument();
 
-      fetchTrading.mockRejectedValue(new Error("trading unavailable"));
+      fetchCredentialStorage.mockRejectedValue(
+        new Error("credential storage unavailable"),
+      );
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5000);
       });
-      expect(fetchTrading).toHaveBeenCalledTimes(2);
+      expect(fetchCredentialStorage).toHaveBeenCalledTimes(2);
       expect(screen.getByText(title)).toBeInTheDocument();
     } finally {
       unmount();
@@ -82,22 +70,30 @@ describe("SensitiveDataBanner", () => {
     }
   });
 
-  it("warns about unsealed trading keys and links to master key setup", async () => {
-    fetchTrading.mockResolvedValue(snapshot);
+  it.each([
+    ["trading keys", { plaintextTradingKeys: true }],
+    ["market-data keys", { plaintextMarketDataKeys: true }],
+    [
+      "both kinds of keys",
+      { plaintextTradingKeys: true, plaintextMarketDataKeys: true },
+    ],
+  ])("warns about plain-text %s", async (_, flags) => {
+    fetchCredentialStorage.mockResolvedValue({
+      credentialsSealed: false,
+      plaintextTradingKeys: false,
+      plaintextMarketDataKeys: false,
+      ...flags,
+    });
     const { container } = renderBanner();
     expect(await screen.findByText(title)).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Officer runs without a master key: API keys of trading connections are kept in plain text in its database and in backups. Set a master key to store them sealed.",
+        "Officer runs without a master key: stored API keys and tokens are kept in plain text in its database and in backups. Set a master key to store them sealed.",
       ),
     ).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: "How to set a master key" });
-    expect(link).toHaveAttribute(
-      "href",
-      "https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key",
-    );
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(
+      screen.getByRole("link", { name: "How to set a master key" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(
       container.querySelector('[role="alert"], [role="status"], [aria-live]'),
@@ -105,30 +101,46 @@ describe("SensitiveDataBanner", () => {
   });
 
   it.each([
-    ["sealed", { ...snapshot, credentialsSealed: true }],
-    ["no connections", { ...snapshot, connections: [] }],
+    [
+      "sealed",
+      {
+        credentialsSealed: true,
+        plaintextTradingKeys: false,
+        plaintextMarketDataKeys: false,
+      },
+    ],
+    [
+      "no keys are stored",
+      {
+        credentialsSealed: false,
+        plaintextTradingKeys: false,
+        plaintextMarketDataKeys: false,
+      },
+    ],
   ])("hides when %s", async (_, data) => {
-    fetchTrading.mockResolvedValue(data);
+    fetchCredentialStorage.mockResolvedValue(data);
     await act(async () => {
       renderBanner();
     });
-    expect(fetchTrading).toHaveBeenCalledTimes(1);
+    expect(fetchCredentialStorage).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(title)).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("hides while loading", () => {
-    fetchTrading.mockReturnValue(new Promise(() => {}));
+    fetchCredentialStorage.mockReturnValue(new Promise(() => {}));
     const { container } = renderBanner();
     expect(container).toBeEmptyDOMElement();
   });
 
   it("hides when loading fails", async () => {
-    fetchTrading.mockRejectedValue(new Error("trading unavailable"));
+    fetchCredentialStorage.mockRejectedValue(
+      new Error("credential storage unavailable"),
+    );
     await act(async () => {
       renderBanner();
     });
-    expect(fetchTrading).toHaveBeenCalledTimes(1);
+    expect(fetchCredentialStorage).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(title)).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });

@@ -30,58 +30,12 @@ import (
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 // The DTOs below are the JSON wire contract of the HTTP surface. They carry the
 // camelCase tags the dashboard SPA expects. Domain and control-plane types
 // carry no JSON tags; this package owns the encoding and the mapping.
-
-type tradingDTO struct {
-	Providers         []tradingProviderDTO   `json:"providers"`
-	Connections       []tradingConnectionDTO `json:"connections"`
-	CredentialsSealed bool                   `json:"credentialsSealed"`
-}
-
-type tradingProviderDTO struct {
-	Type            string `json:"type"`
-	Title           string `json:"title"`
-	VenueAccounts   bool   `json:"venueAccounts"`
-	VerifiesSymbols bool   `json:"verifiesSymbols"`
-	SearchesSymbols bool   `json:"searchesSymbols"`
-	UnlinkedFees    bool   `json:"unlinkedFees"`
-}
-
-type tradingConnectionDTO struct {
-	ID            string                 `json:"id"`
-	Provider      string                 `json:"provider"`
-	Label         string                 `json:"label"`
-	Mode          domain.TradingMode     `json:"mode"`
-	Enabled       bool                   `json:"enabled"`
-	VenueIdentity string                 `json:"venueIdentity"`
-	FeeAccount    string                 `json:"feeAccount"`
-	State         string                 `json:"state"`
-	Error         string                 `json:"error,omitempty"`
-	Secrets       map[string]bool        `json:"secrets"`
-	Instruments   []tradingInstrumentDTO `json:"instruments"`
-	Access        []tradingAccessDTO     `json:"access"`
-}
-
-type tradingInstrumentDTO struct {
-	ExternalSymbol string `json:"externalSymbol"`
-	BaseAsset      string `json:"baseAsset"`
-	QuoteAsset     string `json:"quoteAsset"`
-	Enabled        bool   `json:"enabled"`
-}
-
-// tradingAccessDTO is one grant of a connection. Exactly one of Account and
-// AccountGroup names the subject; Group is the granted account's current group
-// membership, empty for a group grant and for an account outside any group.
-type tradingAccessDTO struct {
-	Account      string `json:"account"`
-	AccountGroup string `json:"accountGroup"`
-	VenueAccount string `json:"venueAccount"`
-	Group        string `json:"group"`
-}
 
 type venueOrderDTO struct {
 	Connection    string          `json:"connection"`
@@ -91,55 +45,6 @@ type venueOrderDTO struct {
 	VenueOrderID  string          `json:"venueOrderId,omitempty"`
 	SendAttempted bool            `json:"sendAttempted"`
 	CreatedAt     string          `json:"createdAt"`
-}
-
-func toTradingDTO(status backend.TradingStatus) tradingDTO {
-	out := tradingDTO{
-		Providers:         make([]tradingProviderDTO, 0, len(status.Providers)),
-		Connections:       make([]tradingConnectionDTO, 0, len(status.Connections)),
-		CredentialsSealed: status.CredentialsSealed,
-	}
-	for _, p := range status.Providers {
-		out.Providers = append(out.Providers, tradingProviderDTO{
-			Type: p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
-			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
-			UnlinkedFees: p.UnlinkedFees,
-		})
-	}
-	for _, c := range status.Connections {
-		out.Connections = append(out.Connections, toTradingConnectionDTO(c))
-	}
-	return out
-}
-
-func toTradingConnectionDTO(c backend.TradingConnectionStatus) tradingConnectionDTO {
-	out := tradingConnectionDTO{
-		ID: c.ExternalID.String(), Provider: c.Provider, Label: c.Label,
-		Mode: c.Mode, Enabled: c.Enabled, VenueIdentity: c.VenueIdentity,
-		FeeAccount: c.FeeAccount.String(), State: c.State,
-		Secrets:     make(map[string]bool, len(c.Secrets)),
-		Instruments: make([]tradingInstrumentDTO, 0, len(c.Instruments)),
-		Access:      make([]tradingAccessDTO, 0, len(c.Access)),
-	}
-	if c.State == "unavailable" {
-		out.Error = c.Unavailable
-	}
-	for key, present := range c.Secrets {
-		out.Secrets[key] = present
-	}
-	for _, i := range c.Instruments {
-		out.Instruments = append(out.Instruments, tradingInstrumentDTO{
-			ExternalSymbol: i.ExternalSymbol, BaseAsset: i.BaseAsset,
-			QuoteAsset: i.QuoteAsset, Enabled: i.Enabled,
-		})
-	}
-	for _, row := range c.Access {
-		out.Access = append(out.Access, tradingAccessDTO{
-			Account: row.Access.Account.String(), AccountGroup: row.Access.AccountGroup,
-			VenueAccount: row.Access.VenueAccount, Group: row.Group,
-		})
-	}
-	return out
 }
 
 func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
@@ -624,7 +529,7 @@ type marketDataInstanceDTO struct {
 	Secrets         map[string]bool           `json:"secrets,omitempty"`
 	References      *marketDataReferencesDTO  `json:"references,omitempty"`
 	Instruments     []marketDataInstrumentDTO `json:"instruments,omitempty"`
-	Diagnostics     []marketDataDiagnosticDTO `json:"diagnostics,omitempty"`
+	Diagnostics     []httpx.DiagnosticDTO     `json:"diagnostics,omitempty"`
 }
 
 // marketDataCreateInstanceRequestDTO is the body of POST
@@ -684,23 +589,6 @@ type marketDataSymbolMatchDTO struct {
 	Strike                       string `json:"strike,omitempty"`
 }
 
-type marketDataDiagnosticActionDTO struct {
-	Type   string `json:"type"`
-	Target string `json:"target,omitempty"`
-}
-
-type marketDataDiagnosticDTO struct {
-	Level       string                          `json:"level"`
-	Code        string                          `json:"code"`
-	Kind        string                          `json:"kind"`
-	Title       string                          `json:"title"`
-	Detail      string                          `json:"detail"`
-	Remediation string                          `json:"remediation,omitempty"`
-	Instrument  string                          `json:"instrument,omitempty"`
-	Actions     []marketDataDiagnosticActionDTO `json:"actions,omitempty"`
-	At          string                          `json:"at"`
-}
-
 type marketDataInstrumentDTO struct {
 	// InstanceExternalID is the owning instance's opaque public handle; omitted
 	// in request bodies (taken from the path) and set in responses.
@@ -754,30 +642,6 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 	for _, instrument := range status.Instruments {
 		instruments = append(instruments, toMarketDataInstrumentDTO(instrument))
 	}
-	diagnostics := make([]marketDataDiagnosticDTO, 0, len(status.Diagnostics))
-	for _, diag := range status.Diagnostics {
-		var actions []marketDataDiagnosticActionDTO
-		if len(diag.Actions) > 0 {
-			actions = make([]marketDataDiagnosticActionDTO, 0, len(diag.Actions))
-			for _, a := range diag.Actions {
-				actions = append(actions, marketDataDiagnosticActionDTO{
-					Type:   a.Type,
-					Target: a.Target,
-				})
-			}
-		}
-		diagnostics = append(diagnostics, marketDataDiagnosticDTO{
-			Level:       diag.Level,
-			Code:        diag.Code,
-			Kind:        diag.Kind,
-			Title:       diag.Title,
-			Detail:      diag.Detail,
-			Remediation: diag.Remediation,
-			Instrument:  diag.Instrument,
-			Actions:     actions,
-			At:          diag.At.Format(time.RFC3339Nano),
-		})
-	}
 	var refs *marketDataReferencesDTO
 	if r := status.References; r != nil && (r.DocsURL != "" || r.SymbolsURL != "") {
 		refs = &marketDataReferencesDTO{
@@ -785,6 +649,9 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 			SymbolsURL: r.SymbolsURL,
 		}
 	}
+	// Stored credentials that are not a JSON object deliberately show no
+	// secret markers.
+	secrets, _ := backend.MarketDataSecrets(status.Instance)
 	return marketDataInstanceDTO{
 		ID:              status.Instance.ExternalID.String(),
 		Provider:        status.Instance.Provider,
@@ -796,10 +663,10 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 		VerifiesSymbols: status.VerifiesSymbols,
 		SearchesSymbols: status.SearchesSymbols,
 		Settings:        marketDataSafeSettings(status.Instance),
-		Secrets:         marketDataSecretState(status.Instance),
+		Secrets:         secrets,
 		References:      refs,
 		Instruments:     instruments,
-		Diagnostics:     diagnostics,
+		Diagnostics:     httpx.ToDiagnosticDTOs(status.Diagnostics),
 	}
 }
 
@@ -826,29 +693,6 @@ func marketDataSafeSettings(instance domain.MarketDataInstance) map[string]any {
 		return nil
 	}
 	return settings
-}
-
-func marketDataSecretState(instance domain.MarketDataInstance) map[string]bool {
-	credentials := marketDataCredentialsObject(instance.Credentials)
-	if len(credentials) == 0 {
-		return nil
-	}
-	secrets := make(map[string]bool)
-	switch instance.Provider {
-	case domain.MarketDataProviderAlpaca:
-		secrets["apiKey"] = stringCredentialPresent(credentials, "apiKey") ||
-			stringCredentialPresent(credentials, "key")
-		secrets["apiSecret"] = stringCredentialPresent(credentials, "apiSecret") ||
-			stringCredentialPresent(credentials, "secret")
-	case domain.MarketDataProviderOANDA, domain.MarketDataProviderFinnhub:
-		secrets["token"] = stringCredentialPresent(credentials, "token")
-	}
-	for _, present := range secrets {
-		if present {
-			return secrets
-		}
-	}
-	return nil
 }
 
 func marketDataCredentialsObject(raw string) map[string]any {
@@ -884,11 +728,6 @@ func copyObjectSetting(dst, src map[string]any, key string) {
 	if v, ok := src[key].(map[string]any); ok && len(v) > 0 {
 		dst[key] = v
 	}
-}
-
-func stringCredentialPresent(credentials map[string]any, key string) bool {
-	value, ok := credentials[key].(string)
-	return ok && strings.TrimSpace(value) != ""
 }
 
 func toMarketDataSymbolVerificationDTO(

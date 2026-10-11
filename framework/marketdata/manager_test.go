@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 )
 
 func testExternalID(label string) domain.ExternalID {
@@ -390,14 +391,14 @@ func newConsumptionObservedFakeConnector() *fakeConnector {
 
 type reportingConnector struct {
 	*fakeConnector
-	statusReporter StatusReporter
+	statusReporter health.StatusReporter
 }
 
 func newReportingConnector() *reportingConnector {
 	return &reportingConnector{fakeConnector: newFakeConnector()}
 }
 
-func (c *reportingConnector) SetStatusReporter(report StatusReporter) {
+func (c *reportingConnector) SetStatusReporter(report health.StatusReporter) {
 	c.statusReporter = report
 }
 
@@ -845,7 +846,7 @@ func TestManager_PushErrorDoesNotStopFeed(t *testing.T) {
 	var found bool
 	for _, diag := range status.Diagnostics {
 		if diag.Title == "Failed to push quote to engine" &&
-			diag.Level == DiagWarn &&
+			diag.Level == health.DiagWarn &&
 			diag.Detail == "push boom" {
 			found = true
 		}
@@ -890,7 +891,7 @@ func TestManagerSkipsInstanceWithNoInstruments(t *testing.T) {
 	defer manager.Stop()
 	status := manager.InstanceStatuses()[instanceID.String()]
 	if status.State != StateError || len(status.Diagnostics) != 1 ||
-		status.Diagnostics[0].Code != CodeNoEnabledInstruments {
+		status.Diagnostics[0].Code != health.CodeNoEnabledInstruments {
 		t.Fatalf("status = %+v", status)
 	}
 }
@@ -2431,7 +2432,7 @@ func TestManagerInvalidProviderConfigIsNotUnsupported(t *testing.T) {
 		t.Fatalf("state = %q, want error", status.State)
 	}
 	if len(status.Diagnostics) != 1 ||
-		status.Diagnostics[0].Code != CodeInvalidProviderConfig {
+		status.Diagnostics[0].Code != health.CodeInvalidProviderConfig {
 		t.Fatalf("diagnostics = %+v", status.Diagnostics)
 	}
 }
@@ -2459,7 +2460,7 @@ func TestManagerUnknownProviderUsesUnsupportedDiagnostic(t *testing.T) {
 
 	status := manager.InstanceStatuses()[instanceID.String()]
 	if len(status.Diagnostics) != 1 ||
-		status.Diagnostics[0].Code != CodeUnsupportedProvider {
+		status.Diagnostics[0].Code != health.CodeUnsupportedProvider {
 		t.Fatalf("diagnostics = %+v", status.Diagnostics)
 	}
 }
@@ -2489,10 +2490,10 @@ func TestRecordDiagLockedDedupedDiagNoLog(t *testing.T) {
 		logger:   slog.New(h),
 		statuses: map[string]InstanceRuntimeStatus{"inst-1": {}},
 	}
-	diag := Diagnostic{
-		Level:  DiagWarn,
-		Code:   CodeNoData,
-		Kind:   DiagKindProvider,
+	diag := health.Diagnostic{
+		Level:  health.DiagWarn,
+		Code:   health.CodeNoData,
+		Kind:   health.DiagKindProvider,
 		Title:  "No market data",
 		Detail: "no quotes arriving",
 	}
@@ -2512,32 +2513,32 @@ func TestRecordDiagLocked_LevelMapping(t *testing.T) {
 
 	cases := []struct {
 		name string
-		diag Diagnostic
+		diag health.Diagnostic
 		want slog.Level
 	}{
 		{
 			name: "routine",
-			diag: Diagnostic{
+			diag: health.Diagnostic{
 				Routine: true,
-				Level:   DiagInfo,
-				Code:    CodeNoData,
+				Level:   health.DiagInfo,
+				Code:    health.CodeNoData,
 				Title:   "routine diagnostic",
 			},
 			want: slog.LevelDebug,
 		},
 		{
 			name: "info",
-			diag: Diagnostic{Level: DiagInfo, Code: CodeNoData, Title: "info diagnostic"},
+			diag: health.Diagnostic{Level: health.DiagInfo, Code: health.CodeNoData, Title: "info diagnostic"},
 			want: slog.LevelInfo,
 		},
 		{
 			name: "warn",
-			diag: Diagnostic{Level: DiagWarn, Code: CodeNoData, Title: "warn diagnostic"},
+			diag: health.Diagnostic{Level: health.DiagWarn, Code: health.CodeNoData, Title: "warn diagnostic"},
 			want: slog.LevelWarn,
 		},
 		{
 			name: "error",
-			diag: Diagnostic{Level: DiagError, Code: CodeNoData, Title: "error diagnostic"},
+			diag: health.Diagnostic{Level: health.DiagError, Code: health.CodeNoData, Title: "error diagnostic"},
 			want: slog.LevelError,
 		},
 	}
@@ -3182,7 +3183,7 @@ func TestManagerUnknownManualAssetDoesNotBlockStreamingFeed(t *testing.T) {
 		t.Fatalf("Start after deleting BYO asset: %v", err)
 	}
 	defer manager.Stop()
-	var retired Diagnostic
+	var retired health.Diagnostic
 	waitFor(t, time.Second, func() bool {
 		status := manager.InstanceStatuses()[byoID.String()]
 		for _, diag := range status.Diagnostics {
@@ -3193,8 +3194,8 @@ func TestManagerUnknownManualAssetDoesNotBlockStreamingFeed(t *testing.T) {
 		}
 		return false
 	})
-	if retired.Level != DiagWarn || retired.Code != CodeInternalError ||
-		retired.Kind != DiagKindConfig ||
+	if retired.Level != health.DiagWarn || retired.Code != health.CodeInternalError ||
+		retired.Kind != health.DiagKindConfig ||
 		retired.Instrument != byoInstrument.ExternalSymbol ||
 		!strings.Contains(retired.Detail, "a stale quote may remain") {
 		t.Fatalf("retired manual quote diagnostic = %+v", retired)

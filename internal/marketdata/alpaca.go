@@ -29,6 +29,7 @@ import (
 
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -44,8 +45,8 @@ const (
 type alpacaConnector struct {
 	dial         func(context.Context, string) (alpacaConn, error)
 	sleep        func(context.Context, time.Duration) error
-	report       fwmarketdata.StatusReporter
-	diagReport   fwmarketdata.DiagnosticReporter
+	report       health.StatusReporter
+	diagReport   health.DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	readTimeout  time.Duration
@@ -169,7 +170,7 @@ func (c liveAlpacaConn) Close(code websocket.StatusCode, reason string) error {
 }
 
 // SetStatusReporter installs the manager's runtime reporter.
-func (c *alpacaConnector) SetStatusReporter(report fwmarketdata.StatusReporter) {
+func (c *alpacaConnector) SetStatusReporter(report health.StatusReporter) {
 	c.report = report
 }
 
@@ -180,11 +181,11 @@ func (c *alpacaConnector) reportStatus(ok bool, errMsg string) {
 }
 
 // SetDiagnosticReporter installs the manager's structured diagnostic reporter.
-func (c *alpacaConnector) SetDiagnosticReporter(report fwmarketdata.DiagnosticReporter) {
+func (c *alpacaConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
 	c.diagReport = report
 }
 
-func (c *alpacaConnector) reportDiag(diag fwmarketdata.Diagnostic) {
+func (c *alpacaConnector) reportDiag(diag health.Diagnostic) {
 	if c.diagReport != nil {
 		c.diagReport(diag)
 	}
