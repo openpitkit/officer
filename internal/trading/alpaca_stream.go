@@ -23,13 +23,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/shopspring/decimal"
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/alpaca"
+	"go.openpit.dev/officer/internal/backoff"
 )
 
 const (
@@ -126,16 +127,25 @@ func (c *alpacaConnector) Close() {
 }
 
 func (c *alpacaConnector) run(ctx context.Context, out chan<- fwtrading.Event) {
-	delay := alpacaReconnectMin
+	attempt := 0
+	refused := false
 	for ctx.Err() == nil {
 		healthy, err := c.stream(ctx, out)
 		if ctx.Err() != nil {
 			return
 		}
 		if healthy {
-			delay = alpacaReconnectMin
+			attempt = 0
+			refused = false
 		}
 		if errors.Is(err, errAlpacaUnauthorized) {
+			refused = true
+		}
+		attempt++
+		delay := backoff.Delay(attempt, alpacaReconnectMin, alpacaReconnectMax)
+		if refused {
+			// A refused authorization holds the longest wait until a
+			// healthy stream proves the credentials work again.
 			delay = alpacaReconnectMax
 		}
 		c.reportStatus(false, c.redactStreamMessage(err.Error()))
@@ -145,10 +155,6 @@ func (c *alpacaConnector) run(ctx context.Context, out chan<- fwtrading.Event) {
 			timer.Stop()
 			return
 		case <-timer.C:
-		}
-		delay *= 2
-		if delay > alpacaReconnectMax {
-			delay = alpacaReconnectMax
 		}
 	}
 }
@@ -183,14 +189,6 @@ func (c *alpacaConnector) readAlpacaFrame(ctx context.Context, conn *websocket.C
 	}
 }
 
-func writeAlpacaFrame(ctx context.Context, conn *websocket.Conn, frame any) error {
-	payload, err := json.Marshal(frame)
-	if err != nil {
-		return err
-	}
-	return conn.Write(ctx, websocket.MessageText, payload)
-}
-
 func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event) (healthy bool, err error) {
 	// Each unparsable site reports once per connection, so a venue sending
 	// malformed frames cannot turn every frame into a report. A site's
@@ -204,11 +202,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 	}
 	handshakeCtx, cancel := context.WithTimeout(ctx, alpacaHandshakeTimeout)
 	defer cancel()
-	conn, _, err := websocket.Dial(handshakeCtx, c.streamURL, &websocket.DialOptions{
-		HTTPClient: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}},
-	})
+	conn, err := alpaca.DialStream(handshakeCtx, c.streamURL)
 	if err != nil {
 		return false, err
 	}
@@ -217,12 +211,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 			slog.Debug("alpaca: close stream connection", "connection", c.externalID, "error", err)
 		}
 	}()
-	auth := struct {
-		Action string `json:"action"`
-		Key    string `json:"key"`
-		Secret string `json:"secret"`
-	}{"auth", c.credentials.APIKey, c.credentials.APISecret}
-	if err := writeAlpacaFrame(handshakeCtx, conn, auth); err != nil {
+	if err := alpaca.WriteStreamAuth(handshakeCtx, conn, c.credentials); err != nil {
 		return false, err
 	}
 	for {
@@ -254,7 +243,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 		} `json:"data"`
 	}{Action: "listen"}
 	listen.Data.Streams = []string{"trade_updates"}
-	if err := writeAlpacaFrame(handshakeCtx, conn, listen); err != nil {
+	if err := alpaca.WriteStreamFrame(handshakeCtx, conn, listen); err != nil {
 		return false, err
 	}
 	for {

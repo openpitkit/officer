@@ -375,20 +375,6 @@ func TestBinanceConnector_CloseBeforeSubscribeDoesNotBreakLaterClose(t *testing.
 	}
 }
 
-func TestBackoffCaps(t *testing.T) {
-	t.Parallel()
-
-	if got := backoff(1, time.Second, 8*time.Second); got != time.Second {
-		t.Fatalf("backoff(1) = %s", got)
-	}
-	if got := backoff(4, time.Second, 8*time.Second); got != 8*time.Second {
-		t.Fatalf("backoff(4) = %s", got)
-	}
-	if got := backoff(10, time.Second, 8*time.Second); got != 8*time.Second {
-		t.Fatalf("backoff(10) = %s", got)
-	}
-}
-
 func TestBinanceConnector_VerifySymbolExists(t *testing.T) {
 	t.Parallel()
 

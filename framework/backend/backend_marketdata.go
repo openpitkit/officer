@@ -898,11 +898,11 @@ func decodeCredentialsJSON(raw string, out *map[string]any) error {
 }
 
 // MarketDataSecrets reports which secret credentials a market-data source
-// stores, by name and never by value: the Alpaca apiKey (alias key) and
-// apiSecret (alias secret), and the OANDA and Finnhub token. It is nil for any
-// other provider, whose credentials it never reads, and when the stored
-// credentials are empty or hold no secret. It fails only when the credentials
-// of one of those three providers are not a JSON object.
+// stores, by name and never by value: the Alpaca apiKey and apiSecret, and the
+// OANDA and Finnhub token. It is nil for any other provider, whose credentials
+// it never reads, and when the stored credentials are empty or hold no secret.
+// It fails only when the credentials of one of those three providers are not a
+// JSON object.
 func MarketDataSecrets(instance domain.MarketDataInstance) (map[string]bool, error) {
 	switch instance.Provider {
 	case domain.MarketDataProviderAlpaca, domain.MarketDataProviderOANDA,
@@ -925,10 +925,8 @@ func MarketDataSecrets(instance domain.MarketDataInstance) (map[string]bool, err
 	secrets := make(map[string]bool)
 	switch instance.Provider {
 	case domain.MarketDataProviderAlpaca:
-		secrets["apiKey"] = stringCredentialPresent(credentials, "apiKey") ||
-			stringCredentialPresent(credentials, "key")
-		secrets["apiSecret"] = stringCredentialPresent(credentials, "apiSecret") ||
-			stringCredentialPresent(credentials, "secret")
+		secrets["apiKey"] = stringCredentialPresent(credentials, "apiKey")
+		secrets["apiSecret"] = stringCredentialPresent(credentials, "apiSecret")
 	case domain.MarketDataProviderOANDA, domain.MarketDataProviderFinnhub:
 		secrets["token"] = stringCredentialPresent(credentials, "token")
 	}

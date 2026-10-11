@@ -38,7 +38,8 @@ is a command or under `internal/`, and cannot be imported:
 - `framework/mcp/catalog` - the MCP command catalogue, without the MCP SDK.
 - `framework/migration` - a version-tracked database migration runner.
 - `framework/node` - one engine and its store, bound to one realm.
-- `framework/secret` - sealing of secret values under a master key.
+- `framework/secret` - sealing of secret values under a master key, and
+  redaction of stored credential values.
 - `framework/signing` - the approval-signing seam and the approval envelope.
 - `framework/store` - the database connector seam, scoped by realm.
 - `framework/store/schema` - the canonical store schema every connector shares.

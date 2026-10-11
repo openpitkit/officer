@@ -15,13 +15,13 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-package trading_test
+package secret_test
 
 import (
 	"reflect"
 	"testing"
 
-	"go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/framework/secret"
 )
 
 func TestCredentialRedactorSpellings(t *testing.T) {
@@ -29,7 +29,7 @@ func TestCredentialRedactorSpellings(t *testing.T) {
 	// not), URL query-escaped and URL path-escaped spellings all differ.
 	const credentials = `{"apiKey":"  echo \"q\" \\ <a&b> +c/d  ",` +
 		`"apiSecret":"   ","extra":{"list":["nested-value"]}}`
-	secrets, redact, err := trading.CredentialRedactor(credentials)
+	secrets, redact, err := secret.CredentialRedactor(credentials)
 	if err != nil {
 		t.Fatalf("CredentialRedactor: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestCredentialRedactorLongestFirst(t *testing.T) {
 		{"escaped key contains secret", `{"apiKey":"prefix/very-long-suffix","apiSecret":"prefix"}`, "refused prefix%2Fvery-long-suffix prefix"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, redact, err := trading.CredentialRedactor(tc.credentials)
+			_, redact, err := secret.CredentialRedactor(tc.credentials)
 			if err != nil {
 				t.Fatalf("CredentialRedactor: %v", err)
 			}

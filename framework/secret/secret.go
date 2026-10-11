@@ -15,7 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package secret seals secret values under an operator-supplied master key.
+// Package secret seals secret values under an operator-supplied master key and
+// redacts stored credential values from text.
 package secret
 
 import (

@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-package trading
+package secret
 
 import (
 	"bytes"
@@ -29,16 +29,17 @@ import (
 )
 
 // CredentialRedactor is the credential redactor that connectors and the
-// backend boundary share. It reads a connection's stored credentials, a JSON
-// object, and returns the members that hold a value and a replacer that
-// redacts each non-blank credential value, trimmed, spelled raw, JSON-escaped
-// (HTML-escaped or not), URL query- or path-escaped. The replacer tries the
-// longest spelling first, so a credential inside a longer credential's
-// spelling is redacted with it and leaves no fragment.
+// backend boundary share. It reads the stored credentials of a trading
+// connection or a market-data source, a JSON object, and returns the members
+// that hold a value and a replacer that redacts each non-blank credential
+// value, trimmed, spelled raw, JSON-escaped (HTML-escaped or not), URL query-
+// or path-escaped. The replacer tries the longest spelling first, so a
+// credential inside a longer credential's spelling is redacted with it and
+// leaves no fragment.
 func CredentialRedactor(credentials string) (map[string]bool, *strings.Replacer, error) {
 	var values map[string]any
 	if err := json.Unmarshal([]byte(credentials), &values); err != nil || values == nil {
-		return nil, nil, fmt.Errorf("stored trading credentials are not a JSON object: %w", domain.ErrInvalid)
+		return nil, nil, fmt.Errorf("secret: stored credentials are not a JSON object: %w", domain.ErrInvalid)
 	}
 	secrets := make(map[string]bool)
 	var credentialStrings []string
@@ -88,7 +89,7 @@ func CredentialRedactor(credentials string) (map[string]bool, *strings.Replacer,
 			encoder := json.NewEncoder(&quoted)
 			encoder.SetEscapeHTML(escapeHTML)
 			if err := encoder.Encode(value); err != nil {
-				return nil, nil, fmt.Errorf("encode stored trading credential: %w", err)
+				return nil, nil, fmt.Errorf("secret: encode stored credential: %w", err)
 			}
 			// Encode writes the quoted string and a newline.
 			spellings[string(quoted.Bytes()[1:quoted.Len()-2])] = true

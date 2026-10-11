@@ -930,6 +930,70 @@ func TestStreamUnauthorized(t *testing.T) {
 	assertStreamLogsNothing(t, logs)
 }
 
+func TestStreamUnauthorizedHoldsMaxUntilHealthy(t *testing.T) {
+	attempts := make(chan time.Time, 8)
+	var count atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := count.Add(1)
+		at := time.Now()
+		conn := acceptAlpaca(t, w, r)
+		if conn == nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if !readAuth(t, ctx, conn) {
+			return
+		}
+		// The first dial is refused, the third delivers one trade update
+		// and so is healthy, and every other one closes before any
+		// authorization reply, an ordinary failure.
+		switch attempt {
+		case 1:
+			sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":"unauthorized","action":"authenticate"}}`)
+		case 3:
+			if !completeHandshake(t, ctx, conn) || !sendFrame(t, ctx, conn, websocket.MessageText, updateFrame("partial_fill", "1", "1", "1")) {
+				return
+			}
+		}
+		// Reported once the handler's frames are done, so closing the
+		// connector after the last dial cannot cut the handler short.
+		attempts <- at
+	}))
+	defer server.Close()
+	c := testAlpacaConnector(t, server)
+	events := subscribeAlpaca(t, c)
+	dials := make([]time.Time, 0, 4)
+	nextDial := func() {
+		t.Helper()
+		select {
+		case at := <-attempts:
+			dials = append(dials, at)
+		case <-time.After(alpacaReconnectMax + time.Second):
+			t.Fatalf("dial %d missing", len(dials)+1)
+		}
+	}
+	for range 3 {
+		nextDial()
+	}
+	if waited := dials[2].Sub(dials[1]); waited < alpacaReconnectMax-50*time.Millisecond {
+		t.Fatalf("failure after a refused authorization waited %v, want at least %v until a healthy stream", waited, alpacaReconnectMax)
+	}
+	if nextEvent(t, events).Kind != fwtrading.EventConnected {
+		t.Fatal("healthy dial did not connect")
+	}
+	if nextEvent(t, events).Kind != fwtrading.EventFill {
+		t.Fatal("healthy dial delivered no trade update")
+	}
+	healthyAt := time.Now()
+	nextDial()
+	if waited := dials[3].Sub(healthyAt); waited >= alpacaReconnectMax/2 {
+		t.Fatalf("failure after a healthy stream waited %v, want under %v", waited, alpacaReconnectMax/2)
+	}
+	assertClosed(t, c, events)
+}
+
 func TestStreamRequiresReporters(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 	defer server.Close()

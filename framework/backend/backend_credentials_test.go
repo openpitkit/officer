@@ -86,16 +86,6 @@ func TestCredentialStorage(t *testing.T) {
 			want:      CredentialStorage{PlaintextMarketDataKeys: true},
 		},
 		{
-			name:      "alpaca-key-alias",
-			instances: sources(source(domain.MarketDataProviderAlpaca, `{"key":"md-key-value"}`)),
-			want:      CredentialStorage{PlaintextMarketDataKeys: true},
-		},
-		{
-			name:      "alpaca-secret-alias",
-			instances: sources(source(domain.MarketDataProviderAlpaca, `{"secret":"md-secret-value"}`)),
-			want:      CredentialStorage{PlaintextMarketDataKeys: true},
-		},
-		{
 			name:      "oanda-token",
 			instances: sources(source(domain.MarketDataProviderOANDA, `{"token":"md-token-value","accountID":"a"}`)),
 			want:      CredentialStorage{PlaintextMarketDataKeys: true},
@@ -140,7 +130,7 @@ func TestCredentialStorage(t *testing.T) {
 		{
 			name:        "malformed-trading",
 			connections: connectionWith(`{"apiKey":"trading-key-value"`),
-			wantErr:     "backend: trading connection connection-1: stored trading credentials are not a JSON object: invalid",
+			wantErr:     "backend: trading connection connection-1: secret: stored credentials are not a JSON object: invalid",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

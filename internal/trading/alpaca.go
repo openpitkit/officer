@@ -32,6 +32,7 @@ import (
 	"github.com/shopspring/decimal"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
+	"go.openpit.dev/officer/framework/secret"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/alpaca"
 )
@@ -99,7 +100,7 @@ func newAlpacaConnector(connection domain.TradingConnection, restURL, streamURL 
 		// The credentials object is the request's credentials member.
 		return nil, domain.WithValidationPointer("/credentials"+domain.ValidationPointer(err), err)
 	}
-	_, redact, err := fwtrading.CredentialRedactor(connection.Credentials)
+	_, redact, err := secret.CredentialRedactor(connection.Credentials)
 	if err != nil {
 		return nil, fmt.Errorf("alpaca: %w", err)
 	}

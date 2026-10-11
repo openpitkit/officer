@@ -21,7 +21,7 @@ import (
 	"context"
 	"fmt"
 
-	"go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/framework/secret"
 )
 
 // CredentialStorage reports how stored credentials sit at rest. Both plaintext
@@ -54,7 +54,7 @@ func (s *Service) CredentialStorage(ctx context.Context) (CredentialStorage, err
 		return CredentialStorage{}, fmt.Errorf("backend: list trading connections: %w", err)
 	}
 	for _, c := range connections {
-		secrets, _, err := trading.CredentialRedactor(c.Credentials)
+		secrets, _, err := secret.CredentialRedactor(c.Credentials)
 		if err != nil {
 			return CredentialStorage{}, fmt.Errorf("backend: trading connection %s: %w", c.ExternalID, err)
 		}

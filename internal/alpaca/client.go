@@ -15,7 +15,8 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Package alpaca provides authenticated REST access and asset discovery.
+// Package alpaca provides authenticated REST access and asset discovery, and
+// opens authenticated streams.
 package alpaca
 
 import (
@@ -94,12 +95,16 @@ type Client struct {
 func NewClient(baseURL string, credentials Credentials, httpClient *http.Client) *Client {
 	if httpClient != nil {
 		copy := *httpClient
-		copy.CheckRedirect = func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}
+		copy.CheckRedirect = refuseRedirect
 		httpClient = &copy
 	}
 	return &Client{strings.TrimRight(baseURL, "/"), credentials, httpClient}
+}
+
+// refuseRedirect is the package's one redirect policy, for REST and streams:
+// a redirect response is returned as it is and never followed.
+func refuseRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 type requestError struct {

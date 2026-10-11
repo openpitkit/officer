@@ -31,6 +31,7 @@ import (
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/backoff"
 )
 
 const (
@@ -253,7 +254,7 @@ func (c *coinbaseConnector) run(
 		}
 		c.reportStatus(false, "stream error: "+err.Error())
 		attempt++
-		if err := c.sleep(ctx, backoff(attempt, c.reconnectMin, c.reconnectMax)); err != nil {
+		if err := c.sleep(ctx, backoff.Delay(attempt, c.reconnectMin, c.reconnectMax)); err != nil {
 			return
 		}
 	}

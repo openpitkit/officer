@@ -155,8 +155,7 @@ func TestListMarketData_ServiceError(t *testing.T) {
 
 // TestMarketDataInstanceDTOSecrets pins the secret markers a market-data
 // instance carries on the wire, list and create alike, for every provider
-// branch, the Alpaca aliases, and stored credentials that hold no secret or are
-// not a JSON object.
+// branch and stored credentials that hold no secret or are not a JSON object.
 func TestMarketDataInstanceDTOSecrets(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -165,9 +164,7 @@ func TestMarketDataInstanceDTOSecrets(t *testing.T) {
 		want        string
 	}{
 		{"alpaca", domain.MarketDataProviderAlpaca, `{"apiKey":"k","apiSecret":"s"}`, `{"apiKey":true,"apiSecret":true}`},
-		{"alpaca-aliases", domain.MarketDataProviderAlpaca, `{"key":"k","secret":"s"}`, `{"apiKey":true,"apiSecret":true}`},
 		{"alpaca-key-only", domain.MarketDataProviderAlpaca, `{"apiKey":"k"}`, `{"apiKey":true,"apiSecret":false}`},
-		{"alpaca-secret-alias-only", domain.MarketDataProviderAlpaca, `{"secret":"s"}`, `{"apiKey":false,"apiSecret":true}`},
 		{"alpaca-blank", domain.MarketDataProviderAlpaca, `{"apiKey":" ","apiSecret":""}`, `null`},
 		{"oanda", domain.MarketDataProviderOANDA, `{"token":"t","accountID":"a"}`, `{"token":true}`},
 		{"finnhub", domain.MarketDataProviderFinnhub, `{"token":"t"}`, `{"token":true}`},

@@ -22,9 +22,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,23 +50,6 @@ func TestParseAlpacaCredentials(t *testing.T) {
 	}
 	if connector.credentials.APISecret != "secret" {
 		t.Fatalf("APISecret = %q, want secret", connector.credentials.APISecret)
-	}
-}
-
-func TestParseAlpacaCredentialsAliases(t *testing.T) {
-	t.Parallel()
-
-	connector, err := NewAlpacaConnector(domain.MarketDataInstance{
-		Credentials: `{"key":"alias-key","secret":"alias-secret"}`,
-	})
-	if err != nil {
-		t.Fatalf("NewAlpacaConnector: %v", err)
-	}
-	if connector.credentials.APIKey != "alias-key" {
-		t.Fatalf("APIKey = %q, want alias-key", connector.credentials.APIKey)
-	}
-	if connector.credentials.APISecret != "alias-secret" {
-		t.Fatalf("APISecret = %q, want alias-secret", connector.credentials.APISecret)
 	}
 }
 
@@ -191,24 +177,19 @@ func TestAlpacaConnector_ReconnectsAndResubscribes(t *testing.T) {
 		mu    sync.Mutex
 		dials int
 	)
-	connector := &alpacaConnector{
-		dial: func(context.Context, string) (alpacaConn, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			dials++
-			if dials == 1 {
-				return first, nil
-			}
-			return second, nil
-		},
-		sleep:        func(context.Context, time.Duration) error { return nil },
-		reconnectMin: time.Millisecond,
-		reconnectMax: time.Millisecond,
-		credentials: alpacaCredentials{
-			APIKey:    "key",
-			APISecret: "secret",
-		},
+	connector := newTestAlpacaConnector(t)
+	connector.dial = func(context.Context, string) (alpacaConn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		dials++
+		if dials == 1 {
+			return first, nil
+		}
+		return second, nil
 	}
+	connector.sleep = func(context.Context, time.Duration) error { return nil }
+	connector.reconnectMin = time.Millisecond
+	connector.reconnectMax = time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -246,19 +227,14 @@ func TestAlpacaConnector_AuthFailureDoesNotReportConnected(t *testing.T) {
 		messages: [][]byte{[]byte(`[{"T":"error","code":401,"msg":"auth failed"}]`)},
 	}
 	var okReported bool
-	connector := &alpacaConnector{
-		dial: func(context.Context, string) (alpacaConn, error) {
-			return conn, nil
-		},
-		credentials: alpacaCredentials{
-			APIKey:    "key",
-			APISecret: "secret",
-		},
-		report: func(ok bool, _ string) {
-			if ok {
-				okReported = true
-			}
-		},
+	connector := newTestAlpacaConnector(t)
+	connector.dial = func(context.Context, string) (alpacaConn, error) {
+		return conn, nil
+	}
+	connector.report = func(ok bool, _ string) {
+		if ok {
+			okReported = true
+		}
 	}
 
 	_, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate))
@@ -284,19 +260,14 @@ func TestAlpacaConnector_ReportsErrorFrame(t *testing.T) {
 		err: context.Canceled,
 	}
 	var statuses []string
-	connector := &alpacaConnector{
-		dial: func(context.Context, string) (alpacaConn, error) {
-			return conn, nil
-		},
-		credentials: alpacaCredentials{
-			APIKey:    "key",
-			APISecret: "secret",
-		},
-		report: func(ok bool, errMsg string) {
-			if !ok {
-				statuses = append(statuses, errMsg)
-			}
-		},
+	connector := newTestAlpacaConnector(t)
+	connector.dial = func(context.Context, string) (alpacaConn, error) {
+		return conn, nil
+	}
+	connector.report = func(ok bool, errMsg string) {
+		if !ok {
+			statuses = append(statuses, errMsg)
+		}
 	}
 
 	if _, err := connector.stream(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate)); !errors.Is(err, context.Canceled) {
@@ -342,27 +313,22 @@ func TestAlpacaConnector_ResetsBackoffAfterRead(t *testing.T) {
 		dials  int
 		delays []time.Duration
 	)
-	connector := &alpacaConnector{
-		dial: func(context.Context, string) (alpacaConn, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			conn := conns[dials]
-			dials++
-			return conn, nil
-		},
-		sleep: func(_ context.Context, delay time.Duration) error {
-			mu.Lock()
-			defer mu.Unlock()
-			delays = append(delays, delay)
-			return nil
-		},
-		reconnectMin: time.Millisecond,
-		reconnectMax: 4 * time.Millisecond,
-		credentials: alpacaCredentials{
-			APIKey:    "key",
-			APISecret: "secret",
-		},
+	connector := newTestAlpacaConnector(t)
+	connector.dial = func(context.Context, string) (alpacaConn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		conn := conns[dials]
+		dials++
+		return conn, nil
 	}
+	connector.sleep = func(_ context.Context, delay time.Duration) error {
+		mu.Lock()
+		defer mu.Unlock()
+		delays = append(delays, delay)
+		return nil
+	}
+	connector.reconnectMin = time.Millisecond
+	connector.reconnectMax = 4 * time.Millisecond
 
 	ch := make(chan fwmarketdata.QuoteUpdate)
 	go func() {
@@ -387,6 +353,112 @@ func TestAlpacaConnector_ResetsBackoffAfterRead(t *testing.T) {
 	}
 }
 
+// TestAlpacaConnector_RedactsCredentialsInStatus feeds auth replies that echo
+// a credential, raw or JSON-escaped, and expects the published status to keep
+// the venue text with the credential redacted.
+func TestAlpacaConnector_RedactsCredentialsInStatus(t *testing.T) {
+	t.Parallel()
+
+	const (
+		apiKey    = "PKREDACTIONKEY"
+		apiSecret = `redaction"secret<value>`
+	)
+	credentials, err := json.Marshal(map[string]string{"apiKey": apiKey, "apiSecret": apiSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted, err := json.Marshal(apiSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The JSON spelling escapes the quote and the angle brackets.
+	escapedSecret := string(quoted[1 : len(quoted)-1])
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+	})
+	for _, tc := range []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{"api key", "unknown key " + apiKey, "stream error: alpaca auth: 402: unknown key [redacted]"},
+		{"json-escaped api secret", `bad secret "` + escapedSecret + `"`, `stream error: alpaca auth: 402: bad secret "[redacted]"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reply, err := json.Marshal([]alpacaControlEvent{{Type: "error", Code: 402, Msg: tc.msg}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			connector, err := NewAlpacaConnector(domain.MarketDataInstance{Credentials: string(credentials)})
+			if err != nil {
+				t.Fatalf("NewAlpacaConnector: %v", err)
+			}
+			connector.dial = func(context.Context, string) (alpacaConn, error) {
+				return &fakeAlpacaConn{messages: [][]byte{reply}}, nil
+			}
+			// The first reconnect wait ends the run.
+			connector.sleep = func(context.Context, time.Duration) error { return context.Canceled }
+			var statuses []string
+			connector.report = func(_ bool, errMsg string) {
+				statuses = append(statuses, errMsg)
+			}
+
+			connector.run(context.Background(), subs, make(chan fwmarketdata.QuoteUpdate))
+			if len(statuses) != 1 || statuses[0] != tc.want {
+				t.Fatalf("statuses = %q, want [%q]", statuses, tc.want)
+			}
+		})
+	}
+}
+
+// TestAlpacaDialRefusesRedirect pins that the connector's dial refuses a
+// redirect, as the trading stream's does, so the auth frame cannot reach a
+// host chosen by a redirect response.
+func TestAlpacaDialRefusesRedirect(t *testing.T) {
+	t.Parallel()
+
+	var reached atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		_ = conn.CloseNow()
+	}))
+	defer target.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := newTestAlpacaConnector(t).dial(ctx, server.URL)
+	if err == nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		t.Error("stream dial followed a redirect")
+	}
+	if reached.Load() {
+		t.Error("redirect target received the stream dial")
+	}
+}
+
+// newTestAlpacaConnector builds a connector as production does, so its
+// credentials (key "key", secret "secret") and its redactor are set.
+func newTestAlpacaConnector(t *testing.T) *alpacaConnector {
+	t.Helper()
+	connector, err := NewAlpacaConnector(domain.MarketDataInstance{
+		Credentials: `{"apiKey":"key","apiSecret":"secret"}`,
+	})
+	if err != nil {
+		t.Fatalf("NewAlpacaConnector: %v", err)
+	}
+	return connector
+}
+
 func mustNormalizeAlpacaSubscriptions(
 	t *testing.T, subs []fwmarketdata.Subscription,
 ) []alpacaSubscription {
@@ -403,7 +475,16 @@ func assertAlpacaAuthAndSubscribeWrites(t *testing.T, conn *fakeAlpacaConn) {
 	if len(conn.writes) != 2 {
 		t.Fatalf("len(writes) = %d, want 2", len(conn.writes))
 	}
-	var auth alpacaFrame
+	for i, typ := range conn.types {
+		if typ != websocket.MessageText {
+			t.Fatalf("write %d message type = %v, want text", i, typ)
+		}
+	}
+	var auth struct {
+		Action string `json:"action"`
+		Key    string `json:"key"`
+		Secret string `json:"secret"`
+	}
 	if err := json.Unmarshal(conn.writes[0], &auth); err != nil {
 		t.Fatalf("unmarshal auth: %v", err)
 	}
@@ -422,6 +503,7 @@ func assertAlpacaAuthAndSubscribeWrites(t *testing.T, conn *fakeAlpacaConn) {
 type fakeAlpacaConn struct {
 	messages  [][]byte
 	writes    [][]byte
+	types     []websocket.MessageType
 	err       error
 	index     int
 	closeOnce sync.Once
@@ -439,8 +521,9 @@ func (c *fakeAlpacaConn) Read(context.Context) ([]byte, error) {
 	return message, nil
 }
 
-func (c *fakeAlpacaConn) Write(_ context.Context, payload []byte) error {
+func (c *fakeAlpacaConn) Write(_ context.Context, typ websocket.MessageType, payload []byte) error {
 	c.writes = append(c.writes, append([]byte(nil), payload...))
+	c.types = append(c.types, typ)
 	return nil
 }
 

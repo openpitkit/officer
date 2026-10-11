@@ -30,6 +30,7 @@ import (
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
+	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 )
@@ -198,7 +199,7 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			feeAccount = ""
 		}
 		state, reason := tradingConnectionState(c.ExternalID, states)
-		secrets, redact, err := trading.CredentialRedactor(c.Credentials)
+		secrets, redact, err := secret.CredentialRedactor(c.Credentials)
 		if err != nil {
 			return TradingStatus{}, err
 		}
@@ -685,7 +686,7 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 		if err != nil {
 			return VenueSendResult{}, err
 		}
-		_, redact, err = trading.CredentialRedactor(connection.Credentials)
+		_, redact, err = secret.CredentialRedactor(connection.Credentials)
 		if err != nil {
 			return VenueSendResult{}, err
 		}
@@ -730,7 +731,7 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 		if err != nil {
 			return VenueSendResult{}, err
 		}
-		_, redact, err = trading.CredentialRedactor(connection.Credentials)
+		_, redact, err = secret.CredentialRedactor(connection.Credentials)
 		if err != nil {
 			return VenueSendResult{}, err
 		}
@@ -894,7 +895,7 @@ func (e *redactedTradingError) Error() string { return e.text }
 func (e *redactedTradingError) Unwrap() error { return e.cause }
 
 func redactTradingCredentials(credentials, text string) (string, error) {
-	_, redact, err := trading.CredentialRedactor(credentials)
+	_, redact, err := secret.CredentialRedactor(credentials)
 	if err != nil {
 		return "", err
 	}

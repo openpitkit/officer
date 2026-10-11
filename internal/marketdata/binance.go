@@ -32,6 +32,7 @@ import (
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/backoff"
 )
 
 const (
@@ -300,7 +301,7 @@ func (c *binanceConnector) run(
 		// shutdown took the context.Canceled branch above and is not reported.
 		c.reportStatus(false, "stream error: "+err.Error())
 		attempt++
-		if err := c.sleep(ctx, backoff(attempt, c.reconnectMin, c.reconnectMax)); err != nil {
+		if err := c.sleep(ctx, backoff.Delay(attempt, c.reconnectMin, c.reconnectMax)); err != nil {
 			return
 		}
 	}
@@ -643,23 +644,6 @@ func quoteUpdateFromBinanceEvent(
 		}, true
 	}
 	return fwmarketdata.QuoteUpdate{}, false
-}
-
-func backoff(attempt int, minDelay, maxDelay time.Duration) time.Duration {
-	if attempt <= 0 {
-		return minDelay
-	}
-	delay := minDelay
-	for range attempt - 1 {
-		if delay >= maxDelay/2 {
-			return maxDelay
-		}
-		delay *= 2
-	}
-	if delay > maxDelay {
-		return maxDelay
-	}
-	return delay
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {

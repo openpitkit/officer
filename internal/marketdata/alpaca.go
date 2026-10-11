@@ -31,6 +31,9 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/framework/secret"
+	"go.openpit.dev/officer/internal/alpaca"
+	"go.openpit.dev/officer/internal/backoff"
 )
 
 const (
@@ -50,16 +53,19 @@ type alpacaConnector struct {
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	readTimeout  time.Duration
-	credentials  alpacaCredentials
+	credentials  alpaca.Credentials
+	redact       *strings.Replacer
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	once   sync.Once
 }
 
+// alpacaConn is the stream connection seam: its write half is the shared
+// stream writer, so the auth and subscribe frames go through internal/alpaca.
 type alpacaConn interface {
+	alpaca.StreamWriter
 	Read(context.Context) ([]byte, error)
-	Write(context.Context, []byte) error
 	Close(websocket.StatusCode, string) error
 }
 
@@ -67,20 +73,14 @@ type liveAlpacaConn struct {
 	conn *websocket.Conn
 }
 
-type alpacaCredentials struct {
-	APIKey    string
-	APISecret string
-}
-
 type alpacaSubscription struct {
 	fwmarketdata.Subscription
 	symbol string
 }
 
+// alpacaFrame is the subscribe frame.
 type alpacaFrame struct {
 	Action string   `json:"action,omitempty"`
-	Key    string   `json:"key,omitempty"`
-	Secret string   `json:"secret,omitempty"`
 	Quotes []string `json:"quotes,omitempty"`
 	Trades []string `json:"trades,omitempty"`
 }
@@ -101,13 +101,18 @@ type alpacaControlEvent struct {
 }
 
 // NewAlpacaConnector builds an Alpaca IEX streaming connector from instance
-// credentials.
+// credentials. They are parsed by the parser trading uses too, and its typed
+// validation error is returned unchanged.
 func NewAlpacaConnector(
 	instance domain.MarketDataInstance,
 ) (*alpacaConnector, error) {
-	credentials, err := parseAlpacaCredentials(instance.Credentials)
+	credentials, err := alpaca.ParseCredentials(instance.Credentials)
 	if err != nil {
 		return nil, err
+	}
+	_, redact, err := secret.CredentialRedactor(instance.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("alpaca: %w", err)
 	}
 	return &alpacaConnector{
 		dial:         dialAlpaca,
@@ -116,37 +121,12 @@ func NewAlpacaConnector(
 		reconnectMax: defaultAlpacaReconnectMax,
 		readTimeout:  defaultAlpacaReadTimeout,
 		credentials:  credentials,
+		redact:       redact,
 	}, nil
 }
 
-func parseAlpacaCredentials(raw string) (alpacaCredentials, error) {
-	var payload struct {
-		APIKey    string `json:"apiKey"`
-		APISecret string `json:"apiSecret"`
-		Key       string `json:"key"`
-		Secret    string `json:"secret"`
-	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return alpacaCredentials{}, fmt.Errorf("alpaca credentials: %w", err)
-	}
-	credentials := alpacaCredentials{
-		APIKey:    strings.TrimSpace(payload.APIKey),
-		APISecret: strings.TrimSpace(payload.APISecret),
-	}
-	if credentials.APIKey == "" {
-		credentials.APIKey = strings.TrimSpace(payload.Key)
-	}
-	if credentials.APISecret == "" {
-		credentials.APISecret = strings.TrimSpace(payload.Secret)
-	}
-	if credentials.APIKey == "" || credentials.APISecret == "" {
-		return alpacaCredentials{}, errors.New("alpaca credentials: apiKey and apiSecret are required")
-	}
-	return credentials, nil
-}
-
 func dialAlpaca(ctx context.Context, streamURL string) (alpacaConn, error) {
-	conn, _, err := websocket.Dial(ctx, streamURL, nil)
+	conn, err := alpaca.DialStream(ctx, streamURL)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +141,8 @@ func (c liveAlpacaConn) Read(ctx context.Context) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
-func (c liveAlpacaConn) Write(ctx context.Context, payload []byte) error {
-	return c.conn.Write(ctx, websocket.MessageText, payload)
+func (c liveAlpacaConn) Write(ctx context.Context, typ websocket.MessageType, payload []byte) error {
+	return c.conn.Write(ctx, typ, payload)
 }
 
 func (c liveAlpacaConn) Close(code websocket.StatusCode, reason string) error {
@@ -174,9 +154,11 @@ func (c *alpacaConnector) SetStatusReporter(report health.StatusReporter) {
 	c.report = report
 }
 
+// reportStatus publishes every status of the connector, redacted: a venue
+// error text can echo a credential back.
 func (c *alpacaConnector) reportStatus(ok bool, errMsg string) {
 	if c.report != nil {
-		c.report(ok, errMsg)
+		c.report(ok, c.redact.Replace(errMsg))
 	}
 }
 
@@ -234,7 +216,7 @@ func (c *alpacaConnector) run(
 		}
 		c.reportStatus(false, "stream error: "+err.Error())
 		attempt++
-		if err := c.sleep(ctx, backoff(attempt, c.reconnectMin, c.reconnectMax)); err != nil {
+		if err := c.sleep(ctx, backoff.Delay(attempt, c.reconnectMin, c.reconnectMax)); err != nil {
 			return
 		}
 	}
@@ -251,7 +233,7 @@ func (c *alpacaConnector) stream(
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}()
 
-	if err := writeAlpacaAuth(ctx, conn, c.credentials); err != nil {
+	if err := alpaca.WriteStreamAuth(ctx, conn, c.credentials); err != nil {
 		return false, err
 	}
 	if err := c.waitForAuth(ctx, conn); err != nil {
@@ -361,33 +343,15 @@ func normalizeAlpacaSubscriptions(
 	return normalized, nil
 }
 
-func writeAlpacaAuth(
-	ctx context.Context, conn alpacaConn, credentials alpacaCredentials,
-) error {
-	payload, err := json.Marshal(alpacaFrame{
-		Action: "auth",
-		Key:    credentials.APIKey,
-		Secret: credentials.APISecret,
-	})
-	if err != nil {
-		return err
-	}
-	return conn.Write(ctx, payload)
-}
-
 func writeAlpacaSubscribe(
 	ctx context.Context, conn alpacaConn, subs []alpacaSubscription,
 ) error {
 	symbols := alpacaSymbols(subs)
-	payload, err := json.Marshal(alpacaFrame{
+	return alpaca.WriteStreamFrame(ctx, conn, alpacaFrame{
 		Action: "subscribe",
 		Quotes: symbols,
 		Trades: symbols,
 	})
-	if err != nil {
-		return err
-	}
-	return conn.Write(ctx, payload)
 }
 
 func alpacaSymbols(subs []alpacaSubscription) []string {

@@ -821,11 +821,13 @@ func TestService_UpdateMarketDataInstanceSettingsMergesBlankSecret(t *testing.T)
 func TestService_UpdateMarketDataInstanceSettingsKeepsIntegersExact(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
+	// Binance builds without reading credentials, so any members pass its
+	// validation and the merge is all the test exercises.
 	fn.mdInstances = []domain.MarketDataInstance{
 		{
-			ExternalID:  mdID("alpaca-1"),
-			Provider:    domain.MarketDataProviderAlpaca,
-			Label:       "Alpaca",
+			ExternalID:  mdID("binance-1"),
+			Provider:    domain.MarketDataProviderBinance,
+			Label:       "Binance",
 			Credentials: `{"apiKey":"old-key","apiSecret":"old-secret","stored":9007199254740993}`,
 		},
 	}
@@ -833,7 +835,7 @@ func TestService_UpdateMarketDataInstanceSettingsKeepsIntegersExact(t *testing.T
 	// 2^53+1 is the smallest integer a float64 round trip rewrites.
 	err := svc.UpdateMarketDataInstanceSettings(
 		systemCtx(),
-		mdID("alpaca-1").String(),
+		mdID("binance-1").String(),
 		"",
 		`{"apiKey":"new-key","updated":9007199254740993}`,
 	)
