@@ -245,6 +245,39 @@ func TestServiceLifecycleHandlerRejectsWhenAuditFails(t *testing.T) {
 	}
 }
 
+func TestLifecycleAuditMapsKnownActionsAndRejectsUnknown(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		action     lifecycleAction
+		wantAction domain.AuditAction
+		wantDetail string
+	}{
+		{lifecycleRestart, domain.AuditActionRestartService, "restart service requested"},
+		{lifecycleStop, domain.AuditActionStopService, "stop service requested"},
+	}
+	for _, tt := range tests {
+		gotAction, gotDetail, err := lifecycleAudit(tt.action)
+		if err != nil {
+			t.Fatalf("lifecycleAudit(%q) error = %v", tt.action, err)
+		}
+		if gotAction != tt.wantAction || gotDetail != tt.wantDetail {
+			t.Fatalf("lifecycleAudit(%q) = (%q, %q), want (%q, %q)",
+				tt.action, gotAction, gotDetail, tt.wantAction, tt.wantDetail)
+		}
+	}
+
+	gotAction, gotDetail, err := lifecycleAudit(lifecycleAction("pause"))
+	if err == nil {
+		t.Fatalf("lifecycleAudit(%q) = (%q, %q), want an error", "pause", gotAction, gotDetail)
+	}
+	if gotAction != "" {
+		t.Fatalf("lifecycleAudit(%q) audit action = %q, want none", "pause", gotAction)
+	}
+	if !strings.Contains(err.Error(), `"pause"`) {
+		t.Fatalf("lifecycleAudit error = %v, want it to name the action", err)
+	}
+}
+
 func TestRestartProcessArgsPinsHTTPAddr(t *testing.T) {
 	t.Parallel()
 	const addr = "127.0.0.1:54321"

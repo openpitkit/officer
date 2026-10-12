@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/shopspring/decimal"
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/alpaca"
@@ -41,19 +40,22 @@ const (
 
 var errAlpacaUnauthorized = errors.New("alpaca: stream authorization refused")
 
-// The stream's unparsable_data diagnostics share one title, carry a fixed
-// detail per site and never embed frame content.
+// The stream's diagnostics carry a fixed detail per site and never embed
+// frame content; the unparsable_data ones share one title.
 const (
-	alpacaUnparsableTitle = "Unreadable data on the venue stream"
+	alpacaUnparsableTitle   = "Unreadable data on the venue stream"
+	alpacaInconsistentTitle = "Inconsistent data on the venue stream"
 
 	alpacaFrameUnreadable  = "A stream message could not be decoded."
 	alpacaAuthUnreadable   = "The stream authorization reply could not be decoded."
 	alpacaListenUnreadable = "The stream subscription reply could not be decoded."
 	alpacaHeaderUnreadable = "A trade update had no readable event type."
 	alpacaRefUnreadable    = "A trade update had no usable order reference."
+	alpacaVenueIDUnusable  = "A trade update had no usable venue order id."
 	alpacaFillUnreadable   = "A fill update could not be decoded."
 	alpacaFillUntimed      = "A fill update had no timestamp."
 	alpacaFillDecimals     = "A fill update had an unreadable quantity or price."
+	alpacaFillOverfilled   = "A fill update reported more filled than the order quantity."
 
 	alpacaSkipped = "Officer skipped the message and kept reading the " +
 		"stream. This is a venue or Officer issue, not your configuration " +
@@ -64,6 +66,11 @@ const (
 	alpacaReconciled = "Officer reconciles the order from the venue's " +
 		"order and fill history instead. This is a venue or Officer issue, " +
 		"not your configuration - please report it if it repeats."
+	alpacaNotBooked = "Officer did not book the update. An order Officer " +
+		"still has open is reconciled from the venue's order and fill " +
+		"history; an excess on an order Officer has already finished is " +
+		"not booked anywhere. Compare the account's position at the venue " +
+		"with Officer's. This is a venue issue, not your configuration."
 )
 
 // alpacaUnparsable builds the unparsable_data diagnostic of one stream site.
@@ -82,7 +89,7 @@ func (c *alpacaConnector) SetStatusReporter(report health.StatusReporter) {
 }
 
 // SetDiagnosticReporter installs the owner's diagnostic reporter. It must be
-// called before Subscribe.
+// called before Subscribe or Lookup.
 func (c *alpacaConnector) SetDiagnosticReporter(report health.DiagnosticReporter) {
 	c.reportDiag = report
 }
@@ -190,15 +197,21 @@ func (c *alpacaConnector) readAlpacaFrame(ctx context.Context, conn *websocket.C
 }
 
 func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event) (healthy bool, err error) {
-	// Each unparsable site reports once per connection, so a venue sending
-	// malformed frames cannot turn every frame into a report. A site's
-	// detail is fixed and identifies it.
+	// An unparsable_data site reports once per connection, so a venue
+	// sending malformed frames cannot turn every frame into a report; a
+	// site's detail is fixed and identifies it. An inconsistent_data
+	// diagnostic reports every time: each one is a fill the venue reports
+	// beyond the order quantity, and one on an order Officer has already
+	// finished leaves no other trace.
 	reported := make(map[string]bool)
 	report := func(diag *health.Diagnostic) {
-		if !reported[diag.Detail] {
+		if diag.Code == health.CodeUnparsableData {
+			if reported[diag.Detail] {
+				return
+			}
 			reported[diag.Detail] = true
-			c.reportDiag(*diag)
 		}
+		c.reportDiag(*diag)
 	}
 	handshakeCtx, cancel := context.WithTimeout(ctx, alpacaHandshakeTimeout)
 	defer cancel()
@@ -314,10 +327,14 @@ func (c *alpacaConnector) redactStreamMessage(message string) string {
 }
 
 // parseAlpacaTradeUpdate maps one trade update to the event to emit, if any,
-// and returns the unparsable_data diagnostic of an update it could not fully
-// read: dropped (no event) or reconciled (an order event in place of a fill).
-// An unknown event type is ignored, and a readable fill of a notional order
-// is reconciled, without a diagnostic.
+// and returns the diagnostic of an update it could not map in full. An update
+// without a readable event type or a usable client order id is dropped (no
+// event). One without a usable venue order id, or a fill it could not fully
+// read, is reconciled (an order event, never a fill) with an unparsable_data
+// diagnostic. An overfill, a fill reporting more filled than the order
+// quantity, is not booked: it yields an order event, never a fill, with an
+// inconsistent_data diagnostic. An unknown event type is ignored, and a
+// readable fill of a notional order is reconciled, without a diagnostic.
 func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading.Event, bool, *health.Diagnostic) {
 	var header struct {
 		Event *string         `json:"event"`
@@ -338,17 +355,18 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 	if json.Unmarshal(header.Order, &reference) != nil {
 		return fwtrading.Event{}, false, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)
 	}
-	var ref fwtrading.OrderRef
-	if err := json.Unmarshal(reference["id"], &ref.VenueOrderID); err != nil {
-		ref.VenueOrderID = ""
-	}
-	if err := json.Unmarshal(reference["client_order_id"], &ref.ClientOrderID); err != nil {
-		ref.ClientOrderID = ""
-	}
-	if ref.VenueOrderID == "" && ref.ClientOrderID == "" {
+	// The runtime routes an event by its client order id alone, so there is
+	// nothing to emit without one.
+	clientID, ok := alpacaOrderID(reference["client_order_id"])
+	if !ok {
 		return fwtrading.Event{}, false, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)
 	}
-	event := fwtrading.Event{Kind: fwtrading.EventOrder, Ref: ref}
+	event := fwtrading.Event{Kind: fwtrading.EventOrder, Ref: fwtrading.OrderRef{ClientOrderID: clientID}}
+	venueID, ok := alpacaOrderID(reference["id"])
+	if !ok {
+		return event, true, alpacaUnparsable(health.DiagWarn, alpacaVenueIDUnusable, alpacaReconciled)
+	}
+	event.Ref.VenueOrderID = venueID
 	if terminal {
 		return event, true, nil
 	}
@@ -388,7 +406,11 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 	}
 	leaves := qty.Sub(cum)
 	if leaves.IsNegative() {
-		leaves = decimal.Zero
+		return event, true, &health.Diagnostic{
+			Level: health.DiagError, Code: health.CodeInconsistentData,
+			Kind: health.DiagKindProvider, Title: alpacaInconsistentTitle,
+			Detail: alpacaFillOverfilled, Remediation: alpacaNotBooked,
+		}
 	}
 	event.Kind = fwtrading.EventFill
 	event.Fill = fwtrading.Fill{
@@ -397,4 +419,14 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		Final: *header.Event == "fill", At: update.Timestamp,
 	}
 	return event, true, nil
+}
+
+// alpacaOrderID reads one order reference field, usable only as a non-empty
+// JSON string: absent, null, any other JSON type and "" are not.
+func alpacaOrderID(raw json.RawMessage) (string, bool) {
+	var id string
+	if json.Unmarshal(raw, &id) != nil || id == "" {
+		return "", false
+	}
+	return id, true
 }

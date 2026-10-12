@@ -7300,8 +7300,15 @@ components:
         feeAccount:
           type: string
           description: >
-            Empty string when unset. In single-account mode it is also empty when
-            the fee account is another account, which still receives the
+            Officer account that receives every unlinked venue fee of the
+            connection. Empty string when unset. On a provider with unlinked
+            fees, a connection without a fee account books them to the single
+            Officer account that can send through it, directly or through a
+            granted group; when none or several can, each fee is skipped with a
+            `venue_fee_skipped` audit. Such a connection refuses a group grant,
+            and an account grant while it holds any other grant, with
+            `fee_account_required`. In single-account mode it is also empty
+            when the fee account is another account, which still receives the
             connection's unlinked fees.
         state:
           $ref: "#/components/schemas/TradingState"

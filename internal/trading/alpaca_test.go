@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/alpaca"
 )
@@ -511,40 +512,125 @@ func TestLookup(t *testing.T) {
 			if byVenue {
 				ref.VenueOrderID = "venue"
 			}
-			snapshot, found, err := testAlpacaConnector(t, server).Lookup(context.Background(), ref)
+			c := testAlpacaConnector(t, server)
+			reports := recordAlpacaReports(c)
+			snapshot, found, err := c.Lookup(context.Background(), ref)
 			if err != nil || !found || pages != 2 || len(snapshot.Fills) != 101 || snapshot.Status != fwtrading.VenueStatusFilled || snapshot.FilledQuantity != "100.000000000000000001" {
 				t.Fatal("lookup pagination or snapshot failed")
 			}
 			if snapshot.Fills[0].CumQuantity != "1" || snapshot.Fills[99].CumQuantity != "100" || snapshot.Fills[0].Quantity != "1.000" || snapshot.Fills[0].Price != "0.123456789123456789" || !snapshot.Fills[0].At.Equal(at) || snapshot.Fills[0].Final || !snapshot.Fills[100].Final || snapshot.Fills[100].LeavesQuantity != "0" {
 				t.Fatal("venue fill fields or order changed")
 			}
+			if _, diagnostics := reports.snapshot(); len(diagnostics) != 0 {
+				t.Fatalf("documented fill types reported %+v", diagnostics)
+			}
 		})
 	}
-	for _, status := range []string{"new", "partially_filled", "filled", "done_for_day", "canceled", "expired", "replaced", "pending_cancel", "pending_replace", "accepted", "pending_new", "accepted_for_bidding", "stopped", "rejected", "suspended", "calculated", "held", "future_status"} {
-		t.Run(status, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasPrefix(r.URL.Path, "/v2/orders") {
-					_ = json.NewEncoder(w).Encode(map[string]string{"id": "venue", "status": status, "filled_qty": "0"})
-				} else {
-					_, _ = w.Write([]byte("[]"))
+	// lookupOrder builds a connector to a venue whose order has status and
+	// one fill of fillType, or none when fillType is empty, and records what
+	// the connector reports.
+	lookupOrder := func(t *testing.T, status, fillType string) (*alpacaConnector, *alpacaReports) {
+		t.Helper()
+		fills := []alpacaActivity{}
+		if fillType != "" {
+			fills = append(fills, alpacaActivity{ID: "1", Type: fillType})
+		}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/v2/orders") {
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "venue", "status": status, "filled_qty": "0"})
+			} else {
+				_ = json.NewEncoder(w).Encode(fills)
+			}
+		}))
+		t.Cleanup(server.Close)
+		c := testAlpacaConnector(t, server)
+		return c, recordAlpacaReports(c)
+	}
+	for _, tc := range []struct {
+		status string
+		want   fwtrading.VenueStatus
+	}{
+		{"new", fwtrading.VenueStatusOpen},
+		{"partially_filled", fwtrading.VenueStatusOpen},
+		{"done_for_day", fwtrading.VenueStatusOpen},
+		{"accepted", fwtrading.VenueStatusOpen},
+		{"pending_new", fwtrading.VenueStatusOpen},
+		{"accepted_for_bidding", fwtrading.VenueStatusOpen},
+		{"pending_cancel", fwtrading.VenueStatusOpen},
+		{"pending_replace", fwtrading.VenueStatusOpen},
+		{"stopped", fwtrading.VenueStatusOpen},
+		{"suspended", fwtrading.VenueStatusOpen},
+		{"calculated", fwtrading.VenueStatusOpen},
+		{"held", fwtrading.VenueStatusOpen},
+		{"filled", fwtrading.VenueStatusFilled},
+		{"canceled", fwtrading.VenueStatusCancelled},
+		{"expired", fwtrading.VenueStatusCancelled},
+		{"rejected", fwtrading.VenueStatusCancelled},
+		{"replaced", fwtrading.VenueStatusReplaced},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			c, reports := lookupOrder(t, tc.status, "")
+			snapshot, found, err := c.Lookup(context.Background(), fwtrading.OrderRef{VenueOrderID: "venue"})
+			if err != nil || !found || snapshot.Status != tc.want {
+				t.Fatalf("status %q = %q, found %t, error %v; want %q", tc.status, snapshot.Status, found, err, tc.want)
+			}
+			if _, diagnostics := reports.snapshot(); len(diagnostics) != 0 {
+				t.Fatalf("known status reported %+v", diagnostics)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, status, fillType, want string
+	}{
+		// The venue echoes both credentials inside a value Officer does not
+		// know.
+		{"unknown status", "future_status test-key-marker test-secret-marker", "", `unknown venue order status "future_status [redacted] [redacted]"`},
+		{"unknown fill type", "filled", "future_fill test-key-marker test-secret-marker", `unknown venue fill type "future_fill [redacted] [redacted]"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureStreamLogs(t)
+			c, reports := lookupOrder(t, tc.status, tc.fillType)
+			snapshot, found, err := c.Lookup(context.Background(), fwtrading.OrderRef{VenueOrderID: "venue"})
+			if !errors.Is(err, domain.ErrUpstream) || found || !reflect.DeepEqual(snapshot, fwtrading.Snapshot{}) {
+				t.Fatalf("%s = %+v, found %t, error %v; want an upstream error", tc.name, snapshot, found, err)
+			}
+			if message := err.Error(); !strings.Contains(message, tc.want) ||
+				strings.Contains(message, "test-key-marker") || strings.Contains(message, "test-secret-marker") {
+				t.Fatalf("%s error = %q, want %q with the credentials redacted", tc.name, message, tc.want)
+			}
+			_, diagnostics := reports.snapshot()
+			if len(diagnostics) != 1 {
+				t.Fatalf("diagnostics = %+v, want one", diagnostics)
+			}
+			diag := diagnostics[0]
+			if diag.Level != health.DiagError || diag.Code != health.CodeUnparsableData || diag.Kind != health.DiagKindProvider ||
+				diag.Title == "" || diag.Detail == "" || diag.Remediation == "" {
+				t.Fatalf("%s diagnostic = %+v", tc.name, diag)
+			}
+			for _, venueText := range []string{"future_status", "future_fill", "test-key-marker", "test-secret-marker"} {
+				if strings.Contains(diag.Title+diag.Detail+diag.Remediation, venueText) {
+					t.Fatalf("%s diagnostic embeds venue text %q: %+v", tc.name, venueText, diag)
 				}
-			}))
-			defer server.Close()
-			snapshot, found, err := testAlpacaConnector(t, server).Lookup(context.Background(), fwtrading.OrderRef{VenueOrderID: "venue"})
-			want := fwtrading.VenueStatusOpen
-			switch status {
-			case "filled":
-				want = fwtrading.VenueStatusFilled
-			case "canceled", "expired", "rejected":
-				want = fwtrading.VenueStatusCancelled
-			case "replaced":
-				want = fwtrading.VenueStatusReplaced
 			}
-			if err != nil || !found || snapshot.Status != want {
-				t.Fatal("wrong status mapping")
-			}
+			assertStreamLogsNothing(t, logs)
 		})
 	}
+	t.Run("no diagnostic reporter", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Error("lookup without a diagnostic reporter reached the venue")
+		}))
+		t.Cleanup(server.Close)
+		// testAlpacaConnector installs the reporters, so this connector is
+		// built directly.
+		c, err := newAlpacaConnector(domain.TradingConnection{ExternalID: "test-connection", Credentials: tradingCredentials}, server.URL, "ws"+strings.TrimPrefix(server.URL, "http")+"/stream")
+		if err != nil {
+			t.Fatal("connector construction failed")
+		}
+		snapshot, found, err := c.Lookup(context.Background(), fwtrading.OrderRef{VenueOrderID: "venue"})
+		if err == nil || err.Error() != "alpaca: lookup requires a diagnostic reporter" || found || !reflect.DeepEqual(snapshot, fwtrading.Snapshot{}) {
+			t.Fatalf("lookup without a diagnostic reporter = %+v, found %t, error %v", snapshot, found, err)
+		}
+	})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) }))
 	defer server.Close()
 	if _, found, err := testAlpacaConnector(t, server).Lookup(context.Background(), fwtrading.OrderRef{ClientOrderID: "unknown"}); err != nil || found {

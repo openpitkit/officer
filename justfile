@@ -33,7 +33,7 @@ go_version := env_var("CI_GO")
 go_cache := env_var_or_default("GOCACHE", justfile_directory() / ".tmp" / "go-build-cache")
 golangci_lint_cache := env_var_or_default("GOLANGCI_LINT_CACHE", justfile_directory() / ".tmp" / "golangci-lint-cache")
 go_packages := ". ./web ./httpapi/... ./mcptools/... ./engine/... ./signing/... ./framework/... ./internal/... ./cmd/... ./examples/..."
-go_dirs := "register.go register_test.go web/dist.go httpapi mcptools engine signing framework internal cmd examples"
+go_dirs := "register.go register_test.go web/dist.go httpapi mcptools engine signing framework internal cmd examples checks/semgrep/testdata"
 export GOTOOLCHAIN := go_toolchain
 export GOCACHE := go_cache
 export GOLANGCI_LINT_CACHE := golangci_lint_cache
@@ -176,6 +176,7 @@ install-semgrep:
 # Run the Semgrep invariant rule set over the whole tree.
 check-semgrep: install-semgrep
     {{ semgrep }} --config checks/semgrep/ --error --quiet --metrics=off --disable-version-check .
+    {{ semgrep }} --test --config checks/semgrep/default-domain-status.yml --metrics=off --disable-version-check checks/semgrep/testdata/default-domain-status.go
 
 # Lint all.
 [parallel]

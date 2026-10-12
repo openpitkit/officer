@@ -1,0 +1,135 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# No default stands in for a domain status (Go).
+#
+# A `default` arm of a switch, or the miss branch of a map lookup, that returns
+# a valid domain status substitutes that status for input Officer could not
+# map. An unknown venue or input value then looks like a real lifecycle fact -
+# an order reported open, a fee executed, a connection running - and nothing
+# downstream can tell it from one.
+#
+# The rule holds a list of domain status types, matched by constant name:
+# VenueStatus*, FeeExecuted / FeeNotApplicable, ConnectionRunning / Degraded /
+# Unavailable, the market data StateOK / StateError, OrderStatus*,
+# AdjustmentStatus*, OrderEvent* and AuditAction*. The list appears once, in
+# the regex's shared tail; a new status type joins it there. A function call
+# is not a constant: `AuditActionsByCategory(...)` computes its answer and is
+# not matched.
+#
+# One regex: an alternated head finds the place that runs for an unmapped
+# value - a `default:` arm, an `if ...!ok {` miss branch (separate or in the
+# `if v, ok := m[k]; !ok {` form), or an `if ...; ok {` hit branch followed
+# by its fallthrough statement or its `else` block. A head line and the hit
+# branch's closing brace may carry a trailing `//` comment, and blank and
+# comment lines may sit between the hit branch and its fallthrough. The
+# shared tail then matches a statement that
+# returns such a constant at any top-level tuple position, or assigns it to a
+# plain, field, indexed or multiple target with `=` or `:=`. The list is not
+# a metavariable-regex over a named capture: the lazy body scan would bind
+# the first assignment in an arm, and the filter would then drop the match.
+#
+# It is a text rule over gofmt-formatted Go: the regex reads structure from
+# gofmt's tab indentation, and lint-go gofmt-gates every Go directory this
+# rule scans and its fixture. Semgrep 1.175's Go matcher could express
+# neither a `default` clause with statements before its `return` nor the
+# `if v, ok := m[k]; !ok` form.
+#
+# Deliberate limits:
+# - Only a statement at the arm's own indentation counts. A deeper one would
+#   match closures nested inside a long `default` arm.
+# - Only the `ok`, `found`, `known` and `exists` flags count. A general
+#   `!flag` matches ordinary boolean branches such as `if !blocked`.
+# - The hit branch needs the `v, ok := m[k]; ok` init form. A bare `if ok {`
+#   is an ordinary boolean branch, such as a connector's health flag.
+# - Known false positive: a duplicate guard followed by a registration, such
+#   as `if _, exists := m[k]; exists { return err }` and then a write of an
+#   initial status into the slot, a field or a local, is matched. No site
+#   exists today; when one appears, the rule is narrowed then.
+# - A tuple element before the status that holds a call or a composite
+#   literal hides it: a constant inside parentheses or braces is never read,
+#   so a call argument such as `fmt.Errorf("%v", VenueStatusOpen)` is not a
+#   finding.
+# - A backtick raw string or a `/* */` comment inside a returned tuple is not
+#   read as one element, so a comma or a parenthesis inside it can cause a
+#   false positive or hide a status.
+# - A status written as a string literal of its type, such as
+#   `return "open"`, is invisible to a rule keyed on constant names.
+#
+# Deliberately not covered:
+# - framework/domain/domain.go `AuditAction.Category` returns an
+#   AuditCategory: a total classification by definition, not a status.
+# - framework/backend/backend_marketdata.go `marketDataInstanceState` returns
+#   the REST state string "pending" for an instance missing from the runtime
+#   status map. That is the function's documented meaning, not a
+#   substitution.
+#
+# There is no approval marker: a false positive narrows the rule.
+
+rules:
+  - id: default-domain-status
+    message: >-
+      A default arm or a map miss returns a valid domain status for a value
+      that was not mapped, so an unknown input reads as a real lifecycle
+      fact. Map every known value explicitly, and return an error or report a
+      diagnostic for an unknown one.
+    severity: ERROR
+    languages: [generic]
+    # Extended mode: whitespace is layout, `[ ]` is a literal space.
+    pattern-regex: |-
+      (?mx)
+      ^(?P<indent>\t*)
+      (?:
+        # A default arm, scanned down to a line one level in.
+        default:(?:[ \t]+//[^\n]*)?\n
+        (?:(?P=indent)\t[^\n]*\n|\n)*?
+        (?P=indent)\t
+      |
+        # A miss branch, scanned the same way.
+        (?:\}[ ]else[ ])?if[ ](?:[^\n]*;[ ])?!(?:ok|found|known|exists)[ ]\{(?:[ \t]+//[^\n]*)?\n
+        (?:(?P=indent)\t[^\n]*\n|\n)*?
+        (?P=indent)\t
+      |
+        # A hit branch, then its fallthrough or its else block.
+        if[ ][^\n]*;[ ](?:ok|found|known|exists)[ ]\{(?:[ \t]+//[^\n]*)?\n
+        (?:(?P=indent)\t[^\n]*\n|\n)*?
+        (?P=indent)\}
+        (?:
+          # The fallthrough, past blank and comment lines.
+          (?:[ \t]+//[^\n]*)?\n(?:(?P=indent)//[^\n]*\n|\n)*
+          (?P=indent)
+        |
+          [ ]else[ ]\{(?:[ \t]+//[^\n]*)?\n
+          (?:(?P=indent)\t[^\n]*\n|\n)*?
+          (?P=indent)\t
+        )
+      )
+      # The statement: a return, or an assignment to one or more targets.
+      (?:return[ ]|\w[\w.]*(?:\[[^\]\n]*\][\w.]*)*(?:,[ ]\w[\w.]*(?:\[[^\]\n]*\][\w.]*)*)*[ ]:?=[ ])
+      # Earlier top-level tuple elements. A double-quoted string is one atom;
+      # parentheses, braces and a `//` comment end the scan.
+      (?:(?:"(?:[^"\\\n]|\\.)*"|(?!//)[^,(){}"\n])+,[ ])*
+      # The status constant, package-qualified or not, and not a call.
+      (?:\w+\.)?
+      (?:VenueStatus\w+|Fee(?:Executed|NotApplicable)|Connection(?:Running|Degraded|Unavailable)|State(?:OK|Error)|OrderStatus\w+|AdjustmentStatus\w+|OrderEvent\w+|AuditAction\w+)
+      \b(?!\()
+    paths:
+      include:
+        - "**/*.go"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

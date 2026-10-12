@@ -57,7 +57,7 @@ type alpacaConnector struct {
 	feeMu       sync.Mutex
 	feeSymbols  map[string]string
 	// reportStatus and reportDiag are the owner's reporters, set before
-	// Subscribe and required by it.
+	// Subscribe and required by it; Lookup requires reportDiag too.
 	reportStatus health.StatusReporter
 	reportDiag   health.DiagnosticReporter
 	// redact is the connection's credential redactor, the one the backend
@@ -300,16 +300,22 @@ func (c *alpacaConnector) Send(ctx context.Context, order fwtrading.Order) (fwtr
 	return fwtrading.Ack{VenueOrderID: response.ID}, nil
 }
 
-func alpacaVenueStatus(status string) fwtrading.VenueStatus {
+// alpacaVenueStatus maps a documented Alpaca order status to its venue
+// lifecycle state and reports false for any other status.
+func alpacaVenueStatus(status string) (fwtrading.VenueStatus, bool) {
 	switch status {
+	case "new", "partially_filled", "done_for_day", "accepted", "pending_new",
+		"accepted_for_bidding", "pending_cancel", "pending_replace", "stopped",
+		"suspended", "calculated", "held":
+		return fwtrading.VenueStatusOpen, true
 	case "filled":
-		return fwtrading.VenueStatusFilled
+		return fwtrading.VenueStatusFilled, true
 	case "canceled", "expired", "rejected":
-		return fwtrading.VenueStatusCancelled
+		return fwtrading.VenueStatusCancelled, true
 	case "replaced":
-		return fwtrading.VenueStatusReplaced
+		return fwtrading.VenueStatusReplaced, true
 	default:
-		return fwtrading.VenueStatusOpen
+		return "", false
 	}
 }
 
@@ -323,7 +329,28 @@ type alpacaActivity struct {
 	At             time.Time `json:"transaction_time"`
 }
 
+// alpacaLookupUnparsable builds the unparsable_data diagnostic of an order
+// lookup site that read a value Officer does not know. The detail is fixed per
+// site and never embeds the value.
+func alpacaLookupUnparsable(detail string) health.Diagnostic {
+	return health.Diagnostic{
+		Level: health.DiagError, Code: health.CodeUnparsableData,
+		Kind: health.DiagKindProvider, Title: "Unknown order data from the venue",
+		Detail: detail,
+		Remediation: "Officer keeps the order pending and retries the " +
+			"lookup; the order is not reconciled until the venue reports " +
+			"data Officer knows. This is a venue or Officer issue, not your " +
+			"configuration - please report it.",
+	}
+}
+
+// Lookup requires the diagnostic reporter, as Subscribe does: it reports an
+// order status or a fill type Officer does not know through it and fails the
+// lookup with an upstream error instead of mapping that value.
 func (c *alpacaConnector) Lookup(ctx context.Context, ref fwtrading.OrderRef) (fwtrading.Snapshot, bool, error) {
+	if c.reportDiag == nil {
+		return fwtrading.Snapshot{}, false, errors.New("alpaca: lookup requires a diagnostic reporter")
+	}
 	path := "/v2/orders/" + url.PathEscape(ref.VenueOrderID)
 	if ref.VenueOrderID == "" {
 		if ref.ClientOrderID == "" {
@@ -343,7 +370,13 @@ func (c *alpacaConnector) Lookup(ctx context.Context, ref fwtrading.OrderRef) (f
 	if order.ID == "" {
 		return fwtrading.Snapshot{}, false, errors.New("alpaca: lookup response is missing order id")
 	}
-	snapshot := fwtrading.Snapshot{VenueOrderID: order.ID, Status: alpacaVenueStatus(order.Status), FilledQuantity: order.FilledQuantity}
+	status, known := alpacaVenueStatus(order.Status)
+	if !known {
+		c.reportDiag(alpacaLookupUnparsable("An order lookup returned an order status Officer does not know."))
+		return fwtrading.Snapshot{}, false, fmt.Errorf("alpaca: unknown venue order status %q: %w",
+			c.redact.Replace(order.Status), domain.ErrUpstream)
+	}
+	snapshot := fwtrading.Snapshot{VenueOrderID: order.ID, Status: status, FilledQuantity: order.FilledQuantity}
 	query := url.Values{"order_id": {order.ID}, "direction": {"asc"}, "page_size": {"100"}}
 	for {
 		var page []alpacaActivity
@@ -352,10 +385,20 @@ func (c *alpacaConnector) Lookup(ctx context.Context, ref fwtrading.OrderRef) (f
 			return fwtrading.Snapshot{}, false, err
 		}
 		for _, activity := range page {
+			var final bool
+			switch activity.Type {
+			case "fill":
+				final = true
+			case "partial_fill":
+			default:
+				c.reportDiag(alpacaLookupUnparsable("An order lookup returned a fill of a type Officer does not know."))
+				return fwtrading.Snapshot{}, false, fmt.Errorf("alpaca: unknown venue fill type %q: %w",
+					c.redact.Replace(activity.Type), domain.ErrUpstream)
+			}
 			snapshot.Fills = append(snapshot.Fills, fwtrading.Fill{
 				Quantity: activity.Quantity, Price: activity.Price,
 				CumQuantity: activity.CumQuantity, LeavesQuantity: activity.LeavesQuantity,
-				Final: activity.Type == "fill", At: activity.At,
+				Final: final, At: activity.At,
 			})
 		}
 		if len(page) < alpacaFillPageSize {

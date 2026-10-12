@@ -31,10 +31,21 @@ checks/
   semgrep/
     requirements.txt    Semgrep dependency include
     *.yml               every active rule
+    testdata/           regression fixtures, run by semgrep --test
 ```
 
 All rules are active, and `just check-semgrep` (and therefore `just check` /
 `check-debug` / `check-release` / CI) blocks any violation.
+
+`testdata/` holds rule fixtures: deliberate violations and non-violations
+annotated for `semgrep --test`. It holds one rule's fixture today:
+`checks/semgrep/testdata/default-domain-status.go`, for the rule
+`checks/semgrep/default-domain-status.yml`. A fixture runs only through its
+own `--test` line in `check-semgrep`, after the tree scan, so a new fixture
+adds its own line there. A rule with a fixture excludes `testdata/` through its
+`paths`, so the tree scan does not report the fixture. The directory is named
+`testdata` so the Go tool ignores it, and it is in the justfile's `go_dirs`,
+so `lint-go` gofmt-checks the fixtures.
 
 Fix a finding by changing the code, or by narrowing the rule if the finding
 turns out to be a rule bug - never by loosening what the rule means.
@@ -66,6 +77,24 @@ which review still catches:
   exercise the parser").
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
+
+### `default-domain-status`
+
+`checks/semgrep/default-domain-status.yml` forbids a `default` arm or a map
+miss that returns or assigns a valid domain status - a venue, order, fee,
+connection, adjustment, market data or audit status - for a value that was not
+mapped. Fix a finding by mapping every known value explicitly and returning an
+error or reporting a diagnostic for an unknown one. A new domain status type
+joins the rule's list, which the rule holds in one place.
+
+Two sites are deliberately not findings:
+
+- `AuditAction.Category` returns an `AuditCategory`, a total classification,
+  not a status.
+- `marketDataInstanceState` returns `"pending"` for an instance absent from the
+  runtime status map, which is what that state means.
+
+This rule has no approval marker.
 
 ### Approval marker
 

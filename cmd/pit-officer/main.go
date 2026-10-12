@@ -389,7 +389,10 @@ func buildServeHandler(
 	lifecycleRequests chan<- lifecycleAction,
 ) (http.Handler, error) {
 	recordLifecycle := func(ctx context.Context, action lifecycleAction) error {
-		auditAction, detail := lifecycleAudit(action)
+		auditAction, detail, err := lifecycleAudit(action)
+		if err != nil {
+			return err
+		}
 		return app.RecordServiceLifecycle(ctx, auditAction, detail)
 	}
 	controller := &serviceLifecycleController{
@@ -435,14 +438,14 @@ func (c *serviceLifecycleController) handler(action lifecycleAction) http.Handle
 	})
 }
 
-func lifecycleAudit(action lifecycleAction) (domain.AuditAction, string) {
+func lifecycleAudit(action lifecycleAction) (domain.AuditAction, string, error) {
 	switch action {
 	case lifecycleRestart:
-		return domain.AuditActionRestartService, "restart service requested"
+		return domain.AuditActionRestartService, "restart service requested", nil
 	case lifecycleStop:
-		return domain.AuditActionStopService, "stop service requested"
+		return domain.AuditActionStopService, "stop service requested", nil
 	default:
-		return domain.AuditActionStopService, "unknown service lifecycle requested"
+		return "", "", fmt.Errorf("unknown service lifecycle action %q", action)
 	}
 }
 

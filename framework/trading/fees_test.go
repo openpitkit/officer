@@ -150,6 +150,18 @@ func postedFee(id, asset, amount string) trading.Fee {
 		Status: trading.FeeExecuted, At: time.Now().Add(time.Hour)}
 }
 
+const defaultFeeAccountLog = "venue fee applied to the only account that can send through the connection because the connection has no fee account"
+
+func defaultFeeAccountLogs(f *fixture) []string {
+	var lines []string
+	for _, line := range strings.Split(f.logs.text(), "\n") {
+		if strings.Contains(line, defaultFeeAccountLog) {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
 func TestFeeIntakeExactAssetsAndReplay(t *testing.T) {
 	f, v := newFeeFixture(t)
 	_, err := f.n.CreateAsset(testCtx, domain.Asset{Code: "ETHER"}, testCaller)
@@ -188,6 +200,16 @@ func TestFeeIntakeExactAssetsAndReplay(t *testing.T) {
 	if lookups == 0 {
 		t.Fatal("fee intake preceded reconnect reconciliation")
 	}
+	logs := defaultFeeAccountLogs(f)
+	if len(logs) != 2 {
+		t.Fatalf("default fee account logs = %q, want one per applied fee", logs)
+	}
+	for i, feeID := range []string{"USD-fee", "crypto-fee"} {
+		if !strings.Contains(logs[i], `"level":"INFO"`) || !strings.Contains(logs[i], `"fee_id":"`+feeID+`"`) ||
+			!strings.Contains(logs[i], `"account":"desk"`) || !strings.Contains(logs[i], f.connection.ExternalID.String()) {
+			t.Fatalf("default fee account log lost level/fee id/account/connection: %s", logs[i])
+		}
+	}
 	for i := 0; i < 3; i++ {
 		f.venue.push(trading.Event{Kind: trading.EventConnected})
 	}
@@ -198,6 +220,9 @@ func TestFeeIntakeExactAssetsAndReplay(t *testing.T) {
 	f.flush()
 	feeBalance(t, f, "USD", "997.876543211")
 	feeBalance(t, f, "ETHER", "0.999805")
+	if logs := defaultFeeAccountLogs(f); len(logs) != 2 {
+		t.Fatalf("replayed fees logged as applied to the default account again: %q", logs)
+	}
 	id := domain.ExternalID("trading:" + f.connection.ExternalID.String() + ":fee:USD-fee")
 	records, err := f.st.ListAdjustments(testCtx, "desk", "", 10)
 	must(t, err)
@@ -266,6 +291,9 @@ func TestFeeAccountTargets(t *testing.T) {
 			feeAccountBalance(t, f, "fees", "USD", wantFees)
 			feeAccountBalance(t, f, "other", "USD", "1000")
 			feeSkipRows(t, f, 0)
+			if logs := defaultFeeAccountLogs(f); len(logs) != 0 {
+				t.Fatalf("fee to the connection's fee account logged as the default target: %q", logs)
+			}
 			must(t, f.runtime.Restart())
 			f.venue.push(trading.Event{Kind: trading.EventConnected})
 			f.flush()
@@ -621,6 +649,9 @@ func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
 				!strings.Contains(logs, `"fee_id":"`+fee.ID+`"`) || !strings.Contains(logs, f.connection.ExternalID.String()) {
 				t.Fatalf("fee attention log lost reason/id/connection/error level: %s", logs)
 			}
+			if lines := defaultFeeAccountLogs(f); len(lines) != 0 {
+				t.Fatalf("skipped fee logged as applied to the default account: %q", lines)
+			}
 		})
 	}
 }
@@ -821,12 +852,15 @@ func TestFeeCursorResumesAfterReadBudget(t *testing.T) {
 func TestFeeCoreRejectionIsFinal(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f, v := newFeeFixture(t)
-		v.fees = []trading.Fee{postedFee("rejected", "USD", "-1"), postedFee("accepted", "USD", "-1")}
+		v.fees = []trading.Fee{postedFee("rejected", "USD", "-1"), postedFee("duplicate", "USD", "-1"), postedFee("accepted", "USD", "-1")}
 		var rejects atomic.Int32
 		sink := func(ctx context.Context, account domain.AccountID, id domain.ExternalID, req domain.AdjustmentRequest) error {
 			if strings.HasSuffix(id.String(), ":rejected") {
 				rejects.Add(1)
 				return fmt.Errorf("risk blocked: %w", trading.ErrAdjustmentRejected)
+			}
+			if strings.HasSuffix(id.String(), ":duplicate") {
+				return domain.ErrAlreadyExists
 			}
 			return f.adjustmentSink(ctx, account, id, req)
 		}
@@ -849,6 +883,9 @@ func TestFeeCoreRejectionIsFinal(t *testing.T) {
 		if rejects.Load() != 1 || strings.Count(f.logs.text(), "fee rejected not applied: rejected by the core: risk blocked") != 1 ||
 			!strings.Contains(f.logs.text(), `"level":"ERROR"`) {
 			t.Fatalf("core rejection must be logged once and consumed: rejects=%d logs=%s", rejects.Load(), f.logs.text())
+		}
+		if lines := defaultFeeAccountLogs(f); len(lines) != 1 || !strings.Contains(lines[0], `"fee_id":"accepted"`) {
+			t.Fatalf("default fee account logs = %q, want the accepted fee alone", lines)
 		}
 	})
 }

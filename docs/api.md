@@ -137,8 +137,10 @@ Access to a connection is granted to an Officer account or an account group:
 `accountGroup`, as do the MCP tools `grant_trading_access` and
 `revoke_trading_access`. A member account sends through its group's grant; the
 account's own grant on the same connection wins. On providers with unlinked fees
-a group grant needs the connection's fee account and is refused with
-`fee_account_required` without one.
+a connection without a fee account books them to the one account that can send
+through it; when none or several can, each fee is skipped with a
+`venue_fee_skipped` audit. A group grant, or a grant to a second account, needs
+the fee account there and is refused with `fee_account_required` without one.
 
 Paper sends use `POST /orders/send-paper` or `send_paper_order`; live counterparts
 `POST /orders/send-live` and `send_live_order` come with the live-trading token.

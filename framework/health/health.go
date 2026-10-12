@@ -47,6 +47,7 @@ const (
 	CodeInternalError         = "internal_error"
 	CodeSelfDiagnosisFailed   = "self_diagnosis_failed"
 	CodeUnparsableData        = "unparsable_data"
+	CodeInconsistentData      = "inconsistent_data"
 
 	// Action types - the UI maps these to buttons.
 	ActionRestart          = "restart"

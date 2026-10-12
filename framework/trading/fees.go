@@ -48,9 +48,11 @@ func (w *worker) intakeFees() {
 		return
 	}
 	accountReason := ""
+	defaulted := false
 	if account == "" {
 		if len(accounts) == 1 {
 			account = accounts[0]
+			defaulted = true
 		} else {
 			accountReason = fmt.Sprintf("connection is used by %d accounts and has no fee account", len(accounts))
 		}
@@ -69,7 +71,7 @@ func (w *worker) intakeFees() {
 				w.reportFeeSkip(fee, "missing fee id")
 				return
 			}
-			if !w.intakeFee(ctx, reader, fee, account, accountReason) {
+			if !w.intakeFee(ctx, reader, fee, account, defaulted, accountReason) {
 				return
 			}
 			w.feeCursor = fee.ID
@@ -88,7 +90,7 @@ func (w *worker) intakeFees() {
 	}
 }
 
-func (w *worker) intakeFee(ctx context.Context, reader FeeReader, fee Fee, account domain.AccountID, accountReason string) bool {
+func (w *worker) intakeFee(ctx context.Context, reader FeeReader, fee Fee, account domain.AccountID, defaulted bool, accountReason string) bool {
 	if fee.Status == FeeNotApplicable {
 		w.logFee(fee, fee.Detail, nil)
 		return w.reportFeeSkip(fee, fee.Detail)
@@ -139,6 +141,11 @@ func (w *worker) intakeFee(ctx context.Context, reader FeeReader, fee Fee, accou
 	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
 		w.logFee(fee, "apply fee adjustment", err)
 		return false
+	}
+	if err == nil && defaulted {
+		w.r.logger.InfoContext(context.WithoutCancel(w.r.ctx),
+			"venue fee applied to the only account that can send through the connection because the connection has no fee account",
+			"connection", w.connection.ExternalID, "fee_id", fee.ID, "account", account)
 	}
 	return true
 }
