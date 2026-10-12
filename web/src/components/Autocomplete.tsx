@@ -113,6 +113,25 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
     const listRef = useRef<HTMLUListElement>(null);
     const onKeyDownRef = useRef(onKeyDown);
     onKeyDownRef.current = onKeyDown;
+    const pendingTimersRef = useRef(new Set<number>());
+
+    // Deferred calls still pending at unmount are cancelled, so none of them
+    // runs against a component that is already gone.
+    useEffect(() => {
+      const pendingTimers = pendingTimersRef.current;
+      return () => {
+        pendingTimers.forEach((timer) => window.clearTimeout(timer));
+        pendingTimers.clear();
+      };
+    }, []);
+
+    function defer(callback: () => void, delayMs: number) {
+      const timer = window.setTimeout(() => {
+        pendingTimersRef.current.delete(timer);
+        callback();
+      }, delayMs);
+      pendingTimersRef.current.add(timer);
+    }
 
     const filtered = filterSuggestions(value, suggestions, maxSuggestions);
     const visible = open && filtered.length > 0;
@@ -133,7 +152,7 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
     }
 
     function forwardEnterAfterSelection(e: KeyboardEvent<HTMLInputElement>) {
-      setTimeout(() => onKeyDownRef.current?.(e), 0);
+      defer(() => onKeyDownRef.current?.(e), 0);
     }
 
     function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -196,7 +215,7 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
           }}
           onBlur={(e) => {
             // Delay so a click on a list item fires before the blur closes it.
-            setTimeout(() => setOpen(false), 120);
+            defer(() => setOpen(false), 120);
             onBlur?.(e);
           }}
           onKeyDown={handleKeyDown}

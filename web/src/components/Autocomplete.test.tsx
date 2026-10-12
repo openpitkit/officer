@@ -15,19 +15,21 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { useState, type KeyboardEvent } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Autocomplete } from "@/components/Autocomplete";
 
 function Harness({
   onClear,
+  onKeyDown,
   initial = "",
   suggestions = ["crypto", "credit", "equity"],
 }: {
   onClear?: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
   initial?: string;
   suggestions?: string[];
 }) {
@@ -37,6 +39,7 @@ function Harness({
       aria-label="dictionary field"
       value={value}
       onChange={setValue}
+      onKeyDown={onKeyDown}
       suggestions={suggestions}
       onClear={
         onClear
@@ -51,7 +54,91 @@ function Harness({
   );
 }
 
+function openSuggestions(query: string) {
+  const input = screen.getByRole("combobox", { name: "dictionary field" });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: query } });
+  return input;
+}
+
 describe("Autocomplete", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("closes the suggestion list shortly after the field loses focus", () => {
+    vi.useFakeTimers();
+    render(<Harness />);
+    const input = openSuggestions("cr");
+
+    fireEvent.blur(input);
+    // The list outlives the blur briefly so a click on an item still lands.
+    expect(screen.getByRole("option", { name: "crypto" })).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(120);
+    });
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+  });
+
+  it("selects a suggestion clicked while the field has focus", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.type(
+      screen.getByRole("combobox", { name: "dictionary field" }),
+      "cr",
+    );
+    await user.click(screen.getByRole("option", { name: "credit" }));
+
+    expect(
+      screen.getByRole("combobox", { name: "dictionary field" }),
+    ).toHaveValue("credit");
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+  });
+
+  it("leaves no deferred close when unmounted while the blur timer is pending", () => {
+    vi.useFakeTimers();
+    const { unmount } = render(<Harness />);
+    fireEvent.blur(openSuggestions("cr"));
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("forwards Enter to the caller after the selection lands", () => {
+    vi.useFakeTimers();
+    const onKeyDown = vi.fn();
+    render(<Harness onKeyDown={onKeyDown} suggestions={["desk-alpha"]} />);
+    const input = openSuggestions("des");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input).toHaveValue("desk-alpha");
+    expect(onKeyDown).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.runAllTimers();
+    });
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    expect(onKeyDown).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "Enter" }),
+    );
+  });
+
+  it("drops the pending Enter forward when unmounted first", () => {
+    vi.useFakeTimers();
+    const onKeyDown = vi.fn();
+    const { unmount } = render(
+      <Harness onKeyDown={onKeyDown} suggestions={["desk-alpha"]} />,
+    );
+    fireEvent.keyDown(openSuggestions("des"), { key: "Enter" });
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
   it("renders the inline reset glyph only while non-empty and clears in place", async () => {
     const user = userEvent.setup();
     const onClear = vi.fn();

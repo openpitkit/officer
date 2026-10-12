@@ -16,10 +16,10 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { Check, Copy } from "lucide-react";
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { copyText } from "@/lib/clipboard";
+import { useCopyFeedback } from "@/lib/useCopyFeedback";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -38,13 +38,10 @@ export function CopyableSnippet({
   className?: string;
 }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
+  const [copied, markCopied] = useCopyFeedback(1500);
 
   function handleCopy() {
-    void copyText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    void copyText(text).then(markCopied);
   }
 
   const copyBtn = (

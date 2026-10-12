@@ -33,9 +33,9 @@ import {
   Trash2,
 } from "lucide-react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
-import { useCallback, useEffect, useState } from "react";
 
 import { copyText } from "@/lib/clipboard";
+import { useCopyFeedback } from "@/lib/useCopyFeedback";
 import { cn } from "@/lib/utils";
 import { useOpenInNewTabHint } from "./openInNewTabHint";
 
@@ -154,21 +154,6 @@ export interface CopyIdButtonProps {
   size?: number;
 }
 
-function useCopyFeedback() {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) {
-      return undefined;
-    }
-    const timeout = window.setTimeout(() => setCopied(false), 1400);
-    return () => window.clearTimeout(timeout);
-  }, [copied]);
-
-  const markCopied = useCallback(() => setCopied(true), []);
-  return [copied, markCopied] as const;
-}
-
 /** Copy the raw entity ID to the clipboard. */
 export function CopyIdButton({
   value,
@@ -177,7 +162,7 @@ export function CopyIdButton({
   onCopy,
   size = 30,
 }: CopyIdButtonProps) {
-  const [copied, markCopied] = useCopyFeedback();
+  const [copied, markCopied] = useCopyFeedback(1400);
 
   return (
     <ActionButton
@@ -214,7 +199,7 @@ export function ShareLinkButton({
   size = 30,
 }: ShareLinkButtonProps) {
   const newTabHint = useOpenInNewTabHint();
-  const [copied, markCopied] = useCopyFeedback();
+  const [copied, markCopied] = useCopyFeedback(1400);
 
   return (
     <ActionButton
