@@ -27,7 +27,6 @@ import (
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
-	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
@@ -35,9 +34,11 @@ import (
 
 // The DTOs below are the JSON wire contract of the HTTP surface. They carry the
 // camelCase tags the dashboard SPA expects. Domain and control-plane types
-// carry no JSON tags; this package owns the encoding and the mapping. The
-// account, group, order and trade row DTOs are shared with the MCP tools and
-// live in framework/web/httpapi (list_dto.go).
+// carry no JSON tags; this package owns the encoding and the mapping, except
+// for the DTOs shared with the MCP tools: the account, group, order and trade
+// row DTOs (list_dto.go), the asset DTO (asset_dto.go), the adjustment DTOs
+// (adjustment_dto.go) and the execution-report DTOs (execution_report_dto.go).
+// framework/web/httpapi owns their encoding and mapping.
 
 type venueOrderDTO struct {
 	Connection    string          `json:"connection"`
@@ -90,15 +91,6 @@ type storeHealthDTO struct {
 	Path          string `json:"path"`
 	SchemaVersion int    `json:"schemaVersion"`
 	Reachable     bool   `json:"reachable"`
-}
-
-// assetDTO is the wire shape of a single asset dictionary record. Its public
-// code is operator-chosen and renameable; the store surrogate id is never
-// serialized.
-type assetDTO struct {
-	Code       string `json:"code"`
-	Title      string `json:"title"`
-	AssetClass string `json:"assetClass"`
 }
 
 // assetClassDTO is the wire shape of a single asset-class dictionary record. A
@@ -230,15 +222,6 @@ func toStatusDTO(status backend.Status) statusDTO {
 			},
 		},
 		Healthy: status.Healthy,
-	}
-}
-
-// toAssetDTO maps a domain.Asset onto the wire DTO.
-func toAssetDTO(asset domain.Asset) assetDTO {
-	return assetDTO{
-		Code:       asset.Code,
-		Title:      asset.Title,
-		AssetClass: asset.AssetClass,
 	}
 }
 
@@ -767,208 +750,6 @@ func toBalanceDTO(b domain.Balance) balanceDTO {
 	}
 }
 
-// --- adjustment -------------------------------------------------------------
-
-// adjustmentAmountDTO is one per-field adjustment value in a request body.
-type adjustmentAmountDTO struct {
-	Mode  string `json:"mode"`
-	Value string `json:"value"`
-}
-
-// adjustmentBoundsDTO constrains an adjustment field's resulting value.
-type adjustmentBoundsDTO struct {
-	Lower string `json:"lower,omitempty"`
-	Upper string `json:"upper,omitempty"`
-}
-
-// adjustmentRequestDTO is the wire body of POST .../adjustments. All values are
-// exact decimal strings passed through verbatim. Type is the required
-// adjustment type, also passed through verbatim: the node refuses a missing or
-// unknown one, and the echoed request always carries it. ID is the optional
-// caller-supplied opaque public handle for the adjustment record; when omitted
-// the server generates and returns one. It is
-// write-only on create: a supplied id is accepted verbatim and must be unique
-// (a duplicate is a 409). It is omitted from the request echoed back in an
-// adjustment record (the record's own id carries the resolved handle).
-type adjustmentRequestDTO struct {
-	Balance           *adjustmentAmountDTO `json:"balance,omitempty"`
-	BalanceBounds     *adjustmentBoundsDTO `json:"balanceBounds,omitempty"`
-	Held              *adjustmentAmountDTO `json:"held,omitempty"`
-	HeldBounds        *adjustmentBoundsDTO `json:"heldBounds,omitempty"`
-	Incoming          *adjustmentAmountDTO `json:"incoming,omitempty"`
-	IncomingBounds    *adjustmentBoundsDTO `json:"incomingBounds,omitempty"`
-	ID                string               `json:"id,omitempty"`
-	Type              string               `json:"type"`
-	Asset             string               `json:"asset"`
-	AverageEntryPrice string               `json:"averageEntryPrice,omitempty"`
-	RealizedPnl       string               `json:"realizedPnl,omitempty"`
-}
-
-// adjustmentOutcomeDTO is the accept/reject outcome of an adjustment record.
-// Exactly one of Accepted/Rejected is non-nil.
-type adjustmentOutcomeDTO struct {
-	Accepted *adjustmentAcceptedDTO `json:"accepted,omitempty"`
-	Rejected *adjustmentRejectedDTO `json:"rejected,omitempty"`
-}
-
-// adjustmentAcceptedDTO carries the per-field delta and absolute result.
-type adjustmentAcceptedDTO struct {
-	BalanceDelta          string                         `json:"balanceDelta"`
-	BalanceResult         string                         `json:"balanceResult"`
-	HeldDelta             string                         `json:"heldDelta"`
-	HeldResult            string                         `json:"heldResult"`
-	IncomingDelta         string                         `json:"incomingDelta"`
-	IncomingResult        string                         `json:"incomingResult"`
-	RealizedPnlResult     adjustmentRealizedPnlResultDTO `json:"realizedPnlResult"`
-	RealizedPnlHaltReason string                         `json:"realizedPnlHaltReason,omitempty"`
-	AverageEntryPrice     string                         `json:"averageEntryPrice,omitempty"`
-}
-
-type adjustmentRealizedPnlResultDTO struct {
-	Delta  string `json:"delta"`
-	Result string `json:"result"`
-}
-
-// adjustmentRejectedDTO carries the structured rejection reason.
-type adjustmentRejectedDTO struct {
-	Code    string `json:"code"`
-	Scope   string `json:"scope,omitempty"`
-	Policy  string `json:"policy,omitempty"`
-	Reason  string `json:"reason"`
-	Details string `json:"details,omitempty"`
-}
-
-// adjustmentDTO is the wire shape of one adjustment record incl. outcome. An
-// adjustment is a machine record: its public handle is the opaque external id;
-// no surrogate id is serialized.
-type adjustmentDTO struct {
-	At        time.Time            `json:"at"`
-	ID        string               `json:"id"`
-	Request   adjustmentRequestDTO `json:"request"`
-	Outcome   adjustmentOutcomeDTO `json:"outcome"`
-	Account   string               `json:"account"`
-	Principal string               `json:"principal,omitempty"`
-	Source    string               `json:"source"`
-	Status    string               `json:"status"`
-}
-
-// fromAdjustmentRequestDTO maps a wire request body onto the domain request.
-// Decimal values are carried through verbatim; never parsed to float.
-func fromAdjustmentRequestDTO(dto adjustmentRequestDTO) domain.AdjustmentRequest {
-	return domain.AdjustmentRequest{
-		Type:              domain.AdjustmentType(dto.Type),
-		Asset:             dto.Asset,
-		AverageEntryPrice: dto.AverageEntryPrice,
-		RealizedPnl:       dto.RealizedPnl,
-		Balance:           fromAdjustmentAmountDTO(dto.Balance),
-		BalanceBounds:     fromAdjustmentBoundsDTO(dto.BalanceBounds),
-		Held:              fromAdjustmentAmountDTO(dto.Held),
-		HeldBounds:        fromAdjustmentBoundsDTO(dto.HeldBounds),
-		Incoming:          fromAdjustmentAmountDTO(dto.Incoming),
-		IncomingBounds:    fromAdjustmentBoundsDTO(dto.IncomingBounds),
-	}
-}
-
-func fromAdjustmentAmountDTO(dto *adjustmentAmountDTO) *domain.AdjustmentAmount {
-	if dto == nil {
-		return nil
-	}
-	return &domain.AdjustmentAmount{
-		Mode:  domain.AdjustmentAmountMode(dto.Mode),
-		Value: dto.Value,
-	}
-}
-
-func fromAdjustmentBoundsDTO(dto *adjustmentBoundsDTO) *domain.AdjustmentBounds {
-	if dto == nil {
-		return nil
-	}
-	return &domain.AdjustmentBounds{Lower: dto.Lower, Upper: dto.Upper}
-}
-
-func toAdjustmentRequestDTO(req domain.AdjustmentRequest) adjustmentRequestDTO {
-	return adjustmentRequestDTO{
-		Type:              string(req.Type),
-		Asset:             req.Asset,
-		AverageEntryPrice: req.AverageEntryPrice,
-		RealizedPnl:       req.RealizedPnl,
-		Balance:           toAdjustmentAmountDTO(req.Balance),
-		BalanceBounds:     toAdjustmentBoundsDTO(req.BalanceBounds),
-		Held:              toAdjustmentAmountDTO(req.Held),
-		HeldBounds:        toAdjustmentBoundsDTO(req.HeldBounds),
-		Incoming:          toAdjustmentAmountDTO(req.Incoming),
-		IncomingBounds:    toAdjustmentBoundsDTO(req.IncomingBounds),
-	}
-}
-
-func toAdjustmentAmountDTO(a *domain.AdjustmentAmount) *adjustmentAmountDTO {
-	if a == nil {
-		return nil
-	}
-	return &adjustmentAmountDTO{Mode: string(a.Mode), Value: a.Value}
-}
-
-func toAdjustmentBoundsDTO(b *domain.AdjustmentBounds) *adjustmentBoundsDTO {
-	if b == nil {
-		return nil
-	}
-	return &adjustmentBoundsDTO{Lower: b.Lower, Upper: b.Upper}
-}
-
-// toAdjustmentDTO maps a domain.AccountAdjustmentRecord onto the wire DTO. The
-// status field summarises the outcome for indexed listing; the outcome object
-// carries the full accepted-or-rejected detail.
-func toAdjustmentDTO(r domain.AccountAdjustmentRecord) adjustmentDTO {
-	status := domain.AdjustmentStatusAccepted
-	outcome := adjustmentOutcomeDTO{}
-	if r.Accepted != nil {
-		outcome.Accepted = &adjustmentAcceptedDTO{
-			BalanceDelta:          r.Accepted.BalanceDelta,
-			BalanceResult:         r.Accepted.BalanceResult,
-			HeldDelta:             r.Accepted.HeldDelta,
-			HeldResult:            r.Accepted.HeldResult,
-			IncomingDelta:         r.Accepted.IncomingDelta,
-			IncomingResult:        r.Accepted.IncomingResult,
-			RealizedPnlResult:     toAdjustmentRealizedPnlResultDTO(r),
-			RealizedPnlHaltReason: string(r.Accepted.RealizedPnlHaltReason),
-			AverageEntryPrice:     r.Accepted.AverageEntryPrice,
-		}
-	}
-	if r.Rejected != nil {
-		status = domain.AdjustmentStatusRejected
-		outcome.Rejected = &adjustmentRejectedDTO{
-			Code:    r.Rejected.Code,
-			Scope:   r.Rejected.Scope,
-			Policy:  r.Rejected.Policy,
-			Reason:  r.Rejected.Reason,
-			Details: r.Rejected.Details,
-		}
-	}
-	return adjustmentDTO{
-		At:        r.At,
-		ID:        r.ExternalID.String(),
-		Request:   toAdjustmentRequestDTO(r.Request),
-		Outcome:   outcome,
-		Account:   string(r.Account),
-		Principal: r.Principal,
-		Source:    string(r.Source),
-		Status:    string(status),
-	}
-}
-
-// toAdjustmentRealizedPnlResultDTO surfaces the persisted realized-P&L result and
-// delta verbatim from the accepted outcome, which the node guarantees carries the
-// authoritative persisted value; no fallback to the request is applied, so delta
-// and result stay mutually consistent.
-func toAdjustmentRealizedPnlResultDTO(
-	r domain.AccountAdjustmentRecord,
-) adjustmentRealizedPnlResultDTO {
-	return adjustmentRealizedPnlResultDTO{
-		Delta:  r.Accepted.RealizedPnlDelta,
-		Result: r.Accepted.RealizedPnlResult,
-	}
-}
-
 // --- order ------------------------------------------------------------------
 
 // eventAttestationDTO is the wire shape of an event's persisted signed
@@ -1121,7 +902,7 @@ type eventReproductionResponseDTO struct {
 	// SubmitResponse reproduces the POST /orders/submit response (submit).
 	SubmitResponse *signedApprovalDTO `json:"submitResponse,omitempty"`
 	// ExecutionReport reproduces the POST .../execution-reports response.
-	ExecutionReport *executionReportResponseDTO `json:"executionReport,omitempty"`
+	ExecutionReport *httpx.ExecutionReportResponseDTO `json:"executionReport,omitempty"`
 	// Confirm reproduces the POST .../confirm response.
 	Confirm *orderMutationResponseDTO `json:"confirm,omitempty"`
 	// Cancel reproduces the POST .../cancel response.
@@ -1145,10 +926,10 @@ type orderRejectDTO struct {
 // would-be account block on reject. The display price is an exact decimal
 // string, never the opaque lock blob.
 type checkResultDTO struct {
-	WouldBlock        *executionBlockDTO `json:"wouldBlock"`
-	Rejects           []orderRejectDTO   `json:"rejects"`
-	WouldDisplayPrice string             `json:"wouldDisplayPrice"`
-	Passed            bool               `json:"passed"`
+	WouldBlock        *httpx.ExecutionBlockDTO `json:"wouldBlock"`
+	Rejects           []orderRejectDTO         `json:"rejects"`
+	WouldDisplayPrice string                   `json:"wouldDisplayPrice"`
+	Passed            bool                     `json:"passed"`
 }
 
 func toOrderRejectDTOs(rejects []domain.OrderReject) []orderRejectDTO {
@@ -1175,9 +956,9 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 	if rejects == nil {
 		rejects = []orderRejectDTO{}
 	}
-	var block *executionBlockDTO
+	var block *httpx.ExecutionBlockDTO
 	if r.WouldBlock != nil {
-		block = &executionBlockDTO{
+		block = &httpx.ExecutionBlockDTO{
 			Account: string(r.WouldBlock.Account),
 			Policy:  r.WouldBlock.Policy,
 			Code:    r.WouldBlock.Code,
@@ -1301,51 +1082,6 @@ func toExecutionReportRequestDTO(
 	}
 }
 
-// executionResultDTO is the wire shape of one execution-report outcome: the
-// account blocks the engine recorded and the per-asset adjustment outcomes.
-type executionResultDTO struct {
-	Blocks   []executionBlockDTO   `json:"blocks"`
-	Outcomes []executionOutcomeDTO `json:"outcomes"`
-}
-
-// executionOutcomeDTO is one per-asset balance effect of a fill, tagged with its
-// asset so the base and quote legs of a spot fill can be told apart.
-type executionOutcomeDTO struct {
-	Asset                 string `json:"asset"`
-	BalanceDelta          string `json:"balanceDelta"`
-	BalanceResult         string `json:"balanceResult"`
-	HeldDelta             string `json:"heldDelta"`
-	HeldResult            string `json:"heldResult"`
-	IncomingDelta         string `json:"incomingDelta"`
-	IncomingResult        string `json:"incomingResult"`
-	RealizedPnlDelta      string `json:"realizedPnlDelta"`
-	RealizedPnlResult     string `json:"realizedPnlResult"`
-	RealizedPnlHaltReason string `json:"realizedPnlHaltReason,omitempty"`
-	AverageEntryPrice     string `json:"averageEntryPrice,omitempty"`
-}
-
-// executionBlockDTO is one engine-recorded account block from a report.
-type executionBlockDTO struct {
-	Account string `json:"account"`
-	Policy  string `json:"policy"`
-	Code    string `json:"code"`
-	Reason  string `json:"reason"`
-	Details string `json:"details"`
-}
-
-// executionReportResponseDTO is the response of POST
-// /orders/{id}/execution-reports: the recorded result plus the
-// attestation envelope proving what Officer recorded. SignedAttestation is present
-// on success; signing or attestation persistence failures fail the request
-// before the report is committed.
-type executionReportResponseDTO struct {
-	ID                string             `json:"id"`
-	Result            executionResultDTO `json:"result"`
-	SignedAttestation string             `json:"signedAttestation,omitempty"`
-	AttestationKeyID  string             `json:"attestationKeyId,omitempty"`
-	Signed            bool               `json:"signed"`
-}
-
 // orderMutationResponseDTO is the response of POST /orders/{id}/confirm
 // and .../cancel: the updated order plus the attestation envelope proving which
 // workflow shortcut Officer recorded. SignedAttestation is present on success;
@@ -1355,37 +1091,6 @@ type orderMutationResponseDTO struct {
 	SignedAttestation string         `json:"signedAttestation,omitempty"`
 	AttestationKeyID  string         `json:"attestationKeyId,omitempty"`
 	Signed            bool           `json:"signed"`
-}
-
-// toExecutionResultDTO maps an engine.ExecutionReportResult onto the wire DTO.
-func toExecutionResultDTO(r engine.ExecutionReportResult) executionResultDTO {
-	blocks := make([]executionBlockDTO, 0, len(r.Blocks))
-	for _, b := range r.Blocks {
-		blocks = append(blocks, executionBlockDTO{
-			Account: string(b.Account),
-			Policy:  b.Policy,
-			Code:    b.Code,
-			Reason:  b.Reason,
-			Details: b.Details,
-		})
-	}
-	outcomes := make([]executionOutcomeDTO, 0, len(r.Outcomes))
-	for _, o := range r.Outcomes {
-		outcomes = append(outcomes, executionOutcomeDTO{
-			Asset:                 o.Asset,
-			BalanceDelta:          o.Outcome.BalanceDelta,
-			BalanceResult:         o.Outcome.BalanceResult,
-			HeldDelta:             o.Outcome.HeldDelta,
-			HeldResult:            o.Outcome.HeldResult,
-			IncomingDelta:         o.Outcome.IncomingDelta,
-			IncomingResult:        o.Outcome.IncomingResult,
-			RealizedPnlDelta:      o.Outcome.RealizedPnlDelta,
-			RealizedPnlResult:     o.Outcome.RealizedPnlResult,
-			RealizedPnlHaltReason: string(o.Outcome.RealizedPnlHaltReason),
-			AverageEntryPrice:     o.Outcome.AverageEntryPrice,
-		})
-	}
-	return executionResultDTO{Blocks: blocks, Outcomes: outcomes}
 }
 
 // --- signing keys -----------------------------------------------------------

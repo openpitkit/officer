@@ -117,6 +117,9 @@ func TestInputSchemasByAccountFeatures(t *testing.T) {
 		{"get_limits", nil, false, ""},
 		{"get_audit", nil, false, ""},
 		{"check_order", []string{"account"}, false, ""},
+		{"update_account", []string{"account"}, false, ""},
+		{"delete_account", []string{"account"}, false, ""},
+		{"set_account_currency", []string{"account"}, false, ""},
 		{"submit_order", []string{"account", "missingAccount"}, false,
 			"create to register an account that does not exist yet, reject to fail the submit instead"},
 		{"submit_drop_copy_order", []string{"account", "missingAccount"}, false,
@@ -210,7 +213,9 @@ func orderInput(extra map[string]any) map[string]any {
 // TestOmittedAccountReachesSourceWithOneAccount covers every tool that
 // requires an account by default: with one account fixed, the call reaches the
 // Source with the account omitted, or named as that account where the Source
-// reads an empty one as a clear (the fee account).
+// reads an empty one as a clear (the fee account). The core refuses the tools
+// that change the account set there, and that refusal reaches the agent; a
+// currency change acts on the one account and reads it back omitted too.
 func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 	t.Parallel()
 	t.Run("check_order", func(t *testing.T) {
@@ -302,6 +307,43 @@ func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 			}
 		})
 	}
+	for _, tc := range []struct {
+		name  string
+		input map[string]any
+		calls []string
+		args  []any
+	}{
+		{"update_account", map[string]any{"code": "desk-2", "title": ""}, []string{"update"},
+			[]any{domain.AccountID(""), domain.Account{Code: "desk-2"}}},
+		{"delete_account", map[string]any{}, []string{"delete"},
+			[]any{domain.AccountID(""), false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := accountsFixture()
+			src.accountFeatures = oneAccountFeatures
+			src.err = accountsNotManagedRefusal.err
+			res := callTool[map[string]any](t, src, tc.name, tc.input)
+			requireToolError(t, res.IsError)
+			if !reflect.DeepEqual(src.calls, tc.calls) || !reflect.DeepEqual(src.arguments, tc.args) {
+				t.Fatalf("delegation mismatch: calls %v args %#v", src.calls, src.arguments)
+			}
+			if got, want := textContent(res.Content), accountsNotManagedRefusal.want; got != want {
+				t.Fatalf("error text = %q, want the Source's %q", got, want)
+			}
+		})
+	}
+	t.Run("set_account_currency", func(t *testing.T) {
+		src := accountsFixture()
+		src.accountFeatures = oneAccountFeatures
+		res := callTool[map[string]any](t, src, "set_account_currency",
+			map[string]any{"currency": "EUR"})
+		requireNotToolError(t, res.IsError)
+		wantCalls := []string{"currency", `read ""`}
+		wantArgs := []any{domain.AccountID(""), "EUR"}
+		if !reflect.DeepEqual(src.calls, wantCalls) || !reflect.DeepEqual(src.arguments, wantArgs) {
+			t.Fatalf("delegation mismatch: calls %v args %#v", src.calls, src.arguments)
+		}
+	})
 }
 
 // TestRelaxedInputRefusalsWithOneAccount covers what a relaxed single-mode
@@ -347,9 +389,11 @@ func TestRelaxedInputRefusalsWithOneAccount(t *testing.T) {
 	})
 }
 
-// TestSourceRefusalReachesAgent covers the read tools: a refusal, invalid
-// input (the account scope's own included) or an absent or hidden resource,
-// reaches the agent with the Source's message under the code REST answers.
+// TestSourceRefusalReachesAgent covers the read tools, create_account, the
+// account tool that names no account, and set_account_currency naming an
+// account one account excludes: a refusal, invalid input (the account scope's
+// own included) or an absent or hidden resource, reaches the agent with the
+// Source's message under the code REST answers.
 func TestSourceRefusalReachesAgent(t *testing.T) {
 	t.Parallel()
 	t.Run("get_audit", func(t *testing.T) {
@@ -371,6 +415,30 @@ func TestSourceRefusalReachesAgent(t *testing.T) {
 			map[string]any{"account": "other"})
 		requireToolError(t, res.IsError)
 		if got, want := textContent(res.Content), "not_found: "+src.listLimitsErr.Error(); got != want {
+			t.Fatalf("error text = %q, want the Source's %q", got, want)
+		}
+	})
+	t.Run("create_account", func(t *testing.T) {
+		src := accountsFixture()
+		src.accountFeatures = oneAccountFeatures
+		src.err = accountsNotManagedRefusal.err
+		res := callTool[map[string]any](t, src, "create_account",
+			map[string]any{"code": "desk-1"})
+		requireToolError(t, res.IsError)
+		if got, want := textContent(res.Content), accountsNotManagedRefusal.want; got != want {
+			t.Fatalf("error text = %q, want the Source's %q", got, want)
+		}
+	})
+	t.Run("set_account_currency", func(t *testing.T) {
+		src := accountsFixture()
+		src.accountFeatures = oneAccountFeatures
+		src.err = domain.NewValidationError("/account", "single_account_mode",
+			`single-account mode acts only on the default account "default": `+
+				"another account is not accepted")
+		res := callTool[map[string]any](t, src, "set_account_currency",
+			map[string]any{"account": "other", "currency": "EUR"})
+		requireToolError(t, res.IsError)
+		if got, want := textContent(res.Content), "validation: "+src.err.Error(); got != want {
 			t.Fatalf("error text = %q, want the Source's %q", got, want)
 		}
 	})

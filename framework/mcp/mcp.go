@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/mcp/catalog"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
@@ -55,6 +56,55 @@ type Source interface {
 	// GetAccountState returns the account row and its account-scoped barriers.
 	GetAccountState(ctx context.Context, id domain.AccountID) (
 		domain.Account, node.AccountLimits, error)
+	// CreateAccount creates an account under its public code with its title and
+	// currency and returns the stored row.
+	CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error)
+	// UpdateAccount replaces the public code and title of the account oldID
+	// names and returns the stored row.
+	UpdateAccount(
+		ctx context.Context, oldID domain.AccountID, account domain.Account,
+	) (domain.Account, error)
+	// DeleteAccount removes an account. Without force an account with dependent
+	// rows is refused; force deletes them with it, the account's venue-fee
+	// adjustments included, so fees it received may be booked again to the
+	// connection's current fee account on the next restart. A trading
+	// connection's fee account is refused even with force.
+	DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error
+	// SetAccountCurrency sets the account's own realized P&L currency, or
+	// clears it when currency is empty. A change of the account's effective
+	// currency while the account is not economically empty, or while a
+	// currency-valued limit applies to it, is refused with a
+	// domain.CurrencyChangeBlockedError.
+	SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error
+	// CreateAsset creates an asset under its public code with its title and
+	// asset class and returns the stored row.
+	CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error)
+	// UpdateAsset replaces the public code, title and asset class of the asset
+	// oldCode names and returns the stored row.
+	UpdateAsset(
+		ctx context.Context, oldCode string, asset domain.Asset,
+	) (domain.Asset, error)
+	// DeleteAsset removes an asset. Without force an asset with dependent rows
+	// is refused; force deletes them with it, the market-data and trading
+	// instruments that reference the asset included. An asset an account or
+	// group holds as its currency is refused even with force.
+	DeleteAsset(ctx context.Context, code string, force bool) error
+	// CreateGroup creates an account group under its public code with its
+	// title, currency and notes and returns the stored row.
+	CreateGroup(
+		ctx context.Context, group domain.AccountGroup,
+	) (domain.AccountGroup, error)
+	// UpdateGroup replaces the public code and title of the account group
+	// oldCode names and returns the stored row.
+	UpdateGroup(
+		ctx context.Context, oldCode string, group domain.AccountGroup,
+	) (domain.AccountGroup, error)
+	// DeleteGroup removes an account group and detaches its member accounts.
+	// Without force a group with dependent rows is refused; force deletes them
+	// with it. A delete that would change the effective currency of a member
+	// carrying protected state is refused with a
+	// domain.CurrencyChangeBlockedError even with force.
+	DeleteGroup(ctx context.Context, code string, force bool) error
 	// ListGroups returns every account group with its block state. An account
 	// row carries only its own latched block, so the tool surface joins the
 	// group tier in to report the effective one.
@@ -168,12 +218,21 @@ type Source interface {
 		ctx context.Context,
 		orderExternalID, leavesQuantity, reason string,
 	) (domain.Order, Attestation, error)
+	// ApplyExecutionReport applies one execution report to the order it names
+	// and returns the engine result with its attestation. A report on a
+	// drop-copy order stays unsigned and returns the zero Attestation, since
+	// drop-copy never enforced a pre-trade verdict. A report on an ordinary
+	// order is signed and attested fail-closed, its envelope unsigned under
+	// eSign-off, so an MCP caller receives the same proof an HTTP caller does.
+	ApplyExecutionReport(
+		ctx context.Context, in domain.ExecutionReportInput,
+	) (engine.ExecutionReportResult, Attestation, error)
 }
 
 // Attestation is the surface-agnostic proof an MCP caller receives for a
-// workflow confirmation or cancellation. It mirrors the fields the HTTP
-// surface exposes; it is the zero value (Token empty) when attestation was
-// skipped or failed best-effort.
+// workflow confirmation, a cancellation or an execution report. It mirrors the
+// fields the HTTP surface exposes; it is the zero value (Token empty) when
+// attestation was skipped or failed best-effort.
 type Attestation struct {
 	// Token is the base64url-encoded attestation envelope; empty when none.
 	Token string
@@ -678,6 +737,66 @@ func (s controlPlaneSource) GetAccountState(
 	return s.cp.GetAccountState(ctx, id)
 }
 
+func (s controlPlaneSource) CreateAccount(
+	ctx context.Context, account domain.Account,
+) (domain.Account, error) {
+	return s.cp.CreateAccount(ctx, account)
+}
+
+func (s controlPlaneSource) UpdateAccount(
+	ctx context.Context, oldID domain.AccountID, account domain.Account,
+) (domain.Account, error) {
+	return s.cp.UpdateAccount(ctx, oldID, account)
+}
+
+func (s controlPlaneSource) DeleteAccount(
+	ctx context.Context, id domain.AccountID, force bool,
+) error {
+	return s.cp.DeleteAccount(ctx, id, force)
+}
+
+func (s controlPlaneSource) SetAccountCurrency(
+	ctx context.Context, id domain.AccountID, currency string,
+) error {
+	return s.cp.SetAccountCurrency(ctx, id, currency)
+}
+
+func (s controlPlaneSource) CreateAsset(
+	ctx context.Context, asset domain.Asset,
+) (domain.Asset, error) {
+	return s.cp.CreateAsset(ctx, asset)
+}
+
+func (s controlPlaneSource) UpdateAsset(
+	ctx context.Context, oldCode string, asset domain.Asset,
+) (domain.Asset, error) {
+	return s.cp.UpdateAsset(ctx, oldCode, asset)
+}
+
+func (s controlPlaneSource) DeleteAsset(
+	ctx context.Context, code string, force bool,
+) error {
+	return s.cp.DeleteAsset(ctx, code, force)
+}
+
+func (s controlPlaneSource) CreateGroup(
+	ctx context.Context, group domain.AccountGroup,
+) (domain.AccountGroup, error) {
+	return s.cp.CreateGroup(ctx, group)
+}
+
+func (s controlPlaneSource) UpdateGroup(
+	ctx context.Context, oldCode string, group domain.AccountGroup,
+) (domain.AccountGroup, error) {
+	return s.cp.UpdateGroup(ctx, oldCode, group)
+}
+
+func (s controlPlaneSource) DeleteGroup(
+	ctx context.Context, code string, force bool,
+) error {
+	return s.cp.DeleteGroup(ctx, code, force)
+}
+
 func (s controlPlaneSource) ListGroups(
 	ctx context.Context,
 ) ([]domain.AccountGroup, error) {
@@ -798,6 +917,16 @@ func (s controlPlaneSource) CancelOrder(
 		return domain.Order{}, Attestation{}, err
 	}
 	return order, attestationFromBackend(att), nil
+}
+
+func (s controlPlaneSource) ApplyExecutionReport(
+	ctx context.Context, in domain.ExecutionReportInput,
+) (engine.ExecutionReportResult, Attestation, error) {
+	result, att, err := s.cp.ApplyExecutionReport(ctx, in)
+	if err != nil {
+		return engine.ExecutionReportResult{}, Attestation{}, err
+	}
+	return result, attestationFromBackend(att), nil
 }
 
 // attestationFromBackend maps the backend attestation onto the surface-agnostic

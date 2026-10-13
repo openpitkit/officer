@@ -3049,11 +3049,11 @@ paths:
       operationId: listMcpAccess
       summary: List the MCP command catalogue and per-command enabled state
       description: >
-        Returns every MCP command Pit Officer exposes - both the implemented
-        read-only tools and the designed-but-not-yet-built mutating ones - with
-        its metadata and current effective enabled state. A command with no
-        stored override resolves to its catalogue default (read-only commands
-        on, protective commands off).
+        Returns every MCP command in the Pit Officer catalogue, implemented or
+        designed but not yet built, with its metadata - whether it is
+        implemented included - and its current effective enabled state. A
+        command with no stored override resolves to its catalogue default
+        (read-only commands on, mutating commands off).
       tags: [mcp-access]
       responses:
         "200":

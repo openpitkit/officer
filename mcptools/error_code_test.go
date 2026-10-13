@@ -75,7 +75,7 @@ func TestToolErrorMatchesREST(t *testing.T) {
 		{"CurrencyChangeBlockedError/account", wrapped(blocked(domain.ScopeAccount)), "currency_change_blocked", ""},
 		{"CurrencyChangeBlockedError/account_group", wrapped(blocked(domain.ScopeAccountGroup)), "currency_change_blocked", ""},
 		{"CurrencyChangeBlockedError/global", wrapped(blocked(domain.ScopeGlobal)), "conflict", ""},
-		{"HasDependentsError", wrapped(domain.NewHasDependentsError([]domain.DependentCount{{Kind: "orders", Count: 2}})), "has_dependents", ""},
+		{"HasDependentsError", wrapped(domain.NewHasDependentsError([]domain.DependentCount{{Kind: "orders", Count: 2}})), "has_dependents", "; orders (2)"},
 		{"DestinationAmbiguousError", wrapped(&backend.DestinationAmbiguousError{Candidates: []backend.TradingDestinationStatus{{Connection: domain.ExternalID("conn"), Label: "Paper"}}}), "destination_ambiguous", "; conn (Paper)"},
 		{"ValidationError", wrapped(domain.NewValidationError("/price", "format", "price must be a decimal")), "validation", ""},
 		{"account-missing-over-not-found", fmt.Errorf("%w: %w", domain.NewAccountMissingError("acc-2"), domain.ErrNotFound), "account_missing", ""},

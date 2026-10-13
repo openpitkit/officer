@@ -38,24 +38,30 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
+// sourceRecorder records the operations a fake Source serves, in order, with
+// the arguments of the last one, and answers each with err.
+type sourceRecorder struct {
+	calls     []string
+	arguments []any
+	err       error
+}
+
+func (r *sourceRecorder) record(operation string, args ...any) error {
+	r.calls = append(r.calls, operation)
+	r.arguments = args
+	return r.err
+}
+
 type tradingSource struct {
 	paperSendResult backend.VenueSendResult
 	fakeSource
+	sourceRecorder
 	status       backend.TradingStatus
 	info         trading.AccountInfo
 	verification backend.TradingSymbolVerification
 	search       backend.TradingSymbolSearch
 	destinations []backend.TradingDestinationStatus
-	calls        []string
-	arguments    []any
-	err          error
 	snapshotErr  error
-}
-
-func (s *tradingSource) record(operation string, args ...any) error {
-	s.calls = append(s.calls, operation)
-	s.arguments = args
-	return s.err
 }
 
 func (s *tradingSource) SendPaperOrder(_ context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
@@ -124,6 +130,12 @@ func tradingFixture() *tradingSource {
 	}
 }
 
+// tradingRecorded is tradingFixture as the shared tool drivers take it.
+func tradingRecorded() (frameworkmcp.Source, *fakeSource, *sourceRecorder) {
+	src := tradingFixture()
+	return src, &src.fakeSource, &src.sourceRecorder
+}
+
 func assertTradingWire(t *testing.T, got json.RawMessage, want string) {
 	t.Helper()
 	var actual, expected any
@@ -140,41 +152,56 @@ func assertTradingWire(t *testing.T, got json.RawMessage, want string) {
 
 func TestTradingToolsSuccess(t *testing.T) {
 	const connection = `{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"","state":"running","diagnostics":[],"secrets":{"key":true},"instruments":[],"access":[]}`
-	cases := []struct {
-		name  string
-		input map[string]any
-		want  string
-		calls []string
-		args  []any
-	}{
-		{"get_trading", map[string]any{}, `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[` + connection + `]}`, []string{"get"}, nil},
-		{"create_trading_connection", map[string]any{"provider": "alpaca", "label": "Paper", "mode": "paper", "credentials": map[string]any{"z": "secret-value", "a": "first-value"}, "enabled": true}, `{"connection":` + connection + `}`, []string{"create", "get"}, []any{domain.TradingConnection{Provider: "alpaca", Label: "Paper", Mode: domain.TradingModePaper, Credentials: `{"a":"first-value","z":"secret-value"}`, Enabled: true}}},
-		{"update_trading_connection", map[string]any{"connection": "conn", "label": "Paper", "credentials": map[string]any{"z": "secret-value", "a": "first-value"}}, `{"connection":` + connection + `}`, []string{"update", "get"}, []any{"conn", "Paper", `{"a":"first-value","z":"secret-value"}`}},
-		{"set_trading_connection_enabled", map[string]any{"connection": "conn", "enabled": false}, `{"connection":"conn","enabled":false}`, []string{"enable"}, []any{"conn", false}},
-		{"check_trading_connection", map[string]any{"connection": "conn"}, `{"venueIdentity":"venue","venueStatus":"ACTIVE"}`, []string{"check"}, []any{"conn"}},
-		{"set_trading_instrument", map[string]any{"connection": "conn", "externalSymbol": "AAPL", "baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, `{"connection":"conn","externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}`, []string{"instrument"}, []any{domain.TradingInstrument{Connection: domain.ExternalID("conn"), ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}}},
-		{"delete_trading_instrument", map[string]any{"connection": "conn", "externalSymbol": "AAPL"}, `{"connection":"conn","externalSymbol":"AAPL"}`, []string{"delete"}, []any{"conn", "AAPL"}},
-		{"verify_trading_symbol", map[string]any{"connection": "conn", "externalSymbol": "AAPL"}, `{"supported":true,"exists":true,"tradable":true}`, []string{"verify"}, []any{"conn", "AAPL"}},
-		{"search_trading_symbols", map[string]any{"connection": "conn", "query": "AAPL"}, `{"supported":true,"matches":[{"symbol":"AAPL","tradable":true}]}`, []string{"search"}, []any{"conn", "AAPL"}},
-		{"grant_trading_access", map[string]any{"connection": "conn", "account": "acc", "venueAccount": "remote"}, `{"connection":"conn","account":"acc","venueAccount":"remote"}`, []string{"grant"}, []any{domain.TradingAccess{Connection: domain.ExternalID("conn"), Account: domain.AccountID("acc"), VenueAccount: "remote"}}},
-		{"revoke_trading_access", map[string]any{"connection": "conn", "account": "acc"}, `{"connection":"conn","account":"acc"}`, []string{"revoke"}, []any{domain.ExternalID("conn"), domain.AccountID("acc"), ""}},
-		{"grant_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"}, `{"connection":"conn","accountGroup":"desks"}`, []string{"grant"}, []any{domain.TradingAccess{Connection: domain.ExternalID("conn"), AccountGroup: "desks"}}},
-		{"revoke_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"}, `{"connection":"conn","accountGroup":"desks"}`, []string{"revoke"}, []any{domain.ExternalID("conn"), domain.AccountID(""), "desks"}},
-		{"set_trading_fee_account", map[string]any{"connection": "conn", "account": "acc"}, `{"connection":"conn","account":"acc"}`, []string{"fee"}, []any{domain.ExternalID("conn"), domain.AccountID("acc")}},
-		{"clear_trading_fee_account", map[string]any{"connection": "conn"}, `{"connection":"conn"}`, []string{"fee"}, []any{domain.ExternalID("conn"), domain.AccountID("")}},
-		{"list_trading_destinations", map[string]any{"account": "acc", "mode": "paper"}, `{"destinations":[{"connection":"conn","label":"Paper","provider":"alpaca","mode":"paper","enabled":true,"venueAccount":"","state":"running"}]}`, []string{"destinations"}, []any{domain.AccountID("acc"), domain.TradingModePaper}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			src := tradingFixture()
-			res := callTool[map[string]any](t, src, tc.name, tc.input)
-			requireNotToolError(t, res.IsError)
-			assertTradingWire(t, res.Wire, tc.want)
-			if !reflect.DeepEqual(src.calls, tc.calls) || !reflect.DeepEqual(src.arguments, tc.args) {
-				t.Fatalf("delegation mismatch: calls %v args %#v", src.calls, src.arguments)
-			}
-		})
-	}
+	runToolSuccess(t, tradingRecorded, []toolSuccessCase{
+		{"get_trading", map[string]any{},
+			[]string{"get"}, nil,
+			"trading connections", `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[` + connection + `]}`},
+		{"create_trading_connection", map[string]any{"provider": "alpaca", "label": "Paper", "mode": "paper", "credentials": map[string]any{"z": "secret-value", "a": "first-value"}, "enabled": true},
+			[]string{"create", "get"}, []any{domain.TradingConnection{Provider: "alpaca", Label: "Paper", Mode: domain.TradingModePaper, Credentials: `{"a":"first-value","z":"secret-value"}`, Enabled: true}},
+			"trading connection created", `{"connection":` + connection + `}`},
+		{"update_trading_connection", map[string]any{"connection": "conn", "label": "Paper", "credentials": map[string]any{"z": "secret-value", "a": "first-value"}},
+			[]string{"update", "get"}, []any{"conn", "Paper", `{"a":"first-value","z":"secret-value"}`},
+			"trading connection updated", `{"connection":` + connection + `}`},
+		{"set_trading_connection_enabled", map[string]any{"connection": "conn", "enabled": false},
+			[]string{"enable"}, []any{"conn", false},
+			"set trading connection enabled", `{"connection":"conn","enabled":false}`},
+		{"check_trading_connection", map[string]any{"connection": "conn"},
+			[]string{"check"}, []any{"conn"},
+			"trading connection checked", `{"venueIdentity":"venue","venueStatus":"ACTIVE"}`},
+		{"set_trading_instrument", map[string]any{"connection": "conn", "externalSymbol": "AAPL", "baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true},
+			[]string{"instrument"}, []any{domain.TradingInstrument{Connection: domain.ExternalID("conn"), ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}},
+			"set trading instrument", `{"connection":"conn","externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}`},
+		{"delete_trading_instrument", map[string]any{"connection": "conn", "externalSymbol": "AAPL"},
+			[]string{"delete"}, []any{"conn", "AAPL"},
+			"delete trading instrument", `{"connection":"conn","externalSymbol":"AAPL"}`},
+		{"verify_trading_symbol", map[string]any{"connection": "conn", "externalSymbol": "AAPL"},
+			[]string{"verify"}, []any{"conn", "AAPL"},
+			"trading symbol verified", `{"supported":true,"exists":true,"tradable":true}`},
+		{"search_trading_symbols", map[string]any{"connection": "conn", "query": "AAPL"},
+			[]string{"search"}, []any{"conn", "AAPL"},
+			"trading symbols", `{"supported":true,"matches":[{"symbol":"AAPL","tradable":true}]}`},
+		{"grant_trading_access", map[string]any{"connection": "conn", "account": "acc", "venueAccount": "remote"},
+			[]string{"grant"}, []any{domain.TradingAccess{Connection: domain.ExternalID("conn"), Account: domain.AccountID("acc"), VenueAccount: "remote"}},
+			"grant trading access", `{"connection":"conn","account":"acc","venueAccount":"remote"}`},
+		{"revoke_trading_access", map[string]any{"connection": "conn", "account": "acc"},
+			[]string{"revoke"}, []any{domain.ExternalID("conn"), domain.AccountID("acc"), ""},
+			"revoke trading access", `{"connection":"conn","account":"acc"}`},
+		{"grant_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"},
+			[]string{"grant"}, []any{domain.TradingAccess{Connection: domain.ExternalID("conn"), AccountGroup: "desks"}},
+			"grant trading access", `{"connection":"conn","accountGroup":"desks"}`},
+		{"revoke_trading_access", map[string]any{"connection": "conn", "accountGroup": "desks"},
+			[]string{"revoke"}, []any{domain.ExternalID("conn"), domain.AccountID(""), "desks"},
+			"revoke trading access", `{"connection":"conn","accountGroup":"desks"}`},
+		{"set_trading_fee_account", map[string]any{"connection": "conn", "account": "acc"},
+			[]string{"fee"}, []any{domain.ExternalID("conn"), domain.AccountID("acc")},
+			"set trading fee account", `{"connection":"conn","account":"acc"}`},
+		{"clear_trading_fee_account", map[string]any{"connection": "conn"},
+			[]string{"fee"}, []any{domain.ExternalID("conn"), domain.AccountID("")},
+			"clear trading fee account", `{"connection":"conn"}`},
+		{"list_trading_destinations", map[string]any{"account": "acc", "mode": "paper"},
+			[]string{"destinations"}, []any{domain.AccountID("acc"), domain.TradingModePaper},
+			"trading destinations", `{"destinations":[{"connection":"conn","label":"Paper","provider":"alpaca","mode":"paper","enabled":true,"venueAccount":"","state":"running"}]}`},
+	})
 }
 
 func TestTradingOptionalAndEmptyShapes(t *testing.T) {
@@ -734,32 +761,15 @@ func TestTradingSourceFailures(t *testing.T) {
 }
 
 func TestTradingGates(t *testing.T) {
-	for _, name := range []string{"create_trading_connection", "update_trading_connection", "set_trading_connection_enabled", "set_trading_instrument", "delete_trading_instrument", "grant_trading_access", "revoke_trading_access", "set_trading_fee_account", "clear_trading_fee_account"} {
-		t.Run(name, func(t *testing.T) {
-			src := tradingFixture()
-			src.disabledCommands = map[string]bool{name: true}
-			var inputs map[string]any
-			switch name {
-			case "create_trading_connection":
-				inputs = map[string]any{"provider": "alpaca", "label": "Paper", "mode": "paper", "credentials": map[string]any{}, "enabled": false}
-			case "update_trading_connection", "clear_trading_fee_account":
-				inputs = map[string]any{"connection": "conn"}
-			case "set_trading_connection_enabled":
-				inputs = map[string]any{"connection": "conn", "enabled": false}
-			case "set_trading_instrument":
-				inputs = map[string]any{"connection": "conn", "externalSymbol": "AAPL", "baseAsset": "AAPL", "quoteAsset": "USD", "enabled": false}
-			case "delete_trading_instrument":
-				inputs = map[string]any{"connection": "conn", "externalSymbol": "AAPL"}
-			default:
-				inputs = map[string]any{"connection": "conn", "account": "acc"}
-			}
-			res := callTool[map[string]any](t, src, name, inputs)
-			if !strings.Contains(textContent(res.Content), "disabled") {
-				t.Fatalf("gate: %q", textContent(res.Content))
-			}
-			if len(src.calls) != 0 {
-				t.Fatal("disabled tool reached Source")
-			}
-		})
-	}
+	runToolsDisabled(t, tradingRecorded, map[string]map[string]any{
+		"create_trading_connection":      {"provider": "alpaca", "label": "Paper", "mode": "paper", "credentials": map[string]any{}, "enabled": false},
+		"update_trading_connection":      {"connection": "conn"},
+		"set_trading_connection_enabled": {"connection": "conn", "enabled": false},
+		"set_trading_instrument":         {"connection": "conn", "externalSymbol": "AAPL", "baseAsset": "AAPL", "quoteAsset": "USD", "enabled": false},
+		"delete_trading_instrument":      {"connection": "conn", "externalSymbol": "AAPL"},
+		"grant_trading_access":           {"connection": "conn", "account": "acc"},
+		"revoke_trading_access":          {"connection": "conn", "account": "acc"},
+		"set_trading_fee_account":        {"connection": "conn", "account": "acc"},
+		"clear_trading_fee_account":      {"connection": "conn"},
+	})
 }

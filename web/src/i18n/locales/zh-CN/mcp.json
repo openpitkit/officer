@@ -81,7 +81,7 @@
       "description": "取消尚无执行报告活动的工作流订单。"
     },
     "report_fill": {
-      "description": "向引擎报告交易成交情况（盘后）。"
+      "description": "对订单应用执行报告（成交、佣金或生命周期状态）；终态会关闭订单并释放其预留剩余数量。普通订单的报告会被认证，非 eSign-off 模式下还会签名；drop-copy 订单的报告不认证。"
     },
     "get_credential_storage": {
       "description": "读取已保存的凭据是否已加密，以及哪些凭据以明文形式保存密钥。"

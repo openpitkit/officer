@@ -81,7 +81,7 @@
       "description": "Cancel a workflow order with no execution-report activity."
     },
     "report_fill": {
-      "description": "Report an execution fill to the engine (post-trade)."
+      "description": "Apply an execution report - a fill, a commission or a lifecycle status - to an order; a terminal status closes the order and releases its remaining reservation. Attested on an ordinary order, signed unless eSign is off, and unattested on a drop-copy order."
     },
     "get_credential_storage": {
       "description": "Read whether stored credentials are sealed and which hold plaintext keys."

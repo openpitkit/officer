@@ -58,7 +58,7 @@ func TestPnlHaltReasonDTOsSerializeRequiredAndOptionalFields(t *testing.T) {
 	})
 
 	t.Run("adjustment outcome optional", func(t *testing.T) {
-		got := marshalDTOMap(t, toAdjustmentDTO(domain.AccountAdjustmentRecord{
+		got := marshalDTOMap(t, httpx.ToAdjustmentDTO(domain.AccountAdjustmentRecord{
 			Accepted: &domain.AdjustmentOutcomeAccepted{
 				RealizedPnlHaltReason: domain.PnlHaltReasonArithmeticOverflow,
 			},
@@ -68,7 +68,7 @@ func TestPnlHaltReasonDTOsSerializeRequiredAndOptionalFields(t *testing.T) {
 			t.Fatalf("realizedPnlHaltReason = %v", accepted["realizedPnlHaltReason"])
 		}
 
-		empty := marshalDTOMap(t, toAdjustmentDTO(domain.AccountAdjustmentRecord{
+		empty := marshalDTOMap(t, httpx.ToAdjustmentDTO(domain.AccountAdjustmentRecord{
 			Accepted: &domain.AdjustmentOutcomeAccepted{},
 		}))
 		emptyAccepted := nestedDTOMap(t, nestedDTOMap(t, empty, "outcome"), "accepted")
@@ -78,7 +78,7 @@ func TestPnlHaltReasonDTOsSerializeRequiredAndOptionalFields(t *testing.T) {
 	})
 
 	t.Run("execution outcome optional", func(t *testing.T) {
-		got := marshalDTOMap(t, toExecutionResultDTO(engine.ExecutionReportResult{
+		got := marshalDTOMap(t, httpx.ToExecutionResultDTO(engine.ExecutionReportResult{
 			Outcomes: []engine.BalanceOutcome{{
 				Asset: "USD",
 				Outcome: domain.AdjustmentOutcomeAccepted{
@@ -95,7 +95,7 @@ func TestPnlHaltReasonDTOsSerializeRequiredAndOptionalFields(t *testing.T) {
 			t.Fatalf("realizedPnlHaltReason = %v", outcome["realizedPnlHaltReason"])
 		}
 
-		empty := marshalDTOMap(t, toExecutionResultDTO(engine.ExecutionReportResult{
+		empty := marshalDTOMap(t, httpx.ToExecutionResultDTO(engine.ExecutionReportResult{
 			Outcomes: []engine.BalanceOutcome{{Asset: "USD"}},
 		}))
 		emptyOutcome := empty["outcomes"].([]any)[0].(map[string]any)
@@ -108,7 +108,7 @@ func TestPnlHaltReasonDTOsSerializeRequiredAndOptionalFields(t *testing.T) {
 func TestExecutionBlockDTOsPreserveSDKPolicy(t *testing.T) {
 	t.Parallel()
 	const policy = domain.PolicySpotFundsPnlBoundsKillSwitch
-	execution := marshalDTOMap(t, toExecutionResultDTO(engine.ExecutionReportResult{
+	execution := marshalDTOMap(t, httpx.ToExecutionResultDTO(engine.ExecutionReportResult{
 		Blocks: []domain.AccountBlock{{
 			Account: "acc-1", Policy: policy,
 			Code: "pnl_bound_breached", Reason: "lower bound breached",

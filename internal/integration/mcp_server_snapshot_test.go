@@ -128,6 +128,93 @@ func TestServerToolSnapshot(t *testing.T) {
 				"order is placed, no funds are reserved.",
 		},
 		{
+			name: "create_account",
+			description: "Create an account with a code, an optional title and an " +
+				"optional realized P&L currency. Without its own currency the account " +
+				"inherits its group's, then the default group's; with no tier set it " +
+				"tracks no realized P&L. Mutates Officer control-plane config; " +
+				"protected and disabled by default.",
+		},
+		{
+			name: "update_account",
+			description: "Change an account's code and title; the title replaces the " +
+				"stored one and an empty title clears it. Mutates Officer control-plane " +
+				"config; protected and disabled by default.",
+		},
+		{
+			name: "delete_account",
+			description: "Delete an account. An account with dependent rows is refused " +
+				"with has_dependents unless force deletes them with it; a trading " +
+				"connection's fee account is refused with conflict, even with force. " +
+				"Force-deleting removes the account's venue-fee adjustments, so fees it " +
+				"received may be booked again to the connection's current fee account " +
+				"on the next restart. Mutates Officer control-plane config; protected " +
+				"and disabled by default.",
+		},
+		{
+			name: "set_account_currency",
+			description: "Set or clear an account's own realized P&L currency; an " +
+				"empty currency clears it, so the account inherits its group's, then " +
+				"the default group's, and tracks no realized P&L when no tier is set. " +
+				"A change of the account's effective currency is refused with " +
+				"currency_change_blocked while the account holds any non-zero " +
+				"balance, position, cost-basis or P&L value, a P&L halt or an active " +
+				"order, or while a Spot Funds P&L bound applies to it. Mutates Officer " +
+				"control-plane config; protected and disabled by default.",
+		},
+		{
+			name: "create_asset",
+			description: "Create an asset with a code, an optional title and the " +
+				"optional code of an existing asset class. Mutates Officer " +
+				"control-plane config; protected and disabled by default.",
+		},
+		{
+			name: "update_asset",
+			description: "Change an asset's code, title and asset class; the title " +
+				"and the asset class replace the stored ones, and an omitted or empty " +
+				"one clears it. Mutates Officer control-plane config; protected and " +
+				"disabled by default.",
+		},
+		{
+			name: "delete_asset",
+			description: "Delete an asset. An asset with dependent rows is refused " +
+				"with has_dependents unless force deletes them with it, the market-data " +
+				"and trading instruments that reference the asset included; an asset an " +
+				"account or group holds as its currency is refused with has_dependents, " +
+				"even with force. Mutates Officer control-plane config; protected and " +
+				"disabled by default.",
+		},
+		{
+			name: "create_group",
+			description: "Create an account group with a code, an optional title, an " +
+				"optional realized P&L currency and optional notes. A member account " +
+				"without its own currency inherits the group's, then the default " +
+				"group's; without a currency the group tier stays unset. The code - is " +
+				"reserved for the default group and refused with validation. Mutates " +
+				"Officer control-plane config; protected and disabled by default.",
+		},
+		{
+			name: "update_group",
+			description: "Change an account group's code and title; the title " +
+				"replaces the stored one and an empty title clears it. The default " +
+				"group cannot be changed, and the code - is reserved for it and refused " +
+				"with validation. Mutates Officer control-plane config; protected and " +
+				"disabled by default.",
+		},
+		{
+			name: "delete_group",
+			description: "Delete an account group. Its member accounts leave the group " +
+				"and keep their trading and compliance history, and a block the group " +
+				"carries no longer applies to them; the delete is refused with " +
+				"currency_change_blocked, even with force, when leaving would " +
+				"change the effective currency of a member carrying protected state. A " +
+				"group with a group-scoped Spot Funds P&L bound is refused with " +
+				"has_dependents unless force deletes the bound with it. The group's " +
+				"trading access grants are deleted with it; its former members keep " +
+				"only their own. The default group cannot be deleted. Mutates Officer " +
+				"control-plane config; protected and disabled by default.",
+		},
+		{
 			name: "set_market_data_instrument",
 			description: "Enable or disable one configured market-data instrument. " +
 				"Mutates Officer control-plane config only; protected and disabled " +
@@ -162,6 +249,22 @@ func TestServerToolSnapshot(t *testing.T) {
 				"the order's own recorded reservation remainder. After execution-report " +
 				"activity, submit an explicit report. " +
 				"Protected and disabled by default.",
+		},
+		{
+			name: "report_fill",
+			description: "Apply an execution report - a fill, a commission or a " +
+				"lifecycle status - to an order returned by submit_order or " +
+				"submit_drop_copy_order; the instrument, account and side come from " +
+				"the order. A report on an ordinary order is signed and attested " +
+				"fail-closed and returns its attestation, unsigned under eSign-off; a " +
+				"report on a drop-copy order stays unsigned and returns no " +
+				"attestation, because drop-copy never enforced a pre-trade verdict. " +
+				"filled and partially_filled carry a fill; rejected, rolled_back, " +
+				"filled and cancelled are terminal and release the order's remaining " +
+				"reservation. A report on a terminal order is refused with " +
+				"terminal_order, on a venue-linked order with venue_order_managed, " +
+				"and a repeated id with conflict. Mutates engine state; protected " +
+				"and disabled by default.",
 		},
 	}
 	want = append(want,
@@ -376,7 +479,7 @@ func TestServerToolSnapshot(t *testing.T) {
 	}
 	for _, name := range []string{
 		"get_order", "submit_order", "send_paper_order", "submit_drop_copy_order", "confirm_execution", "cancel",
-		"set_market_data_instrument",
+		"report_fill", "set_market_data_instrument",
 	} {
 		tool := gotByName[name]
 		for schemaName, schema := range map[string]any{
@@ -429,6 +532,17 @@ func TestServerToolSnapshot(t *testing.T) {
 				}
 				if _, ok := shape.Properties["token"]; ok {
 					t.Fatalf("confirm input schema still has token: %s", wire)
+				}
+			}
+			if name == "report_fill" && schemaName == "input" {
+				var shape struct {
+					Properties map[string]json.RawMessage `json:"properties"`
+				}
+				if err := json.Unmarshal(raw, &shape); err != nil {
+					t.Fatalf("decode report_fill input schema: %v", err)
+				}
+				if _, ok := shape.Properties["force"]; ok {
+					t.Fatalf("report_fill input schema offers force: %s", wire)
 				}
 			}
 			if !strings.Contains(wire, `"id"`) {

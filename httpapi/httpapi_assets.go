@@ -37,9 +37,9 @@ func handleListAssets(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]assetDTO, 0, len(page.Rows))
+		dtos := make([]httpx.AssetDTO, 0, len(page.Rows))
 		for _, asset := range page.Rows {
-			dtos = append(dtos, toAssetDTO(asset))
+			dtos = append(dtos, httpx.ToAssetDTO(asset))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"assets": dtos,
@@ -70,7 +70,7 @@ func handleCreateAsset(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"asset": toAssetDTO(created)})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"asset": httpx.ToAssetDTO(created)})
 	}
 }
 
@@ -102,7 +102,7 @@ func handleUpdateAsset(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"asset": toAssetDTO(updated)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"asset": httpx.ToAssetDTO(updated)})
 	}
 }
 

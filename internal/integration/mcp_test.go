@@ -28,6 +28,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
@@ -1355,4 +1356,92 @@ func (s *fakeSource) SendPaperOrder(ctx context.Context, o domain.Order, dest ba
 
 func (s *captureNSource) SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
 	return backend.VenueSendResult{}, domain.ErrNotImplemented
+}
+
+func (s *fakeSource) CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error) {
+	return domain.Account{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error) {
+	return domain.Account{}, domain.ErrNotImplemented
+}
+
+func (s *fakeSource) UpdateAccount(ctx context.Context, oldID domain.AccountID, account domain.Account) (domain.Account, error) {
+	return domain.Account{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) UpdateAccount(ctx context.Context, oldID domain.AccountID, account domain.Account) (domain.Account, error) {
+	return domain.Account{}, domain.ErrNotImplemented
+}
+
+func (s *fakeSource) DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *captureNSource) DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *fakeSource) CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error) {
+	return domain.Asset{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error) {
+	return domain.Asset{}, domain.ErrNotImplemented
+}
+
+func (s *fakeSource) UpdateAsset(ctx context.Context, oldCode string, asset domain.Asset) (domain.Asset, error) {
+	return domain.Asset{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) UpdateAsset(ctx context.Context, oldCode string, asset domain.Asset) (domain.Asset, error) {
+	return domain.Asset{}, domain.ErrNotImplemented
+}
+
+func (s *fakeSource) DeleteAsset(ctx context.Context, code string, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *captureNSource) DeleteAsset(ctx context.Context, code string, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *fakeSource) CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error) {
+	return domain.AccountGroup{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error) {
+	return domain.AccountGroup{}, domain.ErrNotImplemented
+}
+
+func (s *fakeSource) UpdateGroup(ctx context.Context, oldCode string, group domain.AccountGroup) (domain.AccountGroup, error) {
+	return domain.AccountGroup{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) UpdateGroup(ctx context.Context, oldCode string, group domain.AccountGroup) (domain.AccountGroup, error) {
+	return domain.AccountGroup{}, domain.ErrNotImplemented
+}
+
+func (s *fakeSource) DeleteGroup(ctx context.Context, code string, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *captureNSource) DeleteGroup(ctx context.Context, code string, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *fakeSource) SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *captureNSource) SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *fakeSource) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput) (engine.ExecutionReportResult, frameworkmcp.Attestation, error) {
+	return engine.ExecutionReportResult{}, frameworkmcp.Attestation{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput) (engine.ExecutionReportResult, frameworkmcp.Attestation, error) {
+	return engine.ExecutionReportResult{}, frameworkmcp.Attestation{}, domain.ErrNotImplemented
 }

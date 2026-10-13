@@ -99,7 +99,7 @@ func handleApplyAdjustment(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		var req adjustmentRequestDTO
+		var req httpx.AdjustmentRequestDTO
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
@@ -116,7 +116,7 @@ func handleApplyAdjustment(svc backend.ControlPlane) http.HandlerFunc {
 			}
 		}
 		record, err := svc.ApplyAdjustment(
-			r.Context(), id, externalID, fromAdjustmentRequestDTO(req), missing)
+			r.Context(), id, externalID, httpx.FromAdjustmentRequestDTO(req), missing)
 		if err != nil {
 			if errors.Is(err, domain.ErrNoChange) {
 				w.WriteHeader(http.StatusNoContent)
@@ -125,7 +125,7 @@ func handleApplyAdjustment(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"adjustment": toAdjustmentDTO(record)})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"adjustment": httpx.ToAdjustmentDTO(record)})
 	}
 }
 
@@ -174,10 +174,10 @@ func handleListAdjustments(svc backend.ControlPlane) http.HandlerFunc {
 	}
 }
 
-func toAdjustmentDTOs(recs []domain.AccountAdjustmentRecord) []adjustmentDTO {
-	dtos := make([]adjustmentDTO, 0, len(recs))
+func toAdjustmentDTOs(recs []domain.AccountAdjustmentRecord) []httpx.AdjustmentDTO {
+	dtos := make([]httpx.AdjustmentDTO, 0, len(recs))
 	for _, rec := range recs {
-		dtos = append(dtos, toAdjustmentDTO(rec))
+		dtos = append(dtos, httpx.ToAdjustmentDTO(rec))
 	}
 	return dtos
 }

@@ -28,6 +28,7 @@ import (
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 // --- GET /api/v1/orders -----------------------------------------------------
@@ -1237,15 +1238,15 @@ func TestAdjustmentRequestDTO_Type(t *testing.T) {
 		{`{"type":"bogus","asset":"USD"}`, "bogus"},
 		{`{"asset":"USD"}`, ""},
 	} {
-		var dto adjustmentRequestDTO
+		var dto httpx.AdjustmentRequestDTO
 		if err := json.Unmarshal([]byte(tc.body), &dto); err != nil {
 			t.Fatal(err)
 		}
-		if got := fromAdjustmentRequestDTO(dto).Type; got != tc.want {
+		if got := httpx.FromAdjustmentRequestDTO(dto).Type; got != tc.want {
 			t.Fatalf("%s: type = %q, want %q", tc.body, got, tc.want)
 		}
 	}
-	got := marshalDTOMap(t, toAdjustmentDTO(domain.AccountAdjustmentRecord{
+	got := marshalDTOMap(t, httpx.ToAdjustmentDTO(domain.AccountAdjustmentRecord{
 		Request: domain.AdjustmentRequest{Type: domain.AdjustmentTypeDeposit, Asset: "USD"},
 	}))
 	if request := nestedDTOMap(t, got, "request"); request["type"] != "deposit" {

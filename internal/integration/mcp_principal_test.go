@@ -19,15 +19,11 @@ package integration_test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
-	"go.openpit.dev/officer/engine"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
-	"go.openpit.dev/officer/framework/node"
-	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 type principalStoreSource struct {
@@ -53,29 +49,7 @@ func (s *principalStoreSource) SubmitDropCopyOrder(
 func TestMCPGuardPersistsOperatorPrincipal(t *testing.T) {
 	t.Parallel()
 	ctx := systemCtx()
-	st, err := sqlite.New(
-		filepath.Join(t.TempDir(), "mcp-principal.db"),
-		domain.DefaultRealm,
-	)
-	if err != nil {
-		t.Fatalf("sqlite.New: %v", err)
-	}
-	if err := st.Migrate(ctx); err != nil {
-		_ = st.Close()
-		t.Fatalf("initialize node store: %v", err)
-	}
-	target, _, err := node.NewLocalNode(
-		ctx,
-		domain.DefaultRealm,
-		st,
-		engine.NewOpenPitEngineBuildFunc(),
-		func(err error) { t.Errorf("unexpected fatal shutdown: %v", err) },
-	)
-	if err != nil {
-		_ = st.Close()
-		t.Fatalf("node.NewLocalNode: %v", err)
-	}
-	t.Cleanup(func() { _ = target.Close() })
+	target, _ := newLocalNode(t)
 	for _, code := range []string{"AAPL", "USD"} {
 		if _, err := target.CreateAsset(
 			ctx, domain.Asset{Code: code}, domain.Caller{Source: domain.SourceSystem},
@@ -83,10 +57,7 @@ func TestMCPGuardPersistsOperatorPrincipal(t *testing.T) {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}
-	service, err := backend.New(target, nil, nil, engine.LockSettlementPrice)
-	if err != nil {
-		t.Fatalf("backend.New: %v", err)
-	}
+	service := newOfficerService(t, target, nil, nil)
 	source := &principalStoreSource{
 		fakeSource: &fakeSource{},
 		service:    service,

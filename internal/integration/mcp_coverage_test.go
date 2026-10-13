@@ -26,6 +26,7 @@ import (
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
@@ -339,4 +340,48 @@ func (s *setMDErrSource) ListTradingDestinations(ctx context.Context, account do
 
 func (s *setMDErrSource) SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
 	return backend.VenueSendResult{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error) {
+	return domain.Account{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) UpdateAccount(ctx context.Context, oldID domain.AccountID, account domain.Account) (domain.Account, error) {
+	return domain.Account{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error) {
+	return domain.Asset{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) UpdateAsset(ctx context.Context, oldCode string, asset domain.Asset) (domain.Asset, error) {
+	return domain.Asset{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) DeleteAsset(ctx context.Context, code string, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error) {
+	return domain.AccountGroup{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) UpdateGroup(ctx context.Context, oldCode string, group domain.AccountGroup) (domain.AccountGroup, error) {
+	return domain.AccountGroup{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) DeleteGroup(ctx context.Context, code string, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput) (engine.ExecutionReportResult, frameworkmcp.Attestation, error) {
+	return engine.ExecutionReportResult{}, frameworkmcp.Attestation{}, domain.ErrNotImplemented
 }

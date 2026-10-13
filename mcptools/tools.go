@@ -222,6 +222,106 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		false,
 	))
 	registerTool(reg, descriptor(
+		createAccountToolName,
+		"Create account",
+		createAccountToolDescription,
+		"Create an account with a code, an optional title and an optional currency.",
+		true,
+		true,
+		true,
+		false,
+	), createAccountHandler)
+	registerTool(reg, descriptor(
+		updateAccountToolName,
+		"Update account",
+		updateAccountToolDescription,
+		"Change an account's code and title.",
+		true,
+		true,
+		true,
+		false,
+	), updateAccountHandler)
+	registerTool(reg, descriptor(
+		deleteAccountToolName,
+		"Delete account",
+		deleteAccountToolDescription,
+		"Delete an account, with force together with its dependent rows.",
+		true,
+		true,
+		true,
+		false,
+	), deleteAccountHandler)
+	registerTool(reg, descriptor(
+		setAccountCurrencyToolName,
+		"Set account currency",
+		setAccountCurrencyToolDescription,
+		"Set or clear an account's realized P&L currency.",
+		true,
+		true,
+		true,
+		false,
+	), setAccountCurrencyHandler)
+	registerTool(reg, descriptor(
+		createAssetToolName,
+		"Create asset",
+		createAssetToolDescription,
+		"Create an asset with a code, an optional title and an optional asset class.",
+		true,
+		true,
+		true,
+		false,
+	), createAssetHandler)
+	registerTool(reg, descriptor(
+		updateAssetToolName,
+		"Update asset",
+		updateAssetToolDescription,
+		"Change an asset's code, title and asset class.",
+		true,
+		true,
+		true,
+		false,
+	), updateAssetHandler)
+	registerTool(reg, descriptor(
+		deleteAssetToolName,
+		"Delete asset",
+		deleteAssetToolDescription,
+		"Delete an asset, with force together with its dependent rows.",
+		true,
+		true,
+		true,
+		false,
+	), deleteAssetHandler)
+	registerTool(reg, descriptor(
+		createGroupToolName,
+		"Create group",
+		createGroupToolDescription,
+		"Create an account group with a code, an optional title, an optional currency and optional notes.",
+		true,
+		true,
+		true,
+		false,
+	), createGroupHandler)
+	registerTool(reg, descriptor(
+		updateGroupToolName,
+		"Update group",
+		updateGroupToolDescription,
+		"Change an account group's code and title.",
+		true,
+		true,
+		true,
+		false,
+	), updateGroupHandler)
+	registerTool(reg, descriptor(
+		deleteGroupToolName,
+		"Delete group",
+		deleteGroupToolDescription,
+		"Delete an account group, with force together with its dependent rows.",
+		true,
+		true,
+		true,
+		false,
+	), deleteGroupHandler)
+	registerTool(reg, descriptor(
 		setMarketDataInstrumentToolName,
 		"Set market-data instrument",
 		setMarketDataInstrumentToolDescription,
@@ -274,16 +374,18 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		true,
 		false,
 	), cancelHandler)
-	reg.Register(descriptor(
-		"report_fill",
+	registerTool(reg, descriptor(
+		reportFillToolName,
 		"Report fill",
-		"",
-		"Report an execution fill to the engine (post-trade).",
+		reportFillToolDescription,
+		"Apply an execution report - a fill, a commission or a lifecycle "+
+			"status - to an order; attested on an ordinary order, signed unless "+
+			"eSign is off, and unattested on a drop-copy order.",
+		true,
 		true,
 		true,
 		false,
-		false,
-	))
+	), reportFillHandler)
 	registerTool(reg, descriptor("send_paper_order", "Send paper order",
 		"Check, hold and send an order to a paper venue. Returns the approval and "+
 			"acknowledged, refused or unknown send outcome. Mutating, protected and "+
@@ -1612,7 +1714,9 @@ type listTradingDestinationsOutput struct {
 
 // toolError reports err, an error from the Source, as "<code>: <message>" with
 // the code and message REST answers for it. REST returns the candidates of an
-// ambiguous destination as a member; the text lists them instead.
+// ambiguous destination and the dependents blocking a delete as members; the
+// text lists them instead, each candidate as "<connection> (<label>)" and each
+// dependent as "<kind> (<count>)".
 func toolError(err error) error {
 	public := httpx.DescribeErr(err)
 	message := public.Message
@@ -1620,6 +1724,12 @@ func toolError(err error) error {
 	if public.Code == "destination_ambiguous" && errors.As(err, &ambiguous) {
 		for _, c := range ambiguous.Candidates {
 			message += fmt.Sprintf("; %s (%s)", c.Connection.String(), c.Label)
+		}
+	}
+	var dependents domain.HasDependentsError
+	if public.Code == "has_dependents" && errors.As(err, &dependents) {
+		for _, d := range dependents.Dependents {
+			message += fmt.Sprintf("; %s (%d)", d.Kind, d.Count)
 		}
 	}
 	return fmt.Errorf("%s: %s", public.Code, message)

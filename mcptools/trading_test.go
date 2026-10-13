@@ -45,6 +45,13 @@ func TestToolError(t *testing.T) {
 		{"not-found", fmt.Errorf("order: %w", domain.ErrNotFound), "not_found: order: not found"},
 		{"candidates", fmt.Errorf("choose: %w", candidates), "destination_ambiguous: several destinations; name one; first (First paper); second (Second paper)"},
 		{"bare-ambiguous", fmt.Errorf("choose: %w", domain.ErrDestinationAmbiguous), "destination_ambiguous: several destinations; name one"},
+		{"dependents", fmt.Errorf("delete: %w", domain.NewHasDependentsError([]domain.DependentCount{
+			{Kind: "balance", Count: 2}, {Kind: "order_record", Count: 3},
+		})), "has_dependents: has dependents; balance (2); order_record (3)"},
+		{"bare-dependents", fmt.Errorf("delete: %w", domain.ErrHasDependents), "has_dependents: has dependents"},
+		{"dependents-only-when-has-dependents", fmt.Errorf("%w: %w", domain.ErrInvalid, domain.NewHasDependentsError([]domain.DependentCount{
+			{Kind: "balance", Count: 2},
+		})), "validation: invalid: has dependents"},
 		{"candidates-only-when-ambiguous", fmt.Errorf("%w: %w", domain.ErrInvalid, candidates), "validation: invalid: several destinations; name one"},
 		{"uncovered", errors.New("offline"), "internal: internal error"},
 		{"upstream", fmt.Errorf("alpaca: HTTP 401: %w", domain.ErrUpstream), "upstream: The provider couldn't complete the request. Check your provider access and the request, then try again."},

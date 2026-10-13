@@ -363,7 +363,7 @@ func toEventReproductionResponseDTO(
 		if event.Payload.ExecutionReport != nil {
 			reportID = event.Payload.ExecutionReport.ExternalID.String()
 		}
-		out.ExecutionReport = &executionReportResponseDTO{
+		out.ExecutionReport = &httpx.ExecutionReportResponseDTO{
 			ID:                reportID,
 			Result:            executionResultFromPayload(p),
 			SignedAttestation: att.Token,
@@ -402,11 +402,11 @@ func submitPayloadRejectReasons(p domain.ApprovalPayload) []orderRejectDTO {
 // executionResultFromPayload reconstructs the execution result DTO from the
 // signed payload's result section (blocks and per-asset balance outcomes are not
 // re-derived; only the blocks bound in the payload are surfaced).
-func executionResultFromPayload(p domain.ApprovalPayload) executionResultDTO {
-	blocks := make([]executionBlockDTO, 0)
+func executionResultFromPayload(p domain.ApprovalPayload) httpx.ExecutionResultDTO {
+	blocks := make([]httpx.ExecutionBlockDTO, 0)
 	if p.Result != nil {
 		for _, b := range p.Result.Blocks {
-			blocks = append(blocks, executionBlockDTO{
+			blocks = append(blocks, httpx.ExecutionBlockDTO{
 				Account: b.Account,
 				Policy:  b.Policy,
 				Code:    b.Code,
@@ -415,7 +415,7 @@ func executionResultFromPayload(p domain.ApprovalPayload) executionResultDTO {
 			})
 		}
 	}
-	return executionResultDTO{Blocks: blocks, Outcomes: make([]executionOutcomeDTO, 0)}
+	return httpx.ExecutionResultDTO{Blocks: blocks, Outcomes: make([]httpx.ExecutionOutcomeDTO, 0)}
 }
 
 // orderMutationResponseFromPayload reconstructs the confirm/cancel response DTO
@@ -514,13 +514,9 @@ func handleApplyExecutionReport(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusCreated, executionReportResponseDTO{
-			ID:                result.ReportID.String(),
-			Result:            toExecutionResultDTO(result),
-			SignedAttestation: att.Token,
-			AttestationKeyID:  att.KeyID,
-			Signed:            att.Signed,
-		})
+		httpx.WriteJSON(w, http.StatusCreated, httpx.ToExecutionReportResponseDTO(
+			result, att.Token, att.KeyID, att.Signed,
+		))
 	}
 }
 

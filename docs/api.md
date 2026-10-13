@@ -68,8 +68,10 @@ call while it is off.
 An error Officer reports for a tool call answers a text of the form
 `<code>: <message>`, with the same code and message the REST API answers for
 that error (see Errors) - including a value Officer rejects (`validation`) and
-a refused trading access (`forbidden`). A `destination_ambiguous` error also
-lists its candidate connections. Plain text comes back only from a check the
+a refused trading access (`forbidden`). Two errors also list in the text the
+members REST returns with them: `destination_ambiguous` its candidate
+connections, as `; <connection> (<label>)`, and `has_dependents` its
+dependents, as `; <kind> (<count>)`. Plain text comes back only from a check the
 tool makes before it calls Officer - a required argument left empty, or an
 argument the tool parses itself, except in the list tools (below) - and from
 the MCP gate's own refusals: an unauthorized caller, a failed command-access
@@ -114,6 +116,42 @@ own argument checks, such as a time that is not RFC 3339 or a negative limit or
 page. An argument that does not decode into its type, such as a string for
 `limit`, is rejected by the MCP layer before the tool runs and comes back as a
 protocol error, not as a tool result.
+
+### Control-plane tools
+
+Each of these tools makes the core call of one REST operation:
+
+- `create_account`, `update_account`, `delete_account`: `POST /accounts`,
+  `PUT /accounts/{code}`, `DELETE /accounts/{code}`;
+- `set_account_currency`: `PUT /accounts/{code}/currency`;
+- `create_asset`, `update_asset`, `delete_asset`: `POST /assets`,
+  `PUT /assets/{code}`, `DELETE /assets/{code}`;
+- `create_group`, `update_group`, `delete_group`: `POST /groups`,
+  `PUT /groups/{code}`, `DELETE /groups/{code}`;
+- `report_fill`: `POST /orders/{id}/execution-reports`.
+
+All eleven are mutating and protective and ship disabled. The path code or id
+is the `account`, `asset`, `group` or `order` argument, a delete's `force` query
+parameter is the `force` argument, and body fields keep their REST names. The
+`update_*` tools replace the code and title, `update_asset` also the asset
+class, as `PUT` does.
+
+Arguments reach the core as given, and the core decides every value rule, the
+single-account refusal and which accounts are visible, as for REST. A tool
+answers any code its REST operation documents - most often `validation`,
+`not_found`, `conflict`, `accounts_not_managed`, `has_dependents`,
+`currency_change_blocked`, `terminal_order`, `venue_order_managed` or the
+retryable `engine_restarting` - except that the default group `-` given as
+`group` is refused with `validation`, where REST answers `reserved_group`.
+
+A tool answers the body its REST operation answers: `{"account": ...}`,
+`{"asset": ...}`, `{"group": ...}` or the execution-report body. A delete,
+which REST answers without a body, answers its own input.
+
+`report_fill` leaves a report on a drop-copy order unattested; a report on an
+ordinary order is attested, and signed unless eSign-off is set. REST's `force`
+is not offered, and a present `commission` is passed as given: REST reads an
+all-empty commission as none, the core refuses it.
 
 ## Trading
 

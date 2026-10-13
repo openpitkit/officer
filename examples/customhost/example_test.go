@@ -739,3 +739,47 @@ func (s *customHostSource) ListTradingDestinations(ctx context.Context, account 
 func (s *customHostSource) SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
 	return backend.VenueSendResult{}, domain.ErrNotImplemented
 }
+
+func (s *customHostSource) CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error) {
+	return domain.Account{}, domain.ErrNotImplemented
+}
+
+func (s *customHostSource) UpdateAccount(ctx context.Context, oldID domain.AccountID, account domain.Account) (domain.Account, error) {
+	return domain.Account{}, domain.ErrNotImplemented
+}
+
+func (s *customHostSource) DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *customHostSource) CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error) {
+	return domain.Asset{}, domain.ErrNotImplemented
+}
+
+func (s *customHostSource) UpdateAsset(ctx context.Context, oldCode string, asset domain.Asset) (domain.Asset, error) {
+	return domain.Asset{}, domain.ErrNotImplemented
+}
+
+func (s *customHostSource) DeleteAsset(ctx context.Context, code string, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *customHostSource) CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error) {
+	return domain.AccountGroup{}, domain.ErrNotImplemented
+}
+
+func (s *customHostSource) UpdateGroup(ctx context.Context, oldCode string, group domain.AccountGroup) (domain.AccountGroup, error) {
+	return domain.AccountGroup{}, domain.ErrNotImplemented
+}
+
+func (s *customHostSource) DeleteGroup(ctx context.Context, code string, force bool) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *customHostSource) SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *customHostSource) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput) (engine.ExecutionReportResult, mcp.Attestation, error) {
+	return engine.ExecutionReportResult{}, mcp.Attestation{}, domain.ErrNotImplemented
+}
