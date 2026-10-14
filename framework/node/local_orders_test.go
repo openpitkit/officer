@@ -857,6 +857,10 @@ func (d *fakeOrderChainDriver) ApplyAccountAdjustment(
 	return d.admin.ApplyAccountAdjustment(account, adjustments)
 }
 
+func (d *fakeOrderChainDriver) RetireAccount(account param.AccountID) error {
+	return d.admin.RetireAccount(account)
+}
+
 func (d *fakeOrderChainDriver) Accounts() accounts.Accounts {
 	return d.admin.Accounts()
 }

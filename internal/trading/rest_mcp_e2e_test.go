@@ -1122,6 +1122,33 @@ func TestAdjustmentTypeRequiredEndToEnd(t *testing.T) {
 	}
 }
 
+// A REST adjustment whose resulting balance leaves its bounds is recorded as
+// rejected for its bounds and changes no balance, although its change lies
+// within them: the bounds reach the engine and constrain the result.
+func TestAdjustmentBoundsEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, false)
+	const path = "/accounts/desk/adjustments?missingAccount=reject"
+	f.rest(http.MethodPost, path, map[string]any{"type": "deposit", "asset": "USD",
+		"balance": map[string]any{"mode": "absolute", "value": "100"}}, http.StatusCreated)
+	adjusted := tradingE2EDecode[struct {
+		Adjustment struct {
+			Status  string
+			Outcome httpx.AdjustmentOutcomeDTO
+		}
+	}](t, f.rest(http.MethodPost, path, map[string]any{"type": "deposit", "asset": "USD",
+		"balance":       map[string]any{"mode": "delta", "value": "1"},
+		"balanceBounds": map[string]any{"lower": "0", "upper": "100"}}, http.StatusCreated)).Adjustment
+	if rejected := adjusted.Outcome.Rejected; adjusted.Status != "rejected" || rejected == nil ||
+		rejected.Code != domain.RejectCodeAccountAdjustmentBoundsExceeded {
+		t.Fatalf("adjustment past its bounds = %+v, want it rejected for its bounds", adjusted)
+	}
+	balances := tradingE2EDecode[struct{ Balances []struct{ Available string } }](t,
+		f.rest(http.MethodGet, "/balances?account=desk&asset=USD", nil, http.StatusOK)).Balances
+	if len(balances) != 1 || balances[0].Available != "100" {
+		t.Fatalf("desk USD balances after the rejection = %+v, want 100 unchanged", balances)
+	}
+}
+
 // group creates an account group and moves members into it.
 func (f *tradingE2E) group(code string, members ...string) {
 	f.t.Helper()
