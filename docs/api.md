@@ -124,17 +124,19 @@ Each of these tools makes the core call of one REST operation:
 - `create_account`, `update_account`, `delete_account`: `POST /accounts`,
   `PUT /accounts/{code}`, `DELETE /accounts/{code}`;
 - `set_account_currency`: `PUT /accounts/{code}/currency`;
+- `apply_adjustment`: `POST /accounts/{code}/adjustments`;
 - `create_asset`, `update_asset`, `delete_asset`: `POST /assets`,
   `PUT /assets/{code}`, `DELETE /assets/{code}`;
 - `create_group`, `update_group`, `delete_group`: `POST /groups`,
   `PUT /groups/{code}`, `DELETE /groups/{code}`;
 - `report_fill`: `POST /orders/{id}/execution-reports`.
 
-All eleven are mutating and protective and ship disabled. The path code or id
+All twelve are mutating and protective and ship disabled. The path code or id
 is the `account`, `asset`, `group` or `order` argument, a delete's `force` query
-parameter is the `force` argument, and body fields keep their REST names. The
-`update_*` tools replace the code and title, `update_asset` also the asset
-class, as `PUT` does.
+parameter is the `force` argument, `missingAccount` keeps its query name, and
+body fields keep their REST names; `apply_adjustment` takes the whole REST body
+as its `adjustment` argument. The `update_*` tools replace the code and title,
+`update_asset` also the asset class, as `PUT` does.
 
 Arguments reach the core as given, and the core decides every value rule, the
 single-account refusal and which accounts are visible, as for REST. A tool
@@ -145,8 +147,12 @@ retryable `engine_restarting` - except that the default group `-` given as
 `group` is refused with `validation`, where REST answers `reserved_group`.
 
 A tool answers the body its REST operation answers: `{"account": ...}`,
-`{"asset": ...}`, `{"group": ...}` or the execution-report body. A delete,
-which REST answers without a body, answers its own input.
+`{"asset": ...}`, `{"group": ...}`, `{"adjustment": ...}` or the
+execution-report body. A delete, which REST answers without a body, answers its
+own input. An adjustment the engine rejects, such as one whose resulting
+balance leaves its bounds, is recorded and answered with its `rejected`
+outcome, as REST answers it; one that changes nothing answers `{}`, where REST
+answers 204.
 
 `report_fill` leaves a report on a drop-copy order unattested; a report on an
 ordinary order is attested, and signed unless eSign-off is set. REST's `force`

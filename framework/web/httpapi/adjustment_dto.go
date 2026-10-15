@@ -29,14 +29,14 @@ import (
 
 // AdjustmentAmountDTO is one per-field adjustment value in a request body.
 type AdjustmentAmountDTO struct {
-	Mode  string `json:"mode"`
-	Value string `json:"value"`
+	Mode  string `json:"mode" jsonschema:"absolute sets the field to value, delta adds value to it"`
+	Value string `json:"value" jsonschema:"Exact decimal string; a negative delta decreases the field"`
 }
 
 // AdjustmentBoundsDTO constrains an adjustment field's resulting value.
 type AdjustmentBoundsDTO struct {
-	Lower string `json:"lower,omitempty"`
-	Upper string `json:"upper,omitempty"`
+	Lower string `json:"lower,omitempty" jsonschema:"Inclusive lower bound on the resulting value as an exact decimal string; omitted sets none"`
+	Upper string `json:"upper,omitempty" jsonschema:"Inclusive upper bound on the resulting value as an exact decimal string; omitted sets none"`
 }
 
 // AdjustmentRequestDTO is the wire body of POST .../adjustments. All values are
@@ -49,17 +49,17 @@ type AdjustmentBoundsDTO struct {
 // (a duplicate is a 409). It is omitted from the request echoed back in an
 // adjustment record (the record's own id carries the resolved handle).
 type AdjustmentRequestDTO struct {
-	Balance           *AdjustmentAmountDTO `json:"balance,omitempty"`
-	BalanceBounds     *AdjustmentBoundsDTO `json:"balanceBounds,omitempty"`
-	Held              *AdjustmentAmountDTO `json:"held,omitempty"`
-	HeldBounds        *AdjustmentBoundsDTO `json:"heldBounds,omitempty"`
-	Incoming          *AdjustmentAmountDTO `json:"incoming,omitempty"`
-	IncomingBounds    *AdjustmentBoundsDTO `json:"incomingBounds,omitempty"`
-	ID                string               `json:"id,omitempty"`
-	Type              string               `json:"type"`
-	Asset             string               `json:"asset"`
-	AverageEntryPrice string               `json:"averageEntryPrice,omitempty"`
-	RealizedPnl       string               `json:"realizedPnl,omitempty"`
+	Balance           *AdjustmentAmountDTO `json:"balance,omitempty" jsonschema:"Change of the available balance; omitted leaves it unchanged"`
+	BalanceBounds     *AdjustmentBoundsDTO `json:"balanceBounds,omitempty" jsonschema:"Bounds on the available balance the adjustment results in, not on the change, checked only when balance is given; a result outside them records the adjustment as rejected with its reason and changes no balance"`
+	Held              *AdjustmentAmountDTO `json:"held,omitempty" jsonschema:"Change of the held balance; omitted leaves it unchanged"`
+	HeldBounds        *AdjustmentBoundsDTO `json:"heldBounds,omitempty" jsonschema:"Bounds on the held balance the adjustment results in, not on the change, checked only when held is given; a result outside them records the adjustment as rejected with its reason and changes no balance"`
+	Incoming          *AdjustmentAmountDTO `json:"incoming,omitempty" jsonschema:"Change of the incoming balance; omitted leaves it unchanged"`
+	IncomingBounds    *AdjustmentBoundsDTO `json:"incomingBounds,omitempty" jsonschema:"Bounds on the incoming balance the adjustment results in, not on the change, checked only when incoming is given; a result outside them records the adjustment as rejected with its reason and changes no balance"`
+	ID                string               `json:"id,omitempty" jsonschema:"Optional caller-supplied unique adjustment id; omit to have the server generate one. A duplicate is refused with conflict"`
+	Type              string               `json:"type" jsonschema:"Reason recorded with the adjustment: venue_fee (a fee or charge a trading venue booked), deposit (funds deposited into the account), withdrawal (funds withdrawn from the account) or correction (a manual correction of the books). It does not change how the amounts apply, so a withdrawal takes a negative delta"`
+	Asset             string               `json:"asset" jsonschema:"Code of the asset whose balances are adjusted; an asset that does not exist yet is created"`
+	AverageEntryPrice string               `json:"averageEntryPrice,omitempty" jsonschema:"Optional replacement for the average entry price of the asset's position as an exact decimal string"`
+	RealizedPnl       string               `json:"realizedPnl,omitempty" jsonschema:"Optional replacement for the asset's cumulative realized P&L as an exact decimal string; it restarts a halted P&L calculation from this value"`
 }
 
 // AdjustmentOutcomeDTO is the accept/reject outcome of an adjustment record.

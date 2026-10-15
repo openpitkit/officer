@@ -1445,3 +1445,11 @@ func (s *fakeSource) ApplyExecutionReport(ctx context.Context, in domain.Executi
 func (s *captureNSource) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput) (engine.ExecutionReportResult, frameworkmcp.Attestation, error) {
 	return engine.ExecutionReportResult{}, frameworkmcp.Attestation{}, domain.ErrNotImplemented
 }
+
+func (s *fakeSource) ApplyAdjustment(ctx context.Context, account domain.AccountID, externalID domain.ExternalID, req domain.AdjustmentRequest, missing domain.MissingAccountPolicy) (domain.AccountAdjustmentRecord, error) {
+	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) ApplyAdjustment(ctx context.Context, account domain.AccountID, externalID domain.ExternalID, req domain.AdjustmentRequest, missing domain.MissingAccountPolicy) (domain.AccountAdjustmentRecord, error) {
+	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
+}

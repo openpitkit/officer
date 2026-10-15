@@ -163,6 +163,19 @@ func TestServerToolSnapshot(t *testing.T) {
 				"control-plane config; protected and disabled by default.",
 		},
 		{
+			name: "apply_adjustment",
+			description: "Apply an adjustment to an account's balances of one asset " +
+				"through the engine and return the recorded adjustment. Each of " +
+				"balance (available), held and incoming is set to a value (absolute) " +
+				"or changed by one (delta), given as exact decimal strings. A bound " +
+				"constrains the value the adjustment results in, not the change: a " +
+				"result outside it records the adjustment as rejected with a " +
+				"structured reason and changes no balance, a policy outcome rather " +
+				"than an error. An adjustment that changes nothing, such as one " +
+				"naming no field, is not recorded and returns no adjustment. Mutates " +
+				"account balances; protected and disabled by default.",
+		},
+		{
 			name: "create_asset",
 			description: "Create an asset with a code, an optional title and the " +
 				"optional code of an existing asset class. Mutates Officer " +

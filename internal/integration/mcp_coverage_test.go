@@ -385,3 +385,7 @@ func (s *setMDErrSource) SetAccountCurrency(ctx context.Context, id domain.Accou
 func (s *setMDErrSource) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput) (engine.ExecutionReportResult, frameworkmcp.Attestation, error) {
 	return engine.ExecutionReportResult{}, frameworkmcp.Attestation{}, domain.ErrNotImplemented
 }
+
+func (s *setMDErrSource) ApplyAdjustment(ctx context.Context, account domain.AccountID, externalID domain.ExternalID, req domain.AdjustmentRequest, missing domain.MissingAccountPolicy) (domain.AccountAdjustmentRecord, error) {
+	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
+}

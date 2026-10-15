@@ -170,6 +170,15 @@ func TestCatalogParity(t *testing.T) {
 			DefaultEnabled:   false,
 		},
 		{
+			Name:             "apply_adjustment",
+			Title:            "Apply adjustment",
+			AgentDescription: "Apply a deposit, withdrawal, venue fee or correction to an account's balances.",
+			Mutating:         true,
+			Protective:       true,
+			Implemented:      true,
+			DefaultEnabled:   false,
+		},
+		{
 			Name:             "create_asset",
 			Title:            "Create asset",
 			AgentDescription: "Create an asset with a code, an optional title and an optional asset class.",
@@ -326,6 +335,7 @@ func TestImplementedDescriptorOrder(t *testing.T) {
 		"update_account",
 		"delete_account",
 		"set_account_currency",
+		"apply_adjustment",
 		"create_asset",
 		"update_asset",
 		"delete_asset",

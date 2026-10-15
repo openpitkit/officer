@@ -779,3 +779,7 @@ func (s *guardSource) SetAccountCurrency(ctx context.Context, id domain.AccountI
 func (s *guardSource) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput) (engine.ExecutionReportResult, Attestation, error) {
 	return engine.ExecutionReportResult{}, Attestation{}, domain.ErrNotImplemented
 }
+
+func (s *guardSource) ApplyAdjustment(ctx context.Context, account domain.AccountID, externalID domain.ExternalID, req domain.AdjustmentRequest, missing domain.MissingAccountPolicy) (domain.AccountAdjustmentRecord, error) {
+	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
+}

@@ -76,6 +76,20 @@ type Source interface {
 	// currency-valued limit applies to it, is refused with a
 	// domain.CurrencyChangeBlockedError.
 	SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error
+	// ApplyAdjustment applies one adjustment to an account's balances of one
+	// asset through the engine and returns the recorded adjustment: one the
+	// engine rejects is recorded with its reason and is not an error. A
+	// non-zero externalID is the record's handle, a zero one leaves it to the
+	// store, and missing decides whether an account that does not exist yet
+	// is registered or refused. An adjustment the engine reports as changing
+	// nothing is not recorded and returns domain.ErrNoChange.
+	ApplyAdjustment(
+		ctx context.Context,
+		account domain.AccountID,
+		externalID domain.ExternalID,
+		req domain.AdjustmentRequest,
+		missing domain.MissingAccountPolicy,
+	) (domain.AccountAdjustmentRecord, error)
 	// CreateAsset creates an asset under its public code with its title and
 	// asset class and returns the stored row.
 	CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error)
@@ -759,6 +773,16 @@ func (s controlPlaneSource) SetAccountCurrency(
 	ctx context.Context, id domain.AccountID, currency string,
 ) error {
 	return s.cp.SetAccountCurrency(ctx, id, currency)
+}
+
+func (s controlPlaneSource) ApplyAdjustment(
+	ctx context.Context,
+	account domain.AccountID,
+	externalID domain.ExternalID,
+	req domain.AdjustmentRequest,
+	missing domain.MissingAccountPolicy,
+) (domain.AccountAdjustmentRecord, error) {
+	return s.cp.ApplyAdjustment(ctx, account, externalID, req, missing)
 }
 
 func (s controlPlaneSource) CreateAsset(

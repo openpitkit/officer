@@ -262,6 +262,16 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		false,
 	), setAccountCurrencyHandler)
 	registerTool(reg, descriptor(
+		applyAdjustmentToolName,
+		"Apply adjustment",
+		applyAdjustmentToolDescription,
+		"Apply a deposit, withdrawal, venue fee or correction to an account's balances.",
+		true,
+		true,
+		true,
+		false,
+	), applyAdjustmentHandler)
+	registerTool(reg, descriptor(
 		createAssetToolName,
 		"Create asset",
 		createAssetToolDescription,

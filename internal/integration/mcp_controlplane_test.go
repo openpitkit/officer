@@ -282,3 +282,263 @@ func TestGroupToolsOnControlPlane(t *testing.T) {
 	_, _, err = service.GetGroup(ctx, "traders")
 	requireGone(t, "group traders", err)
 }
+
+// appliedAsListed calls apply_adjustment on account with adjustment, requires
+// its result to be the body REST answers for the record the service lists
+// last for the account, and returns that record with the tool's text.
+func appliedAsListed(
+	t *testing.T, service *backend.Service, src frameworkmcp.Source,
+	account domain.AccountID, adjustment map[string]any,
+) (httpx.AdjustmentDTO, string) {
+	t.Helper()
+	res := callTool[map[string]any](t, src, "apply_adjustment", map[string]any{
+		"account": string(account), "missingAccount": "reject", "adjustment": adjustment,
+	})
+	if res.IsError {
+		t.Fatalf("apply_adjustment: %s", textContent(res.Content))
+	}
+	listed, err := service.ListAdjustments(systemCtx(), account, "", 1)
+	if err != nil {
+		t.Fatalf("list adjustments of %s: %v", account, err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("adjustments of %s = %+v, want the one applied", account, listed)
+	}
+	record := httpx.ToAdjustmentDTO(listed[0])
+	assertResultBody(t, res.Wire, map[string]any{"adjustment": record})
+	return record, textContent(res.Content)
+}
+
+// outcomeJSON renders an adjustment outcome for a failure message.
+func outcomeJSON(t *testing.T, outcome httpx.AdjustmentOutcomeDTO) string {
+	t.Helper()
+	raw, err := json.Marshal(outcome)
+	if err != nil {
+		t.Fatalf("marshal outcome: %v", err)
+	}
+	return string(raw)
+}
+
+// TestApplyAdjustmentArithmeticOnControlPlane drives apply_adjustment through
+// the control-plane Source into a local service: the engine adds a delta and
+// sets an absolute amount in exact decimal arithmetic, digits float64 cannot
+// carry included, each result is the record the service lists, REST's answer,
+// and the service reads the same balance back.
+func TestApplyAdjustmentArithmeticOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk-1"}); err != nil {
+		t.Fatalf("create account desk-1: %v", err)
+	}
+	for _, step := range []struct {
+		typ, mode, value, delta, result string
+	}{
+		{"deposit", "delta", "0.1", "0.1", "0.1"},
+		// float64 sums these to 0.30000000000000004.
+		{"deposit", "delta", "0.2", "0.2", "0.3"},
+		// float64 cannot tell this result from 0.3.
+		{"deposit", "delta", "0.0000000000000000001", "0.0000000000000000001", "0.3000000000000000001"},
+		// An absolute amount sets the result; the delta is the change it made.
+		{"correction", "absolute", "7.25", "6.9499999999999999999", "7.25"},
+	} {
+		record, text := appliedAsListed(t, service, src, "desk-1", map[string]any{
+			"type": step.typ, "asset": "USD",
+			"balance": map[string]any{"mode": step.mode, "value": step.value},
+		})
+		if want := "adjustment " + record.ID + " accepted"; text != want {
+			t.Fatalf("%s %s: text %q, want %q", step.mode, step.value, text, want)
+		}
+		accepted := record.Outcome.Accepted
+		if accepted == nil || accepted.BalanceDelta != step.delta || accepted.BalanceResult != step.result {
+			t.Fatalf("%s %s: outcome %s, want balance delta %s and result %s",
+				step.mode, step.value, outcomeJSON(t, record.Outcome), step.delta, step.result)
+		}
+		if got := deskBalance(t, service, "USD").Available; got != step.result {
+			t.Fatalf("%s %s: service reads balance %s, want %s", step.mode, step.value, got, step.result)
+		}
+	}
+}
+
+// TestApplyAdjustmentBoundsOnControlPlane drives apply_adjustment through the
+// control-plane Source into a local service: a bound constrains the balance an
+// adjustment results in, not its change. A small change whose result leaves
+// the bounds is recorded as rejected with the engine's structured reason and
+// changes no balance, whichever bound of balance, held or incoming it leaves;
+// a large change whose result lands on an inclusive bound
+// is accepted, and a bound on a balance the adjustment leaves alone is not
+// checked. Each result is the record the service lists, REST's answer.
+func TestApplyAdjustmentBoundsOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk-1"}); err != nil {
+		t.Fatalf("create account desk-1: %v", err)
+	}
+	appliedAsListed(t, service, src, "desk-1", map[string]any{
+		"type": "deposit", "asset": "USD",
+		"balance": map[string]any{"mode": "absolute", "value": "100"},
+	})
+
+	// The change of 1 lies within the bounds; the result of 101 does not.
+	record, text := appliedAsListed(t, service, src, "desk-1", map[string]any{
+		"type": "deposit", "asset": "USD",
+		"balance":       map[string]any{"mode": "delta", "value": "1"},
+		"balanceBounds": map[string]any{"lower": "0", "upper": "100"},
+	})
+	rejected := record.Outcome.Rejected
+	if record.Status != string(domain.AdjustmentStatusRejected) || rejected == nil ||
+		rejected.Code != domain.RejectCodeAccountAdjustmentBoundsExceeded || rejected.Reason == "" {
+		t.Fatalf("result out of bounds: status %s, outcome %s, want it rejected for its bounds",
+			record.Status, outcomeJSON(t, record.Outcome))
+	}
+	if want := "adjustment " + record.ID + " rejected: " + rejected.Reason; text != want {
+		t.Fatalf("rejection text %q, want %q", text, want)
+	}
+	if got := deskBalance(t, service, "USD").Available; got != "100" {
+		t.Fatalf("balance after the rejection = %s, want 100 unchanged", got)
+	}
+
+	// Each bound of each field reaches the engine: a result past a lower
+	// bound, and one past a held or an incoming bound, is rejected as well.
+	for _, step := range []struct {
+		name       string
+		adjustment map[string]any
+	}{
+		{"balance lower", map[string]any{
+			"type": "withdrawal", "asset": "USD",
+			"balance":       map[string]any{"mode": "delta", "value": "-1"},
+			"balanceBounds": map[string]any{"lower": "100"},
+		}},
+		{"held upper", map[string]any{
+			"type": "correction", "asset": "USD",
+			"held":       map[string]any{"mode": "delta", "value": "1"},
+			"heldBounds": map[string]any{"upper": "0"},
+		}},
+		{"incoming lower", map[string]any{
+			"type": "correction", "asset": "USD",
+			"incoming":       map[string]any{"mode": "delta", "value": "1"},
+			"incomingBounds": map[string]any{"lower": "2"},
+		}},
+	} {
+		record, _ := appliedAsListed(t, service, src, "desk-1", step.adjustment)
+		if rejected := record.Outcome.Rejected; record.Status != string(domain.AdjustmentStatusRejected) ||
+			rejected == nil || rejected.Code != domain.RejectCodeAccountAdjustmentBoundsExceeded {
+			t.Fatalf("%s bound left: status %s, outcome %s, want it rejected for its bounds",
+				step.name, record.Status, outcomeJSON(t, record.Outcome))
+		}
+		if got := deskBalance(t, service, "USD"); got.Available != "100" || got.Held != "0" || got.Incoming != "0" {
+			t.Fatalf("balance after the %s rejection = %+v, want 100, 0 and 0 unchanged", step.name, got)
+		}
+	}
+
+	// The change of -90 lies below the bounds; the result of 10 is their
+	// inclusive lower bound.
+	record, _ = appliedAsListed(t, service, src, "desk-1", map[string]any{
+		"type": "withdrawal", "asset": "USD",
+		"balance":       map[string]any{"mode": "delta", "value": "-90"},
+		"balanceBounds": map[string]any{"lower": "10", "upper": "100"},
+	})
+	if accepted := record.Outcome.Accepted; accepted == nil || accepted.BalanceResult != "10" {
+		t.Fatalf("result on its bound: outcome %s, want it accepted with balance 10",
+			outcomeJSON(t, record.Outcome))
+	}
+	if got := deskBalance(t, service, "USD").Available; got != "10" {
+		t.Fatalf("balance after the withdrawal = %s, want 10", got)
+	}
+
+	// The balance of 10 lies above its bound, which is not checked, as the
+	// adjustment changes only held.
+	record, _ = appliedAsListed(t, service, src, "desk-1", map[string]any{
+		"type": "correction", "asset": "USD",
+		"held":          map[string]any{"mode": "delta", "value": "1"},
+		"balanceBounds": map[string]any{"upper": "5"},
+	})
+	if accepted := record.Outcome.Accepted; accepted == nil || accepted.HeldResult != "1" {
+		t.Fatalf("held change: outcome %s, want it accepted with held 1",
+			outcomeJSON(t, record.Outcome))
+	}
+	if got := deskBalance(t, service, "USD"); got.Available != "10" || got.Held != "1" {
+		t.Fatalf("balance after the held change = %+v, want available 10 and held 1", got)
+	}
+}
+
+// TestApplyAdjustmentRefusalsOnControlPlane drives apply_adjustment through the
+// control-plane Source into a local service. The backend refuses a named
+// account's absent or unknown missing-account policy with the answer REST
+// gives when it parses the policy itself, a duplicate id and an account the
+// policy refuses as REST does, and an adjustment the engine reports as
+// changing nothing is a success without an adjustment. None of them records
+// one.
+func TestApplyAdjustmentRefusalsOnControlPlane(t *testing.T) {
+	t.Parallel()
+	ctx := systemCtx()
+	service, src := controlPlaneTools(t)
+	if _, err := service.CreateAccount(ctx, domain.Account{Code: "desk-1"}); err != nil {
+		t.Fatalf("create account desk-1: %v", err)
+	}
+	deposit := map[string]any{
+		"id": "adj-1", "type": "deposit", "asset": "USD",
+		"balance": map[string]any{"mode": "delta", "value": "1"},
+	}
+	if record, _ := appliedAsListed(t, service, src, "desk-1", deposit); record.ID != "adj-1" {
+		t.Fatalf("record id = %q, want the supplied adj-1", record.ID)
+	}
+	request := domain.AdjustmentRequest{
+		Type: domain.AdjustmentTypeDeposit, Asset: "USD",
+		Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "1"},
+	}
+	// refusedAsREST requires the tool to refuse in with REST's answer to
+	// restErr.
+	refusedAsREST := func(in map[string]any, restErr error) {
+		t.Helper()
+		rest := httpx.DescribeErr(restErr)
+		res := callTool[map[string]any](t, src, "apply_adjustment", in)
+		requireToolError(t, res.IsError)
+		if got, want := textContent(res.Content), rest.Code+": "+rest.Message; got != want {
+			t.Fatalf("refusal = %q, want REST's %q", got, want)
+		}
+	}
+
+	for _, policy := range []string{"", "bogus"} {
+		_, restErr := domain.ParseMissingAccountPolicy(policy)
+		in := map[string]any{"account": "desk-1", "adjustment": deposit}
+		if policy != "" {
+			in["missingAccount"] = policy
+		}
+		refusedAsREST(in, restErr)
+	}
+	_, restErr := service.ApplyAdjustment(ctx, "desk-1", "adj-1", request, domain.MissingAccountReject)
+	if !errors.Is(restErr, domain.ErrAlreadyExists) {
+		t.Fatalf("service duplicate id = %v, want already exists", restErr)
+	}
+	refusedAsREST(map[string]any{
+		"account": "desk-1", "missingAccount": "reject", "adjustment": deposit,
+	}, restErr)
+	_, restErr = service.ApplyAdjustment(ctx, "ghost", "", request, domain.MissingAccountReject)
+	if !errors.Is(restErr, domain.ErrAccountMissing) {
+		t.Fatalf("service missing account = %v, want account missing", restErr)
+	}
+	refusedAsREST(map[string]any{
+		"account": "ghost", "missingAccount": "reject",
+		"adjustment": map[string]any{"type": "deposit", "asset": "USD",
+			"balance": map[string]any{"mode": "delta", "value": "1"}},
+	}, restErr)
+
+	// An adjustment naming no field leaves the engine nothing to change.
+	res := callTool[map[string]any](t, src, "apply_adjustment", map[string]any{
+		"account": "desk-1", "missingAccount": "reject",
+		"adjustment": map[string]any{"type": "deposit", "asset": "USD"},
+	})
+	requireNotToolError(t, res.IsError)
+	if got, want := textContent(res.Content), "the engine reported no change; no adjustment was recorded"; got != want {
+		t.Fatalf("no-change text = %q, want %q", got, want)
+	}
+	assertTradingWire(t, res.Wire, `{}`)
+
+	listed, err := service.ListAdjustments(ctx, "desk-1", "", 10)
+	if err != nil {
+		t.Fatalf("list adjustments of desk-1: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("adjustments of desk-1 = %+v, want only the first deposit", listed)
+	}
+}

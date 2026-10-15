@@ -783,3 +783,7 @@ func (s *customHostSource) SetAccountCurrency(ctx context.Context, id domain.Acc
 func (s *customHostSource) ApplyExecutionReport(ctx context.Context, in domain.ExecutionReportInput) (engine.ExecutionReportResult, mcp.Attestation, error) {
 	return engine.ExecutionReportResult{}, mcp.Attestation{}, domain.ErrNotImplemented
 }
+
+func (s *customHostSource) ApplyAdjustment(ctx context.Context, account domain.AccountID, externalID domain.ExternalID, req domain.AdjustmentRequest, missing domain.MissingAccountPolicy) (domain.AccountAdjustmentRecord, error) {
+	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
+}

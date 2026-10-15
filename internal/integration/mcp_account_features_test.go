@@ -120,6 +120,8 @@ func TestInputSchemasByAccountFeatures(t *testing.T) {
 		{"update_account", []string{"account"}, false, ""},
 		{"delete_account", []string{"account"}, false, ""},
 		{"set_account_currency", []string{"account"}, false, ""},
+		{"apply_adjustment", []string{"account", "missingAccount"}, false,
+			"create to register an account that does not exist yet, reject to fail the adjustment instead"},
 		{"submit_order", []string{"account", "missingAccount"}, false,
 			"create to register an account that does not exist yet, reject to fail the submit instead"},
 		{"submit_drop_copy_order", []string{"account", "missingAccount"}, false,
@@ -215,7 +217,9 @@ func orderInput(extra map[string]any) map[string]any {
 // Source with the account omitted, or named as that account where the Source
 // reads an empty one as a clear (the fee account). The core refuses the tools
 // that change the account set there, and that refusal reaches the agent; a
-// currency change acts on the one account and reads it back omitted too.
+// currency change acts on the one account and reads it back omitted too, and
+// an adjustment reaches the Source with its missing-account policy omitted as
+// well, which the core resolves for the one account.
 func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 	t.Parallel()
 	t.Run("check_order", func(t *testing.T) {
@@ -344,6 +348,21 @@ func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 			t.Fatalf("delegation mismatch: calls %v args %#v", src.calls, src.arguments)
 		}
 	})
+	t.Run("apply_adjustment", func(t *testing.T) {
+		src := adjustmentsFixture()
+		src.accountFeatures = oneAccountFeatures
+		res := callTool[map[string]any](t, src, "apply_adjustment",
+			map[string]any{"adjustment": map[string]any{"type": "deposit", "asset": "USD"}})
+		requireNotToolError(t, res.IsError)
+		wantArgs := []any{
+			domain.AccountID(""), domain.ExternalID(""),
+			domain.AdjustmentRequest{Type: domain.AdjustmentTypeDeposit, Asset: "USD"},
+			domain.MissingAccountPolicy(""),
+		}
+		if !reflect.DeepEqual(src.calls, []string{"apply"}) || !reflect.DeepEqual(src.arguments, wantArgs) {
+			t.Fatalf("delegation mismatch: calls %v args %#v", src.calls, src.arguments)
+		}
+	})
 }
 
 // TestRelaxedInputRefusalsWithOneAccount covers what a relaxed single-mode
@@ -390,10 +409,10 @@ func TestRelaxedInputRefusalsWithOneAccount(t *testing.T) {
 }
 
 // TestSourceRefusalReachesAgent covers the read tools, create_account, the
-// account tool that names no account, and set_account_currency naming an
-// account one account excludes: a refusal, invalid input (the account scope's
-// own included) or an absent or hidden resource, reaches the agent with the
-// Source's message under the code REST answers.
+// account tool that names no account, and set_account_currency and
+// apply_adjustment naming an account one account excludes: a refusal, invalid
+// input (the account scope's own included) or an absent or hidden resource,
+// reaches the agent with the Source's message under the code REST answers.
 func TestSourceRefusalReachesAgent(t *testing.T) {
 	t.Parallel()
 	t.Run("get_audit", func(t *testing.T) {
@@ -437,6 +456,21 @@ func TestSourceRefusalReachesAgent(t *testing.T) {
 				"another account is not accepted")
 		res := callTool[map[string]any](t, src, "set_account_currency",
 			map[string]any{"account": "other", "currency": "EUR"})
+		requireToolError(t, res.IsError)
+		if got, want := textContent(res.Content), "validation: "+src.err.Error(); got != want {
+			t.Fatalf("error text = %q, want the Source's %q", got, want)
+		}
+	})
+	t.Run("apply_adjustment", func(t *testing.T) {
+		src := adjustmentsFixture()
+		src.accountFeatures = oneAccountFeatures
+		src.err = domain.NewValidationError("/account", "single_account_mode",
+			`single-account mode acts only on the default account "default": `+
+				"another account is not accepted")
+		res := callTool[map[string]any](t, src, "apply_adjustment", map[string]any{
+			"account": "other", "missingAccount": "reject",
+			"adjustment": map[string]any{"type": "deposit", "asset": "USD"},
+		})
 		requireToolError(t, res.IsError)
 		if got, want := textContent(res.Content), "validation: "+src.err.Error(); got != want {
 			t.Fatalf("error text = %q, want the Source's %q", got, want)
