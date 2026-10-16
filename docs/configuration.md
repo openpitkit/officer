@@ -9,6 +9,9 @@ environment value is treated as unset for `PIT_OFFICER_HTTP_ADDR`,
 shadow the default; for the two master-key variables an empty value is
 configured but invalid, not absent.
 
+To install and start Officer from the published Docker image, see the
+[quickstart](quickstart.md).
+
 The run mode is not configured here - it comes from the subcommand.
 
 | Environment variable | Flag | Default | Applies to |
@@ -33,7 +36,7 @@ The run mode is not configured here - it comes from the subcommand.
   reads the address `serve` published next to the database, so both need the
   same database path.
 - `healthcheck` - probe a running instance's `/healthz` and exit non-zero if it
-  is not 200.
+  is not 200. The container image runs it as its Docker `HEALTHCHECK`.
 
 ## Authorization
 
@@ -66,6 +69,12 @@ variable in the environment that starts `pit-officer`.
 surrounding whitespace trimmed and its path cleaned, so `/a/b/` and `/a/b`
 match - and refuse to start, naming both, when they differ. The container image
 leaves both unset.
+
+With `OPENPIT_RUNTIME_LIBRARY_PATH` unset, the SDK extracts its embedded runtime
+into the OS user cache directory, or into `OPENPIT_RUNTIME_CACHE_DIR` when that
+is set. The container image sets it to `/tmp/openpit-runtime` because its user
+has no home directory. A container with a read-only root filesystem needs `/tmp`
+writable and executable, as `docker-compose.yml` mounts it.
 
 ## Browser launch
 

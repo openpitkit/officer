@@ -92,7 +92,16 @@ ENV PIT_OFFICER_SQLITE_PATH=/data/pit-officer.db
 # Headless container: never attempt to launch a browser on serve start.
 ENV PIT_OFFICER_OPEN_BROWSER=false
 
+# The OpenPit SDK extracts its embedded runtime on first load into the user
+# cache directory, and the officer user has no home directory. A read-only root
+# filesystem must keep /tmp writable and executable.
+ENV OPENPIT_RUNTIME_CACHE_DIR=/tmp/openpit-runtime
+
 EXPOSE 8787
+
+# The binary's own /healthz probe; the image carries no curl or wget.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/app/pit-officer", "healthcheck"]
 
 USER officer
 

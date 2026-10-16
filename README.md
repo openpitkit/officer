@@ -23,8 +23,20 @@ evaluates orders.
 
 ## Run
 
-Pit Officer is a single binary with four subcommands: `serve`, `mcp`,
-`dashboard`, `healthcheck`. With [Just](https://just.systems/):
+With Docker installed and running, one command starts Pit Officer from the
+published image:
+
+```sh
+docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer
+```
+
+Once `docker ps` shows it as healthy, the panel is at <http://127.0.0.1:8787>,
+and its data stays in the `pit-officer-data` volume. Installing Docker,
+reopening the panel, stopping and starting, and common errors are in the
+[quickstart](docs/quickstart.md).
+
+From source, Pit Officer is a single binary with four subcommands: `serve`,
+`mcp`, `dashboard`, `healthcheck`. With [Just](https://just.systems/):
 
 ```bash
 just run-serve   # build the SPA and the binary, then serve
@@ -32,11 +44,8 @@ just dashboard   # print the running instance's URLs and open the browser
 just run-mcp     # local stdio MCP server
 ```
 
-In a container, build the image with `just docker-build` and start it with
-`docker compose up`; `docker-compose.yml` pins the port, the database volume,
-and a read-only root filesystem. Released versions are published as
-`ghcr.io/openpitkit/officer:X.Y.Z`; set that as `image:` in
-`docker-compose.yml` to run one without building.
+`just docker-build` and `docker compose up` run a locally built image with the
+settings in `docker-compose.yml`.
 
 The subcommands, the environment variables and flags, and the authorization
 model are in the [configuration reference](docs/configuration.md).

@@ -26,6 +26,14 @@ on:
 permissions:
   contents: read
 
+# Each run ranks the tags it sees when it starts, so an overlapping run could
+# move `latest` back. Runs go one at a time; `queue: max` keeps every pending
+# release waiting instead of replacing it with the next one.
+concurrency:
+  group: release-image
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   publish:
     name: Publish image (ghcr.io/openpitkit/officer)

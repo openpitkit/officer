@@ -66,19 +66,12 @@ services:
     cap_drop:
       - ALL
 
-    # Read-only root filesystem; /data and /tmp are writable via tmpfs/volume.
+    # Read-only root filesystem. /data is the volume; /tmp is a tmpfs that stays
+    # executable because the OpenPit SDK extracts and loads its native runtime
+    # there (OPENPIT_RUNTIME_CACHE_DIR in the Dockerfile).
     read_only: true
     tmpfs:
-      - /tmp:size=64m,mode=1777
-
-    healthcheck:
-      # Use the binary's own healthcheck subcommand: it probes /healthz and
-      # exits 0 on HTTP 200. wget is not present in debian:bookworm-slim.
-      test: ["CMD", "/app/pit-officer", "healthcheck"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      - /tmp:size=64m,mode=1777,exec
 
 volumes:
   # Persistent storage for the Officer SQLite database.
