@@ -1,0 +1,41 @@
+# Regression cases of the locale-latin-words rule, in the shape of a
+# prettier-formatted catalog. A `ruleid` line marks the next line as a finding,
+# an `ok` line marks it clean. The annotations make this file text, not JSON.
+{
+  "nested": {
+    # ruleid: locale-latin-words
+    "planted": "Разрешает ордера, сначала применяя policy барьеры.",
+    # ruleid: locale-latin-words
+    "plantedZh": "订单离开系统前先应用 policy 屏障。",
+    # ruleid: locale-latin-words
+    "afterKept": "Работает из панели и FIX-oriented сценариев.",
+    # ruleid: locale-latin-words
+    "afterEscape": "Первая строка.\nnext строка.",
+    # ruleid: locale-latin-words
+    "afterPath": "Или создайте ChatGPT Action по адресу /docs.",
+    # ruleid: locale-latin-words
+    "afterPathWord": "Опишите /docs через Action.",
+    # ruleid: locale-latin-words
+    "keptPrefix": "Это Pitfall, а не Pit.",
+    # ruleid: locale-latin-words
+    "phraseTail": "下载 Agent 技能。",
+    # ruleid: locale-latin-words
+    "secondWord": "Pit Officer и venue, и ledger.",
+    # ok: locale-latin-words
+    "phrases": "Pit Officer, Claude Agent Skill, API key и IB Gateway; HTTPS-URL.",
+    # ok: locale-latin-words
+    "markup": "Ключ {{venueAccount}} на странице <tradingLink>Подключения</tradingLink> и `pit-officer mcp`.",
+    # ok: locale-latin-words
+    "figures": "целое число > 0, <= 1e9; 500ms, 24h, 7d",
+    # ok: locale-latin-words
+    "path": "Тело события, как его возвращает GET /orders.",
+    # ok: locale-latin-words
+    "csv": "code,title,currency,notes,blocked,block_reason",
+    # ok: locale-latin-words
+    "examples": "Например, desk-* найдёт desk-alpha и desk-risk.",
+    # ok: locale-latin-words
+    "quoted": "Кавычка \"MCP\" и P&L.",
+    # ok: locale-latin-words
+    "identifiers": "spot_funds_pnl_bounds_kill_switch требует lower_bound или upper_bound"
+  }
+}

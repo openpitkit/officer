@@ -24,12 +24,12 @@
   },
   "kindHint": {
     "rate_limit": {
-      "max_orders": "integer > 0, <= 1e9",
-      "window": "Go duration, > 0, <= 24h (e.g. 1s, 500ms)"
+      "max_orders": "整数 > 0，<= 1e9",
+      "window": "Go 时长，> 0，<= 24h（如 1s、500ms）"
     },
     "order_size_limit": {
-      "max_quantity": "positive decimal",
-      "max_notional": "positive decimal"
+      "max_quantity": "正小数",
+      "max_notional": "正小数"
     },
     "spot_funds_pnl_bounds_kill_switch": {
       "currency": "资产代码",
@@ -44,7 +44,7 @@
     },
     "order_size_limit": {
       "label": "订单规模限制",
-      "description": "按数量和名义价值限制单笔订单的规模，防止误操作（fat-finger）。"
+      "description": "按数量和名义价值限制单笔订单的规模，防止乌龙指错误。"
     },
     "spot_funds_pnl_bounds_kill_switch": {
       "label": "PnL 熔断开关",

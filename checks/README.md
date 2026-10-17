@@ -38,14 +38,13 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 `check-debug` / `check-release` / CI) blocks any violation.
 
 `testdata/` holds rule fixtures: deliberate violations and non-violations
-annotated for `semgrep --test`. It holds one rule's fixture today:
-`checks/semgrep/testdata/default-domain-status.go`, for the rule
-`checks/semgrep/default-domain-status.yml`. A fixture runs only through its
-own `--test` line in `check-semgrep`, after the tree scan, so a new fixture
-adds its own line there. A rule with a fixture excludes `testdata/` through its
-`paths`, so the tree scan does not report the fixture. The directory is named
-`testdata` so the Go tool ignores it, and it is in the justfile's `go_dirs`,
-so `lint-go` gofmt-checks the fixtures.
+annotated for `semgrep --test`, one file per rule, named after it:
+`default-domain-status.go` and `locale-latin-words.txt`. A fixture runs only
+through its own `--test` line in `check-semgrep`, after the tree scan, so a new
+fixture adds its own line there. A rule with a fixture keeps `testdata/` out of
+its `paths`, so the tree scan does not report the fixture. The directory is
+named `testdata` so the Go tool ignores it, and it is in the justfile's
+`go_dirs`, so `lint-go` gofmt-checks the Go fixtures.
 
 Fix a finding by changing the code, or by narrowing the rule if the finding
 turns out to be a rule bug - never by loosening what the rule means.
@@ -93,6 +92,21 @@ Two sites are deliberately not findings:
   not a status.
 - `marketDataInstanceState` returns `"pending"` for an instance absent from the
   runtime status map, which is what that state means.
+
+This rule has no approval marker.
+
+### `locale-latin-words`
+
+`checks/semgrep/locale-latin-words.yml` forbids a Latin-script word inside a
+`ru` or `zh-CN` panel catalog string unless the word is on the rule's keep
+list: names, field labels as providers document them, codes and
+abbreviations, domain identifiers, and jargon with no established
+translation. The keep list is the rule's `keep` group and is the only one; the
+localization guidelines point to it. Fix a finding by translating the word
+with the term the locale already uses, or, for a term that stays as written in
+every translated catalog, by adding it to the keep list. Placeholders, tags,
+code spans, figures, URL paths and comma-separated identifier lists such as a
+CSV header are not words.
 
 This rule has no approval marker.
 

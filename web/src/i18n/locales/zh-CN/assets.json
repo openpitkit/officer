@@ -106,7 +106,7 @@
   "createClass": {
     "trigger": "新建类别",
     "title": "创建资产类别",
-    "description": "按分类归集资产，例如 crypto 或 equity。",
+    "description": "按分类归集资产，例如加密货币或股票。",
     "codeLabel": "类别代码",
     "titleLabel": "名称",
     "titlePlaceholder": "加密货币",

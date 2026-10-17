@@ -211,9 +211,9 @@
     "shareTitle": "复制链接 ({{entity}})",
     "shareFilters": "复制当前筛选条件的链接",
     "copiedLink": "链接已复制",
-    "openInNewTabHint": "在 macOS 上 Cmd-click，或在 Windows/Linux 上 Ctrl-click，可在新标签页打开。",
-    "openInNewTabHintMac": "Cmd-click 可在新标签页打开。",
-    "openInNewTabHintCtrl": "Ctrl-click 可在新标签页打开。",
+    "openInNewTabHint": "在 macOS 上按住 Cmd 单击，或在 Windows/Linux 上按住 Ctrl 单击，可在新标签页打开。",
+    "openInNewTabHintMac": "按住 Cmd 单击可在新标签页打开。",
+    "openInNewTabHintCtrl": "按住 Ctrl 单击可在新标签页打开。",
     "view": "查看",
     "viewTitle": "查看 {{entity}}",
     "filterBy": "按此筛选",
@@ -374,15 +374,15 @@
   },
   "about": {
     "title": "关于",
-    "description": "Pit Officer 是本地优先的盘前风控控制平面。",
+    "description": "Pit Officer 是本地优先的交易前风控控制平面。",
     "product": "产品",
     "copyrightLabel": "版权",
-    "copyright": "Copyright The Pit Project Owners. All rights reserved.",
+    "copyright": "© The Pit Project Owners。保留所有权利。",
     "openWelcome": "打开首次运行指南",
     "links": {
       "website": "Pit Officer 网站",
-      "issues": "Issue tracker",
-      "discussions": "GitHub discussions",
+      "issues": "问题跟踪",
+      "discussions": "GitHub 讨论区",
       "openpit": "OpenPit 网站"
     }
   },
@@ -393,7 +393,7 @@
     "sections": {
       "product": "这个应用是什么",
       "uses": "可用方式",
-      "preTrade": "Pre-trade 设置",
+      "preTrade": "交易前控制设置",
       "marketData": "行情数据",
       "optional": "控制可选时"
     },
@@ -403,37 +403,37 @@
     "useCases": {
       "dropCopy": {
         "title": "Drop-copy 登记",
-        "copy": "在执行后记录订单、成交、账户状态和审计事件，不阻塞上游 venue。"
+        "copy": "在执行后记录订单、成交、账户状态和审计事件，不阻塞上游交易场所。"
       },
       "preTrade": {
-        "title": "Pre-trade gate",
-        "copy": "订单离开系统前先应用账户余额和 policy barriers，然后允许或拒绝。"
+        "title": "交易前关卡",
+        "copy": "订单离开系统前先应用账户余额和策略屏障，然后允许或拒绝。"
       },
       "surfaces": {
         "title": "REST、MCP 和 FIX",
-        "copy": "可通过面板、REST 客户端、MCP agents 以及启用后的 FIX-oriented 流程操作。"
+        "copy": "可通过面板、REST 客户端、MCP 智能体以及启用后的面向 FIX 的流程操作。"
       },
       "operations": {
-        "title": "Operator ledger",
-        "copy": "查看持仓、冻结资金、breaches、策略变更、approvals、日志和服务状态。"
+        "title": "操作员台账",
+        "copy": "查看持仓、冻结资金、超限事件、策略变更、批准、日志和服务状态。"
       }
     },
     "preTrade": {
-      "copy": "如果要做允许或禁止的 pre-trade 控制，请创建账户，分配持仓或现金余额，然后定义 policy barriers。如果不需要 buying power 控制，可以不创建账户和余额。",
+      "copy": "如果要做允许或禁止的交易前控制，请创建账户，分配持仓或现金余额，然后定义策略屏障。如果不需要购买力控制，可以不创建账户和余额。",
       "copyUnnamed": "如需允许或禁止订单的交易前控制，请为该账户分配持仓或现金余额，然后定义屏障。如果不需要购买力控制，该账户可以保持为空。"
     },
     "marketData": {
-      "copy": "Market orders、locked prices、跨币种敞口和 realized PnL 需要行情源。您可以稍后连接 live provider，也可以现在安装静态 BYO preset。"
+      "copy": "市价单、锁定价格、跨币种敞口和已实现盈亏需要行情源。您可以稍后连接实时数据提供方，也可以现在安装静态 BYO 预设。"
     },
     "optional": {
-      "copy": "纯登记或审计工作流可以不配置账户、余额和 feeds。只有当订单路径必须由 Pit 允许或阻止时，再添加这些控制。"
+      "copy": "纯登记或审计工作流可以不配置账户、余额和数据源。只有当订单路径必须由 Pit 允许或阻止时，再添加这些控制。"
     },
     "actions": {
       "demoAccount": "创建演示账户和持仓",
       "demoPositions": "添加演示持仓",
-      "policyPreset": "添加 starter policy barriers",
-      "marketDataPreset": "安装 FX 和 crypto 静态价格",
-      "binancePreset": "从 Binance 获取 FX 和 crypto rates",
+      "policyPreset": "添加入门策略屏障",
+      "marketDataPreset": "安装 FX 和加密货币静态价格",
+      "binancePreset": "从 Binance 获取 FX 和加密货币汇率",
       "or": "或",
       "openAccounts": "打开账户",
       "openAccount": "打开账户",
@@ -476,7 +476,7 @@
       "tape": "Tape",
       "tapeTitle": "Tape：现金、现货、外汇和组合交易台风格",
       "ladder": "Ladder",
-      "ladderTitle": "Ladder：期货、期权、DOM 和价格梯交易台风格"
+      "ladderTitle": "Ladder：期货、期权、市场深度和价格梯交易台风格"
     }
   },
   "theme": {

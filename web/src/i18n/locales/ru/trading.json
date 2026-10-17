@@ -5,8 +5,8 @@
   },
   "missingProvider": "Провайдер {{provider}} отсутствует в снимке торговых подключений.",
   "mode": {
-    "paper": "Paper",
-    "live": "Live"
+    "paper": "Учебный",
+    "live": "Реальный"
   },
   "state": {
     "running": "Работает",
@@ -31,15 +31,15 @@
     "chooseVenue": "Выберите торговую площадку",
     "prepareAccount": "Подготовьте учётную запись {{provider}}",
     "mode": "Режим",
-    "liveNote": "Торговля в режиме Live пока недоступна: она появится вместе с токеном подключения в режиме Live.",
+    "liveNote": "Реальная торговля пока недоступна: она появится вместе с токеном подключения для реальной торговли.",
     "alpaca": {
       "createAccount": "Создайте учётную запись Alpaca.",
       "signUp": "Зарегистрироваться в Alpaca",
       "logIn": "Войти",
-      "openPaperAccount": "Откройте счёт Paper Trading: на панели Alpaca переключите селектор счёта вверху на Paper Trading. Alpaca предоставляет каждой учётной записи счёт Paper с виртуальными средствами.",
+      "openPaperAccount": "Откройте учебный счёт: на панели Alpaca переключите селектор счёта вверху на Paper Trading. Alpaca предоставляет каждой учётной записи учебный счёт с виртуальными средствами.",
       "openDashboard": "Открыть панель Alpaca",
-      "aboutPaperTrading": "О Paper Trading",
-      "generateKeys": "Создайте ключи API для Paper Trading: выбрав Paper Trading, найдите панель API Keys на панели управления и нажмите Generate New Key. Скопируйте API key и API secret - Alpaca показывает API secret только один раз. Ключи Paper работают только со счётом Paper.",
+      "aboutPaperTrading": "Об учебной торговле",
+      "generateKeys": "Создайте ключи API для учебного счёта: выбрав Paper Trading, найдите панель API Keys на панели управления и нажмите Generate New Key. Скопируйте API key и API secret - Alpaca показывает API secret только один раз. Ключи учебного счёта работают только с учебным счётом.",
       "keepDashboardOpen": "Не закрывайте панель Alpaca: поля ниже запрашивают оба значения."
     }
   },

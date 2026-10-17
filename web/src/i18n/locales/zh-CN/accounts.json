@@ -228,7 +228,7 @@
     "groupLabel": "分组（可选）",
     "groupHint": "选择已有分组或输入新代码。留空则创建未分组账户。",
     "currencyLabel": "货币（可选）",
-    "currencyHint": "未设置货币时，不计算该账户的已实现 P&L。",
+    "currencyHint": "未设置货币时，不计算该账户的已实现 PnL。",
     "cancel": "取消",
     "submit": "创建"
   },
@@ -239,7 +239,7 @@
     "titleLabel": "显示名称（可选）",
     "titlePlaceholder": "美国股票交易组",
     "currencyLabel": "货币（可选）",
-    "currencyHint": "未设置货币时，除非在账户层级设置货币，否则不计算该分组内账户的已实现 P&L。",
+    "currencyHint": "未设置货币时，除非在账户层级设置货币，否则不计算该分组内账户的已实现 PnL。",
     "notesLabel": "备注（可选）",
     "notesPlaceholder": "归属于美国股票交易台的账户。",
     "notesHint": "参考备注 - 仅存储于控制平面，不发送至引擎。",
@@ -259,9 +259,9 @@
       "group": "分组",
       "default": "默认"
     },
-    "blockedHint": "此账户持有非零持仓或 P&L。若变更会改变有效货币，后端将拒绝该操作。",
+    "blockedHint": "此账户持有非零持仓或 PnL。若变更会改变有效货币，后端将拒绝该操作。",
     "currencyLabel": "账户货币",
-    "currencyHint": "清空字段可从分组和默认层级继承。未设置账户有效货币时，不计算该账户的已实现 P&L。",
+    "currencyHint": "清空字段可从分组和默认层级继承。未设置账户有效货币时，不计算该账户的已实现 PnL。",
     "cancel": "取消",
     "submit": "保存"
   },
@@ -269,7 +269,7 @@
     "title": "编辑分组货币",
     "description": "为 {{group}} 设置分组货币。",
     "defaultDescription": "设置保留默认分组货币。",
-    "blockedHint": "若变更会改变持有非零持仓或 P&L 的成员账户有效货币，后端将拒绝该操作。",
+    "blockedHint": "若变更会改变持有非零持仓或 PnL 的成员账户有效货币，后端将拒绝该操作。",
     "currencyLabel": "分组货币",
     "cancel": "取消",
     "submit": "保存"

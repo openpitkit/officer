@@ -33,7 +33,7 @@
     "ib": {
       "title": "Interactive Brokers",
       "description": "来自 Interactive Brokers TWS 或 IB Gateway 的实时行情。普通代码不明确时，请使用合约设置。",
-      "createHint": "创建连接到 TWS/Gateway 的 Interactive Brokers 来源。配置 host、port、client ID 和行情数据模式。"
+      "createHint": "创建连接到 TWS 或 IB Gateway 的 Interactive Brokers 来源。配置 Host、Port、Client ID 和行情数据模式。"
     },
     "binance": {
       "title": "Binance",
@@ -68,12 +68,12 @@
     "oanda": {
       "title": "OANDA",
       "description": "来自 OANDA v20 的实时外汇价格。需要账户凭据；外部代码使用 EUR_USD 等工具。",
-      "createHint": "创建 OANDA 来源以接收外汇价格。填写 token、account ID 和环境。"
+      "createHint": "创建 OANDA 来源以接收外汇价格。填写 Token、Account ID 和环境。"
     },
     "finnhub": {
       "title": "Finnhub",
-      "description": "来自 Finnhub WebSocket 的实时成交价格。需要 API token；外部代码必须是 Finnhub 支持的代码。",
-      "createHint": "创建 Finnhub 来源以接收实时成交价格。填写 API token。"
+      "description": "来自 Finnhub WebSocket 的实时成交价格。需要 API 令牌；外部代码必须是 Finnhub 支持的代码。",
+      "createHint": "创建 Finnhub 来源以接收实时成交价格。填写 API 令牌。"
     },
     "byo": {
       "title": "BYO",

@@ -175,7 +175,7 @@
       "submitMode": "提交模式",
       "submitModeImmediate": "提交并结算",
       "submitModeImmediateHelp": "执行交易前检查、预留资金并立即按锁定价格结算。",
-      "submitModeDropCopy": "Drop copy",
+      "submitModeDropCopy": "Drop-copy",
       "submitModeDropCopyHelp": "执行所有策略，但不应用拒绝结果或账户及账户组封锁。必须提供正数限价。",
       "submitModeHold": "提交并等待",
       "submitModeHoldHelp": "执行交易前检查、记录锁定状态并等待执行报告。",
@@ -235,7 +235,7 @@
   },
 
   "dropCopy": {
-    "badge": "DROP COPY"
+    "badge": "DROP-COPY"
   },
 
   "check": {
@@ -426,14 +426,14 @@
     "note": "在您的浏览器中对上方规范字节运行 Ed25519，使用此认证密钥 ID 对应的公钥。",
     "button": "验证",
     "verifying": "验证中…",
-    "badgeValid": "VALID",
-    "badgeInvalid": "INVALID",
-    "badgeUnverified": "UNVERIFIED",
-    "badgeUnsigned": "UNSIGNED",
-    "badgeError": "ERROR",
+    "badgeValid": "有效",
+    "badgeInvalid": "无效",
+    "badgeUnverified": "未验证",
+    "badgeUnsigned": "未签名",
+    "badgeError": "错误",
     "validNote": "已通过此认证密钥 ID 对应的公钥验证签名。",
     "invalidNote": "签名不匹配。信封可能已被更改。",
-    "unsignedNote": "无加密签名 - 此事件在 eSign-off 模式下认证。",
+    "unsignedNote": "无加密签名 - 此事件在 eSign 关闭时认证。",
     "errorNote": "无法执行验证。{{message}}",
     "missingArtifacts": "数据包中缺少规范字节或签名。",
     "jsSnippetLabel": "使用 WebCrypto 验证（JavaScript）",
@@ -503,10 +503,10 @@
 
   "esign": {
     "label": "eSign 模式",
-    "signed": "SIGNED",
-    "unsigned": "UNSIGNED",
+    "signed": "已签名",
+    "unsigned": "未签名",
     "alg": "alg {{alg}}",
     "noAlg": "无认证信封",
-    "offGlobal": "已全局启用 eSign-off"
+    "offGlobal": "已全局关闭 eSign"
   }
 }

@@ -175,7 +175,7 @@
       "submitMode": "Режим подачи",
       "submitModeImmediate": "Отправить и исполнить",
       "submitModeImmediateHelp": "Выполнить предторговую проверку, зарезервировать средства и сразу исполнить по цене блокировки.",
-      "submitModeDropCopy": "Drop copy",
+      "submitModeDropCopy": "Drop-copy",
       "submitModeDropCopyHelp": "Выполнить все политики без применения отклонений и блокировок счёта или группы. Положительная лимитная цена обязательна.",
       "submitModeHold": "Отправить и ожидать",
       "submitModeHoldHelp": "Выполнить предторговую проверку, зафиксировать блокировку и ожидать отчёты об исполнении.",
@@ -198,16 +198,16 @@
         "sendToVenue": "Отправить на площадку",
         "mode": "Режим",
         "modeValues": {
-          "paper": "paper",
-          "live": "live"
+          "paper": "учебный",
+          "live": "реальный"
         },
         "target": "Цель",
         "loadingTargets": "Загрузка целей…",
         "disabled": "Отключено",
         "unavailable": "Недоступно: {{error}}",
         "degraded": "Работает со сбоями: {{error}}",
-        "noTargets": "Для счёта {{account}} нет целей в режиме {{mode}}.",
-        "noTargetsUnnamed": "Нет целей в режиме {{mode}}.",
+        "noTargets": "Для счёта {{account}} нет целей в режиме «{{mode}}».",
+        "noTargetsUnnamed": "Нет целей в режиме «{{mode}}».",
         "timeInForce": "Срок действия",
         "chooseTimeInForce": "Выберите срок действия",
         "timeInForceOptions": {
@@ -221,8 +221,8 @@
         "aboutTimeInForce": "О сроках действия",
         "unsupportedProvider": "Эта панель не поддерживает отправку на {{provider}}.",
         "quantityHint": "Ордера отправляются на площадку по количеству.",
-        "submitPaper": "Отправить ордер PAPER",
-        "submitLive": "Отправить ордер LIVE",
+        "submitPaper": "Отправить УЧЕБНЫЙ ордер",
+        "submitLive": "Отправить РЕАЛЬНЫЙ ордер",
         "submit": "Отправить ордер",
         "chooseTarget": "Выберите цель",
         "acknowledged": "Отправлено на {{venue}} · {{mode}}. Ордер площадки {{venueOrderId}}.",
@@ -235,7 +235,7 @@
   },
 
   "dropCopy": {
-    "badge": "DROP COPY"
+    "badge": "DROP-COPY"
   },
 
   "check": {
@@ -426,14 +426,14 @@
     "note": "Выполняет Ed25519 в вашем браузере по каноническим байтам выше, используя открытый ключ для идентификатора ключа этой аттестации.",
     "button": "Проверить",
     "verifying": "Проверка…",
-    "badgeValid": "VALID",
-    "badgeInvalid": "INVALID",
-    "badgeUnverified": "UNVERIFIED",
-    "badgeUnsigned": "UNSIGNED",
-    "badgeError": "ERROR",
+    "badgeValid": "ВЕРНА",
+    "badgeInvalid": "НЕВЕРНА",
+    "badgeUnverified": "НЕ ПРОВЕРЕНА",
+    "badgeUnsigned": "БЕЗ ПОДПИСИ",
+    "badgeError": "ОШИБКА",
     "validNote": "Подпись проверена по открытому ключу для идентификатора ключа этой аттестации.",
     "invalidNote": "Подпись не совпадает. Возможно, конверт был изменён.",
-    "unsignedNote": "Криптографическая подпись отсутствует - это событие аттестовано в режиме eSign-off.",
+    "unsignedNote": "Криптографическая подпись отсутствует - это событие аттестовано при отключённом eSign.",
     "errorNote": "Проверку выполнить не удалось. {{message}}",
     "missingArtifacts": "В комплекте отсутствуют канонические байты или подпись.",
     "jsSnippetLabel": "Проверка через WebCrypto (JavaScript)",
@@ -503,10 +503,10 @@
 
   "esign": {
     "label": "Режим eSign",
-    "signed": "SIGNED",
-    "unsigned": "UNSIGNED",
+    "signed": "ПОДПИСАНО",
+    "unsigned": "БЕЗ ПОДПИСИ",
     "alg": "alg {{alg}}",
     "noAlg": "конверт аттестации отсутствует",
-    "offGlobal": "eSign-off включён глобально"
+    "offGlobal": "eSign отключён глобально"
   }
 }

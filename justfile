@@ -177,6 +177,7 @@ install-semgrep:
 check-semgrep: install-semgrep
     {{ semgrep }} --config checks/semgrep/ --error --quiet --metrics=off --disable-version-check .
     {{ semgrep }} --test --config checks/semgrep/default-domain-status.yml --metrics=off --disable-version-check checks/semgrep/testdata/default-domain-status.go
+    {{ semgrep }} --test --config checks/semgrep/locale-latin-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-latin-words.txt
 
 # Lint all.
 [parallel]

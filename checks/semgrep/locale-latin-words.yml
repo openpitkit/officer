@@ -1,0 +1,137 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# No English word inside a translated panel string.
+#
+# A ru or zh-CN catalog string is translated fully. A Latin-script word may
+# stay in it only when it is on the keep list below: a product, venue,
+# protocol or format name, a field label written as the provider documents
+# it, a code or an abbreviation, a domain identifier, trading jargon with no
+# established translation, or an example code an operator types. A term on
+# the list is written exactly as listed wherever it appears in a translated
+# catalog; a concept the locale translates is translated everywhere.
+#
+# The keep list is the `keep` group of the regex, one category per comment.
+# It is the only keep list: localization guidelines point here. An entry is
+# matched case-sensitively as a whole word or phrase. A phrase goes before any
+# shorter entry it starts with - `Pit\ Officer` before `Pit` - because the
+# first entry that matches is taken.
+#
+# What is not a word, and is not checked:
+# - a `{{placeholder}}`, an inline `<tag>` and a backtick code span;
+# - a figure: a token that starts with a digit, with its unit or exponent
+#   (`500ms`, `24h`, `1e9`);
+# - a URL path segment right after a slash that starts a token (`/docs`);
+# - a value that is a comma-separated list of lowercase identifiers with no
+#   spaces, such as a CSV header: a machine format, not prose.
+#
+# It is a text rule over prettier-formatted JSON: a key and its string value
+# sit on one line, which the regex reads from the line start. Keys are never
+# read. A continuation from the end of the previous match (`\G`) reports
+# every word of a string, not only the first.
+#
+# Deliberate limits:
+# - Only ASCII letters are Latin script here: an accented letter splits a
+#   word, and the ASCII part is still reported.
+# - Only the first segment of a URL path is exempt: `/api/v1` reports `v1`.
+#
+# There is no approval marker: a word either joins the keep list for every
+# translated catalog or is translated.
+
+rules:
+  - id: locale-latin-words
+    message: >-
+      A Latin-script word inside a translated catalog string is not on the
+      keep list. Translate it with the word this locale already uses for the
+      concept, or, if it is a name, code or term that stays as written in
+      every translated catalog, add it to the keep list in this rule.
+    severity: ERROR
+    languages: [generic]
+    # Extended mode: whitespace is layout, `\ ` is a literal space.
+    pattern-regex: |-
+      (?mx)
+      (?(DEFINE)(?<keep>(?:
+        # Provider UI and field labels, written as the provider documents them.
+          API\ Keys | API\ key | API\ secret | Paper\ Trading | Generate\ New\ Key
+        | Client\ ID | Con\ ID | Account\ ID | Host | Port | Token
+        # Product, venue, provider, company and Pit dialect names.
+        | Pit\ Officer | OpenPit | Officer | The\ Pit\ Project\ Owners | Pit
+        | Spot\ Funds | eSign | Tape | Ladder | BYO | Mock
+        | Interactive\ Brokers | IB\ Gateway | IB | TWS | IEX
+        | Alpaca | Binance | Bybit | Coinbase\ Exchange | Coinbase | Kraken
+        | OKX | OANDA | Finnhub
+        | Claude\ Desktop | Claude\ Agent\ Skill | Claude\ Skill | Claude
+        | ChatGPT | GPT | GitHub | OpenSSH
+        # Protocol, format, platform, language and key names.
+        | MCP | REST | FIX | OpenAPI | Swagger | streamable\ HTTP | HTTPS | HTTP
+        | stdio | WebSocket | WebCrypto | JSON | CSV | ZIP | PEM | PKCS
+        | Ed25519 | raw-base64 | base64url | base64 | authorized_keys
+        | crypto/ed25519 | JavaScript | Go | macOS | Windows | Linux
+        | localhost | Cmd | Ctrl
+        # Abbreviations, trading codes and the trade abbreviations.
+        | API | SDK | CLI | URL | CPU | LTO | AI | ID | GET | FX
+        | P&L | PnL | uPnL | rPnL | PX | QTY | NTL | MTM | TIF | CCY
+        | STK | CASH | OPT | FUT | IND | CRYPTO
+        | DAY | GTC | OPG | CLS | IOC | FOK
+        | BTC | USDT | USD | EUR | AAPL | BTCUSDT | EUR_USD | YYYYMMDD
+        | v2 | v5 | v20
+        # Domain identifiers: wire and configuration names, never translated.
+        | rate_limit | order_size_limit | spot_funds_pnl_bounds_kill_switch
+        | max_orders | max_quantity | max_notional | window
+        | lower_bound | upper_bound | alg
+        # Trading jargon with no established translation.
+        | drop-copy | Drop-copy | DROP-COPY
+        # Example codes an operator types.
+        | desk-alpha | desk-risk | desk-a | desk-\* | acc-1
+      )(?![A-Za-z0-9_])))
+      # Where scanning starts: a string value on its own key line, unless it is
+      # a comma-separated identifier list; or right after the previous match,
+      # which is never the start of the file.
+      (?:
+        ^[ \t]*"[^"\\\n]*"[ ]*:[ ]*"(?![a-z0-9_]+(?:,[a-z0-9_]+)+")
+      |
+        \G(?!\A)
+      )
+      # Everything up to the word: markup, kept terms, figures, URL path
+      # segments, letters glued to a previous token, escapes and other
+      # characters. A backtick, `{{` and `<` are taken only as a whole code
+      # span, placeholder or tag; a quote ends the string. Whatever the word
+      # below may not start on has to be taken here, or the scan stops.
+      (?:
+          \{\{[^}\n]*\}\}
+        | `[^`\n]*`
+        | </?[A-Za-z][A-Za-z0-9]*[ ]*/?>
+        | (?>(?&keep))
+        | [0-9][A-Za-z0-9_]*
+        | (?<=[ \t"(]/)[A-Za-z][A-Za-z0-9_]*
+        | (?<=[A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]*
+        | \\.
+        | \{(?!\{)
+        | <(?![A-Za-z/])
+        | [^"\\A-Za-z0-9`{<\n]
+      )*?
+      \K
+      # The word: not inside another token, not a URL path segment, not kept.
+      # A word right after an escape such as `\n` starts there.
+      (?:(?<![A-Za-z0-9_])|(?<=\\[nrt]))
+      (?<![ \t"(]/)
+      (?!(?>(?&keep)))
+      [A-Za-z][A-Za-z0-9_]*
+    paths:
+      include:
+        - "/web/src/i18n/locales/ru/*.json"
+        - "/web/src/i18n/locales/zh-CN/*.json"
