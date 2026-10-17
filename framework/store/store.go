@@ -1928,8 +1928,10 @@ type RealmStore interface {
 
 	// --- Signing keys and config (key_id is the key's own UUID handle) ---
 
-	// UpsertSigningKey inserts or replaces a signing key row. PrivateKey must be
-	// populated; it is stored as a BLOB.
+	// UpsertSigningKey inserts or replaces a signing key row, sealing PrivateKey
+	// when a master key is configured. Without one, a non-empty PrivateKey returns
+	// domain.ErrMasterKeyRequired and nothing is written; an empty one, which a
+	// verify-only key carries, is stored as is.
 	UpsertSigningKey(ctx context.Context, key domain.SigningKey) error
 
 	// GetActiveSigningKey returns the currently active key with PrivateKey

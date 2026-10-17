@@ -133,16 +133,32 @@ func getBalanceRow(
 func seedSigningKey(t *testing.T, ctx context.Context, rs fwstore.RealmStore, keyID string) {
 	t.Helper()
 	seed := []byte("00000000000000000000000000000001")
-	publicKey := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
-	r := rs.(*realmStore)
-	if _, err := r.rawDB().ExecContext(
+	seedClearSigningKey(t, ctx, rs, domain.SigningKey{
+		CreatedAt:  time.Now(),
+		KeyID:      keyID,
+		Alg:        "ed25519",
+		PrivateKey: seed,
+		PublicKey:  ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey),
+		Active:     true,
+	})
+}
+
+// seedClearSigningKey inserts key with its private material stored as given,
+// bypassing UpsertSigningKey, which refuses unsealed private material without a
+// master key.
+func seedClearSigningKey(
+	t *testing.T, ctx context.Context, rs fwstore.RealmStore, key domain.SigningKey,
+) {
+	t.Helper()
+	if _, err := rs.(*realmStore).rawDB().ExecContext(
 		ctx,
 		`INSERT INTO signing_key
 		 (key_id, alg, private_key, public_key, created_at, active)
-		 VALUES (?, 'ed25519', ?, ?, ?, 1)`,
-		keyID, seed, publicKey, nowStr(),
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		key.KeyID, key.Alg, key.PrivateKey, key.PublicKey,
+		timeStr(key.CreatedAt), key.Active,
 	); err != nil {
-		t.Fatalf("seed signing key: %v", err)
+		t.Fatalf("seed signing key %q: %v", key.KeyID, err)
 	}
 }
 

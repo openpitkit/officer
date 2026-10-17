@@ -43,6 +43,7 @@ import (
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/secret"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/internal/store/sqlite"
@@ -409,7 +410,14 @@ func newRealServiceRouterWithEngine(t *testing.T) (
 ) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := sqlite.New(t.TempDir()+"/httpapi-realgate.db", domain.DefaultRealm)
+	// The store holds the signing key generated below, which needs a master key.
+	masterKey, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if err != nil {
+		t.Fatalf("ParseMasterKey: %v", err)
+	}
+	st, err := sqlite.New(
+		t.TempDir()+"/httpapi-realgate.db", domain.DefaultRealm, sqlite.WithMasterKey(masterKey),
+	)
 	if err != nil {
 		t.Fatalf("sqlite.New: %v", err)
 	}

@@ -388,15 +388,22 @@ func TestBackupExportPreservesCredentialFormAndExcludesSigningPrivateKey(t *test
 			seed := bytes.Repeat([]byte{0x47}, ed25519.SeedSize)
 			privateKey := ed25519.NewKeyFromSeed(seed)
 			publicKey := privateKey.Public().(ed25519.PublicKey)
-			if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+			signingKey := domain.SigningKey{
 				CreatedAt:  time.Now().UTC(),
 				KeyID:      "archive-key",
 				Alg:        fwsigning.AlgEd25519,
 				PrivateKey: seed,
 				PublicKey:  publicKey,
 				Active:     true,
-			}); err != nil {
-				t.Fatalf("UpsertSigningKey: %v", err)
+			}
+			if test.sealed {
+				if err := rs.UpsertSigningKey(ctx, signingKey); err != nil {
+					t.Fatalf("UpsertSigningKey: %v", err)
+				}
+			} else {
+				// UpsertSigningKey refuses private material without a master key;
+				// a clear row seeded directly must still stay out of the archive.
+				seedClearSigningKey(t, ctx, rs, signingKey)
 			}
 			credentials := []byte(`{"token":"archive-secret"}`)
 			instance, err := rs.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
@@ -785,7 +792,7 @@ func TestBackupRestoreRejectsMissingOrUnknownCredentialForm(t *testing.T) {
 
 func TestBackupRestoreSigningKeyIsVerifyOnlyAndInactive(t *testing.T) {
 	ctx := context.Background()
-	_, src := newTestStore(t)
+	_, src := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x29)))
 	seed := bytes.Repeat([]byte{0x29}, ed25519.SeedSize)
 	privateKey := ed25519.NewKeyFromSeed(seed)
 	publicKey := privateKey.Public().(ed25519.PublicKey)
@@ -834,6 +841,48 @@ func TestBackupRestoreSigningKeyIsVerifyOnlyAndInactive(t *testing.T) {
 	if len(storedPrivateKey) == 0 || active {
 		t.Fatalf("stored signing key private length=%d active=%v, want sealed empty and inactive",
 			len(storedPrivateKey), active)
+	}
+}
+
+func TestBackupRestoreSigningKeyWithoutMasterKeyStaysVerifyOnly(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	store := openSQLiteStoreForTest(t, path)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	rs, err := store.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm: %v", err)
+	}
+	archived := signingKeyForBackup(t, "restored-public-key", 0x2d, true)
+	archive := backup.NewArchive(
+		time.Now(), "test", backup.RealmLabel{Code: "source"},
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{SigningKeys: []backup.SigningKey{archived}},
+		backup.CredentialFormPlaintext,
+	)
+	if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeInsertMissing,
+	}); err != nil {
+		t.Fatalf("RestoreBackup without a master key: %v", err)
+	}
+	got, err := rs.GetSigningKey(ctx, archived.KeyID)
+	if err != nil {
+		t.Fatalf("GetSigningKey: %v", err)
+	}
+	if got.Active || len(got.PrivateKey) != 0 || !bytes.Equal(got.PublicKey, archived.PublicKey) {
+		t.Fatalf("restored signing key = %+v, want inactive public-only key", got)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	// A verify-only key holds no secret, so its database still opens without a
+	// master key.
+	reopened := openSQLiteStoreForTest(t, path)
+	if err := reopened.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate over a verify-only signing key without a master key: %v", err)
 	}
 }
 
@@ -893,7 +942,7 @@ func TestBackupRestoreSelfPreservesActiveSigningKey(t *testing.T) {
 
 func TestBackupRestoreKeepsTargetActiveWhenArchiveAddsActiveKey(t *testing.T) {
 	ctx := context.Background()
-	_, rs := newTestStore(t)
+	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x33)))
 	target := signingKeyForBackup(t, "existing-active", 0x31, true)
 	seed := bytes.Repeat([]byte{0x31}, ed25519.SeedSize)
 	if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
@@ -928,7 +977,7 @@ func TestBackupRestoreKeepsTargetActiveWhenArchiveAddsActiveKey(t *testing.T) {
 
 func TestBackupRestoreRejectsSigningKeyIdentityConflict(t *testing.T) {
 	ctx := context.Background()
-	_, rs := newTestStore(t)
+	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x43)))
 	target := signingKeyForBackup(t, "shared-id", 0x41, true)
 	seed := bytes.Repeat([]byte{0x41}, ed25519.SeedSize)
 	if err := rs.UpsertSigningKey(ctx, domain.SigningKey{

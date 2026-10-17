@@ -24,20 +24,27 @@ import (
 	"go.openpit.dev/officer/engine"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 // newLocalNode builds a local node that runs the OpenPit engine on a fresh
 // SQLite store of the default realm, and returns it with the store bound to
-// that realm, where the application keeps its signing keys. The node is closed
-// when the test ends.
+// that realm, where the application keeps its signing keys. The store is sealed
+// with a master key, which signing keys need. The node is closed when the test
+// ends.
 func newLocalNode(t *testing.T) (node.Node, store.RealmStore) {
 	t.Helper()
 	ctx := systemCtx()
+	masterKey, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if err != nil {
+		t.Fatalf("ParseMasterKey: %v", err)
+	}
 	st, err := sqlite.New(
 		filepath.Join(t.TempDir(), "officer.db"),
 		domain.DefaultRealm,
+		sqlite.WithMasterKey(masterKey),
 	)
 	if err != nil {
 		t.Fatalf("sqlite.New: %v", err)

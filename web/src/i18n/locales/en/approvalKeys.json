@@ -9,6 +9,7 @@
     "status": "Status",
     "statusActive": "active",
     "empty": "No signing key configured. Generate or import one below.",
+    "emptyNoMasterKey": "No signing key configured.",
     "export": {
       "label": "Export public key",
       "formatLabel": "Format",
@@ -30,6 +31,10 @@
     "importKeyLabel": "Private key",
     "importKeyPlaceholder": "Paste your private key here…",
     "importBusy": "Importing…",
+    "masterKeyRequired": {
+      "title": "Approval signing requires a master key",
+      "description": "Officer stores a signing key only sealed under a master key. This instance runs without one, so it cannot generate or import a key. Configure a master key and restart Officer to enable signing."
+    },
     "generateDialog": {
       "title": "Generate new signing key",
       "description": "This will create a fresh Ed25519 key pair. The current active key will be deactivated. Connectors can still resolve the old public key to verify envelopes signed under it.",
@@ -46,7 +51,7 @@
     "sectionTitle": "Electronic Signature",
     "label": "Require signature on approval and attestation envelopes",
     "description": "When enabled, every approval and attestation envelope is signed with the active Ed25519 key. Connectors verify the signature before executing. When disabled, envelopes carry the full payload and binding but no cryptographic signature; the binding is still checked.",
-    "missingKeyError": "Generate or import a signing key before enabling electronic signatures.",
+    "missingKeyError": "Electronic signatures need an active signing key. Set one up under Generate or Import above.",
     "busy": "Saving…"
   }
 }

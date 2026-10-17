@@ -432,6 +432,8 @@ func DescribeErr(err error) PublicError {
 		return PublicError{http.StatusConflict, "trading_mode_mismatch", domain.ErrTradingModeMismatch.Error()}
 	case errors.Is(err, domain.ErrFeeAccountRequired):
 		return PublicError{http.StatusConflict, "fee_account_required", domain.ErrFeeAccountRequired.Error()}
+	case errors.Is(err, domain.ErrMasterKeyRequired):
+		return PublicError{http.StatusConflict, "master_key_required", domain.ErrMasterKeyRequired.Error()}
 	case errors.Is(err, domain.ErrAccountsNotManaged):
 		return PublicError{http.StatusConflict, "accounts_not_managed", err.Error()}
 	case errors.Is(err, domain.ErrVenueOrderManaged):

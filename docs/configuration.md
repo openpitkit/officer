@@ -111,14 +111,30 @@ If both sources are configured they must carry the same key, and a configured
 source that cannot be read or parsed is a startup error. Officer refuses to
 start rather than silently running unencrypted.
 
-Startup resolves to one of four states:
+Approval signing needs the master key. Officer stores an approval signing
+private key only sealed under it, so without a key generating or importing a
+signing key is refused with `master_key_required` (HTTP 409), and the panel's
+Signing Keys screen says why. To enable signing, configure the key and restart
+Officer.
 
-- **Unsealed database, no key** - secrets are stored as plaintext. This is the
+Startup resolves to one of six states:
+
+- **Unsealed database, no key** - trading and market-data credentials are stored
+  as plaintext; an approval signing private key is never stored. This is the
   default.
+- **Unsealed database holding an approval signing private key in the clear, no
+  key** - Officer refuses to start. Only an earlier build could have written
+  that key. Start Officer with the master key, which seals the key in place -
+  it must then be considered exposed and reissued - or start from a new
+  database.
 - **Unsealed database, key supplied** - the database is sealed, then vacuumed.
   For a database that already existed, Officer logs that previously stored
   secrets must be considered exposed and should be reissued: they were on disk
   in the clear, and sealing cannot undo that.
+- **Sealed database, matching key** - Officer starts with stored secrets
+  sealed. If an earlier sealing never recorded its vacuum, the database is
+  vacuumed first, and Officer logs that previously stored secrets must be
+  considered exposed and should be reissued.
 - **Sealed database, no key** - Officer refuses to start.
 - **Sealed database, wrong key** - Officer refuses to start.
 

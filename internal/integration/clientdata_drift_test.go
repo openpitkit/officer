@@ -1725,13 +1725,15 @@ func seedClientDataDriftRealm(
 	signingKeySeed := []byte("00000000000000000000000000000002")
 	ed25519Key := ed25519.NewKeyFromSeed(signingKeySeed)
 	signingKeyPublic := ed25519Key.Public().(ed25519.PublicKey)
+	// The realm stays unsealed so archived credentials compare byte-exact, and
+	// an unsealed store refuses private signing material; archives never carry
+	// it, so the key is verify-only.
 	must(t, "UpsertSigningKey", rs.UpsertSigningKey(ctx, domain.SigningKey{
-		CreatedAt:  time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC),
-		KeyID:      "key-sentinel-1",
-		Alg:        "ed25519",
-		PublicKey:  signingKeyPublic,
-		PrivateKey: signingKeySeed,
-		Active:     true,
+		CreatedAt: time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC),
+		KeyID:     "key-sentinel-1",
+		Alg:       "ed25519",
+		PublicKey: signingKeyPublic,
+		Active:    true,
 	}))
 	must(t, "PutEventAttestation", rs.PutEventAttestation(
 		ctx, event.ExternalID, domain.EventAttestation{

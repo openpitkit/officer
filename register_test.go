@@ -20,6 +20,9 @@ package officer
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -263,10 +266,7 @@ func TestRegisterBuildUsesPopulatedMCPCatalog(t *testing.T) {
 func TestRegisterPassesMasterKeyToSQLite(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	key, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-	if err != nil {
-		t.Fatalf("ParseMasterKey: %v", err)
-	}
+	key := testMasterKey(t)
 
 	builder := frameworkapp.NewBuilder()
 	if err := Register(builder, Config{SQLitePath: path, MasterKey: &key}); err != nil {
@@ -293,6 +293,82 @@ func TestRegisterPassesMasterKeyToSQLite(t *testing.T) {
 	if !strings.Contains(err.Error(), "no master key was supplied") {
 		t.Fatalf("Build without the master key returned the wrong error: %v", err)
 	}
+}
+
+// TestRegisterSigningKeyRequiresMasterKey drives, over REST, the real
+// composition: without a master key, generating and importing a signing key are
+// refused with master_key_required and no private key reaches the database;
+// with one, both succeed and every stored private key is sealed.
+func TestRegisterSigningKeyRequiresMasterKey(t *testing.T) {
+	seed := bytes.Repeat([]byte{0x6b}, ed25519.SeedSize)
+	importBody := fmt.Sprintf(
+		`{"key":%q,"format":"raw-base64"}`, base64.StdEncoding.EncodeToString(seed),
+	)
+
+	clearPath := filepath.Join(t.TempDir(), "officer.db")
+	app, handler := serveSeededApp(t, Config{SQLitePath: clearPath}, nil)
+	for _, route := range []struct{ path, body string }{
+		{"/signing/keys/generate", ""},
+		{"/signing/keys/import", importBody},
+	} {
+		refused := restCall(t, handler, http.MethodPost, route.path, route.body, http.StatusConflict)
+		if errObj, _ := refused["error"].(map[string]any); errObj["code"] != "master_key_required" ||
+			errObj["message"] != domain.ErrMasterKeyRequired.Error() {
+			t.Fatalf("POST %s without a master key = %v, want master_key_required", route.path, refused)
+		}
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("Close without a master key: %v", err)
+	}
+	if stored := storedSigningPrivateKeys(t, clearPath); len(stored) != 0 {
+		t.Fatalf("signing private keys stored without a master key = %d, want 0", len(stored))
+	}
+
+	key := testMasterKey(t)
+	sealedPath := filepath.Join(t.TempDir(), "officer.db")
+	app, handler = serveSeededApp(t, Config{SQLitePath: sealedPath, MasterKey: &key}, nil)
+	restCall(t, handler, http.MethodPost, "/signing/keys/generate", "", http.StatusCreated)
+	restCall(t, handler, http.MethodPost, "/signing/keys/import", importBody, http.StatusCreated)
+	if err := app.Close(); err != nil {
+		t.Fatalf("Close with a master key: %v", err)
+	}
+	stored := storedSigningPrivateKeys(t, sealedPath)
+	if len(stored) != 2 {
+		t.Fatalf("signing private keys stored with a master key = %d, want 2", len(stored))
+	}
+	for _, privateKey := range stored {
+		if len(privateKey) == ed25519.SeedSize || bytes.Contains(privateKey, seed) {
+			t.Fatal("a signing private key is stored in the clear")
+		}
+	}
+}
+
+// storedSigningPrivateKeys reads every non-empty signing_key.private_key of the
+// SQLite database at path as stored, past the store and its sealing.
+func storedSigningPrivateKeys(t *testing.T, path string) [][]byte {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.Query(`SELECT private_key FROM signing_key WHERE length(private_key) > 0`)
+	if err != nil {
+		t.Fatalf("read signing private keys: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var stored [][]byte
+	for rows.Next() {
+		var privateKey []byte
+		if err := rows.Scan(&privateKey); err != nil {
+			t.Fatalf("scan signing private key: %v", err)
+		}
+		stored = append(stored, privateKey)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate signing private keys: %v", err)
+	}
+	return stored
 }
 
 func TestBuildRejectsNodeBuilderWithoutEngine(t *testing.T) {
@@ -389,6 +465,17 @@ func TestBuildRejectsNilFatalHook(t *testing.T) {
 	if !strings.Contains(err.Error(), "nil fatal shutdown hook") {
 		t.Fatalf("Build error = %v, want the missing fatal shutdown hook named", err)
 	}
+}
+
+// testMasterKey returns the fixed master key of the compositions that seal
+// their database.
+func testMasterKey(t *testing.T) secret.MasterKey {
+	t.Helper()
+	key, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if err != nil {
+		t.Fatalf("ParseMasterKey: %v", err)
+	}
+	return key
 }
 
 // failOnFatal returns the fatal-shutdown hook of a test that expects no
@@ -519,7 +606,11 @@ func TestRecordServiceLifecycleRecordsExplicitSystemCaller(t *testing.T) {
 // default account alone, the account set cannot change, and a stored switch
 // back to multi-account mode waits for a restart.
 func TestRegisterSingleAccountMode(t *testing.T) {
-	handler := serveSeededApp(t, map[string]string{
+	// The composition generates a signing key, which needs a master key.
+	key := testMasterKey(t)
+	_, handler := serveSeededApp(t, Config{
+		SQLitePath: filepath.Join(t.TempDir(), "officer.db"), MasterKey: &key,
+	}, map[string]string{
 		accountmode.SettingKeyMode: "single:default",
 	})
 	assertAccountMode(t, handler, http.MethodGet, "",
@@ -572,7 +663,9 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 // existed, the mode reads as not chosen, and refused mode choices answer with
 // their own codes.
 func TestRegisterWithoutAccountMode(t *testing.T) {
-	handler := serveSeededApp(t, nil)
+	_, handler := serveSeededApp(
+		t, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")}, nil,
+	)
 	assertAccountMode(t, handler, http.MethodGet, "",
 		`{"mode":null,"account":"","features":{"accounts":true,"account":""},"restartRequired":false}`)
 	got := listedAccounts(t, handler)
@@ -600,9 +693,12 @@ func TestRegisterWithoutAccountMode(t *testing.T) {
 // registrar sees the scope Register installs, so submit_order neither requires
 // an account nor offers an account group.
 func TestRegisterSingleAccountModeMCPSchemas(t *testing.T) {
-	server := httptest.NewServer(serveSeededApp(t, map[string]string{
+	_, handler := serveSeededApp(t, Config{
+		SQLitePath: filepath.Join(t.TempDir(), "officer.db"),
+	}, map[string]string{
 		accountmode.SettingKeyMode: "single:default",
-	}))
+	})
+	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -677,15 +773,21 @@ func TestRegisterRouteBaseline(t *testing.T) {
 	}
 }
 
-// serveSeededApp builds the real composition - Register over a temporary
-// SQLite database, with Register's own node over the native engine - on a
-// database seeded with the accounts "default" and "other", the assets AAPL and
-// USD, and settings, and returns the app's served handler.
-func serveSeededApp(t *testing.T, settings map[string]string) http.Handler {
+// serveSeededApp builds the real composition - Register over cfg, with
+// Register's own node over the native engine - on a database seeded, sealed
+// with cfg's master key when it carries one, with the accounts "default" and
+// "other", the assets AAPL and USD, and settings, and returns the app and its
+// served handler.
+func serveSeededApp(
+	t *testing.T, cfg Config, settings map[string]string,
+) (*frameworkapp.App, http.Handler) {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "officer.db")
-	st, err := sqlite.New(path, domain.DefaultRealm)
+	var opts []sqlite.Option
+	if cfg.MasterKey != nil {
+		opts = append(opts, sqlite.WithMasterKey(*cfg.MasterKey))
+	}
+	st, err := sqlite.New(cfg.SQLitePath, domain.DefaultRealm, opts...)
 	if err != nil {
 		t.Fatalf("sqlite.New: %v", err)
 	}
@@ -718,7 +820,7 @@ func serveSeededApp(t *testing.T, settings map[string]string) http.Handler {
 	}
 
 	builder := frameworkapp.NewBuilder()
-	if err := Register(builder, Config{SQLitePath: path}); err != nil {
+	if err := Register(builder, cfg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	builder.SetSPAFactory(func() (fs.FS, error) {
@@ -733,7 +835,7 @@ func serveSeededApp(t *testing.T, settings map[string]string) http.Handler {
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
-	return handler
+	return app, handler
 }
 
 // restCall serves one /api/v1 request through handler and decodes its JSON

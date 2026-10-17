@@ -165,6 +165,13 @@ var (
 	ErrNoDestination = registerSentinel(errors.New("no destination for the account in this mode"))
 	// ErrFeeAccountRequired prevents ambiguous attribution of unlinked fees.
 	ErrFeeAccountRequired = registerSentinel(errors.New("the connection's fee account must be set: the venue's fees cannot be split between Officer accounts"))
+	// ErrMasterKeyRequired refuses to hold an approval signing private key in the
+	// clear: generating or importing one, or starting over a database that already
+	// stores one unsealed, needs a configured master key. Its text must fit both
+	// cases, so it names the remedy and not the refused action.
+	ErrMasterKeyRequired = registerSentinel(errors.New(
+		"approval signing requires a master key: configure one and restart Officer",
+	))
 	// ErrNoChange marks a successful engine command that produced no account
 	// modifications for Officer to persist.
 	ErrNoChange = registerSentinel(errors.New("no change"))

@@ -34,7 +34,7 @@ import (
 
 func TestSigningKeyUpsertGetList(t *testing.T) {
 	ctx := context.Background()
-	_, rs := newTestStore(t)
+	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x81)))
 
 	priv := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
 	pub := []byte{0xaa, 0xbb, 0xcc}
@@ -100,7 +100,7 @@ func TestSigningKeyUpsertGetList(t *testing.T) {
 
 func TestSigningKeyActiveSwitchingAndDeactivateAll(t *testing.T) {
 	ctx := context.Background()
-	_, rs := newTestStore(t)
+	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x82)))
 
 	// First key is active.
 	k1 := domain.SigningKey{
@@ -170,7 +170,7 @@ func TestSigningKeyActiveSwitchingAndDeactivateAll(t *testing.T) {
 
 func TestUpsertSigningKeyRejectsZeroCreatedAt(t *testing.T) {
 	ctx := context.Background()
-	_, rs := newTestStore(t)
+	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x83)))
 	err := rs.UpsertSigningKey(ctx, domain.SigningKey{
 		KeyID: "k1", Alg: "ed25519", PublicKey: []byte{1}, PrivateKey: []byte{1}, Active: true,
 	})

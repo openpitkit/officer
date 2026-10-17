@@ -15,12 +15,22 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+import { Info } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { SigningKey, SigningKeyFormat } from "@/api/types";
+import type {
+  CredentialStorage,
+  SigningKey,
+  SigningKeyFormat,
+} from "@/api/types";
+import { useCredentialStorage } from "@/api/useCredentialStorage";
+import type { LoadState } from "@/api/usePolling";
 import { useSigningKeys } from "@/api/useSigningKeys";
 import { CopyableSnippet } from "@/components/CopyableSnippet";
+import { CredentialStorageCheck } from "@/components/CredentialStorageCheck";
+import { MasterKeyLink } from "@/components/MasterKeyLink";
+import { Notice } from "@/components/Notice";
 import {
   ErrorBanner,
   ErrorState,
@@ -70,7 +80,13 @@ function errMessage(err: unknown): string {
 // Card A - Active key
 // ---------------------------------------------------------------------------
 
-function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
+function ActiveKeyCard({
+  activeKey,
+  sealed,
+}: {
+  activeKey: SigningKey | null;
+  sealed: boolean;
+}) {
   const { t } = useTranslation("approvalKeys");
   const { exportPublicKey } = useOfficerApi();
 
@@ -106,7 +122,9 @@ function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
       </CardHeader>
       <CardContent className="space-y-4">
         {activeKey === null ? (
-          <p className="text-xs text-muted-lt">{t("currentKey.empty")}</p>
+          <p className="text-xs text-muted-lt">
+            {sealed ? t("currentKey.empty") : t("currentKey.emptyNoMasterKey")}
+          </p>
         ) : (
           <>
             <StatRow
@@ -187,7 +205,15 @@ function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
 // Card B - Generate / Import
 // ---------------------------------------------------------------------------
 
-function ManageKeyCard({ onDone }: { onDone: () => void }) {
+function ManageKeyCard({
+  storage,
+  sealed,
+  onDone,
+}: {
+  storage: LoadState<CredentialStorage>;
+  sealed: boolean;
+  onDone: () => void;
+}) {
   const { t } = useTranslation("approvalKeys");
   const { t: tc } = useTranslation();
   const { generateSigningKey, importSigningKey } = useOfficerApi();
@@ -241,6 +267,20 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
         <CardTitle>{t("manageKey.sectionTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Officer stores a signing key only sealed under a master key. */}
+        <CredentialStorageCheck storage={storage}>
+          <Notice
+            tone="warn"
+            icon={Info}
+            title={t("manageKey.masterKeyRequired.title")}
+          >
+            <p>{t("manageKey.masterKeyRequired.description")}</p>
+            <p>
+              <MasterKeyLink />
+            </p>
+          </Notice>
+        </CredentialStorageCheck>
+
         {/* Mode toggle */}
         <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
           {(["generate", "import"] as const).map((m) => (
@@ -274,7 +314,7 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
             <Button
               size="sm"
               onClick={() => setGenerateDialogOpen(true)}
-              disabled={generateBusy}
+              disabled={generateBusy || !sealed}
             >
               {t("manageKey.generateButton")}
             </Button>
@@ -293,7 +333,7 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
               <Select
                 value={importFormat}
                 onValueChange={(v) => setImportFormat(v as SigningKeyFormat)}
-                disabled={importBusy}
+                disabled={importBusy || !sealed}
               >
                 <SelectTrigger className="h-8 w-56 text-xs">
                   <SelectValue />
@@ -317,7 +357,7 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
                 value={importKey}
                 onChange={(e) => setImportKey(e.target.value)}
                 placeholder={t("manageKey.importKeyPlaceholder")}
-                disabled={importBusy}
+                disabled={importBusy || !sealed}
                 rows={5}
                 className="resize-none font-mono text-xs"
                 autoComplete="off"
@@ -331,7 +371,7 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
             <Button
               size="sm"
               onClick={() => void handleImport()}
-              disabled={importBusy}
+              disabled={importBusy || !sealed}
             >
               {importBusy
                 ? t("manageKey.importBusy")
@@ -369,7 +409,7 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
                   e.preventDefault();
                   void handleGenerate();
                 }}
-                disabled={generateBusy}
+                disabled={generateBusy || !sealed}
               >
                 {t("manageKey.generateDialog.confirm")}
               </AlertDialogAction>
@@ -427,6 +467,9 @@ export function SigningKeys() {
   const { t } = useTranslation("approvalKeys");
   const { setESignEnabled } = useOfficerApi();
   const { load, reload } = useSigningKeys();
+  const { load: storage } = useCredentialStorage();
+  // Key entry stays closed until the storage load proves a master key seals it.
+  const sealed = storage.state === "ready" && storage.data.credentialsSealed;
 
   const [eSignBusy, setESignBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -491,9 +534,11 @@ export function SigningKeys() {
 
       {load.state === "ready" && (
         <div className="space-y-4">
-          <ActiveKeyCard activeKey={activeKey} />
+          <ActiveKeyCard activeKey={activeKey} sealed={sealed} />
 
           <ManageKeyCard
+            storage={storage}
+            sealed={sealed}
             onDone={() => {
               setLocalESign(null);
               reload();

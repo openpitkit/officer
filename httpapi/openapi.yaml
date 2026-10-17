@@ -3244,7 +3244,10 @@ paths:
       summary: Generate a fresh Ed25519 signing key and make it active
       description: >
         Generates a fresh Ed25519 keypair, makes it the sole active signing key,
-        and returns it without private material.
+        and returns it without private material. Officer stores the private key
+        only sealed under the master key, so without one the request is refused
+        with 409 master_key_required. GET /credential-storage reports
+        `credentialsSealed`.
       tags: [signing]
       responses:
         "201":
@@ -3257,6 +3260,8 @@ paths:
                 properties:
                   key:
                     $ref: "#/components/schemas/SigningKey"
+        "409":
+          $ref: "#/components/responses/MasterKeyRequiredError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -3264,6 +3269,12 @@ paths:
     post:
       operationId: importSigningKey
       summary: Import an Ed25519 signing key and make it active
+      description: >
+        Imports an Ed25519 private key, makes it the active signing key, and
+        returns it without private material. Officer stores the private key
+        only sealed under the master key, so without one the request is refused
+        with 409 master_key_required. GET /credential-storage reports
+        `credentialsSealed`.
       tags: [signing]
       requestBody:
         required: true
@@ -3294,6 +3305,8 @@ paths:
                     $ref: "#/components/schemas/SigningKey"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
+        "409":
+          $ref: "#/components/responses/MasterKeyRequiredError"
         "422":
           $ref: "#/components/responses/ValidationError"
         "500":
@@ -5110,6 +5123,16 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    MasterKeyRequiredError:
+      description: >
+        Approval signing is refused while Officer runs without a master key
+        (master_key_required): a signing private key is stored only sealed
+        under it. Configure a master key and restart Officer.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     TradingConflictError:
       description: >
         A connection or account dependency conflicts with the request. A
@@ -5277,8 +5300,8 @@ components:
                 `live_trading_unavailable`, `trading_mode_mismatch`,
                 `fee_account_required`, `venue_order_managed`, `no_destination`,
                 `destination_ambiguous`, `accounts_not_managed`,
-                `engine_restarting`, `signing`, `upstream`, `not_implemented`,
-                or `internal`.
+                `engine_restarting`, `signing`, `master_key_required`,
+                `upstream`, `not_implemented`, or `internal`.
               example: not_found
             message:
               type: string

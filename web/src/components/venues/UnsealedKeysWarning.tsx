@@ -20,47 +20,33 @@ import { useTranslation } from "react-i18next";
 
 import type { CredentialStorage } from "@/api/types";
 import type { LoadState } from "@/api/usePolling";
+import { CredentialStorageCheck } from "@/components/CredentialStorageCheck";
 import { MasterKeyLink } from "@/components/MasterKeyLink";
 import { Notice } from "@/components/Notice";
-import { ErrorBanner } from "@/components/PageStates";
 
 export type UnsealedKeysWarningProps = {
   /** Installation credential storage load that decides the warning. */
   storage: LoadState<CredentialStorage>;
 };
 
-/** Warns about unsealed credentials without restricting key entry. Until the
- *  storage load settles, a quiet status says the check is running; a failed
- *  load is shown as the error, since the dialog then cannot tell whether the
- *  keys will be sealed. */
+/** Warns about unsealed credentials without restricting key entry. A running
+ *  or failed storage check renders as CredentialStorageCheck shows it. */
 export function UnsealedKeysWarning({ storage }: UnsealedKeysWarningProps) {
   const { t } = useTranslation("venues");
-  const { t: tc } = useTranslation();
-  if (storage.state === "error")
-    return (
-      <ErrorBanner
-        message={tc("sensitiveData.unknown", { error: storage.error })}
-      />
-    );
-  if (storage.state === "loading")
-    return (
-      <p role="status" className="text-xs text-muted">
-        {tc("sensitiveData.checking")}
-      </p>
-    );
-  if (storage.data.credentialsSealed) return null;
   return (
-    <Notice
-      tone="danger"
-      icon={AlertTriangle}
-      title={t("unsealed.title")}
-      role="alert"
-    >
-      <p>{t("unsealed.description")}</p>
-      <p>
-        <MasterKeyLink />
-      </p>
-      <p>{t("unsealed.caution")}</p>
-    </Notice>
+    <CredentialStorageCheck storage={storage}>
+      <Notice
+        tone="danger"
+        icon={AlertTriangle}
+        title={t("unsealed.title")}
+        role="alert"
+      >
+        <p>{t("unsealed.description")}</p>
+        <p>
+          <MasterKeyLink />
+        </p>
+        <p>{t("unsealed.caution")}</p>
+      </Notice>
+    </CredentialStorageCheck>
   );
 }
