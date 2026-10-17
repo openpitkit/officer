@@ -225,7 +225,7 @@ func NewIBConnector(instanceID, credentials string) *ibConnector {
 		newClient: func(wrapper ibapi.EWrapper) ibClient {
 			return liveIBClient{client: ibapi.NewEClient(wrapper)}
 		},
-		sleep:          sleepContext,
+		sleep:          backoff.Sleep,
 		now:            func() time.Time { return time.Now().UTC() },
 		cfg:            cfg,
 		configErr:      err,

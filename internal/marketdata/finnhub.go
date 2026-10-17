@@ -128,7 +128,7 @@ func NewFinnhubConnector(
 	}
 	return &finnhubConnector{
 		dial:          dialFinnhub,
-		sleep:         sleepContext,
+		sleep:         backoff.Sleep,
 		quote:         fetchFinnhubQuote,
 		search:        fetchFinnhubSearchResults,
 		cryptoSymbols: fetchFinnhubCryptoSymbols,

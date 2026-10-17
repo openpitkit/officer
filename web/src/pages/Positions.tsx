@@ -3370,8 +3370,7 @@ function sortFromParams(
 export function Positions() {
   const { t } = useTranslation("positions");
   const { t: tc } = useTranslation("common");
-  const { fetchAccounts, fetchAdjustmentsPage, fetchAssets, fetchGroups } =
-    useOfficerApi();
+  const { fetchAccounts, fetchAdjustmentsPage, fetchGroups } = useOfficerApi();
   const [searchParams] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
   const { showsAccounts } = accountScope();
@@ -3540,10 +3539,6 @@ export function Positions() {
     groupDraft.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
-  const deferredAssetDraft = useDebouncedValue(
-    assetDraft.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
   const deferredAccount = accountFilter;
   const deferredGroup = groupFilter;
   const deferredAsset = assetFilter;
@@ -3624,15 +3619,13 @@ export function Positions() {
 
   const [accountSuggestions, setAccountSuggestions] = useState<string[]>([]);
   const [groupSuggestions, setGroupSuggestions] = useState<string[]>([]);
-  const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
+  const assetSuggestions = useAssetCodeSuggestions(assetDraft, true);
   const accountCurrencySuggestions =
     useAccountCurrencySuggestions(moreFiltersOpen);
   const visibleAccountSuggestions =
     deferredAccountDraft.trim() === "" ? [] : accountSuggestions;
   const visibleGroupSuggestions =
     deferredGroupDraft.trim() === "" ? [] : groupSuggestions;
-  const visibleAssetSuggestions =
-    deferredAssetDraft.trim() === "" ? [] : assetSuggestions;
 
   useEffect(() => {
     const query = deferredAccountDraft.trim();
@@ -3691,34 +3684,6 @@ export function Positions() {
       });
     return () => controller.abort();
   }, [deferredGroupDraft, fetchGroups]);
-
-  useEffect(() => {
-    const query = deferredAssetDraft.trim();
-    if (query === "") {
-      return;
-    }
-    const controller = new AbortController();
-    void fetchAssets(
-      {
-        code: query,
-        codeMatch: "starts_with",
-        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-        sort: "code",
-      },
-      controller.signal,
-    )
-      .then((assets) => {
-        const next = assets.map((asset) => asset.code);
-        setAssetSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
-      })
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) {
-          console.error(err);
-          setAssetSuggestions((prev) => (prev.length === 0 ? prev : []));
-        }
-      });
-    return () => controller.abort();
-  }, [deferredAssetDraft, fetchAssets]);
 
   const openNewAdjust = () => {
     setDraftOpenRequest((current) => current + 1);
@@ -4399,7 +4364,7 @@ export function Positions() {
           label={t("filters.byAsset")}
           value={assetDraft}
           placeholder="AAPL"
-          suggestions={visibleAssetSuggestions}
+          suggestions={assetSuggestions.codes}
           width={160}
           onChange={setAssetDraft}
           onSuggestionSelect={(value) => applyIdentityField("asset", value)}
@@ -4647,7 +4612,7 @@ export function Positions() {
                 defaultDraftAsset={assetFilter.trim()}
                 draftOpenRequest={draftOpenRequest}
                 accountSuggestions={accountSuggestions}
-                assetSuggestions={assetSuggestions}
+                assetSuggestions={assetSuggestions.codes}
                 onSortChange={(sort, order) => {
                   setBalanceSort({ sort, order });
                   setBalancePage(0);
@@ -4892,7 +4857,7 @@ export function Positions() {
         initialHeldBoundsUpper={adjustHeldBoundsUpper}
         initialIncomingBoundsLower={adjustIncomingBoundsLower}
         initialIncomingBoundsUpper={adjustIncomingBoundsUpper}
-        assetSuggestions={assetSuggestions}
+        assetSuggestions={assetSuggestions.codes}
         accountSuggestions={accountSuggestions}
         onDone={handleAdjustDone}
       />

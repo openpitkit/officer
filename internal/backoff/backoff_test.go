@@ -18,6 +18,8 @@
 package backoff
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -33,5 +35,28 @@ func TestDelayCaps(t *testing.T) {
 	}
 	if got := Delay(10, time.Second, 8*time.Second); got != 8*time.Second {
 		t.Fatalf("Delay(10) = %s", got)
+	}
+}
+
+func TestSleepEndsWithContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := Sleep(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Sleep(canceled) = %v", err)
+	}
+}
+
+func TestSleepWaitsForDelay(t *testing.T) {
+	t.Parallel()
+
+	const delay = 10 * time.Millisecond
+	start := time.Now()
+	if err := Sleep(t.Context(), delay); err != nil {
+		t.Fatalf("Sleep = %v", err)
+	}
+	if waited := time.Since(start); waited < delay {
+		t.Fatalf("Sleep returned after %s, want at least %s", waited, delay)
 	}
 }

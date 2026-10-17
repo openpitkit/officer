@@ -127,7 +127,7 @@ func NewBybitConnector(credentials string) (*bybitConnector, error) {
 	}
 	return &bybitConnector{
 		dial:         dialBybit,
-		sleep:        sleepContext,
+		sleep:        backoff.Sleep,
 		fetchSymbols: fetchBybitSymbols,
 		reconnectMin: defaultBybitReconnectMin,
 		reconnectMax: defaultBybitReconnectMax,

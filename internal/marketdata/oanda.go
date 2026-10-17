@@ -117,7 +117,7 @@ func NewOANDAConnector(
 	}
 	return &oandaConnector{
 		stream:       streamOANDA,
-		sleep:        sleepContext,
+		sleep:        backoff.Sleep,
 		reconnectMin: defaultOANDAReconnectMin,
 		reconnectMax: defaultOANDAReconnectMax,
 		idleTimeout:  defaultOANDAIdleTimeout,

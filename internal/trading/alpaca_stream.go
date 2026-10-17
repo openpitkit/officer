@@ -156,12 +156,8 @@ func (c *alpacaConnector) run(ctx context.Context, out chan<- fwtrading.Event) {
 			delay = alpacaReconnectMax
 		}
 		c.reportStatus(false, c.redactStreamMessage(err.Error()))
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if err := backoff.Sleep(ctx, delay); err != nil {
 			return
-		case <-timer.C:
 		}
 	}
 }

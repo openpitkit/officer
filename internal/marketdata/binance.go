@@ -116,7 +116,7 @@ type binanceTickerEvent struct {
 func NewBinanceConnector() *binanceConnector {
 	return &binanceConnector{
 		dial:         dialBinance,
-		sleep:        sleepContext,
+		sleep:        backoff.Sleep,
 		fetchSymbols: fetchBinanceSymbols,
 		reconnectMin: defaultBinanceReconnectMin,
 		reconnectMax: defaultBinanceReconnectMax,
@@ -644,16 +644,4 @@ func quoteUpdateFromBinanceEvent(
 		}, true
 	}
 	return fwmarketdata.QuoteUpdate{}, false
-}
-
-func sleepContext(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }

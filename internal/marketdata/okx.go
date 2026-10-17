@@ -104,7 +104,7 @@ var _ fwmarketdata.Diagnosable = (*okxConnector)(nil)
 func NewOKXConnector() *okxConnector {
 	return &okxConnector{
 		dial:         dialOKX,
-		sleep:        sleepContext,
+		sleep:        backoff.Sleep,
 		fetchSymbols: fetchOKXSymbols,
 		reconnectMin: defaultOKXReconnectMin,
 		reconnectMax: defaultOKXReconnectMax,

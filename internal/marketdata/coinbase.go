@@ -101,7 +101,7 @@ var _ fwmarketdata.Diagnosable = (*coinbaseConnector)(nil)
 func NewCoinbaseConnector() *coinbaseConnector {
 	return &coinbaseConnector{
 		dial:         dialCoinbase,
-		sleep:        sleepContext,
+		sleep:        backoff.Sleep,
 		fetchSymbols: fetchCoinbaseSymbols,
 		reconnectMin: defaultCoinbaseReconnectMin,
 		reconnectMax: defaultCoinbaseReconnectMax,

@@ -98,6 +98,7 @@ import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
 import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
+import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { cn } from "@/lib/utils";
 
 type AssetsTab = "assets" | "classes";
@@ -1267,7 +1268,7 @@ function ClassesPanel({
 export function Assets() {
   const { t } = useTranslation("assets");
   const { t: tc } = useTranslation("common");
-  const { fetchAssetClasses, fetchAssets } = useOfficerApi();
+  const { fetchAssetClasses } = useOfficerApi();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -1390,15 +1391,11 @@ export function Assets() {
   const assetFilterValue = selectedAsset !== null ? selectedAsset : search;
 
   const [classSuggestions, setClassSuggestions] = useState<string[]>([]);
-  const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
   const visibleClassSuggestions =
     debouncedClassSearch.trim() === "" && selectedClass === null
       ? []
       : classSuggestions;
-  const visibleAssetSuggestions =
-    debouncedSearch.trim() === "" && selectedAsset === null
-      ? []
-      : assetSuggestions;
+  const assetSuggestions = useAssetCodeSuggestions(assetFilterValue, true);
 
   useEffect(() => {
     const query = (selectedClass ?? debouncedClassSearch).trim();
@@ -1427,34 +1424,6 @@ export function Assets() {
       });
     return () => controller.abort();
   }, [debouncedClassSearch, fetchAssetClasses, selectedClass]);
-
-  useEffect(() => {
-    const query = (selectedAsset ?? debouncedSearch).trim();
-    if (query === "") {
-      return;
-    }
-    const controller = new AbortController();
-    void fetchAssets(
-      {
-        code: query,
-        codeMatch: "starts_with",
-        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-        sort: "code",
-      },
-      controller.signal,
-    )
-      .then((rows) => {
-        const next = rows.map((row) => row.code);
-        setAssetSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
-      })
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) {
-          console.error(err);
-          setAssetSuggestions((prev) => (prev.length === 0 ? prev : []));
-        }
-      });
-    return () => controller.abort();
-  }, [debouncedSearch, fetchAssets, selectedAsset]);
 
   const loadError = load.state === "error" ? load.error : null;
   const classesError = classesLoad.state === "error" ? classesLoad.error : null;
@@ -1666,7 +1635,7 @@ export function Assets() {
               label={t("filters.searchLabel")}
               value={assetFilterValue}
               placeholder={t("filters.searchPlaceholder")}
-              suggestions={visibleAssetSuggestions}
+              suggestions={assetSuggestions.codes}
               onChange={(value) => {
                 setSelectedAsset(null);
                 setSearch(value);

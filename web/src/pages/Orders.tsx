@@ -113,6 +113,7 @@ import {
 } from "@/lib/numberStep";
 import { shareUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
+import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { cn } from "@/lib/utils";
 import {
   readStoredPreference,
@@ -441,7 +442,6 @@ interface SubmitOrderDialogProps {
   onCreated: () => void;
   onOpenDetail: (externalId: string, banner?: DetailBanner) => void;
   accountSuggestions: string[];
-  assetSuggestions: string[];
   tradingSnapshot: TradingSnapshot | null;
   /** Pre-seed all input fields (clone path). */
   initialValues?: OrderInitialValues;
@@ -453,7 +453,6 @@ function SubmitOrderDialog({
   onCreated,
   onOpenDetail,
   accountSuggestions,
-  assetSuggestions,
   tradingSnapshot,
   initialValues,
 }: SubmitOrderDialogProps) {
@@ -464,7 +463,6 @@ function SubmitOrderDialog({
     checkOrder,
     createOrder,
     fetchAccounts,
-    fetchAssets,
     fetchTradingDestinations,
     sendPaperOrder,
   } = useOfficerApi();
@@ -507,18 +505,9 @@ function SubmitOrderDialog({
     account.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
-  const debouncedBaseAsset = useDebouncedValue(
-    baseAsset.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
-  const debouncedQuoteAsset = useDebouncedValue(
-    quoteAsset.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
+  const baseAssetSuggestions = useAssetCodeSuggestions(baseAsset, open);
+  const quoteAssetSuggestions = useAssetCodeSuggestions(quoteAsset, open);
   const [dialogAccountSuggestions, setDialogAccountSuggestions] = useState<
-    string[]
-  >([]);
-  const [dialogAssetSuggestions, setDialogAssetSuggestions] = useState<
     string[]
   >([]);
   const checkAbortRef = useRef<AbortController | null>(null);
@@ -588,51 +577,6 @@ function SubmitOrderDialog({
       });
     return () => controller.abort();
   }, [debouncedAccount, fetchAccounts, showsAccounts]);
-
-  useEffect(() => {
-    const queries = Array.from(
-      new Set(
-        [debouncedBaseAsset, debouncedQuoteAsset].filter(
-          (value) => value !== "",
-        ),
-      ),
-    );
-    if (queries.length === 0) {
-      return;
-    }
-    const controller = new AbortController();
-    Promise.all(
-      queries.map((query) =>
-        fetchAssets(
-          {
-            code: query,
-            codeMatch: "starts_with",
-            limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-            sort: "code",
-          },
-          controller.signal,
-        ),
-      ),
-    )
-      .then((pages) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        const next = new Set<string>();
-        for (const page of pages) {
-          for (const asset of page) {
-            next.add(asset.code);
-          }
-        }
-        setDialogAssetSuggestions(Array.from(next).sort().slice(0, 12));
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setDialogAssetSuggestions([]);
-        }
-      });
-    return () => controller.abort();
-  }, [debouncedBaseAsset, debouncedQuoteAsset, fetchAssets]);
 
   useEffect(() => {
     if (
@@ -1342,13 +1286,7 @@ function SubmitOrderDialog({
             id="so-base"
             value={baseAsset}
             onChange={setBaseAsset}
-            suggestions={
-              debouncedBaseAsset === ""
-                ? []
-                : dialogAssetSuggestions.length > 0
-                  ? dialogAssetSuggestions
-                  : assetSuggestions
-            }
+            suggestions={baseAssetSuggestions.codes}
             placeholder={t("addOrder.dialog.baseAssetPlaceholder")}
             disabled={busy}
             onClear={() => setBaseAsset("")}
@@ -1361,13 +1299,7 @@ function SubmitOrderDialog({
             id="so-quote"
             value={quoteAsset}
             onChange={setQuoteAsset}
-            suggestions={
-              debouncedQuoteAsset === ""
-                ? []
-                : dialogAssetSuggestions.length > 0
-                  ? dialogAssetSuggestions
-                  : assetSuggestions
-            }
+            suggestions={quoteAssetSuggestions.codes}
             placeholder={t("addOrder.dialog.quoteAssetPlaceholder")}
             disabled={busy}
             onClear={() => setQuoteAsset("")}
@@ -1797,7 +1729,7 @@ function ExecReportDialog({
 }: ExecReportDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
-  const { fetchAssets, submitExecutionReport } = useOfficerApi();
+  const { submitExecutionReport } = useOfficerApi();
   const { showsAccounts } = accountScope();
   const statusTriggerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -1825,11 +1757,9 @@ function ExecReportDialog({
   const [done, setDone] = useState(false);
   const [reportId, setReportId] = useState("");
   const [blocks, setBlocks] = useState<ExecutionBlock[]>([]);
-  const [commissionCurrencySuggestions, setCommissionCurrencySuggestions] =
-    useState<string[]>([]);
-  const debouncedCommissionCurrency = useDebouncedValue(
-    commissionCurrency.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
+  const commissionCurrencySuggestions = useAssetCodeSuggestions(
+    commissionCurrency,
+    commissionMode !== "none",
   );
 
   const showFillFields = execReportShowsFillFields(status);
@@ -1841,35 +1771,7 @@ function ExecReportDialog({
       commissionMagnitude(nextInitialValues?.commission?.amount),
     );
     setCommissionCurrency(nextInitialValues?.commission?.currency ?? "");
-    setCommissionCurrencySuggestions([]);
   }
-
-  useEffect(() => {
-    if (commissionMode === "none" || debouncedCommissionCurrency === "") {
-      return;
-    }
-    const controller = new AbortController();
-    fetchAssets(
-      {
-        code: debouncedCommissionCurrency,
-        codeMatch: "starts_with",
-        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-        sort: "code",
-      },
-      controller.signal,
-    )
-      .then((assets) => {
-        if (!controller.signal.aborted) {
-          setCommissionCurrencySuggestions(assets.map((asset) => asset.code));
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setCommissionCurrencySuggestions([]);
-        }
-      });
-    return () => controller.abort();
-  }, [commissionMode, debouncedCommissionCurrency, fetchAssets]);
 
   function applyStatus(next: ExecReportOrderStatus) {
     const wasShowingFillFields = showFillFields;
@@ -1976,7 +1878,6 @@ function ExecReportDialog({
     if (next === "none") {
       setCommissionAmount("");
       setCommissionCurrency("");
-      setCommissionCurrencySuggestions([]);
     }
   }
 
@@ -2281,7 +2182,7 @@ function ExecReportDialog({
                         id="er-commission-currency"
                         value={commissionCurrency}
                         onChange={setCommissionCurrency}
-                        suggestions={commissionCurrencySuggestions}
+                        suggestions={commissionCurrencySuggestions.codes}
                         placeholder={t(
                           "execReport.dialog.commissionCurrencyPlaceholder",
                         )}
@@ -4432,7 +4333,7 @@ function OrderStatusFilterGroup({
 export function Orders() {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation("common");
-  const { fetchAccounts, fetchAssets, fetchOrderDetail } = useOfficerApi();
+  const { fetchAccounts, fetchOrderDetail } = useOfficerApi();
   const filterRegionRef = useRef<HTMLDivElement | null>(null);
   const advancedFilterDialogRef = useRef<HTMLDivElement | null>(null);
   const openedTradeExternalIdRef = useRef<string | null>(null);
@@ -4619,14 +4520,6 @@ export function Orders() {
     tradeAccountDraft.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
-  const debouncedTradeBaseAssetDraft = useDebouncedValue(
-    tradeBaseAssetDraft.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
-  const debouncedTradeQuoteAssetDraft = useDebouncedValue(
-    tradeQuoteAssetDraft.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
   const debouncedTradeAtMin = useDebouncedValue(
     tradeAtMin,
     DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -4657,14 +4550,6 @@ export function Orders() {
   );
   const debouncedTradeLockPriceMax = useDebouncedValue(
     tradeLockPriceMax.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
-  const debouncedOrderBaseAssetDraft = useDebouncedValue(
-    orderBaseAssetDraft.trim(),
-    DEFAULT_SEARCH_DEBOUNCE_MS,
-  );
-  const debouncedOrderQuoteAssetDraft = useDebouncedValue(
-    orderQuoteAssetDraft.trim(),
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
   const debouncedOrderAmountMin = useDebouncedValue(
@@ -5150,64 +5035,22 @@ export function Orders() {
     return () => controller.abort();
   }, [accountSuggestionQuery, fetchAccounts]);
 
-  const assetSuggestionQuery = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          [
-            debouncedOrderBaseAssetDraft,
-            debouncedOrderQuoteAssetDraft,
-            debouncedTradeBaseAssetDraft,
-            debouncedTradeQuoteAssetDraft,
-          ]
-            .map((value) => value.trim())
-            .filter(Boolean),
-        ),
-      ),
-    [
-      debouncedOrderBaseAssetDraft,
-      debouncedOrderQuoteAssetDraft,
-      debouncedTradeBaseAssetDraft,
-      debouncedTradeQuoteAssetDraft,
-    ],
+  const orderBaseAssetSuggestions = useAssetCodeSuggestions(
+    orderBaseAssetDraft,
+    true,
   );
-  const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
-  const visibleAssetSuggestions =
-    assetSuggestionQuery.length === 0 ? [] : assetSuggestions;
-  useEffect(() => {
-    if (assetSuggestionQuery.length === 0) {
-      return;
-    }
-    const controller = new AbortController();
-    Promise.all(
-      assetSuggestionQuery.map((query) =>
-        fetchAssets(
-          {
-            code: query,
-            codeMatch: "starts_with",
-            limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-            sort: "code",
-          },
-          controller.signal,
-        ),
-      ),
-    )
-      .then((pages) => {
-        const next = new Set<string>();
-        for (const assets of pages) {
-          for (const asset of assets) {
-            next.add(asset.code);
-          }
-        }
-        setAssetSuggestions(Array.from(next).sort().slice(0, 12));
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setAssetSuggestions([]);
-        }
-      });
-    return () => controller.abort();
-  }, [assetSuggestionQuery, fetchAssets]);
+  const orderQuoteAssetSuggestions = useAssetCodeSuggestions(
+    orderQuoteAssetDraft,
+    true,
+  );
+  const tradeBaseAssetSuggestions = useAssetCodeSuggestions(
+    tradeBaseAssetDraft,
+    true,
+  );
+  const tradeQuoteAssetSuggestions = useAssetCodeSuggestions(
+    tradeQuoteAssetDraft,
+    true,
+  );
 
   // Dialog state
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -6112,7 +5955,7 @@ export function Orders() {
                   label={t("filter.baseAssetLabel")}
                   value={orderBaseAssetDraft}
                   placeholder={t("filter.baseAssetPlaceholder")}
-                  suggestions={visibleAssetSuggestions}
+                  suggestions={orderBaseAssetSuggestions.codes}
                   onChange={setOrderBaseAssetDraft}
                   onSuggestionSelect={(value) =>
                     applyOrderIdentityField("baseAsset", value)
@@ -6129,7 +5972,7 @@ export function Orders() {
                   label={t("filter.quoteAssetLabel")}
                   value={orderQuoteAssetDraft}
                   placeholder={t("filter.quoteAssetPlaceholder")}
-                  suggestions={visibleAssetSuggestions}
+                  suggestions={orderQuoteAssetSuggestions.codes}
                   onChange={setOrderQuoteAssetDraft}
                   onSuggestionSelect={(value) =>
                     applyOrderIdentityField("quoteAsset", value)
@@ -6260,7 +6103,7 @@ export function Orders() {
                   label={t("filter.baseAssetLabel")}
                   value={tradeBaseAssetDraft}
                   placeholder={t("filter.baseAssetPlaceholder")}
-                  suggestions={visibleAssetSuggestions}
+                  suggestions={tradeBaseAssetSuggestions.codes}
                   onChange={setTradeBaseAssetDraft}
                   onSuggestionSelect={(value) =>
                     applyTradeIdentityField("baseAsset", value)
@@ -6277,7 +6120,7 @@ export function Orders() {
                   label={t("filter.quoteAssetLabel")}
                   value={tradeQuoteAssetDraft}
                   placeholder={t("filter.quoteAssetPlaceholder")}
-                  suggestions={visibleAssetSuggestions}
+                  suggestions={tradeQuoteAssetSuggestions.codes}
                   onChange={setTradeQuoteAssetDraft}
                   onSuggestionSelect={(value) =>
                     applyTradeIdentityField("quoteAsset", value)
@@ -6765,7 +6608,6 @@ export function Orders() {
           )
         }
         accountSuggestions={allAccountSuggestions}
-        assetSuggestions={assetSuggestions}
         tradingSnapshot={tradingSnapshot}
         initialValues={submitInitialValues}
       />

@@ -15,12 +15,16 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Package backoff holds the one reconnect-delay formula that market-data and
-// trading stream connectors share; each connector's run loop keeps its own
-// policy for when to grow or reset the attempt count.
+// Package backoff holds the one reconnect-delay formula and the one
+// cancellable wait that market-data and trading stream connectors share; each
+// connector's run loop keeps its own policy for when to grow or reset the
+// attempt count.
 package backoff
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Delay returns the wait before reconnect attempt attempt: minDelay when
 // attempt <= 0, otherwise minDelay doubled attempt-1 times, capped at
@@ -40,4 +44,18 @@ func Delay(attempt int, minDelay, maxDelay time.Duration) time.Duration {
 		return maxDelay
 	}
 	return delay
+}
+
+// Sleep waits for delay unless ctx ends first: it returns ctx.Err() when ctx
+// ends the wait and nil when delay elapses.
+func Sleep(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

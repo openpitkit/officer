@@ -102,6 +102,7 @@ import { sortDirection } from "@/lib/sortDirection";
 import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
+import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { LimitDialog } from "@/pages/LimitDialog";
 
 const ALL = "all";
@@ -514,7 +515,7 @@ export function Limits() {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
   const officerApi = useOfficerApi();
-  const { fetchAccounts, fetchAssets } = officerApi;
+  const { fetchAccounts } = officerApi;
   const fetchGroups =
     "fetchGroups" in officerApi ? officerApi.fetchGroups : undefined;
   const [searchParams] = useSearchParams();
@@ -548,7 +549,6 @@ export function Limits() {
   );
 
   const deferredAccountDraft = useDeferredValue(accountDraft.trim());
-  const deferredAssetDraft = useDeferredValue(assetDraft.trim());
   const accountGlobalLocked =
     globalAccountFilter.account !== "" &&
     accountFilter.trim() === globalAccountFilter.account;
@@ -655,7 +655,6 @@ export function Limits() {
   }, [reload, reloadPolicyCounts]);
 
   const [accountSuggestions, setAccountSuggestions] = useState<Account[]>([]);
-  const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
   const [accountGroupSuggestions, setAccountGroupSuggestions] = useState<
     string[]
   >([]);
@@ -663,8 +662,7 @@ export function Limits() {
     deferredAccountDraft.trim() === ""
       ? []
       : accountSuggestions.map((account) => account.code);
-  const visibleAssetSuggestions =
-    deferredAssetDraft.trim() === "" ? [] : assetSuggestions;
+  const assetSuggestions = useAssetCodeSuggestions(assetDraft, true);
 
   useEffect(() => {
     const query = deferredAccountDraft.trim();
@@ -690,31 +688,6 @@ export function Limits() {
       });
     return () => controller.abort();
   }, [deferredAccountDraft, fetchAccounts]);
-
-  useEffect(() => {
-    const query = deferredAssetDraft.trim();
-    if (query === "") {
-      return;
-    }
-    const controller = new AbortController();
-    void fetchAssets(
-      {
-        code: query,
-        codeMatch: "starts_with",
-        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
-        sort: "code",
-      },
-      controller.signal,
-    )
-      .then((assets) => setAssetSuggestions(assets.map((asset) => asset.code)))
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) {
-          console.error(err);
-          setAssetSuggestions([]);
-        }
-      });
-    return () => controller.abort();
-  }, [deferredAssetDraft, fetchAssets]);
 
   useEffect(() => {
     if (!showsAccounts || typeof fetchGroups !== "function") {
@@ -906,7 +879,7 @@ export function Limits() {
           label={t("filter.asset")}
           value={assetDraft}
           placeholder={t("filter.assetPlaceholder")}
-          suggestions={visibleAssetSuggestions}
+          suggestions={assetSuggestions.codes}
           onChange={setAssetDraft}
           onSuggestionSelect={(value) => applyIdentityField("asset", value)}
           onKeyDown={applyIdentityFiltersOnEnter}
@@ -1025,7 +998,7 @@ export function Limits() {
         open={dialogOpen}
         editing={editing}
         initialAccount={initialAccount}
-        assetSuggestions={assetSuggestions}
+        assetSuggestions={assetSuggestions.codes}
         accountSuggestions={accountSuggestions.map((account) => account.code)}
         accountGroupSuggestions={accountGroupSuggestions}
         policyCounts={policyCounts}

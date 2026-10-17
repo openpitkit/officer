@@ -121,7 +121,7 @@ func NewAlpacaConnector(
 	}
 	return &alpacaConnector{
 		dial:         dialAlpaca,
-		sleep:        sleepContext,
+		sleep:        backoff.Sleep,
 		reconnectMin: defaultAlpacaReconnectMin,
 		reconnectMax: defaultAlpacaReconnectMax,
 		readTimeout:  defaultAlpacaReadTimeout,

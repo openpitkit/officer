@@ -103,7 +103,7 @@ type krakenFrameHeader struct {
 func NewKrakenConnector() *krakenConnector {
 	return &krakenConnector{
 		dial:         dialKraken,
-		sleep:        sleepContext,
+		sleep:        backoff.Sleep,
 		fetchSymbols: fetchKrakenSymbols,
 		reconnectMin: defaultKrakenReconnectMin,
 		reconnectMax: defaultKrakenReconnectMax,
