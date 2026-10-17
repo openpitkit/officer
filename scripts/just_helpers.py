@@ -21,17 +21,26 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import http.client
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_MODES = {"debug", "release"}
+# Covers the image's HEALTHCHECK start period and retries, under emulation too.
+DOCKER_START_TIMEOUT_SECONDS = 180
+SERVE_CONTAINER_PORT = "8787/tcp"
 _WINDOWS_CGO_COMPILER_COMMANDS: dict[tuple[str, ...], str] = {}
 _WINDOWS_CGO_WRAPPER_DIRS: set[Path] = set()
 
@@ -431,6 +440,90 @@ def command_run_officer_dev(args: argparse.Namespace) -> None:
     run([str(executable), *args.officer_args], env=env)
 
 
+def docker_container_state(container: str) -> dict[str, Any]:
+    inspected = run(
+        ["docker", "inspect", "--format", "{{json .State}}", container], capture=True
+    )
+    return json.loads(inspected.stdout)
+
+
+def fail_with_container_logs(container: str, message: str) -> NoReturn:
+    run(["docker", "logs", container])
+    raise SystemExit(message)
+
+
+def wait_until_container_healthy(container: str) -> None:
+    deadline = time.monotonic() + DOCKER_START_TIMEOUT_SECONDS
+    while True:
+        state = docker_container_state(container)
+        if "Health" not in state:
+            raise SystemExit("the image defines no HEALTHCHECK to wait for")
+        health = state["Health"]["Status"]
+        if not state["Running"]:
+            fail_with_container_logs(
+                container,
+                f"the container exited with code {state['ExitCode']} "
+                f"before it became healthy",
+            )
+        if health == "healthy":
+            return
+        if health == "unhealthy":
+            probe = state["Health"]["Log"][-1]["Output"].strip()
+            fail_with_container_logs(
+                container, f"the container is unhealthy; last probe: {probe}"
+            )
+        if time.monotonic() >= deadline:
+            fail_with_container_logs(
+                container,
+                f"the container was not healthy within "
+                f"{DOCKER_START_TIMEOUT_SECONDS}s (health: {health})",
+            )
+        time.sleep(2)
+
+
+def command_docker_start_check(args: argparse.Namespace) -> None:
+    # Created and started apart, so a container that fails to start is still
+    # removed.
+    created = run(
+        [
+            "docker",
+            "create",
+            "--pull=never",
+            f"--platform={args.platform}",
+            "--publish",
+            f"127.0.0.1::{SERVE_CONTAINER_PORT}",
+            args.image,
+        ],
+        capture=True,
+    )
+    container = created.stdout.strip()
+    try:
+        run(["docker", "start", container], capture=True)
+        wait_until_container_healthy(container)
+        addresses = run(
+            ["docker", "port", container, SERVE_CONTAINER_PORT], capture=True
+        ).stdout.split()
+        if len(addresses) != 1:
+            raise SystemExit(
+                f"expected one host address for {SERVE_CONTAINER_PORT}, got {addresses}"
+            )
+        url = f"http://{addresses[0]}/healthz"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+        except (OSError, http.client.HTTPException) as exc:
+            fail_with_container_logs(container, f"{url} did not answer: {exc}")
+        if status != 200:
+            fail_with_container_logs(
+                container, f"{url} answered {status}, expected 200"
+            )
+        print(f"{args.image} ({args.platform}) is healthy; {url} answered 200")
+    finally:
+        run(["docker", "rm", "--force", "--volumes", container], capture=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -485,6 +578,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparser.add_argument("pit_checkout")
     subparser.add_argument("officer_args", nargs=argparse.REMAINDER)
     subparser.set_defaults(func=command_run_officer_dev)
+
+    subparser = subparsers.add_parser("docker-start-check")
+    subparser.add_argument("image")
+    subparser.add_argument("platform")
+    subparser.set_defaults(func=command_docker_start_check)
 
     return parser
 

@@ -15,13 +15,21 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
-# Publishes the `serve` image from version tags on `main` to GHCR.
+# Publishes the `serve` image to GHCR: a release from version tags on `main`,
+# and a dry run from a dispatch on the `release-dry-run` branch.
 
 name: Release image
 
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Publish a test image under its own dry-run tag instead of a release
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -41,6 +49,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      IMAGE: ghcr.io/openpitkit/officer
+      PLATFORMS: linux/amd64,linux/arm64
 
     steps:
       # This packages:write job pins actions by SHA; ci.yml uses major tags.
@@ -49,11 +60,47 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A dispatched run is always a dry run: it publishes one test image under
+      # a tag of its own and never touches X.Y.Z, X.Y or latest.
+      - name: Resolve release mode
+        id: mode
+        shell: bash
+        env:
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              echo "release_mode=production" >> "$GITHUB_OUTPUT"
+              ;;
+            workflow_dispatch)
+              if [[ "$GITHUB_REF" != refs/heads/release-dry-run ]]; then
+                echo "::error::a dispatched run is only allowed from branch release-dry-run"
+                exit 1
+              fi
+              if [[ "$DRY_RUN_INPUT" != true ]]; then
+                echo "::error::a dispatched run must set dry_run=true"
+                exit 1
+              fi
+              # Unique per attempt: pushing an existing tag again would leave the
+              # image it replaced untagged, out of reach of the cleanup below.
+              {
+                echo "release_mode=dry-run"
+                echo "dry_run_tag=dry-run-${GITHUB_SHA::12}-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::unsupported event $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
       # Guards against accidentally releasing an off-main commit.
       - name: Require the tagged commit on main
+        if: steps.mode.outputs.release_mode == 'production'
         run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
 
       - name: Rank stable version
+        if: steps.mode.outputs.release_mode == 'production'
         id: rank
         shell: bash
         run: |
@@ -111,24 +158,96 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Stable versions always get X.Y.Z; moving tags follow the rank outputs.
+      # A dry run gets only its own tag.
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/openpitkit/officer
+          images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}},enable=${{ steps.rank.outputs.minor == 'true' }}
             type=raw,value=latest,enable=${{ steps.rank.outputs.latest == 'true' }}
+            type=raw,value=${{ steps.mode.outputs.dry_run_tag }},enable=${{ steps.mode.outputs.release_mode == 'dry-run' }}
+
+      - name: Require only the dry-run tag
+        if: steps.mode.outputs.release_mode == 'dry-run'
+        shell: bash
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DRY_RUN_TAG: ${{ steps.mode.outputs.dry_run_tag }}
+        run: |
+          if [[ "$TAGS" != "$IMAGE:$DRY_RUN_TAG" ]]; then
+            echo "::error::a dry run publishes only $IMAGE:$DRY_RUN_TAG, metadata produced: $TAGS"
+            exit 1
+          fi
 
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ env.PLATFORMS }}
           build-args: GO_VERSION=${{ env.CI_GO }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # A start-time crash passes every build gate, so the dry run pulls each
+      # platform back from the registry and requires serve to become healthy
+      # and answer 200 on /healthz.
+      - name: Start the dry-run image
+        if: steps.mode.outputs.release_mode == 'dry-run'
+        shell: bash
+        env:
+          IMAGE_REF: ${{ env.IMAGE }}:${{ steps.mode.outputs.dry_run_tag }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE_REF"
+          for platform in ${PLATFORMS//,/ }; do
+            docker pull --platform "$platform" "$IMAGE_REF"
+            python scripts/just_helpers.py docker-start-check "$IMAGE_REF" "$platform"
+          done
+
+      # The package keeps one dry-run image: older ones go, each with the
+      # platform and attestation manifests it lists, which GHCR keeps as
+      # untagged versions of their own. This run's image stays until the next
+      # dry run, also because GHCR refuses to delete a package's last tagged
+      # version. Release manifests never appear in a dry-run index: the version
+      # label differs, so every digest differs.
+      - name: Delete older dry-run images
+        if: steps.mode.outputs.release_mode == 'dry-run'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN_TAG: ${{ steps.mode.outputs.dry_run_tag }}
+        run: |
+          package="${IMAGE#ghcr.io/}"
+          versions_api="orgs/${package%%/*}/packages/container/${package#*/}/versions"
+          versions="$(gh api --paginate "$versions_api" \
+            --jq '.[] | {id, digest: .name, tags: .metadata.container.tags}')"
+
+          # Stale: tagged, every tag a dry-run tag, none of them this run's.
+          stale="$(jq -r --arg current "$DRY_RUN_TAG" '
+            select((.tags | length) > 0
+              and all(.tags[]; startswith("dry-run-") and . != $current))
+            | .digest' <<<"$versions")"
+          if [[ -z "$stale" ]]; then
+            echo "no older dry-run images"
+          fi
+
+          for index_digest in $stale; do
+            # Children first: a run that stops halfway leaves the tagged index,
+            # and with it the list of what remains, to the next dry run.
+            children="$(docker buildx imagetools inspect --raw "$IMAGE@$index_digest" |
+              jq -r '.manifests[]?.digest')"
+            for digest in $children "$index_digest"; do
+              id="$(jq -r --arg digest "$digest" 'select(.digest == $digest) | .id' <<<"$versions")"
+              if [[ -z "$id" ]]; then
+                echo "$digest was deleted by an earlier run"
+                continue
+              fi
+              gh api --method DELETE "$versions_api/$id"
+              echo "deleted $digest"
+            done
+          done

@@ -215,6 +215,20 @@ A tag on any other commit fails the workflow; a pre-release tag such as
 `v0.1.0-rc.1` gets only its own version. The workflow is
 `.github/workflows/release-image.yml`.
 
+`just release-dry` tries the build and publication part of that path before a
+release: it force-pushes `HEAD` to the `release-dry-run` branch and dispatches
+the same workflow as a dry run, the only kind of dispatch it accepts. The dry
+run publishes both platforms to the same package under its own
+`dry-run-<sha>-<run>.<attempt>` tag and never moves `X.Y.Z`, `X.Y` or `latest`.
+It then pulls each platform back, starts `serve`, and requires the container to
+become healthy and `/healthz` to answer 200. Last, it deletes the older dry-run
+images, so the package holds only the newest one. The `main` check and the
+ranking of `X.Y` and `latest` run only on a real version tag.
+
+`just docker-start-check <image> <platform>` runs the same start check on a
+local image, for example `just docker-start-check pit-officer:local
+linux/arm64`.
+
 ## Seeding
 
 `just seed` fills a running instance with demo accounts, balances, orders, and

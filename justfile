@@ -334,6 +334,15 @@ frontend-ci-install:
 docker-build tag="pit-officer:local":
     docker build --build-arg GO_VERSION={{ go_version }} -f {{ justfile_directory() }}/Dockerfile -t {{ tag }} {{ justfile_directory() }}
 
+# Start a local image for one platform; wait until it is healthy and /healthz answers 200.
+docker-start-check image platform:
+    {{ python }} {{ just_helper }} docker-start-check {{ quote(image) }} {{ quote(platform) }}
+
+# Push the current HEAD to the dry-run branch and start the image release dry run.
+release-dry:
+    git push --force-with-lease origin HEAD:release-dry-run
+    gh workflow run release-image.yml --ref release-dry-run -f dry_run=true
+
 # Build the native OpenPit runtime library from a local Pit checkout.
 dylib-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
 
