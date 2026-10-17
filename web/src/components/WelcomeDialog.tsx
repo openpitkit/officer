@@ -46,6 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ApiError, MAX_LIST_LIMIT, useOfficerApi } from "@/framework";
+import { accountScope } from "@/lib/accountScope";
 import { cn } from "@/lib/utils";
 
 const DEMO_ACCOUNT_ID = "demo-main";
@@ -384,6 +385,7 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     fetchAssetClasses,
     fetchAssets,
     fetchMarketData,
+    fetchPoliciesPage,
     putLimit,
     restartMarketData,
     setAccountCurrency,
@@ -394,6 +396,10 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     updateAssetClass,
     upsertMarketDataInstrument,
   } = useOfficerApi();
+  const { showsAccounts, account: defaultAccount, accountFor } = accountScope();
+  const demoActionLabel = showsAccounts
+    ? t("welcome.actions.demoAccount")
+    : t("welcome.actions.demoPositions");
   const [busy, setBusy] = useState<ActionId | null>(null);
   const [status, setStatus] = useState<StatusMessage | null>(null);
   // The first-run dialog reappears on every load until the operator opts out;
@@ -465,26 +471,39 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     }
   };
 
+  // While accounts are hidden, the demo acts on the operator's only account,
+  // which may be live: it writes only while that account holds no positions,
+  // and it does not create or describe an account of its own.
   const ensureDemoAccount = async () => {
+    const demoAccount = accountFor(DEMO_ACCOUNT_ID);
     let applied = 0;
     try {
-      const accounts = await fetchAccounts();
+      if (!showsAccounts) {
+        await requireNoPositions(demoAccount);
+      }
+      const demoMissing =
+        showsAccounts &&
+        !(await fetchAccounts()).some(
+          (account) => account.code === DEMO_ACCOUNT_ID,
+        );
       await ensureWelcomePresetAssets(() => {
         applied += 1;
       });
-      if (!accounts.some((account) => account.code === DEMO_ACCOUNT_ID)) {
+      if (demoMissing) {
         await createAccount(DEMO_ACCOUNT_ID, "", "USD");
         applied += 1;
       }
-      await setAccountCurrency(DEMO_ACCOUNT_ID, "USD");
+      await setAccountCurrency(demoAccount, "USD");
       applied += 1;
-      await setAccountNotes(DEMO_ACCOUNT_ID, t("welcome.presets.accountNote"));
-      applied += 1;
+      if (showsAccounts) {
+        await setAccountNotes(demoAccount, t("welcome.presets.accountNote"));
+        applied += 1;
+      }
       for (const position of DEMO_POSITIONS) {
         await createAdjustment(
-          DEMO_ACCOUNT_ID,
+          demoAccount,
           {
-            // The starting positions fund a fresh demo account.
+            // The starting positions fund an account that holds none yet.
             type: "deposit",
             asset: position.asset,
             balance: { mode: "absolute", value: position.balance },
@@ -500,16 +519,59 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     }
   };
 
+  // Like the positions demo, the barriers go onto the operator's only account
+  // while accounts are hidden only when it has none of them yet.
   const applyPolicyPreset = async () => {
+    const limits = DEMO_LIMITS.map((limit) => ({
+      ...limit,
+      account: accountFor(limit.account),
+    }));
     let applied = 0;
     try {
-      for (const limit of DEMO_LIMITS) {
+      if (!showsAccounts) {
+        await requireNoDemoBarriers(defaultAccount, limits);
+      }
+      for (const limit of limits) {
         await putLimit(limit, "create");
         applied += 1;
       }
       return applied;
     } catch (error) {
       throw new PresetApplyError(error, applied);
+    }
+  };
+
+  const requireNoPositions = async (account: string) => {
+    const row = (
+      await fetchAccounts({ code: account, codeMatch: "exact", limit: 1 })
+    ).find((candidate) => candidate.code === account);
+    if (row === undefined) {
+      throw new Error(t("welcome.status.accountMissing", { account }));
+    }
+    if (row.positionCount === undefined) {
+      throw new Error(`account ${account}: list row has no positionCount`);
+    }
+    if (row.positionCount > 0) {
+      throw new Error(t("welcome.status.accountHoldsPositions", { account }));
+    }
+  };
+
+  const requireNoDemoBarriers = async (account: string, limits: Limit[]) => {
+    const page = await fetchPoliciesPage({ account, limit: MAX_LIST_LIMIT });
+    if (page.total > page.items.length) {
+      throw new Error(t("welcome.status.barriersUnread", { account }));
+    }
+    const exists = limits.some((limit) =>
+      page.items.some(
+        (row) =>
+          row.policy === limit.policy &&
+          row.scope === limit.scope &&
+          row.account === limit.account &&
+          row.asset === limit.asset,
+      ),
+    );
+    if (exists) {
+      throw new Error(t("welcome.status.barriersExist", { account }));
     }
   };
 
@@ -713,20 +775,20 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
           </Section>
 
           <Section icon={WalletCards} label={t("welcome.sections.preTrade")}>
-            <p>{t("welcome.preTrade.copy")}</p>
+            <p>
+              {showsAccounts
+                ? t("welcome.preTrade.copy")
+                : t("welcome.preTrade.copyUnnamed")}
+            </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <ActionButton
                 action="account"
                 busy={busy}
                 onClick={() => {
-                  void runAction(
-                    "account",
-                    t("welcome.actions.demoAccount"),
-                    ensureDemoAccount,
-                  );
+                  void runAction("account", demoActionLabel, ensureDemoAccount);
                 }}
               >
-                {t("welcome.actions.demoAccount")}
+                {demoActionLabel}
               </ActionButton>
               <ActionButton
                 action="policies"
@@ -744,7 +806,9 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
               <Button asChild variant="ghost">
                 <Link to="/accounts">
                   <Landmark />
-                  {t("welcome.actions.openAccounts")}
+                  {showsAccounts
+                    ? t("welcome.actions.openAccounts")
+                    : t("welcome.actions.openAccount")}
                 </Link>
               </Button>
               <Button asChild variant="ghost">

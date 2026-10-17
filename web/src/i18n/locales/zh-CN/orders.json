@@ -207,6 +207,7 @@
         "unavailable": "不可用：{{error}}",
         "degraded": "降级运行：{{error}}",
         "noTargets": "账户 {{account}} 没有可用的{{mode}}目标。",
+        "noTargetsUnnamed": "没有可用的{{mode}}目标。",
         "timeInForce": "有效期",
         "chooseTimeInForce": "选择有效期",
         "timeInForceOptions": {
@@ -244,8 +245,11 @@
     "wouldReject": "预览：将被拒绝",
     "displayPrice": "锁定价格：{{price}}",
     "wouldBlock": "将封锁账户 {{account}}",
+    "wouldBlockUnnamed": "将封锁账户",
     "wouldBlockReason": "将封锁账户 {{account}} - {{reason}}",
+    "wouldBlockReasonUnnamed": "将封锁账户 - {{reason}}",
     "accountBlocked": "账户 {{account}} 已被封锁",
+    "accountBlockedUnnamed": "账户已被封锁",
     "rejectReasons": {
       "account_blocked": "账户已被封锁"
     }
@@ -301,6 +305,7 @@
       "accepted": "执行报告已接受。",
       "reportId": "报告 ID",
       "accountBlocked": "账户 {{account}} 已被封锁：",
+      "accountBlockedUnnamed": "账户已被封锁：",
       "done": "完成",
       "leavesInvalid": "剩余数量必须为非负十进制数，且首尾不得包含空格。"
     }
@@ -318,6 +323,7 @@
       "title": "订单 {{orderExternalId}}",
       "loading": "正在加载订单详情…",
       "accountBlocked": "账户 {{account}} 已被封锁：",
+      "accountBlockedUnnamed": "账户已被封锁：",
       "fieldAccount": "账户",
       "fieldStatus": "状态",
       "fieldSource": "来源",

@@ -42,7 +42,8 @@
     "noPolicies": "No policies yet",
     "noPoliciesHint": "Add the first barrier to start constraining order flow.",
     "noMatching": "No matching policies",
-    "noMatchingHint": "No barrier matches the current account or policy filter."
+    "noMatchingHint": "No barrier matches the current account or policy filter.",
+    "noMatchingHintUnnamed": "No barrier matches the current filters."
   },
   "delete": {
     "title": "Delete policy barrier?",

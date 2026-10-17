@@ -46,11 +46,13 @@ import {
 import { Autocomplete } from "@/components/Autocomplete";
 import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import { ErrorBanner } from "@/components/PageStates";
+import { accountScope } from "@/lib/accountScope";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
 } from "@/lib/useDebounce";
 import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
+import { cn } from "@/lib/utils";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -253,6 +255,15 @@ function fromLimit(limit: Limit): FormState {
   };
 }
 
+/** The scopes the dialog offers for `policy`: while accounts are hidden, none
+ *  with the account-group axis, since the server refuses any named group. */
+function offeredScopes(policy: Policy): Scope[] {
+  const allowed = getAllowedScopes(policy);
+  return accountScope().showsAccounts
+    ? allowed
+    : allowed.filter((scope) => scope !== "account_group");
+}
+
 function applicableKinds(
   policy: Policy,
   scope: Scope,
@@ -312,7 +323,11 @@ export function LimitDialog({
   const { fetchAccounts, putLimit } = officerApi;
   const fetchGroups =
     "fetchGroups" in officerApi ? officerApi.fetchGroups : undefined;
-  const [form, setForm] = useState<FormState>(() => emptyForm(initialAccount));
+  const { showsAccounts } = accountScope();
+  // While accounts are hidden the field is not rendered, so the default
+  // account seeded here is what every account-axis barrier carries.
+  const seededAccount = accountScope().accountFor(initialAccount);
+  const [form, setForm] = useState<FormState>(() => emptyForm(seededAccount));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -349,18 +364,19 @@ export function LimitDialog({
     if (open) {
       // Reseed the form from the edited barrier each time the dialog opens.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setForm(editing ? fromLimit(editing) : emptyForm(initialAccount));
+      setForm(editing ? fromLimit(editing) : emptyForm(seededAccount));
       setError(null);
       setBusy(false);
       setConfirmOpen(false);
       setMissingAccountConfirmOpen(false);
     }
-  }, [open, editing, initialAccount]);
+  }, [open, editing, seededAccount]);
 
   useEffect(() => {
     if (
       !open ||
       isEdit ||
+      !showsAccounts ||
       !scopeHasAccount(form.scope) ||
       accountSearch === ""
     ) {
@@ -387,7 +403,7 @@ export function LimitDialog({
         }
       });
     return () => controller.abort();
-  }, [accountSearch, fetchAccounts, form.scope, isEdit, open]);
+  }, [accountSearch, fetchAccounts, form.scope, isEdit, open, showsAccounts]);
 
   useEffect(() => {
     if (
@@ -422,7 +438,8 @@ export function LimitDialog({
     return () => controller.abort();
   }, [accountGroupSearch, fetchGroups, hasAccountGroupAxis, isEdit, open]);
 
-  const allowedScopes = getAllowedScopes(form.policy);
+  const allowedScopes = offeredScopes(form.policy);
+  const showsAccountField = showsAccounts && scopeHasAccount(form.scope);
   const kinds = getPolicyKinds(form.policy);
   const visibleKinds = applicableKinds(form.policy, form.scope, kinds);
 
@@ -479,7 +496,7 @@ export function LimitDialog({
     setForm((prev) => ({
       ...prev,
       policy,
-      scope: getAllowedScopes(policy)[0] ?? "",
+      scope: offeredScopes(policy)[0] ?? "",
       values: {},
     }));
   };
@@ -610,11 +627,11 @@ export function LimitDialog({
               </div>
             </div>
 
-            {(scopeHasAccount(form.scope) ||
+            {(showsAccountField ||
               hasAccountGroupAxis ||
               scopeHasAsset(form.scope)) && (
-              <div className="grid grid-cols-2 gap-3">
-                {scopeHasAccount(form.scope) && (
+              <div className={cn("grid gap-3", showsAccounts && "grid-cols-2")}>
+                {showsAccountField && (
                   <div className="space-y-1.5">
                     <Label htmlFor="limit-account">{t("dialog.account")}</Label>
                     <Autocomplete

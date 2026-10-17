@@ -3,6 +3,16 @@
     "title": "Accounts",
     "description": "Operator accounts persisted in the control plane and applied to the engine. Block an account or group to halt orders via the kill switch."
   },
+  "account": {
+    "title": "Account",
+    "settingsTitle": "Settings",
+    "switchToSeveral": "Switch to several accounts",
+    "notOwnBlock": "The block does not come from the account itself. It can be lifted in the several-accounts mode.",
+    "missing": {
+      "title": "The account is not in the database",
+      "detail": "Its settings cannot be shown or changed now. The next start of Officer follows the saved account mode."
+    }
+  },
   "tabs": {
     "accounts": "Accounts",
     "groups": "Groups"

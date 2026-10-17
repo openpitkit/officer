@@ -24,6 +24,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
+import { filterSetShare, shareLinkParams } from "@/test/pageHelpers";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +49,7 @@ import i18n from "@/i18n";
 import { Orders } from "@/pages/Orders";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
+import { setAccountScope } from "@/lib/accountScope";
 import { setGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { DEFAULT_SEARCH_DEBOUNCE_MS } from "@/lib/useDebounce";
 
@@ -256,6 +258,20 @@ const sampleOrder: Order = {
   displayPrice: "",
   dropCopy: false,
   signed: false,
+};
+
+const sampleTrade: Trade = {
+  id: "trade-venue-1",
+  order: sampleOrder.id,
+  account: sampleOrder.account,
+  at: sampleOrder.at,
+  source: sampleOrder.source,
+  baseAsset: sampleOrder.baseAsset,
+  quoteAsset: sampleOrder.quoteAsset,
+  side: sampleOrder.side,
+  quantity: "1",
+  price: "100",
+  lockPrice: "",
 };
 
 const alpacaDestination: TradingDestination = {
@@ -623,6 +639,13 @@ async function fillOrderFields(
   dialog: HTMLElement,
 ) {
   await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+  await fillOrderFieldsAfterAccount(user, dialog);
+}
+
+async function fillOrderFieldsAfterAccount(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+) {
   await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
   await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
   await user.click(within(dialog).getByRole("button", { name: "Buy" }));
@@ -3273,19 +3296,6 @@ describe("Orders filter, debounce, sort and pagination", () => {
 
 describe("Orders venue list integration", () => {
   const connectionLabel = "Alpaca · Paper · Primary Alpaca";
-  const sampleTrade: Trade = {
-    id: "trade-venue-1",
-    order: sampleOrder.id,
-    account: sampleOrder.account,
-    at: sampleOrder.at,
-    source: sampleOrder.source,
-    baseAsset: sampleOrder.baseAsset,
-    quoteAsset: sampleOrder.quoteAsset,
-    side: sampleOrder.side,
-    quantity: "1",
-    price: "100",
-    lockPrice: "",
-  };
 
   for (const tab of ["orders", "trades"] as const) {
     const filters = () =>
@@ -4855,5 +4865,470 @@ describe("Order detail venue section", () => {
 
     setIntervalSpy.mockRestore();
     clearIntervalSpy.mockRestore();
+  });
+});
+
+// A failed dry-run as the API returns it: the would-block comes with the
+// reject that causes it.
+function failedCheckBlocking(account: string, code: string, reason: string) {
+  return {
+    passed: false,
+    rejects: [
+      { code, scope: "account", policy: "daily_loss", reason, details: "" },
+    ],
+    wouldDisplayPrice: "",
+    wouldBlock: { account, policy: "daily_loss", code, reason, details: "" },
+  };
+}
+
+describe("Orders would-block preview with accounts shown", () => {
+  it.each([
+    ["account_blocked", "", "Account desk-alpha is blocked"],
+    [
+      "pnl_kill_switch_triggered",
+      "Daily loss limit",
+      "Would block account desk-alpha - Daily loss limit",
+    ],
+    ["pnl_kill_switch_triggered", "", "Would block account desk-alpha"],
+  ])(
+    "previews the %s block with reason %j naming the account",
+    async (code, reason, text) => {
+      const user = userEvent.setup();
+      checkOrderMock.mockResolvedValue(
+        failedCheckBlocking("desk-alpha", code, reason),
+      );
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFields(user, dialog);
+
+      expect(await within(dialog).findByText(text)).toBeInTheDocument();
+    },
+  );
+});
+
+describe("Orders add-order dialog with accounts hidden", () => {
+  beforeEach(() => {
+    setAccountScope({ accounts: false, account: "main" });
+  });
+
+  it("shows no account field on any tab and fetches no account suggestions", async () => {
+    const user = userEvent.setup();
+    setStoredPreference("pit-officer-orders-submit-tab", "immediate");
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+
+    expect(within(dialog).getByLabelText("Base asset")).toHaveFocus();
+    for (const label of [
+      "Submit and settle",
+      "Drop copy",
+      "Submit and wait",
+      "Send to venue",
+    ]) {
+      await user.click(within(dialog).getByRole("tab", { name: label }));
+      expect(
+        within(dialog).queryByLabelText("Account"),
+      ).not.toBeInTheDocument();
+    }
+    await user.type(within(dialog).getByLabelText("Base asset"), "AA");
+    await act(async () => {
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, DEFAULT_SEARCH_DEBOUNCE_MS + 50),
+      );
+    });
+    expect(fetchAssetsMock).toHaveBeenCalled();
+    expect(fetchAccountsMock).not.toHaveBeenCalled();
+  });
+
+  it("checks and creates a cloned order on the default account", async () => {
+    const user = userEvent.setup();
+    const detail = await openSampleOrderDetail(user, {
+      order: { ...sampleOrder, price: "123" },
+      events: [],
+      trades: [],
+    });
+    await user.click(
+      await within(detail).findByRole("button", {
+        name: `Clone order ${sampleOrder.id}`,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add order" });
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Submit and wait" }),
+    );
+    await within(dialog).findByText("Preview: would pass");
+    const order = {
+      account: "main",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+      price: "123",
+    };
+    expect(checkOrderMock).toHaveBeenCalledWith(order, expect.any(AbortSignal));
+
+    await user.click(within(dialog).getByRole("button", { name: "Add Order" }));
+
+    await waitFor(() =>
+      expect(createOrderMock).toHaveBeenCalledWith(
+        { ...order, mode: "hold" },
+        "reject",
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("creates a drop copy on the default account", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFieldsAfterAccount(user, dialog);
+    await user.click(within(dialog).getByRole("tab", { name: "Drop copy" }));
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required for drop-copy)"),
+      "100",
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "Submit drop-copy" }),
+    );
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: /submit without enforced pre-trade approval/i,
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Submit drop-copy" }),
+    );
+
+    await waitFor(() =>
+      expect(createOrderMock).toHaveBeenCalledWith(
+        {
+          account: "main",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "10",
+          price: "100",
+          mode: "drop_copy",
+        },
+        "create",
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("looks up targets and sends a paper order on the default account", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFieldsAfterAccount(user, dialog);
+    await enablePaperSending(user, dialog);
+
+    await waitFor(() =>
+      expect(fetchTradingDestinationsMock).toHaveBeenCalledWith(
+        "main",
+        "paper",
+        expect.any(AbortSignal),
+      ),
+    );
+    await within(dialog).findByRole("combobox", { name: "Target" });
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+    );
+
+    await waitFor(() =>
+      expect(sendPaperOrderMock).toHaveBeenCalledWith(
+        {
+          account: "main",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "10",
+          destination: {
+            connection: "alpaca-paper",
+            venueAccount: "PA-1",
+            route: { timeInForce: "day" },
+          },
+        },
+        expect.any(AbortSignal),
+      ),
+    );
+    for (const [account] of fetchTradingDestinationsMock.mock.calls) {
+      expect(account).toBe("main");
+    }
+  });
+
+  it.each([
+    ["account_blocked", "", "The account is blocked"],
+    [
+      "pnl_kill_switch_triggered",
+      "Daily loss limit",
+      "Would block the account - Daily loss limit",
+    ],
+    ["pnl_kill_switch_triggered", "", "Would block the account"],
+  ])(
+    "previews the %s block with reason %j without naming the account",
+    async (code, reason, text) => {
+      const user = userEvent.setup();
+      checkOrderMock.mockResolvedValue(
+        failedCheckBlocking("main", code, reason),
+      );
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFieldsAfterAccount(user, dialog);
+
+      expect(await within(dialog).findByText(text)).toBeInTheDocument();
+    },
+  );
+
+  it("explains missing targets without naming the account", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await enablePaperSending(user, dialog);
+
+    expect(
+      await within(dialog).findByText("No paper targets."),
+    ).toBeInTheDocument();
+    expect(fetchTradingDestinationsMock).toHaveBeenCalledWith(
+      "main",
+      "paper",
+      expect.any(AbortSignal),
+    );
+  });
+});
+
+// The account surfaces of both tabs, by name: the sortable column, the row's
+// account cell and its filter-by button, and the filter-bar field with its
+// global toggle.
+async function accountSurfaces(
+  user: ReturnType<typeof userEvent.setup>,
+  account: string,
+) {
+  const surfaces: Record<string, HTMLElement | null> = {};
+  for (const tab of ["orders", "trades"]) {
+    await user.click(
+      screen.getByRole("tab", { name: new RegExp(`^${tab}$`, "i") }),
+    );
+    const table = screen.getByRole("table");
+    surfaces[`${tab} column`] = within(table).queryByRole("button", {
+      name: "Sort by Account",
+    });
+    surfaces[`${tab} cell`] = within(table).queryByText(account);
+    surfaces[`${tab} row filter`] = within(table).queryByRole("button", {
+      name: `Filter by ${account}`,
+    });
+    surfaces[`${tab} field`] =
+      screen.queryByPlaceholderText(/filter by account/i);
+    surfaces[`${tab} global toggle`] = screen.queryByRole("button", {
+      name: /global account filter/i,
+    });
+  }
+  return surfaces;
+}
+
+// A fill the engine settled while blocking the order's account, as the order
+// detail returns it.
+function accountBlockingFill(order: Order): OrderEvent {
+  return {
+    id: "evt-block-1",
+    order: order.id,
+    at: "2026-06-24T11:08:00Z",
+    type: "fill",
+    source: "panel",
+    principal: "",
+    fillQuantity: "2",
+    fillPrice: "99",
+    rejectCode: "pnl_kill_switch_triggered",
+    rejectScope: "account",
+    rejectPolicy: "daily_loss",
+    rejectReason: "Daily loss limit",
+    signed: false,
+  };
+}
+
+// Submit an execution report the engine answers with a block on the order's
+// account; resolves once the accepted report is shown.
+async function submitReportBlockingAccount(
+  user: ReturnType<typeof userEvent.setup>,
+  order: Order,
+) {
+  submitExecutionReportMock.mockResolvedValue({
+    id: "report-alpha-1",
+    blocks: [
+      {
+        account: order.account,
+        code: "pnl_kill_switch_triggered",
+        policy: "daily_loss",
+        reason: "Daily loss limit",
+        details: "",
+      },
+    ],
+    outcomes: [],
+    signedAttestation: "",
+    attestationKeyId: "",
+    signed: false,
+  });
+  await openSampleOrderDetail(user, {
+    order: { ...order, price: "12", displayPrice: "12", leavesQuantity: "2" },
+    events: [],
+    trades: [],
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Submit execution report" }),
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Calculate leaves quantity" }),
+  );
+  await user.click(screen.getByRole("button", { name: "Submit" }));
+  await screen.findByText("Execution report accepted.");
+}
+
+describe("Orders account surfaces with accounts shown", () => {
+  it("shows the account column, row filter, filter field and global toggle on both tabs", async () => {
+    const user = userEvent.setup();
+    useOrdersMock.mockReturnValue(readyPage<Order>([sampleOrder]));
+    useTradesMock.mockReturnValue(readyPage<Trade>([sampleTrade]));
+    renderOrders("/orders");
+
+    for (const [name, surface] of Object.entries(
+      await accountSurfaces(user, sampleOrder.account),
+    )) {
+      expect(surface, name).not.toBeNull();
+    }
+  });
+
+  it.each(["orders", "trades"])(
+    "carries the %s account filter into suggestions and the share link",
+    async (tab) => {
+      renderOrders(`/orders?tab=${tab}&account=desk-alpha`);
+
+      await waitFor(() =>
+        expect(fetchAccountsMock).toHaveBeenCalledWith(
+          expect.objectContaining({ code: "desk-alpha" }),
+          expect.any(AbortSignal),
+        ),
+      );
+      expect(shareLinkParams(filterSetShare("link")).get("account")).toBe(
+        "desk-alpha",
+      );
+    },
+  );
+
+  it("names the account in the timeline block banner", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      order: sampleOrder,
+      events: [accountBlockingFill(sampleOrder)],
+      trades: [],
+    });
+
+    expect(
+      await within(dialog).findByText("Account desk-alpha blocked:"),
+    ).toBeInTheDocument();
+  });
+
+  it("names the account in execution-report blocks", async () => {
+    const user = userEvent.setup();
+    await submitReportBlockingAccount(user, sampleOrder);
+
+    expect(screen.getByText("Account desk-alpha blocked:")).toBeInTheDocument();
+  });
+});
+
+describe("Orders page with accounts hidden", () => {
+  const mainOrder: Order = { ...sampleOrder, account: "main" };
+  const mainTrade: Trade = { ...sampleTrade, account: "main" };
+
+  beforeEach(() => {
+    setAccountScope({ accounts: false, account: "main" });
+  });
+
+  it("shows no account column, row filter, filter field or global toggle on either tab", async () => {
+    const user = userEvent.setup();
+    useOrdersMock.mockReturnValue(readyPage<Order>([mainOrder]));
+    useTradesMock.mockReturnValue(readyPage<Trade>([mainTrade]));
+    renderOrders("/orders");
+
+    for (const [name, surface] of Object.entries(
+      await accountSurfaces(user, mainOrder.account),
+    )) {
+      expect(surface, name).toBeNull();
+    }
+  });
+
+  it.each([
+    ["orders", /export orders csv/i],
+    ["trades", /export trades csv/i],
+  ] as const)(
+    "keeps a stale account filter out of %s requests, export and share link",
+    async (tab, exportButton) => {
+      const user = userEvent.setup();
+      setGlobalAccountFilter("desk-alpha");
+      renderOrders(`/orders?tab=${tab}&account=desk-alpha`);
+
+      const requested = [
+        ...useOrdersMock.mock.calls.map(([filters]) => filters?.account),
+        ...useTradesMock.mock.calls.map(([filters]) => filters?.account),
+      ];
+      expect(requested.length).toBeGreaterThan(0);
+      expect(requested.filter((account) => account !== undefined)).toEqual([]);
+      expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+      expect(shareLinkParams(filterSetShare("link")).has("account")).toBe(
+        false,
+      );
+      expect(fetchAccountsMock).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: exportButton }));
+      await user.click(screen.getByRole("button", { name: /^export$/i }));
+      await waitFor(() =>
+        expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1),
+      );
+      expect(exportBusinessCsvMock).toHaveBeenCalledWith(
+        expect.objectContaining({ entity: tab, filters: {} }),
+      );
+    },
+  );
+
+  it("shows the order detail without the account and links adjustments without it", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      order: mainOrder,
+      events: [],
+      trades: [],
+      venueOrder: linkedVenueOrder,
+    });
+
+    expect(
+      await within(dialog).findByRole("link", { name: "View adjustments" }),
+    ).toHaveAttribute("href", "/positions?tab=history&source=system");
+    expect(within(dialog).queryByText("Account")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("main")).not.toBeInTheDocument();
+  });
+
+  it("names no account in the timeline block banner", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      order: mainOrder,
+      events: [accountBlockingFill(mainOrder)],
+      trades: [],
+    });
+
+    expect(
+      await within(dialog).findByText("Account blocked:"),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Account main/)).not.toBeInTheDocument();
+  });
+
+  it("names no account in execution-report blocks", async () => {
+    const user = userEvent.setup();
+    await submitReportBlockingAccount(user, mainOrder);
+
+    expect(screen.getByText("Account blocked:")).toBeInTheDocument();
+    expect(screen.queryByText(/Account main/)).not.toBeInTheDocument();
   });
 });

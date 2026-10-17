@@ -21,7 +21,10 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { vi } from "vitest";
 
+import type { AccountModeState } from "@/api/accountMode";
+import type { Account } from "@/api/types";
 import i18n from "@/i18n";
 import {
   ApiClientProvider,
@@ -66,4 +69,53 @@ export function makeApi(fetchStub: typeof fetch) {
       translate: (key, params) => i18n.t(key, params),
     }),
   );
+}
+
+/** A JSON response as the server sends it. */
+export function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Answers GET /account-mode with `state` until a PUT stores `stored`, and
+ *  with the stored state from then on, as the server does. */
+export function answeringAccountMode(
+  state: AccountModeState,
+  stored?: AccountModeState,
+) {
+  let current = state;
+  return vi.fn(async (_url: string, init: RequestInit) => {
+    if (init.method !== "PUT") {
+      return jsonResponse(current);
+    }
+    if (stored === undefined) {
+      throw new Error("unexpected PUT /account-mode");
+    }
+    current = stored;
+    return jsonResponse(stored);
+  });
+}
+
+/** An unblocked account row with no group, titled after its code. */
+export function accountRow(
+  code: string,
+  overrides: Partial<Account> = {},
+): Account {
+  return {
+    code,
+    title: code,
+    blocked: false,
+    blockReason: "",
+    blockSource: "none",
+    accountBlocked: false,
+    accountBlockReason: "",
+    groupBlocked: false,
+    groupBlockReason: "",
+    group: "",
+    notes: "",
+    pnlHaltReason: "",
+    ...overrides,
+  };
 }

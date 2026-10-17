@@ -30,6 +30,7 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  User,
   Users,
 } from "lucide-react";
 
@@ -42,10 +43,13 @@ import {
 import {
   registerLocaleResourceMap,
   registerNav,
+  registerPage,
   registerRoute,
   registerWidget,
 } from "@/framework";
 import { appLocaleResources } from "@/i18n";
+import { accountScope } from "@/lib/accountScope";
+import { Account } from "@/pages/Account";
 import { Accounts } from "@/pages/Accounts";
 import { Assets } from "@/pages/Assets";
 import { Audit } from "@/pages/Audit";
@@ -166,7 +170,15 @@ export function registerOfficerDefaults(): void {
     Component: Service,
   });
 
-  // Nav ids: dashboard, accounts, positions, orders, policies,
+  // Page ids: accounts (the one account's page while accounts are hidden).
+  registerPage({
+    id: "accounts",
+    titleKey: "accounts:account.title",
+    Component: Account,
+    when: () => !accountScope().showsAccounts,
+  });
+
+  // Nav ids: dashboard, accounts, account, positions, orders, policies,
   // restart-required, audit, mcp-access, signing-keys, trading-connections,
   // market-data, service, non-release, about.
   registerNav({
@@ -185,6 +197,16 @@ export function registerOfficerDefaults(): void {
     icon: Users,
     section: "primary",
     order: 20,
+    when: () => accountScope().showsAccounts,
+  });
+  registerNav({
+    id: "account",
+    to: "/accounts",
+    labelKey: "nav.account",
+    icon: User,
+    section: "primary",
+    order: 20,
+    when: () => !accountScope().showsAccounts,
   });
   registerNav({
     id: "positions",

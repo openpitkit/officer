@@ -27,6 +27,7 @@ import type {
   PublicKeyMaterial,
 } from "@/api/types";
 import { formatDateTime } from "@/i18n/format";
+import { accountScope } from "@/lib/accountScope";
 import {
   base64urlToBytes,
   extractApprovalJsonSubstring,
@@ -278,6 +279,7 @@ function ApprovalBreakdown({
   fields: ParsedApproval;
 }): ReactElement {
   const { t } = useTranslation("orders");
+  const { showsAccounts } = accountScope();
   const issued = fields.issuedAt ? formatDateTime(fields.issuedAt) : "";
   const requestType = fields.requestType
     ? requestTypeLabel(t, fields.requestType)
@@ -335,11 +337,18 @@ function ApprovalBreakdown({
           label={t("breakdown.timeInForce")}
           value={fields.timeInForce}
         />
-        <BreakdownRow label={t("breakdown.account")} value={fields.accountId} />
-        <BreakdownRow
-          label={t("breakdown.accountGroup")}
-          value={fields.accountGroupId}
-        />
+        {showsAccounts && (
+          <>
+            <BreakdownRow
+              label={t("breakdown.account")}
+              value={fields.accountId}
+            />
+            <BreakdownRow
+              label={t("breakdown.accountGroup")}
+              value={fields.accountGroupId}
+            />
+          </>
+        )}
         <BreakdownRow
           label={t("breakdown.estimatePrice")}
           value={fields.estimatePrice}
@@ -403,10 +412,12 @@ function ApprovalBreakdown({
               label={t("breakdown.order")}
               value={fields.executionReport.order}
             />
-            <BreakdownRow
-              label={t("breakdown.account")}
-              value={fields.executionReport.account}
-            />
+            {showsAccounts && (
+              <BreakdownRow
+                label={t("breakdown.account")}
+                value={fields.executionReport.account}
+              />
+            )}
             <BreakdownRow
               label={t("breakdown.side")}
               value={fields.executionReport.side}
@@ -456,7 +467,12 @@ function ApprovalBreakdown({
               <BreakdownRow
                 key={`${block.account}:${block.code}:${index}`}
                 label={t("breakdown.block", { index: index + 1 })}
-                value={[block.account, block.code, block.reason, block.details]
+                value={[
+                  showsAccounts ? block.account : "",
+                  block.code,
+                  block.reason,
+                  block.details,
+                ]
                   .filter(Boolean)
                   .join(" · ")}
               />

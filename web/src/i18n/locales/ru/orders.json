@@ -207,6 +207,7 @@
         "unavailable": "Недоступно: {{error}}",
         "degraded": "Работает со сбоями: {{error}}",
         "noTargets": "Для счёта {{account}} нет целей в режиме {{mode}}.",
+        "noTargetsUnnamed": "Нет целей в режиме {{mode}}.",
         "timeInForce": "Срок действия",
         "chooseTimeInForce": "Выберите срок действия",
         "timeInForceOptions": {
@@ -244,8 +245,11 @@
     "wouldReject": "Предпросмотр: будет отклонён",
     "displayPrice": "Цена блокировки: {{price}}",
     "wouldBlock": "Заблокирует счёт {{account}}",
+    "wouldBlockUnnamed": "Заблокирует счёт",
     "wouldBlockReason": "Заблокирует счёт {{account}} - {{reason}}",
+    "wouldBlockReasonUnnamed": "Заблокирует счёт - {{reason}}",
     "accountBlocked": "Счёт {{account}} заблокирован",
+    "accountBlockedUnnamed": "Счёт заблокирован",
     "rejectReasons": {
       "account_blocked": "Счёт заблокирован"
     }
@@ -301,6 +305,7 @@
       "accepted": "Отчёт об исполнении принят.",
       "reportId": "ID отчёта",
       "accountBlocked": "Счёт {{account}} заблокирован:",
+      "accountBlockedUnnamed": "Счёт заблокирован:",
       "done": "Готово",
       "leavesInvalid": "Оставшееся количество должно быть неотрицательным десятичным числом без пробелов по краям."
     }
@@ -318,6 +323,7 @@
       "title": "Ордер {{orderExternalId}}",
       "loading": "Загрузка деталей ордера…",
       "accountBlocked": "Счёт {{account}} заблокирован:",
+      "accountBlockedUnnamed": "Счёт заблокирован:",
       "fieldAccount": "Счёт",
       "fieldStatus": "Статус",
       "fieldSource": "Источник",

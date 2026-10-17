@@ -42,7 +42,8 @@
     "noPolicies": "暂无策略",
     "noPoliciesHint": "添加第一条屏障以开始约束订单流。",
     "noMatching": "无匹配策略",
-    "noMatchingHint": "当前账户或策略筛选条件下无匹配屏障。"
+    "noMatchingHint": "当前账户或策略筛选条件下无匹配屏障。",
+    "noMatchingHintUnnamed": "当前筛选条件下无匹配屏障。"
   },
   "delete": {
     "title": "删除风控屏障？",

@@ -207,6 +207,7 @@
         "unavailable": "Unavailable: {{error}}",
         "degraded": "Degraded: {{error}}",
         "noTargets": "No {{mode}} targets for account {{account}}.",
+        "noTargetsUnnamed": "No {{mode}} targets.",
         "timeInForce": "Time in force",
         "chooseTimeInForce": "Choose time in force",
         "timeInForceOptions": {
@@ -244,8 +245,11 @@
     "wouldReject": "Preview: would reject",
     "displayPrice": "Lock price: {{price}}",
     "wouldBlock": "Would block account {{account}}",
+    "wouldBlockUnnamed": "Would block the account",
     "wouldBlockReason": "Would block account {{account}} - {{reason}}",
+    "wouldBlockReasonUnnamed": "Would block the account - {{reason}}",
     "accountBlocked": "Account {{account}} is blocked",
+    "accountBlockedUnnamed": "The account is blocked",
     "rejectReasons": {
       "account_blocked": "Account is blocked"
     }
@@ -301,6 +305,7 @@
       "accepted": "Execution report accepted.",
       "reportId": "Report ID",
       "accountBlocked": "Account {{account}} blocked:",
+      "accountBlockedUnnamed": "Account blocked:",
       "done": "Done",
       "leavesInvalid": "Leaves quantity must be a plain non-negative decimal without surrounding spaces."
     }
@@ -318,6 +323,7 @@
       "title": "Order {{orderExternalId}}",
       "loading": "Loading order details…",
       "accountBlocked": "Account {{account}} blocked:",
+      "accountBlockedUnnamed": "Account blocked:",
       "fieldAccount": "Account",
       "fieldStatus": "Status",
       "fieldSource": "Source",

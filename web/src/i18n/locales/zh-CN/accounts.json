@@ -3,6 +3,16 @@
     "title": "账户",
     "description": "在控制平面中持久化并应用于引擎的操作员账户。封锁账户或分组可通过熔断开关停止订单。"
   },
+  "account": {
+    "title": "账户",
+    "settingsTitle": "设置",
+    "switchToSeveral": "切换到多个账户",
+    "notOwnBlock": "该封锁并非来自账户本身，可在多个账户模式下解除。",
+    "missing": {
+      "title": "数据库中没有该账户",
+      "detail": "目前无法查看或更改其设置。Officer 下次启动时将遵循已保存的账户模式。"
+    }
+  },
   "tabs": {
     "accounts": "账户",
     "groups": "账户组"

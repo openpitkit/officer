@@ -21,6 +21,7 @@ import {
   Download,
   ExternalLink,
   FileArchive,
+  Info,
   Loader2,
   Logs,
   Plug,
@@ -30,12 +31,14 @@ import {
   Server,
   Trash2,
   Upload,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
+import { useAccountMode, type AccountModeState } from "@/api/accountMode";
 import type {
   BackupEntitySelector,
   BackupRestoreSummary,
@@ -45,10 +48,12 @@ import type {
   ServiceInfo,
 } from "@/api/types";
 import { useCredentialStorage } from "@/api/useCredentialStorage";
+import type { LoadState, PollingResult } from "@/api/usePolling";
 import { useService } from "@/api/useService";
 import { useServiceLogs } from "@/api/useServiceLogs";
 import { useMcpAccess } from "@/api/useMcpAccess";
 import { useTrading } from "@/api/useTrading";
+import { AccountModePanel } from "@/components/AccountModeChoice";
 import { ConnectAgent } from "@/components/ConnectAgent";
 import { MasterKeyLink } from "@/components/MasterKeyLink";
 import { Notice } from "@/components/Notice";
@@ -80,6 +85,7 @@ import {
   useApiClient,
   useOfficerApi,
 } from "@/framework";
+import { accountScope } from "@/lib/accountScope";
 
 // This page is the canonical i18n pattern: user-facing text
 // goes through useTranslation with a per-area "service" namespace; shared
@@ -92,7 +98,7 @@ interface ProfileRow {
   value: string;
 }
 
-type ServiceTab = "application" | "api" | "database" | "logs";
+type ServiceTab = "application" | "account-mode" | "api" | "database" | "logs";
 type BackupWorkflow = "export" | "restore";
 type ServiceLifecycleAction = "restart" | "stop";
 
@@ -102,6 +108,7 @@ const serviceTabs: {
   icon: LucideIcon;
 }[] = [
   { id: "application", labelKey: "tabs.application", icon: Server },
+  { id: "account-mode", labelKey: "tabs.accountMode", icon: Users },
   { id: "api", labelKey: "tabs.api", icon: Plug },
   { id: "database", labelKey: "tabs.database", icon: Database },
   { id: "logs", labelKey: "tabs.logs", icon: Logs },
@@ -643,6 +650,7 @@ function BackupScopeControls(props: {
   setPositionGroups: (value: string) => void;
 }) {
   const { t } = useTranslation("service");
+  const { showsAccounts } = accountScope();
 
   return (
     <div className="space-y-4">
@@ -683,37 +691,43 @@ function BackupScopeControls(props: {
 
       <p className="text-xs text-muted-lt">{t("backup.tradingSectionsHint")}</p>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <SelectorBox
-          title={t("backup.accounts.title")}
-          allLabel={t("backup.accounts.all")}
-          all={props.exportAllAccounts || props.accountAll}
-          disabled={props.exportAllAccounts}
-          setAll={props.setAccountAll}
-          accounts={props.exportAllAccounts ? "" : props.accountIDs}
-          setAccounts={props.setAccountIDs}
-          groups={props.exportAllAccounts ? "" : props.accountGroups}
-          setGroups={props.setAccountGroups}
-          accountsPlaceholder={t("backup.accountsPlaceholder")}
-          groupsPlaceholder={t("backup.groupsPlaceholder")}
-        />
-        <SelectorBox
-          title={t("backup.positions.title")}
-          allLabel={t("backup.positions.all")}
-          all={props.positionAll}
-          setAll={props.setPositionAll}
-          accounts={props.positionAccounts}
-          setAccounts={props.setPositionAccounts}
-          groups={props.positionGroups}
-          setGroups={props.setPositionGroups}
-          accountsPlaceholder={t("backup.positionsAccountsPlaceholder")}
-          groupsPlaceholder={t("backup.positionsGroupsPlaceholder")}
-        />
-      </div>
-      {props.exportAllAccounts && (
-        <p className="text-xs text-muted-lt">
-          {t("backup.tradingAccountsHint")}
-        </p>
+      {/* While accounts are hidden there is no account or group to narrow
+          by: the selectors keep their all-accounts default. */}
+      {showsAccounts && (
+        <>
+          <div className="grid gap-3 md:grid-cols-2">
+            <SelectorBox
+              title={t("backup.accounts.title")}
+              allLabel={t("backup.accounts.all")}
+              all={props.exportAllAccounts || props.accountAll}
+              disabled={props.exportAllAccounts}
+              setAll={props.setAccountAll}
+              accounts={props.exportAllAccounts ? "" : props.accountIDs}
+              setAccounts={props.setAccountIDs}
+              groups={props.exportAllAccounts ? "" : props.accountGroups}
+              setGroups={props.setAccountGroups}
+              accountsPlaceholder={t("backup.accountsPlaceholder")}
+              groupsPlaceholder={t("backup.groupsPlaceholder")}
+            />
+            <SelectorBox
+              title={t("backup.positions.title")}
+              allLabel={t("backup.positions.all")}
+              all={props.positionAll}
+              setAll={props.setPositionAll}
+              accounts={props.positionAccounts}
+              setAccounts={props.setPositionAccounts}
+              groups={props.positionGroups}
+              setGroups={props.setPositionGroups}
+              accountsPlaceholder={t("backup.positionsAccountsPlaceholder")}
+              groupsPlaceholder={t("backup.positionsGroupsPlaceholder")}
+            />
+          </div>
+          {props.exportAllAccounts && (
+            <p className="text-xs text-muted-lt">
+              {t("backup.tradingAccountsHint")}
+            </p>
+          )}
+        </>
       )}
     </div>
   );
@@ -865,20 +879,9 @@ export function ServiceLifecycleCard({
   onAction: (action: ServiceLifecycleAction) => Promise<void>;
 }) {
   const { t } = useTranslation("service");
-  const { t: tc } = useTranslation();
   const [confirmAction, setConfirmAction] =
     useState<ServiceLifecycleAction | null>(null);
   const busy = busyAction !== null;
-  const currentAction = confirmAction ?? "restart";
-  const confirmBusy = busyAction === confirmAction;
-
-  const run = async () => {
-    if (confirmAction === null) {
-      return;
-    }
-    await onAction(confirmAction);
-    setConfirmAction(null);
-  };
 
   return (
     <Card>
@@ -927,41 +930,173 @@ export function ServiceLifecycleCard({
           </Button>
         </div>
       </CardContent>
-      <AlertDialog
-        open={confirmAction !== null}
-        onOpenChange={(open) => {
-          if (!open && !busy) {
-            setConfirmAction(null);
-          }
-        }}
+      <LifecycleConfirmDialog
+        action={confirmAction}
+        busyAction={busyAction}
+        onClose={() => setConfirmAction(null)}
+        onAction={onAction}
+      />
+    </Card>
+  );
+}
+
+/** Confirms a lifecycle action, runs it and closes; open while `action` is
+ *  set. */
+function LifecycleConfirmDialog({
+  action,
+  busyAction,
+  onClose,
+  onAction,
+}: {
+  action: ServiceLifecycleAction | null;
+  busyAction: ServiceLifecycleAction | null;
+  onClose: () => void;
+  onAction: (action: ServiceLifecycleAction) => Promise<void>;
+}) {
+  const { t } = useTranslation("service");
+  const { t: tc } = useTranslation();
+  const busy = busyAction !== null;
+  const currentAction = action ?? "restart";
+  const confirmBusy = busyAction === action;
+
+  const run = async () => {
+    if (action === null) {
+      return;
+    }
+    await onAction(action);
+    onClose();
+  };
+
+  return (
+    <AlertDialog
+      open={action !== null}
+      onOpenChange={(open) => {
+        if (!open && !busy) {
+          onClose();
+        }
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            {t(`lifecycle.confirm.${currentAction}.title`)}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {t(`lifecycle.confirm.${currentAction}.description`)}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={confirmBusy}>
+            {tc("actions.cancel")}
+          </AlertDialogCancel>
+          <AlertDialogAction
+            disabled={confirmBusy}
+            className="border border-[var(--danger)] bg-[var(--danger)] text-bg hover:bg-[var(--danger)]/90"
+            onClick={(event) => {
+              event.preventDefault();
+              void run();
+            }}
+          >
+            {confirmBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {t(`lifecycle.confirm.${currentAction}.confirm`)}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/** Says that the stored account mode waits for a restart, and restarts the
+ *  service through the lifecycle action after its confirmation. */
+function AccountModeRestartNotice({
+  load,
+  busyAction,
+  onRestart,
+}: {
+  load: LoadState<AccountModeState>;
+  busyAction: ServiceLifecycleAction | null;
+  /** Restarts the service; rejects when the restart is refused. */
+  onRestart: () => Promise<void>;
+}) {
+  const { t } = useTranslation("service");
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (load.state !== "ready" || !load.data.restartRequired) {
+    return null;
+  }
+
+  const restart = async () => {
+    setError(null);
+    try {
+      await onRestart();
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+
+  return (
+    <>
+      <Notice
+        tone="warn"
+        icon={Info}
+        title={t("accountMode.restartNotice.title")}
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirming(true)}
+            disabled={busyAction !== null}
+          >
+            {busyAction === "restart" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            {t("lifecycle.restart")}
+          </Button>
+        }
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t(`lifecycle.confirm.${currentAction}.title`)}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(`lifecycle.confirm.${currentAction}.description`)}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={confirmBusy}>
-              {tc("actions.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={confirmBusy}
-              className="border border-[var(--danger)] bg-[var(--danger)] text-bg hover:bg-[var(--danger)]/90"
-              onClick={(event) => {
-                event.preventDefault();
-                void run();
-              }}
-            >
-              {confirmBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {t(`lifecycle.confirm.${currentAction}.confirm`)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        <p>{t("accountMode.restartNotice.detail")}</p>
+        <CompactStaleState load={load} />
+        {error !== null && <ErrorBanner message={error} />}
+      </Notice>
+      <LifecycleConfirmDialog
+        action={confirming ? "restart" : null}
+        busyAction={busyAction}
+        onClose={() => setConfirming(false)}
+        onAction={restart}
+      />
+    </>
+  );
+}
+
+/** The account-mode tab: the polled mode, its load states and its choice. */
+function AccountModeCard({
+  poll,
+  restart,
+  disabled,
+}: {
+  poll: PollingResult<AccountModeState>;
+  restart: () => Promise<void>;
+  disabled: boolean;
+}) {
+  const { t } = useTranslation("service");
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("accountMode.title")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <AccountModePanel
+          poll={poll}
+          restart={restart}
+          disabled={disabled}
+          onSaved={poll.reload}
+        />
+      </CardContent>
     </Card>
   );
 }
@@ -974,6 +1109,7 @@ export function ServiceCard({
   lifecycleBusyAction,
   lifecycleError,
   onLifecycleAction,
+  onAccountModeRestart,
 }: {
   info: ServiceInfo;
   activeTab: ServiceTab;
@@ -982,11 +1118,15 @@ export function ServiceCard({
   lifecycleBusyAction: ServiceLifecycleAction | null;
   lifecycleError: string | null;
   onLifecycleAction: (action: ServiceLifecycleAction) => Promise<void>;
+  /** Restarts the service under the lifecycle busy state; rejects when the
+   *  restart is refused. */
+  onAccountModeRestart: () => Promise<void>;
 }) {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
   const { t: tmcp } = useTranslation("mcp");
   const { load: mcpLoad } = useMcpAccess();
+  const accountMode = useAccountMode();
   const mcpCommands = mcpLoad.state === "ready" ? mcpLoad.data : null;
   return (
     <Tabs
@@ -994,6 +1134,11 @@ export function ServiceCard({
       onValueChange={(value) => onTabChange(value as ServiceTab)}
       className="space-y-4 animate-fade-in"
     >
+      <AccountModeRestartNotice
+        load={accountMode.load}
+        busyAction={lifecycleBusyAction}
+        onRestart={onAccountModeRestart}
+      />
       <TabsList aria-label={t("tabs.ariaLabel")}>
         {serviceTabs.map(({ id, labelKey, icon: Icon }) => (
           <TabsTrigger
@@ -1107,6 +1252,14 @@ export function ServiceCard({
             )}
           </CardContent>
         </Card>
+      </TabsContent>
+
+      <TabsContent value="account-mode" className="space-y-4">
+        <AccountModeCard
+          poll={accountMode}
+          restart={onAccountModeRestart}
+          disabled={lifecycleBusyAction !== null}
+        />
       </TabsContent>
 
       <TabsContent value="database" className="space-y-4">
@@ -1224,7 +1377,11 @@ export function Service() {
   const scrolledToLogs = useRef(false);
   const refreshing = load.state === "loading";
   const displayedTab: ServiceTab =
-    location.hash === "#logs" ? "logs" : activeTab;
+    location.hash === "#logs"
+      ? "logs"
+      : location.hash === "#account-mode"
+        ? "account-mode"
+        : activeTab;
 
   useEffect(() => {
     if (location.hash !== "#logs") {
@@ -1257,7 +1414,9 @@ export function Service() {
       setRestarting(false);
     }
   };
-  const runLifecycleAction = async (action: ServiceLifecycleAction) => {
+  // Every restart or stop of this page runs under the one busy state, so
+  // while one is in flight no surface offers another.
+  const requestLifecycleAction = async (action: ServiceLifecycleAction) => {
     setLifecycleBusyAction(action);
     setLifecycleError(null);
     try {
@@ -1267,8 +1426,15 @@ export function Service() {
         await stopService();
       }
     } catch (err) {
-      setLifecycleError(errorText(err));
       setLifecycleBusyAction(null);
+      throw err;
+    }
+  };
+  const runLifecycleAction = async (action: ServiceLifecycleAction) => {
+    try {
+      await requestLifecycleAction(action);
+    } catch (err) {
+      setLifecycleError(errorText(err));
     }
   };
 
@@ -1343,6 +1509,7 @@ export function Service() {
           lifecycleBusyAction={lifecycleBusyAction}
           lifecycleError={lifecycleError}
           onLifecycleAction={runLifecycleAction}
+          onAccountModeRestart={() => requestLifecycleAction("restart")}
         />
       )}
     </Page>

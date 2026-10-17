@@ -21,12 +21,15 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  AuditEntry,
   MarketDataInstance,
   MarketDataInstrument,
   MarketDataStatus,
+  Overview,
   TradingConnection,
   TradingSnapshot,
 } from "@/api/types";
+import { useAudit } from "@/api/useAudit";
 import { useMarketData } from "@/api/useMarketData";
 import { useTrading } from "@/api/useTrading";
 import {
@@ -39,11 +42,15 @@ import {
   type DashboardSourceRowProps,
   type DashboardStatusCardProps,
 } from "@/components/dashboard";
+import { setAccountScope } from "@/lib/accountScope";
 import {
+  AuditStrip,
+  CountsRow,
   MarketDataCard,
   TradingConnectionsCard,
 } from "@/pages/dashboard/widgets";
 
+vi.mock("@/api/useAudit", () => ({ useAudit: vi.fn() }));
 vi.mock("@/api/useMarketData", () => ({ useMarketData: vi.fn() }));
 vi.mock("@/api/useTrading", () => ({ useTrading: vi.fn() }));
 // Spies that render the real widgets: the market data cases read the
@@ -467,5 +474,94 @@ describe("TradingConnectionsCard", () => {
     expect(screen.getByText("Stopped")).toHaveClass("text-[var(--warn)]");
     expect(vi.mocked(DashboardItemChips)).not.toHaveBeenCalled();
     expect(vi.mocked(DashboardSourceError)).not.toHaveBeenCalled();
+  });
+});
+
+const counts: Overview["counts"] = {
+  accounts: 3,
+  accountsActive: 2,
+  groups: 2,
+  groupsActive: 1,
+  limits: 4,
+  ordersActive: 5,
+  ordersToday: 6,
+  ordersTotal: 7,
+};
+
+const auditEntry: AuditEntry = {
+  id: "aud-1",
+  at: "2026-10-14T00:00:00Z",
+  actor: "operator",
+  actorTitle: "Operator",
+  action: "set_limit",
+  account: "main",
+  accountTitle: "Main desk",
+  group: "",
+  detail: "set the order rate limit",
+  source: "panel",
+};
+
+/** Render the counts row and return its tile grid. */
+function renderCountsRow(): HTMLElement {
+  render(
+    <MemoryRouter>
+      <CountsRow counts={counts} activity={[]} />
+    </MemoryRouter>,
+  );
+  const grid = screen.getByText("Orders").closest("button")?.parentElement;
+  if (!grid) {
+    throw new Error("counts grid not found");
+  }
+  return grid;
+}
+
+function renderAuditStrip() {
+  vi.mocked(useAudit).mockReturnValue({
+    load: { state: "ready", data: [auditEntry], error: null },
+    reload: vi.fn(),
+  });
+  render(
+    <MemoryRouter>
+      <AuditStrip />
+    </MemoryRouter>,
+  );
+}
+
+describe("Dashboard widgets with accounts shown", () => {
+  it("shows the accounts and groups tiles beside orders", () => {
+    const grid = renderCountsRow();
+
+    expect(screen.getByText("Accounts")).toBeInTheDocument();
+    expect(screen.getByText("Groups")).toBeInTheDocument();
+    expect(grid).toHaveClass("grid-cols-3");
+  });
+
+  it("names the account of an audit row", () => {
+    renderAuditStrip();
+
+    expect(screen.getByText("Main desk")).toBeInTheDocument();
+    expect(screen.getByText("set the order rate limit")).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard widgets with accounts hidden", () => {
+  beforeEach(() => {
+    setAccountScope({ accounts: false, account: "main" });
+  });
+
+  it("shows only the orders tile across the row", () => {
+    const grid = renderCountsRow();
+
+    expect(screen.queryByText("Accounts")).toBeNull();
+    expect(screen.queryByText("Groups")).toBeNull();
+    expect(grid.children).toHaveLength(1);
+    expect(grid).toHaveClass("grid-cols-1");
+  });
+
+  it("shows an audit row without its account", () => {
+    renderAuditStrip();
+
+    expect(screen.queryByText("Main desk")).toBeNull();
+    expect(screen.getByText("set the order rate limit")).toBeInTheDocument();
   });
 });

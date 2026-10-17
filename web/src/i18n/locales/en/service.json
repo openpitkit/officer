@@ -5,6 +5,7 @@
   "tabs": {
     "ariaLabel": "Service sections",
     "application": "Application",
+    "accountMode": "Account mode",
     "api": "API",
     "database": "Database",
     "logs": "Logs"
@@ -32,6 +33,33 @@
         "description": "The service will shut down and may remain offline until an administrator starts it again.",
         "confirm": "Stop service"
       }
+    }
+  },
+  "accountMode": {
+    "title": "Account mode",
+    "stored": "Saved mode",
+    "running": "Running mode",
+    "notChosen": "Not chosen yet",
+    "modes": {
+      "single": "One account",
+      "multi": "Several accounts"
+    },
+    "singleAccount": "One account: {{account}}",
+    "onlyAccount": "Officer acts on the account {{account}} only.",
+    "createsAccount": "No account exists yet: Officer creates the account {{account}} and acts on it only.",
+    "otherAccounts": {
+      "title": "The other accounts stop working",
+      "detail": "They stay in the database and work again once the mode is switched back to several accounts."
+    },
+    "confirm": {
+      "title": "Save the account mode?",
+      "description": "If the running mode changes, Officer restarts to apply it: the panel disconnects and reloads when Officer is back."
+    },
+    "saved": "The account mode is saved. No restart is needed.",
+    "restarting": "Officer is restarting; the panel reloads when it is back.",
+    "restartNotice": {
+      "title": "Restart needed to apply the account mode",
+      "detail": "The saved account mode differs from the mode the running service enforces. Restart the service to apply it."
     }
   },
   "engine": {

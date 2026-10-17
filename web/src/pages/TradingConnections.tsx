@@ -21,6 +21,7 @@ import { RefreshCw, Settings } from "lucide-react";
 
 import type {
   CredentialStorage,
+  TradingAccessGrant,
   TradingAccessSubject,
   TradingConnection,
   TradingConnectionCheck,
@@ -82,6 +83,7 @@ import {
   AUTOCOMPLETE_SUGGESTION_LIMIT,
   useOfficerApi,
 } from "@/framework";
+import { accountScope } from "@/lib/accountScope";
 import { useAccountCodeSuggestions } from "@/lib/useAccountCodeSuggestions";
 import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { useGroupCodeSuggestions } from "@/lib/useGroupCodeSuggestions";
@@ -519,6 +521,35 @@ function ConnectionCheckSection({
   );
 }
 
+/** Optional venue-side account bound by a new access grant. */
+function VenueAccountField({
+  id,
+  busy,
+  venueAccount,
+  setVenueAccount,
+}: {
+  id: string;
+  busy: boolean;
+  venueAccount: string;
+  setVenueAccount: (value: string) => void;
+}) {
+  const { t: tv } = useTranslation("venues");
+  const { t: tc } = useTranslation();
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={`${id}-venue-account`}>{tv("venueAccount")}</Label>
+      <ClearableInput
+        id={`${id}-venue-account`}
+        onClear={() => setVenueAccount("")}
+        clearLabel={tc("filters.clearField")}
+        value={venueAccount}
+        disabled={busy}
+        onChange={(event) => setVenueAccount(event.target.value)}
+      />
+    </div>
+  );
+}
+
 function ConnectionAccessSection({
   accessSection,
   id,
@@ -624,17 +655,12 @@ function ConnectionAccessSection({
           />
         </div>
         {provider.venueAccounts && (
-          <div className="space-y-2">
-            <Label htmlFor={`${id}-venue-account`}>{tv("venueAccount")}</Label>
-            <ClearableInput
-              id={`${id}-venue-account`}
-              onClear={() => setVenueAccount("")}
-              clearLabel={tc("filters.clearField")}
-              value={venueAccount}
-              disabled={busy}
-              onChange={(event) => setVenueAccount(event.target.value)}
-            />
-          </div>
+          <VenueAccountField
+            id={id}
+            busy={busy}
+            venueAccount={venueAccount}
+            setVenueAccount={setVenueAccount}
+          />
         )}
         {feeBlock !== null && (
           <AccessBlockedHint
@@ -650,6 +676,112 @@ function ConnectionAccessSection({
           {tv("actions.grantAccess")}
         </Button>
       </form>
+    </section>
+  );
+}
+
+/** The grant giving the default account access to `connection` while
+ *  accounts are hidden: its own, which wins, else one to its group - the only
+ *  group the server lists then; undefined for none. */
+function defaultAccountGrant(
+  connection: TradingConnection,
+): TradingAccessGrant | undefined {
+  const { account } = accountScope();
+  const own = connection.access.find((grant) => grant.account === account);
+  if (own !== undefined) return own;
+  return connection.access.find((grant) => grant.accountGroup !== "");
+}
+
+/** Access of the default account while accounts are hidden: its own grant,
+ *  which it can revoke, a read-only grant to its group, or none. */
+function DefaultAccountAccessSection({
+  accessSection,
+  id,
+  provider,
+  busy,
+  grant,
+  venueAccount,
+  setVenueAccount,
+  grantAccess,
+  revokeAccess,
+}: {
+  accessSection: Ref<HTMLElement>;
+  id: string;
+  provider: TradingProvider;
+  busy: boolean;
+  grant: TradingAccessGrant | undefined;
+  venueAccount: string;
+  setVenueAccount: (value: string) => void;
+  grantAccess: () => Promise<void>;
+  revokeAccess: () => void;
+}) {
+  const { t } = useTranslation("trading");
+  const { t: tv } = useTranslation("venues");
+  const inherited = grant !== undefined && grant.accountGroup !== "";
+  return (
+    <section
+      ref={accessSection}
+      tabIndex={-1}
+      aria-labelledby={`${id}-access`}
+      className="space-y-3 border-t border-border pt-4"
+    >
+      <h4 id={`${id}-access`} className="text-sm font-medium">
+        {t("access.title")}
+      </h4>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={grant === undefined ? "neutral" : "ok"}>
+          {tv(
+            grant === undefined
+              ? "accessDialog.state.none"
+              : "accessDialog.state.granted",
+          )}
+        </Badge>
+        {grant !== undefined && !inherited && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={revokeAccess}
+          >
+            {tv("actions.revokeAccess")}
+          </Button>
+        )}
+      </div>
+      {inherited && (
+        <p className="text-xs text-muted">{t("access.inherited")}</p>
+      )}
+      {grant !== undefined &&
+        provider.venueAccounts &&
+        grant.venueAccount !== "" && (
+          <p className="text-xs">
+            {tv("accessDialog.venueAccount", {
+              venueAccount: grant.venueAccount,
+            })}
+          </p>
+        )}
+      {grant === undefined && (
+        <form
+          aria-label={tv("actions.grantAccess")}
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void grantAccess();
+          }}
+        >
+          {provider.venueAccounts && (
+            <VenueAccountField
+              id={id}
+              busy={busy}
+              venueAccount={venueAccount}
+              setVenueAccount={setVenueAccount}
+            />
+          )}
+          <Button type="submit" disabled={busy}>
+            {tv("actions.grantAccess")}
+          </Button>
+        </form>
+      )}
     </section>
   );
 }
@@ -1250,6 +1382,9 @@ function ConnectionCard({
     feeInput.current?.scrollIntoView({ block: "nearest" });
     feeInput.current?.focus();
   };
+  const { showsAccounts } = accountScope();
+  // Hidden accounts leave no fee-account section to send the operator to.
+  const showsFeeAccount = showsAccounts && provider.unlinkedFees;
   const subjectCode = subjectInput.trim();
   const feeAccountCode = feeCode.trim();
   // A group is refused whatever its code, so its reason shows before typing.
@@ -1275,6 +1410,8 @@ function ConnectionCard({
     {
       key: "access",
       label: t("access.title"),
+      // Also while accounts are hidden: the list then holds only the default
+      // account's own grants and those of its group.
       done: connection.access.length > 0,
       target: accessSection,
     },
@@ -1298,12 +1435,8 @@ function ConnectionCard({
       setCheckError,
     );
   };
-  const grantAccess = async () => {
-    if (busy || subjectCode === "" || feeBlock !== null) return;
-    const subject: TradingAccessSubject =
-      subjectKind === "account"
-        ? { account: subjectCode }
-        : { accountGroup: subjectCode };
+  const grant = async (subject: TradingAccessSubject) => {
+    if (busy) return;
     const venueAccountCode = venueAccount.trim();
     const body =
       provider.venueAccounts && venueAccountCode !== ""
@@ -1314,6 +1447,18 @@ function ConnectionCard({
       setSubjectInput("");
       setVenueAccount("");
     }
+  };
+  const grantAccess = async () => {
+    if (subjectCode === "" || feeBlock !== null) return;
+    await grant(
+      subjectKind === "account"
+        ? { account: subjectCode }
+        : { accountGroup: subjectCode },
+    );
+  };
+  const openRevoke = (subject: TradingAccessSubject) => {
+    setError("");
+    setRevokeSubject(subject);
   };
   const saveFeeAccount = async (create: boolean) => {
     if (busy || feeAccountCode === "") return;
@@ -1445,7 +1590,7 @@ function ConnectionCard({
         {error && deleteSymbol === null && revokeSubject === null && (
           <div className="space-y-2">
             <ErrorBanner message={error} />
-            {feeRequired && provider.unlinkedFees && (
+            {feeRequired && showsFeeAccount && (
               <LinkButton onClick={focusFeeAccount}>
                 {tv("actions.setFeeAccount")}
               </LinkButton>
@@ -1480,28 +1625,39 @@ function ConnectionCard({
           deleteSymbol={deleteSymbol}
           setDeleteSymbol={setDeleteSymbol}
         />
-        <ConnectionAccessSection
-          accessSection={accessSection}
-          id={id}
-          connection={connection}
-          provider={provider}
-          busy={busy}
-          subjectKind={subjectKind}
-          setSubjectKind={setSubjectKind}
-          subjectInput={subjectInput}
-          setSubjectInput={setSubjectInput}
-          subjectCode={subjectCode}
-          venueAccount={venueAccount}
-          setVenueAccount={setVenueAccount}
-          feeBlock={feeBlock}
-          focusFeeAccount={focusFeeAccount}
-          grantAccess={grantAccess}
-          onRevoke={(subject) => {
-            setError("");
-            setRevokeSubject(subject);
-          }}
-        />
-        {provider.unlinkedFees && (
+        {showsAccounts ? (
+          <ConnectionAccessSection
+            accessSection={accessSection}
+            id={id}
+            connection={connection}
+            provider={provider}
+            busy={busy}
+            subjectKind={subjectKind}
+            setSubjectKind={setSubjectKind}
+            subjectInput={subjectInput}
+            setSubjectInput={setSubjectInput}
+            subjectCode={subjectCode}
+            venueAccount={venueAccount}
+            setVenueAccount={setVenueAccount}
+            feeBlock={feeBlock}
+            focusFeeAccount={focusFeeAccount}
+            grantAccess={grantAccess}
+            onRevoke={openRevoke}
+          />
+        ) : (
+          <DefaultAccountAccessSection
+            accessSection={accessSection}
+            id={id}
+            provider={provider}
+            busy={busy}
+            grant={defaultAccountGrant(connection)}
+            venueAccount={venueAccount}
+            setVenueAccount={setVenueAccount}
+            grantAccess={() => grant({ account: accountScope().account })}
+            revokeAccess={() => openRevoke({ account: accountScope().account })}
+          />
+        )}
+        {showsFeeAccount && (
           <ConnectionFeeAccountSection
             id={id}
             connection={connection}

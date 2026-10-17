@@ -76,6 +76,7 @@ import {
   useDebouncedValue,
 } from "@/lib/useDebounce";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
+import { accountScope } from "@/lib/accountScope";
 
 const SOURCES = ["panel", "api", "mcp", "system"] as const;
 const EMPTY_ACTION_GROUPS: AuditActionGroup[] = [];
@@ -137,6 +138,7 @@ function AuditTable({
 }) {
   const { t } = useTranslation("audit");
   const { t: tc } = useTranslation();
+  const { showsAccounts } = accountScope();
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
   const exactExternalId = activeExternalId?.trim() ?? "";
   useEffect(() => {
@@ -173,11 +175,13 @@ function AuditTable({
               {t("table.action")}
             </ColumnHeader>
           </TableHead>
-          <TableHead>
-            <ColumnHeader description={t("table.columnDescriptions.account")}>
-              {t("table.account")}
-            </ColumnHeader>
-          </TableHead>
+          {showsAccounts && (
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.account")}>
+                {t("table.account")}
+              </ColumnHeader>
+            </TableHead>
+          )}
           <TableHead>
             <ColumnHeader description={t("table.columnDescriptions.source")}>
               {t("table.source")}
@@ -232,25 +236,27 @@ function AuditTable({
                 {entry.action}
               </Badge>
             </TableCell>
-            <TableCell className="nums text-xs">
-              {entry.account ? (
-                <div className="flex min-w-0 items-center gap-1">
-                  <span className="min-w-0 truncate">
-                    {entry.accountTitle || entry.account}
-                  </span>
-                  <span className="ml-auto flex shrink-0 items-center">
-                    <CopyIdButton
-                      value={entry.account}
-                      size={22}
-                      title={t("common:rowActions.copyId")}
-                      copiedTitle={t("common:rowActions.copiedId")}
-                    />
-                  </span>
-                </div>
-              ) : (
-                tc("value.none")
-              )}
-            </TableCell>
+            {showsAccounts && (
+              <TableCell className="nums text-xs">
+                {entry.account ? (
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className="min-w-0 truncate">
+                      {entry.accountTitle || entry.account}
+                    </span>
+                    <span className="ml-auto flex shrink-0 items-center">
+                      <CopyIdButton
+                        value={entry.account}
+                        size={22}
+                        title={t("common:rowActions.copyId")}
+                        copiedTitle={t("common:rowActions.copiedId")}
+                      />
+                    </span>
+                  </div>
+                ) : (
+                  tc("value.none")
+                )}
+              </TableCell>
+            )}
             <TableCell>
               {entry.source ? (
                 <Badge variant={sourceVariant(entry.source)}>
@@ -388,19 +394,25 @@ export function Audit() {
   const { t: tc } = useTranslation();
   const [params] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
+  const { showsAccounts } = accountScope();
 
   // Seed filter state from URL so dashboard activity links and per-account
-  // quick-links land here pre-filtered.
+  // quick-links land here pre-filtered. While accounts are hidden the account
+  // and group filters stay empty, so no request or share link carries one.
   const [externalId, setExternalId] = useState(params.get("id") ?? "");
   const [appliedExternalId, setAppliedExternalId] = useState(
     params.get("id") ?? "",
   );
   const [account, setAccount] = useState(
-    globalAccountFilter.account || params.get("account") || "",
+    showsAccounts
+      ? globalAccountFilter.account || params.get("account") || ""
+      : "",
   );
   const [asset, setAsset] = useState(params.get("asset") ?? "");
   // Exact account-group code; block-details deep links land here.
-  const [group, setGroup] = useState(params.get("group") ?? "");
+  const [group, setGroup] = useState(
+    showsAccounts ? (params.get("group") ?? "") : "",
+  );
   const [actor, setActor] = useState(params.get("actor") ?? "");
   const [source, setSource] = useState(params.get("source") ?? "");
   const [atMode, setAtMode] = useState(params.get("atMode") ?? "after");
@@ -715,31 +727,33 @@ export function Audit() {
         }
         bottom={
           <>
-            <OnlineFilterField
-              label={tc("fields.account")}
-              value={account}
-              onChange={(value) => {
-                if (accountGlobalLocked && value.trim() === "") {
-                  globalAccountFilter.clear();
-                }
-                setAccount(value);
-                resetPage();
-              }}
-              onClear={() => {
-                if (accountGlobalLocked) {
-                  globalAccountFilter.clear();
-                }
-                setAccount("");
-                resetPage();
-              }}
-              clearLabel={tc("filters.clearField")}
-              placeholder={t("filter.account.placeholder")}
-              loading={load.state === "loading" && account.trim() !== ""}
-              searchingLabel={tc("filters.onlineLoading", {
-                field: tc("fields.account"),
-              })}
-              globalToggle={accountGlobalToggle}
-            />
+            {showsAccounts && (
+              <OnlineFilterField
+                label={tc("fields.account")}
+                value={account}
+                onChange={(value) => {
+                  if (accountGlobalLocked && value.trim() === "") {
+                    globalAccountFilter.clear();
+                  }
+                  setAccount(value);
+                  resetPage();
+                }}
+                onClear={() => {
+                  if (accountGlobalLocked) {
+                    globalAccountFilter.clear();
+                  }
+                  setAccount("");
+                  resetPage();
+                }}
+                clearLabel={tc("filters.clearField")}
+                placeholder={t("filter.account.placeholder")}
+                loading={load.state === "loading" && account.trim() !== ""}
+                searchingLabel={tc("filters.onlineLoading", {
+                  field: tc("fields.account"),
+                })}
+                globalToggle={accountGlobalToggle}
+              />
+            )}
             <OnlineFilterField
               label={tc("fields.asset")}
               value={asset}
@@ -758,24 +772,26 @@ export function Audit() {
                 field: tc("fields.asset"),
               })}
             />
-            <OnlineFilterField
-              label={tc("fields.group")}
-              value={group}
-              onChange={(value) => {
-                setGroup(value);
-                resetPage();
-              }}
-              onClear={() => {
-                setGroup("");
-                resetPage();
-              }}
-              clearLabel={tc("filters.clearField")}
-              placeholder={t("filter.group.placeholder")}
-              loading={load.state === "loading" && group.trim() !== ""}
-              searchingLabel={tc("filters.onlineLoading", {
-                field: tc("fields.group"),
-              })}
-            />
+            {showsAccounts && (
+              <OnlineFilterField
+                label={tc("fields.group")}
+                value={group}
+                onChange={(value) => {
+                  setGroup(value);
+                  resetPage();
+                }}
+                onClear={() => {
+                  setGroup("");
+                  resetPage();
+                }}
+                clearLabel={tc("filters.clearField")}
+                placeholder={t("filter.group.placeholder")}
+                loading={load.state === "loading" && group.trim() !== ""}
+                searchingLabel={tc("filters.onlineLoading", {
+                  field: tc("fields.group"),
+                })}
+              />
+            )}
             <OnlineFilterField
               label={t("table.actor")}
               value={actor}
@@ -883,7 +899,7 @@ export function Audit() {
       {/* Gate the list on the catalogue so the first audit fetch carries the
           seeded control default rather than flashing an empty result. */}
       {(catalogue.load.state === "loading" || load.state === "loading") && (
-        <TableSkeleton cols={7} />
+        <TableSkeleton cols={showsAccounts ? 7 : 6} />
       )}
       <StaleState {...catalogue} />
       <StaleState load={load} reload={reload} />

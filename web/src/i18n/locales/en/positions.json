@@ -81,6 +81,7 @@
       "hint": "Use Adjust to seed spot-funds balances for an account and asset."
     },
     "activeOrdersTitle": "Active orders for {{account}}",
+    "activeOrdersTitleUnnamed": "Active orders",
     "ordersTitle": "Open orders for {{account}}"
   },
   "inline": {
@@ -98,6 +99,7 @@
   "panel": {
     "open": "Adjustment",
     "openAriaLabel": "Open adjustment panel for {{account}} {{asset}}",
+    "openAriaLabelUnnamed": "Open adjustment panel for {{asset}}",
     "openDraftAriaLabel": "Open new adjustment panel",
     "title": "Adjustment",
     "descriptionExisting": "Compare the current position with the intended values before submitting.",

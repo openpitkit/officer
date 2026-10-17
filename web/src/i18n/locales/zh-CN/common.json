@@ -353,6 +353,7 @@
   "nav": {
     "dashboard": "仪表盘",
     "accounts": "账户",
+    "account": "账户",
     "assets": "资产",
     "positions": "持仓",
     "orders": "订单",
@@ -418,7 +419,8 @@
       }
     },
     "preTrade": {
-      "copy": "如果要做允许或禁止的 pre-trade 控制，请创建账户，分配持仓或现金余额，然后定义 policy barriers。如果不需要 buying power 控制，可以不创建账户和余额。"
+      "copy": "如果要做允许或禁止的 pre-trade 控制，请创建账户，分配持仓或现金余额，然后定义 policy barriers。如果不需要 buying power 控制，可以不创建账户和余额。",
+      "copyUnnamed": "如需允许或禁止订单的交易前控制，请为该账户分配持仓或现金余额，然后定义屏障。如果不需要购买力控制，该账户可以保持为空。"
     },
     "marketData": {
       "copy": "Market orders、locked prices、跨币种敞口和 realized PnL 需要行情源。您可以稍后连接 live provider，也可以现在安装静态 BYO preset。"
@@ -428,11 +430,13 @@
     },
     "actions": {
       "demoAccount": "创建演示账户和持仓",
+      "demoPositions": "添加演示持仓",
       "policyPreset": "添加 starter policy barriers",
       "marketDataPreset": "安装 FX 和 crypto 静态价格",
       "binancePreset": "从 Binance 获取 FX 和 crypto rates",
       "or": "或",
       "openAccounts": "打开账户",
+      "openAccount": "打开账户",
       "openPolicies": "打开策略",
       "openMarketData": "打开行情数据",
       "start": "开始使用 Pit Officer"
@@ -445,10 +449,18 @@
       "failed": "{{label}} 失败：{{message}}",
       "partialFailed": "{{label}} 已部分应用：失败前已更新 {{count}} 行：{{message}}",
       "marketDataInstanceMissing": "服务器没有返回静态行情数据实例。",
-      "binanceInstanceMissing": "服务器没有返回 Binance 行情数据实例。"
+      "binanceInstanceMissing": "服务器没有返回 Binance 行情数据实例。",
+      "accountMissing": "未找到账户 {{account}}。",
+      "accountHoldsPositions": "账户 {{account}} 已有持仓。演示数据只写入没有持仓的账户。",
+      "barriersExist": "账户 {{account}} 已有入门屏障。演示数据只写入没有这些屏障的账户。",
+      "barriersUnread": "无法读取账户 {{account}} 的全部屏障，因此演示不写入任何数据。"
     },
     "returnHint": "您可以从“关于”对话框回到此对话框。",
     "dontShowAgain": "不再显示"
+  },
+  "accountModeDialog": {
+    "title": "您将使用多少个账户？",
+    "description": "使用单个账户时，Officer 仅作用于该账户，控制面板不显示账户字段。之后可在“服务”页面更改该模式。"
   },
   "display": {
     "density": {
@@ -478,6 +490,7 @@
     "stale": "数据已过时",
     "staleDescription": "刷新失败。当前显示最后收到的数据。",
     "loadError": "数据加载失败",
+    "accountModeLoadError": "账户模式加载失败",
     "loading": "正在加载",
     "copyableSnippet": "可复制片段"
   },

@@ -39,8 +39,9 @@ import type {
 import { SidebarProvider } from "@/components/SidebarContext";
 import { ApiError, AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework";
 import i18n from "@/i18n";
+import { setAccountScope } from "@/lib/accountScope";
 import { TradingConnections } from "@/pages/TradingConnections";
-import { renderWithApi } from "@/test/apiClient";
+import { accountRow, renderWithApi } from "@/test/apiClient";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
@@ -170,20 +171,7 @@ function connection(
 }
 
 function account(code: string): Account {
-  return {
-    code,
-    title: "",
-    blocked: false,
-    blockReason: "",
-    blockSource: "none",
-    accountBlocked: false,
-    accountBlockReason: "",
-    groupBlocked: false,
-    groupBlockReason: "",
-    group: "",
-    notes: "",
-    pnlHaltReason: "",
-  };
+  return accountRow(code, { title: "" });
 }
 
 function group(code: string): Group {
@@ -3601,6 +3589,193 @@ describe("Trading connections", () => {
     expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
       account: "beta",
       venueAccount: "venue-target",
+    });
+  });
+});
+
+describe("Trading connections while accounts are hidden", () => {
+  const ownGrant = {
+    account: "main",
+    accountGroup: "",
+    venueAccount: "",
+    group: "desk",
+  };
+  const deskGrant = {
+    account: "",
+    accountGroup: "desk",
+    venueAccount: "",
+    group: "",
+  };
+  const inheritedNote =
+    "Inherited from the account's group. Group access is managed in multi-account mode.";
+
+  function accessOf(scope: ReturnType<typeof within>) {
+    return within(scope.getByRole("region", { name: "Account access" }));
+  }
+
+  function accessStepOf(scope: ReturnType<typeof within>) {
+    return within(
+      within(scope.getByRole("list", { name: "Setup checklist" })).getAllByRole(
+        "listitem",
+      )[2],
+    );
+  }
+
+  const venueAccountLine = /^Venue account:/;
+
+  beforeEach(() => {
+    setAccountScope({ accounts: false, account: "main" });
+  });
+
+  it("replaces grants, the grant form and the fee section with the default account's access and grants it", async () => {
+    const user = userEvent.setup();
+    api.grantTradingAccess.mockImplementation(async () =>
+      updateConnection("alpaca-1", { access: [ownGrant] }),
+    );
+    renderTrading();
+    const scope = await card();
+    const access = accessOf(scope);
+    expect(access.getByText("No access", { exact: true })).toBeInTheDocument();
+    expect(
+      accessStepOf(scope).getByText("Not done", { exact: true }),
+    ).toBeInTheDocument();
+    expect(venueWiring.access).not.toHaveBeenCalled();
+    expect(
+      access.queryByRole("table", { name: "Access grants" }),
+    ).not.toBeInTheDocument();
+    expect(access.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(
+      access.queryByRole("button", { name: "Account" }),
+    ).not.toBeInTheDocument();
+    expect(
+      access.queryByRole("button", { name: "Group" }),
+    ).not.toBeInTheDocument();
+    expect(
+      access.queryByRole("textbox", { name: "Venue account" }),
+    ).not.toBeInTheDocument();
+    expect(
+      scope.queryByRole("heading", { name: "Fee account" }),
+    ).not.toBeInTheDocument();
+    expect(
+      scope.queryByRole("combobox", { name: "Fee account" }),
+    ).not.toBeInTheDocument();
+    const callsBeforeGrant = api.fetchTrading.mock.calls.length;
+    await user.click(access.getByRole("button", { name: "Grant access" }));
+    expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
+      account: "main",
+    });
+    expect(await access.findByText("Granted", { exact: true })).toBeVisible();
+    expect(api.fetchTrading.mock.calls.length).toBeGreaterThan(
+      callsBeforeGrant,
+    );
+    expect(api.fetchAccounts).not.toHaveBeenCalled();
+    expect(api.fetchGroups).not.toHaveBeenCalled();
+    expect(api.fetchAccountState).not.toHaveBeenCalled();
+    expect(api.setTradingFeeAccount).not.toHaveBeenCalled();
+    expect(api.clearTradingFeeAccount).not.toHaveBeenCalled();
+    expect(api.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("binds the trimmed venue account the provider supports to the default account's grant and shows it", async () => {
+    const user = userEvent.setup();
+    snapshot.providers = [{ ...provider, venueAccounts: true }];
+    api.grantTradingAccess.mockImplementation(async () =>
+      updateConnection("alpaca-1", {
+        access: [{ ...ownGrant, venueAccount: "venue-target" }],
+      }),
+    );
+    renderTrading();
+    const access = accessOf(await card());
+    expect(access.queryByText(venueAccountLine)).not.toBeInTheDocument();
+    await user.type(
+      access.getByRole("textbox", { name: "Venue account" }),
+      " venue-target ",
+    );
+    await user.click(access.getByRole("button", { name: "Grant access" }));
+    expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
+      account: "main",
+      venueAccount: "venue-target",
+    });
+    expect(
+      await access.findByText("Venue account: venue-target"),
+    ).toBeInTheDocument();
+  });
+
+  it("revokes the default account's own grant, which wins over its group's, only after confirmation", async () => {
+    const user = userEvent.setup();
+    snapshot.providers = [{ ...provider, venueAccounts: true }];
+    snapshot.connections = [
+      connection({
+        access: [{ ...deskGrant, venueAccount: "venue-77" }, ownGrant],
+      }),
+    ];
+    renderTrading();
+    const scope = await card();
+    const access = accessOf(scope);
+    expect(access.getByText("Granted", { exact: true })).toBeInTheDocument();
+    expect(
+      accessStepOf(scope).getByText("Done", { exact: true }),
+    ).toBeInTheDocument();
+    expect(
+      access.queryByRole("form", { name: "Grant access" }),
+    ).not.toBeInTheDocument();
+    expect(access.queryByText(inheritedNote)).not.toBeInTheDocument();
+    expect(access.queryByText(venueAccountLine)).not.toBeInTheDocument();
+    await user.click(access.getByRole("button", { name: "Revoke access" }));
+    expect(api.revokeTradingAccess).not.toHaveBeenCalled();
+    const dialog = within(
+      screen.getByRole("alertdialog", { name: "Revoke account access?" }),
+    );
+    const callsBeforeRevoke = api.fetchTrading.mock.calls.length;
+    await user.click(dialog.getByRole("button", { name: "Revoke access" }));
+    expect(api.revokeTradingAccess).toHaveBeenCalledExactlyOnceWith(
+      "alpaca-1",
+      { account: "main" },
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(api.fetchTrading.mock.calls.length).toBeGreaterThan(
+      callsBeforeRevoke,
+    );
+  });
+
+  it("shows a listed group grant as read-only access with its venue account", async () => {
+    snapshot.providers = [{ ...provider, venueAccounts: true }];
+    snapshot.connections = [
+      connection({ access: [{ ...deskGrant, venueAccount: "venue-77" }] }),
+    ];
+    renderTrading();
+    const scope = await card();
+    const access = accessOf(scope);
+    expect(access.getByText(inheritedNote)).toBeInTheDocument();
+    expect(access.getByText("Granted", { exact: true })).toBeInTheDocument();
+    expect(access.getByText("Venue account: venue-77")).toBeInTheDocument();
+    expect(access.queryByRole("button")).not.toBeInTheDocument();
+    expect(access.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(access.queryByText(/desk/)).not.toBeInTheDocument();
+    expect(
+      accessStepOf(scope).getByText("Done", { exact: true }),
+    ).toBeInTheDocument();
+    expect(api.fetchAccountState).not.toHaveBeenCalled();
+  });
+
+  it("shows a fee_account_required refusal without a fee-account action", async () => {
+    const user = userEvent.setup();
+    api.grantTradingAccess.mockRejectedValue(
+      new ApiError("Choose a fee ledger", "fee_account_required", 409),
+    );
+    renderTrading();
+    const scope = await card();
+    await user.click(
+      accessOf(scope).getByRole("button", { name: "Grant access" }),
+    );
+    expect(await scope.findByText("Choose a fee ledger")).toBeInTheDocument();
+    expect(
+      scope.queryByRole("button", { name: "Set fee account" }),
+    ).not.toBeInTheDocument();
+    expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
+      account: "main",
     });
   });
 });

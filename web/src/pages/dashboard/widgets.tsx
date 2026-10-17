@@ -43,6 +43,7 @@ import { CompactStaleState } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime } from "@/i18n/format";
+import { accountScope } from "@/lib/accountScope";
 import {
   auditActionMeta,
   groupActivity,
@@ -57,26 +58,36 @@ export interface DashboardReadyWidgetProps {
 export function CountsRow({ counts }: DashboardReadyWidgetProps) {
   const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
+  const { showsAccounts } = accountScope();
   const tiles: {
     label: string;
     value: ReactNode;
     caption: string;
     route: string;
   }[] = [
-    {
-      label: t("counts.accounts"),
-      value: (
-        <SlashCount left={counts.accountsActive} right={counts.accounts} />
-      ),
-      caption: t("counts.captionActiveTotal"),
-      route: "/accounts",
-    },
-    {
-      label: t("counts.groups"),
-      value: <SlashCount left={counts.groupsActive} right={counts.groups} />,
-      caption: t("counts.captionActiveTotal"),
-      route: "/accounts",
-    },
+    ...(showsAccounts
+      ? [
+          {
+            label: t("counts.accounts"),
+            value: (
+              <SlashCount
+                left={counts.accountsActive}
+                right={counts.accounts}
+              />
+            ),
+            caption: t("counts.captionActiveTotal"),
+            route: "/accounts",
+          },
+          {
+            label: t("counts.groups"),
+            value: (
+              <SlashCount left={counts.groupsActive} right={counts.groups} />
+            ),
+            caption: t("counts.captionActiveTotal"),
+            route: "/accounts",
+          },
+        ]
+      : []),
     {
       label: t("counts.orders"),
       value: (
@@ -89,7 +100,11 @@ export function CountsRow({ counts }: DashboardReadyWidgetProps) {
     },
   ];
   return (
-    <div className="grid grid-cols-3 gap-4">
+    <div
+      className={
+        showsAccounts ? "grid grid-cols-3 gap-4" : "grid grid-cols-1 gap-4"
+      }
+    >
       {tiles.map(({ label, value, caption, route }) => (
         <button
           key={label}
@@ -429,6 +444,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
   const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
   const { Icon, variant, titleKey } = auditActionMeta(entry.action);
+  const { showsAccounts } = accountScope();
 
   return (
     <button
@@ -445,11 +461,13 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
         </span>
       </Badge>
 
-      <span className="w-28 shrink-0 truncate text-xs text-text">
-        {entry.accountTitle || entry.account || (
-          <span className="text-muted-lt">-</span>
-        )}
-      </span>
+      {showsAccounts && (
+        <span className="w-28 shrink-0 truncate text-xs text-text">
+          {entry.accountTitle || entry.account || (
+            <span className="text-muted-lt">-</span>
+          )}
+        </span>
+      )}
 
       <span className="min-w-0 flex-1 truncate text-xs text-muted">
         {entry.detail || entry.actorTitle || entry.actor}

@@ -51,6 +51,14 @@ import { useGroupsPage } from "@/api/useGroups";
 import type { PollingResult } from "@/api/usePolling";
 import { useTrading } from "@/api/useTrading";
 import { validateAccountID } from "@/api/validate";
+import {
+  AccountCurrencyDialog,
+  BlockAccountDialog,
+  currencyText,
+  errMessage,
+  UnblockAccountConfirm,
+} from "@/components/AccountDialogs";
+import { AccountStatusBadge } from "@/components/AccountState";
 import { Autocomplete } from "@/components/Autocomplete";
 import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import {
@@ -477,13 +485,6 @@ function accountCountQuery(
     default:
       return {};
   }
-}
-
-function errMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    return err.message;
-  }
-  return err instanceof Error ? err.message : String(err);
 }
 
 function matchLabelKey(mode: TextMatchMode): string {
@@ -1459,176 +1460,6 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Block / unblock account dialogs
-// ---------------------------------------------------------------------------
-
-function BlockAccountDialog({
-  account,
-  open,
-  onOpenChange,
-  onDone,
-}: {
-  account: Account | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onDone: (updated: Account) => void;
-}) {
-  const { t } = useTranslation("accounts");
-  const { blockAccount } = useOfficerApi();
-  const [reason, setReason] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const trimmed = reason.trim();
-
-  const submit = async () => {
-    if (!account || trimmed.length === 0) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await blockAccount(account.code, trimmed, "reject");
-      onOpenChange(false);
-      setReason("");
-      onDone(updated);
-    } catch (err) {
-      setError(errMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        onOpenChange(next);
-        if (!next) {
-          setReason("");
-          setError(null);
-        }
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            {t("blockAccount.titlePrefix")}{" "}
-            <span className="nums text-accent">{account?.code}</span>
-          </DialogTitle>
-        </DialogHeader>
-        <p className="text-xs text-muted-lt">{t("blockAccount.description")}</p>
-        <div className="space-y-2">
-          <Label htmlFor="block-account-reason">
-            {t("blockAccount.reasonLabel")}
-          </Label>
-          <Textarea
-            id="block-account-reason"
-            value={reason}
-            autoFocus
-            placeholder={t("blockAccount.reasonPlaceholder")}
-            onChange={(e) => setReason(e.target.value)}
-          />
-        </div>
-        {error && (
-          <ErrorBanner message={error} onDismiss={() => setError(null)} />
-        )}
-        <DialogFooter>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            {t("blockAccount.cancel")}
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => void submit()}
-            disabled={busy || trimmed.length === 0}
-          >
-            <Ban className="h-3.5 w-3.5" />
-            {t("blockAccount.submit")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function UnblockAccountConfirm({
-  account,
-  open,
-  onOpenChange,
-  onDone,
-}: {
-  account: Account | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onDone: (updated: Account) => void;
-}) {
-  const { t } = useTranslation("accounts");
-  const { unblockAccount } = useOfficerApi();
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = async () => {
-    if (!account) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await unblockAccount(account.code, "reject");
-      onOpenChange(false);
-      onDone(updated);
-    } catch (err) {
-      setError(errMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t("unblockAccount.title")}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {t("unblockAccount.descriptionPrefix")}{" "}
-            <span className="nums text-accent">{account?.code}</span>{" "}
-            {t("unblockAccount.descriptionSuffix")}
-            {/* The action stays enabled while the account carries its own
-                block, but lifting it leaves the group block in force, so the
-                confirmation must not promise that orders flow again. */}
-            {account?.groupBlocked && (
-              <span className="mt-2 block text-[var(--warn)]">
-                {t("unblockAccount.groupStillBlocked", {
-                  group: account.group,
-                })}
-              </span>
-            )}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {error && (
-          <ErrorBanner message={error} onDismiss={() => setError(null)} />
-        )}
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
-            {t("unblockAccount.cancel")}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            onClick={(e) => {
-              e.preventDefault();
-              void submit();
-            }}
-            disabled={busy}
-          >
-            {t("unblockAccount.submit")}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Block / unblock group dialogs
 // ---------------------------------------------------------------------------
 
@@ -2494,122 +2325,6 @@ function AssignGroupDialog({
   );
 }
 
-function AccountCurrencyDialog({
-  account,
-  open,
-  onOpenChange,
-  onDone,
-}: {
-  account: Account;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onDone: () => void;
-}) {
-  const { t } = useTranslation("accounts");
-  const { setAccountCurrency } = useOfficerApi();
-  const [currency, setCurrency] = useState(account.currency ?? "");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const assetSuggestionResult = useAssetCodeSuggestions(currency, open);
-
-  const submit = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await setAccountCurrency(account.code, currency.trim());
-      onDone();
-    } catch (err) {
-      setError(errMessage(err));
-      setBusy(false);
-    }
-  };
-
-  const hasOpenPositions = (account.positionCount ?? 0) > 0;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("editCurrency.title")}</DialogTitle>
-          <DialogDescription>
-            {t("editCurrency.description", { account: account.code })}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="rounded-card border border-border bg-surface-2 p-3 text-xs">
-            <p className="font-medium text-text">
-              {t("editCurrency.cascadeTitle")}
-            </p>
-            <dl className="mt-2 grid grid-cols-[7rem_1fr] gap-1 text-muted-lt">
-              <dt>{t("editCurrency.accountTier")}</dt>
-              <dd className="nums">{currencyText(account.currency ?? "")}</dd>
-              <dt>{t("editCurrency.groupTier")}</dt>
-              <dd className="nums">
-                {currencyText(account.currencyCascade?.group ?? "")}
-              </dd>
-              <dt>{t("editCurrency.defaultTier")}</dt>
-              <dd className="nums">
-                {currencyText(account.currencyCascade?.default ?? "")}
-              </dd>
-              <dt>{t("editCurrency.effective")}</dt>
-              <dd className="nums">
-                {currencyText(account.effectiveCurrency ?? "")}
-                {account.currencyOrigin
-                  ? ` · ${t(`editCurrency.origins.${account.currencyOrigin}`)}`
-                  : ""}
-              </dd>
-            </dl>
-          </div>
-          {hasOpenPositions && (
-            <p className="text-xs text-[var(--warning)]">
-              {t("editCurrency.blockedHint")}
-            </p>
-          )}
-          <div className="space-y-2">
-            <Label htmlFor="account-currency">
-              {t("editCurrency.currencyLabel")}
-            </Label>
-            <Autocomplete
-              id="account-currency"
-              value={currency}
-              onChange={setCurrency}
-              suggestions={assetSuggestionResult.codes}
-              disabled={busy}
-              placeholder="USD"
-              spellCheck={false}
-              onClear={() => setCurrency("")}
-              clearLabel={t("filters.clearField")}
-            />
-            <p className="text-[0.6875rem] text-muted">
-              {t("editCurrency.currencyHint")}
-            </p>
-            <CodeSuggestionFailure
-              kind="asset"
-              failed={assetSuggestionResult.failed}
-            />
-          </div>
-        </div>
-        {error && (
-          <ErrorBanner message={error} onDismiss={() => setError(null)} />
-        )}
-        <DialogFooter>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            {t("editCurrency.cancel")}
-          </Button>
-          <Button size="sm" onClick={() => void submit()} disabled={busy}>
-            {t("editCurrency.submit")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function GroupCurrencyDialog({
   group,
   open,
@@ -3153,10 +2868,6 @@ function groupDisplayTitle(group: Group): string {
 
 function groupDisplayName(group: Group): string {
   return group.title !== "" ? group.title : group.code;
-}
-
-function currencyText(currency: string): string {
-  return currency.trim() === "" ? "-" : currency;
 }
 
 function pnlText(pnl: string | undefined): string {
@@ -3927,17 +3638,7 @@ function AccountsTable({
                 <div className="flex items-center gap-1">
                   {/* The badge reports the effective state - what the engine
                         does with the account's orders right now. */}
-                  {account.blocked ? (
-                    <Badge variant="danger" className="shrink-0">
-                      <StatusDot tone="danger" />
-                      {t("accounts.status.blocked")}
-                    </Badge>
-                  ) : (
-                    <Badge variant="ok" className="shrink-0">
-                      <StatusDot tone="ok" />
-                      {t("accounts.status.active")}
-                    </Badge>
-                  )}
+                  <AccountStatusBadge blocked={account.blocked} />
                   <div className="accounts-status-action-area">
                     {account.blocked && (
                       <ActionButton

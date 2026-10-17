@@ -81,6 +81,7 @@
       "hint": "Используйте «Корректировать» для задания спот-балансов по счёту и активу."
     },
     "activeOrdersTitle": "Активные ордера по счёту {{account}}",
+    "activeOrdersTitleUnnamed": "Активные ордера",
     "ordersTitle": "Открыть ордера по счёту {{account}}"
   },
   "inline": {
@@ -98,6 +99,7 @@
   "panel": {
     "open": "Корректировка",
     "openAriaLabel": "Открыть панель корректировки для {{account}} {{asset}}",
+    "openAriaLabelUnnamed": "Открыть панель корректировки для {{asset}}",
     "openDraftAriaLabel": "Открыть панель новой корректировки",
     "title": "Корректировка",
     "descriptionExisting": "Сверьте текущую позицию с намерением перед отправкой.",

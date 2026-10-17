@@ -101,6 +101,7 @@ import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
 } from "@/lib/useDebounce";
+import { accountScope } from "@/lib/accountScope";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import {
   isDecimalRangeValid,
@@ -340,19 +341,24 @@ function CheckPreview({ state }: { state: CheckState }) {
   const wouldBlock = result.wouldBlock;
   let wouldBlockMessage = "";
   if (wouldBlock) {
+    const { showsAccounts } = accountScope();
     if (wouldBlock.code === "account_blocked") {
-      wouldBlockMessage = t("check.accountBlocked", {
-        account: wouldBlock.account,
-      });
+      wouldBlockMessage = t(
+        showsAccounts ? "check.accountBlocked" : "check.accountBlockedUnnamed",
+        { account: wouldBlock.account },
+      );
     } else if (wouldBlock.reason) {
-      wouldBlockMessage = t("check.wouldBlockReason", {
-        account: wouldBlock.account,
-        reason: wouldBlock.reason,
-      });
+      wouldBlockMessage = t(
+        showsAccounts
+          ? "check.wouldBlockReason"
+          : "check.wouldBlockReasonUnnamed",
+        { account: wouldBlock.account, reason: wouldBlock.reason },
+      );
     } else {
-      wouldBlockMessage = t("check.wouldBlock", {
-        account: wouldBlock.account,
-      });
+      wouldBlockMessage = t(
+        showsAccounts ? "check.wouldBlock" : "check.wouldBlockUnnamed",
+        { account: wouldBlock.account },
+      );
     }
   }
 
@@ -462,9 +468,15 @@ function SubmitOrderDialog({
     fetchTradingDestinations,
     sendPaperOrder,
   } = useOfficerApi();
+  const { showsAccounts } = accountScope();
+  // While accounts are hidden the field is not rendered, so the default
+  // account seeded here is what every request of this dialog carries.
+  const initialAccount = accountScope().accountFor(
+    initialValues?.account ?? "",
+  );
 
   const [externalId, setExternalId] = useState("");
-  const [account, setAccount] = useState(initialValues?.account ?? "");
+  const [account, setAccount] = useState(initialAccount);
   const [baseAsset, setBaseAsset] = useState(initialValues?.baseAsset ?? "");
   const [quoteAsset, setQuoteAsset] = useState(initialValues?.quoteAsset ?? "");
   const [side, setSide] = useState<string>(initialValues?.side ?? "");
@@ -513,6 +525,7 @@ function SubmitOrderDialog({
   const destinationsAbortRef = useRef<AbortController | null>(null);
   const submitAbortRef = useRef<AbortController | null>(null);
   const accountFieldRef = useRef<HTMLInputElement | null>(null);
+  const baseAssetFieldRef = useRef<HTMLInputElement | null>(null);
   const firstTabRef = useRef<HTMLButtonElement | null>(null);
 
   const currentDestinationsKey =
@@ -550,7 +563,7 @@ function SubmitOrderDialog({
   }, []);
 
   useEffect(() => {
-    if (debouncedAccount === "") {
+    if (!showsAccounts || debouncedAccount === "") {
       return;
     }
     const controller = new AbortController();
@@ -574,7 +587,7 @@ function SubmitOrderDialog({
         }
       });
     return () => controller.abort();
-  }, [debouncedAccount, fetchAccounts]);
+  }, [debouncedAccount, fetchAccounts, showsAccounts]);
 
   useEffect(() => {
     const queries = Array.from(
@@ -757,7 +770,7 @@ function SubmitOrderDialog({
       const storedTab = readStoredPreference(SUBMIT_TAB_PREFERENCE);
       const restoredTab = isSubmitTab(storedTab) ? storedTab : "";
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setAccount(initialValues?.account ?? "");
+      setAccount(initialAccount);
       setBaseAsset(initialValues?.baseAsset ?? "");
       setQuoteAsset(initialValues?.quoteAsset ?? "");
       setExternalId("");
@@ -787,7 +800,7 @@ function SubmitOrderDialog({
   }, [open]);
 
   function reset() {
-    setAccount(initialValues?.account ?? "");
+    setAccount(initialAccount);
     setBaseAsset(initialValues?.baseAsset ?? "");
     setQuoteAsset(initialValues?.quoteAsset ?? "");
     setExternalId("");
@@ -1116,26 +1129,28 @@ function SubmitOrderDialog({
           {t("addOrder.dialog.externalIdHint")}
         </p>
       </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="so-account">{t("addOrder.dialog.account")}</Label>
-        <Autocomplete
-          ref={accountFieldRef}
-          id="so-account"
-          value={account}
-          onChange={changeAccount}
-          suggestions={
-            debouncedAccount === ""
-              ? []
-              : dialogAccountSuggestions.length > 0
-                ? dialogAccountSuggestions
-                : accountSuggestions
-          }
-          placeholder={t("addOrder.dialog.accountPlaceholder")}
-          disabled={busy}
-          onClear={() => changeAccount("")}
-          clearLabel={tc("filters.clearField")}
-        />
-      </div>
+      {showsAccounts && (
+        <div className="space-y-1.5">
+          <Label htmlFor="so-account">{t("addOrder.dialog.account")}</Label>
+          <Autocomplete
+            ref={accountFieldRef}
+            id="so-account"
+            value={account}
+            onChange={changeAccount}
+            suggestions={
+              debouncedAccount === ""
+                ? []
+                : dialogAccountSuggestions.length > 0
+                  ? dialogAccountSuggestions
+                  : accountSuggestions
+            }
+            placeholder={t("addOrder.dialog.accountPlaceholder")}
+            disabled={busy}
+            onClear={() => changeAccount("")}
+            clearLabel={tc("filters.clearField")}
+          />
+        </div>
+      )}
       {tab === "venue" && (
         <div className="space-y-4">
           <div className="space-y-1.5">
@@ -1246,12 +1261,17 @@ function SubmitOrderDialog({
                   selectableDestinations.length === 0 && (
                     <div className="space-y-1 text-xs text-muted-lt">
                       <p>
-                        {t("addOrder.dialog.venue.noTargets", {
-                          mode: t(
-                            `addOrder.dialog.venue.modeValues.${venueMode}`,
-                          ),
-                          account: account.trim(),
-                        })}
+                        {t(
+                          showsAccounts
+                            ? "addOrder.dialog.venue.noTargets"
+                            : "addOrder.dialog.venue.noTargetsUnnamed",
+                          {
+                            mode: t(
+                              `addOrder.dialog.venue.modeValues.${venueMode}`,
+                            ),
+                            account: account.trim(),
+                          },
+                        )}
                       </p>
                       <Link
                         to="/trading-connections"
@@ -1318,6 +1338,7 @@ function SubmitOrderDialog({
         <div className="space-y-1.5">
           <Label htmlFor="so-base">{t("addOrder.dialog.baseAsset")}</Label>
           <Autocomplete
+            ref={baseAssetFieldRef}
             id="so-base"
             value={baseAsset}
             onChange={setBaseAsset}
@@ -1449,10 +1470,12 @@ function SubmitOrderDialog({
         className="max-w-3xl"
         onOpenAutoFocus={(e) => {
           e.preventDefault();
-          if (tab !== "") {
+          if (tab === "") {
+            firstTabRef.current?.focus();
+          } else if (showsAccounts) {
             accountFieldRef.current?.focus();
           } else {
-            firstTabRef.current?.focus();
+            baseAssetFieldRef.current?.focus();
           }
         }}
       >
@@ -1775,6 +1798,7 @@ function ExecReportDialog({
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
   const { fetchAssets, submitExecutionReport } = useOfficerApi();
+  const { showsAccounts } = accountScope();
   const statusTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const initialStatus = initialValues?.status ?? "filled";
@@ -2043,9 +2067,12 @@ function ExecReportDialog({
                 {blocks.map((block, i) => (
                   <div key={i} className="text-[var(--danger)]">
                     <span className="font-medium">
-                      {t("execReport.dialog.accountBlocked", {
-                        account: block.account,
-                      })}
+                      {t(
+                        showsAccounts
+                          ? "execReport.dialog.accountBlocked"
+                          : "execReport.dialog.accountBlockedUnnamed",
+                        { account: block.account },
+                      )}
                     </span>{" "}
                     {block.reason || block.code}
                   </div>
@@ -2416,6 +2443,7 @@ function OrderDetailDialog({
   const { t: tc } = useTranslation();
   const { fetchOrderDetail, confirmOrder, cancelOrder } = useOfficerApi();
   const globalAccountFilter = useGlobalAccountFilter();
+  const { showsAccounts } = accountScope();
 
   const [state, setState] = useState<DetailState>({ phase: "loading" });
   // The event whose per-event reproduction/verification panel is open, or null
@@ -2686,18 +2714,20 @@ function OrderDetailDialog({
                     )}
                   </div>
                 </div>
-                <div>
-                  <span className="text-muted-lt">
-                    {t("detail.dialog.fieldAccount")}
-                  </span>
-                  <div className="mt-0.5">
-                    <IdCell
-                      value={state.order.account}
-                      copyTitle={t("common:rowActions.copyId")}
-                      copiedTitle={t("common:rowActions.copiedId")}
-                    />
+                {showsAccounts && (
+                  <div>
+                    <span className="text-muted-lt">
+                      {t("detail.dialog.fieldAccount")}
+                    </span>
+                    <div className="mt-0.5">
+                      <IdCell
+                        value={state.order.account}
+                        copyTitle={t("common:rowActions.copyId")}
+                        copiedTitle={t("common:rowActions.copiedId")}
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
                 <div>
                   <span className="text-muted-lt">
                     {t("detail.dialog.fieldStatus")}
@@ -2819,9 +2849,13 @@ function OrderDetailDialog({
                       <>
                         {" "}
                         <Link
-                          to={`/positions?tab=history&account=${encodeURIComponent(
-                            state.order.account,
-                          )}&source=system`}
+                          to={
+                            showsAccounts
+                              ? `/positions?tab=history&account=${encodeURIComponent(
+                                  state.order.account,
+                                )}&source=system`
+                              : "/positions?tab=history&source=system"
+                          }
                           className="font-medium text-accent underline-offset-2 hover:underline"
                         >
                           {t("detail.dialog.venue.viewAdjustments")}
@@ -2943,9 +2977,12 @@ function OrderDetailDialog({
                             {blockReason !== null && (
                               <div className="w-full rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">
                                 <span className="font-medium">
-                                  {t("detail.dialog.accountBlocked", {
-                                    account: state.order.account,
-                                  })}
+                                  {t(
+                                    showsAccounts
+                                      ? "detail.dialog.accountBlocked"
+                                      : "detail.dialog.accountBlockedUnnamed",
+                                    { account: state.order.account },
+                                  )}
                                 </span>
                                 <> {blockReason}</>
                               </div>
@@ -3355,6 +3392,7 @@ function OrdersTable({
 }: OrdersTableProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
+  const { showsAccounts } = accountScope();
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -3413,15 +3451,17 @@ function OrdersTable({
               {t("table.externalId")}
             </ColumnHeader>
           </TableHead>
-          <TableHead>
-            <SortableHeader
-              field="account"
-              label={t("table.account")}
-              description={t("table.columnDescriptions.account")}
-              direction={sortDirection(activeSort, activeOrder, "account")}
-              onSort={onSortChange}
-            />
-          </TableHead>
+          {showsAccounts && (
+            <TableHead>
+              <SortableHeader
+                field="account"
+                label={t("table.account")}
+                description={t("table.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "account")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+          )}
           <TableHead>
             <SortableHeader
               field="baseAsset"
@@ -3549,25 +3589,27 @@ function OrdersTable({
                 )}
               </div>
             </TableCell>
-            <TableCell className="nums text-xs">
-              <div className="flex min-w-0 items-center gap-1">
-                <IdCell
-                  value={order.account}
-                  copyTitle={t("common:rowActions.copyId")}
-                  copiedTitle={t("common:rowActions.copiedId")}
-                />
-                <span className="ml-auto flex shrink-0 items-center">
-                  <FilterByButton
-                    size={28}
-                    title={tc("rowActions.filterByTitle", {
-                      field: order.account,
-                    })}
-                    href={ordersFilterHref({ account: order.account })}
-                    onClick={() => onFilterAccount(order.account)}
+            {showsAccounts && (
+              <TableCell className="nums text-xs">
+                <div className="flex min-w-0 items-center gap-1">
+                  <IdCell
+                    value={order.account}
+                    copyTitle={t("common:rowActions.copyId")}
+                    copiedTitle={t("common:rowActions.copiedId")}
                   />
-                </span>
-              </div>
-            </TableCell>
+                  <span className="ml-auto flex shrink-0 items-center">
+                    <FilterByButton
+                      size={28}
+                      title={tc("rowActions.filterByTitle", {
+                        field: order.account,
+                      })}
+                      href={ordersFilterHref({ account: order.account })}
+                      onClick={() => onFilterAccount(order.account)}
+                    />
+                  </span>
+                </div>
+              </TableCell>
+            )}
             <TableCell className="text-xs">
               <div className="flex min-w-0 items-center gap-1">
                 <span className="min-w-0 truncate">
@@ -3698,6 +3740,7 @@ function TradesTable({
 }: TradesTableProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
+  const { showsAccounts } = accountScope();
   const openInNewTabHint = useOpenInNewTabHint();
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -3758,15 +3801,17 @@ function TradesTable({
               {t("table.order")}
             </ColumnHeader>
           </TableHead>
-          <TableHead>
-            <SortableHeader
-              field="account"
-              label={t("table.account")}
-              description={t("table.columnDescriptions.account")}
-              direction={sortDirection(activeSort, activeOrder, "account")}
-              onSort={onSortChange}
-            />
-          </TableHead>
+          {showsAccounts && (
+            <TableHead>
+              <SortableHeader
+                field="account"
+                label={t("table.account")}
+                description={t("table.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "account")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+          )}
           <TableHead>
             <SortableHeader
               field="baseAsset"
@@ -3887,28 +3932,30 @@ function TradesTable({
                 </a>
               </IdCell>
             </TableCell>
-            <TableCell className="nums text-xs">
-              <div className="flex min-w-0 items-center gap-1">
-                <IdCell
-                  value={trade.account}
-                  copyTitle={t("common:rowActions.copyId")}
-                  copiedTitle={t("common:rowActions.copiedId")}
-                />
-                <span className="ml-auto flex shrink-0 items-center">
-                  <FilterByButton
-                    size={28}
-                    title={tc("rowActions.filterByTitle", {
-                      field: trade.account,
-                    })}
-                    href={ordersFilterHref({
-                      tab: "trades",
-                      account: trade.account,
-                    })}
-                    onClick={() => onFilterAccount(trade.account)}
+            {showsAccounts && (
+              <TableCell className="nums text-xs">
+                <div className="flex min-w-0 items-center gap-1">
+                  <IdCell
+                    value={trade.account}
+                    copyTitle={t("common:rowActions.copyId")}
+                    copiedTitle={t("common:rowActions.copiedId")}
                   />
-                </span>
-              </div>
-            </TableCell>
+                  <span className="ml-auto flex shrink-0 items-center">
+                    <FilterByButton
+                      size={28}
+                      title={tc("rowActions.filterByTitle", {
+                        field: trade.account,
+                      })}
+                      href={ordersFilterHref({
+                        tab: "trades",
+                        account: trade.account,
+                      })}
+                      onClick={() => onFilterAccount(trade.account)}
+                    />
+                  </span>
+                </div>
+              </TableCell>
+            )}
             <TableCell className="text-xs">
               <div className="flex min-w-0 items-center gap-1">
                 <IdCell
@@ -4392,6 +4439,7 @@ export function Orders() {
 
   const [params] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
+  const { showsAccounts } = accountScope();
   const tradingResult = useTrading();
   const tradingSnapshot =
     tradingResult.load.state === "ready" ? tradingResult.load.data : null;
@@ -4403,8 +4451,11 @@ export function Orders() {
     params.get("tab") === "trades" ? "trades" : "orders",
   );
   const initialBaseAsset = params.get("baseAsset") ?? "";
-  const initialAccount =
-    globalAccountFilter.account || params.get("account") || "";
+  // While accounts are hidden the account filter stays empty, so no request,
+  // export or share link from this page carries an account.
+  const initialAccount = showsAccounts
+    ? globalAccountFilter.account || params.get("account") || ""
+    : "";
   const initialVenue = normalizeVenueFilterValue(params.get("venue") ?? "");
 
   // Filter state - seeded from URL on mount
@@ -6019,42 +6070,44 @@ export function Orders() {
           >
             {tab === "orders" ? (
               <>
-                <AutocompleteFilterField
-                  label={t("table.account")}
-                  value={orderAccountDraft}
-                  placeholder={t("filter.accountPlaceholder")}
-                  suggestions={visibleAccountSuggestions}
-                  onChange={(value) => {
-                    if (
-                      orderAccount.trim() === globalAccountFilter.account &&
-                      value.trim() === ""
-                    ) {
-                      globalAccountFilter.clear();
+                {showsAccounts && (
+                  <AutocompleteFilterField
+                    label={t("table.account")}
+                    value={orderAccountDraft}
+                    placeholder={t("filter.accountPlaceholder")}
+                    suggestions={visibleAccountSuggestions}
+                    onChange={(value) => {
+                      if (
+                        orderAccount.trim() === globalAccountFilter.account &&
+                        value.trim() === ""
+                      ) {
+                        globalAccountFilter.clear();
+                      }
+                      setOrderAccountDraft(value);
+                    }}
+                    onSuggestionSelect={(value) =>
+                      applyOrderIdentityField("account", value)
                     }
-                    setOrderAccountDraft(value);
-                  }}
-                  onSuggestionSelect={(value) =>
-                    applyOrderIdentityField("account", value)
-                  }
-                  onKeyDown={applyOrderIdentityFiltersOnEnter}
-                  onClear={() => {
-                    if (orderAccount.trim() === globalAccountFilter.account) {
-                      globalAccountFilter.clear();
-                    }
-                    setOrderAccountDraft("");
-                    setOrderAccount("");
-                    setOrderPage(0);
-                  }}
-                  clearLabel={tc("filters.clearField")}
-                  globalToggle={accountGlobalToggle(
-                    orderAccountDraft,
-                    (account) => {
-                      setOrderAccountDraft(account);
-                      setOrderAccount(account);
+                    onKeyDown={applyOrderIdentityFiltersOnEnter}
+                    onClear={() => {
+                      if (orderAccount.trim() === globalAccountFilter.account) {
+                        globalAccountFilter.clear();
+                      }
+                      setOrderAccountDraft("");
+                      setOrderAccount("");
                       setOrderPage(0);
-                    },
-                  )}
-                />
+                    }}
+                    clearLabel={tc("filters.clearField")}
+                    globalToggle={accountGlobalToggle(
+                      orderAccountDraft,
+                      (account) => {
+                        setOrderAccountDraft(account);
+                        setOrderAccount(account);
+                        setOrderPage(0);
+                      },
+                    )}
+                  />
+                )}
                 <AutocompleteFilterField
                   label={t("filter.baseAssetLabel")}
                   value={orderBaseAssetDraft}
@@ -6165,42 +6218,44 @@ export function Orders() {
               </>
             ) : (
               <>
-                <AutocompleteFilterField
-                  label={t("table.account")}
-                  value={tradeAccountDraft}
-                  placeholder={t("filter.accountPlaceholder")}
-                  suggestions={visibleAccountSuggestions}
-                  onChange={(value) => {
-                    if (
-                      tradeAccount.trim() === globalAccountFilter.account &&
-                      value.trim() === ""
-                    ) {
-                      globalAccountFilter.clear();
+                {showsAccounts && (
+                  <AutocompleteFilterField
+                    label={t("table.account")}
+                    value={tradeAccountDraft}
+                    placeholder={t("filter.accountPlaceholder")}
+                    suggestions={visibleAccountSuggestions}
+                    onChange={(value) => {
+                      if (
+                        tradeAccount.trim() === globalAccountFilter.account &&
+                        value.trim() === ""
+                      ) {
+                        globalAccountFilter.clear();
+                      }
+                      setTradeAccountDraft(value);
+                    }}
+                    onSuggestionSelect={(value) =>
+                      applyTradeIdentityField("account", value)
                     }
-                    setTradeAccountDraft(value);
-                  }}
-                  onSuggestionSelect={(value) =>
-                    applyTradeIdentityField("account", value)
-                  }
-                  onKeyDown={applyTradeIdentityFiltersOnEnter}
-                  onClear={() => {
-                    if (tradeAccount.trim() === globalAccountFilter.account) {
-                      globalAccountFilter.clear();
-                    }
-                    setTradeAccountDraft("");
-                    setTradeAccount("");
-                    resetTradePage();
-                  }}
-                  clearLabel={tc("filters.clearField")}
-                  globalToggle={accountGlobalToggle(
-                    tradeAccountDraft,
-                    (account) => {
-                      setTradeAccountDraft(account);
-                      setTradeAccount(account);
+                    onKeyDown={applyTradeIdentityFiltersOnEnter}
+                    onClear={() => {
+                      if (tradeAccount.trim() === globalAccountFilter.account) {
+                        globalAccountFilter.clear();
+                      }
+                      setTradeAccountDraft("");
+                      setTradeAccount("");
                       resetTradePage();
-                    },
-                  )}
-                />
+                    }}
+                    clearLabel={tc("filters.clearField")}
+                    globalToggle={accountGlobalToggle(
+                      tradeAccountDraft,
+                      (account) => {
+                        setTradeAccountDraft(account);
+                        setTradeAccount(account);
+                        resetTradePage();
+                      },
+                    )}
+                  />
+                )}
                 <AutocompleteFilterField
                   label={t("filter.baseAssetLabel")}
                   value={tradeBaseAssetDraft}
@@ -6607,7 +6662,9 @@ export function Orders() {
         {/* Orders view */}
         <TabsContent value="orders" className="space-y-[var(--dens-row-gap)]">
           {ordersResult.load.state === "loading" && (
-            <TableSkeleton cols={venueLabels ? 11 : 10} />
+            <TableSkeleton
+              cols={(venueLabels ? 10 : 9) + (showsAccounts ? 1 : 0)}
+            />
           )}
           <StaleState {...ordersResult} />
           {ordersResult.load.state === "error" && (
@@ -6653,7 +6710,9 @@ export function Orders() {
         {/* Trades view */}
         <TabsContent value="trades" className="space-y-[var(--dens-row-gap)]">
           {tradesResult.load.state === "loading" && (
-            <TableSkeleton cols={venueLabels ? 11 : 10} />
+            <TableSkeleton
+              cols={(venueLabels ? 10 : 9) + (showsAccounts ? 1 : 0)}
+            />
           )}
           <StaleState {...tradesResult} />
           {tradesResult.load.state === "error" && (

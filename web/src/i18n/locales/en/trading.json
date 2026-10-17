@@ -74,7 +74,8 @@
   },
   "access": {
     "title": "Account access",
-    "grantTo": "Grant to"
+    "grantTo": "Grant to",
+    "inherited": "Inherited from the account's group. Group access is managed in multi-account mode."
   },
   "fee": {
     "title": "Fee account",

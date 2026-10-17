@@ -27,6 +27,7 @@ import type {
   PublicKeyMaterial,
 } from "@/api/types";
 import i18n from "@/i18n";
+import { setAccountScope } from "@/lib/accountScope";
 import { OrderVerificationPanel } from "@/pages/OrderVerificationPanel";
 import { renderWithApi } from "@/test/apiClient";
 
@@ -650,6 +651,98 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
     expect(
       screen.getByRole("tab", { name: "Verify envelope" }),
     ).toBeInTheDocument();
+  });
+});
+
+// An execution-report reproduction whose approval names the account wherever
+// the payload can: the request, its group, the report and a recorded block.
+async function renderReproductionNaming(account: string) {
+  const block = {
+    account,
+    policy: "daily_loss",
+    code: "pnl_kill_switch_triggered",
+    reason: "Daily loss limit",
+    details: "limit=-1000",
+  };
+  const result = {
+    outcome: "filled",
+    fillQuantity: "10",
+    fillPrice: "150.25",
+    fillLockPrice: "150.25",
+    leavesQuantity: "0",
+    orderStatus: "filled",
+    blocks: [block],
+  };
+  const fixture = await buildSignedEnvelope("key-account", {
+    requestType: "execution_report",
+    accountId: account,
+    accountGroupId: "equity-desks",
+    executionReport: {
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      fillQuantity: "10",
+      fillPrice: "150.25",
+      leavesQuantity: "0",
+      order: "ord-repro-1",
+      account,
+      side: "buy",
+      orderStatus: "filled",
+      force: false,
+    },
+    result,
+  });
+  const bundle = execReportBundleFrom(fixture);
+  bundle.request = { ...bundle.request!, accountId: account, result };
+  bundle.response!.executionReport!.blocks = [block];
+  fetchEventReproductionMock.mockResolvedValue(bundle);
+  fetchPublicKeyByIdMock.mockResolvedValue({
+    keyId: "key-account",
+    alg: "ed25519",
+    format: "raw-base64",
+    key: fixture.rawPublicKey,
+  } satisfies PublicKeyMaterial);
+
+  renderPanel("ord-repro-1", "evt-fill-1");
+  await screen.findByText("Human-readable breakdown");
+  return { fixture, bundle };
+}
+
+describe("OrderVerificationPanel - accounts", () => {
+  it("names the account in the breakdown while accounts are shown", async () => {
+    await renderReproductionNaming("desk-alpha");
+
+    expect(screen.getAllByText("Account")).toHaveLength(2);
+    expect(screen.getByText("Account group")).toBeInTheDocument();
+    expect(screen.getAllByText("desk-alpha")).toHaveLength(2);
+    expect(screen.getByText("equity-desks")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "desk-alpha · pnl_kill_switch_triggered · Daily loss limit · limit=-1000",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the account out of the breakdown but not out of the signed artifacts while accounts are hidden", async () => {
+    setAccountScope({ accounts: false, account: "main" });
+    const { fixture, bundle } = await renderReproductionNaming("main");
+
+    expect(screen.queryByText("Account")).not.toBeInTheDocument();
+    expect(screen.queryByText("Account group")).not.toBeInTheDocument();
+    expect(screen.queryByText("main")).not.toBeInTheDocument();
+    expect(screen.queryByText("equity-desks")).not.toBeInTheDocument();
+    expect(screen.getByText("Block 1")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "pnl_kill_switch_triggered · Daily loss limit · limit=-1000",
+      ),
+    ).toBeInTheDocument();
+
+    expect(fixture.canonical).toContain('"accountId":"main"');
+    expect(textareaByValue(fixture.envelope)).toBeDefined();
+    expect(textareaByValue(fixture.canonical)).toBeDefined();
+    expect(
+      textareaByValue(JSON.stringify(bundle.request, null, 2)),
+    ).toBeDefined();
   });
 });
 

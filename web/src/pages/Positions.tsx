@@ -145,6 +145,7 @@ import {
 } from "@/lib/useDebounce";
 import { useAccountCodeSuggestions } from "@/lib/useAccountCodeSuggestions";
 import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
+import { accountScope } from "@/lib/accountScope";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { operatorOptions } from "@/lib/dataControlLabels";
 import { isDecimalRangeValid } from "@/lib/numberStep";
@@ -188,13 +189,16 @@ function positionsFilterHref({
   return shareUrl("/positions", query);
 }
 
-/** Deep link to the Orders screen pre-filtered to this account and the active
- *  (working) order statuses, matching the Orders "Active" quick filter. */
-function activeOrdersHref(account: string): string {
+/** Path of the Orders screen pre-filtered to this account and the active
+ *  (working) order statuses, matching the Orders "Active" quick filter. While
+ *  accounts are hidden the path carries no account. */
+function activeOrdersPath(account: string): string {
   const query = new URLSearchParams();
-  query.set("account", account);
+  if (accountScope().showsAccounts) {
+    query.set("account", account);
+  }
   query.set("status", ACTIVE_STATUS_QUERY);
-  return absoluteAppUrl(`/orders?${query.toString()}`);
+  return `/orders?${query.toString()}`;
 }
 
 function ordersFilterHref(account: string): string {
@@ -935,7 +939,11 @@ function PositionRangeFilter({
 // Balances table - adjustment panel
 // ---------------------------------------------------------------------------
 
-const BALANCE_TABLE_COLS = 9;
+/** The balance table's column count: the account column shows only while
+ *  accounts are shown. */
+function balanceTableCols(): number {
+  return accountScope().showsAccounts ? 9 : 8;
+}
 const DRAFT_ADJUSTMENT_KEY = "__draft__";
 
 interface AmountDraftState {
@@ -1387,7 +1395,12 @@ function AdjustmentPanel({
       }
     };
   }, []);
-  const [account, setAccount] = useState(initialAccount);
+  const { showsAccounts } = accountScope();
+  // While accounts are hidden the field is not rendered, so the default
+  // account seeded here is what every request of this panel carries.
+  const [account, setAccount] = useState(
+    accountScope().accountFor(initialAccount),
+  );
   const [asset, setAsset] = useState(initialAsset);
   const [type, setType] = useState<AdjustmentType | "">("");
   const [available, setAvailable] =
@@ -1410,7 +1423,7 @@ function AdjustmentPanel({
     useState(false);
   const localAccountSuggestionResult = useAccountCodeSuggestions(
     account,
-    !lockIdentity,
+    !lockIdentity && showsAccounts,
   );
   const localAssetSuggestionResult = useAssetCodeSuggestions(
     asset,
@@ -1474,7 +1487,8 @@ function AdjustmentPanel({
     hasValue(realizedPnl) ||
     hasBoundsChange;
   const hasFilledField =
-    (!lockIdentity && (hasValue(account) || hasValue(asset))) ||
+    (!lockIdentity &&
+      ((showsAccounts && hasValue(account)) || hasValue(asset))) ||
     type !== "" ||
     hasChanges;
   const canSubmit =
@@ -1490,7 +1504,7 @@ function AdjustmentPanel({
 
   const resetAllFields = () => {
     if (!lockIdentity) {
-      setAccount("");
+      setAccount(accountScope().accountFor(""));
       setAsset("");
     }
     setType("");
@@ -1652,23 +1666,25 @@ function AdjustmentPanel({
           </Button>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="adjust-panel-account">
-              {t("dialog.fields.account")}
-            </Label>
-            <Autocomplete
-              id="adjust-panel-account"
-              value={account}
-              spellCheck={false}
-              placeholder="acc-1"
-              suggestions={mergedAccountSuggestions}
-              disabled={disabled || lockIdentity}
-              onChange={setAccount}
-              onClear={() => setAccount("")}
-              clearLabel={t("common:filters.clearField")}
-            />
-          </div>
+        <div className={cn("grid gap-3", showsAccounts && "md:grid-cols-2")}>
+          {showsAccounts && (
+            <div className="space-y-1.5">
+              <Label htmlFor="adjust-panel-account">
+                {t("dialog.fields.account")}
+              </Label>
+              <Autocomplete
+                id="adjust-panel-account"
+                value={account}
+                spellCheck={false}
+                placeholder="acc-1"
+                suggestions={mergedAccountSuggestions}
+                disabled={disabled || lockIdentity}
+                onChange={setAccount}
+                onClear={() => setAccount("")}
+                clearLabel={t("common:filters.clearField")}
+              />
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="adjust-panel-asset">
               {t("dialog.fields.asset")}
@@ -1900,15 +1916,19 @@ function BalanceEditRow({
   const { t } = useTranslation("positions");
   const { t: tc } = useTranslation("common");
   const navigate = useNavigate();
+  const { showsAccounts } = accountScope();
   const b = balance;
   const haltText = pnlHaltText(t, b.realizedPnlHaltReason);
   const openOrders = () =>
     navigate(`/orders?account=${encodeURIComponent(b.account)}`);
-  const openActiveOrders = () =>
-    navigate(
-      `/orders?account=${encodeURIComponent(b.account)}` +
-        `&status=${ACTIVE_STATUS_QUERY}`,
-    );
+  const activeOrders = activeOrdersPath(b.account);
+  const openActiveOrders = () => navigate(activeOrders);
+  const activeOrdersTitle = t(
+    showsAccounts
+      ? "balances.activeOrdersTitle"
+      : "balances.activeOrdersTitleUnnamed",
+    { account: b.account },
+  );
   return (
     <>
       {/* Clicking the row body opens this position's adjustment history,
@@ -1918,29 +1938,31 @@ function BalanceEditRow({
         className={cn("cursor-pointer", expanded && "bg-accent-dim")}
         onClick={() => onShowHistory(b.account, b.asset)}
       >
-        <TableCell className="nums text-xs">
-          <div className="flex min-w-0 items-center gap-1">
-            <IdCell
-              value={b.account}
-              copyTitle={t("common:rowActions.copyId")}
-              copiedTitle={t("common:rowActions.copiedId")}
-            />
-            <span className="ml-auto flex shrink-0 items-center gap-1">
-              <FilterByButton
-                size={28}
-                title={tc("rowActions.filterByTitle", { field: b.account })}
-                href={positionsFilterHref({ account: b.account })}
-                onClick={() => onFilterAccount(b.account)}
+        {showsAccounts && (
+          <TableCell className="nums text-xs">
+            <div className="flex min-w-0 items-center gap-1">
+              <IdCell
+                value={b.account}
+                copyTitle={t("common:rowActions.copyId")}
+                copiedTitle={t("common:rowActions.copiedId")}
               />
-              <OrdersButton
-                size={28}
-                title={t("balances.ordersTitle", { account: b.account })}
-                href={ordersFilterHref(b.account)}
-                onClick={openOrders}
-              />
-            </span>
-          </div>
-        </TableCell>
+              <span className="ml-auto flex shrink-0 items-center gap-1">
+                <FilterByButton
+                  size={28}
+                  title={tc("rowActions.filterByTitle", { field: b.account })}
+                  href={positionsFilterHref({ account: b.account })}
+                  onClick={() => onFilterAccount(b.account)}
+                />
+                <OrdersButton
+                  size={28}
+                  title={t("balances.ordersTitle", { account: b.account })}
+                  href={ordersFilterHref(b.account)}
+                  onClick={openOrders}
+                />
+              </span>
+            </div>
+          </TableCell>
+        )}
         <TableCell className="nums text-xs">
           <div className="flex min-w-0 items-center gap-1">
             <span className="min-w-0 truncate">{b.asset}</span>
@@ -1962,10 +1984,8 @@ function BalanceEditRow({
               <span className="shrink-0">
                 <OrdersButton
                   size={22}
-                  title={t("balances.activeOrdersTitle", {
-                    account: b.account,
-                  })}
-                  href={activeOrdersHref(b.account)}
+                  title={activeOrdersTitle}
+                  href={absoluteAppUrl(activeOrders)}
                   onClick={openActiveOrders}
                 />
               </span>
@@ -1979,10 +1999,8 @@ function BalanceEditRow({
               <span className="shrink-0">
                 <OrdersButton
                   size={22}
-                  title={t("balances.activeOrdersTitle", {
-                    account: b.account,
-                  })}
-                  href={activeOrdersHref(b.account)}
+                  title={activeOrdersTitle}
+                  href={absoluteAppUrl(activeOrders)}
                   onClick={openActiveOrders}
                 />
               </span>
@@ -2025,10 +2043,12 @@ function BalanceEditRow({
           <RowActions align="flex-end">
             <ActionButton
               icon="edit"
-              title={t("panel.openAriaLabel", {
-                account: b.account,
-                asset: b.asset,
-              })}
+              title={t(
+                showsAccounts
+                  ? "panel.openAriaLabel"
+                  : "panel.openAriaLabelUnnamed",
+                { account: b.account, asset: b.asset },
+              )}
               active={expanded}
               onClick={() => {
                 onToggle();
@@ -2039,7 +2059,7 @@ function BalanceEditRow({
       </TableRow>
       {expanded && (
         <TableRow className="hover:bg-transparent">
-          <TableCell colSpan={BALANCE_TABLE_COLS} className="p-0">
+          <TableCell colSpan={balanceTableCols()} className="p-0">
             <AdjustmentPanel
               balance={b}
               initialAccount={b.account}
@@ -2086,7 +2106,7 @@ function BalanceDraftRow({
       >
         <TableCell
           className="text-xs italic text-muted-lt"
-          colSpan={BALANCE_TABLE_COLS - 1}
+          colSpan={balanceTableCols() - 1}
         >
           {t("inline.newPosition")}
         </TableCell>
@@ -2103,7 +2123,7 @@ function BalanceDraftRow({
       </TableRow>
       {expanded && (
         <TableRow className="hover:bg-transparent">
-          <TableCell colSpan={BALANCE_TABLE_COLS} className="p-0">
+          <TableCell colSpan={balanceTableCols()} className="p-0">
             <AdjustmentPanel
               initialAccount={defaultAccount}
               initialAsset={defaultAsset}
@@ -2150,6 +2170,7 @@ function BalancesTable({
   onFilterAsset: (asset: string) => void;
 }) {
   const { t } = useTranslation("positions");
+  const { showsAccounts } = accountScope();
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -2163,20 +2184,22 @@ function BalancesTable({
     <Table>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead>
-            <SortableHeader
-              field="account"
-              label={t("balances.columns.account")}
-              description={t("balances.columnDescriptions.account")}
-              direction={sortDirection(activeSort, activeOrder, "account")}
-              onSort={(field, next) =>
-                onSortChange(
-                  next === "none" ? undefined : field,
-                  next === "none" ? undefined : next,
-                )
-              }
-            />
-          </TableHead>
+          {showsAccounts && (
+            <TableHead>
+              <SortableHeader
+                field="account"
+                label={t("balances.columns.account")}
+                description={t("balances.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "account")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+          )}
           <TableHead>
             <SortableHeader
               field="asset"
@@ -2649,7 +2672,11 @@ function AdjustDialog({
       ? { enabled: true, lower: lower ?? "", upper: upper ?? "" }
       : emptyBounds();
 
-  const [account, setAccount] = useState(initialAccount);
+  const { showsAccounts } = accountScope();
+  // While accounts are hidden the field is not rendered, so the default
+  // account seeded here is what every request of this dialog carries.
+  const seededAccount = accountScope().accountFor(initialAccount);
+  const [account, setAccount] = useState(seededAccount);
   const [asset, setAsset] = useState(initialAsset);
   const [type, setType] = useState<AdjustmentType | "">(initialType);
   const [avgPrice, setAvgPrice] = useState(initialAvgPrice ?? "");
@@ -2677,7 +2704,10 @@ function AdjustDialog({
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
   const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
     useState(false);
-  const localAccountSuggestionResult = useAccountCodeSuggestions(account, open);
+  const localAccountSuggestionResult = useAccountCodeSuggestions(
+    account,
+    open && showsAccounts,
+  );
   const localAssetSuggestionResult = useAssetCodeSuggestions(asset, open);
   const mergedAccountSuggestions = useMemo(
     () =>
@@ -2698,7 +2728,7 @@ function AdjustDialog({
     if (open) {
       // Reset all form fields from props each time the dialog opens.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setAccount(initialAccount);
+      setAccount(seededAccount);
       setAsset(initialAsset);
       setType(initialType);
       setAvgPrice(initialAvgPrice ?? "");
@@ -2720,7 +2750,7 @@ function AdjustDialog({
     }
   }, [
     open,
-    initialAccount,
+    seededAccount,
     initialAsset,
     initialType,
     initialBalanceMode,
@@ -2787,7 +2817,7 @@ function AdjustDialog({
     boundsFieldValid(incomingBounds);
 
   const resetAllFields = () => {
-    setAccount("");
+    setAccount(accountScope().accountFor(""));
     setAsset("");
     setType("");
     setAvgPrice("");
@@ -2890,23 +2920,25 @@ function AdjustDialog({
 
           <div className="space-y-4">
             {/* Account + asset */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="adj-account">
-                  {t("dialog.fields.account")}
-                </Label>
-                <Autocomplete
-                  id="adj-account"
-                  value={account}
-                  spellCheck={false}
-                  placeholder="acc-1"
-                  suggestions={mergedAccountSuggestions}
-                  onChange={setAccount}
-                  disabled={busy}
-                  onClear={() => setAccount("")}
-                  clearLabel={t("common:filters.clearField")}
-                />
-              </div>
+            <div className={cn("grid gap-3", showsAccounts && "grid-cols-2")}>
+              {showsAccounts && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="adj-account">
+                    {t("dialog.fields.account")}
+                  </Label>
+                  <Autocomplete
+                    id="adj-account"
+                    value={account}
+                    spellCheck={false}
+                    placeholder="acc-1"
+                    suggestions={mergedAccountSuggestions}
+                    onChange={setAccount}
+                    disabled={busy}
+                    onClear={() => setAccount("")}
+                    clearLabel={t("common:filters.clearField")}
+                  />
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="adj-asset">{t("dialog.fields.asset")}</Label>
                 <Autocomplete
@@ -3172,6 +3204,7 @@ function HistoryRow({
 }) {
   const { t } = useTranslation("positions");
   const { t: tc } = useTranslation();
+  const { showsAccounts } = accountScope();
   const isRejected = !!adj.rejected;
   const isAccepted = !!adj.accepted && !isRejected;
   const hasPnlHalt = !!adj.accepted?.realizedPnlHaltReason;
@@ -3213,26 +3246,28 @@ function HistoryRow({
       <TableCell className="text-xs text-muted-lt">
         <SplitTime iso={adj.at} />
       </TableCell>
-      <TableCell className="nums text-xs">
-        <div className="flex min-w-0 items-center gap-1">
-          <IdCell
-            value={adj.account}
-            copyTitle={t("common:rowActions.copyId")}
-            copiedTitle={t("common:rowActions.copiedId")}
-          />
-          <span className="ml-auto flex shrink-0 items-center">
-            <FilterByButton
-              size={28}
-              title={tc("rowActions.filterByTitle", { field: adj.account })}
-              href={positionsFilterHref({
-                tab: "history",
-                account: adj.account,
-              })}
-              onClick={() => onFilterAccount(adj.account)}
+      {showsAccounts && (
+        <TableCell className="nums text-xs">
+          <div className="flex min-w-0 items-center gap-1">
+            <IdCell
+              value={adj.account}
+              copyTitle={t("common:rowActions.copyId")}
+              copiedTitle={t("common:rowActions.copiedId")}
             />
-          </span>
-        </div>
-      </TableCell>
+            <span className="ml-auto flex shrink-0 items-center">
+              <FilterByButton
+                size={28}
+                title={tc("rowActions.filterByTitle", { field: adj.account })}
+                href={positionsFilterHref({
+                  tab: "history",
+                  account: adj.account,
+                })}
+                onClick={() => onFilterAccount(adj.account)}
+              />
+            </span>
+          </div>
+        </TableCell>
+      )}
       <TableCell className="nums text-xs">
         <div className="flex min-w-0 items-center gap-1">
           <span className="min-w-0 truncate">{adj.asset}</span>
@@ -3339,9 +3374,13 @@ export function Positions() {
     useOfficerApi();
   const [searchParams] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
-  const initialAccount =
-    globalAccountFilter.account || searchParams.get("account") || "";
-  const initialGroup = searchParams.get("group") ?? "";
+  const { showsAccounts } = accountScope();
+  // While accounts are hidden the account and group filters stay empty, so no
+  // request, export or share link from this page carries either.
+  const initialAccount = showsAccounts
+    ? globalAccountFilter.account || searchParams.get("account") || ""
+    : "";
+  const initialGroup = showsAccounts ? (searchParams.get("group") ?? "") : "";
   const initialAsset = searchParams.get("asset") ?? "";
   const initialTab: PositionsTab =
     searchParams.get("tab") === "history" ? "history" : "positions";
@@ -3712,12 +3751,14 @@ export function Positions() {
     balancesLoad.reload();
     adjustmentsLoad.reload();
   };
-  // Open this position's adjustment history, pre-filtered by account + asset.
-  // The asset filter is applied client-side on the history list, so no new
-  // server parameter is introduced.
+  // Open this position's adjustment history, pre-filtered by account + asset
+  // (by asset alone while accounts are hidden). The asset filter is applied
+  // client-side on the history list, so no new server parameter is introduced.
   const showAccountAssetHistory = (account: string, asset: string) => {
-    setAccountFilter(account);
-    setAccountDraft(account);
+    if (showsAccounts) {
+      setAccountFilter(account);
+      setAccountDraft(account);
+    }
     setAssetFilter(asset);
     setAssetDraft(asset);
     resetHistoryPage();
@@ -4310,7 +4351,7 @@ export function Positions() {
           ) : undefined
         }
       >
-        {tab === "positions" && (
+        {tab === "positions" && showsAccounts && (
           <AutocompleteFilterField
             label={t("filters.byGroup")}
             value={groupDraft}
@@ -4327,31 +4368,33 @@ export function Positions() {
             clearLabel={t("common:filters.clearField")}
           />
         )}
-        <AutocompleteFilterField
-          label={t("filters.byAccount")}
-          value={accountDraft}
-          placeholder="acc-1"
-          suggestions={visibleAccountSuggestions}
-          onChange={(value) => {
-            if (accountGlobalLocked && value.trim() === "") {
-              globalAccountFilter.clear();
-            }
-            setAccountDraft(value);
-          }}
-          onSuggestionSelect={(value) => applyIdentityField("account", value)}
-          onKeyDown={applyIdentityFiltersOnEnter}
-          onClear={() => {
-            if (accountGlobalLocked) {
-              globalAccountFilter.clear();
-            }
-            setAccountDraft("");
-            setAccountFilter("");
-            setBalancePage(0);
-            resetHistoryPage();
-          }}
-          clearLabel={t("common:filters.clearField")}
-          globalToggle={accountGlobalToggle}
-        />
+        {showsAccounts && (
+          <AutocompleteFilterField
+            label={t("filters.byAccount")}
+            value={accountDraft}
+            placeholder="acc-1"
+            suggestions={visibleAccountSuggestions}
+            onChange={(value) => {
+              if (accountGlobalLocked && value.trim() === "") {
+                globalAccountFilter.clear();
+              }
+              setAccountDraft(value);
+            }}
+            onSuggestionSelect={(value) => applyIdentityField("account", value)}
+            onKeyDown={applyIdentityFiltersOnEnter}
+            onClear={() => {
+              if (accountGlobalLocked) {
+                globalAccountFilter.clear();
+              }
+              setAccountDraft("");
+              setAccountFilter("");
+              setBalancePage(0);
+              resetHistoryPage();
+            }}
+            clearLabel={t("common:filters.clearField")}
+            globalToggle={accountGlobalToggle}
+          />
+        )}
         <AutocompleteFilterField
           label={t("filters.byAsset")}
           value={assetDraft}
@@ -4570,7 +4613,9 @@ export function Positions() {
             </p>
           </div>
 
-          {balancesLoad.load.state === "loading" && <TableSkeleton cols={9} />}
+          {balancesLoad.load.state === "loading" && (
+            <TableSkeleton cols={balanceTableCols()} />
+          )}
           <StaleState {...balancesLoad} />
           {balancesLoad.load.state === "error" && (
             <ErrorState
@@ -4637,7 +4682,7 @@ export function Positions() {
             />
           )}
           {!unknownTypeParam && adjustmentsLoad.load.state === "loading" && (
-            <TableSkeleton cols={10} />
+            <TableSkeleton cols={showsAccounts ? 10 : 9} />
           )}
           {!unknownTypeParam && <StaleState {...adjustmentsLoad} />}
           {!unknownTypeParam && adjustmentsLoad.load.state === "error" && (
@@ -4679,26 +4724,30 @@ export function Positions() {
                           }}
                         />
                       </TableHead>
-                      <TableHead>
-                        <SortableHeader
-                          field="account"
-                          label={t("history.columns.account")}
-                          description={t("history.columnDescriptions.account")}
-                          direction={sortDirection(
-                            historySort.sort,
-                            historySort.order,
-                            "account",
-                          )}
-                          onSort={(field, next) => {
-                            setHistorySort(
-                              next === "none"
-                                ? {}
-                                : { sort: field, order: next },
-                            );
-                            resetHistoryPage();
-                          }}
-                        />
-                      </TableHead>
+                      {showsAccounts && (
+                        <TableHead>
+                          <SortableHeader
+                            field="account"
+                            label={t("history.columns.account")}
+                            description={t(
+                              "history.columnDescriptions.account",
+                            )}
+                            direction={sortDirection(
+                              historySort.sort,
+                              historySort.order,
+                              "account",
+                            )}
+                            onSort={(field, next) => {
+                              setHistorySort(
+                                next === "none"
+                                  ? {}
+                                  : { sort: field, order: next },
+                              );
+                              resetHistoryPage();
+                            }}
+                          />
+                        </TableHead>
+                      )}
                       <TableHead>
                         <SortableHeader
                           field="asset"

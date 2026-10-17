@@ -96,6 +96,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { accountScope } from "@/lib/accountScope";
 import { absoluteAppUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
 import { knownPageCount } from "@/lib/tablePagination";
@@ -186,13 +187,17 @@ function PolicyDescription({ policy }: { policy: PolicyFilter }) {
   );
 }
 
+/** Path of the policies screen filtered to this barrier's target; while
+ *  accounts are hidden it carries neither the account nor the group. */
 function policyRowHref(limit: Limit): string {
   const query = new URLSearchParams();
-  if (limit.account !== "") {
-    query.set("account", limit.account);
-  }
-  if ((limit.accountGroup ?? "") !== "") {
-    query.set("accountGroup", limit.accountGroup ?? "");
+  if (accountScope().showsAccounts) {
+    if (limit.account !== "") {
+      query.set("account", limit.account);
+    }
+    if ((limit.accountGroup ?? "") !== "") {
+      query.set("accountGroup", limit.accountGroup ?? "");
+    }
   }
   query.set("policy", limit.policy);
   return `/policies?${query.toString()}`;
@@ -216,6 +221,16 @@ function DeleteConfirm({
   const { deleteLimit } = useOfficerApi();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // While accounts are hidden the description names no account or group.
+  const accountFragment = !accountScope().showsAccounts
+    ? ""
+    : target?.account
+      ? t("delete.accountFragment", { account: target.account })
+      : target?.accountGroup
+        ? t("delete.accountGroupFragment", {
+            accountGroup: target.accountGroup,
+          })
+        : "";
 
   const submit = async () => {
     if (!target) {
@@ -250,13 +265,7 @@ function DeleteConfirm({
               {t("delete.description", {
                 policy: policyLabel(tc, target?.policy ?? ""),
                 scope: scopeLabel(tc, target?.scope ?? ""),
-                account: target?.account
-                  ? t("delete.accountFragment", { account: target.account })
-                  : target?.accountGroup
-                    ? t("delete.accountGroupFragment", {
-                        accountGroup: target.accountGroup,
-                      })
-                    : "",
+                account: accountFragment,
                 asset: target?.asset
                   ? t("delete.assetFragment", { asset: target.asset })
                   : "",
@@ -313,6 +322,7 @@ function PoliciesTable({
 }) {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
+  const { showsAccounts } = accountScope();
   return (
     <Table>
       <TableHeader>
@@ -345,20 +355,22 @@ function PoliciesTable({
               }
             />
           </TableHead>
-          <TableHead>
-            <SortableHeader
-              field="account"
-              label={t("table.account")}
-              description={t("table.columnDescriptions.account")}
-              direction={sortDirection(activeSort, activeOrder, "account")}
-              onSort={(field, next) =>
-                onSortChange(
-                  next === "none" ? undefined : field,
-                  next === "none" ? undefined : next,
-                )
-              }
-            />
-          </TableHead>
+          {showsAccounts && (
+            <TableHead>
+              <SortableHeader
+                field="account"
+                label={t("table.account")}
+                description={t("table.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "account")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+          )}
           <TableHead>
             <SortableHeader
               field="asset"
@@ -394,6 +406,9 @@ function PoliciesTable({
           const assetAxis = limit.asset;
           const isAccountFilterable = limit.account.length > 0;
           const isAssetFilterable = limit.asset.length > 0;
+          // The server refuses any named group while accounts are hidden, so
+          // a group barrier is read-only then.
+          const readOnly = !showsAccounts && limit.scope === "account_group";
           return (
             <TableRow
               key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.accountGroup ?? ""}|${limit.asset}`}
@@ -407,33 +422,35 @@ function PoliciesTable({
               >
                 {scopeLabel(tc, limit.scope)}
               </TableCell>
-              <TableCell className="nums text-xs">
-                {accountAxis ? (
-                  <div className="flex min-w-0 items-center gap-1">
-                    <IdCell
-                      value={accountAxis}
-                      copyTitle={tc("rowActions.copyId")}
-                      copiedTitle={tc("rowActions.copiedId")}
-                    />
-                    {isAccountFilterable && (
-                      <span className="ml-auto flex shrink-0 items-center">
-                        <FilterByButton
-                          size={28}
-                          title={tc("rowActions.filterByTitle", {
-                            field: limit.account,
-                          })}
-                          href={absoluteAppUrl(
-                            `/policies?account=${encodeURIComponent(limit.account)}`,
-                          )}
-                          onClick={() => onFilterAccount(limit.account)}
-                        />
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  tc("value.none")
-                )}
-              </TableCell>
+              {showsAccounts && (
+                <TableCell className="nums text-xs">
+                  {accountAxis ? (
+                    <div className="flex min-w-0 items-center gap-1">
+                      <IdCell
+                        value={accountAxis}
+                        copyTitle={tc("rowActions.copyId")}
+                        copiedTitle={tc("rowActions.copiedId")}
+                      />
+                      {isAccountFilterable && (
+                        <span className="ml-auto flex shrink-0 items-center">
+                          <FilterByButton
+                            size={28}
+                            title={tc("rowActions.filterByTitle", {
+                              field: limit.account,
+                            })}
+                            href={absoluteAppUrl(
+                              `/policies?account=${encodeURIComponent(limit.account)}`,
+                            )}
+                            onClick={() => onFilterAccount(limit.account)}
+                          />
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    tc("value.none")
+                  )}
+                </TableCell>
+              )}
               <TableCell className="nums text-xs">
                 {assetAxis ? (
                   <div className="flex min-w-0 items-center gap-1">
@@ -461,27 +478,29 @@ function PoliciesTable({
                 <ValueChips values={limit.values} />
               </TableCell>
               <TableCell className="text-right">
-                <RowActions>
-                  <ShareLinkButton
-                    href={absoluteAppUrl(policyRowHref(limit))}
-                    title={tc("rowActions.shareTitle", {
-                      entity: policyLabel(tc, limit.policy),
-                    })}
-                    copiedTitle={tc("rowActions.copiedLink")}
-                  />
-                  <EditButton
-                    title={tc("rowActions.editTitle", {
-                      entity: policyLabel(tc, limit.policy),
-                    })}
-                    onClick={() => onEdit(limit)}
-                  />
-                  <DeleteButton
-                    title={tc("rowActions.deleteTitle", {
-                      entity: policyLabel(tc, limit.policy),
-                    })}
-                    onClick={() => onDelete(limit)}
-                  />
-                </RowActions>
+                {!readOnly && (
+                  <RowActions>
+                    <ShareLinkButton
+                      href={absoluteAppUrl(policyRowHref(limit))}
+                      title={tc("rowActions.shareTitle", {
+                        entity: policyLabel(tc, limit.policy),
+                      })}
+                      copiedTitle={tc("rowActions.copiedLink")}
+                    />
+                    <EditButton
+                      title={tc("rowActions.editTitle", {
+                        entity: policyLabel(tc, limit.policy),
+                      })}
+                      onClick={() => onEdit(limit)}
+                    />
+                    <DeleteButton
+                      title={tc("rowActions.deleteTitle", {
+                        entity: policyLabel(tc, limit.policy),
+                      })}
+                      onClick={() => onDelete(limit)}
+                    />
+                  </RowActions>
+                )}
               </TableCell>
             </TableRow>
           );
@@ -500,9 +519,15 @@ export function Limits() {
     "fetchGroups" in officerApi ? officerApi.fetchGroups : undefined;
   const [searchParams] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
-  const initialAccount =
-    globalAccountFilter.account || searchParams.get("account") || "";
-  const initialAccountGroup = searchParams.get("accountGroup") ?? "";
+  const { showsAccounts } = accountScope();
+  // While accounts are hidden the account and group filters stay empty, so no
+  // request, share link or suggestion fetch from this page carries either.
+  const initialAccount = showsAccounts
+    ? globalAccountFilter.account || searchParams.get("account") || ""
+    : "";
+  const initialAccountGroup = showsAccounts
+    ? (searchParams.get("accountGroup") ?? "")
+    : "";
   const initialAsset = searchParams.get("asset") ?? "";
 
   const [accountFilter, setAccountFilter] = useState(initialAccount);
@@ -692,7 +717,7 @@ export function Limits() {
   }, [deferredAssetDraft, fetchAssets]);
 
   useEffect(() => {
-    if (typeof fetchGroups !== "function") {
+    if (!showsAccounts || typeof fetchGroups !== "function") {
       return;
     }
     const controller = new AbortController();
@@ -710,7 +735,7 @@ export function Limits() {
         }
       });
     return () => controller.abort();
-  }, [fetchGroups]);
+  }, [fetchGroups, showsAccounts]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Limit | null>(null);
@@ -851,30 +876,32 @@ export function Limits() {
           </div>
         }
       >
-        <AutocompleteFilterField
-          label={t("filter.account")}
-          value={accountDraft}
-          placeholder={t("filter.accountPlaceholder")}
-          suggestions={visibleAccountSuggestions}
-          onChange={(value) => {
-            if (accountGlobalLocked && value.trim() === "") {
-              globalAccountFilter.clear();
-            }
-            setAccountDraft(value);
-          }}
-          onSuggestionSelect={(value) => applyIdentityField("account", value)}
-          onKeyDown={applyIdentityFiltersOnEnter}
-          onClear={() => {
-            if (accountGlobalLocked) {
-              globalAccountFilter.clear();
-            }
-            setAccountDraft("");
-            setAccountFilter("");
-            setPage(0);
-          }}
-          clearLabel={tc("filters.clearField")}
-          globalToggle={accountGlobalToggle}
-        />
+        {showsAccounts && (
+          <AutocompleteFilterField
+            label={t("filter.account")}
+            value={accountDraft}
+            placeholder={t("filter.accountPlaceholder")}
+            suggestions={visibleAccountSuggestions}
+            onChange={(value) => {
+              if (accountGlobalLocked && value.trim() === "") {
+                globalAccountFilter.clear();
+              }
+              setAccountDraft(value);
+            }}
+            onSuggestionSelect={(value) => applyIdentityField("account", value)}
+            onKeyDown={applyIdentityFiltersOnEnter}
+            onClear={() => {
+              if (accountGlobalLocked) {
+                globalAccountFilter.clear();
+              }
+              setAccountDraft("");
+              setAccountFilter("");
+              setPage(0);
+            }}
+            clearLabel={tc("filters.clearField")}
+            globalToggle={accountGlobalToggle}
+          />
+        )}
         <AutocompleteFilterField
           label={t("filter.asset")}
           value={assetDraft}
@@ -927,7 +954,9 @@ export function Limits() {
 
       <PolicyDescription policy={policyFilter} />
 
-      {load.state === "loading" && <TableSkeleton cols={6} />}
+      {load.state === "loading" && (
+        <TableSkeleton cols={showsAccounts ? 6 : 5} />
+      )}
       <StaleState load={load} reload={reload} />
       {load.state === "error" && (
         <ErrorState message={load.error} onRetry={reload} />
@@ -942,7 +971,11 @@ export function Limits() {
             }
             hint={
               accountIsSet || policyIsSet || assetIsSet
-                ? t("empty.noMatchingHint")
+                ? t(
+                    showsAccounts
+                      ? "empty.noMatchingHint"
+                      : "empty.noMatchingHintUnnamed",
+                  )
                 : t("empty.noPoliciesHint")
             }
             action={

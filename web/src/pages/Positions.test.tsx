@@ -18,6 +18,11 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
+import {
+  filterSetShare,
+  shareLinkParams,
+  skeletonColumns,
+} from "@/test/pageHelpers";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +47,8 @@ import {
   type GlobalAdjustmentsFilter,
 } from "@/framework";
 import i18n from "@/i18n";
+import { setAccountScope } from "@/lib/accountScope";
+import { ACTIVE_STATUS_QUERY } from "@/lib/orderStatus";
 import { Positions } from "@/pages/Positions";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -123,6 +130,8 @@ const setBalanceRealizedPnlMock = vi.fn();
 const exportBusinessCsvMock = vi.fn();
 const fetchAdjustmentsMock = vi.fn();
 const fetchAssetsMock = vi.fn();
+const fetchAccountsMock = vi.fn();
+const fetchGroupsMock = vi.fn();
 
 function lastBalanceFilters(): BalanceListFilters | undefined {
   const calls = useBalancesMock.mock.calls;
@@ -238,10 +247,10 @@ function renderPositions(initialEntry = "/positions") {
         createAdjustment: createAdjustmentMock,
         setBalanceRealizedPnl: setBalanceRealizedPnlMock,
         exportBusinessCsv: exportBusinessCsvMock,
-        fetchAccounts: async () => [account],
+        fetchAccounts: fetchAccountsMock,
         fetchAdjustmentsPage: fetchAdjustmentsMock,
         fetchAssets: fetchAssetsMock,
-        fetchGroups: async () => [group],
+        fetchGroups: fetchGroupsMock,
       },
     },
   );
@@ -282,6 +291,8 @@ beforeEach(async () => {
     { code: balance.asset, title: balance.asset, assetClass: "" },
   ]);
   fetchAdjustmentsMock.mockResolvedValue({ items: [], total: 0 });
+  fetchAccountsMock.mockResolvedValue([account]);
+  fetchGroupsMock.mockResolvedValue([group]);
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
     value: vi.fn(() => "blob:positions-csv"),
@@ -2192,5 +2203,479 @@ describe("Positions share filter set", () => {
         ]?.[0];
       expect(filter?.id).toBeUndefined();
     });
+  });
+});
+
+/** Open the new-position draft panel and return it. */
+async function openDraftPanel(
+  user: ReturnType<typeof userEvent.setup>,
+): Promise<HTMLElement> {
+  await user.click(
+    screen.getByRole("button", { name: /open new adjustment panel/i }),
+  );
+  return screen.getByRole("region", { name: "Adjustment" });
+}
+
+/** The balance table's header column count and the columns its draft row
+ *  spans, closed and with the panel open. */
+async function draftRowSpans(user: ReturnType<typeof userEvent.setup>) {
+  const table = screen.getByRole("table");
+  const columns = within(table).getAllByRole("columnheader").length;
+  const draftRow = within(table)
+    .getAllByRole("row")
+    .find((row) => row.textContent?.includes("New position"));
+  if (!draftRow) {
+    throw new Error("draft row not found");
+  }
+  const closed = within(draftRow)
+    .getAllByRole("cell")
+    .reduce((sum, cell) => sum + (cell as HTMLTableCellElement).colSpan, 0);
+  const panelCell = (await openDraftPanel(user)).closest("td");
+  if (!panelCell) {
+    throw new Error("draft panel cell not found");
+  }
+  return { columns, closed, open: panelCell.colSpan };
+}
+
+/** Export the positions CSV and return the filters the export sent. */
+async function exportedPositionFilters(
+  user: ReturnType<typeof userEvent.setup>,
+): Promise<BusinessCsvExportFilters | undefined> {
+  await user.click(
+    screen.getByRole("button", { name: /export positions csv/i }),
+  );
+  await user.click(screen.getByRole("button", { name: /^export$/i }));
+  await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
+  return exportBusinessCsvMock.mock.calls[0][0].filters;
+}
+
+// The account surfaces of both tabs, by name: the sortable column, the row's
+// account cell with its filter-by and orders buttons, and the filter bar's
+// account and group fields with the global toggle.
+async function accountSurfaces(
+  user: ReturnType<typeof userEvent.setup>,
+  code: string,
+) {
+  const surfaces: Record<string, HTMLElement | null> = {};
+  for (const tab of ["Positions", "History"]) {
+    await user.click(screen.getByRole("button", { name: tab }));
+    const table = screen.getByRole("table");
+    surfaces[`${tab} column`] = within(table).queryByRole("button", {
+      name: "Sort by Account",
+    });
+    surfaces[`${tab} cell`] = within(table).queryByText(code);
+    surfaces[`${tab} row filter`] = within(table).queryByRole("button", {
+      name: `Filter by ${code}`,
+    });
+    surfaces[`${tab} account field`] =
+      screen.queryByLabelText("Filter by account");
+    surfaces[`${tab} global toggle`] = screen.queryByRole("button", {
+      name: /global account filter/i,
+    });
+    if (tab === "Positions") {
+      surfaces["Positions row orders"] = within(table).queryByRole("button", {
+        name: `Open orders for ${code}`,
+      });
+      surfaces["Positions group field"] =
+        screen.queryByLabelText("Filter by group");
+    }
+  }
+  return surfaces;
+}
+
+/** Skeleton column counts of both tabs while their lists load. */
+async function loadingSkeletonColumns(
+  user: ReturnType<typeof userEvent.setup>,
+) {
+  const loading = {
+    load: { state: "loading", data: null, error: null },
+    reload: vi.fn(),
+  } as const;
+  useBalancesMock.mockReturnValue(loading);
+  useAdjustmentsMock.mockReturnValue(loading);
+  renderPositions();
+  const positions = skeletonColumns();
+  await user.click(screen.getByRole("button", { name: "History" }));
+  return { positions, history: skeletonColumns() };
+}
+
+/** The grid holding an adjustment form's account and asset fields. */
+function identityGrid(form: HTMLElement): HTMLElement {
+  const grid = within(form).getByText("Asset").closest<HTMLElement>(".grid");
+  if (!grid) {
+    throw new Error("identity grid not found");
+  }
+  return grid;
+}
+
+// The identity grid classes of the draft panel and of the adjust dialog opened
+// by cloning the listed adjustment.
+async function identityGridClasses(user: ReturnType<typeof userEvent.setup>) {
+  const panel = Array.from(identityGrid(await openDraftPanel(user)).classList);
+  await user.click(screen.getByRole("button", { name: "History" }));
+  await user.click(screen.getByRole("button", { name: /clone adj-alpha-10/i }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Adjust position",
+  });
+  return { panel, dialog: Array.from(identityGrid(dialog).classList) };
+}
+
+describe("Positions account surfaces with accounts shown", () => {
+  beforeEach(() => {
+    useAdjustmentsMock.mockReturnValue(
+      readyPage<Adjustment>([
+        acceptedAdjustment({
+          type: "deposit",
+          asset: "AAPL",
+          balance: { mode: "absolute", value: "10" },
+        }),
+      ]),
+    );
+  });
+
+  it("shows the account and group surfaces on both tabs", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    for (const [name, surface] of Object.entries(
+      await accountSurfaces(user, balance.account),
+    )) {
+      expect(surface, name).not.toBeNull();
+    }
+  });
+
+  it("carries URL account and group filters into requests, suggestions, CSV and the share link", async () => {
+    const user = userEvent.setup();
+    renderPositions("/positions?account=desk-alpha&group=equity-desks");
+
+    expect(lastBalanceFilters()).toEqual(
+      expect.objectContaining({
+        account: "desk-alpha",
+        groupCode: "equity-desks",
+      }),
+    );
+    expect(useAdjustmentsMock.mock.calls.at(-1)?.[0]?.account).toBe(
+      "desk-alpha",
+    );
+    await waitFor(() =>
+      expect(fetchAccountsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "desk-alpha" }),
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchGroupsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "equity-desks" }),
+        expect.any(AbortSignal),
+      ),
+    );
+    const params = shareLinkParams(filterSetShare("button"));
+    expect(params.get("account")).toBe("desk-alpha");
+    expect(params.get("group")).toBe("equity-desks");
+    expect(await exportedPositionFilters(user)).toEqual({
+      account: "desk-alpha",
+      groupCode: "equity-desks",
+    });
+  });
+
+  it("links a balance row's active orders with its account", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      within(balanceRow()).getByRole("button", {
+        name: "Active orders for Bucks McMoneyface",
+      }),
+    );
+
+    const location = screen.getByTestId("location");
+    expect(location).toHaveAttribute("data-pathname", "/orders");
+    const search = new URLSearchParams(
+      location.getAttribute("data-search") ?? "",
+    );
+    expect(search.get("account")).toBe("Bucks McMoneyface");
+    expect(search.get("status")).toBe(ACTIVE_STATUS_QUERY);
+  });
+
+  it("spans the draft row over every column, the account included", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    expect(await draftRowSpans(user)).toEqual({
+      columns: 9,
+      closed: 9,
+      open: 9,
+    });
+  });
+
+  it("counts a typed draft account as a field to reset", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const panel = await openDraftPanel(user);
+    const resetAll = within(panel).getByRole("button", { name: /reset all/i });
+    expect(resetAll).toBeDisabled();
+    await user.type(within(panel).getByLabelText("Account"), "my");
+    expect(resetAll).toBeEnabled();
+  });
+
+  it("seeds, suggests and clears the cloned account in the adjust dialog", async () => {
+    const user = userEvent.setup();
+    renderPositions("/positions?tab=history");
+
+    await user.click(
+      screen.getByRole("button", { name: /clone adj-alpha-10/i }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Adjust position",
+    });
+    const accountField = within(dialog).getByLabelText("Account");
+    expect(accountField).toHaveValue("Bucks McMoneyface");
+    await waitFor(() =>
+      expect(fetchAccountsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "Bucks McMoneyface" }),
+        expect.any(AbortSignal),
+      ),
+    );
+
+    await user.click(within(dialog).getByRole("button", { name: "Clear all" }));
+    expect(accountField).toHaveValue("");
+  });
+
+  it("sizes both loading skeletons to the account column", async () => {
+    const user = userEvent.setup();
+
+    expect(await loadingSkeletonColumns(user)).toEqual({
+      positions: 9,
+      history: 10,
+    });
+  });
+
+  it("lays the account and asset fields out in two columns", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const grids = await identityGridClasses(user);
+    expect(grids.panel).toContain("md:grid-cols-2");
+    expect(grids.dialog).toContain("grid-cols-2");
+  });
+});
+
+describe("Positions page with accounts hidden", () => {
+  // Lists hold the default account's rows only, as the server narrows them.
+  const mainBalance: Balance = { ...balance, account: "main" };
+  const mainAdjustment: Adjustment = {
+    ...acceptedAdjustment({
+      type: "withdrawal",
+      asset: "AAPL",
+      balance: { mode: "delta", value: "25" },
+      realizedPnl: "-12.50",
+    }),
+    account: "main",
+  };
+
+  beforeEach(() => {
+    setAccountScope({ accounts: false, account: "main" });
+    useBalancesMock.mockReturnValue(readyPage<Balance>([mainBalance]));
+    useAdjustmentsMock.mockReturnValue(readyPage<Adjustment>([mainAdjustment]));
+    createAdjustmentMock.mockImplementation(async (code: string, body) => ({
+      ...acceptedAdjustment(body as unknown as Adjustment["request"]),
+      account: code,
+    }));
+  });
+
+  it("shows no account or group surface on either tab", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    for (const [name, surface] of Object.entries(
+      await accountSurfaces(user, mainBalance.account),
+    )) {
+      expect(surface, name).toBeNull();
+    }
+  });
+
+  it("keeps URL account and group filters out of requests, suggestions, CSV and the share link", async () => {
+    const user = userEvent.setup();
+    renderPositions("/positions?account=desk-alpha&group=equity-desks");
+
+    expect(useBalancesMock).toHaveBeenCalled();
+    for (const [filters] of useBalancesMock.mock.calls) {
+      expect(filters?.account).toBeUndefined();
+      expect(filters?.groupCode).toBeUndefined();
+    }
+    expect(useAdjustmentsMock).toHaveBeenCalled();
+    for (const [filters] of useAdjustmentsMock.mock.calls) {
+      expect(filters?.account).toBeUndefined();
+    }
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+    const params = shareLinkParams(filterSetShare("button"));
+    expect(params.has("account")).toBe(false);
+    expect(params.has("group")).toBe(false);
+    expect(await exportedPositionFilters(user)).toEqual({});
+    expect(fetchAccountsMock).not.toHaveBeenCalled();
+    expect(fetchGroupsMock).not.toHaveBeenCalled();
+  });
+
+  it("names no account on a balance row and links its active orders without one", async () => {
+    const user = userEvent.setup();
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderPositions();
+
+    expect(
+      screen.getByRole("button", { name: "Open adjustment panel for AAPL" }),
+    ).toBeInTheDocument();
+    const activeOrders = screen.getByRole("button", { name: "Active orders" });
+    fireEvent.click(activeOrders, { metaKey: true });
+    const href = open.mock.calls[0]?.[0];
+    open.mockRestore();
+    expect(href).toEqual(expect.stringContaining("/orders?"));
+    const opened = new URL(String(href), window.location.origin);
+    expect(opened.searchParams.has("account")).toBe(false);
+    expect(opened.searchParams.get("status")).toBe(ACTIVE_STATUS_QUERY);
+
+    await user.click(activeOrders);
+    const location = screen.getByTestId("location");
+    expect(location).toHaveAttribute("data-pathname", "/orders");
+    const search = new URLSearchParams(
+      location.getAttribute("data-search") ?? "",
+    );
+    expect(search.has("account")).toBe(false);
+    expect(search.get("status")).toBe(ACTIVE_STATUS_QUERY);
+  });
+
+  it("opens a balance row's history filtered by its asset alone", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const row = screen
+      .getByRole("button", { name: "Open adjustment panel for AAPL" })
+      .closest("tr");
+    if (!row) {
+      throw new Error("balance row not found");
+    }
+    await user.click(row);
+
+    expect(await screen.findByText("Adjustment history")).toBeInTheDocument();
+    const filters = useAdjustmentsMock.mock.calls.at(-1)?.[0];
+    expect(filters?.asset).toBe("AAPL");
+    expect(filters?.account).toBeUndefined();
+  });
+
+  it("spans the draft row over every column without the account", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    expect(await draftRowSpans(user)).toEqual({
+      columns: 8,
+      closed: 8,
+      open: 8,
+    });
+  });
+
+  it("posts inline-panel adjustments to the default account", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const scope = within(await openDraftPanel(user));
+    expect(scope.queryByLabelText("Account")).not.toBeInTheDocument();
+    const resetAll = scope.getByRole("button", { name: /reset all/i });
+    expect(resetAll).toBeDisabled();
+
+    await user.type(scope.getByLabelText("Asset"), "AAPL");
+    await user.type(scope.getByLabelText("Available adjustment amount"), "600");
+    await user.click(scope.getByRole("button", { name: "Deposit" }));
+    expect(resetAll).toBeEnabled();
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
+
+    await user.click(resetAll);
+    expect(resetAll).toBeDisabled();
+    await user.type(scope.getByLabelText("Asset"), "MSFT");
+    await user.type(scope.getByLabelText("Available adjustment amount"), "5");
+    await user.click(scope.getByRole("button", { name: "Withdrawal" }));
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
+
+    expect(createAdjustmentMock.mock.calls).toEqual([
+      [
+        "main",
+        {
+          type: "deposit",
+          asset: "AAPL",
+          balance: { mode: "absolute", value: "600" },
+        },
+        "reject",
+      ],
+      [
+        "main",
+        {
+          type: "withdrawal",
+          asset: "MSFT",
+          balance: { mode: "absolute", value: "5" },
+        },
+        "reject",
+      ],
+    ]);
+    expect(fetchAccountsMock).not.toHaveBeenCalled();
+  });
+
+  it("posts adjust-dialog adjustments to the default account", async () => {
+    const user = userEvent.setup();
+    renderPositions("/positions?tab=history");
+
+    await user.click(
+      screen.getByRole("button", { name: /clone adj-alpha-10/i }),
+    );
+    const scope = within(
+      await screen.findByRole("dialog", { name: "Adjust position" }),
+    );
+    expect(scope.queryByLabelText("Account")).not.toBeInTheDocument();
+    await user.click(scope.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
+
+    await user.click(scope.getByRole("button", { name: "Clear all" }));
+    await user.type(scope.getByLabelText("Asset"), "MSFT");
+    await user.type(scope.getByLabelText("Realized PnL"), "5");
+    await user.click(scope.getByRole("button", { name: "Manual correction" }));
+    await user.click(scope.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
+
+    expect(createAdjustmentMock.mock.calls).toEqual([
+      [
+        "main",
+        {
+          type: "withdrawal",
+          asset: "AAPL",
+          balance: { mode: "delta", value: "25" },
+          realizedPnl: "-12.50",
+        },
+        "reject",
+      ],
+      [
+        "main",
+        { type: "correction", asset: "MSFT", realizedPnl: "5" },
+        "reject",
+      ],
+    ]);
+    expect(fetchAccountsMock).not.toHaveBeenCalled();
+  });
+
+  it("sizes both loading skeletons without the account column", async () => {
+    const user = userEvent.setup();
+
+    expect(await loadingSkeletonColumns(user)).toEqual({
+      positions: 8,
+      history: 9,
+    });
+  });
+
+  it("gives the asset field the whole row", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const grids = await identityGridClasses(user);
+    expect(grids.panel).not.toContain("md:grid-cols-2");
+    expect(grids.dialog).not.toContain("grid-cols-2");
   });
 });

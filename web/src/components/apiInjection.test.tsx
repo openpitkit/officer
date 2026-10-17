@@ -23,17 +23,10 @@ import { describe, expect, it, vi } from "vitest";
 import { BusinessCsvExportDialog } from "@/components/BusinessCsvDialogs";
 import { PendingRestartBanner } from "@/components/PendingRestartBanner";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
-import { renderWithApi } from "@/test/apiClient";
+import { jsonResponse, renderWithApi } from "@/test/apiClient";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
 const injectedBaseUrl = "https://host.example/officer/api";
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
 
 function marketDataResponse(restartRequired: boolean): Response {
   return jsonResponse({

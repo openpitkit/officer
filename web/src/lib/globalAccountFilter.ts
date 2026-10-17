@@ -17,6 +17,7 @@
 
 import { useMemo, useSyncExternalStore } from "react";
 
+import { accountScope } from "@/lib/accountScope";
 import {
   readStoredPreference,
   writeStoredPreference,
@@ -61,12 +62,17 @@ export function setGlobalAccountFilter(account: string): void {
   notify();
 }
 
+/**
+ * The global account filter. While accounts are hidden it reports no filter
+ * and keeps the stored one for when they are shown again.
+ */
 export function useGlobalAccountFilter() {
-  const account = useSyncExternalStore(
+  const stored = useSyncExternalStore(
     subscribe,
     getSnapshot,
     getServerSnapshot,
   );
+  const account = accountScope().showsAccounts ? stored : "";
 
   return useMemo(
     () => ({

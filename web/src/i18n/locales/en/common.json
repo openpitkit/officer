@@ -353,6 +353,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "accounts": "Accounts",
+    "account": "Account",
     "assets": "Assets",
     "positions": "Positions",
     "orders": "Orders",
@@ -418,7 +419,8 @@
       }
     },
     "preTrade": {
-      "copy": "For allow-or-deny pre-trade control, create accounts, assign positions or cash balances, then define policy barriers. If buying-power control is not needed, accounts and balances can stay empty."
+      "copy": "For allow-or-deny pre-trade control, create accounts, assign positions or cash balances, then define policy barriers. If buying-power control is not needed, accounts and balances can stay empty.",
+      "copyUnnamed": "For allow-or-deny pre-trade control, assign positions or cash balances to the account, then define policy barriers. If buying-power control is not needed, the account can stay empty."
     },
     "marketData": {
       "copy": "Market orders, locked prices, cross-currency exposure, and realized PnL need a market-data source. You can connect a live provider later or install a static BYO preset now."
@@ -428,11 +430,13 @@
     },
     "actions": {
       "demoAccount": "Create demo account and positions",
+      "demoPositions": "Add demo positions",
       "policyPreset": "Add starter policy barriers",
       "marketDataPreset": "Install FX and crypto static prices",
       "binancePreset": "Get FX and crypto rates from Binance",
       "or": "or",
       "openAccounts": "Open accounts",
+      "openAccount": "Open account",
       "openPolicies": "Open policies",
       "openMarketData": "Open market data",
       "start": "Start working in Pit Officer"
@@ -445,10 +449,18 @@
       "failed": "{{label}} failed: {{message}}",
       "partialFailed": "{{label}} partially applied: {{count}} rows updated before failure: {{message}}",
       "marketDataInstanceMissing": "Static market-data instance was not returned by the server.",
-      "binanceInstanceMissing": "Binance market-data instance was not returned by the server."
+      "binanceInstanceMissing": "Binance market-data instance was not returned by the server.",
+      "accountMissing": "The account {{account}} was not found.",
+      "accountHoldsPositions": "The account {{account}} already holds positions. The demo writes only into an account without positions.",
+      "barriersExist": "The account {{account}} already has a starter barrier. The demo writes only into an account without them.",
+      "barriersUnread": "Not every barrier of the account {{account}} could be read, so the demo writes nothing."
     },
     "returnHint": "You can return to this dialog from the About dialog.",
     "dontShowAgain": "Don't show this again"
+  },
+  "accountModeDialog": {
+    "title": "How many accounts will you use?",
+    "description": "With one account, Officer acts on it only and the panel shows no account fields. The mode can be changed later on the Service page."
   },
   "display": {
     "density": {
@@ -478,6 +490,7 @@
     "stale": "Stale data",
     "staleDescription": "Refresh failed. Showing the last received data.",
     "loadError": "Could not load data",
+    "accountModeLoadError": "Could not load the account mode",
     "loading": "Loading",
     "copyableSnippet": "Copyable snippet"
   },

@@ -5,6 +5,7 @@
   "tabs": {
     "ariaLabel": "服务分区",
     "application": "应用",
+    "accountMode": "账户模式",
     "api": "API",
     "database": "数据库",
     "logs": "日志"
@@ -32,6 +33,33 @@
         "description": "服务将关闭，并且可能保持离线，直到管理员再次启动。",
         "confirm": "停止服务"
       }
+    }
+  },
+  "accountMode": {
+    "title": "账户模式",
+    "stored": "已保存的模式",
+    "running": "运行中的模式",
+    "notChosen": "尚未选择",
+    "modes": {
+      "single": "单个账户",
+      "multi": "多个账户"
+    },
+    "singleAccount": "单个账户：{{account}}",
+    "onlyAccount": "Officer 仅作用于账户 {{account}}。",
+    "createsAccount": "尚无任何账户：Officer 将创建账户 {{account}}，并仅作用于该账户。",
+    "otherAccounts": {
+      "title": "其他账户将停止工作",
+      "detail": "它们仍保留在数据库中，在模式切换回多个账户后恢复工作。"
+    },
+    "confirm": {
+      "title": "保存账户模式？",
+      "description": "如果运行中的模式发生变化，Officer 将重启以应用该模式：控制面板会断开连接，并在 Officer 恢复后重新加载。"
+    },
+    "saved": "账户模式已保存，无需重启。",
+    "restarting": "Officer 正在重启；恢复后控制面板将重新加载。",
+    "restartNotice": {
+      "title": "需要重启才能应用账户模式",
+      "detail": "已保存的账户模式与运行中的服务所执行的模式不同。请重启服务以应用该模式。"
     }
   },
   "engine": {

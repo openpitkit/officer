@@ -81,6 +81,7 @@
       "hint": "使用「调整」功能为账户和资产设定现货资金余额。"
     },
     "activeOrdersTitle": "{{account}} 的活跃订单",
+    "activeOrdersTitleUnnamed": "活跃订单",
     "ordersTitle": "打开 {{account}} 的订单"
   },
   "inline": {
@@ -98,6 +99,7 @@
   "panel": {
     "open": "调整",
     "openAriaLabel": "打开 {{account}} {{asset}} 的调整面板",
+    "openAriaLabelUnnamed": "打开 {{asset}} 的调整面板",
     "openDraftAriaLabel": "打开新建调整面板",
     "title": "调整",
     "descriptionExisting": "提交前，请对照当前持仓与拟提交数值。",

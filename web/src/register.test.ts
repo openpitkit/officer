@@ -17,7 +17,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { getNav, getWidgets } from "@/framework";
+import { getNav, getPage, getRoutes, getWidgets } from "@/framework";
+import { setAccountScope } from "@/lib/accountScope";
+import { Account } from "@/pages/Account";
+import { Accounts } from "@/pages/Accounts";
 // Side-effect import: the application's own registration.
 import "@/register";
 
@@ -25,6 +28,21 @@ function indexOf(ids: string[], id: string): number {
   const index = ids.indexOf(id);
   expect(index, `${id} is registered`).toBeGreaterThanOrEqual(0);
   return index;
+}
+
+/** Ids of the primary menu entries the sidebar renders now. */
+function shownPrimaryIds(): string[] {
+  return getNav("primary")
+    .filter((entry) => entry.when?.() ?? true)
+    .map((entry) => entry.id);
+}
+
+function accountsRoute() {
+  const route = getRoutes().find((entry) => entry.path === "/accounts");
+  if (route === undefined) {
+    throw new Error("/accounts is not routed");
+  }
+  return route;
 }
 
 describe("officer default registration", () => {
@@ -42,5 +60,31 @@ describe("officer default registration", () => {
     expect(indexOf(ids, "trading-connections-card")).toBeLessThan(
       indexOf(ids, "market-data-card"),
     );
+  });
+
+  it("offers the Accounts entry and page while accounts are shown", () => {
+    const ids = shownPrimaryIds();
+    expect(ids).toContain("accounts");
+    expect(ids).not.toContain("account");
+
+    const route = accountsRoute();
+    expect(route.Component).toBe(Accounts);
+    expect(getPage(route.id)?.when?.()).toBe(false);
+  });
+
+  it("offers the Account entry and page in its place while accounts are hidden", () => {
+    setAccountScope({ accounts: false, account: "main" });
+
+    const ids = shownPrimaryIds();
+    expect(ids).toContain("account");
+    expect(ids).not.toContain("accounts");
+    expect(ids[indexOf(ids, "account") - 1]).toBe("dashboard");
+    expect(getNav("primary").find((entry) => entry.id === "account")?.to).toBe(
+      "/accounts",
+    );
+
+    const page = getPage(accountsRoute().id);
+    expect(page?.Component).toBe(Account);
+    expect(page?.when?.()).toBe(true);
   });
 });

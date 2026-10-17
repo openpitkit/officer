@@ -84,10 +84,14 @@ navigation entries, dashboard widgets, row actions, vocabulary, and locale
 catalogs under stable ids. A host application can replace an entry by
 registering the same id or remove it with the matching unregister API.
 
-`src/App.tsx` is intentionally kept as a minimal shell instead of being deleted.
-The current framework surface has `Sidebar` and `AppRoutes`, but no top-level
-overlay slot; keeping `App.tsx` preserves the welcome dialog lifecycle without
-adding a new framework API.
+`src/App.tsx` wraps the framework `Sidebar` and `AppRoutes` in the app's
+startup flow. `AccountScopeGate` reads `GET /account-mode` before the shell
+renders and keeps polling it; a restart into another account mode reloads the
+page. While no account mode is stored, the app asks for one before the welcome
+dialog opens. App code asks `accountScope()` (`src/lib/accountScope.ts`)
+whether accounts are shown and which account a request carries, never whether
+the mode is single; `src/register.ts` switches the Accounts navigation entry
+and page through `when` predicates.
 
 ## Consuming the web library
 

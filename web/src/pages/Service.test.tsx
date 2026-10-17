@@ -17,21 +17,29 @@
 
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithApi as render } from "@/test/apiClient";
+import {
+  accountRow,
+  answeringAccountMode,
+  jsonResponse,
+  renderWithApi as render,
+} from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { useState } from "react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
+import { setAccountScope } from "@/lib/accountScope";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
+import type { AccountModeState } from "@/api/accountMode";
 import type {
   CredentialStorage,
   ServiceInfo,
   TradingSnapshot,
 } from "@/api/types";
+import type { OfficerApi } from "@/framework";
 import {
   BackupCard,
   DatabaseCard,
@@ -179,6 +187,25 @@ beforeEach(async () => {
   await i18n.changeLanguage("en");
 });
 
+const runningSingle = { accounts: false, account: "main" };
+const runningMulti = { accounts: true, account: "" };
+// Stored multi while the process runs single: a restart is pending.
+const waitingMulti: AccountModeState = {
+  mode: "multi",
+  account: "",
+  features: runningSingle,
+  restartRequired: true,
+};
+// Stored single on an account deleted since, while the process runs multi.
+const waitingOldAccount: AccountModeState = {
+  mode: "single",
+  account: "old",
+  features: runningMulti,
+  restartRequired: true,
+};
+const mainAccount = accountRow("main");
+const noticeTitle = "Restart needed to apply the account mode";
+
 describe("ServiceCard", () => {
   it("switches each service tab to its matching panel and reports its id", async () => {
     const user = userEvent.setup();
@@ -186,7 +213,7 @@ describe("ServiceCard", () => {
 
     function ControlledServiceCard() {
       const [activeTab, setActiveTab] = useState<
-        "application" | "api" | "database" | "logs"
+        "application" | "account-mode" | "api" | "database" | "logs"
       >("application");
       return (
         <ServiceCard
@@ -200,6 +227,7 @@ describe("ServiceCard", () => {
           lifecycleBusyAction={null}
           lifecycleError={null}
           onLifecycleAction={vi.fn().mockResolvedValue(undefined)}
+          onAccountModeRestart={vi.fn().mockResolvedValue(undefined)}
         />
       );
     }
@@ -219,6 +247,10 @@ describe("ServiceCard", () => {
           fetchTrading: fetchTradingMock,
           fetchCredentialStorage: fetchCredentialStorageMock,
         },
+        fetch: answeringAccountMode({
+          ...waitingMulti,
+          restartRequired: false,
+        }) as unknown as typeof fetch,
       },
     );
 
@@ -226,6 +258,7 @@ describe("ServiceCard", () => {
       ["api", "API"],
       ["database", "Database"],
       ["logs", "Logs"],
+      ["account-mode", "Account mode"],
       ["application", "Application"],
     ]) {
       onTabChange.mockClear();
@@ -253,8 +286,11 @@ describe("Service", () => {
     );
   }
 
-  async function renderAtLogsHash() {
-    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+  function renderService(
+    entry: string,
+    api: Partial<OfficerApi> = {},
+    fetch?: (url: string, init: RequestInit) => Promise<Response>,
+  ) {
     render(
       <I18nextProvider i18n={i18n}>
         <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
@@ -262,7 +298,7 @@ describe("Service", () => {
             densityStorageKey="pit-test-density"
             tradeStyleStorageKey="pit-test-style"
           >
-            <MemoryRouter initialEntries={["/service#logs"]}>
+            <MemoryRouter initialEntries={[entry]}>
               <SidebarProvider>
                 <Service />
               </SidebarProvider>
@@ -280,9 +316,16 @@ describe("Service", () => {
           fetchServiceLogs: vi
             .fn()
             .mockResolvedValue({ lines: ["Service log"] }),
+          ...api,
         },
+        fetch: fetch as unknown as typeof globalThis.fetch | undefined,
       },
     );
+  }
+
+  async function renderAtLogsHash() {
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+    renderService("/service#logs");
 
     const logsTab = await screen.findByRole("tab", { name: "Logs" });
     expect(logsTab).toHaveAttribute("aria-selected", "true");
@@ -329,6 +372,267 @@ describe("Service", () => {
       expectHashClearedOn("Logs");
     },
   );
+
+  function noticeRestartButton() {
+    return screen.getByRole("button", { name: "Restart service" });
+  }
+
+  async function confirmDialog(
+    user: ReturnType<typeof userEvent.setup>,
+    name: string,
+  ) {
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name }));
+  }
+
+  it("shows the account mode tab from the hash and clears it on another tab", async () => {
+    const user = userEvent.setup();
+    renderService(
+      "/service#account-mode",
+      {},
+      answeringAccountMode({ ...waitingMulti, restartRequired: false }),
+    );
+
+    const tab = await screen.findByRole("tab", { name: "Account mode" });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    const panel = screen.getByRole("tabpanel", { name: "Account mode" });
+    expect(await within(panel).findByTitle("Several accounts")).toBeVisible();
+    expect(
+      within(panel).getByRole("group", { name: "Account mode" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Application" }));
+
+    expectHashClearedOn("Application");
+  });
+
+  it.each([true, false])(
+    "shows the restart notice above every tab only when restartRequired is %s",
+    async (restartRequired) => {
+      const user = userEvent.setup();
+      renderService(
+        "/service#account-mode",
+        {},
+        answeringAccountMode({ ...waitingMulti, restartRequired }),
+      );
+      const panel = await screen.findByRole("tabpanel", {
+        name: "Account mode",
+      });
+      await within(panel).findByTitle("Several accounts");
+
+      expect(screen.queryByText(noticeTitle) !== null).toBe(restartRequired);
+      await user.click(screen.getByRole("tab", { name: "Application" }));
+      expect(screen.queryByText(noticeTitle) !== null).toBe(restartRequired);
+    },
+  );
+
+  it("restarts from the notice only after confirming, then blocks the choice", async () => {
+    const user = userEvent.setup();
+    const restartService = vi.fn().mockResolvedValue(undefined);
+    renderService(
+      "/service#account-mode",
+      { restartService },
+      answeringAccountMode(waitingMulti),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "One account" }),
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+
+    await user.click(noticeRestartButton());
+    expect(
+      await screen.findByRole("alertdialog", { name: "Restart service?" }),
+    ).toBeInTheDocument();
+    expect(restartService).not.toHaveBeenCalled();
+    await confirmDialog(user, "Restart service");
+
+    await waitFor(() => expect(restartService).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(noticeRestartButton()).toBeDisabled());
+    expect(
+      screen.getByRole("button", { name: "Several accounts" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("restarts a saved choice under the page's lifecycle busy state", async () => {
+    const user = userEvent.setup();
+    const restartService = vi.fn().mockResolvedValue(undefined);
+    renderService(
+      "/service#account-mode",
+      {
+        restartService,
+        fetchAccounts: vi.fn().mockResolvedValue([mainAccount]),
+      },
+      answeringAccountMode(waitingOldAccount, {
+        ...waitingOldAccount,
+        account: "main",
+      }),
+    );
+    await screen.findByText("Officer acts on the account main only.");
+    expect(noticeRestartButton()).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await confirmDialog(user, "Save");
+
+    expect(
+      await screen.findByText(
+        "Officer is restarting; the panel reloads when it is back.",
+      ),
+    ).toBeInTheDocument();
+    expect(restartService).toHaveBeenCalledTimes(1);
+    expect(noticeRestartButton()).toBeDisabled();
+  });
+
+  it("shows a refused restart of a saved choice once and offers the restart again", async () => {
+    const user = userEvent.setup();
+    const restartService = vi
+      .fn()
+      .mockRejectedValue(new Error("restart is not allowed"));
+    renderService(
+      "/service#account-mode",
+      {
+        restartService,
+        fetchAccounts: vi.fn().mockResolvedValue([mainAccount]),
+      },
+      answeringAccountMode(waitingOldAccount, {
+        ...waitingOldAccount,
+        account: "main",
+      }),
+    );
+    await screen.findByText("Officer acts on the account main only.");
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await confirmDialog(user, "Save");
+
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent("restart is not allowed");
+    expect(noticeRestartButton()).toBeEnabled();
+  });
+
+  it("reloads the account mode right after a save that needs no restart", async () => {
+    const user = userEvent.setup();
+    renderService(
+      "/service#account-mode",
+      {},
+      answeringAccountMode(waitingMulti, {
+        mode: "single",
+        account: "main",
+        features: runningSingle,
+        restartRequired: false,
+      }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "One account" }),
+    );
+    expect(screen.getByText(noticeTitle)).toBeInTheDocument();
+    expect(screen.getByText("Running mode")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await confirmDialog(user, "Save");
+
+    // The poll ticks every 5 s, beyond waitFor's 1 s: only the reload the
+    // save triggers can clear these in time.
+    await waitFor(() =>
+      expect(screen.queryByText(noticeTitle)).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Running mode")).not.toBeInTheDocument();
+    expect(screen.getByTitle("One account: main")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("shows a refused restart from the notice in the notice only", async () => {
+    const user = userEvent.setup();
+    const restartService = vi
+      .fn()
+      .mockRejectedValue(new Error("restart is not allowed"));
+    renderService(
+      "/service#account-mode",
+      { restartService },
+      answeringAccountMode(waitingMulti),
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Restart service" }),
+    );
+    await confirmDialog(user, "Restart service");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "restart is not allowed",
+    );
+    expect(noticeRestartButton()).toBeEnabled();
+    await user.click(screen.getByRole("tab", { name: "Application" }));
+    expect(screen.getAllByText("restart is not allowed")).toHaveLength(1);
+  });
+
+  const accountModeUnavailable = () =>
+    jsonResponse(
+      { error: { code: "internal", message: "account mode is unavailable" } },
+      500,
+    );
+
+  it("shows a failed account mode load and retries it", async () => {
+    const user = userEvent.setup();
+    const fetchMock = answeringAccountMode({
+      ...waitingMulti,
+      restartRequired: false,
+    });
+    fetchMock.mockImplementationOnce(async () => accountModeUnavailable());
+    renderService("/service#account-mode", {}, fetchMock);
+
+    const panel = await screen.findByRole("tabpanel", {
+      name: "Account mode",
+    });
+    expect(
+      await within(panel).findByText("Could not load the account mode"),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByText("account mode is unavailable"),
+    ).toBeInTheDocument();
+
+    await user.click(within(panel).getByRole("button", { name: "Retry" }));
+
+    expect(await within(panel).findByTitle("Several accounts")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the account mode stale when a background poll fails and retries it", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const user = userEvent.setup();
+      const fetchMock = answeringAccountMode({
+        ...waitingMulti,
+        restartRequired: false,
+      });
+      renderService("/service#account-mode", {}, fetchMock);
+      const panel = await screen.findByRole("tabpanel", {
+        name: "Account mode",
+      });
+      await within(panel).findByTitle("Several accounts");
+
+      fetchMock.mockImplementationOnce(async () => accountModeUnavailable());
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      const stale = await within(panel).findByRole("status", {
+        name: "Stale data",
+      });
+      expect(stale).toHaveTextContent("account mode is unavailable");
+      expect(within(panel).getByTitle("Several accounts")).toBeVisible();
+
+      await user.click(within(stale).getByRole("button", { name: "Retry" }));
+
+      await waitFor(() =>
+        expect(
+          within(panel).queryByRole("status", { name: "Stale data" }),
+        ).not.toBeInTheDocument(),
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("BackupCard", () => {
@@ -1087,6 +1391,74 @@ describe("BackupCard", () => {
 
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(restoreBackupMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("BackupCard with accounts hidden", () => {
+  beforeEach(() => {
+    setAccountScope({ accounts: false, account: "main" });
+  });
+
+  it("shows no account or position selector and keeps the data sections", async () => {
+    fetchTradingMock.mockResolvedValue(tradingSnapshot);
+    const user = userEvent.setup();
+    renderBackupCard();
+    // Trading has loaded with a connection, which would lock the hidden
+    // account selector to all accounts and show its hint.
+    await act(async () => {});
+    expect(fetchTradingMock).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("checkbox", { name: "All data" }));
+
+    for (const name of ["All accounts and groups", "All position accounts"]) {
+      expect(screen.queryByRole("checkbox", { name })).toBeNull();
+    }
+    for (const placeholder of [
+      "accounts, comma-separated",
+      "groups, comma-separated",
+      "position accounts, comma-separated",
+      "position groups, comma-separated",
+    ]) {
+      expect(screen.queryByPlaceholderText(placeholder)).toBeNull();
+    }
+    expect(
+      screen.queryByText(
+        "Trading data is exported and restored for all accounts.",
+      ),
+    ).toBeNull();
+    for (const name of ["Accounts and groups", "Positions"]) {
+      expect(screen.getByRole("checkbox", { name })).toBeChecked();
+    }
+  });
+
+  it("exports the selected sections for every account", async () => {
+    exportBackupMock.mockResolvedValue({
+      blob: new Blob(["backup"]),
+      filename: "backup.zip",
+    });
+    const user = userEvent.setup();
+    await act(async () => {
+      renderBackupCard();
+    });
+    await user.click(screen.getByRole("checkbox", { name: "All data" }));
+    await user.click(screen.getByRole("button", { name: "Export" }));
+
+    await waitFor(() => expect(exportBackupMock).toHaveBeenCalledTimes(1));
+    expect(exportBackupMock.mock.calls[0][0]).toEqual({
+      all: false,
+      accounts: { all: true },
+      positions: { all: true },
+      sections: [
+        "accounts_groups",
+        "positions",
+        "risk_limits",
+        "market_data_settings",
+        "general_settings",
+        "user_settings",
+        "activity_history",
+        "trading",
+        "audit_log",
+      ],
+    });
   });
 });
 

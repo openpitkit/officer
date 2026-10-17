@@ -26,6 +26,7 @@ import type {
   VenueOrder,
 } from "@/api/types";
 import { ApiError, createApiClient, createOfficerApi } from "@/framework";
+import { jsonResponse } from "@/test/apiClient";
 
 function api() {
   return createOfficerApi(
@@ -120,13 +121,6 @@ function okMarketDataResponse(): Response {
       headers: { "Content-Type": "application/json" },
     },
   );
-}
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
 }
 
 describe("trading client", () => {

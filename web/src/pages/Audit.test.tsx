@@ -15,9 +15,14 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
+import {
+  filterSetShare,
+  shareLinkParams,
+  skeletonColumns,
+} from "@/test/pageHelpers";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +33,7 @@ import type { AuditFilter } from "@/framework";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { badgeVariants } from "@/components/ui/badge";
 import i18n from "@/i18n";
+import { setAccountScope } from "@/lib/accountScope";
 import { Audit } from "@/pages/Audit";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -329,5 +335,106 @@ describe("Audit action tones", () => {
     expect(action).toHaveClass(
       ...badgeVariants({ variant: "danger" }).split(" "),
     );
+  });
+});
+
+/** The account and group surfaces of the page, each null when absent. */
+async function accountSurfaces(accountTitle: string) {
+  const table = await screen.findByRole("table");
+  return {
+    column: within(table).queryByRole("columnheader", { name: "Account" }),
+    cell: within(table).queryByText(accountTitle),
+    "account field": screen.queryByPlaceholderText("Filter by account…"),
+    "group field": screen.queryByPlaceholderText("Exact group code…"),
+    "global toggle": screen.queryByRole("button", {
+      name: /global account filter/i,
+    }),
+  };
+}
+
+/** Column count of the audit list's loading skeleton. */
+function loadingSkeletonColumns(): number {
+  useAuditPageMock.mockReturnValue({
+    load: { state: "loading", data: null, error: null },
+    reload: vi.fn(),
+  });
+  renderAudit();
+  return skeletonColumns();
+}
+
+describe("Audit with accounts shown", () => {
+  it("shows the account column, account and group filters and global toggle", async () => {
+    renderAudit();
+
+    for (const [name, surface] of Object.entries(
+      await accountSurfaces("Desk Alpha"),
+    )) {
+      expect(surface, name).not.toBeNull();
+    }
+  });
+
+  it("sends URL account and group filters and keeps them in the share link", async () => {
+    renderAudit("/audit?account=desk-alpha&group=desk-a");
+
+    await waitFor(() =>
+      expect(lastAuditFilter()).toMatchObject({
+        account: "desk-alpha",
+        group: "desk-a",
+      }),
+    );
+    const shared = shareLinkParams(filterSetShare("button"));
+    expect(shared.get("account")).toBe("desk-alpha");
+    expect(shared.get("group")).toBe("desk-a");
+  });
+
+  it("loads with a skeleton column per visible column", () => {
+    expect(loadingSkeletonColumns()).toBe(7);
+  });
+});
+
+describe("Audit with accounts hidden", () => {
+  beforeEach(() => {
+    setAccountScope({ accounts: false, account: "main" });
+  });
+
+  it("shows no account column, account or group filter, or global toggle", async () => {
+    useAuditPageMock.mockReturnValue(
+      auditPage([
+        {
+          ...sampleEntry,
+          account: "main",
+          accountTitle: "Main desk",
+          detail: "blocked the default account",
+        },
+      ]),
+    );
+    renderAudit();
+
+    for (const [name, surface] of Object.entries(
+      await accountSurfaces("Main desk"),
+    )) {
+      expect(surface, name).toBeNull();
+    }
+    expect(screen.getByText("blocked the default account")).toBeInTheDocument();
+  });
+
+  it("keeps URL account and group filters out of requests and the share link", async () => {
+    renderAudit("/audit?account=desk-alpha&group=desk-a&actor=operator");
+
+    await waitFor(() =>
+      expect(lastAuditFilter()).toMatchObject({ actor: "operator" }),
+    );
+    for (const [filter] of useAuditPageMock.mock.calls) {
+      expect(filter?.account).toBeUndefined();
+      expect(filter?.group).toBeUndefined();
+    }
+    const shared = shareLinkParams(filterSetShare("button"));
+    expect(shared.get("actor")).toBe("operator");
+    expect(shared.has("account")).toBe(false);
+    expect(shared.has("group")).toBe(false);
+  });
+
+  it("loads with a skeleton column per visible column", () => {
+    expect(loadingSkeletonColumns()).toBe(6);
   });
 });

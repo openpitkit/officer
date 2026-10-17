@@ -30,6 +30,8 @@ import type {
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { ApiClientProvider, type OfficerApi } from "@/framework";
 import i18n from "@/i18n";
+import { setAccountScope } from "@/lib/accountScope";
+import { accountRow } from "@/test/apiClient";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
 const createMarketDataInstanceMock = vi.fn();
@@ -50,6 +52,12 @@ const upsertMarketDataInstrumentMock = vi.fn();
 const updateAssetMock = vi.fn();
 const updateAssetClassMock = vi.fn();
 const setWelcomeSeenMock = vi.fn();
+const fetchPoliciesPageMock = vi.fn();
+
+const PRE_TRADE_ACCOUNTS =
+  "For allow-or-deny pre-trade control, create accounts, assign positions or cash balances, then define policy barriers. If buying-power control is not needed, accounts and balances can stay empty.";
+const PRE_TRADE_ACCOUNT =
+  "For allow-or-deny pre-trade control, assign positions or cash balances to the account, then define policy barriers. If buying-power control is not needed, the account can stay empty.";
 
 function byoInstance(
   overrides: Partial<MarketDataInstance> = {},
@@ -128,6 +136,7 @@ function renderWelcome(onOpenChange = vi.fn()) {
     fetchAssetClasses: fetchAssetClassesMock,
     fetchAssets: fetchAssetsMock,
     fetchMarketData: fetchMarketDataMock,
+    fetchPoliciesPage: fetchPoliciesPageMock,
     putLimit: putLimitMock,
     restartMarketData: restartMarketDataMock,
     setAccountCurrency: setAccountCurrencyMock,
@@ -174,6 +183,7 @@ beforeEach(() => {
   );
   fetchMarketDataMock.mockResolvedValue(marketDataStatus());
   putLimitMock.mockResolvedValue({});
+  fetchPoliciesPageMock.mockResolvedValue({ items: [], total: 0 });
   createMarketDataInstanceMock.mockImplementation(async (body) =>
     body.provider === "binance" ? binanceInstance() : byoInstance(),
   );
@@ -693,5 +703,213 @@ describe("WelcomeDialog", () => {
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(setWelcomeSeenMock).not.toHaveBeenCalled();
+  });
+
+  it("describes the demo account it creates", async () => {
+    const user = userEvent.setup();
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /Create demo account and positions/i,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(setAccountNotesMock).toHaveBeenCalledExactlyOnceWith(
+        "demo-main",
+        "Created from the first-run guide. Replace with the real account identifier before production use.",
+      ),
+    );
+  });
+
+  it("links the accounts page under its several-accounts label", () => {
+    renderWelcome();
+
+    expect(screen.getByRole("link", { name: "Open accounts" })).toHaveAttribute(
+      "href",
+      "/accounts",
+    );
+    expect(screen.getByText(PRE_TRADE_ACCOUNTS)).toBeInTheDocument();
+    expect(screen.queryByText(PRE_TRADE_ACCOUNT)).not.toBeInTheDocument();
+  });
+
+  it("checks neither positions nor barriers before writing its own account", async () => {
+    const user = userEvent.setup();
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /Create demo account and positions/i,
+      }),
+    );
+    await screen.findByText(/^Create demo account and positions applied:/);
+    await user.click(
+      screen.getByRole("button", { name: /Add starter policy barriers/i }),
+    );
+
+    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(3));
+    expect(fetchAccountsMock).toHaveBeenCalledExactlyOnceWith();
+    expect(fetchPoliciesPageMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("WelcomeDialog while accounts are hidden", () => {
+  beforeEach(() => {
+    setAccountScope({ accounts: false, account: "main" });
+    fetchAccountsMock.mockResolvedValue([
+      accountRow("main", { positionCount: 0 }),
+    ]);
+  });
+
+  it("labels the actions for the one account", () => {
+    renderWelcome();
+    const dialog = screen.getByRole("dialog");
+
+    expect(
+      within(dialog).getByRole("button", { name: "Add demo positions" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: /demo account/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("link", { name: "Open account" }),
+    ).toHaveAttribute("href", "/accounts");
+    expect(within(dialog).getByText(PRE_TRADE_ACCOUNT)).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(PRE_TRADE_ACCOUNTS),
+    ).not.toBeInTheDocument();
+  });
+
+  it("funds the default account without creating or describing one", async () => {
+    const user = userEvent.setup();
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", { name: "Add demo positions" }),
+    );
+
+    expect(
+      await screen.findByText(/^Add demo positions applied:/),
+    ).toBeInTheDocument();
+    expect(fetchAccountsMock).toHaveBeenCalledExactlyOnceWith({
+      code: "main",
+      codeMatch: "exact",
+      limit: 1,
+    });
+    expect(createAccountMock).not.toHaveBeenCalled();
+    expect(setAccountNotesMock).not.toHaveBeenCalled();
+    expect(setAccountCurrencyMock).toHaveBeenCalledExactlyOnceWith(
+      "main",
+      "USD",
+    );
+    expect(createAdjustmentMock).toHaveBeenCalledTimes(9);
+    for (const [account] of createAdjustmentMock.mock.calls) {
+      expect(account).toBe("main");
+    }
+  });
+
+  it("writes the starter barriers for the default account", async () => {
+    const user = userEvent.setup();
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", { name: /Add starter policy barriers/i }),
+    );
+
+    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(3));
+    expect(fetchPoliciesPageMock).toHaveBeenCalledExactlyOnceWith({
+      account: "main",
+      limit: 1000,
+    });
+    expect(putLimitMock.mock.calls.map(([limit]) => limit.account)).toEqual([
+      "main",
+      "main",
+      "main",
+    ]);
+  });
+
+  it("refuses to fund an account that holds positions and writes nothing", async () => {
+    const user = userEvent.setup();
+    fetchAccountsMock.mockResolvedValue([
+      accountRow("main", { positionCount: 2 }),
+    ]);
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", { name: "Add demo positions" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Add demo positions failed: The account main already holds positions. The demo writes only into an account without positions.",
+      ),
+    ).toBeInTheDocument();
+    for (const write of [
+      createAssetClassMock,
+      updateAssetClassMock,
+      createAssetMock,
+      updateAssetMock,
+      createAccountMock,
+      setAccountCurrencyMock,
+      setAccountNotesMock,
+      createAdjustmentMock,
+    ]) {
+      expect(write).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses the starter barriers when the account has one of them", async () => {
+    const user = userEvent.setup();
+    fetchPoliciesPageMock.mockResolvedValue({
+      items: [
+        {
+          policy: "order_size_limit",
+          scope: "account_underlying_asset",
+          account: "main",
+          asset: "BTC",
+          values: { max_quantity: "5" },
+        },
+      ],
+      total: 1,
+    });
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", { name: /Add starter policy barriers/i }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Add starter policy barriers failed: The account main already has a starter barrier. The demo writes only into an account without them.",
+      ),
+    ).toBeInTheDocument();
+    expect(putLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses the starter barriers when not every barrier could be read", async () => {
+    const user = userEvent.setup();
+    fetchPoliciesPageMock.mockResolvedValue({
+      items: Array.from({ length: 1000 }, (_, index) => ({
+        policy: "order_size_limit",
+        scope: "account_underlying_asset",
+        account: "main",
+        asset: `ASSET${index}`,
+        values: { max_quantity: "1" },
+      })),
+      total: 1001,
+    });
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", { name: /Add starter policy barriers/i }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Add starter policy barriers failed: Not every barrier of the account main could be read, so the demo writes nothing.",
+      ),
+    ).toBeInTheDocument();
+    expect(putLimitMock).not.toHaveBeenCalled();
   });
 });

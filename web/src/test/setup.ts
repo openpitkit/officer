@@ -16,14 +16,15 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Global test setup: register jest-dom matchers, initialize the app i18n so
-// react-i18next has resources during render, and unmount the React tree after
-// each test to keep cases isolated.
+// react-i18next has resources during render, show accounts by default, and
+// unmount the React tree after each test to keep cases isolated.
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 
 // Side-effect import: runs the app's i18next .init() and loads every catalog.
 import "@/i18n";
+import { setAccountScope } from "@/lib/accountScope";
 import "@/test/registerDefaults";
 
 // jsdom lacks these APIs, and Radix Select calls them.
@@ -32,6 +33,12 @@ proto.hasPointerCapture = () => false;
 proto.setPointerCapture = () => {};
 proto.releasePointerCapture = () => {};
 proto.scrollIntoView = () => {};
+
+// The app sets the scope from GET /account-mode before its shell renders;
+// tests that need hidden accounts set their own scope before rendering.
+beforeEach(() => {
+  setAccountScope({ accounts: true, account: "" });
+});
 
 afterEach(() => {
   cleanup();
