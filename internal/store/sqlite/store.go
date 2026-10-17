@@ -166,11 +166,14 @@ func (s *sqliteStore) ForRealm(
 }
 
 // ensureRealmRow inserts the single realm identity row when absent, assigning it
-// an external id. Its code is the bound realm id. A present row whose code is
-// another realm means the database was created for that realm: it is rejected
-// with an error wrapping domain.ErrInvalid naming both codes rather than served
-// under the bound one. Migrate runs the same check before it writes anything
-// else, so a foreign database is refused before its secrets are resealed.
+// an external id. Its code is the bound realm id. The insert is one statement
+// conditional on the schema's single-row constraint, so concurrent opens of one
+// database leave exactly one row. The stored code is then compared with the
+// bound realm: a row whose code is another realm means the database was created
+// for that realm, and it is rejected with an error wrapping domain.ErrInvalid
+// naming both codes rather than served under the bound one. Migrate runs the
+// same check before it writes anything else, so a foreign database is refused
+// before its secrets are resealed.
 func (s *sqliteStore) ensureRealmRow(ctx context.Context) error {
 	db := s.currentDB()
 	if db == nil {
@@ -180,30 +183,29 @@ func (s *sqliteStore) ensureRealmRow(ctx context.Context) error {
 }
 
 func (s *sqliteStore) ensureRealmRowDB(ctx context.Context, db *sql.DB) error {
-	var code string
-	err := db.QueryRowContext(ctx, `SELECT code FROM realm`).Scan(&code)
-	if err == nil {
-		if code != s.realm.String() {
-			return fmt.Errorf(
-				"store: database at %q is bound to realm %q, not %q: %w",
-				s.path, code, s.realm, domain.ErrInvalid,
-			)
-		}
-		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("store: read realm row: %w", err)
-	}
 	xid, err := newExternalID()
 	if err != nil {
 		return err
 	}
 	if _, err := db.ExecContext(
 		ctx,
-		`INSERT INTO realm (external_id, code, title) VALUES (?, ?, '')`,
+		`INSERT INTO realm (external_id, code, title) VALUES (?, ?, '')
+		 ON CONFLICT (singleton) DO NOTHING`,
 		xid.Bytes(), s.realm.String(),
 	); err != nil {
 		return fmt.Errorf("store: insert realm row: %w", err)
+	}
+	var code string
+	if err := db.QueryRowContext(
+		ctx, `SELECT code FROM realm`,
+	).Scan(&code); err != nil {
+		return fmt.Errorf("store: read realm row: %w", err)
+	}
+	if code != s.realm.String() {
+		return fmt.Errorf(
+			"store: database at %q is bound to realm %q, not %q: %w",
+			s.path, code, s.realm, domain.ErrInvalid,
+		)
 	}
 	return nil
 }

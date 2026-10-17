@@ -32,8 +32,11 @@
 
 -- Single-row identity of the realm this schema holds: recorded once for backup
 -- labelling and future placement. It is not a foreign key on any other table.
+-- singleton is always 1 and unique, so a second row is impossible; a connector
+-- inserts the row conditionally on it (ON CONFLICT (singleton) DO NOTHING).
 CREATE TABLE realm (
     id          {{PK}},
+    singleton   INTEGER NOT NULL DEFAULT 1 UNIQUE CHECK (singleton = 1),
     external_id {{XID}} UNIQUE,
     code        TEXT    NOT NULL,
     title       TEXT    NOT NULL DEFAULT ''

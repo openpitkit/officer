@@ -497,7 +497,8 @@ func TestTimeStrTextOrderIsChronological(t *testing.T) {
 // one realm is not served under another: the realm row written on the first
 // ForRealm is compared with the bound realm on every later open, so opening the
 // same file bound to a different realm fails with ErrInvalid naming both codes,
-// while reopening it under the original realm still works.
+// at Migrate and at ForRealm alike, while reopening it under the original realm
+// still works.
 func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
@@ -529,8 +530,92 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 		!strings.Contains(migrateErr.Error(), `"b"`) {
 		t.Fatalf("Migrate(b) error = %q, want both realm codes named", migrateErr)
 	}
+	foreign, err := New(path, "b")
+	if err != nil {
+		t.Fatalf("New(b): %v", err)
+	}
+	_, bindErr := foreign.ForRealm(ctx, "b")
+	_ = foreign.Close()
+	if !errors.Is(bindErr, domain.ErrInvalid) {
+		t.Fatalf("ForRealm(b) on a database bound to a = %v, want ErrInvalid", bindErr)
+	}
 	if migrateErr, bindErr := open("a"); migrateErr != nil || bindErr != nil {
 		t.Fatalf("open(a) after the rejected open = %v, %v, want nil", migrateErr, bindErr)
+	}
+}
+
+// TestForRealmConcurrentOpensLeaveOneRealmRow proves the realm identity row
+// cannot duplicate: several stores, each on its own connection like separate
+// processes over one dataset, call ForRealm at once on a migrated database whose
+// row is absent, and exactly one row remains. A direct second insert is refused
+// by the schema's single-row constraint itself.
+func TestForRealmConcurrentOpensLeaveOneRealmRow(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	s, err := New(path, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	db := s.(*sqliteStore).currentDB()
+	if _, err := db.ExecContext(ctx, `DELETE FROM realm`); err != nil {
+		t.Fatalf("delete realm row: %v", err)
+	}
+
+	const openers = 8
+	stores := make([]fwstore.Store, openers)
+	for i := range stores {
+		// busy_timeout queues the openers' writes on SQLite's file lock instead
+		// of failing them with SQLITE_BUSY.
+		opener, err := New(path+"?_pragma=busy_timeout(5000)", domain.DefaultRealm)
+		if err != nil {
+			t.Fatalf("New(opener %d): %v", i, err)
+		}
+		t.Cleanup(func() { _ = opener.Close() })
+		stores[i] = opener
+	}
+	start := make(chan struct{})
+	errs := make(chan error, openers)
+	var wg sync.WaitGroup
+	for _, opener := range stores {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := opener.ForRealm(ctx, domain.DefaultRealm)
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ForRealm: %v", err)
+		}
+	}
+
+	var rows int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM realm`).Scan(&rows); err != nil {
+		t.Fatalf("count realm rows: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("realm rows after concurrent ForRealm = %d, want 1", rows)
+	}
+	xid, err := newExternalID()
+	if err != nil {
+		t.Fatalf("newExternalID: %v", err)
+	}
+	_, err = db.ExecContext(
+		ctx,
+		`INSERT INTO realm (external_id, code, title) VALUES (?, 'other', '')`,
+		xid.Bytes(),
+	)
+	if !isSQLiteUniqueOn(err, "realm", "singleton") {
+		t.Fatalf("second realm row insert = %v, want UNIQUE on realm.singleton", err)
 	}
 }
 
