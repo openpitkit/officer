@@ -101,7 +101,7 @@ func reportFillHandler(
 			return "", httpx.ExecutionReportResponseDTO{}, toolError(err)
 		}
 		out := httpx.ToExecutionReportResponseDTO(
-			result, att.Token, att.KeyID, att.Signed,
+			result, att.SignedAttestation, att.KeyID, att.Signed,
 		)
 		return fmt.Sprintf(
 			"execution report %s recorded for order %s: %s",

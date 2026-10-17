@@ -27,7 +27,7 @@ import (
 	fwsigning "go.openpit.dev/officer/framework/signing"
 )
 
-func TestSubmitOrderTokenSignsSurfacePrincipalAndOmitsAcceptReasons(t *testing.T) {
+func TestSubmitOrderSignsSurfacePrincipalAndOmitsAcceptReasons(t *testing.T) {
 	t.Parallel()
 	handler, realm := newRealServiceRouter(t)
 	seedRealAccountAndAssets(t, realm, "acc-1")

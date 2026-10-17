@@ -1062,7 +1062,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	"event_attestation": {
 		backup: map[string]string{
 			"event_id":        "OrderEvents.Attestation",
-			"token":           "Attestation.Token",
+			"signed_envelope": "Attestation.SignedEnvelope",
 			"signing_key_id":  "Attestation.KeyID",
 			"alg_id":          "Attestation.Alg",
 			"request_type_id": "Attestation.RequestType",
@@ -1737,22 +1737,22 @@ func seedClientDataDriftRealm(
 	}))
 	must(t, "PutEventAttestation", rs.PutEventAttestation(
 		ctx, event.ExternalID, domain.EventAttestation{
-			Token:       "token-sentinel",
-			KeyID:       "key-sentinel-1",
-			Alg:         "ed25519",
-			RequestType: domain.AttestationRequestSubmit,
-			Mode:        "immediate",
-			IssuedAt:    "2026-07-08T10:01:00Z",
+			SignedEnvelope: "token-sentinel",
+			KeyID:          "key-sentinel-1",
+			Alg:            "ed25519",
+			RequestType:    domain.AttestationRequestSubmit,
+			Mode:           "immediate",
+			IssuedAt:       "2026-07-08T10:01:00Z",
 		},
 	))
 	must(t, "PutEventAttestation reject", rs.PutEventAttestation(
 		ctx, rejectEvent.ExternalID, domain.EventAttestation{
-			Token:       "token-reject-sentinel",
-			KeyID:       "key-sentinel-1",
-			Alg:         "ed25519",
-			RequestType: domain.AttestationRequestSubmit,
-			Mode:        "immediate",
-			IssuedAt:    "2026-07-08T10:01:30Z",
+			SignedEnvelope: "token-reject-sentinel",
+			KeyID:          "key-sentinel-1",
+			Alg:            "ed25519",
+			RequestType:    domain.AttestationRequestSubmit,
+			Mode:           "immediate",
+			IssuedAt:       "2026-07-08T10:01:30Z",
 		},
 	))
 	if _, err := rs.CreateTrade(ctx, domain.Trade{

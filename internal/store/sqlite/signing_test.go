@@ -133,7 +133,7 @@ func TestSigningKeyActiveSwitchingAndDeactivateAll(t *testing.T) {
 		t.Fatalf("active key = %q, want k2", active.KeyID)
 	}
 
-	// k1 survives as an inactive key (connectors verify in-flight tokens).
+	// k1 survives as an inactive key (connectors verify in-flight envelopes).
 	got1, err := rs.GetSigningKey(ctx, "k1")
 	if err != nil {
 		t.Fatalf("GetSigningKey(k1): %v", err)

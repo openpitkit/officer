@@ -145,10 +145,10 @@ func WithAccountScope(scope AccountScope) Option {
 // New constructs a Service over n, the node of the realm the service serves.
 // md is the live connector-manager view used to surface per-instance
 // subscription state and to re-apply configuration; signer is the framework
-// signing seam backing the approval-token flow; lockSettlement derives the
+// signing seam backing the signed-approval flow; lockSettlement derives the
 // display settlement price of an order from its engine lock. md may be nil
 // (market-data state resolves to empty and RestartMarketData is a no-op);
-// signer may be nil (the signing and approval-token methods then report the
+// signer may be nil (the signing and approval methods then report the
 // feature unconfigured). New returns an error when n or lockSettlement is nil,
 // or when WithAccountScope passes a nil scope.
 func New(

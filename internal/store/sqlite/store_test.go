@@ -291,6 +291,45 @@ func TestMigrateRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
 	}
 }
 
+// TestMigrateRejectsDatabaseThatPredatesSchema proves a database created by an
+// earlier build, whose event_attestation still keeps the signed envelope under
+// its earlier column name, is refused at Migrate with an error naming the
+// database and the remedy, while the same file migrated fresh opens cleanly.
+func TestMigrateRejectsDatabaseThatPredatesSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	fresh, err := New(path, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := fresh.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate on a fresh database: %v", err)
+	}
+	if _, err := fresh.(*sqliteStore).currentDB().ExecContext(
+		ctx, `ALTER TABLE event_attestation RENAME COLUMN signed_envelope TO token`,
+	); err != nil {
+		t.Fatalf("give event_attestation its earlier shape: %v", err)
+	}
+	if err := fresh.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	earlier, err := New(path, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("New on the earlier database: %v", err)
+	}
+	defer func() { _ = earlier.Close() }()
+	err = earlier.Migrate(ctx)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Migrate on the earlier database = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{path, "predates the current schema", "recreate the database"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Migrate on the earlier database error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
 // TestRealmDataOpAfterCloseReturnsClosedError proves the realm data path fails
 // gracefully on a shutdown/Close race: once Close swaps the pool out, a data
 // method resolves the pool through the guarded accessor and returns the same

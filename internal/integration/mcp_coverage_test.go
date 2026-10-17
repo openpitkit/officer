@@ -183,10 +183,10 @@ func (s *setMDErrSource) CommandEnabled(context.Context, string) (bool, error) {
 	return true, nil
 }
 
-func (s *setMDErrSource) SubmitOrderToken(
+func (s *setMDErrSource) SubmitOrder(
 	context.Context, domain.Order, string, domain.MissingAccountPolicy,
-) (frameworkmcp.SubmitOrderTokenResult, error) {
-	return frameworkmcp.SubmitOrderTokenResult{}, nil
+) (frameworkmcp.SubmitOrderResult, error) {
+	return frameworkmcp.SubmitOrderResult{}, nil
 }
 
 func (s *setMDErrSource) SubmitDropCopyOrder(

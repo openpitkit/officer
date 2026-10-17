@@ -233,6 +233,9 @@ func (s *sqliteStore) migrateDB(
 	); err != nil {
 		return err
 	}
+	if err := s.requireSignedEnvelopeColumnDB(ctx, db); err != nil {
+		return err
+	}
 	if err := s.ensureRealmRowDB(ctx, db); err != nil {
 		return err
 	}
@@ -244,6 +247,34 @@ func (s *sqliteStore) migrateDB(
 		return err
 	}
 	s.enumCodes.Store(dictionaries)
+	return nil
+}
+
+// requireSignedEnvelopeColumnDB refuses a database created before
+// event_attestation had its signed_envelope column. The canonical schema
+// changes in place, so such a database records the same migration version as a
+// current one and only its shape tells them apart. It is rejected with an error
+// wrapping domain.ErrInvalid that names the path, before Migrate writes
+// anything else, rather than read with a column it does not have; the remedy is
+// to recreate the database. The probe covers that one column: a database that
+// predates a later in-place schema change is not caught here.
+func (s *sqliteStore) requireSignedEnvelopeColumnDB(ctx context.Context, db *sql.DB) error {
+	var columns int
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('event_attestation')
+		 WHERE name = 'signed_envelope'`,
+	).Scan(&columns); err != nil {
+		return fmt.Errorf("store: read event_attestation columns: %w", err)
+	}
+	if columns == 0 {
+		return fmt.Errorf(
+			"store: database at %q was created by an earlier Officer build and "+
+				"predates the current schema (event_attestation has no "+
+				"signed_envelope column); recreate the database: %w",
+			s.path, domain.ErrInvalid,
+		)
+	}
 	return nil
 }
 

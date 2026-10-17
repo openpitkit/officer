@@ -541,7 +541,7 @@ const (
 	AuditActionImportSigningKey   AuditAction = "import_signing_key"
 	AuditActionSetSigningConfig   AuditAction = "set_signing_config"
 
-	// Approval token lifecycle.
+	// Signed approval lifecycle.
 	AuditActionApprovalIssued    AuditAction = "approval_issued"
 	AuditActionApprovalFailed    AuditAction = "approval_failed"
 	AuditActionApprovalConfirmed AuditAction = "approval_confirmed"

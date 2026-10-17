@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package signing implements Ed25519 approval-token signing and verification
+// Package signing implements Ed25519 approval signing and verification
 // over the framework approval envelope. It owns BYOK key import/export and the
 // global eSign-off read path. Private keys never leave this package.
 package signing
@@ -70,7 +70,7 @@ type Store interface {
 	SetSetting(ctx context.Context, key, value string) error
 }
 
-// Service signs and verifies approval tokens against the persisted key set. The
+// Service signs and verifies signed envelopes against the persisted key set. The
 // active keypair is cached in memory; key generation and import refresh it, and
 // callers that change keys through another path must call Reload after commit.
 // A nil active key means no key is configured yet.
@@ -172,7 +172,8 @@ func (s *Service) storeNewActive(ctx context.Context, pub ed25519.PublicKey, see
 }
 
 // ListKeys returns all keys ordered newest-first, including inactive public
-// keys (connectors verify in-flight tokens). Private material is never carried.
+// keys (connectors verify in-flight envelopes). Private material is never
+// carried.
 func (s *Service) ListKeys(ctx context.Context) ([]domain.SigningKey, error) {
 	keys, err := s.store.ListSigningKeys(ctx)
 	if err != nil {
@@ -197,7 +198,7 @@ func (s *Service) ActivePublicKey(format string) (string, error) {
 }
 
 // PublicKeyByID exports the public key bound to keyID in the given format. It
-// resolves the key by id, not by the active flag, so a token signed under a
+// resolves the key by id, not by the active flag, so an envelope signed under a
 // since-rotated key still yields the exact public key that signed it. It reads
 // only the public half; an unknown id reports domain.ErrNotFound.
 func (s *Service) PublicKeyByID(ctx context.Context, keyID, format string) (string, error) {
@@ -218,7 +219,7 @@ func (s *Service) Fingerprint(pub []byte) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// Sign builds the signed envelope token for payload, using the active key. It
+// Sign builds the signed envelope for payload, using the active key. It
 // sets KeyID and Alg on a copy of the payload, signs the canonical bytes, and
 // returns the base64url-encoded envelope.
 func (s *Service) Sign(payload domain.ApprovalPayload) (string, error) {
@@ -250,13 +251,13 @@ func (s *Service) Sign(payload domain.ApprovalPayload) (string, error) {
 	return fwsigning.BuildEnvelope(env)
 }
 
-// SignNone builds an unsigned (eSign-off) envelope token so Service satisfies
+// SignNone builds an unsigned (eSign-off) envelope so Service satisfies
 // the framework signing seam.
 func (s *Service) SignNone(payload domain.ApprovalPayload) (string, error) {
 	return SignNone(payload)
 }
 
-// SignNone builds an unsigned (eSign-off) envelope token: the full payload is
+// SignNone builds an unsigned (eSign-off) envelope: the full payload is
 // emitted with alg "none" and no signature.
 func SignNone(payload domain.ApprovalPayload) (string, error) {
 	payload.KeyID = ""
@@ -265,13 +266,13 @@ func SignNone(payload domain.ApprovalPayload) (string, error) {
 	return fwsigning.BuildEnvelope(env)
 }
 
-// Verify decodes the token, recomputes its canonical bytes, verifies the
+// Verify decodes the envelope, recomputes its canonical bytes, verifies the
 // signature when alg is ed25519, and re-binds the bound order params against
 // expect. For alg "none" the signature step is skipped; binding still applies.
 func (s *Service) Verify(
-	ctx context.Context, token string, expect fwsigning.VerifyParams,
+	ctx context.Context, envelope string, expect fwsigning.VerifyParams,
 ) (fwsigning.VerifyResult, error) {
-	env, err := fwsigning.DecodeEnvelope(token)
+	env, err := fwsigning.DecodeEnvelope(envelope)
 	if err != nil {
 		return fwsigning.VerifyResult{}, err
 	}
@@ -306,7 +307,7 @@ func (s *Service) Verify(
 			return fwsigning.VerifyResult{}, err
 		}
 		if !off {
-			return fwsigning.VerifyResult{}, fmt.Errorf("signing: unsigned token rejected while eSign is enabled: %w", domain.ErrInvalid)
+			return fwsigning.VerifyResult{}, fmt.Errorf("signing: unsigned envelope rejected while eSign is enabled: %w", domain.ErrInvalid)
 		}
 		// eSign-off: no signature, binding still enforced.
 	default:
@@ -374,7 +375,7 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 func rebind(p domain.ApprovalPayload, expect fwsigning.VerifyParams) error {
 	check := func(field, want, got string) error {
 		if want != got {
-			return fmt.Errorf("signing: %s mismatch (token %q != order %q): %w", field, got, want, domain.ErrInvalid)
+			return fmt.Errorf("signing: %s mismatch (envelope %q != order %q): %w", field, got, want, domain.ErrInvalid)
 		}
 		return nil
 	}

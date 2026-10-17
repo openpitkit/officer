@@ -522,12 +522,12 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 	}
 
 	att := domain.EventAttestation{
-		Token:       "tok-abc",
-		KeyID:       "key-1",
-		Alg:         "ed25519",
-		RequestType: domain.AttestationRequestSubmit,
-		Mode:        "immediate",
-		IssuedAt:    "2026-06-26T10:00:00Z",
+		SignedEnvelope: "tok-abc",
+		KeyID:          "key-1",
+		Alg:            "ed25519",
+		RequestType:    domain.AttestationRequestSubmit,
+		Mode:           "immediate",
+		IssuedAt:       "2026-06-26T10:00:00Z",
 	}
 	if err := rs.PutEventAttestation(ctx, event.ExternalID, att); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
@@ -541,16 +541,16 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 		t.Fatalf("GetOrder signed attestation = %+v, want %+v", got, att)
 	}
 
-	// Write-once: a second put with a different token does not clobber.
+	// Write-once: a second put with a different envelope does not clobber.
 	clobber := att
-	clobber.Token = "tok-CLOBBER"
+	clobber.SignedEnvelope = "tok-CLOBBER"
 	if err := rs.PutEventAttestation(ctx, event.ExternalID, clobber); err != nil {
 		t.Fatalf("PutEventAttestation(retry): %v", err)
 	}
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
 	got = eventAttestation(t, detail, event.ExternalID)
-	if got == nil || got.Token != "tok-abc" {
-		t.Fatalf("attestation token after retry = %+v, want the first (write-once)", got)
+	if got == nil || got.SignedEnvelope != "tok-abc" {
+		t.Fatalf("attestation envelope after retry = %+v, want the first (write-once)", got)
 	}
 
 	// A missing event id is a hard error: an attestation without its event row
@@ -569,11 +569,11 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 		t.Fatalf("AppendOrderEvent(unsigned): %v", err)
 	}
 	unsigned := domain.EventAttestation{
-		Token:       "tok-unsigned",
-		Alg:         "none",
-		RequestType: domain.AttestationRequestSubmit,
-		Mode:        "immediate",
-		IssuedAt:    "2026-06-26T10:10:00Z",
+		SignedEnvelope: "tok-unsigned",
+		Alg:            "none",
+		RequestType:    domain.AttestationRequestSubmit,
+		Mode:           "immediate",
+		IssuedAt:       "2026-06-26T10:10:00Z",
 	}
 	if err := rs.PutEventAttestation(ctx, unsignedEvent.ExternalID, unsigned); err != nil {
 		t.Fatalf("PutEventAttestation(unsigned): %v", err)
@@ -2225,12 +2225,12 @@ func TestRecordOrderSubmissionAttestationFailureRollsBack(t *testing.T) {
 			return domain.EventAttestation{}, false, errSign
 		}
 		return domain.EventAttestation{
-			Token:       "tok-" + string(event.Type),
-			KeyID:       "key-1",
-			Alg:         "ed25519",
-			RequestType: domain.AttestationRequestSubmit,
-			Mode:        "immediate",
-			IssuedAt:    "2026-06-26T10:00:00Z",
+			SignedEnvelope: "tok-" + string(event.Type),
+			KeyID:          "key-1",
+			Alg:            "ed25519",
+			RequestType:    domain.AttestationRequestSubmit,
+			Mode:           "immediate",
+			IssuedAt:       "2026-06-26T10:00:00Z",
 		}, true, nil
 	}
 
@@ -2883,7 +2883,7 @@ func TestDeleteOrderCascadesChildren(t *testing.T) {
 		t.Fatalf("CreateTrade: %v", err)
 	}
 	if err := rs.PutEventAttestation(ctx, event.ExternalID, domain.EventAttestation{
-		Token: "t", KeyID: "key-1", Alg: "ed25519",
+		SignedEnvelope: "t", KeyID: "key-1", Alg: "ed25519",
 		RequestType: domain.AttestationRequestSubmit, Mode: "immediate",
 		IssuedAt: "2026-06-26T10:00:00Z",
 	}); err != nil {

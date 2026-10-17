@@ -2008,16 +2008,16 @@ func (rt *restoreTx) restoreEventAttestation(
 	if _, err := rt.tx.ExecContext(
 		ctx,
 		`INSERT INTO event_attestation
-		 (event_id, token, signing_key_id, alg_id, request_type_id, mode_id, issued_at)
+		 (event_id, signed_envelope, signing_key_id, alg_id, request_type_id, mode_id, issued_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(event_id) DO UPDATE SET
-		   token = excluded.token,
+		   signed_envelope = excluded.signed_envelope,
 		   signing_key_id = excluded.signing_key_id,
 		   alg_id = excluded.alg_id,
 		   request_type_id = excluded.request_type_id,
 		   mode_id = excluded.mode_id,
 		   issued_at = excluded.issued_at`,
-		eventID, att.Token, signingKeyID, algID, requestTypeID, modeID, att.IssuedAt,
+		eventID, att.SignedEnvelope, signingKeyID, algID, requestTypeID, modeID, att.IssuedAt,
 	); err != nil {
 		return fmt.Errorf("store: restore event attestation %q: %w", ev.ExternalID, err)
 	}

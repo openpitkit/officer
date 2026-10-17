@@ -252,7 +252,7 @@ func buildEventReproduction(
 	// Decode the persisted envelope with the same signing code that built it and
 	// expose the payload in its exact canonical signed form and the bound request.
 	// This is byte-identical to what was signed; it is never re-serialized here.
-	env, err := fwsigning.DecodeEnvelope(att.Token)
+	env, err := fwsigning.DecodeEnvelope(att.SignedEnvelope)
 	if err != nil {
 		// An envelope that fails to decode is presentation-only degradation: the
 		// event row and its attestation metadata stay authoritative, so the bundle
@@ -352,7 +352,7 @@ func toEventReproductionResponseDTO(
 	switch att.RequestType {
 	case domain.AttestationRequestSubmit:
 		out.SubmitResponse = &signedApprovalDTO{
-			SignedApproval:  att.Token,
+			SignedApproval:  att.SignedEnvelope,
 			KeyID:           att.KeyID,
 			OrderExternalID: event.Order.String(),
 			Verdict:         p.Verdict,
@@ -366,7 +366,7 @@ func toEventReproductionResponseDTO(
 		out.ExecutionReport = &httpx.ExecutionReportResponseDTO{
 			ID:                reportID,
 			Result:            executionResultFromPayload(p),
-			SignedAttestation: att.Token,
+			SignedAttestation: att.SignedEnvelope,
 			AttestationKeyID:  att.KeyID,
 			Signed:            eventAttestationSigned(att),
 		}
@@ -441,7 +441,7 @@ func orderMutationResponseFromPayload(
 			DisplayPrice:        "",
 			Signed:              eventAttestationSigned(att),
 		},
-		SignedAttestation: att.Token,
+		SignedAttestation: att.SignedEnvelope,
 		AttestationKeyID:  att.KeyID,
 		Signed:            eventAttestationSigned(att),
 	}
@@ -515,7 +515,7 @@ func handleApplyExecutionReport(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusCreated, httpx.ToExecutionReportResponseDTO(
-			result, att.Token, att.KeyID, att.Signed,
+			result, att.SignedAttestation, att.KeyID, att.Signed,
 		))
 	}
 }

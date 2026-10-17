@@ -173,12 +173,12 @@ func TestCheckOrder_ValidationError(t *testing.T) {
 	}
 }
 
-func TestSubmitOrderToken_Created(t *testing.T) {
-	svc := &fakeService{approvalToken: backend.ApprovalToken{
-		Token:   "submit-envelope",
-		KeyID:   "key-1",
-		Verdict: "accept",
-		Signed:  true,
+func TestSubmitOrder_Created(t *testing.T) {
+	svc := &fakeService{signedApproval: backend.SignedApproval{
+		SignedApproval: "submit-envelope",
+		KeyID:          "key-1",
+		Verdict:        "accept",
+		Signed:         true,
 	}}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -311,10 +311,10 @@ func TestSubmitDropCopyOrder_ValidationErrorPreservesEngineMessage(t *testing.T)
 	}
 }
 
-func TestSubmitOrderToken_ForwardsCallerSuppliedID(t *testing.T) {
+func TestSubmitOrder_ForwardsCallerSuppliedID(t *testing.T) {
 	supplied := extID("client-order-1")
-	svc := &fakeService{approvalToken: backend.ApprovalToken{
-		Token: "submit-envelope", Verdict: "accept",
+	svc := &fakeService{signedApproval: backend.SignedApproval{
+		SignedApproval: "submit-envelope", Verdict: "accept",
 	}}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -340,7 +340,7 @@ func TestSubmitOrderToken_ForwardsCallerSuppliedID(t *testing.T) {
 	}
 }
 
-func TestSubmitOrderToken_RiskRejectResponse(t *testing.T) {
+func TestSubmitOrder_RiskRejectResponse(t *testing.T) {
 	reject := map[string]any{
 		"code":    "max_order_size",
 		"scope":   "order",
@@ -349,8 +349,8 @@ func TestSubmitOrderToken_RiskRejectResponse(t *testing.T) {
 		"details": "qty=100",
 	}
 	svc := &fakeService{
-		approvalToken: backend.ApprovalToken{
-			Token:           "reject-envelope",
+		signedApproval: backend.SignedApproval{
+			SignedApproval:  "reject-envelope",
 			KeyID:           "key-1",
 			OrderExternalID: extID("order-1").String(),
 			Verdict:         "reject",
@@ -395,7 +395,7 @@ func TestSubmitOrderToken_RiskRejectResponse(t *testing.T) {
 // decimal, or asset the engine mapper rejects with domain.ErrInvalid) surfaces
 // as 400, not the 500 default. The fake stands in for the engine mapper raising
 // ErrInvalid for, e.g., an unknown amount kind or a non-decimal amount.
-func TestSubmitOrderToken_ValidationError(t *testing.T) {
+func TestSubmitOrder_ValidationError(t *testing.T) {
 	svc := &fakeService{signingErr: domain.ErrInvalid}
 	r, err := newRouter(svc)
 	if err != nil {

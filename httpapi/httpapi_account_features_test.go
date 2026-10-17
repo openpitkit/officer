@@ -60,7 +60,7 @@ func TestOmittedAccountByAccountFeatures(t *testing.T) {
 			`{` + order + `,"mode":"immediate"}`, http.StatusCreated, "",
 			"account id is empty",
 			func(f *fakeService) (domain.AccountID, bool) {
-				return f.submitOrderIn.Account, f.submitTokenMode != ""
+				return f.submitOrderIn.Account, f.submitMode != ""
 			},
 		},
 		{

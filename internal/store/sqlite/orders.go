@@ -379,10 +379,10 @@ func putEventAttestationTx(
 	if _, err := q.ExecContext(
 		ctx,
 		`INSERT INTO event_attestation
-		 (event_id, token, signing_key_id, alg_id, request_type_id, mode_id, issued_at)
+		 (event_id, signed_envelope, signing_key_id, alg_id, request_type_id, mode_id, issued_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(event_id) DO NOTHING`,
-		surrogate, att.Token, signingKeyID, algID, requestTypeID, modeID, att.IssuedAt,
+		surrogate, att.SignedEnvelope, signingKeyID, algID, requestTypeID, modeID, att.IssuedAt,
 	); err != nil {
 		return fmt.Errorf("store: put event attestation: %w", err)
 	}
@@ -838,11 +838,12 @@ func scanOrderInto(
 // orderEventSelect is the shared projection for event reads. The event links to
 // its order through the surrogate FK internally; reads surface only the event's
 // own fields plus the optional principal code and, when present, the event's 1:1
-// signed attestation metadata (token verbatim, key UUID, alg, request type,
-// mode, issued-at). A NULL token means the event carries no attestation.
+// signed attestation metadata (signed envelope verbatim, key UUID, alg, request
+// type, mode, issued-at). A NULL signed envelope means the event carries no
+// attestation.
 const orderEventSelect = `
 SELECT e.external_id, e.at, e.type_id, e.source_id, p.code, e.payload,
-       ea.token, sk.key_id, ea.alg_id, ea.request_type_id, ea.mode_id,
+       ea.signed_envelope, sk.key_id, ea.alg_id, ea.request_type_id, ea.mode_id,
        ea.issued_at
 FROM order_event e
 LEFT JOIN principal p ON p.id = e.principal_id
@@ -960,13 +961,13 @@ func scanOrderEvent(
 		typeID, sourceID                      int64
 		principal                             sql.NullString
 		payloadStr                            string
-		attToken, attKeyID                    sql.NullString
+		attEnvelope, attKeyID                 sql.NullString
 		attAlgID, attRequestTypeID, attModeID sql.NullInt64
 		attIssuedAt                           sql.NullString
 	)
 	if err := rows.Scan(
 		&extID, &at, &typeID, &sourceID, &principal, &payloadStr,
-		&attToken, &attKeyID, &attAlgID, &attRequestTypeID, &attModeID,
+		&attEnvelope, &attKeyID, &attAlgID, &attRequestTypeID, &attModeID,
 		&attIssuedAt,
 	); err != nil {
 		return domain.OrderEvent{}, fmt.Errorf("store: scan order event: %w", err)
@@ -1000,7 +1001,7 @@ func scanOrderEvent(
 		Principal:  principal.String,
 		Payload:    payload,
 	}
-	if attToken.Valid {
+	if attEnvelope.Valid {
 		alg, err := dictionaries.code(attestationAlgTable, "attestation algorithm", attAlgID.Int64)
 		if err != nil {
 			return domain.OrderEvent{}, err
@@ -1016,12 +1017,12 @@ func scanOrderEvent(
 			return domain.OrderEvent{}, err
 		}
 		ev.Attestation = &domain.EventAttestation{
-			Token:       attToken.String,
-			KeyID:       attKeyID.String,
-			Alg:         alg,
-			RequestType: domain.AttestationRequestType(requestType),
-			Mode:        mode,
-			IssuedAt:    attIssuedAt.String,
+			SignedEnvelope: attEnvelope.String,
+			KeyID:          attKeyID.String,
+			Alg:            alg,
+			RequestType:    domain.AttestationRequestType(requestType),
+			Mode:           mode,
+			IssuedAt:       attIssuedAt.String,
 		}
 	}
 	return ev, nil

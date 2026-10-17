@@ -34,7 +34,7 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// Submit modes for an approval token. SubmitModeImmediate commits and settles
+// Submit modes for a signed approval. SubmitModeImmediate commits and settles
 // at the lock price; SubmitModeHold is the workflow submit, whose later state
 // changes arrive as execution reports.
 const (
@@ -45,16 +45,17 @@ const (
 // approvalPayloadVersion is the canonical payload schema version.
 const approvalPayloadVersion = 1
 
-// ApprovalToken is the backend-facing result of issuing an approval token. The
-// surface layers map it onto their wire DTO. Token is the base64url-encoded
-// signed (or eSign-off) envelope; KeyID is the signing key id (empty under
-// eSign-off); Signed reports whether the envelope carries a signature.
-type ApprovalToken struct {
-	// Token is the base64url-encoded approval envelope.
-	Token string
+// SignedApproval is the backend-facing result of issuing a signed approval. The
+// surface layers map it onto their wire DTO. SignedApproval is the
+// base64url-encoded signed (or eSign-off) envelope; KeyID is the signing key id
+// (empty under eSign-off); Signed reports whether the envelope carries a
+// signature.
+type SignedApproval struct {
+	// SignedApproval is the base64url-encoded approval envelope.
+	SignedApproval string
 	// KeyID is the signing key id; empty under eSign-off.
 	KeyID string
-	// OrderExternalID is the opaque public handle of the recorded order the token
+	// OrderExternalID is the opaque public handle of the recorded order the approval
 	// authorises. It is the order's external id, never a surrogate or engine id.
 	OrderExternalID string
 	// Verdict is the pre-trade decision carried by the signed envelope.
@@ -98,14 +99,14 @@ func persistedEventAttestation(
 		if event.Order != order || event.Type != eventType {
 			continue
 		}
-		if event.Attestation == nil || event.Attestation.Token == "" {
+		if event.Attestation == nil || event.Attestation.SignedEnvelope == "" {
 			continue
 		}
 		return Attestation{
-			Token:           event.Attestation.Token,
-			KeyID:           event.Attestation.KeyID,
-			EventExternalID: event.ExternalID.String(),
-			Signed:          event.Attestation.Alg != fwsigning.AlgNone,
+			SignedAttestation: event.Attestation.SignedEnvelope,
+			KeyID:             event.Attestation.KeyID,
+			EventExternalID:   event.ExternalID.String(),
+			Signed:            event.Attestation.Alg != fwsigning.AlgNone,
 		}, true, nil
 	}
 	return Attestation{}, false, nil
@@ -153,35 +154,35 @@ func eventAttestor(
 		}
 		payload.RequestType = string(actualRequestType)
 		payload.EventExternalID = event.ExternalID.String()
-		var token string
+		var envelope string
 		signed := false
 		if off {
 			payload.KeyID = ""
 			payload.Alg = fwsigning.AlgNone
-			token, err = signer.SignNone(payload)
+			envelope, err = signer.SignNone(payload)
 		} else {
 			payload.KeyID = keyID
 			payload.Alg = fwsigning.AlgEd25519
-			token, err = signer.Sign(payload)
+			envelope, err = signer.Sign(payload)
 			signed = true
 		}
 		if err != nil {
 			return domain.EventAttestation{}, false, err
 		}
 		att := domain.EventAttestation{
-			Token:       token,
-			KeyID:       payload.KeyID,
-			Alg:         payload.Alg,
-			RequestType: requestType,
-			Mode:        payload.Mode,
-			IssuedAt:    payload.IssuedAt,
+			SignedEnvelope: envelope,
+			KeyID:          payload.KeyID,
+			Alg:            payload.Alg,
+			RequestType:    requestType,
+			Mode:           payload.Mode,
+			IssuedAt:       payload.IssuedAt,
 		}
 		if capture != nil {
 			capture(Attestation{
-				Token:           token,
-				KeyID:           payload.KeyID,
-				EventExternalID: event.ExternalID.String(),
-				Signed:          signed,
+				SignedAttestation: envelope,
+				KeyID:             payload.KeyID,
+				EventExternalID:   event.ExternalID.String(),
+				Signed:            signed,
 			}, payload)
 		}
 		att.RequestType = actualRequestType
@@ -231,7 +232,7 @@ func (s *Service) ImportSigningKey(
 }
 
 // ListSigningKeys returns every signing key newest-first, including inactive
-// public keys (connectors verify in-flight tokens). Private material is never
+// public keys (connectors verify in-flight envelopes). Private material is never
 // carried.
 func (s *Service) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error) {
 	signer, err := s.signerOrErr()
@@ -266,7 +267,7 @@ func (s *Service) PublicKeyByID(ctx context.Context, keyID, format string) (stri
 }
 
 // GetNoESign reports whether global eSign-off is enabled. With eSign-off on,
-// approval tokens are emitted unsigned (alg "none").
+// approval envelopes are emitted unsigned (alg "none").
 func (s *Service) GetNoESign(ctx context.Context) (bool, error) {
 	signer, err := s.signerOrErr()
 	if err != nil {
@@ -294,8 +295,8 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 
 // --- Submit / confirm / cancel ----------------------------------------------
 
-// SubmitOrderToken runs the pre-trade pipeline for o in the given mode and, on
-// accept, issues a signed (or eSign-off) approval token. Mode "hold" uses the
+// SubmitOrder runs the pre-trade pipeline for o in the given mode and, on
+// accept, issues a signed (or eSign-off) approval. Mode "hold" uses the
 // normal workflow submit: the engine commits the pre-trade effects and later
 // execution reports settle or release them. Mode "immediate" also settles a
 // fill at the engine lock price in the same call. A pre-trade reject is a
@@ -306,59 +307,59 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 // an order naming
 // an account that does not exist yet: register it with no group and no currency,
 // or fail with domain.ErrAccountMissing.
-func (s *Service) SubmitOrderToken(
+func (s *Service) SubmitOrder(
 	ctx context.Context,
 	o domain.Order,
 	mode string,
 	missing domain.MissingAccountPolicy,
-) (ApprovalToken, error) {
+) (SignedApproval, error) {
 	if isDropCopyOrder(o) {
-		return ApprovalToken{}, dropCopySigningError()
+		return SignedApproval{}, dropCopySigningError()
 	}
-	return s.submitOrderToken(ctx, o, mode, missing)
+	return s.submitOrder(ctx, o, mode, missing)
 }
 
-func (s *Service) submitOrderToken(
+func (s *Service) submitOrder(
 	ctx context.Context,
 	o domain.Order,
 	mode string,
 	missing domain.MissingAccountPolicy,
-) (ApprovalToken, error) {
+) (SignedApproval, error) {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
-		return ApprovalToken{}, err
+		return SignedApproval{}, err
 	}
 	scopedAccount, err := s.scope.Account(caller, o.Account)
 	if err != nil {
-		return ApprovalToken{}, err
+		return SignedApproval{}, err
 	}
 	scopedMissing, err := s.scope.MissingAccount(caller, missing)
 	if err != nil {
-		return ApprovalToken{}, err
+		return SignedApproval{}, err
 	}
 	// Malformed identity is refused here, not only at a surface: every caller -
 	// HTTP, MCP, or an embedder - reaches the engine lane through this seam, and
 	// an account registered under an unaddressable code could never be read back.
 	if err := domain.ValidateAccountID(scopedAccount); err != nil {
-		return ApprovalToken{}, err
+		return SignedApproval{}, err
 	}
 	if err := validateMissingAccountPolicy(o.Account, missing); err != nil {
-		return ApprovalToken{}, err
+		return SignedApproval{}, err
 	}
 	o.Account, missing = scopedAccount, scopedMissing
 	signer, err := s.signerOrErr()
 	if err != nil {
-		return ApprovalToken{}, err
+		return SignedApproval{}, err
 	}
 	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
-		return ApprovalToken{}, err
+		return SignedApproval{}, err
 	}
 	if mode == "" {
-		return ApprovalToken{}, fmt.Errorf("backend: submit mode is required: %w", domain.ErrInvalid)
+		return SignedApproval{}, fmt.Errorf("backend: submit mode is required: %w", domain.ErrInvalid)
 	}
 	if mode != SubmitModeHold && mode != SubmitModeImmediate {
-		return ApprovalToken{}, fmt.Errorf("backend: submit mode %q: %w", mode, domain.ErrInvalid)
+		return SignedApproval{}, fmt.Errorf("backend: submit mode %q: %w", mode, domain.ErrInvalid)
 	}
 
 	// The account id was validated above, before the engine lane is entered. The
@@ -373,7 +374,7 @@ func (s *Service) submitOrderToken(
 	n := s.node
 	submitApprovalID, err := newNonce()
 	if err != nil {
-		return ApprovalToken{}, err
+		return SignedApproval{}, err
 	}
 
 	var (
@@ -448,9 +449,9 @@ func (s *Service) submitOrderToken(
 				ctx, n, o.Account, domain.AuditActionApprovalFailed,
 				fmt.Sprintf("submit attestation failed: %v", err),
 			); auditErr != nil {
-				return ApprovalToken{}, errors.Join(err, auditErr)
+				return SignedApproval{}, errors.Join(err, auditErr)
 			}
-			return ApprovalToken{}, err
+			return SignedApproval{}, err
 		}
 		accepted = result.Accepted
 		rejects = result.Rejects
@@ -531,16 +532,16 @@ func (s *Service) submitOrderToken(
 				ctx, n, o.Account, domain.AuditActionApprovalFailed,
 				fmt.Sprintf("submit attestation failed: %v", err),
 			); auditErr != nil {
-				return ApprovalToken{}, errors.Join(err, auditErr)
+				return SignedApproval{}, errors.Join(err, auditErr)
 			}
-			return ApprovalToken{}, err
+			return SignedApproval{}, err
 		}
 		accepted = result.Accepted
 		rejects = result.Rejects
 	}
 
-	if issued.Token == "" {
-		return ApprovalToken{}, missingAttestationError(
+	if issued.SignedAttestation == "" {
+		return SignedApproval{}, missingAttestationError(
 			domain.AttestationRequestSubmit)
 	}
 	if accepted {
@@ -563,8 +564,8 @@ func (s *Service) submitOrderToken(
 		)
 	}
 
-	return ApprovalToken{
-		Token:           issued.Token,
+	return SignedApproval{
+		SignedApproval:  issued.SignedAttestation,
 		KeyID:           issued.KeyID,
 		OrderExternalID: order.ExternalID.String(),
 		Verdict:         verdict,
@@ -574,7 +575,7 @@ func (s *Service) submitOrderToken(
 }
 
 // SubmitDropCopyOrder submits one non-enforcing pre-trade order without ever
-// creating an approval token or lifecycle attestation. A caller-supplied
+// creating a signed approval or lifecycle attestation. A caller-supplied
 // external id is preserved; when omitted, the store assigns one. Duplicate ids
 // follow the ordinary unique-store conflict path. A drop-copy reports an
 // execution that already happened, so it can never reject a missing account:
@@ -594,7 +595,7 @@ func (s *Service) SubmitDropCopyOrder(
 	if err != nil {
 		return domain.Order{}, err
 	}
-	// See submitOrderToken: identity format is a seam check, not a surface check.
+	// See submitOrder: identity format is a seam check, not a surface check.
 	if err := domain.ValidateAccountID(scopedAccount); err != nil {
 		return domain.Order{}, err
 	}
@@ -697,7 +698,7 @@ func (s *Service) ConfirmExecution(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
-	if att.Token == "" {
+	if att.SignedAttestation == "" {
 		var ok bool
 		att, ok, err = persistedEventAttestation(
 			ctx, n, order, domain.OrderEventConfirmed)
@@ -821,7 +822,7 @@ func (s *Service) CancelOrder(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
-	if att.Token == "" {
+	if att.SignedAttestation == "" {
 		return domain.Order{}, Attestation{}, missingAttestationError(
 			domain.AttestationRequestCancel)
 	}
@@ -861,7 +862,7 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 	for i := range stored.Events {
 		event := &stored.Events[i]
 		if event.Type == domain.OrderEventPreTradeAccepted &&
-			event.Attestation != nil && event.Attestation.Token != "" {
+			event.Attestation != nil && event.Attestation.SignedEnvelope != "" {
 			recorded = event
 			break
 		}
@@ -877,7 +878,7 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 		return domain.ApprovalPayload{}, nil, err
 	}
 	result, err := signer.Verify(
-		ctx, recorded.Attestation.Token, verifyParamsFor(stored.Order),
+		ctx, recorded.Attestation.SignedEnvelope, verifyParamsFor(stored.Order),
 	)
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalid) ||
@@ -1213,7 +1214,7 @@ func attestationBlocks(blocks []domain.AccountBlock) []domain.AttestationBlock {
 
 // verifyParamsFor builds the re-bind expectation from the stored order. The
 // connector contract compares each bound param to the order it will execute; the
-// backend re-binds against the persisted order the token authorises.
+// backend re-binds against the persisted order the approval authorises.
 func verifyParamsFor(order domain.Order) fwsigning.VerifyParams {
 	orderType := "market"
 	if order.Price != "" {
@@ -1299,7 +1300,7 @@ func (s *Service) auditSigning(ctx context.Context, action domain.AuditAction, d
 }
 
 // auditApproval records an approval issue/confirm/cancel action on the given
-// node, stamped with the account the token authorises.
+// node, stamped with the account the approval authorises.
 func (s *Service) auditApproval(
 	ctx context.Context,
 	n node.Node,
@@ -1324,13 +1325,14 @@ func (s *Service) auditApproval(
 // --- Event attestation (shared across submit / report / confirm / cancel) ---
 
 // Attestation is the backend-facing result of stamping a signed attestation onto
-// an order-history event. Surface layers return Token to the caller so a robot
-// receives its proof. Token is the base64url-encoded signed (or eSign-off)
-// envelope; KeyID is the signing key id (empty under eSign-off); Signed reports
-// whether the envelope carries a signature.
+// an order-history event. Surface layers return SignedAttestation to the caller
+// so a robot receives its proof. SignedAttestation is the base64url-encoded
+// signed (or eSign-off) envelope; KeyID is the signing key id (empty under
+// eSign-off); Signed reports whether the envelope carries a signature.
 type Attestation struct {
-	// Token is the base64url-encoded attestation envelope; empty when none.
-	Token string
+	// SignedAttestation is the base64url-encoded attestation envelope; empty
+	// when none.
+	SignedAttestation string
 	// KeyID is the signing key id; empty under eSign-off or when none.
 	KeyID string
 	// EventExternalID is the opaque handle of the attested order-history event.

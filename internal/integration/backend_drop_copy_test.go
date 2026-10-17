@@ -84,16 +84,16 @@ func TestService_SubmitDropCopyOrderRequiresMissingAccountChoice(t *testing.T) {
 	}
 }
 
-// TestService_SubmitOrderTokenRequiresMissingAccountChoice covers the same
+// TestService_SubmitOrderRequiresMissingAccountChoice covers the same
 // boundary for the signed submit path.
-func TestService_SubmitOrderTokenRequiresMissingAccountChoice(t *testing.T) {
+func TestService_SubmitOrderRequiresMissingAccountChoice(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
 
-	if _, err := svc.SubmitOrderToken(
+	if _, err := svc.SubmitOrder(
 		systemCtx(), sampleOrder(), backend.SubmitModeHold, "",
 	); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SubmitOrderToken(empty) = %v, want ErrInvalid", err)
+		t.Fatalf("SubmitOrder(empty) = %v, want ErrInvalid", err)
 	}
 	if len(fn.missingAccountCalls) != 0 {
 		t.Fatalf("node saw %+v, want no submit", fn.missingAccountCalls)
@@ -130,16 +130,16 @@ func TestService_SubmitDropCopyOrderGeneratesExternalIDWhenAbsent(t *testing.T) 
 	}
 }
 
-func TestService_SubmitOrderTokenRefusesDropCopy(t *testing.T) {
+func TestService_SubmitOrderRefusesDropCopy(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
 	order := dropCopyOrder(mdID("signed-drop-copy"))
 	order.DropCopy = true
 
-	if _, err := svc.SubmitOrderToken(
+	if _, err := svc.SubmitOrder(
 		systemCtx(), order, "hold", domain.MissingAccountCreate,
 	); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SubmitOrderToken error = %v, want ErrInvalid", err)
+		t.Fatalf("SubmitOrder error = %v, want ErrInvalid", err)
 	}
 	if len(fn.orders) != 0 || len(fn.attestations) != 0 {
 		t.Fatalf("orders = %+v, attestations = %+v, want none", fn.orders, fn.attestations)
@@ -212,7 +212,7 @@ func TestService_DropCopyExecutionReportRemainsUnsignedAndKeepsCaller(t *testing
 	if result.Persistence == nil {
 		t.Fatal("ApplyExecutionReport persistence = nil")
 	}
-	if attestation.Token != "" || attestation.Signed ||
+	if attestation.SignedAttestation != "" || attestation.Signed ||
 		len(signer.signed) != 0 || len(fn.attestations) != 0 ||
 		len(fn.persistAttestationCalls) != 0 {
 		t.Fatalf(

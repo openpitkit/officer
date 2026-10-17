@@ -1055,7 +1055,7 @@ func toOrderApprovalDTO(detail domain.OrderDetail) *orderApprovalDTO {
 		return nil
 	}
 	return &orderApprovalDTO{
-		SignedEnvelope: att.Token,
+		SignedEnvelope: att.SignedEnvelope,
 		KeyID:          att.KeyID,
 		Alg:            att.Alg,
 		Mode:           att.Mode,
@@ -1415,12 +1415,12 @@ func submitOrderHandler(
 			o.ExternalID = id
 		}
 		mode := strings.TrimSpace(in.Mode)
-		res, err := src.SubmitOrderToken(ctx, o, mode, missing)
+		res, err := src.SubmitOrder(ctx, o, mode, missing)
 		if err != nil {
 			return "", submitOrderOutput{}, toolError(err)
 		}
 		out := submitOrderOutput{
-			SignedApproval:  res.Token,
+			SignedApproval:  res.SignedApproval,
 			KeyID:           res.KeyID,
 			OrderExternalID: res.OrderExternalID,
 			Verdict:         res.Verdict,
@@ -1512,7 +1512,7 @@ func confirmExecutionHandler(
 		out := confirmExecutionOutput{
 			OrderExternalID:   order.ExternalID.String(),
 			Status:            string(order.Status),
-			SignedAttestation: att.Token,
+			SignedAttestation: att.SignedAttestation,
 			KeyID:             att.KeyID,
 		}
 		return fmt.Sprintf(
@@ -1547,7 +1547,7 @@ func cancelHandler(
 		out := cancelOutput{
 			OrderExternalID:   order.ExternalID.String(),
 			Status:            string(order.Status),
-			SignedAttestation: att.Token,
+			SignedAttestation: att.SignedAttestation,
 			KeyID:             att.KeyID,
 		}
 		return fmt.Sprintf(
@@ -2097,10 +2097,10 @@ func sendPaperOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[sendPa
 		if err != nil {
 			return "", sendPaperOrderOutput{}, toolError(err)
 		}
-		tok := result.Token
+		approval := result.Approval
 		out := sendPaperOrderOutput{
-			SignedApproval: tok.Token, KeyID: tok.KeyID, OrderExternalID: tok.OrderExternalID,
-			Verdict: tok.Verdict, Reasons: toMCPRejectDTOs(tok.Reasons),
+			SignedApproval: approval.SignedApproval, KeyID: approval.KeyID, OrderExternalID: approval.OrderExternalID,
+			Verdict: approval.Verdict, Reasons: toMCPRejectDTOs(approval.Reasons),
 		}
 		if result.Send != nil {
 			out.VenueSend = &venueSendDTO{Status: result.Send.Status, Error: result.Send.Error}
@@ -2119,6 +2119,6 @@ func sendPaperOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[sendPa
 				outcome += ": " + result.Send.Error
 			}
 		}
-		return fmt.Sprintf("order %s: %s", tok.OrderExternalID, outcome), out, nil
+		return fmt.Sprintf("order %s: %s", approval.OrderExternalID, outcome), out, nil
 	}
 }

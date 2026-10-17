@@ -187,10 +187,10 @@ func (f *fakeSource) SetMarketDataInstrumentEnabled(
 
 // fakeSource stubs for the order-approval methods. They are never called in
 // the existing tests; approval_test.go overrides them via approvalFakeSource.
-func (f *fakeSource) SubmitOrderToken(
+func (f *fakeSource) SubmitOrder(
 	_ context.Context, _ domain.Order, _ string, _ domain.MissingAccountPolicy,
-) (frameworkmcp.SubmitOrderTokenResult, error) {
-	return frameworkmcp.SubmitOrderTokenResult{}, nil
+) (frameworkmcp.SubmitOrderResult, error) {
+	return frameworkmcp.SubmitOrderResult{}, nil
 }
 
 func (f *fakeSource) SubmitDropCopyOrder(
@@ -892,10 +892,10 @@ func (c *captureNSource) SetMarketDataInstrumentEnabled(
 func (c *captureNSource) CommandEnabled(context.Context, string) (bool, error) {
 	return true, nil
 }
-func (c *captureNSource) SubmitOrderToken(
+func (c *captureNSource) SubmitOrder(
 	context.Context, domain.Order, string, domain.MissingAccountPolicy,
-) (frameworkmcp.SubmitOrderTokenResult, error) {
-	return frameworkmcp.SubmitOrderTokenResult{}, nil
+) (frameworkmcp.SubmitOrderResult, error) {
+	return frameworkmcp.SubmitOrderResult{}, nil
 }
 
 func (c *captureNSource) SubmitDropCopyOrder(
@@ -947,12 +947,12 @@ func TestGetOrderHappyPath(t *testing.T) {
 					Order:      orderEID,
 					Type:       domain.OrderEventPreTradeAccepted,
 					Attestation: &domain.EventAttestation{
-						Token:       "eyAPPROVAL",
-						KeyID:       "key-1",
-						Alg:         "ed25519",
-						RequestType: domain.AttestationRequestSubmit,
-						Mode:        "hold",
-						IssuedAt:    "2026-06-11T10:00:00Z",
+						SignedEnvelope: "eyAPPROVAL",
+						KeyID:          "key-1",
+						Alg:            "ed25519",
+						RequestType:    domain.AttestationRequestSubmit,
+						Mode:           "hold",
+						IssuedAt:       "2026-06-11T10:00:00Z",
 					},
 				},
 			},

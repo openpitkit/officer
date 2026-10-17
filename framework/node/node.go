@@ -585,7 +585,7 @@ type Node interface {
 
 	// AppendAudit persists one audit row stamped with the caller. It is the seam
 	// the backend uses to record control-plane actions that have no node-mutating
-	// counterpart (signing-key management, signing config, and approval token
+	// counterpart (signing-key management, signing config, and signed approval
 	// issue/confirm/cancel). The entry's Actor and Source are taken from caller.
 	AppendAudit(ctx context.Context, entry store.AuditEntry, caller domain.Caller) error
 

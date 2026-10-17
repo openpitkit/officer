@@ -515,11 +515,11 @@ func TestSendPaperOrderResponse(t *testing.T) {
 	for _, status := range []string{"acknowledged", "refused", "unknown", "reject"} {
 		t.Run(status, func(t *testing.T) {
 			svc := &fakeService{paperSendResult: backend.VenueSendResult{
-				Token: backend.ApprovalToken{Token: "approval", KeyID: "key",
+				Approval: backend.SignedApproval{SignedApproval: "approval", KeyID: "key",
 					OrderExternalID: "order", Verdict: "accept"}}}
 			want := `{"signedApproval":"approval","keyId":"key","id":"order","verdict":"accept"`
 			if status == "reject" {
-				svc.paperSendResult.Token.Verdict = "reject"
+				svc.paperSendResult.Approval.Verdict = "reject"
 				want = strings.Replace(want, `"accept"`, `"reject"`, 1) + `}`
 			} else {
 				svc.paperSendResult.Send = &backend.VenueSend{Status: status}

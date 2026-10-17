@@ -151,7 +151,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, log
 	register(registry, "signing.keys.public.get", http.MethodGet, "/signing/keys/{keyId}/public", handleGetSigningKeyPublic(svc))
 	register(registry, "signing.config.get", http.MethodGet, "/signing/config", handleGetSigningConfig(svc))
 	register(registry, "signing.config.put", http.MethodPut, "/signing/config", handleSetSigningConfig(svc))
-	register(registry, "orders.submit-token.post", http.MethodPost, "/orders/submit", handleSubmitOrderToken(svc))
+	register(registry, "orders.submit.post", http.MethodPost, "/orders/submit", handleSubmitOrder(svc))
 	register(registry, "orders.send-paper.post", http.MethodPost, "/orders/send-paper", handleSendPaperOrder(svc))
 	register(registry, "orders.submit-drop-copy.post", http.MethodPost, "/orders/drop-copy/submit", handleSubmitDropCopyOrder(svc))
 	register(registry, "orders.confirm.post", http.MethodPost, "/orders/{id}/confirm", handleConfirmExecution(svc))

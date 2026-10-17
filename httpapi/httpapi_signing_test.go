@@ -330,18 +330,18 @@ func TestSetSigningConfig_RequiresNoESign(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderToken_HappyPath verifies POST /orders/submit CREATES the order
+// TestSubmitOrder_HappyPath verifies POST /orders/submit CREATES the order
 // from a supplied external id and returns that id in the approval envelope. The
 // fake mirrors the real create-once behavior: it does not echo a pre-stored id,
 // so the returned id is the one the caller supplied - and it is the id a later
 // confirm resolves, proving submit created exactly one order.
-func TestSubmitOrderToken_HappyPath(t *testing.T) {
+func TestSubmitOrder_HappyPath(t *testing.T) {
 	supplied := extID("order-1").String()
 	svc := &fakeService{
-		approvalToken: backend.ApprovalToken{
-			Token:  "signed-envelope-test-value",
-			KeyID:  "key-1",
-			Signed: true,
+		signedApproval: backend.SignedApproval{
+			SignedApproval: "signed-envelope-test-value",
+			KeyID:          "key-1",
+			Signed:         true,
 		},
 	}
 	body, _ := json.Marshal(map[string]any{
@@ -395,11 +395,11 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	}
 }
 
-func TestSubmitOrderToken_RiskRejectReturnsSignedDecision(t *testing.T) {
+func TestSubmitOrder_RiskRejectReturnsSignedDecision(t *testing.T) {
 	supplied := extID("order-reject").String()
 	svc := &fakeService{
-		approvalToken: backend.ApprovalToken{
-			Token:           "reject-envelope",
+		signedApproval: backend.SignedApproval{
+			SignedApproval:  "reject-envelope",
 			KeyID:           "key-1",
 			OrderExternalID: supplied,
 			Verdict:         "reject",
@@ -446,11 +446,11 @@ func TestSubmitOrderToken_RiskRejectReturnsSignedDecision(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderToken_GeneratesWhenAbsent verifies that omitting id has
+// TestSubmitOrder_GeneratesWhenAbsent verifies that omitting id has
 // the server generate and return a 22-char id.
-func TestSubmitOrderToken_GeneratesWhenAbsent(t *testing.T) {
+func TestSubmitOrder_GeneratesWhenAbsent(t *testing.T) {
 	svc := &fakeService{
-		approvalToken: backend.ApprovalToken{Token: "env", KeyID: "key-1"},
+		signedApproval: backend.SignedApproval{SignedApproval: "env", KeyID: "key-1"},
 	}
 	body, _ := json.Marshal(map[string]any{
 		"account":     "acc-1",
@@ -481,9 +481,9 @@ func TestSubmitOrderToken_GeneratesWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderToken_DuplicateConflict verifies a duplicate supplied id yields
+// TestSubmitOrder_DuplicateConflict verifies a duplicate supplied id yields
 // 409 (the backend rejects with domain.ErrAlreadyExists).
-func TestSubmitOrderToken_DuplicateConflict(t *testing.T) {
+func TestSubmitOrder_DuplicateConflict(t *testing.T) {
 	svc := &fakeService{signingErr: domain.ErrAlreadyExists}
 	body, _ := json.Marshal(map[string]any{
 		"id":          extID("order-1").String(),
@@ -512,9 +512,9 @@ func TestSubmitOrderToken_DuplicateConflict(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderToken_OpaqueID verifies a caller-supplied id is accepted
+// TestSubmitOrder_OpaqueID verifies a caller-supplied id is accepted
 // verbatim without a base64url shape requirement.
-func TestSubmitOrderToken_OpaqueID(t *testing.T) {
+func TestSubmitOrder_OpaqueID(t *testing.T) {
 	svc := &fakeService{}
 	supplied := "not-a-valid-external-id"
 	body, _ := json.Marshal(map[string]any{
@@ -542,9 +542,9 @@ func TestSubmitOrderToken_OpaqueID(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderToken_BadMode verifies that an unrecognised mode yields 400
+// TestSubmitOrder_BadMode verifies that an unrecognised mode yields 400
 // with code "signing".
-func TestSubmitOrderToken_BadMode(t *testing.T) {
+func TestSubmitOrder_BadMode(t *testing.T) {
 	svc := &fakeService{}
 	body, _ := json.Marshal(map[string]any{"account": "acc-1", "mode": "unsupported"})
 	r, err := newRouter(svc)

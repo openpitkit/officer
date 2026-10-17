@@ -1173,14 +1173,14 @@ const (
 
 // EventAttestation is the persisted signed attestation over one trading request
 // and its recorded result, bound 1:1 to the order-history event that records it.
-// Token is the exact base64url envelope bytes issued by the signer;
+// SignedEnvelope is the exact base64url envelope bytes issued by the signer;
 // the remaining fields are the envelope metadata carried for read-back without
-// decoding the token. KeyID references the signing key by its own UUID handle.
+// decoding the envelope. KeyID references the signing key by its own UUID handle.
 // IssuedAt is an RFC3339Nano UTC string.
 type EventAttestation struct {
-	// Token is the exact base64url-encoded signed attestation envelope.
-	Token string
-	// KeyID is the signing key UUID that produced Token.
+	// SignedEnvelope is the exact base64url-encoded signed attestation envelope.
+	SignedEnvelope string
+	// KeyID is the signing key UUID that produced SignedEnvelope.
 	KeyID string
 	// Alg is the envelope signing algorithm ("ed25519" | "none").
 	Alg string
@@ -1587,7 +1587,7 @@ type AttestationBlock struct {
 }
 
 // ApprovalPayload is the canonical signed attestation payload embedded in a
-// token. It binds a trading request (its material params) and its recorded
+// signed envelope. It binds a trading request (its material params) and its recorded
 // result, keyed to the order-history event that recorded it, so a verifier can
 // prove "for THIS request Officer recorded THIS result". Field
 // declaration order is the canonical wire order (Go json.Marshal emits fields in
@@ -1606,12 +1606,12 @@ type ApprovalPayload struct {
 	RequestType string `json:"requestType,omitempty"`
 	Mode        string `json:"mode"` // "hold" | "immediate"
 	// OrderExternalID is the order's opaque public handle, never the internal
-	// surrogate key: a monotonic surrogate in a client-facing token would leak
+	// surrogate key: a monotonic surrogate in a client-facing envelope would leak
 	// record counts/existence.
 	OrderExternalID string `json:"orderId,omitempty"`
 	// EventExternalID is the opaque public handle of the order-history event this
-	// attestation is bound 1:1 to. Empty on a submit token issued before the
-	// event id is known (kept omitempty so those tokens stay deterministic).
+	// attestation is bound 1:1 to. Empty on a submit envelope issued before the
+	// event id is known (kept omitempty so those envelopes stay deterministic).
 	EventExternalID string `json:"eventId,omitempty"`
 
 	// Bound order params - connector re-binds against the order it executes.
@@ -1651,7 +1651,7 @@ type ApprovalPayload struct {
 	RejectDetails string `json:"rejectDetails,omitempty"`
 
 	// Caller who triggered the request; empty when none was recorded. Appended
-	// with omitempty so a submit token with no principal stays deterministic.
+	// with omitempty so a submit envelope with no principal stays deterministic.
 	Principal string `json:"principal,omitempty"`
 
 	// ExecutionReport is the audit-safe original report input for an execution

@@ -250,7 +250,7 @@ func seedAccountOperationalRows(
 		t.Fatalf("event id: %v", err)
 	}
 	exec(`INSERT INTO event_attestation
-		(event_id, token, alg_id, request_type_id, mode_id, issued_at)
+		(event_id, signed_envelope, alg_id, request_type_id, mode_id, issued_at)
 		VALUES (?, 'unsigned',
 		 (SELECT id FROM attestation_alg WHERE code = 'none'),
 		 (SELECT id FROM attestation_request_type WHERE code = 'submit'),

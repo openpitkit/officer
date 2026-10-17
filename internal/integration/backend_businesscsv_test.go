@@ -65,10 +65,10 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
 				t.Helper()
 				reset()
-				if _, err := svc.SubmitOrderToken(
+				if _, err := svc.SubmitOrder(
 					systemCtx(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate,
 				); err != nil {
-					t.Fatalf("SubmitOrderToken workflow: %v", err)
+					t.Fatalf("SubmitOrder workflow: %v", err)
 				}
 				// One fetch: the attest read-back that binds the verdict event.
 				return 1
@@ -79,10 +79,10 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
 				t.Helper()
 				reset()
-				if _, err := svc.SubmitOrderToken(
+				if _, err := svc.SubmitOrder(
 					systemCtx(), sampleOrder(), backend.SubmitModeImmediate, domain.MissingAccountCreate,
 				); err != nil {
-					t.Fatalf("SubmitOrderToken immediate: %v", err)
+					t.Fatalf("SubmitOrder immediate: %v", err)
 				}
 				// One fetch: the attest read-back that binds the verdict event.
 				return 1
@@ -121,7 +121,7 @@ func TestService_OrderFlowsFetchAtMostOnce(t *testing.T) {
 				if err != nil {
 					t.Fatalf("idempotent confirm: %v", err)
 				}
-				if order.Status != domain.OrderStatusCommitted || att.Token == "" {
+				if order.Status != domain.OrderStatusCommitted || att.SignedAttestation == "" {
 					t.Fatalf("idempotent confirm = %+v att=%+v, want unchanged status with attestation",
 						order, att)
 				}

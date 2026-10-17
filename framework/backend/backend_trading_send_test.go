@@ -158,7 +158,7 @@ func (s *paperSendTestSigner) Sign(payload domain.ApprovalPayload) (string, erro
 	if payload.RequestType == string(domain.AttestationRequestSubmit) {
 		s.holdPayload = payload
 	}
-	return "paper-approval-token", nil
+	return "paper-signed-approval", nil
 }
 
 func (s *paperSendTestSigner) Verify(context.Context, string, fwsigning.VerifyParams) (fwsigning.VerifyResult, error) {
@@ -441,9 +441,9 @@ func TestSendPaperOrderPreTrade(t *testing.T) {
 				verdict = "reject"
 				reasons = []domain.OrderReject{{Code: "order_size_limit", Reason: "too large"}}
 			}
-			want := ApprovalToken{Token: "paper-approval-token", KeyID: "paper-key", OrderExternalID: "generated-paper-order", Verdict: verdict, Reasons: reasons, Signed: true}
-			if err != nil || !reflect.DeepEqual(got.Token, want) || signer.payload.Mode != SubmitModeHold {
-				t.Fatalf("approval = %+v, err=%v mode=%s", got.Token, err, signer.payload.Mode)
+			want := SignedApproval{SignedApproval: "paper-signed-approval", KeyID: "paper-key", OrderExternalID: "generated-paper-order", Verdict: verdict, Reasons: reasons, Signed: true}
+			if err != nil || !reflect.DeepEqual(got.Approval, want) || signer.payload.Mode != SubmitModeHold {
+				t.Fatalf("approval = %+v, err=%v mode=%s", got.Approval, err, signer.payload.Mode)
 			}
 			if name == "rejected" {
 				if got.Send != nil || len(rt.sends) != 0 || n.reads != 0 {
@@ -490,7 +490,7 @@ func TestSendPaperOrderSend(t *testing.T) {
 				rt.cancel = cancel
 			}
 			got, err := s.SendPaperOrder(ctx, paperSendTestOrder(), SendDestination{Route: "{}"})
-			if err != nil || got.Token.OrderExternalID != "draft-order" || got.Token.Token != "paper-approval-token" || got.Send == nil || got.Send.Status != tc.want || !reflect.DeepEqual(got.Send.Order, n.venue) || n.reads != 1 || n.cancels != 0 {
+			if err != nil || got.Approval.OrderExternalID != "draft-order" || got.Approval.SignedApproval != "paper-signed-approval" || got.Send == nil || got.Send.Status != tc.want || !reflect.DeepEqual(got.Send.Order, n.venue) || n.reads != 1 || n.cancels != 0 {
 				t.Fatalf("send result=%+v send=%+v err=%v reads=%d", got, got.Send, err, n.reads)
 			}
 			message := ""
@@ -536,7 +536,7 @@ func TestSendPaperOrderNotSent(t *testing.T) {
 				rt.cancel = cancel
 			}
 			got, err := s.SendPaperOrder(ctx, paperSendTestOrder(), SendDestination{Route: "{}"})
-			if err != nil || got.Token.OrderExternalID != "draft-order" || got.Token.Token != "paper-approval-token" || got.Send == nil || n.cancels != 1 {
+			if err != nil || got.Approval.OrderExternalID != "draft-order" || got.Approval.SignedApproval != "paper-signed-approval" || got.Send == nil || n.cancels != 1 {
 				t.Fatalf("not sent result=%+v send=%+v err=%v cancels=%d", got, got.Send, err, n.cancels)
 			}
 			if tc.cancelFails {
@@ -782,7 +782,7 @@ func TestSendPaperOrderVenueRead(t *testing.T) {
 				n.venueErr = errors.New("store unavailable")
 			}
 			got, err := s.SendPaperOrder(systemCtx(), paperSendTestOrder(), SendDestination{Route: "{}"})
-			if err != nil || got.Send == nil || got.Token.OrderExternalID != "draft-order" || got.Send.Order != nil || n.reads != 1 {
+			if err != nil || got.Send == nil || got.Approval.OrderExternalID != "draft-order" || got.Send.Order != nil || n.reads != 1 {
 				t.Fatalf("venue read result=%+v send=%+v err=%v", got, got.Send, err)
 			}
 			if name == "read_error" {

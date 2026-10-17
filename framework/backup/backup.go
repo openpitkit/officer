@@ -41,7 +41,7 @@ import (
 )
 
 // FormatVersion is the current portable archive shape.
-const FormatVersion = 3
+const FormatVersion = 4
 
 const (
 	// CredentialFormPlaintext declares that archived credentials are plaintext.

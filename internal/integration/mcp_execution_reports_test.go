@@ -75,7 +75,7 @@ func reportsAttestedBy(att frameworkmcp.Attestation) recordedFixture {
 
 // signedReportAttestation is the attestation of a report on an ordinary order.
 var signedReportAttestation = frameworkmcp.Attestation{
-	Token: "signed-envelope", KeyID: "key-1", Signed: true,
+	SignedAttestation: "signed-envelope", KeyID: "key-1", Signed: true,
 }
 
 // reportResultBody is the REST result body of every reportsAttestedBy report.
@@ -112,7 +112,7 @@ func TestReportFillSuccess(t *testing.T) {
 			`{"id":"report-1","result":` + reportResultBody + `,"signedAttestation":"signed-envelope",` +
 				`"attestationKeyId":"key-1","signed":true}`},
 	})
-	runToolSuccess(t, reportsAttestedBy(frameworkmcp.Attestation{Token: "unsigned-envelope"}), []toolSuccessCase{
+	runToolSuccess(t, reportsAttestedBy(frameworkmcp.Attestation{SignedAttestation: "unsigned-envelope"}), []toolSuccessCase{
 		{"report_fill", map[string]any{
 			"order": "ord-1", "status": "cancelled", "commission": map[string]any{"amount": "", "currency": ""},
 		}, []string{"report"}, []any{domain.ExecutionReportInput{

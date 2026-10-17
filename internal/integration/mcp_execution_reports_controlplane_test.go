@@ -321,7 +321,7 @@ func TestReportFillOrdinaryOrderOnControlPlane(t *testing.T) {
 				recorded = append(recorded, event.Attestation)
 			}
 		}
-		if len(recorded) != 1 || recorded[0] == nil || recorded[0].Token != res.SignedAttestation ||
+		if len(recorded) != 1 || recorded[0] == nil || recorded[0].SignedEnvelope != res.SignedAttestation ||
 			recorded[0].KeyID != tc.keyID {
 			t.Fatalf("%s: fill event attestations = %+v, want the reported one", tc.name, recorded)
 		}

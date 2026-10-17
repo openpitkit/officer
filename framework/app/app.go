@@ -56,7 +56,7 @@ type NodeBuilder func(
 	context.Context, store.Store, FatalShutdownHook,
 ) (node.Node, engine.Engine, error)
 
-// SigningFactory builds the approval-token signing service.
+// SigningFactory builds the approval signing service.
 type SigningFactory func(store.RealmStore) (signing.Service, error)
 
 // ServiceFactory builds the framework control plane service over the node.
@@ -120,7 +120,7 @@ func (b *Builder) SetNodeBuilder(builder NodeBuilder) {
 	b.nodeBuilder = builder
 }
 
-// SetSigningFactory sets the approval-token signing implementation hook.
+// SetSigningFactory sets the approval signing implementation hook.
 func (b *Builder) SetSigningFactory(factory SigningFactory) {
 	b.signingFactory = factory
 }

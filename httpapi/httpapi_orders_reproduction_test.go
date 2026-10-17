@@ -151,12 +151,12 @@ func attestationFromToken(t *testing.T, token string) *domain.EventAttestation {
 		t.Fatalf("decode envelope: %v", err)
 	}
 	return &domain.EventAttestation{
-		Token:       token,
-		KeyID:       env.KeyID,
-		Alg:         env.Approval.Alg,
-		RequestType: domain.AttestationRequestType(env.Approval.RequestType),
-		Mode:        env.Approval.Mode,
-		IssuedAt:    env.Approval.IssuedAt,
+		SignedEnvelope: token,
+		KeyID:          env.KeyID,
+		Alg:            env.Approval.Alg,
+		RequestType:    domain.AttestationRequestType(env.Approval.RequestType),
+		Mode:           env.Approval.Mode,
+		IssuedAt:       env.Approval.IssuedAt,
 	}
 }
 

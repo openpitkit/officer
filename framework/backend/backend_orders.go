@@ -215,7 +215,7 @@ func (s *Service) ApplyExecutionReport(
 	if err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
 	}
-	if att.Token == "" {
+	if att.SignedAttestation == "" {
 		return engine.ExecutionReportResult{}, Attestation{},
 			missingAttestationError(domain.AttestationRequestExecutionReport)
 	}

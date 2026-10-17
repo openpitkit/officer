@@ -620,10 +620,10 @@ func TestSendPaperOrderWire(t *testing.T) {
 	for _, status := range []string{"acknowledged", "refused", "unknown", "reject"} {
 		t.Run(status, func(t *testing.T) {
 			src := tradingFixture()
-			src.paperSendResult.Token = backend.ApprovalToken{Token: "approval", KeyID: "key", OrderExternalID: "order", Verdict: "accept"}
+			src.paperSendResult.Approval = backend.SignedApproval{SignedApproval: "approval", KeyID: "key", OrderExternalID: "order", Verdict: "accept"}
 			want := `{"signedApproval":"approval","keyId":"key","id":"order","verdict":"accept"`
 			if status == "reject" {
-				src.paperSendResult.Token.Verdict = "reject"
+				src.paperSendResult.Approval.Verdict = "reject"
 				want = strings.Replace(want, `"accept"`, `"reject"`, 1) + `}`
 			} else {
 				src.paperSendResult.Send = &backend.VenueSend{Status: status}

@@ -479,13 +479,13 @@ func (s *customHostSource) CommandEnabled(context.Context, string) (bool, error)
 	return s.enabled, nil
 }
 
-func (s *customHostSource) SubmitOrderToken(
+func (s *customHostSource) SubmitOrder(
 	context.Context,
 	domain.Order,
 	string,
 	domain.MissingAccountPolicy,
-) (mcp.SubmitOrderTokenResult, error) {
-	return mcp.SubmitOrderTokenResult{}, nil
+) (mcp.SubmitOrderResult, error) {
+	return mcp.SubmitOrderResult{}, nil
 }
 
 func (s *customHostSource) SubmitDropCopyOrder(

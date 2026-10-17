@@ -122,7 +122,7 @@ func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
-	if att.Token == "" || !att.Signed {
+	if att.SignedAttestation == "" || !att.Signed {
 		t.Fatalf("report must return a signed attestation, got %+v", att)
 	}
 	if len(fn.persistAttestationCalls) != 1 {
@@ -139,7 +139,7 @@ func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
 			fill = &detail.Events[i]
 		}
 	}
-	if fill == nil || fill.Attestation == nil || fill.Attestation.Token == "" ||
+	if fill == nil || fill.Attestation == nil || fill.Attestation.SignedEnvelope == "" ||
 		fill.Attestation.Alg != fwsigning.AlgEd25519 {
 		t.Fatalf("report must stamp a signed attestation on the fill event, got %+v", fill)
 	}

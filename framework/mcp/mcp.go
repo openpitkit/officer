@@ -200,15 +200,15 @@ type Source interface {
 	SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error)
 	// CommandEnabled reports whether the operator has the named MCP command enabled.
 	CommandEnabled(ctx context.Context, command string) (bool, error)
-	// SubmitOrderToken runs the pre-trade pipeline and issues an approval token.
+	// SubmitOrder runs the pre-trade pipeline and issues a signed approval.
 	// missing is the caller's explicit choice for an order naming an account that
 	// does not exist yet.
-	SubmitOrderToken(
+	SubmitOrder(
 		ctx context.Context,
 		o domain.Order,
 		mode string,
 		missing domain.MissingAccountPolicy,
-	) (SubmitOrderTokenResult, error)
+	) (SubmitOrderResult, error)
 	// SubmitDropCopyOrder submits through the distinct unsigned operation. missing
 	// accepts only domain.MissingAccountCreate: a drop-copy reports an execution
 	// that already happened, so it cannot refuse an unknown account.
@@ -245,22 +245,23 @@ type Source interface {
 
 // Attestation is the surface-agnostic proof an MCP caller receives for a
 // workflow confirmation, a cancellation or an execution report. It mirrors the
-// fields the HTTP surface exposes; it is the zero value (Token empty) when
-// attestation was skipped or failed best-effort.
+// fields the HTTP surface exposes; it is the zero value (SignedAttestation
+// empty) when attestation was skipped or failed best-effort.
 type Attestation struct {
-	// Token is the base64url-encoded attestation envelope; empty when none.
-	Token string
+	// SignedAttestation is the base64url-encoded attestation envelope; empty
+	// when none.
+	SignedAttestation string
 	// KeyID is the signing key id; empty under eSign-off or when none.
 	KeyID string
 	// Signed reports whether the envelope carries a signature.
 	Signed bool
 }
 
-// SubmitOrderTokenResult is the surface-agnostic result of issuing an approval
-// token.
-type SubmitOrderTokenResult struct {
-	// Token is the base64url-encoded approval envelope.
-	Token string
+// SubmitOrderResult is the surface-agnostic result of issuing a signed
+// approval.
+type SubmitOrderResult struct {
+	// SignedApproval is the base64url-encoded approval envelope.
+	SignedApproval string
 	// KeyID is the signing key id; empty under eSign-off.
 	KeyID string
 	// OrderExternalID is the order's opaque public handle.
@@ -889,22 +890,22 @@ func (s controlPlaneSource) CommandEnabled(ctx context.Context, command string) 
 	return s.cp.CommandEnabled(ctx, command)
 }
 
-func (s controlPlaneSource) SubmitOrderToken(
+func (s controlPlaneSource) SubmitOrder(
 	ctx context.Context,
 	o domain.Order,
 	mode string,
 	missing domain.MissingAccountPolicy,
-) (SubmitOrderTokenResult, error) {
-	tok, err := s.cp.SubmitOrderToken(ctx, o, mode, missing)
+) (SubmitOrderResult, error) {
+	approval, err := s.cp.SubmitOrder(ctx, o, mode, missing)
 	if err != nil {
-		return SubmitOrderTokenResult{}, err
+		return SubmitOrderResult{}, err
 	}
-	return SubmitOrderTokenResult{
-		Token:           tok.Token,
-		KeyID:           tok.KeyID,
-		OrderExternalID: tok.OrderExternalID,
-		Verdict:         tok.Verdict,
-		Reasons:         tok.Reasons,
+	return SubmitOrderResult{
+		SignedApproval:  approval.SignedApproval,
+		KeyID:           approval.KeyID,
+		OrderExternalID: approval.OrderExternalID,
+		Verdict:         approval.Verdict,
+		Reasons:         approval.Reasons,
 	}, nil
 }
 
@@ -954,12 +955,13 @@ func (s controlPlaneSource) ApplyExecutionReport(
 }
 
 // attestationFromBackend maps the backend attestation onto the surface-agnostic
-// MCP carrier, mirroring the token and key id the HTTP surface exposes.
+// MCP carrier, mirroring the signed attestation and key id the HTTP surface
+// exposes.
 func attestationFromBackend(att backend.Attestation) Attestation {
 	return Attestation{
-		Token:  att.Token,
-		KeyID:  att.KeyID,
-		Signed: att.Signed,
+		SignedAttestation: att.SignedAttestation,
+		KeyID:             att.KeyID,
+		Signed:            att.Signed,
 	}
 }
 

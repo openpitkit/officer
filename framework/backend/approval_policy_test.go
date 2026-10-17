@@ -125,9 +125,9 @@ func (r *shortcutRecorder) AppendAudit(context.Context, store.AuditEntry, domain
 type envelopeSigner struct{ fwsigning.Service }
 
 func (envelopeSigner) Verify(
-	_ context.Context, token string, _ fwsigning.VerifyParams,
+	_ context.Context, envelope string, _ fwsigning.VerifyParams,
 ) (fwsigning.VerifyResult, error) {
-	env, err := fwsigning.DecodeEnvelope(token)
+	env, err := fwsigning.DecodeEnvelope(envelope)
 	if err != nil {
 		return fwsigning.VerifyResult{}, err
 	}
@@ -162,7 +162,7 @@ func TestImmediateApprovalIsNoShortcut(t *testing.T) {
 	payload.RequestType = string(domain.AttestationRequestSubmit)
 	payload.EventExternalID = eventID.String()
 	payload.Alg = fwsigning.AlgNone
-	token, err := fwsigning.BuildEnvelope(fwsigning.Envelope{
+	envelope, err := fwsigning.BuildEnvelope(fwsigning.Envelope{
 		Approval: payload, Alg: fwsigning.AlgNone,
 	})
 	if err != nil {
@@ -175,10 +175,10 @@ func TestImmediateApprovalIsNoShortcut(t *testing.T) {
 			Order:      order.ExternalID,
 			Type:       domain.OrderEventPreTradeAccepted,
 			Attestation: &domain.EventAttestation{
-				Token:       token,
-				Alg:         fwsigning.AlgNone,
-				RequestType: domain.AttestationRequestSubmit,
-				Mode:        SubmitModeImmediate,
+				SignedEnvelope: envelope,
+				Alg:            fwsigning.AlgNone,
+				RequestType:    domain.AttestationRequestSubmit,
+				Mode:           SubmitModeImmediate,
 			},
 		}},
 	}

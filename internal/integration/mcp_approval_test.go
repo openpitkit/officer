@@ -37,7 +37,7 @@ const testOrderEID = "b3JkZXItZXh0ZXJuYWwtMQ"
 type approvalFakeSource struct {
 	fakeSource
 
-	submitResult   frameworkmcp.SubmitOrderTokenResult
+	submitResult   frameworkmcp.SubmitOrderResult
 	dropCopyResult frameworkmcp.SubmitDropCopyOrderResult
 	submitErr      error
 	submitCalls    []submitCall
@@ -71,10 +71,10 @@ type cancelCallRecord struct {
 	reason          string
 }
 
-func (f *approvalFakeSource) SubmitOrderToken(
+func (f *approvalFakeSource) SubmitOrder(
 	_ context.Context, o domain.Order, mode string,
 	missing domain.MissingAccountPolicy,
-) (frameworkmcp.SubmitOrderTokenResult, error) {
+) (frameworkmcp.SubmitOrderResult, error) {
 	f.submitCalls = append(f.submitCalls, submitCall{
 		order: o, mode: mode, missing: missing,
 	})
@@ -250,8 +250,8 @@ func TestCancelGateMutatingAccessError(t *testing.T) {
 // fields when the gate is open.
 func TestSubmitOrderHappyPath(t *testing.T) {
 	src := &approvalFakeSource{
-		submitResult: frameworkmcp.SubmitOrderTokenResult{
-			Token:           "eyFAKETOKEN",
+		submitResult: frameworkmcp.SubmitOrderResult{
+			SignedApproval:  "eyFAKETOKEN",
 			KeyID:           "key-1",
 			OrderExternalID: testOrderEID,
 		},
@@ -397,8 +397,8 @@ func TestSubmitDropCopyOrderBackendErrorPreservesEngineMessage(t *testing.T) {
 
 func TestSubmitOrderRiskRejectReturnsDecision(t *testing.T) {
 	src := &approvalFakeSource{
-		submitResult: frameworkmcp.SubmitOrderTokenResult{
-			Token:           "eyREJECT",
+		submitResult: frameworkmcp.SubmitOrderResult{
+			SignedApproval:  "eyREJECT",
 			KeyID:           "key-1",
 			OrderExternalID: testOrderEID,
 			Verdict:         "reject",
@@ -484,7 +484,7 @@ func TestSubmitOrderValidatesMissingAccountPolicy(t *testing.T) {
 // choice through the guarded MCP surface.
 func TestSubmitOrderForwardsRejectMissingAccountPolicy(t *testing.T) {
 	src := &approvalFakeSource{
-		submitResult: frameworkmcp.SubmitOrderTokenResult{OrderExternalID: testOrderEID},
+		submitResult: frameworkmcp.SubmitOrderResult{OrderExternalID: testOrderEID},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Mode:    "immediate",
@@ -552,7 +552,7 @@ func TestSubmitOrderBackendError(t *testing.T) {
 // order as-is and returned in orderExternalId.
 func TestSubmitOrderSuppliedExternalID(t *testing.T) {
 	src := &approvalFakeSource{
-		submitResult: frameworkmcp.SubmitOrderTokenResult{Token: "tok", OrderExternalID: testOrderEID},
+		submitResult: frameworkmcp.SubmitOrderResult{SignedApproval: "tok", OrderExternalID: testOrderEID},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Mode:    "immediate",
@@ -583,7 +583,7 @@ func TestSubmitOrderSuppliedExternalID(t *testing.T) {
 // unset for the backend to generate; the returned id is the one the backend used.
 func TestSubmitOrderGeneratesWhenAbsent(t *testing.T) {
 	src := &approvalFakeSource{
-		submitResult: frameworkmcp.SubmitOrderTokenResult{Token: "tok", OrderExternalID: testOrderEID},
+		submitResult: frameworkmcp.SubmitOrderResult{SignedApproval: "tok", OrderExternalID: testOrderEID},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Mode:    "immediate",

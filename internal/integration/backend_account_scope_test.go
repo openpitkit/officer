@@ -198,7 +198,7 @@ func seedOwnedOrder(t *testing.T, fn *fakeNode, signer *fakeSigner) {
 	order.ExternalID = scopeOwnedOrder
 	order.Account = scopeOwnerAccount
 	seed := newOfficerService(t, fn, nil, signer)
-	if _, err := seed.SubmitOrderToken(
+	if _, err := seed.SubmitOrder(
 		systemCtx(), order, backend.SubmitModeHold, domain.MissingAccountCreate,
 	); err != nil {
 		t.Fatalf("seed owned order: %v", err)
@@ -429,9 +429,9 @@ func accountScopeSites() []scopeSite {
 			reached: []string{`SetBalanceRealizedPnl "scoped-acc" "reject"`},
 		},
 		{
-			name: "SubmitOrderToken",
+			name: "SubmitOrder",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				_, err := svc.SubmitOrderToken(
+				_, err := svc.SubmitOrder(
 					ctx, clientOrder(req), backend.SubmitModeHold, req.policy,
 				)
 				return err

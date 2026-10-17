@@ -200,12 +200,12 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	// addressed by the event's external id; no separate external id to assert
 	// here).
 	if err := rs.PutEventAttestation(ctx, ev.ExternalID, domain.EventAttestation{
-		Token:       "tok",
-		KeyID:       "key-sweep",
-		Alg:         "ed25519",
-		RequestType: domain.AttestationRequestSubmit,
-		Mode:        "immediate",
-		IssuedAt:    "2026-06-26T10:00:00Z",
+		SignedEnvelope: "tok",
+		KeyID:          "key-sweep",
+		Alg:            "ed25519",
+		RequestType:    domain.AttestationRequestSubmit,
+		Mode:           "immediate",
+		IssuedAt:       "2026-06-26T10:00:00Z",
 	}); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}
@@ -414,12 +414,12 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 		t.Fatalf("CreateTrade: %v", err)
 	}
 	if err := rs.PutEventAttestation(ctx, event.ExternalID, domain.EventAttestation{
-		Token:       "tok",
-		KeyID:       "key-cascade",
-		Alg:         "ed25519",
-		RequestType: domain.AttestationRequestSubmit,
-		Mode:        "immediate",
-		IssuedAt:    "2026-06-26T10:00:00Z",
+		SignedEnvelope: "tok",
+		KeyID:          "key-cascade",
+		Alg:            "ed25519",
+		RequestType:    domain.AttestationRequestSubmit,
+		Mode:           "immediate",
+		IssuedAt:       "2026-06-26T10:00:00Z",
 	}); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}

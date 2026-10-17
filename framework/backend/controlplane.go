@@ -245,12 +245,12 @@ type ControlPlane interface {
 	PublicKeyByID(ctx context.Context, keyID, format string) (string, error)
 	GetNoESign(ctx context.Context) (bool, error)
 	SetNoESign(ctx context.Context, off bool) error
-	SubmitOrderToken(
+	SubmitOrder(
 		ctx context.Context,
 		o domain.Order,
 		mode string,
 		missing domain.MissingAccountPolicy,
-	) (ApprovalToken, error)
+	) (SignedApproval, error)
 	SubmitDropCopyOrder(
 		ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 	) (domain.Order, error)

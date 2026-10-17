@@ -181,9 +181,9 @@ type fakeService struct {
 	noESign               bool
 	noESignSet            bool
 	noESignCalls          int
-	approvalToken         backend.ApprovalToken
+	signedApproval        backend.SignedApproval
 	attestation           backend.Attestation
-	submitTokenMode       string
+	submitMode            string
 	signingErr            error
 	// confirmErr/cancelErr inject a resolution failure (e.g. a terminal-order
 	// conflict) into ConfirmExecution/CancelOrder, kept distinct from signingErr so
@@ -201,7 +201,7 @@ type fakeService struct {
 
 	// Captured caller-supplied external ids for the user-create surfaces. The
 	// adjustment id is captured on ApplyAdjustment; the order id is captured on
-	// SubmitOrderToken (which CREATES the order once, mirroring the backend).
+	// SubmitOrder (which CREATES the order once, mirroring the backend).
 	adjustmentExternalID domain.ExternalID
 	submitOrderIn        domain.Order
 
@@ -214,7 +214,7 @@ type fakeService struct {
 	missingAccount domain.MissingAccountPolicy
 
 	// orders submitted-then-resolved, keyed by their used external id, so a fake
-	// SubmitOrderToken can create once and confirm/cancel resolve the same order.
+	// SubmitOrder can create once and confirm/cancel resolve the same order.
 	submittedOrders map[string]domain.Order
 }
 
@@ -948,21 +948,21 @@ func (f *fakeService) SetNoESign(_ context.Context, off bool) error {
 	return f.signingErr
 }
 
-// SubmitOrderToken mirrors the real backend: submit CREATES the order exactly
+// SubmitOrder mirrors the real backend: submit CREATES the order exactly
 // once. It uses the caller-supplied external id when set, otherwise generates a
 // deterministic one, records the created order keyed by that id, and returns an
 // approval envelope whose OrderExternalID is the id actually used - so a later
 // confirm/cancel resolves the same order. When signingErr is set it surfaces
 // before any create, so duplicate/malformed-id rejection can be exercised.
-func (f *fakeService) SubmitOrderToken(
+func (f *fakeService) SubmitOrder(
 	_ context.Context, o domain.Order, mode string,
 	missing domain.MissingAccountPolicy,
-) (backend.ApprovalToken, error) {
-	f.submitTokenMode = mode
+) (backend.SignedApproval, error) {
+	f.submitMode = mode
 	f.submitOrderIn = o
 	f.missingAccount = missing
 	if f.signingErr != nil {
-		return backend.ApprovalToken{}, f.signingErr
+		return backend.SignedApproval{}, f.signingErr
 	}
 	used := o.ExternalID
 	if used.IsZero() {
@@ -973,7 +973,7 @@ func (f *fakeService) SubmitOrderToken(
 		f.submittedOrders = make(map[string]domain.Order)
 	}
 	f.submittedOrders[used.String()] = o
-	tok := f.approvalToken
+	tok := f.signedApproval
 	tok.OrderExternalID = used.String()
 	return tok, nil
 }

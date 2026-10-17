@@ -775,7 +775,7 @@ func toEventAttestationDTO(a *domain.EventAttestation) *eventAttestationDTO {
 		return nil
 	}
 	return &eventAttestationDTO{
-		SignedEnvelope: a.Token,
+		SignedEnvelope: a.SignedEnvelope,
 		KeyID:          a.KeyID,
 		Alg:            a.Alg,
 		RequestType:    string(a.RequestType),
@@ -1138,13 +1138,13 @@ type publicKeyMaterialDTO struct {
 	Key    string `json:"key"`
 }
 
-// submitOrderTokenRequestDTO is the body of POST /orders/submit. Submit creates
+// submitOrderRequestDTO is the body of POST /orders/submit. Submit creates
 // the order from these fields: there is no prior persisting create. ExternalID
 // is the optional caller-supplied opaque public handle; when omitted the server
 // generates and returns one in the response. A supplied id is accepted verbatim
 // and must be unique (a duplicate is a 409); it is never a surrogate or engine
 // id.
-type submitOrderTokenRequestDTO struct {
+type submitOrderRequestDTO struct {
 	ID          string `json:"id,omitempty"`
 	Account     string `json:"account"`
 	BaseAsset   string `json:"baseAsset"`
@@ -1156,7 +1156,7 @@ type submitOrderTokenRequestDTO struct {
 	Mode        string `json:"mode"`
 }
 
-func (d submitOrderTokenRequestDTO) orderFields() submitOrderFieldsDTO {
+func (d submitOrderRequestDTO) orderFields() submitOrderFieldsDTO {
 	return submitOrderFieldsDTO{
 		ID: d.ID, Account: d.Account, BaseAsset: d.BaseAsset,
 		QuoteAsset: d.QuoteAsset, Side: d.Side, AmountKind: d.AmountKind,

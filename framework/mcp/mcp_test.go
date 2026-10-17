@@ -636,13 +636,13 @@ func (s *guardSource) CommandEnabled(context.Context, string) (bool, error) {
 	return s.enabled, nil
 }
 
-func (s *guardSource) SubmitOrderToken(
+func (s *guardSource) SubmitOrder(
 	context.Context,
 	domain.Order,
 	string,
 	domain.MissingAccountPolicy,
-) (SubmitOrderTokenResult, error) {
-	return SubmitOrderTokenResult{}, nil
+) (SubmitOrderResult, error) {
+	return SubmitOrderResult{}, nil
 }
 
 func (s *guardSource) SubmitDropCopyOrder(

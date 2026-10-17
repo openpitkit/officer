@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package signing defines the approval-token signing seam used by the Officer
+// Package signing defines the approval signing seam used by the Officer
 // backend without binding it to a concrete key-management implementation. It
 // also owns the approval envelope wire form: every signer produces it, and every
 // verifier and reproduction reader decodes it.
@@ -40,7 +40,7 @@ const (
 )
 
 // Service is the signing-and-verification seam the backend depends on to issue
-// and check approval tokens. Use ServiceOrUnavailable when a composition point
+// and check signed envelopes. Use ServiceOrUnavailable when a composition point
 // accepts optional signing; there is no allow-all default for signing.
 type Service interface {
 	GenerateKey(ctx context.Context) (domain.SigningKey, error)
@@ -48,16 +48,16 @@ type Service interface {
 	ListKeys(ctx context.Context) ([]domain.SigningKey, error)
 	ActivePublicKey(format string) (string, error)
 	// PublicKeyByID exports the public key bound to keyID in the given format,
-	// resolving it by id rather than by the active flag so a token signed under a
+	// resolving it by id rather than by the active flag so an envelope signed under a
 	// rotated (now inactive) key still yields the key that actually signed it. An
 	// unknown id reports domain.ErrNotFound.
 	PublicKeyByID(ctx context.Context, keyID, format string) (string, error)
 	Fingerprint(pub []byte) string
 	Sign(payload domain.ApprovalPayload) (string, error)
-	// SignNone issues an unsigned token after the implementation reports
+	// SignNone issues an unsigned envelope after the implementation reports
 	// eSign-off via NoESign.
 	SignNone(payload domain.ApprovalPayload) (string, error)
-	Verify(ctx context.Context, token string, expect VerifyParams) (VerifyResult, error)
+	Verify(ctx context.Context, envelope string, expect VerifyParams) (VerifyResult, error)
 	NoESign(ctx context.Context) (bool, error)
 	SetNoESign(ctx context.Context, off bool) error
 	// Reload refreshes cached key state from committed store state after
@@ -152,7 +152,8 @@ func (unavailableService) Reload(context.Context) error {
 	return nil
 }
 
-// VerifyParams are the connector-side expectations a token is re-bound against.
+// VerifyParams are the connector-side expectations an envelope is re-bound
+// against.
 // Empty fields are not checked, except those always present in the payload.
 type VerifyParams struct {
 	OrderExternalID string
@@ -175,8 +176,8 @@ type VerifyResult struct {
 	Signed  bool
 }
 
-// Envelope is the wire form of a signed (or eSign-off) approval token. Signature
-// is omitted under alg "none".
+// Envelope is the wire form of a signed (or eSign-off) approval. Signature is
+// omitted under alg "none".
 type Envelope struct {
 	Approval  domain.ApprovalPayload `json:"approval"`
 	Signature string                 `json:"signature,omitempty"`
@@ -189,7 +190,7 @@ type Envelope struct {
 // twice and compares to assert byte stability.
 //
 // The field order of domain.ApprovalPayload defines the signed form: reordering
-// its fields changes these bytes and invalidates every issued token.
+// its fields changes these bytes and invalidates every issued envelope.
 func CanonicalBytes(payload domain.ApprovalPayload) ([]byte, error) {
 	b1, err := json.Marshal(payload)
 	if err != nil {
@@ -205,7 +206,7 @@ func CanonicalBytes(payload domain.ApprovalPayload) ([]byte, error) {
 	return b1, nil
 }
 
-// BuildEnvelope encodes env to its base64url token form.
+// BuildEnvelope encodes env to its base64url signed-envelope form.
 func BuildEnvelope(env Envelope) (string, error) {
 	raw, err := json.Marshal(env)
 	if err != nil {
@@ -214,11 +215,11 @@ func BuildEnvelope(env Envelope) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// DecodeEnvelope decodes a base64url token back into its envelope.
-func DecodeEnvelope(token string) (Envelope, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
+// DecodeEnvelope decodes a base64url signed envelope back into its Envelope.
+func DecodeEnvelope(envelope string) (Envelope, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(envelope)
 	if err != nil {
-		return Envelope{}, fmt.Errorf("signing: decode token: %w", domain.ErrInvalid)
+		return Envelope{}, fmt.Errorf("signing: decode envelope: %w", domain.ErrInvalid)
 	}
 	var env Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {

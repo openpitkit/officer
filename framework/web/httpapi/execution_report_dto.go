@@ -65,16 +65,18 @@ type ExecutionReportResponseDTO struct {
 }
 
 // ToExecutionReportResponseDTO builds the response of POST
-// /orders/{id}/execution-reports from the recorded engine result and the token,
-// key id and signed flag of the report's attestation, empty and false when the
-// report carries none.
+// /orders/{id}/execution-reports from the recorded engine result and the signed
+// attestation, key id and signed flag of the report's attestation, empty and
+// false when the report carries none.
 func ToExecutionReportResponseDTO(
-	result engine.ExecutionReportResult, token, keyID string, signed bool,
+	result engine.ExecutionReportResult,
+	signedAttestation, keyID string,
+	signed bool,
 ) ExecutionReportResponseDTO {
 	return ExecutionReportResponseDTO{
 		ID:                result.ReportID.String(),
 		Result:            ToExecutionResultDTO(result),
-		SignedAttestation: token,
+		SignedAttestation: signedAttestation,
 		AttestationKeyID:  keyID,
 		Signed:            signed,
 	}

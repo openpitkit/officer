@@ -537,11 +537,11 @@ func handleSendPaperOrder(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		tok := result.Token
+		approval := result.Approval
 		out := sendPaperOrderResponseDTO{signedApprovalDTO: signedApprovalDTO{
-			SignedApproval: tok.Token, KeyID: tok.KeyID,
-			OrderExternalID: tok.OrderExternalID, Verdict: tok.Verdict,
-			Reasons: toOrderRejectDTOs(tok.Reasons),
+			SignedApproval: approval.SignedApproval, KeyID: approval.KeyID,
+			OrderExternalID: approval.OrderExternalID, Verdict: approval.Verdict,
+			Reasons: toOrderRejectDTOs(approval.Reasons),
 		}}
 		if result.Send != nil {
 			out.VenueSend = &venueSendDTO{Status: result.Send.Status,

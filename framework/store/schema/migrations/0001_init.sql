@@ -355,13 +355,13 @@ CREATE INDEX idx_order_events_principal ON order_event (principal_id);
 -- signing_key_id references the signing key surrogate and is RESTRICT so a key
 -- in use cannot be dropped. NULL means an unsigned (eSign-off) envelope.
 CREATE TABLE event_attestation (
-    event_id       INTEGER PRIMARY KEY REFERENCES order_event(id) ON DELETE CASCADE,
-    token          TEXT    NOT NULL,
-    signing_key_id INTEGER REFERENCES signing_key(id) ON DELETE RESTRICT,
-    alg_id         INTEGER NOT NULL REFERENCES attestation_alg(id),
+    event_id        INTEGER PRIMARY KEY REFERENCES order_event(id) ON DELETE CASCADE,
+    signed_envelope TEXT    NOT NULL,
+    signing_key_id  INTEGER REFERENCES signing_key(id) ON DELETE RESTRICT,
+    alg_id          INTEGER NOT NULL REFERENCES attestation_alg(id),
     request_type_id INTEGER NOT NULL REFERENCES attestation_request_type(id),
-    mode_id        INTEGER NOT NULL REFERENCES attestation_mode(id),
-    issued_at      TEXT    NOT NULL
+    mode_id         INTEGER NOT NULL REFERENCES attestation_mode(id),
+    issued_at       TEXT    NOT NULL
 );
 
 CREATE INDEX idx_event_attestations_signing_key ON event_attestation (signing_key_id);

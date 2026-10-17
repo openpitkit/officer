@@ -104,7 +104,7 @@ type SendDestination struct {
 
 // VenueSendResult preserves the pre-trade approval even if sending is unknown.
 type VenueSendResult struct {
-	Token ApprovalToken
+	Approval SignedApproval
 	// Send is nil when the pre-trade verdict is reject.
 	Send *VenueSend
 }
@@ -749,15 +749,15 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 		}
 		return VenueSendResult{}, fmt.Errorf("trading pre-check: %w: %w", err, domain.ErrUpstream)
 	}
-	token, err := s.SubmitOrderToken(ctx, o, SubmitModeHold, domain.MissingAccountReject)
+	approval, err := s.SubmitOrder(ctx, o, SubmitModeHold, domain.MissingAccountReject)
 	if err != nil {
 		return VenueSendResult{}, err
 	}
-	result = VenueSendResult{Token: token}
-	if token.Verdict == "reject" {
+	result = VenueSendResult{Approval: approval}
+	if approval.Verdict == "reject" {
 		return result, nil
 	}
-	orderID := domain.ExternalID(token.OrderExternalID)
+	orderID := domain.ExternalID(approval.OrderExternalID)
 	_, sendErr := s.trading.Send(ctx, orderID, destination)
 	result.Send = &VenueSend{Status: "acknowledged"}
 	if sendErr != nil {

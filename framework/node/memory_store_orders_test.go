@@ -693,7 +693,7 @@ func TestMemoryRealmRecordOrderSubmissionWithAttestationStampsEveryEvent(
 		}
 		offered = append(offered, event.Type)
 		return domain.EventAttestation{
-			Token: "token-" + string(event.Type),
+			SignedEnvelope: "envelope-" + string(event.Type),
 		}, true, nil
 	}
 
@@ -730,9 +730,9 @@ func TestMemoryRealmRecordOrderSubmissionWithAttestationStampsEveryEvent(
 	}
 	for _, event := range detail.Events {
 		if event.Attestation == nil ||
-			event.Attestation.Token != "token-"+string(event.Type) {
+			event.Attestation.SignedEnvelope != "envelope-"+string(event.Type) {
 			t.Fatalf(
-				"event %s attestation = %+v, want its stamped token",
+				"event %s attestation = %+v, want its stamped envelope",
 				event.Type, event.Attestation,
 			)
 		}

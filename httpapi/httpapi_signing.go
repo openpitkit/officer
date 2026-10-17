@@ -191,7 +191,7 @@ func handleSetSigningConfig(svc backend.ControlPlane) http.HandlerFunc {
 
 // --- order approval ---------------------------------------------------------
 
-// handleSubmitOrderToken handles
+// handleSubmitOrder handles
 // POST /api/v1/orders/submit?missingAccount=create|reject. The body carries
 // the order fields, an optional caller-supplied external id, and the submit mode
 // (hold | immediate). The hold wire value is retained for compatibility and
@@ -200,9 +200,9 @@ func handleSetSigningConfig(svc backend.ControlPlane) http.HandlerFunc {
 // order, then issues an approval envelope on accept. The returned id is the one
 // actually used (the supplied one when valid, else a generated one), so
 // confirm/cancel resolve the same order. There is no separate persisting create before submit.
-func handleSubmitOrderToken(svc backend.ControlPlane) http.HandlerFunc {
+func handleSubmitOrder(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req submitOrderTokenRequestDTO
+		var req submitOrderRequestDTO
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
@@ -227,17 +227,17 @@ func handleSubmitOrderToken(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		tok, err := svc.SubmitOrderToken(r.Context(), order, mode, missing)
+		approval, err := svc.SubmitOrder(r.Context(), order, mode, missing)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
 		httpx.WriteJSON(w, http.StatusCreated, signedApprovalDTO{
-			SignedApproval:  tok.Token,
-			KeyID:           tok.KeyID,
-			OrderExternalID: tok.OrderExternalID,
-			Verdict:         tok.Verdict,
-			Reasons:         toOrderRejectDTOs(tok.Reasons),
+			SignedApproval:  approval.SignedApproval,
+			KeyID:           approval.KeyID,
+			OrderExternalID: approval.OrderExternalID,
+			Verdict:         approval.Verdict,
+			Reasons:         toOrderRejectDTOs(approval.Reasons),
 		})
 	}
 }
@@ -329,7 +329,7 @@ func handleConfirmExecution(svc backend.ControlPlane) http.HandlerFunc {
 			Order: httpx.ToOrderDTO(
 				order, presentation.displayPrice, presentation.signed,
 			),
-			SignedAttestation: att.Token,
+			SignedAttestation: att.SignedAttestation,
 			AttestationKeyID:  att.KeyID,
 			Signed:            att.Signed,
 		})
@@ -363,7 +363,7 @@ func handleCancelOrder(svc backend.ControlPlane) http.HandlerFunc {
 			Order: httpx.ToOrderDTO(
 				order, presentation.displayPrice, presentation.signed,
 			),
-			SignedAttestation: att.Token,
+			SignedAttestation: att.SignedAttestation,
 			AttestationKeyID:  att.KeyID,
 			Signed:            att.Signed,
 		})
