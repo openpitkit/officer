@@ -81,6 +81,32 @@ describe("Autocomplete", () => {
     expect(screen.queryByRole("option")).not.toBeInTheDocument();
   });
 
+  it("keeps suggestions open when refocused before the blur delay expires", () => {
+    vi.useFakeTimers();
+    render(<Harness />);
+    const input = openSuggestions("cr");
+
+    fireEvent.blur(input);
+    act(() => {
+      vi.advanceTimersByTime(60);
+    });
+    fireEvent.focus(input);
+    act(() => {
+      vi.advanceTimersByTime(120);
+    });
+    expect(screen.getByRole("option", { name: "crypto" })).toBeInTheDocument();
+
+    fireEvent.blur(input);
+    act(() => {
+      vi.advanceTimersByTime(119);
+    });
+    expect(screen.getByRole("option", { name: "crypto" })).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+  });
+
   it("selects a suggestion clicked while the field has focus", async () => {
     const user = userEvent.setup();
     render(<Harness />);

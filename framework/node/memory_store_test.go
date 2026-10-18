@@ -35,12 +35,13 @@ var (
 )
 
 type memoryStore struct {
-	mu       sync.Mutex
-	realm    *memoryRealm
-	path     string
-	version  int
-	closed   bool
-	resetErr error
+	mu                sync.Mutex
+	realm             *memoryRealm
+	path              string
+	version           int
+	closed            bool
+	resetErr          error
+	resetCommittedErr error
 }
 
 type memoryRealm struct {
@@ -143,7 +144,7 @@ func (s *memoryStore) Reset(context.Context) error {
 		return s.resetErr
 	}
 	s.realm = newMemoryRealm(s)
-	return nil
+	return s.resetCommittedErr
 }
 
 func (s *memoryStore) Close() error {

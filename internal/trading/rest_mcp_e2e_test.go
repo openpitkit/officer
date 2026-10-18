@@ -250,7 +250,8 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 	provider.Build = func(c domain.TradingConnection) (fwtrading.Connector, error) {
 		return newAlpacaConnector(c, venue.URL, "ws"+strings.TrimPrefix(venue.URL, "http")+"/stream")
 	}
-	dbPath := t.TempDir() + "/officer.db"
+	// Persist across app restarts without testing power-loss durability.
+	dbPath := t.TempDir() + "/officer.db?_pragma=journal_mode(MEMORY)&_pragma=synchronous(OFF)"
 	var options []sqlite.Option
 	if sealed {
 		key, err := secret.ParseMasterKey(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)))
@@ -349,7 +350,8 @@ func (f *tradingE2E) rest(method, path string, body any, status int) []byte {
 		}
 	}
 	if w.Code != status {
-		f.t.Fatalf("%s %s: status %d, want %d: %s", method, path, w.Code, status, w.Body.String())
+		f.t.Fatalf("%s %s: status %d, want %d: %s\ncontext: %v\napplication logs:\n%s",
+			method, path, w.Code, status, w.Body.String(), f.ctx.Err(), f.logs.String())
 	}
 	return w.Body.Bytes()
 }

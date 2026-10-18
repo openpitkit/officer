@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -294,7 +295,9 @@ func officerSession(
 	t *testing.T, ctx context.Context, src frameworkmcp.Source,
 ) (session *sdkmcp.ClientSession, closeSession func()) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(ctx)
+	// The caller's deadline bounds connection setup, not the server's lifetime.
+	// Each request has its own deadline; closeSession explicitly stops the server.
+	serverCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	server, err := frameworkmcp.Build(
 		officerToolRegistry(), src, nil, httpx.AllowAll{}, operatorCaller(),
 	)
@@ -305,7 +308,7 @@ func officerSession(
 	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
 	serverErr := make(chan error, 1)
 	go func() {
-		serverErr <- server.Run(ctx, serverTransport)
+		serverErr <- server.Run(serverCtx, serverTransport)
 	}()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
 	session, err = client.Connect(ctx, clientTransport)
@@ -313,13 +316,54 @@ func officerSession(
 		cancel()
 		t.Fatalf("client connect: %v", err)
 	}
-	return session, func() {
+	var closeOnce sync.Once
+	closeSession = func() {
 		t.Helper()
-		_ = session.Close()
-		cancel()
-		if err := <-serverErr; err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatalf("server run: %v", err)
-		}
+		closeOnce.Do(func() {
+			cancel()
+			clientErr := make(chan error, 1)
+			go func() { clientErr <- session.Close() }()
+			shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			select {
+			case err := <-clientErr:
+				if err != nil {
+					t.Errorf("client close: %v", err)
+				}
+			case <-shutdownCtx.Done():
+				t.Errorf("client close: %v", shutdownCtx.Err())
+			}
+			select {
+			case err := <-serverErr:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					t.Errorf("server run: %v", err)
+				}
+			case <-shutdownCtx.Done():
+				t.Errorf("server shutdown: %v", shutdownCtx.Err())
+			}
+		})
+	}
+	t.Cleanup(closeSession)
+	return session, closeSession
+}
+
+func TestMCPSessionSeparatesConnectionAndRequestLifetimes(t *testing.T) {
+	t.Parallel()
+	connectCtx, cancelConnect := context.WithCancel(systemCtx())
+	defer cancelConnect()
+	session, closeSession := officerSession(t, connectCtx, &fakeSource{})
+	defer closeSession()
+	cancelConnect()
+
+	canceledRequest, cancelRequest := context.WithCancel(systemCtx())
+	cancelRequest()
+	if _, err := session.ListTools(canceledRequest, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ListTools error = %v, want context.Canceled", err)
+	}
+	requestCtx, stopRequest := context.WithTimeout(systemCtx(), 5*time.Second)
+	defer stopRequest()
+	if _, err := session.ListTools(requestCtx, nil); err != nil {
+		t.Fatalf("ListTools after connection and request cancellation: %v", err)
 	}
 }
 
@@ -334,8 +378,10 @@ func callTool[Out any](
 	defer cancel()
 
 	session, closeSession := officerSession(t, ctx, src)
-	res, callErr := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: in})
-	closeSession()
+	defer closeSession()
+	callCtx, stopCall := context.WithTimeout(systemCtx(), 5*time.Second)
+	defer stopCall()
+	res, callErr := session.CallTool(callCtx, &sdkmcp.CallToolParams{Name: name, Arguments: in})
 	if callErr != nil {
 		t.Fatalf("%s returned protocol error: %v", name, callErr)
 	}

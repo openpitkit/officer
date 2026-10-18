@@ -701,11 +701,21 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 	r := rs.(*realmStore)
+	dictionaries, err := r.dictionaries()
+	if err != nil {
+		t.Fatalf("dictionaries: %v", err)
+	}
+	tx, err := r.rawDB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin audit fixture transaction: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
 
 	// Populate a few thousand rows so the query planner's index choice is not an
-	// artifact of a near-empty table.
+	// artifact of a near-empty table. One transaction keeps fixture preparation
+	// from performing thousands of separate durable commits on Windows.
 	for i := 0; i < 4000; i++ {
-		if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
+		if err := appendAudit(ctx, tx, dictionaries, fwstore.AuditEntry{
 			Actor: "operator", Action: domain.AuditActionBlock,
 			Account: "acc-1", Source: domain.SourcePanel, Detail: "bulk",
 		}); err != nil {
@@ -713,9 +723,8 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 		}
 	}
 
-	dictionaries, err := r.dictionaries()
-	if err != nil {
-		t.Fatalf("dictionaries: %v", err)
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit audit fixtures: %v", err)
 	}
 
 	explain := func(query string, queryArgs []any) string {

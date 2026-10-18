@@ -114,6 +114,7 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
     const onKeyDownRef = useRef(onKeyDown);
     onKeyDownRef.current = onKeyDown;
     const pendingTimersRef = useRef(new Set<number>());
+    const blurTimerRef = useRef<number | null>(null);
 
     // Deferred calls still pending at unmount are cancelled, so none of them
     // runs against a component that is already gone.
@@ -131,6 +132,7 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
         callback();
       }, delayMs);
       pendingTimersRef.current.add(timer);
+      return timer;
     }
 
     const filtered = filterSuggestions(value, suggestions, maxSuggestions);
@@ -210,12 +212,20 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
             setOpen(true);
           }}
           onFocus={(e) => {
+            if (blurTimerRef.current !== null) {
+              window.clearTimeout(blurTimerRef.current);
+              pendingTimersRef.current.delete(blurTimerRef.current);
+              blurTimerRef.current = null;
+            }
             setOpen(true);
             onFocus?.(e);
           }}
           onBlur={(e) => {
             // Delay so a click on a list item fires before the blur closes it.
-            defer(() => setOpen(false), 120);
+            blurTimerRef.current = defer(() => {
+              blurTimerRef.current = null;
+              setOpen(false);
+            }, 120);
             onBlur?.(e);
           }}
           onKeyDown={handleKeyDown}

@@ -118,18 +118,22 @@ func TestSetupHandsAllowedHostsToRegister(t *testing.T) {
 
 func TestCheckRuntimeLibraryPath(t *testing.T) {
 	t.Parallel()
+	directory := t.TempDir()
+	loaded := filepath.Join(directory, "runtime.dll")
+	separator := string(filepath.Separator)
 	tests := []struct {
 		name       string
 		configured string
 		loaded     string
 		wantErr    bool
 	}{
-		{name: "not configured", configured: "", loaded: "/a/b"},
-		{name: "same path", configured: "/a/b", loaded: "/a/b"},
-		{name: "trailing slash", configured: "/a/b/", loaded: "/a/b"},
-		{name: "padded", configured: " /a/./b ", loaded: "/a/b"},
-		{name: "different path", configured: "/a/c", loaded: "/a/b", wantErr: true},
-		{name: "blank", configured: " ", loaded: "/a/b"},
+		{name: "not configured", configured: "", loaded: loaded},
+		{name: "same path", configured: loaded, loaded: loaded},
+		{name: "trailing slash", configured: loaded + separator, loaded: loaded},
+		{name: "forward slashes", configured: filepath.ToSlash(loaded), loaded: loaded},
+		{name: "padded", configured: " " + directory + separator + "." + separator + "runtime.dll ", loaded: loaded},
+		{name: "different path", configured: filepath.Join(directory, "other.dll"), loaded: loaded, wantErr: true},
+		{name: "blank", configured: " ", loaded: loaded},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

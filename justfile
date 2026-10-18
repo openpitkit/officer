@@ -38,6 +38,8 @@ export GOTOOLCHAIN := go_toolchain
 export GOCACHE := go_cache
 export GOLANGCI_LINT_CACHE := golangci_lint_cache
 export CGO_ENABLED := "1"
+# Python tools must read the repository's Unicode fixtures as UTF-8 on Windows.
+export PYTHONUTF8 := "1"
 
 venv_dir := justfile_directory() / ".venv"
 venv_bin := if os_family() == "windows" { venv_dir / "Scripts" } else { venv_dir / "bin" }

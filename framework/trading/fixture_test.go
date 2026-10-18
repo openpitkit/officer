@@ -20,9 +20,12 @@ package trading_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +46,28 @@ import (
 
 var testCtx = context.Background()
 var testCaller = domain.Caller{Source: domain.SourcePanel, Principal: domain.PrincipalOperator}
+
+// Fixture files keep restart semantics without power-loss durability costs.
+const fixtureSQLitePragmas = "?_pragma=journal_mode(MEMORY)&_pragma=synchronous(OFF)"
+
+// Cache only the closed, empty schema. Every fixture gets its own database file
+// and still runs Migrate before using the store, including its dictionary checks.
+var fixtureSchema = sync.OnceValues(func() (contents []byte, result error) {
+	directory, err := os.MkdirTemp("", "officer-trading-schema-*")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { result = errors.Join(result, os.RemoveAll(directory)) }()
+	path := filepath.Join(directory, "officer.db")
+	st, err := sqlite.New(path+fixtureSQLitePragmas, domain.DefaultRealm)
+	if err != nil {
+		return nil, err
+	}
+	if err := errors.Join(st.Migrate(testCtx), st.Close()); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+})
 
 type safeBuffer struct {
 	mu sync.Mutex
@@ -222,7 +247,11 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	st, err := sqlite.New(t.TempDir()+"/officer.db", domain.DefaultRealm)
+	schema, err := fixtureSchema()
+	must(t, err)
+	path := filepath.Join(t.TempDir(), "officer.db")
+	must(t, os.WriteFile(path, schema, 0o600))
+	st, err := sqlite.New(path+fixtureSQLitePragmas, domain.DefaultRealm)
 	must(t, err)
 	t.Cleanup(func() { must(t, st.Close()) })
 	must(t, st.Migrate(testCtx))
@@ -247,6 +276,17 @@ func newFixture(t *testing.T) *fixture {
 	f.dest = domain.TradingDestination{Connection: f.connection.ExternalID, Route: "{}"}
 	return f
 }
+
+func TestFixturesKeepIndependentStores(t *testing.T) {
+	first := newFixture(t)
+	_, err := first.n.CreateAsset(testCtx, domain.Asset{Code: "ISOLATED"}, testCaller)
+	must(t, err)
+	second := newFixture(t)
+	if _, exists, err := second.st.GetAsset(testCtx, "ISOLATED"); err != nil || exists {
+		t.Fatalf("asset from another fixture: exists=%t error=%v, want absent", exists, err)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

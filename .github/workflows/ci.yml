@@ -60,6 +60,12 @@ jobs:
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v${{ env.CI_GOLANGCI_LINT }}
 
+      - name: Use MinGW for Windows CGo
+        if: runner.os == 'Windows'
+        run: |
+          "CC=gcc" >> $env:GITHUB_ENV
+          "CXX=g++" >> $env:GITHUB_ENV
+
       - name: Setup just
         uses: extractions/setup-just@v3
 

@@ -161,7 +161,8 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	dbPath := t.TempDir() + "/officer.db"
+	// Persist across app restarts without testing power-loss durability.
+	dbPath := t.TempDir() + "/officer.db?_pragma=journal_mode(MEMORY)&_pragma=synchronous(OFF)"
 	st, err := sqlite.New(dbPath, domain.DefaultRealm)
 	must(err)
 	closeStore := st.Close
