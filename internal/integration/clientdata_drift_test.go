@@ -38,6 +38,7 @@ import (
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
 
+	"go.openpit.dev/officer/engine"
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/businesscsv"
 	"go.openpit.dev/officer/framework/domain"
@@ -1360,19 +1361,8 @@ func encodeBusinessCSVFromStore(
 	}
 }
 
-func storedLockPrice(order domain.Order) string {
-	if len(order.Lock) == 0 {
-		return ""
-	}
-	lock, err := pretrade.NewLockFromMsgPack(order.Lock)
-	if err != nil {
-		return ""
-	}
-	prices, err := lock.Prices()
-	if err != nil || len(prices) != 1 {
-		return ""
-	}
-	return prices[0].String()
+func storedLockPrice(order domain.Order) (string, error) {
+	return engine.LockSettlementPrice(order.Lock, order)
 }
 
 func TestClientDataStructParityDrift(t *testing.T) {

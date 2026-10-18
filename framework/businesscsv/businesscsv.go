@@ -165,13 +165,15 @@ func EncodePositions(rows []domain.Balance, delimiter Delimiter) ([]byte, error)
 }
 
 // OrderLockPrice resolves the display settlement price from an order's opaque
-// engine lock.
-type OrderLockPrice func(domain.Order) string
+// engine lock. An error means a stored lock could not be restored; it aborts
+// the export.
+type OrderLockPrice func(domain.Order) (string, error)
 
 // EncodeOrders serializes orders for export. Orders are export-only and are
 // addressed by id; no integer surrogate id is emitted. The account column
 // carries the account code; assets carry their symbols. lockPrice resolves the
-// human-facing price through the engine lock decoder without exposing the lock.
+// human-facing price through the engine lock decoder without exposing the lock;
+// its error aborts the export and is returned unchanged, with no body.
 func EncodeOrders(
 	rows []domain.Order,
 	delimiter Delimiter,
@@ -180,7 +182,10 @@ func EncodeOrders(
 	out := make([][]string, 0, len(rows)+1)
 	out = append(out, orderHeader)
 	for _, row := range rows {
-		price := lockPrice(row)
+		price, err := lockPrice(row)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, []string{
 			row.ExternalID.String(), row.At.Format(time.RFC3339Nano),
 			string(row.Account), string(row.Source), row.Principal,

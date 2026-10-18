@@ -20,7 +20,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -82,7 +81,7 @@ func (s *Service) ExportBusinessCSV(
 			return businesscsv.ExportFile{}, businessCSVFilterError(lerr)
 		}
 		body, err = businesscsv.EncodeOrders(
-			orders, req.Delimiter, s.businessCSVOrderLockPrice,
+			orders, req.Delimiter, s.orderDisplayPrice,
 		)
 	case businesscsv.EntityTrades:
 		trades, lerr := s.ListAllTrades(ctx, req.Filter.Account, req.Filter.Source)
@@ -105,22 +104,6 @@ func (s *Service) ExportBusinessCSV(
 		return businesscsv.ExportFile{}, err
 	}
 	return file, nil
-}
-
-func (s *Service) businessCSVOrderLockPrice(order domain.Order) string {
-	if len(order.Lock) == 0 {
-		return ""
-	}
-	price, err := s.lockSettlement(order.Lock, order)
-	if err != nil {
-		slog.Warn(
-			"order CSV lock price unavailable",
-			"order", order.ExternalID,
-			"error", err,
-		)
-		return ""
-	}
-	return price
 }
 
 func (s *Service) businessCSVGroups(ctx context.Context) ([]domain.AccountGroup, error) {

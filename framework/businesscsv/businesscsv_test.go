@@ -20,6 +20,7 @@ package businesscsv_test
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -99,11 +100,11 @@ func TestEncodeOrdersIncludesRestoredLockPrice(t *testing.T) {
 		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "10",
 		Price: "150", Leaves: "7", Status: domain.OrderStatusAccepted,
-	}}, businesscsv.DelimiterComma, func(order domain.Order) string {
+	}}, businesscsv.DelimiterComma, func(order domain.Order) (string, error) {
 		if order.ExternalID != id {
 			t.Fatalf("lock price order = %q, want %q", order.ExternalID, id)
 		}
-		return "149.5"
+		return "149.5", nil
 	})
 	if err != nil {
 		t.Fatalf("EncodeOrders: %v", err)
@@ -112,6 +113,20 @@ func TestEncodeOrdersIncludesRestoredLockPrice(t *testing.T) {
 	if !strings.Contains(content, "price,lock_price,leaves,status") ||
 		!strings.Contains(content, ",150,149.5,7,accepted,false") {
 		t.Fatalf("orders CSV misses lock price:\n%s", content)
+	}
+}
+
+func TestEncodeOrdersFailsOnLockPriceError(t *testing.T) {
+	t.Parallel()
+	errUnreadableLock := errors.New("unreadable lock")
+	body, err := businesscsv.EncodeOrders([]domain.Order{{
+		ExternalID: mustExternalID(t, "AAAAAAAAAAAAAAAAAAAAAA"),
+		Lock:       []byte{0x01},
+	}}, businesscsv.DelimiterComma, func(domain.Order) (string, error) {
+		return "", errUnreadableLock
+	})
+	if !errors.Is(err, errUnreadableLock) || body != nil {
+		t.Fatalf("EncodeOrders = %q, %v; want no body and the lock price error", body, err)
 	}
 }
 

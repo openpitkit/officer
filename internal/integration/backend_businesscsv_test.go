@@ -356,11 +356,11 @@ func TestService_BusinessCSVExportAccountFilterErrorPointsAtFilter(t *testing.T)
 	}
 }
 
-func TestService_BusinessCSVOrderExportKeepsUnreadableLockRow(t *testing.T) {
+func TestService_BusinessCSVOrderExportFailsOnUnreadableLock(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
-	fn.allOrders = []domain.Order{{
-		ExternalID:  "order-corrupt-lock",
+	unlocked := domain.Order{
+		ExternalID:  "order-no-lock",
 		Account:     "acc-1",
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
@@ -372,30 +372,47 @@ func TestService_BusinessCSVOrderExportKeepsUnreadableLockRow(t *testing.T) {
 		Price:       "152",
 		Leaves:      "1",
 		Status:      domain.OrderStatusAccepted,
-		Lock:        []byte{0x01, 0x02, 0x03},
-	}}
+	}
+	corrupt := unlocked
+	corrupt.ExternalID = "order-corrupt-lock"
+	corrupt.Lock = []byte{0x01, 0x02, 0x03}
+	request := backend.BusinessCSVExportRequest{
+		Entity:    businesscsv.EntityOrders,
+		Delimiter: businesscsv.DelimiterComma,
+	}
 
-	file, err := svc.ExportBusinessCSV(systemCtx(),
-		backend.BusinessCSVExportRequest{
-			Entity:    businesscsv.EntityOrders,
-			Delimiter: businesscsv.DelimiterComma,
-		})
+	fn.allOrders = []domain.Order{unlocked, corrupt}
+	file, err := svc.ExportBusinessCSV(systemCtx(), request)
+	if err == nil || !strings.Contains(err.Error(), "order-corrupt-lock") {
+		t.Fatalf("ExportBusinessCSV(corrupt lock) error = %v, want one naming order-corrupt-lock", err)
+	}
+	if file.Body != nil || file.Name != "" {
+		t.Fatalf("ExportBusinessCSV(corrupt lock) returned file %+v, want none", file)
+	}
+	if len(fn.auditCalls) != 0 {
+		t.Fatalf("failed export was audited: %+v", fn.auditCalls)
+	}
+
+	// An order without a lock has no settlement price to restore: its
+	// lock_price cell is empty and the export succeeds.
+	fn.allOrders = []domain.Order{unlocked}
+	file, err = svc.ExportBusinessCSV(systemCtx(), request)
 	if err != nil {
-		t.Fatalf("ExportBusinessCSV(orders): %v", err)
+		t.Fatalf("ExportBusinessCSV(no lock): %v", err)
 	}
 	rows, err := csv.NewReader(bytes.NewReader(file.Body)).ReadAll()
 	if err != nil {
 		t.Fatalf("read orders CSV: %v", err)
 	}
 	if len(rows) != 2 {
-		t.Fatalf("orders CSV rows = %d, want header and corrupt-lock order", len(rows))
+		t.Fatalf("orders CSV rows = %d, want header and no-lock order", len(rows))
 	}
 	column := make(map[string]int, len(rows[0]))
 	for index, name := range rows[0] {
 		column[name] = index
 	}
-	if rows[1][column["id"]] != "order-corrupt-lock" ||
+	if rows[1][column["id"]] != "order-no-lock" ||
 		rows[1][column["lock_price"]] != "" {
-		t.Fatalf("corrupt-lock row = %v, want retained with empty lock_price", rows[1])
+		t.Fatalf("no-lock row = %v, want empty lock_price", rows[1])
 	}
 }
