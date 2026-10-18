@@ -19,13 +19,18 @@
 // react-i18next has resources during render, show accounts by default, and
 // unmount the React tree after each test to keep cases isolated.
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach, beforeEach } from "vitest";
 
 // Side-effect import: runs the app's i18next .init() and loads every catalog.
 import "@/i18n";
 import { setAccountScope } from "@/lib/accountScope";
 import "@/test/registerDefaults";
+
+// A findBy or waitFor gives up after this long. The 1 s default is a hang
+// detector sized for an idle machine; under gate load a suggestion lookup
+// that settles in 0.4 s idle took 1.5 s. See testTimeout in vitest.config.ts.
+configure({ asyncUtilTimeout: 5_000 });
 
 // jsdom lacks these APIs, and Radix Select calls them.
 const proto = window.HTMLElement.prototype;

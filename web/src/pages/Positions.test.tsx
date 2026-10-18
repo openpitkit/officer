@@ -415,20 +415,20 @@ describe("Positions adjustment panel", () => {
     ).toBeGreaterThan(0);
     expect(scope.queryByLabelText("Lower")).not.toBeInTheDocument();
 
-    await user.type(scope.getByLabelText("Available adjustment amount"), "600");
-    await user.type(scope.getByLabelText("Held adjustment amount"), "10");
-    await user.clear(scope.getByLabelText("Incoming adjustment amount"));
-    await user.type(scope.getByLabelText("Incoming adjustment amount"), "-50");
-    await user.type(
-      scope.getByLabelText("Average entry price (optional)"),
-      "142.50",
-    );
-    await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
+    // NumberStepper's own test covers keystroke drafts; this test checks the
+    // payload, and typing each character re-renders the whole page.
+    const enter = (field: HTMLElement, value: string) =>
+      fireEvent.change(field, { target: { value } });
+    enter(scope.getByLabelText("Available adjustment amount"), "600");
+    enter(scope.getByLabelText("Held adjustment amount"), "10");
+    enter(scope.getByLabelText("Incoming adjustment amount"), "-50");
+    enter(scope.getByLabelText("Average entry price (optional)"), "142.50");
+    enter(scope.getByLabelText("Realized PnL"), "-12.50");
     await user.click(
       scope.getByRole("button", { name: /bounds \(optional\)/i }),
     );
-    await user.type(scope.getAllByLabelText("Lower")[0], "-100");
-    await user.type(scope.getAllByLabelText("Upper")[0], "1000");
+    enter(scope.getAllByLabelText("Lower")[0], "-100");
+    enter(scope.getAllByLabelText("Upper")[0], "1000");
 
     expect(scope.getByLabelText("Average entry price (optional)")).toHaveValue(
       "142.50",

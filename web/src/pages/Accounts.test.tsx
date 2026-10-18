@@ -1669,16 +1669,16 @@ describe("Accounts business CSV", () => {
 
   it("resets account pagination and requests accounts with the selected group", async () => {
     const user = userEvent.setup();
-    const pagedAccounts: Account[] = [
-      ...Array.from({ length: 51 }, (_, index) => ({
-        code: `desk-${index.toString().padStart(2, "0")}`,
-        title: `Desk ${index.toString().padStart(2, "0")}`,
+    const [deskZero, deskAlpha] = [
+      {
+        code: "desk-00",
+        title: "Desk 00",
         blocked: false,
         blockReason: "",
         group: "",
         notes: "",
         pnlHaltReason: "",
-      })),
+      },
       {
         code: "desk-alpha",
         title: "Desk alpha",
@@ -1689,10 +1689,12 @@ describe("Accounts business CSV", () => {
         pnlHaltReason: "",
       },
     ].map(accountFixture);
+    // The pager reads only the total, so one listed row standing for 52
+    // accounts offers a next page without rendering fifty rows.
     useAccountsMock.mockImplementation((filters) =>
-      readyPage(
-        filters?.group === "equity-desks" ? [pagedAccounts[51]] : pagedAccounts,
-      ),
+      filters?.group === "equity-desks"
+        ? readyPage([deskAlpha])
+        : ready({ items: [deskZero], total: 52 }),
     );
     renderAccounts();
 

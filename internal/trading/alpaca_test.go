@@ -404,9 +404,13 @@ func TestInvariantUnknownOutcomeIsNotRejected(t *testing.T) {
 		{422, `{"code":40010001,"message":"client_order_id must be unique"}`, false},
 		{408, "{}", false}, {500, "{}", false}, {200, "{}", false}, {200, `{"id":"late"}`, true},
 	} {
+		// A slow answer waits until Send has returned, so it always lands
+		// after the deadline. The request context would never end here: the
+		// server cannot see the client hang up while the order body is unread.
+		late := make(chan struct{})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if tc.slow {
-				time.Sleep(50 * time.Millisecond)
+				<-late
 			}
 			w.WriteHeader(tc.status)
 			_, _ = w.Write([]byte(tc.body))
@@ -414,6 +418,7 @@ func TestInvariantUnknownOutcomeIsNotRejected(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		_, err := testAlpacaConnector(t, server).Send(ctx, testOrder())
 		cancel()
+		close(late)
 		server.Close()
 		if err == nil || errors.Is(err, fwtrading.ErrRejected) {
 			t.Fatal("uncertain outcome marked rejected")

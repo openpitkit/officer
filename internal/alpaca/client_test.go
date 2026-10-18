@@ -439,7 +439,9 @@ func TestTimeoutReadingErrorResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(403)
 		w.(http.Flusher).Flush()
-		time.Sleep(50 * time.Millisecond)
+		// Hold the body open until the client gives up, so the response
+		// cannot complete before the client deadline on a loaded runner.
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 	client := NewClient(server.URL, testCredentials, &http.Client{Timeout: 20 * time.Millisecond})
