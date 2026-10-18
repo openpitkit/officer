@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -177,6 +178,98 @@ func TestUpsertMarketDataInstrumentRejectedByRestartWritesNothing(t *testing.T) 
 	}
 	if len(rows) != 0 {
 		t.Fatalf("mutation audit rows = %+v, want none", rows)
+	}
+}
+
+// TestLocalNode_AgentMarketDataInstrumentEnable refuses an agent's enable of a
+// market-data instrument before anything changes - the instrument stays
+// disabled and no audit entry is written - and lets its disable through.
+// Every operator caller enables the instrument as before.
+func TestLocalNode_AgentMarketDataInstrumentEnable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	// newInstrumentNode builds a node holding the BTCUSDT instrument of a
+	// Binance instance, enabled or not.
+	newInstrumentNode := func(
+		t *testing.T, enabled bool,
+	) (*localNode, domain.ExternalID) {
+		t.Helper()
+		n, realm := newTestNode(t, newFakeEngine())
+		instance, err := realm.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+			Provider: domain.MarketDataProviderBinance,
+			Label:    "Binance",
+			Enabled:  true,
+		})
+		if err != nil {
+			t.Fatalf("CreateMarketDataInstance: %v", err)
+		}
+		if err := n.UpsertMarketDataInstrument(ctx, domain.MarketDataInstrument{
+			Instance:       instance.ExternalID,
+			ExternalSymbol: "BTCUSDT",
+			BaseAsset:      "BTC",
+			QuoteAsset:     "USDT",
+			Enabled:        enabled,
+		}, testCaller); err != nil {
+			t.Fatalf("UpsertMarketDataInstrument: %v", err)
+		}
+		return n, instance.ExternalID
+	}
+	storedEnabled := func(
+		t *testing.T, n *localNode, instance domain.ExternalID,
+	) bool {
+		t.Helper()
+		instruments, err := n.realm.ListMarketDataInstruments(ctx, instance)
+		if err != nil || len(instruments) != 1 {
+			t.Fatalf("ListMarketDataInstruments = %+v err=%v, want BTCUSDT", instruments, err)
+		}
+		return instruments[0].Enabled
+	}
+
+	t.Run("agent enable", func(t *testing.T) {
+		t.Parallel()
+		n, instance := newInstrumentNode(t, false)
+		audit, err := n.ListAudit(ctx, 100)
+		if err != nil {
+			t.Fatalf("ListAudit before the refusal: %v", err)
+		}
+		requireLoosening(t, "SetMarketDataInstrumentEnabled(true)",
+			n.SetMarketDataInstrumentEnabled(ctx, instance, "BTCUSDT", true, agentCaller))
+		if storedEnabled(t, n, instance) {
+			t.Fatal("the refused enable enabled the instrument")
+		}
+		after, err := n.ListAudit(ctx, 100)
+		if err != nil {
+			t.Fatalf("ListAudit after the refusal: %v", err)
+		}
+		if !reflect.DeepEqual(after, audit) {
+			t.Fatalf("refusal changed the audit trail: before=%+v after=%+v", audit, after)
+		}
+	})
+	t.Run("agent disable", func(t *testing.T) {
+		t.Parallel()
+		n, instance := newInstrumentNode(t, true)
+		if err := n.SetMarketDataInstrumentEnabled(
+			ctx, instance, "BTCUSDT", false, agentCaller,
+		); err != nil {
+			t.Fatalf("SetMarketDataInstrumentEnabled(false): %v", err)
+		}
+		if storedEnabled(t, n, instance) {
+			t.Fatal("the agent's disable left the instrument enabled")
+		}
+	})
+	for name, caller := range operatorCallers {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n, instance := newInstrumentNode(t, false)
+			if err := n.SetMarketDataInstrumentEnabled(
+				ctx, instance, "BTCUSDT", true, caller,
+			); err != nil {
+				t.Fatalf("SetMarketDataInstrumentEnabled(true): %v", err)
+			}
+			if !storedEnabled(t, n, instance) {
+				t.Fatal("the enable left the instrument disabled")
+			}
+		})
 	}
 }
 

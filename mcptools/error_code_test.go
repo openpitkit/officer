@@ -60,6 +60,7 @@ func TestToolErrorMatchesREST(t *testing.T) {
 		{"ErrHasDependents", wrapped(domain.ErrHasDependents), "has_dependents", ""},
 		{"ErrInvalid", wrapped(domain.ErrInvalid), "validation", ""},
 		{"ErrLiveTradingUnavailable", wrapped(domain.ErrLiveTradingUnavailable), "live_trading_unavailable", ""},
+		{"ErrLoosening", wrapped(domain.ErrLoosening), "loosening_refused", ""},
 		{"ErrMasterKeyRequired", wrapped(domain.ErrMasterKeyRequired), "master_key_required", ""},
 		{"ErrNoChange", wrapped(domain.ErrNoChange), "internal", ""},
 		{"ErrNoDestination", wrapped(domain.ErrNoDestination), "no_destination", ""},

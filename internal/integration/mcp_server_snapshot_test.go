@@ -54,13 +54,16 @@ func TestServerToolSnapshot(t *testing.T) {
 		},
 		{
 			name: "get_account_state",
-			description: "Return account row and its account-scoped risk barriers. " +
-				"Read-only - no secrets, no order-flow control.",
+			description: "Return account row and its account-scoped risk barriers, " +
+				"each with the fields set_limit takes, the rate window as windowMs " +
+				"in milliseconds. Read-only - no secrets, no order-flow control.",
 		},
 		{
 			name: "get_limits",
 			description: "Return risk barriers and P&L-bound currencies, optionally " +
-				"filtered by account. Read-only - no secrets, no order-flow control.",
+				"filtered by account; each barrier has the fields set_limit takes, " +
+				"the rate window as windowMs in milliseconds. Read-only - no " +
+				"secrets, no order-flow control.",
 		},
 		{
 			name: "get_order",
@@ -128,28 +131,64 @@ func TestServerToolSnapshot(t *testing.T) {
 				"order is placed, no funds are reserved.",
 		},
 		{
+			name: "set_limit",
+			description: "Create a risk barrier, or make the one stored at the same " +
+				"address stricter, and return it as stored. policy names the kind - " +
+				"rate_limit, order_size_limit or spot_funds_pnl_bounds_kill_switch - " +
+				"and the other arguments are that kind's fields; a field of another " +
+				"kind is refused with validation. Anything that loosens risk is " +
+				"refused with loosening_refused and changes nothing. A barrier that " +
+				"replaces the one at its address must be no looser: for rate_limit " +
+				"no more orders and, on the broker and asset scopes, the same " +
+				"window, on the account and account_asset scopes a window no " +
+				"shorter; for order_size_limit every current cap kept and none " +
+				"raised; for spot_funds_pnl_bounds_kill_switch the same currency, " +
+				"every current bound kept, the lower bound no lower and the upper " +
+				"bound no higher. A new account_underlying_asset or " +
+				"account_settlement_asset cap must be no higher than the " +
+				"underlying_asset or settlement_asset cap on the same asset that it " +
+				"overrides, and a new account_group or account bound must be in the " +
+				"currency of, and no looser than, the bound it takes over from: for " +
+				"a group the global bound, for an account the bound that applies to " +
+				"it now. The first order-size barrier is refused while any " +
+				"rate-limit barrier is configured. No barrier can be removed. " +
+				"Mutates Officer control-plane config; protected and disabled by " +
+				"default.",
+		},
+		{
 			name: "create_account",
 			description: "Create an account with a code, an optional title and an " +
 				"optional realized P&L currency. Without its own currency the account " +
 				"inherits its group's, then the default group's; with no tier set it " +
-				"tracks no realized P&L. Mutates Officer control-plane config; " +
-				"protected and disabled by default.",
+				"tracks no realized P&L. The create is refused with " +
+				"loosening_refused, as a new account starts unblocked, with no " +
+				"barrier of its own and no balance or P&L history, so it could bring " +
+				"back a code that was deleted or renamed away. Mutates Officer " +
+				"control-plane config; protected and disabled by default.",
 		},
 		{
 			name: "update_account",
 			description: "Change an account's code and title; the title replaces the " +
-				"stored one and an empty title clears it. Mutates Officer control-plane " +
-				"config; protected and disabled by default.",
+				"stored one and an empty title clears it. A code change is refused with " +
+				"loosening_refused when the account is blocked, when it is in a blocked " +
+				"group or in a group with a group-scoped Spot Funds P&L bound, or when " +
+				"it carries a rate-limit, order-size or Spot Funds P&L barrier of its " +
+				"own. Mutates Officer control-plane config; protected and disabled by " +
+				"default.",
 		},
 		{
 			name: "delete_account",
 			description: "Delete an account. An account with dependent rows is refused " +
 				"with has_dependents unless force deletes them with it; a trading " +
 				"connection's fee account is refused with conflict, even with force. " +
-				"Force-deleting removes the account's venue-fee adjustments, so fees it " +
-				"received may be booked again to the connection's current fee account " +
-				"on the next restart. Mutates Officer control-plane config; protected " +
-				"and disabled by default.",
+				"The delete is refused with loosening_refused, even with force, when " +
+				"the account is blocked, when it is in a blocked group or in a group " +
+				"with a group-scoped Spot Funds P&L bound, when it carries a " +
+				"rate-limit, order-size or Spot Funds P&L barrier of its own, or while " +
+				"any rate-limit barrier is configured. Force-deleting removes the " +
+				"account's venue-fee adjustments, so fees it received may be booked " +
+				"again to the connection's current fee account on the next restart. " +
+				"Mutates Officer control-plane config; protected and disabled by default.",
 		},
 		{
 			name: "set_account_currency",
@@ -165,9 +204,16 @@ func TestServerToolSnapshot(t *testing.T) {
 		{
 			name: "apply_adjustment",
 			description: "Apply an adjustment to an account's balances of one asset " +
-				"through the engine and return the recorded adjustment. Each of " +
-				"balance (available), held and incoming is set to a value (absolute) " +
-				"or changed by one (delta), given as exact decimal strings. A bound " +
+				"through the engine and return the recorded adjustment. An agent may " +
+				"only lower the balance (available), held and incoming of the " +
+				"account's own currency, each set to a value (absolute) or changed " +
+				"by one (delta), given as exact decimal strings: another asset, a " +
+				"position included, an account without a currency of its own, a " +
+				"delta above zero or an absolute above the field's current value " +
+				"refuses the whole adjustment with loosening_refused and changes " +
+				"nothing, and so does an averageEntryPrice or a realizedPnl other " +
+				"than the current one, or any realizedPnl while the position's P&L " +
+				"calculation is halted, as it would restart it. A bound " +
 				"constrains the value the adjustment results in, not the change: a " +
 				"result outside it records the adjustment as rejected with a " +
 				"structured reason and changes no balance, a policy outcome rather " +
@@ -185,17 +231,22 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "update_asset",
 			description: "Change an asset's code, title and asset class; the title " +
 				"and the asset class replace the stored ones, and an omitted or empty " +
-				"one clears it. Mutates Officer control-plane config; protected and " +
-				"disabled by default.",
+				"one clears it. A code change is refused with loosening_refused while " +
+				"a rate-limit or order-size barrier references the asset or a Spot " +
+				"Funds P&L bound is denominated in it. Mutates Officer control-plane " +
+				"config; protected and disabled by default.",
 		},
 		{
 			name: "delete_asset",
-			description: "Delete an asset. An asset with dependent rows is refused " +
-				"with has_dependents unless force deletes them with it, the market-data " +
-				"and trading instruments that reference the asset included; an asset an " +
-				"account or group holds as its currency is refused with has_dependents, " +
-				"even with force. Mutates Officer control-plane config; protected and " +
-				"disabled by default.",
+			description: "Delete an asset. An asset with dependent rows, the " +
+				"market-data and trading instruments that reference it included, is " +
+				"refused with has_dependents, and so is an asset an account or group " +
+				"holds as its currency. The delete is refused with loosening_refused " +
+				"while a rate-limit or order-size barrier references the asset or a " +
+				"Spot Funds P&L bound is denominated in it, and always with force: " +
+				"force would delete the asset's dependent rows with it - balances, " +
+				"orders, trades, adjustments and barriers among them. Mutates Officer " +
+				"control-plane config; protected and disabled by default.",
 		},
 		{
 			name: "create_group",
@@ -217,21 +268,22 @@ func TestServerToolSnapshot(t *testing.T) {
 		{
 			name: "delete_group",
 			description: "Delete an account group. Its member accounts leave the group " +
-				"and keep their trading and compliance history, and a block the group " +
-				"carries no longer applies to them; the delete is refused with " +
+				"and keep their trading and compliance history. The delete is refused " +
+				"with loosening_refused, even with force, when the group is blocked, " +
+				"when it carries a group-scoped Spot Funds P&L bound, or while any " +
+				"rate-limit barrier is configured; it is refused with " +
 				"currency_change_blocked, even with force, when leaving would " +
-				"change the effective currency of a member carrying protected state. A " +
-				"group with a group-scoped Spot Funds P&L bound is refused with " +
-				"has_dependents unless force deletes the bound with it. The group's " +
-				"trading access grants are deleted with it; its former members keep " +
-				"only their own. The default group cannot be deleted. Mutates Officer " +
-				"control-plane config; protected and disabled by default.",
+				"change the effective currency of a member carrying protected state. " +
+				"The group's trading access grants are deleted with it; its former " +
+				"members keep only their own. The default group cannot be deleted. " +
+				"Mutates Officer control-plane config; protected and disabled by default.",
 		},
 		{
 			name: "set_market_data_instrument",
 			description: "Enable or disable one configured market-data instrument. " +
-				"Mutates Officer control-plane config only; protected and disabled " +
-				"by default.",
+				"An enable is refused with loosening_refused, as it widens the quotes " +
+				"the engine prices orders with. Mutates Officer control-plane config " +
+				"only; protected and disabled by default.",
 		},
 		{
 			name: "submit_order",
@@ -298,15 +350,15 @@ func TestServerToolSnapshot(t *testing.T) {
 		struct {
 			name        string
 			description string
-		}{name: "create_trading_connection", description: "Create a trading connection with write-only credentials. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "create_trading_connection", description: "Create a trading connection with write-only credentials. The create is refused with loosening_refused, as a new connection widens what can be sent. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
-		}{name: "update_trading_connection", description: "Update a trading connection label or write-only credentials. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "update_trading_connection", description: "Update a trading connection label or write-only credentials. A credential change is refused with loosening_refused, as it restarts the trading runtime and so brings unavailable connections back. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
-		}{name: "set_trading_connection_enabled", description: "Enable or disable a trading connection. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "set_trading_connection_enabled", description: "Enable or disable a trading connection. An enable is refused with loosening_refused, as it widens what can be sent. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
@@ -314,11 +366,11 @@ func TestServerToolSnapshot(t *testing.T) {
 		struct {
 			name        string
 			description string
-		}{name: "set_trading_instrument", description: "Set a trading instrument mapping. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "set_trading_instrument", description: "Set a trading instrument mapping. The change is refused with loosening_refused, as a mapping decides what can be sent and which asset a venue fee is booked in. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
-		}{name: "delete_trading_instrument", description: "Delete a trading instrument mapping. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "delete_trading_instrument", description: "Delete a trading instrument mapping. The delete is refused with loosening_refused, as a mapping decides what can be sent and which asset a venue fee is booked in. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
@@ -330,19 +382,19 @@ func TestServerToolSnapshot(t *testing.T) {
 		struct {
 			name        string
 			description string
-		}{name: "grant_trading_access", description: "Grant an Officer account access to a trading connection, or an account group where the server offers account groups. A group grant needs the connection's fee account on providers with unlinked fees. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "grant_trading_access", description: "Grant an Officer account access to a trading connection, or an account group where the server offers account groups. The grant is refused with loosening_refused, as it widens what can be sent. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
-		}{name: "revoke_trading_access", description: "Revoke the access of an Officer account to a trading connection, or of an account group where the server offers account groups. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "revoke_trading_access", description: "Revoke the access of an Officer account to a trading connection, or of an account group where the server offers account groups. Revoking the last sender of a connection with no fee account on a provider with unlinked fees is refused with loosening_refused, as the connection's venue fees would then be skipped. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
-		}{name: "set_trading_fee_account", description: "Set the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "set_trading_fee_account", description: "Set the Officer account receiving unlinked venue fees. The set is refused with loosening_refused, as it moves where future venue fees are debited. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string
-		}{name: "clear_trading_fee_account", description: "Clear the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default."},
+		}{name: "clear_trading_fee_account", description: "Clear the Officer account receiving unlinked venue fees. The clear is refused with loosening_refused, as it moves where future venue fees are debited. Mutates Officer control-plane config; protected and disabled by default."},
 		struct {
 			name        string
 			description string

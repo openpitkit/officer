@@ -217,7 +217,9 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 }
 
 // CreateTradingConnection identifies the venue account before storing a paper
-// connection. The returned value omits credentials.
+// connection. The returned value omits credentials. A tighten-only caller is
+// refused with domain.ErrLoosening before anything is checked or the venue is
+// called: a new connection widens what can be sent.
 func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection) (domain.TradingConnection, error) {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -227,6 +229,12 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
 		return domain.TradingConnection{}, err
+	}
+	if caller.TightenOnly() {
+		return domain.TradingConnection{}, fmt.Errorf(
+			"create trading connection: a new connection widens what can be sent: %w",
+			domain.ErrLoosening,
+		)
 	}
 	c.Provider = strings.TrimSpace(c.Provider)
 	c.Label = strings.TrimSpace(c.Label)
@@ -286,7 +294,10 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 }
 
 // UpdateTradingConnectionSettings merges credentials without allowing a change
-// of venue account. Empty labels and credential values keep stored settings.
+// of venue account. Empty labels and credential values keep stored settings. A
+// tighten-only caller is refused a credential change with domain.ErrLoosening
+// before the venue is called, since the change restarts the trading runtime
+// and so brings unavailable connections back; a label-only update passes.
 func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label, credentials string) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -323,6 +334,25 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 		return fmt.Errorf("merged trading credentials are not a JSON object: %w", domain.ErrInvalid)
 	}
 	changed := !reflect.DeepEqual(storedValues, mergedValues)
+	if caller.TightenOnly() {
+		// The refusal compares the members exactly: changed takes two integers
+		// above 2^53 that differ only past float64 precision for one value,
+		// while the merged text stores them apart.
+		var storedExact, mergedExact map[string]any
+		if err := decodeCredentialsJSON(c.Credentials, &storedExact); err != nil {
+			return fmt.Errorf("stored trading credentials are not a JSON object: %w", domain.ErrInvalid)
+		}
+		if err := decodeCredentialsJSON(merged, &mergedExact); err != nil {
+			return fmt.Errorf("merged trading credentials are not a JSON object: %w", domain.ErrInvalid)
+		}
+		if !reflect.DeepEqual(storedExact, mergedExact) {
+			return fmt.Errorf(
+				"update trading connection %s: a credential change restarts the "+
+					"trading runtime and so brings unavailable connections back: %w",
+				c.ExternalID, domain.ErrLoosening,
+			)
+		}
+	}
 	c.Credentials = merged
 	if err := domain.ValidateTradingConnection(c); err != nil {
 		return err
@@ -481,7 +511,9 @@ func (s *Service) SearchTradingSymbols(ctx context.Context, id, query string) (T
 // PutTradingAccess grants an Officer account or an account group access to a
 // connection and venue account. On a provider with unlinked fees, a connection
 // without a fee account refuses a group grant, and an account grant while it
-// holds any other grant, with domain.ErrFeeAccountRequired.
+// holds any other grant, with domain.ErrFeeAccountRequired. After the subject,
+// connection and provider checks, the node refuses a tighten-only caller's
+// grant with domain.ErrLoosening.
 func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAccess) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -513,7 +545,14 @@ func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAcc
 // RemoveTradingAccess revokes the grant of a trading connection to exactly one
 // subject: account or accountGroup, the other empty. A malformed subject
 // returns domain.ErrInvalid before any lookup. Existing venue-managed orders
-// continue through their stored venue links.
+// continue through their stored venue links. On a provider with unlinked fees,
+// a tighten-only caller is refused with domain.ErrLoosening the revoke after
+// which no account can send through a connection without a fee account while
+// exactly one could before, as the connection's venue fees would then be
+// skipped instead of debited. Only a tighten-only caller's revoke resolves the
+// connection and its provider for that rule; when either cannot be resolved,
+// the revoke returns that error and changes nothing. Any other caller's revoke
+// makes no such lookup and reaches the node as it always did.
 func (s *Service) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -533,7 +572,21 @@ func (s *Service) RemoveTradingAccess(ctx context.Context, connection domain.Ext
 	}); err != nil {
 		return err
 	}
-	return s.node.RemoveTradingAccess(ctx, connection, account, accountGroup, caller)
+	// The node reads the provider's fee policy only for a tighten-only caller,
+	// so only that caller's revoke resolves the connection and its provider.
+	var requireFeeAccount bool
+	if caller.TightenOnly() {
+		c, err := s.tradingConnection(ctx, connection.String())
+		if err != nil {
+			return err
+		}
+		p, err := s.tradingProvider(c.Provider)
+		if err != nil {
+			return err
+		}
+		requireFeeAccount = p.UnlinkedFees
+	}
+	return s.node.RemoveTradingAccess(ctx, connection, account, accountGroup, requireFeeAccount, caller)
 }
 
 // scopeTradingSubject passes the subject of a trading grant through the account

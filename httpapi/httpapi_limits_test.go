@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 func TestListLimits(t *testing.T) {
@@ -472,6 +473,61 @@ func TestPutSpotFundsPnlBoundsLimit_EmptyCurrencyValidationError(t *testing.T) {
 	}
 }
 
+// TestPutSpotFundsPnlBoundsLimit_HugeExponentValidationError puts, through
+// the real backend and node, a lower bound written with an exponent that,
+// compared with the upper bound as written, would build 10^2000000000: it is
+// answered within a second as a validation error on /lowerBound before the
+// bounds are compared, and nothing is stored.
+func TestPutSpotFundsPnlBoundsLimit_HugeExponentValidationError(t *testing.T) {
+	requireLowerBoundRefused(t, "-1e-2000000000")
+}
+
+// TestPutSpotFundsPnlBoundsLimit_ExponentNotationValidationError puts, through
+// the real backend and node, a lower bound of -100 written in exponent
+// notation, which the engine's exact parser does not take: it is answered as
+// a validation error on /lowerBound and nothing is stored, where a stored
+// bound would fail the engine configuration and undoing that would rebuild the
+// engine.
+func TestPutSpotFundsPnlBoundsLimit_ExponentNotationValidationError(t *testing.T) {
+	requireLowerBoundRefused(t, "-1e2")
+}
+
+// requireLowerBoundRefused puts, through the real backend and node, a global
+// P&L-bounds barrier with lowerBound under an upper bound of 0, and fails t
+// unless the answer comes within a second as a single decimal validation
+// error at /lowerBound with nothing stored, so a bound whose check grows with
+// its exponent fails the test instead of stalling the suite.
+func requireLowerBoundRefused(t *testing.T, lowerBound string) {
+	t.Helper()
+	r, realm := newRealServiceRouter(t)
+	body, err := json.Marshal(map[string]string{
+		"scope": "global", "currency": "USD", "lowerBound": lowerBound, "upperBound": "0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(
+		http.MethodPut, "/api/v1/limits/spot-funds-pnl-bounds", bytes.NewReader(body),
+	)
+	rec := serveWithinASecond(t, r, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	problems, _ := bodyMap(t, rec.Result())["errors"].([]any)
+	if len(problems) != 1 {
+		t.Fatalf("problems = %v, want one", problems)
+	}
+	problem, _ := problems[0].(map[string]any)
+	if problem["code"] != "validation" || problem["pointer"] != "/lowerBound" ||
+		problem["constraint"] != "decimal" {
+		t.Fatalf("problem = %v, want a decimal validation at /lowerBound", problem)
+	}
+	stored, err := realm.ListSpotFundsPnlBoundsLimits(t.Context(), "")
+	if err != nil || len(stored) != 0 {
+		t.Fatalf("stored bounds = %+v err=%v, want none", stored, err)
+	}
+}
+
 func TestPutSpotFundsPnlBoundsLimit_NotImplemented(t *testing.T) {
 	const msg = "engine: spot_funds add not supported yet"
 	svc := &fakeService{
@@ -541,6 +597,46 @@ func TestPutRateLimit_ValidationError(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate?missingAccount=create", body))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+// TestPutRateLimit_OverflowingWindowValidationError puts, through the real
+// backend and node, a broker rate barrier whose windowMs does not fit
+// time.Duration in nanoseconds, above or below, and would wrap to exactly 60s:
+// it is answered as a range validation error on /windowMs and nothing is
+// stored.
+func TestPutRateLimit_OverflowingWindowValidationError(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		windowMs string
+	}{
+		{name: "above", windowMs: "288230376151771744"},  // 2^58 + 60000
+		{name: "below", windowMs: "-288230376151651744"}, // 60000 - 2^58
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, realm := newRealServiceRouter(t)
+			body := bytes.NewBufferString(
+				`{"scope":"broker","windowMs":` + tc.windowMs + `,"maxOrders":100}`,
+			)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			problems, _ := bodyMap(t, rec.Result())["errors"].([]any)
+			if len(problems) != 1 {
+				t.Fatalf("problems = %v, want one", problems)
+			}
+			problem, _ := problems[0].(map[string]any)
+			if problem["code"] != "validation" || problem["pointer"] != "/windowMs" ||
+				problem["constraint"] != "range" {
+				t.Fatalf("problem = %v, want a range validation at /windowMs", problem)
+			}
+			stored, err := realm.ListRateLimits(t.Context(), "")
+			if err != nil || len(stored) != 0 {
+				t.Fatalf("stored rate limits = %+v err=%v, want none", stored, err)
+			}
+		})
 	}
 }
 
@@ -670,7 +766,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 				Currency: "USD", LowerBound: "-1000", UpperBound: "5000"},
 		},
 	}
-	b, err := json.Marshal(toAccountLimitsDTO(limits))
+	b, err := json.Marshal(httpx.ToAccountLimitsDTO(limits))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +781,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 	rate := rates[0].(map[string]any)
 	for _, key := range []string{"scope", "account", "asset", "windowMs", "maxOrders"} {
 		if _, ok := rate[key]; !ok {
-			t.Fatalf("rateLimitDTO missing JSON key %q", key)
+			t.Fatalf("RateLimitDTO missing JSON key %q", key)
 		}
 	}
 	if rate["maxOrders"] != float64(100) || rate["windowMs"] != float64(1000) {
@@ -695,7 +791,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 	size := sizes[0].(map[string]any)
 	for _, key := range []string{"scope", "account", "asset", "maxQuantity", "maxNotional"} {
 		if _, ok := size[key]; !ok {
-			t.Fatalf("orderSizeLimitDTO missing JSON key %q", key)
+			t.Fatalf("OrderSizeLimitDTO missing JSON key %q", key)
 		}
 	}
 	spotFundsPnls, _ := m["spotFundsPnlBoundsLimits"].([]any)
@@ -709,10 +805,10 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 		"upperBound",
 	} {
 		if _, ok := spotFundsPnl[key]; !ok {
-			t.Fatalf("spotFundsPnlBoundsLimitDTO missing JSON key %q", key)
+			t.Fatalf("SpotFundsPnlBoundsLimitDTO missing JSON key %q", key)
 		}
 	}
 	if spotFundsPnl["currency"] != "USD" {
-		t.Fatalf("spotFundsPnlBoundsLimitDTO currency = %v, want USD", spotFundsPnl["currency"])
+		t.Fatalf("SpotFundsPnlBoundsLimitDTO currency = %v, want USD", spotFundsPnl["currency"])
 	}
 }

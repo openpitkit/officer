@@ -19,6 +19,8 @@ package domain
 
 import (
 	"fmt"
+	"math/big"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -38,9 +40,12 @@ func (s LimitScope) HasAccountAxis() bool {
 }
 
 // LimitRate is the typed rate-limit barrier: at most MaxOrders new orders per
-// rolling Window for the addressed scope. It maps to the engine's rate-limit
-// policy. The optional Account and Asset axes are present exactly when Scope
-// carries them. MaxOrders is a positive count; Window is a positive duration.
+// Window for the addressed scope - a fixed window, started by the first order
+// after the previous one expires, for the broker and asset scopes, and a
+// rolling window for the account and account_asset scopes. It maps to the
+// engine's rate-limit policy. The optional Account and Asset axes are present
+// exactly when Scope carries them. MaxOrders is a positive count; Window is a
+// positive duration.
 //
 // Money and size barriers live on the order-size and P&L types; a rate barrier
 // carries no decimal value, so its value columns are a plain count and a Go
@@ -52,7 +57,8 @@ type LimitRate struct {
 	Account AccountID
 	// Asset is the asset axis; empty unless Scope carries it.
 	Asset string
-	// Window is the rolling time window the order count is measured over.
+	// Window is the time window the order count is measured over: fixed for
+	// the broker and asset scopes, rolling for the account scopes.
 	Window time.Duration
 	// MaxOrders is the maximum number of orders allowed within Window.
 	MaxOrders uint64
@@ -329,28 +335,27 @@ func ValidateLimitScopeAndAxes(
 	return nil
 }
 
+// validatePnlBounds checks that each set bound is a decimal the engine can
+// hold, written as the engine parses it, and that the lower bound is not above
+// the upper one. Both are parsed with parseEngineBound before they are
+// compared, so the comparison never rescales by the exponent a bound is
+// written with.
 func validatePnlBounds(lowerBound, upperBound string) error {
 	var lowerD, upperD decimal.Decimal
 	var err error
 	if lowerBound != "" {
-		lowerD, err = decimal.NewFromString(lowerBound)
+		lowerD, err = parseEngineBound(lowerBound)
 		if err != nil {
 			return invalidField(
-				"/lowerBound", "decimal",
-				fmt.Errorf(
-					"lower_bound is not a valid decimal: %w", ErrInvalid,
-				),
+				"/lowerBound", "decimal", fmt.Errorf("lower_bound: %w", err),
 			)
 		}
 	}
 	if upperBound != "" {
-		upperD, err = decimal.NewFromString(upperBound)
+		upperD, err = parseEngineBound(upperBound)
 		if err != nil {
 			return invalidField(
-				"/upperBound", "decimal",
-				fmt.Errorf(
-					"upper_bound is not a valid decimal: %w", ErrInvalid,
-				),
+				"/upperBound", "decimal", fmt.Errorf("upper_bound: %w", err),
 			)
 		}
 	}
@@ -360,6 +365,354 @@ func validatePnlBounds(lowerBound, upperBound string) error {
 			fmt.Errorf(
 				"lower_bound must be <= upper_bound: %w", ErrInvalid,
 			),
+		)
+	}
+	return nil
+}
+
+// parseEngineBound parses a P&L bound as ParseEngineDecimal does and also
+// refuses, with an error wrapping ErrInvalid, a bound written in a way the
+// engine does not parse. The engine reads a bound with rust_decimal's
+// Decimal::from_str_exact (rust_decimal 1.42.1, parse_str_radix_10_exact in
+// src/str.rs): an optional leading sign, then digits with at most one point,
+// every digit kept as written, at most 28 of them after the point, and all of
+// them, read as one integer, below 2^96. ParseEngineDecimal takes more: an
+// exponent, a sign right after a leading point, and trailing fractional zeros
+// past either limit, since it drops them before it checks the scale and the
+// range. A stored bound the engine cannot parse fails the policy
+// configuration, and undoing that rebuilds the engine, which resets every
+// rate-limit window.
+func parseEngineBound(value string) (decimal.Decimal, error) {
+	parsed, err := ParseEngineDecimal(value)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	unsigned := value
+	if strings.HasPrefix(value, "-") || strings.HasPrefix(value, "+") {
+		unsigned = value[1:]
+	}
+	whole, fraction, _ := strings.Cut(unsigned, ".")
+	digits := whole + fraction
+	if strings.ContainsFunc(digits, func(r rune) bool { return r < '0' || r > '9' }) {
+		return decimal.Decimal{}, fmt.Errorf(
+			"%q is not in plain notation, an optional leading sign and digits with at most one point: %w",
+			value, ErrInvalid,
+		)
+	}
+	if len(fraction) > engineDecimalMaxScale {
+		return decimal.Decimal{}, fmt.Errorf(
+			"%q has %d fractional digits as written, at most %d: %w",
+			value, len(fraction), engineDecimalMaxScale, ErrInvalid,
+		)
+	}
+	coefficient, ok := new(big.Int).SetString(digits, 10)
+	if !ok || coefficient.BitLen() > engineDecimalMantissaBits {
+		return decimal.Decimal{}, fmt.Errorf(
+			"%q has digits that, read as one integer as written, exceed %d bits: %w",
+			value, engineDecimalMantissaBits, ErrInvalid,
+		)
+	}
+	return parsed, nil
+}
+
+// NoLooserThan returns nil when the rate barrier is at least as strict as ref,
+// the barrier it would replace: MaxOrders not above ref's, over a Window the
+// scope's order count allows. The engine counts every attempt, admitted or
+// not. A broker or asset barrier counts in a fixed window that opens at the
+// first attempt after the previous window closes, so a window of any other
+// length, a longer one too, can admit an attempt ref rejects: Window must
+// equal ref's. An account or account_asset barrier counts over a sliding
+// window, so Window must not be shorter than ref's. Otherwise it returns an
+// error wrapping ErrLoosening that names the reason, or one wrapping
+// ErrInvalid for a scope the rate policy does not allow.
+func (l LimitRate) NoLooserThan(ref LimitRate) error {
+	switch l.Scope {
+	case ScopeBroker, ScopeAsset:
+		if l.Window != ref.Window {
+			return fmt.Errorf(
+				"window %s differs from the current %s on a fixed-window scope: %w",
+				l.Window, ref.Window, ErrLoosening,
+			)
+		}
+	case ScopeAccount, ScopeAccountAsset:
+		if l.Window < ref.Window {
+			return fmt.Errorf(
+				"window %s below the current %s: %w", l.Window, ref.Window, ErrLoosening,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"scope %q not allowed for policy %q: %w",
+			l.Scope, PolicyRateLimit, ErrInvalid,
+		)
+	}
+	if l.MaxOrders > ref.MaxOrders {
+		return fmt.Errorf(
+			"max_orders %d above the current %d: %w",
+			l.MaxOrders, ref.MaxOrders, ErrLoosening,
+		)
+	}
+	return nil
+}
+
+// NoLooserThan returns nil when the order-size barrier is at least as strict
+// as ref, the barrier it would replace or override: it carries every cap ref
+// carries, none above ref's. A cap ref lacks may take any value. Otherwise it
+// returns an error wrapping ErrLoosening that names the looser cap.
+func (l LimitOrderSize) NoLooserThan(ref LimitOrderSize) error {
+	if err := boundNoLooserThan(
+		"max_quantity", l.MaxQuantity, ref.MaxQuantity, false,
+	); err != nil {
+		return err
+	}
+	return boundNoLooserThan(
+		"max_notional", l.MaxNotional, ref.MaxNotional, false,
+	)
+}
+
+// NoLooserThan returns nil when the Spot Funds P&L-bounds barrier is at least
+// as strict as ref, the barrier it would replace or take over from: it is in
+// ref's currency, since bounds in another currency are not comparable, it
+// carries every bound ref carries, its lower bound is not below ref's and its
+// upper bound is not above ref's. A bound ref lacks may take any value.
+// Otherwise it returns an error wrapping ErrLoosening that names what loosens.
+func (l LimitSpotFundsPnlBounds) NoLooserThan(ref LimitSpotFundsPnlBounds) error {
+	if l.Currency != ref.Currency {
+		return fmt.Errorf(
+			"currency %s differs from the current %s: %w",
+			l.Currency, ref.Currency, ErrLoosening,
+		)
+	}
+	if err := boundNoLooserThan(
+		"lower_bound", l.LowerBound, ref.LowerBound, true,
+	); err != nil {
+		return err
+	}
+	return boundNoLooserThan(
+		"upper_bound", l.UpperBound, ref.UpperBound, false,
+	)
+}
+
+// InAccountCurrency returns nil when the adjustment r adjusts currency, the
+// own currency of the account r applies to: the one asset whose balances a
+// tighten-only caller may change, as a lower balance of it is a withdrawal.
+// Lowering any other asset, a position, moves the quantity the engine
+// realizes P&L against: an absolute that does not end flat keeps the average
+// entry price, so a later buy realizes a P&L that never happened; a lower
+// held reserved by an accepted sell clears the average, so the venue fill
+// opens a short whose loss is never realized; and lowering a position with no
+// average dodges the MissingCostBasis halt. An empty currency, an account
+// with none of its own, refuses every asset: a group's or the default
+// currency does not count. Otherwise it returns an error wrapping ErrLoosening
+// that says what an agent may adjust.
+func (r AdjustmentRequest) InAccountCurrency(currency string) error {
+	if currency == "" {
+		return fmt.Errorf(
+			"%s; the account has none: %w", agentMayAdjust(currency), ErrLoosening,
+		)
+	}
+	if r.Asset != currency {
+		return fmt.Errorf(
+			"%s; asset %s is not it: %w",
+			agentMayAdjust(currency), r.Asset, ErrLoosening,
+		)
+	}
+	return nil
+}
+
+// InExistingAccountCurrency returns nil when the adjustment r adjusts
+// currency, the account's own (InAccountCurrency), and exists reports that the
+// asset of that code is stored: adjusting an asset that does not exist creates
+// it, and a tighten-only caller may not. Otherwise it returns an error wrapping
+// ErrLoosening that says what an agent may adjust.
+func (r AdjustmentRequest) InExistingAccountCurrency(
+	currency string, exists bool,
+) error {
+	if err := r.InAccountCurrency(currency); err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf(
+			"%s; no such asset exists, and an agent may not create one: %w",
+			agentMayAdjust(currency), ErrLoosening,
+		)
+	}
+	return nil
+}
+
+// agentMayAdjust says what a tighten-only caller may adjust in an account
+// whose own currency is currency, empty when it has none: the text every
+// refusal of the asset or the money its adjustment changes begins with.
+func agentMayAdjust(currency string) string {
+	own := "own currency"
+	if currency != "" {
+		own = "currency " + currency
+	}
+	return "an agent may only lower the balance, held or incoming of the " +
+		"account's " + own
+}
+
+// NoLooserThan returns nil when the adjustment r, made by a tighten-only
+// caller, only lowers the money of the account it applies to: currency is the
+// account's own currency, which r must adjust (InAccountCurrency), and current
+// the stored balance of it, a missing one being the zero balance. Each of
+// balance (available), held and incoming that r names may only go down: a
+// delta must not lie above zero, and an absolute must not lie above the
+// field's current value, an empty one being zero. A lower held never raises
+// spendable funds, which count held only while it is negative, and incoming is
+// funds still to come. The average entry price and the realized P&L are the
+// operator's books: r may name either only with its current value, compared
+// by value, and an empty current one is no value, so any given one differs. A
+// realized P&L is refused whatever its value while current's P&L calculation
+// is halted, as it would restart it, and so is a halt r would set. A bound only
+// constrains the result, so it may take any value. Every value is parsed with
+// ParseEngineDecimal, so one it does not accept is an error, never a pass.
+// Otherwise it returns an error wrapping ErrLoosening that says what an agent
+// may change.
+func (r AdjustmentRequest) NoLooserThan(currency string, current Balance) error {
+	if err := r.InAccountCurrency(currency); err != nil {
+		return err
+	}
+	lowerOnly := agentMayAdjust(currency)
+	for _, field := range []struct {
+		name    string
+		amount  *AdjustmentAmount
+		current string
+	}{
+		{"balance", r.Balance, current.Available},
+		{"held", r.Held, current.Held},
+		{"incoming", r.Incoming, current.Incoming},
+	} {
+		if field.amount == nil {
+			continue
+		}
+		value, err := ParseEngineDecimal(field.amount.Value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", field.name, err)
+		}
+		switch field.amount.Mode {
+		case AdjustmentModeDelta:
+			if value.IsPositive() {
+				return fmt.Errorf(
+					"%s; %s delta %s lies above zero: %w",
+					lowerOnly, field.name, field.amount.Value, ErrLoosening,
+				)
+			}
+		case AdjustmentModeAbsolute:
+			now := field.current
+			if now == "" {
+				now = "0"
+			}
+			if err := boundNoLooserThan(
+				field.name, field.amount.Value, now, false,
+			); err != nil {
+				return fmt.Errorf("%s; %w", lowerOnly, err)
+			}
+		default:
+			return fmt.Errorf(
+				"%s mode %q is neither %q nor %q: %w",
+				field.name, field.amount.Mode, AdjustmentModeAbsolute,
+				AdjustmentModeDelta, ErrInvalid,
+			)
+		}
+	}
+	if r.RealizedPnlHaltReason != "" {
+		return fmt.Errorf(
+			"an agent may not halt the position's P&L calculation: %w",
+			ErrLoosening,
+		)
+	}
+	if r.RealizedPnl != "" && current.RealizedPnlHaltReason != "" {
+		return fmt.Errorf(
+			"an agent may not set the realized P&L of a position whose P&L "+
+				"calculation is halted for %s, as it would restart it: %w",
+			current.RealizedPnlHaltReason, ErrLoosening,
+		)
+	}
+	books := "an agent may not change the average entry price or the realized P&L"
+	for _, field := range []struct{ name, value, current string }{
+		{"average entry price", r.AverageEntryPrice, current.AverageEntryPrice},
+		{"realized P&L", r.RealizedPnl, current.RealizedPnl},
+	} {
+		if field.value == "" {
+			continue
+		}
+		if field.current == "" {
+			return fmt.Errorf(
+				"%s; %s %s given while the current is unset: %w",
+				books, field.name, field.value, ErrLoosening,
+			)
+		}
+		// A value neither above nor below the current one is the current one.
+		for _, floor := range []bool{false, true} {
+			if err := boundNoLooserThan(
+				field.name, field.value, field.current, floor,
+			); err != nil {
+				return fmt.Errorf("%s; %w", books, err)
+			}
+		}
+	}
+	return nil
+}
+
+// TradingRuntimeIDPrefix begins the external id of every record the trading
+// runtime books itself: a venue fee's adjustment,
+// trading:<connection>:fee:<fee id>, and an execution report,
+// trading:<client order id>:<suffix>. The namespace is reserved for the
+// runtime (AdjustmentIDOutsideTradingRuntime).
+const TradingRuntimeIDPrefix = "trading:"
+
+// AdjustmentIDOutsideTradingRuntime returns nil when id, the external id a
+// tighten-only caller gives its adjustment, does not begin with
+// TradingRuntimeIDPrefix, as the zero id, one the store generates, does not.
+// The runtime books a venue fee as an adjustment under such an id and takes an
+// adjustment already stored under it for that fee booked: after an accepted
+// one the fee is never debited, and after a rejected one it is skipped, so an
+// adjustment taking the id first would leave the fee undebited. Otherwise it
+// returns an error wrapping ErrLoosening that says the namespace is reserved
+// for the trading runtime.
+func AdjustmentIDOutsideTradingRuntime(id ExternalID) error {
+	if strings.HasPrefix(id.String(), TradingRuntimeIDPrefix) {
+		return fmt.Errorf(
+			"adjustment id %q: an id starting with %q is reserved for the "+
+				"trading runtime: %w",
+			id, TradingRuntimeIDPrefix, ErrLoosening,
+		)
+	}
+	return nil
+}
+
+// boundNoLooserThan compares one optional exact decimal bound, value, with the
+// reference's, ref, by value. A bound ref lacks may take any value. A bound ref
+// carries must be present and must not lie below ref when floor is set, or
+// above it otherwise; else it returns an error wrapping ErrLoosening. Both are
+// parsed with ParseEngineDecimal, so the comparison's work is bounded by their
+// length, and a value it does not accept is an error, never a pass.
+func boundNoLooserThan(field, value, ref string, floor bool) error {
+	if ref == "" {
+		return nil
+	}
+	if value == "" {
+		return fmt.Errorf(
+			"%s unset while the current is %s: %w", field, ref, ErrLoosening,
+		)
+	}
+	v, err := ParseEngineDecimal(value)
+	if err != nil {
+		return fmt.Errorf("%s: %w", field, err)
+	}
+	r, err := ParseEngineDecimal(ref)
+	if err != nil {
+		return fmt.Errorf("the current %s: %w", field, err)
+	}
+	switch {
+	case floor && v.LessThan(r):
+		return fmt.Errorf(
+			"%s %s below the current %s: %w", field, value, ref, ErrLoosening,
+		)
+	case !floor && v.GreaterThan(r):
+		return fmt.Errorf(
+			"%s %s above the current %s: %w", field, value, ref, ErrLoosening,
 		)
 	}
 	return nil

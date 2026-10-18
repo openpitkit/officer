@@ -124,14 +124,16 @@ func TestTradingMutationsAuditAndGate(t *testing.T) {
 				mutate = func() error { return n.PutTradingAccess(ctx, access, true, testCaller) }
 				detail = "put trading access connection/account"
 			case "remove":
-				mutate = func() error { return n.RemoveTradingAccess(ctx, access.Connection, access.Account, "", testCaller) }
+				mutate = func() error {
+					return n.RemoveTradingAccess(ctx, access.Connection, access.Account, "", true, testCaller)
+				}
 				detail = "remove trading access connection/account"
 			case "grant group":
 				mutate = func() error { return n.PutTradingAccess(ctx, access, true, testCaller) }
 				detail = "put trading access connection/group:desk/venue-subaccount"
 			case "remove group":
 				mutate = func() error {
-					return n.RemoveTradingAccess(ctx, access.Connection, "", access.AccountGroup, testCaller)
+					return n.RemoveTradingAccess(ctx, access.Connection, "", access.AccountGroup, true, testCaller)
 				}
 				detail = "remove trading access connection/group:desk"
 			}
@@ -331,7 +333,7 @@ func TestTradingAccessRejectsInvalidSubjectBeforeFeeRule(t *testing.T) {
 		if err := n.PutTradingAccess(ctx, access, true, testCaller); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("put %+v error = %v, want ErrInvalid", access, err)
 		}
-		if err := n.RemoveTradingAccess(ctx, access.Connection, access.Account, access.AccountGroup, testCaller); !errors.Is(err, domain.ErrInvalid) {
+		if err := n.RemoveTradingAccess(ctx, access.Connection, access.Account, access.AccountGroup, true, testCaller); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("remove %+v error = %v, want ErrInvalid", access, err)
 		}
 	}
@@ -443,7 +445,7 @@ func TestTradingFeeAccountClearingRules(t *testing.T) {
 				t.Fatalf("clear audit = %+v, want previous account and clear detail", rows[0])
 			}
 			if tc.wantRefusal {
-				if err := n.RemoveTradingAccess(ctx, connection.ExternalID, tc.revoke.Account, tc.revoke.AccountGroup, testCaller); err != nil {
+				if err := n.RemoveTradingAccess(ctx, connection.ExternalID, tc.revoke.Account, tc.revoke.AccountGroup, true, testCaller); err != nil {
 					t.Fatal(err)
 				}
 				if err := n.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "", testCaller); err != nil {
@@ -736,6 +738,335 @@ func TestMemoryTradingGroupAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	effective("a new desk inherits nothing")
+}
+
+// tradingAgentState is what a refused trading write must leave as it was: the
+// connection, its instrument mappings and grants, and the audit trail.
+type tradingAgentState struct {
+	connection  domain.TradingConnection
+	instruments []domain.TradingInstrument
+	grants      []store.TradingAccessListRow
+	audit       []domain.AuditRow
+}
+
+// readTradingAgentState reads the tradingAgentState of connection from the
+// store of n.
+func readTradingAgentState(
+	t *testing.T, n *localNode, connection domain.ExternalID,
+) tradingAgentState {
+	t.Helper()
+	ctx := context.Background()
+	stored, found, err := n.realm.GetTradingConnection(ctx, connection)
+	if err != nil || !found {
+		t.Fatalf("GetTradingConnection(%s): found=%v err=%v", connection, found, err)
+	}
+	instruments, err := n.realm.ListTradingInstruments(ctx, connection)
+	if err != nil {
+		t.Fatalf("ListTradingInstruments: %v", err)
+	}
+	grants, err := n.realm.ListTradingAccessForConnection(ctx, connection)
+	if err != nil {
+		t.Fatalf("ListTradingAccessForConnection: %v", err)
+	}
+	audit, err := n.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	return tradingAgentState{
+		connection: stored, instruments: instruments, grants: grants, audit: audit,
+	}
+}
+
+// newAgentTradingNode builds a node holding the disabled connection of
+// newTradingFeeAccountNode with the fee account fees, an AAPL mapping, a grant
+// to the account first, and the group team, so that every trading write of
+// TestLocalNode_AgentTradingWideningRefused succeeds for an operator.
+func newAgentTradingNode(t *testing.T) (*localNode, domain.ExternalID) {
+	t.Helper()
+	ctx := context.Background()
+	n, realm, connection := newTradingFeeAccountNode(t)
+	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "team"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := realm.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+		Connection: connection.ExternalID, ExternalSymbol: "AAPL",
+		BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := realm.PutTradingAccess(ctx, domain.TradingAccess{
+		Connection: connection.ExternalID, Account: "first",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := realm.SetTradingConnectionFeeAccount(
+		ctx, connection.ExternalID, "fees",
+	); err != nil {
+		t.Fatal(err)
+	}
+	return n, connection.ExternalID
+}
+
+// TestLocalNode_AgentTradingWideningRefused refuses an agent each trading
+// write that widens what can be sent or changes how venue fees are booked - a
+// grant to an account or a group, an enable of a disabled connection, a
+// mapping's add, disable or delete, and a fee account's set or clear - before
+// anything changes: no row and no audit entry. Every operator caller makes the
+// same write as before.
+func TestLocalNode_AgentTradingWideningRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		write func(*localNode, domain.ExternalID, domain.Caller) error
+	}{
+		{"grant an account", func(n *localNode, connection domain.ExternalID, caller domain.Caller) error {
+			return n.PutTradingAccess(ctx, domain.TradingAccess{
+				Connection: connection, Account: "second",
+			}, true, caller)
+		}},
+		{"grant a group", func(n *localNode, connection domain.ExternalID, caller domain.Caller) error {
+			return n.PutTradingAccess(ctx, domain.TradingAccess{
+				Connection: connection, AccountGroup: "team",
+			}, true, caller)
+		}},
+		{"enable the connection", func(n *localNode, connection domain.ExternalID, caller domain.Caller) error {
+			return n.SetTradingConnectionEnabled(ctx, connection, true, caller)
+		}},
+		{"add a mapping", func(n *localNode, connection domain.ExternalID, caller domain.Caller) error {
+			return n.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+				Connection: connection, ExternalSymbol: "AAPL.EU",
+				BaseAsset: "AAPL", QuoteAsset: "EUR", Enabled: true,
+			}, caller)
+		}},
+		{"disable a mapping", func(n *localNode, connection domain.ExternalID, caller domain.Caller) error {
+			return n.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+				Connection: connection, ExternalSymbol: "AAPL",
+				BaseAsset: "AAPL", QuoteAsset: "USD",
+			}, caller)
+		}},
+		{"delete a mapping", func(n *localNode, connection domain.ExternalID, caller domain.Caller) error {
+			return n.DeleteTradingInstrument(ctx, connection, "AAPL", caller)
+		}},
+		{"set the fee account", func(n *localNode, connection domain.ExternalID, caller domain.Caller) error {
+			return n.SetTradingConnectionFeeAccount(ctx, connection, "second", caller)
+		}},
+		{"clear the fee account", func(n *localNode, connection domain.ExternalID, caller domain.Caller) error {
+			return n.SetTradingConnectionFeeAccount(ctx, connection, "", caller)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			t.Run("agent", func(t *testing.T) {
+				t.Parallel()
+				n, connection := newAgentTradingNode(t)
+				before := readTradingAgentState(t, n, connection)
+				requireLoosening(t, tc.name, tc.write(n, connection, agentCaller))
+				if after := readTradingAgentState(t, n, connection); !reflect.DeepEqual(after, before) {
+					t.Fatalf("refusal changed the trading state: before=%+v after=%+v", before, after)
+				}
+			})
+			for name, caller := range operatorCallers {
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					n, connection := newAgentTradingNode(t)
+					before := readTradingAgentState(t, n, connection)
+					if err := tc.write(n, connection, caller); err != nil {
+						t.Fatalf("%s: %v", tc.name, err)
+					}
+					after := readTradingAgentState(t, n, connection)
+					rows, err := n.realm.ListAuditFiltered(ctx, domain.AuditFilter{
+						Actions: []domain.AuditAction{domain.AuditActionSetTrading},
+					}, 10)
+					if err != nil || len(rows) != 1 || rows[0].Source != caller.Source {
+						t.Fatalf("%s audit = %+v err=%v, want one row from %s", tc.name, rows, err, caller.Source)
+					}
+					before.audit, after.audit = nil, nil
+					if reflect.DeepEqual(after, before) {
+						t.Fatalf("%s changed nothing: %+v", tc.name, after)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestLocalNode_AgentTradingNarrowingPasses lets an agent narrow trading as
+// before - revoke an account's grant or a group's, disable a connection - and
+// refuses its enable of a connection that is already enabled, since the
+// backend restarts the trading runtime after any enable.
+func TestLocalNode_AgentTradingNarrowingPasses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	n, connection := newAgentTradingNode(t)
+	if err := n.realm.PutTradingAccess(ctx, domain.TradingAccess{
+		Connection: connection, AccountGroup: "team",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.realm.SetTradingConnectionEnabled(ctx, connection, true); err != nil {
+		t.Fatal(err)
+	}
+
+	before := readTradingAgentState(t, n, connection)
+	requireLoosening(t, "enable an enabled connection",
+		n.SetTradingConnectionEnabled(ctx, connection, true, agentCaller))
+	if after := readTradingAgentState(t, n, connection); !reflect.DeepEqual(after, before) {
+		t.Fatalf("refusal changed the trading state: before=%+v after=%+v", before, after)
+	}
+
+	for _, write := range []struct {
+		name string
+		call func() error
+	}{
+		{"revoke an account grant", func() error {
+			return n.RemoveTradingAccess(ctx, connection, "first", "", true, agentCaller)
+		}},
+		{"revoke a group grant", func() error {
+			return n.RemoveTradingAccess(ctx, connection, "", "team", true, agentCaller)
+		}},
+		{"disable the connection", func() error {
+			return n.SetTradingConnectionEnabled(ctx, connection, false, agentCaller)
+		}},
+	} {
+		if err := write.call(); err != nil {
+			t.Fatalf("%s: %v", write.name, err)
+		}
+	}
+	after := readTradingAgentState(t, n, connection)
+	if after.connection.Enabled || len(after.grants) != 0 {
+		t.Fatalf(
+			"after the agent narrowed: connection=%+v grants=%+v, want it disabled with no grant",
+			after.connection, after.grants,
+		)
+	}
+	rows, err := n.realm.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionSetTrading},
+	}, 10)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("narrowing audit = %+v err=%v, want three rows", rows, err)
+	}
+	for _, row := range rows {
+		if row.Source != domain.SourceMCP {
+			t.Fatalf("narrowing audit row %+v, want the agent's", row)
+		}
+	}
+}
+
+// newLastSenderNode builds the node of newTradingFeeAccountNode holding the
+// grants, the group team with the accounts members, and the fee account
+// feeAccount, written to the store directly so that no grant rule applies.
+func newLastSenderNode(
+	t *testing.T, grants []domain.TradingAccess, members []domain.AccountID,
+	feeAccount domain.AccountID,
+) (*localNode, domain.ExternalID) {
+	t.Helper()
+	ctx := context.Background()
+	n, realm, connection := newTradingFeeAccountNode(t)
+	if _, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "team"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range members {
+		if err := realm.SetAccountGroup(ctx, member, "team"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, grant := range grants {
+		grant.Connection = connection.ExternalID
+		if err := realm.PutTradingAccess(ctx, grant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := realm.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, feeAccount); err != nil {
+		t.Fatal(err)
+	}
+	return n, connection.ExternalID
+}
+
+// TestLocalNode_AgentLastFeeSenderRevokeRefused refuses an agent, on a
+// provider with unlinked fees, the revoke after which no grant of a connection
+// without a fee account reaches an account while before it they reached
+// exactly one, as the connection's venue fees would then be skipped instead of
+// debited: no grant, fee account or audit row changes, and a failed read of
+// the grants is returned, never passed. A revoke that leaves an account able
+// to send, one from two reached accounts to none, whose fees are skipped
+// already, one on a connection with a fee account, one on a provider without
+// unlinked fees, and every operator caller's revoke pass.
+func TestLocalNode_AgentLastFeeSenderRevokeRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first := domain.TradingAccess{Account: "first"}
+	team := domain.TradingAccess{AccountGroup: "team"}
+	for _, tc := range []struct {
+		name       string
+		grants     []domain.TradingAccess
+		members    []domain.AccountID
+		feeAccount domain.AccountID
+		require    bool
+		revoke     domain.TradingAccess
+		refused    bool
+	}{
+		{name: "the only account grant", grants: []domain.TradingAccess{first}, require: true, revoke: first, refused: true},
+		{name: "the only group grant", grants: []domain.TradingAccess{team}, members: []domain.AccountID{"first"}, require: true, revoke: team, refused: true},
+		{name: "the only group grant to two members", grants: []domain.TradingAccess{team}, members: []domain.AccountID{"first", "second"}, require: true, revoke: team},
+		{name: "beside an empty group's grant", grants: []domain.TradingAccess{first, team}, require: true, revoke: first, refused: true},
+		{name: "beside a member's group grant", grants: []domain.TradingAccess{first, team}, members: []domain.AccountID{"second"}, require: true, revoke: first},
+		{name: "with a fee account", grants: []domain.TradingAccess{first}, feeAccount: "fees", require: true, revoke: first},
+		{name: "on linked fees", grants: []domain.TradingAccess{first}, revoke: first},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			n, connection := newLastSenderNode(t, tc.grants, tc.members, tc.feeAccount)
+			before := readTradingAgentState(t, n, connection)
+			err := n.RemoveTradingAccess(
+				ctx, connection, tc.revoke.Account, tc.revoke.AccountGroup, tc.require, agentCaller,
+			)
+			after := readTradingAgentState(t, n, connection)
+			if tc.refused {
+				requireLoosening(t, tc.name, err)
+				if !reflect.DeepEqual(after, before) {
+					t.Fatalf("refusal changed the trading state: before=%+v after=%+v", before, after)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("agent revoke %s: %v", tc.name, err)
+			}
+			if len(after.grants) != len(before.grants)-1 || len(after.audit) != len(before.audit)+1 {
+				t.Fatalf("agent revoke %s left grants %+v and audit %+v", tc.name, after.grants, after.audit)
+			}
+		})
+	}
+	t.Run("failed grant read", func(t *testing.T) {
+		t.Parallel()
+		n, connection := newLastSenderNode(t, []domain.TradingAccess{first}, nil, "")
+		before := readTradingAgentState(t, n, connection)
+		readFailure := errors.New("grant read failed")
+		realm := n.realm
+		n.realm = &failTradingAccessReadRealm{RealmStore: realm, err: readFailure}
+		err := n.RemoveTradingAccess(ctx, connection, "first", "", true, agentCaller)
+		n.realm = realm
+		if !errors.Is(err, readFailure) {
+			t.Fatalf("revoke over a failed grant read = %v, want the read failure", err)
+		}
+		if after := readTradingAgentState(t, n, connection); !reflect.DeepEqual(after, before) {
+			t.Fatalf("failed read changed the trading state: before=%+v after=%+v", before, after)
+		}
+	})
+	for name, caller := range operatorCallers {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n, connection := newLastSenderNode(t, []domain.TradingAccess{first}, nil, "")
+			before := readTradingAgentState(t, n, connection)
+			if err := n.RemoveTradingAccess(ctx, connection, "first", "", true, caller); err != nil {
+				t.Fatalf("%s revoke of the last sender: %v", name, err)
+			}
+			after := readTradingAgentState(t, n, connection)
+			if len(after.grants) != 0 || len(after.audit) != len(before.audit)+1 {
+				t.Fatalf("%s revoke left grants %+v and audit %+v", name, after.grants, after.audit)
+			}
+		})
+	}
 }
 
 func (r *rejectTradingRealm) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {

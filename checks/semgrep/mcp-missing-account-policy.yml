@@ -1,0 +1,56 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# An MCP tool passes a missing-account policy only for a named account (Go).
+#
+# REST reads ?missingAccount= only for a request that names an account and
+# ignores a value sent with none (missingAccountQuery in
+# httpapi/httpapi_query.go). In a composition that fixes one account, a call
+# that names none acts on that account, and the core validates and applies a
+# policy passed with it there, so a tool that passes the agent's
+# missingAccount as given answers otherwise than REST. Every mcptools call
+# site takes its policy from missingAccountPolicy (mcptools/tools.go), which
+# passes none when no account is named. A policy made from the agent's value
+# anywhere else in mcptools - a domain.MissingAccountPolicy conversion or a
+# domain.ParseMissingAccountPolicy call - bypasses it.
+#
+# The rule matches the package name domain as mcptools imports it; an import
+# under another name is not matched.
+
+rules:
+  - id: mcp-missing-account-policy-outside-helper
+    message: >-
+      An MCP tool makes a missing-account policy outside missingAccountPolicy.
+      Take it from missingAccountPolicy, which passes none when the call names
+      no account, as REST ignores the query parameter then; the core applies a
+      policy passed with no account to the one account of a single-account
+      composition.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-either:
+          - pattern: domain.MissingAccountPolicy($X)
+          - pattern: domain.ParseMissingAccountPolicy($X)
+      - pattern-not-inside: |
+          func missingAccountPolicy(...) $R {
+            ...
+          }
+    paths:
+      include:
+        - /mcptools/**
+      exclude:
+        - "**/*_test.go"

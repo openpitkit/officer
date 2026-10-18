@@ -273,7 +273,7 @@ func TestFeeAccountTargets(t *testing.T) {
 			f.start()
 			f.send(f.submit("1"))
 			if scenario == "no bindings" {
-				must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
+				must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", true, testCaller))
 			}
 			if scenario == "two bindings" || scenario == "bound fee account" {
 				must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{Connection: f.connection.ExternalID, Account: "other"}, true, testCaller))
@@ -321,7 +321,7 @@ func TestFeeAccountThroughGroup(t *testing.T) {
 			}
 			must(t, f.n.SetTradingConnectionFeeAccount(testCtx, f.connection.ExternalID, "fees", testCaller))
 			must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{AccountGroup: "team", Connection: f.connection.ExternalID}, true, testCaller))
-			must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
+			must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", true, testCaller))
 			f.start()
 			f.send(f.submit("1"))
 			v.mu.Lock()
@@ -404,7 +404,7 @@ func TestFeeAccountSnapshotPreventsMixedTarget(t *testing.T) {
 	st := &feeAccountChangeStore{Store: f.st}
 	st.change = func() {
 		must(t, f.n.SetTradingConnectionFeeAccount(testCtx, f.connection.ExternalID, "fees", testCaller))
-		must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
+		must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", true, testCaller))
 		must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{Account: "other", Connection: f.connection.ExternalID}, true, testCaller))
 	}
 	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
@@ -451,7 +451,7 @@ func TestAppliedFeeReplayAfterTargetOrMappingRemoval(t *testing.T) {
 			feeBalance(t, f, "USD", "997")
 			r.Stop()
 			if change == "revoke binding" {
-				must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", testCaller))
+				must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", true, testCaller))
 			} else {
 				must(t, f.n.DeleteTradingInstrument(testCtx, f.connection.ExternalID, "AAPL", testCaller))
 			}

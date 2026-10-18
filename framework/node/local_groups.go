@@ -527,7 +527,12 @@ func (n *localNode) ensureGroupRegisteredLocked(
 
 // DeleteGroup removes the group, detaches its member accounts, rebuilds the
 // engine from the resulting snapshot, and audits the action. Account-owned
-// trading and compliance history remains intact.
+// trading and compliance history remains intact. A tighten-only caller's
+// delete, with or without force, is refused before anything changes while the
+// group is blocked, since the block would stop applying to its members, while
+// the group carries a group-scoped Spot Funds P&L bound, and while any
+// rate-limit barrier is configured, since the engine rebuild would reset every
+// rate-limit window.
 func (n *localNode) DeleteGroup(
 	ctx context.Context, code string, force bool, caller domain.Caller,
 ) error {
@@ -542,6 +547,14 @@ func (n *localNode) DeleteGroup(
 	}
 	if !ok {
 		return fmt.Errorf("group %q: %w", code, domain.ErrNotFound)
+	}
+	// The tighten-only guards precede the currency guard, which audits its own
+	// refusal: a tighten-only refusal writes nothing.
+	if err := n.guardTightenOnlyGroupDelete(ctx, group, caller); err != nil {
+		return err
+	}
+	if err := n.guardTightenOnlyRebuild(ctx, caller); err != nil {
+		return fmt.Errorf("delete group %q: %w", code, err)
 	}
 	members, err := n.realm.ListGroupAccounts(ctx, code)
 	if err != nil {
@@ -617,6 +630,54 @@ func (n *localNode) DeleteGroup(
 		return n.fatalPostEngineAuditByCode(
 			"audit delete group", "group", code,
 			fmt.Errorf("audit delete group: %w", err),
+		)
+	}
+	return nil
+}
+
+// guardTightenOnlyGroupDelete refuses a tighten-only caller's delete of group,
+// with or without force, while the group protects its members (see
+// groupProtection), since the protection would stop applying to them. It
+// returns nil for a caller that is not tighten-only.
+func (n *localNode) guardTightenOnlyGroupDelete(
+	ctx context.Context, group domain.AccountGroup, caller domain.Caller,
+) error {
+	if !caller.TightenOnly() {
+		return nil
+	}
+	if err := n.groupProtection(ctx, group); err != nil {
+		return fmt.Errorf("delete group: %w", err)
+	}
+	return nil
+}
+
+// groupProtection refuses the shedding of what group applies to its member
+// accounts through the group - its block, or a group-scoped Spot Funds P&L
+// bound - with an error wrapping domain.ErrLoosening that names the group and
+// the protection. A tighten-only caller may not shed it, neither by deleting
+// the group nor by releasing a member's code, since an account recreated under
+// that code is in no group. It returns the failure of the bound read it needs,
+// and nil when the group applies neither.
+func (n *localNode) groupProtection(
+	ctx context.Context, group domain.AccountGroup,
+) error {
+	if group.Blocked {
+		return fmt.Errorf("group %q is blocked: %w", group.Code, domain.ErrLoosening)
+	}
+	_, bound, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
+		Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Scope:        domain.ScopeAccountGroup,
+		AccountGroup: group.Code,
+	})
+	if err != nil {
+		return fmt.Errorf(
+			"read spot funds pnl-bounds limits for group %q: %w", group.Code, err,
+		)
+	}
+	if bound {
+		return fmt.Errorf(
+			"group %q carries a group-scoped Spot Funds P&L bound: %w",
+			group.Code, domain.ErrLoosening,
 		)
 	}
 	return nil

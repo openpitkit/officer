@@ -27,7 +27,6 @@ import (
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
-	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
@@ -35,9 +34,11 @@ import (
 // The DTOs below are the JSON wire contract of the HTTP surface. They carry the
 // camelCase tags the dashboard SPA expects. Domain and control-plane types
 // carry no JSON tags; this package owns the encoding and the mapping, except
-// for the DTOs shared with the MCP tools: the account, group, order and trade
+// for the DTOs shared with the MCP tools - the account, group, order and trade
 // row DTOs (list_dto.go), the asset DTO (asset_dto.go), the adjustment DTOs
-// (adjustment_dto.go) and the execution-report DTOs (execution_report_dto.go).
+// (adjustment_dto.go) and the execution-report DTOs (execution_report_dto.go) -
+// and the limit DTOs (limit_dto.go), shared there so a second surface can take
+// and answer the same body.
 // framework/web/httpapi owns their encoding and mapping.
 
 type venueOrderDTO struct {
@@ -100,45 +101,6 @@ type assetClassDTO struct {
 	Title      string `json:"title"`
 	Notes      string `json:"notes"`
 	AssetCount int    `json:"assetCount"`
-}
-
-// rateLimitDTO is the wire shape of a rate-limit barrier.
-type rateLimitDTO struct {
-	Scope     string `json:"scope"`
-	Account   string `json:"account"`
-	Asset     string `json:"asset"`
-	WindowMs  int64  `json:"windowMs"`
-	MaxOrders uint64 `json:"maxOrders"`
-}
-
-// orderSizeLimitDTO is the wire shape of an order-size barrier. The ceilings are
-// exact decimal strings; an unset ceiling is the empty string.
-type orderSizeLimitDTO struct {
-	Scope       string `json:"scope"`
-	Account     string `json:"account"`
-	Asset       string `json:"asset"`
-	MaxQuantity string `json:"maxQuantity"`
-	MaxNotional string `json:"maxNotional"`
-}
-
-// spotFundsPnlBoundsLimitDTO is the wire shape of a currency-valued SpotFunds
-// self-computed P&L-bounds barrier.
-type spotFundsPnlBoundsLimitDTO struct {
-	Scope        string `json:"scope"`
-	Account      string `json:"account"`
-	AccountGroup string `json:"accountGroup"`
-	Currency     string `json:"currency"`
-	LowerBound   string `json:"lowerBound"`
-	UpperBound   string `json:"upperBound"`
-}
-
-// accountLimitsDTO is the per-policy view of an account's typed barriers,
-// returned by the account-state and limit-list endpoints. Each slice is always
-// a non-nil JSON array.
-type accountLimitsDTO struct {
-	RateLimits               []rateLimitDTO               `json:"rateLimits"`
-	OrderSizeLimits          []orderSizeLimitDTO          `json:"orderSizeLimits"`
-	SpotFundsPnlBoundsLimits []spotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimits"`
 }
 
 // policyRateValuesDTO carries the rate-limit-specific values of a policy row.
@@ -241,72 +203,9 @@ func toAssetClassRowDTO(row store.AssetClassListRow) assetClassDTO {
 	return dto
 }
 
-// toRateLimitDTO maps a domain.LimitRate onto the wire DTO.
-func toRateLimitDTO(l domain.LimitRate) rateLimitDTO {
-	return rateLimitDTO{
-		Scope:     string(l.Scope),
-		Account:   string(l.Account),
-		Asset:     l.Asset,
-		WindowMs:  l.Window.Milliseconds(),
-		MaxOrders: l.MaxOrders,
-	}
-}
-
-// toOrderSizeLimitDTO maps a domain.LimitOrderSize onto the wire DTO.
-func toOrderSizeLimitDTO(l domain.LimitOrderSize) orderSizeLimitDTO {
-	return orderSizeLimitDTO{
-		Scope:       string(l.Scope),
-		Account:     string(l.Account),
-		Asset:       l.Asset,
-		MaxQuantity: l.MaxQuantity,
-		MaxNotional: l.MaxNotional,
-	}
-}
-
-// toSpotFundsPnlBoundsLimitDTO maps a domain.LimitSpotFundsPnlBounds onto the
-// wire DTO.
-func toSpotFundsPnlBoundsLimitDTO(
-	l domain.LimitSpotFundsPnlBounds,
-) spotFundsPnlBoundsLimitDTO {
-	return spotFundsPnlBoundsLimitDTO{
-		Scope:        string(l.Scope),
-		Account:      string(l.Account),
-		AccountGroup: l.AccountGroup,
-		Currency:     l.Currency,
-		LowerBound:   l.LowerBound,
-		UpperBound:   l.UpperBound,
-	}
-}
-
-// toAccountLimitsDTO maps the per-policy typed barriers onto the wire DTO. Each
-// slice is a non-nil JSON array.
-func toAccountLimitsDTO(limits node.AccountLimits) accountLimitsDTO {
-	rates := make([]rateLimitDTO, 0, len(limits.RateLimits))
-	for _, l := range limits.RateLimits {
-		rates = append(rates, toRateLimitDTO(l))
-	}
-	sizes := make([]orderSizeLimitDTO, 0, len(limits.OrderSizeLimits))
-	for _, l := range limits.OrderSizeLimits {
-		sizes = append(sizes, toOrderSizeLimitDTO(l))
-	}
-	spotFundsPnls := make(
-		[]spotFundsPnlBoundsLimitDTO,
-		0,
-		len(limits.SpotFundsPnlBoundsLimits),
-	)
-	for _, l := range limits.SpotFundsPnlBoundsLimits {
-		spotFundsPnls = append(spotFundsPnls, toSpotFundsPnlBoundsLimitDTO(l))
-	}
-	return accountLimitsDTO{
-		RateLimits:               rates,
-		OrderSizeLimits:          sizes,
-		SpotFundsPnlBoundsLimits: spotFundsPnls,
-	}
-}
-
 // toPolicyRowDTO maps a unified policy list row onto the wire DTO. It carries
 // the shared scope/account/asset axes and the one value payload that matches the
-// row's kind, rendered with the same per-kind fields as toAccountLimitsDTO.
+// row's kind, rendered with the same per-kind fields as httpx.ToAccountLimitsDTO.
 func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 	dto := policyDTO{
 		Kind:         string(row.Kind),

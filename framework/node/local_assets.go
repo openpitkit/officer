@@ -98,9 +98,12 @@ func (n *localNode) CreateAsset(
 }
 
 // UpdateAsset replaces the asset's public code and mutable fields and
-// audits the action. A code rename rebuilds the live engine from the
-// renamed store snapshot and can report ErrEngineRestarting while another
-// rebuild is in progress.
+// audits the action. A code rename republishes the asset's resolver alias on
+// the live engine rather than rebuilding it (see renameAsset) and can report
+// ErrEngineRestarting while an engine rebuild is in progress. A tighten-only
+// caller's code change is refused before anything changes while a barrier
+// references the asset (see guardTightenOnlyAssetRelease); a title or
+// asset-class change alone passes.
 func (n *localNode) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
 ) (domain.Asset, error) {
@@ -143,6 +146,9 @@ func (n *localNode) renameAsset(
 	}
 	if !ok {
 		return domain.Asset{}, fmt.Errorf("asset %q: %w", oldCode, domain.ErrNotFound)
+	}
+	if err := n.guardTightenOnlyAssetRelease(ctx, previous.Code, caller); err != nil {
+		return domain.Asset{}, fmt.Errorf("rename asset %q: %w", oldCode, err)
 	}
 	resolver := n.currentEngine()
 
@@ -205,7 +211,14 @@ func updateAssetDetail(previous string, next string) string {
 }
 
 // DeleteAsset removes the asset and audits the action. A forced delete rebuilds
-// the engine without the rows that the store cascades.
+// the engine without the rows that the store cascades. A tighten-only caller's
+// delete without force is refused before anything changes while a barrier
+// references the asset (see guardTightenOnlyAssetRelease), and its forced
+// delete always, whatever the asset carries: force deletes every dependent row
+// of the asset - balances with their realized P&L, a negative held amount the
+// spendable funds subtract included, orders, trades and adjustments - and an
+// order naming the code recreates the asset with no balance, so a debt or a
+// position the funds and P&L checks measure would be gone.
 func (n *localNode) DeleteAsset(
 	ctx context.Context, code string, force bool, caller domain.Caller,
 ) error {
@@ -221,6 +234,9 @@ func (n *localNode) DeleteAsset(
 		}
 		if !ok {
 			return fmt.Errorf("asset %q: %w", code, domain.ErrNotFound)
+		}
+		if err := n.guardTightenOnlyAssetRelease(ctx, asset.Code, caller); err != nil {
+			return fmt.Errorf("delete asset %q: %w", code, err)
 		}
 		resolver := n.currentEngine()
 		if err := ctx.Err(); err != nil {
@@ -304,6 +320,13 @@ func (n *localNode) DeleteAsset(
 		return nil
 	}
 
+	if caller.TightenOnly() {
+		return fmt.Errorf(
+			"delete asset %q: force would delete the asset's dependent rows with "+
+				"it - balances, orders, trades, adjustments and barriers among them: %w",
+			code, domain.ErrLoosening,
+		)
+	}
 	if err := n.beginEngineRestart(); err != nil {
 		return err
 	}
@@ -364,6 +387,48 @@ func (n *localNode) DeleteAsset(
 	return nil
 }
 
+// guardTightenOnlyAssetRelease refuses a tighten-only caller's release of the
+// asset code names - its delete without force or a change of its code - while
+// a barrier references the asset: a rate-limit or order-size barrier on it, or
+// a Spot Funds P&L bound denominated in it. A release frees the code, so an
+// asset recreated under it - an order auto-creates the assets it names - comes
+// back without the barrier. A forced delete is refused outright (see
+// DeleteAsset). It returns nil for a caller that is not tighten-only.
+func (n *localNode) guardTightenOnlyAssetRelease(
+	ctx context.Context, code string, caller domain.Caller,
+) error {
+	if !caller.TightenOnly() {
+		return nil
+	}
+	limits, err := n.listLimits(ctx, "")
+	if err != nil {
+		return err
+	}
+	for _, limit := range limits.RateLimits {
+		if isAssetRateLimit(limit, code) {
+			return fmt.Errorf(
+				"a rate-limit barrier references the asset: %w", domain.ErrLoosening,
+			)
+		}
+	}
+	for _, limit := range limits.OrderSizeLimits {
+		if isAssetOrderSizeLimit(limit, code) {
+			return fmt.Errorf(
+				"an order-size barrier references the asset: %w", domain.ErrLoosening,
+			)
+		}
+	}
+	for _, limit := range limits.SpotFundsPnlBoundsLimits {
+		if isAssetSpotFundsPnlBoundsLimit(limit, code) {
+			return fmt.Errorf(
+				"a Spot Funds P&L bound is denominated in the asset: %w",
+				domain.ErrLoosening,
+			)
+		}
+	}
+	return nil
+}
+
 func snapshotWithoutAsset(snapshot engine.Snapshot, asset string) engine.Snapshot {
 	snapshot.Assets = slices.DeleteFunc(snapshot.Assets, func(row domain.Asset) bool {
 		return row.Code == asset
@@ -373,17 +438,40 @@ func snapshotWithoutAsset(snapshot engine.Snapshot, asset string) engine.Snapsho
 	})
 	snapshot.RateLimits = slices.DeleteFunc(
 		snapshot.RateLimits,
-		func(row domain.LimitRate) bool { return row.Asset == asset },
+		func(row domain.LimitRate) bool { return isAssetRateLimit(row, asset) },
 	)
 	snapshot.OrderSizeLimits = slices.DeleteFunc(
 		snapshot.OrderSizeLimits,
-		func(row domain.LimitOrderSize) bool { return row.Asset == asset },
+		func(row domain.LimitOrderSize) bool {
+			return isAssetOrderSizeLimit(row, asset)
+		},
 	)
 	snapshot.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
 		snapshot.SpotFundsPnlBoundsLimits,
-		func(row domain.LimitSpotFundsPnlBounds) bool { return row.Currency == asset },
+		func(row domain.LimitSpotFundsPnlBounds) bool {
+			return isAssetSpotFundsPnlBoundsLimit(row, asset)
+		},
 	)
 	return snapshot
+}
+
+// isAssetRateLimit reports whether limit is a rate-limit barrier on asset.
+func isAssetRateLimit(limit domain.LimitRate, asset string) bool {
+	return limit.Asset == asset
+}
+
+// isAssetOrderSizeLimit reports whether limit is an order-size barrier on
+// asset.
+func isAssetOrderSizeLimit(limit domain.LimitOrderSize, asset string) bool {
+	return limit.Asset == asset
+}
+
+// isAssetSpotFundsPnlBoundsLimit reports whether limit is a Spot Funds P&L
+// bound denominated in asset.
+func isAssetSpotFundsPnlBoundsLimit(
+	limit domain.LimitSpotFundsPnlBounds, asset string,
+) bool {
+	return limit.Currency == asset
 }
 
 func snapshotAssetCurrencyDependents(

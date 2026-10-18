@@ -209,7 +209,8 @@ func (n *tradingTestNode) PutTradingAccess(_ context.Context, access domain.Trad
 	n.access = append(n.access, access)
 	return nil
 }
-func (n *tradingTestNode) RemoveTradingAccess(_ context.Context, id domain.ExternalID, account domain.AccountID, accountGroup string, caller domain.Caller) error {
+func (n *tradingTestNode) RemoveTradingAccess(_ context.Context, id domain.ExternalID, account domain.AccountID, accountGroup string, requireFeeAccount bool, caller domain.Caller) error {
+	n.requireFees = requireFeeAccount
 	if err := n.write("remove-access", caller); err != nil {
 		return err
 	}
@@ -879,6 +880,75 @@ func TestTradingRemoveAccessSubject(t *testing.T) {
 	}
 }
 
+// TestTradingRemoveAccessFeePolicy hands the node the connection provider's fee
+// policy with an agent's revoke, so the node can refuse an agent the revoke of
+// the last account that can send through a connection without a fee account.
+func TestTradingRemoveAccessFeePolicy(t *testing.T) {
+	agent := auth.ContextWithCaller(context.Background(), tradingTestAgent)
+	for _, unlinked := range []bool{true, false} {
+		t.Run(fmt.Sprint(unlinked), func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			n.connections = []domain.TradingConnection{tradingTestConnection()}
+			rt.providers[0].UnlinkedFees = unlinked
+			access := domain.TradingAccess{Account: "acct-1", Connection: "connection-1"}
+			n.access = []domain.TradingAccess{access}
+			n.requireFees = !unlinked
+			if err := s.RemoveTradingAccess(agent, access.Connection, access.Account, ""); err != nil {
+				t.Fatal(err)
+			}
+			if n.requireFees != unlinked || len(n.access) != 0 {
+				t.Fatalf("revoke reached the node with requireFeeAccount=%t leaving %+v, want %t and no grant", n.requireFees, n.access, unlinked)
+			}
+		})
+	}
+}
+
+// TestTradingRemoveAccessUnregisteredProvider keeps an operator's revoke on a
+// connection whose provider is no longer registered as it always was: the
+// panel, the REST API and the system remove the grant without resolving the
+// provider. An agent's revoke there is refused with the provider's ErrInvalid
+// and changes nothing: a revoke whose fee rule cannot be decided is never
+// passed.
+func TestTradingRemoveAccessUnregisteredProvider(t *testing.T) {
+	access := domain.TradingAccess{Account: "acct-1", Connection: "connection-1"}
+	newService := func(t *testing.T) (*Service, *tradingTestNode, *tradingTestRuntime) {
+		t.Helper()
+		s, n, rt := newTradingTestService(t)
+		c := tradingTestConnection()
+		c.Provider = "retired"
+		n.connections = []domain.TradingConnection{c}
+		n.access = []domain.TradingAccess{access}
+		return s, n, rt
+	}
+	t.Run("agent", func(t *testing.T) {
+		s, n, rt := newService(t)
+		ctx := auth.ContextWithCaller(context.Background(), tradingTestAgent)
+		err := s.RemoveTradingAccess(ctx, access.Connection, access.Account, "")
+		if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "unknown trading provider") {
+			t.Fatalf("agent revoke = %v, want the provider's ErrInvalid", err)
+		}
+		if len(n.writes) != 0 || !reflect.DeepEqual(n.access, []domain.TradingAccess{access}) ||
+			len(rt.checks) != 0 || rt.restarts != 0 {
+			t.Fatalf(
+				"refused revoke: writes %v, grants %+v, venue checks %d, restarts %d, want none and the grant kept",
+				n.writes, n.access, len(rt.checks), rt.restarts,
+			)
+		}
+	})
+	for name, caller := range tradingTestOperators {
+		t.Run(name, func(t *testing.T) {
+			s, n, _ := newService(t)
+			ctx := auth.ContextWithCaller(context.Background(), caller)
+			if err := s.RemoveTradingAccess(ctx, access.Connection, access.Account, ""); err != nil {
+				t.Fatalf("revoke: %v", err)
+			}
+			if len(n.access) != 0 || !reflect.DeepEqual(n.callers, []domain.Caller{caller}) {
+				t.Fatalf("revoke left %+v by %v, want no grant, removed by the caller", n.access, n.callers)
+			}
+		})
+	}
+}
+
 func TestTradingDestinations(t *testing.T) {
 	s, n, rt := newTradingTestService(t)
 	n.connections = []domain.TradingConnection{tradingTestConnection(), tradingTestConnection(), tradingTestConnection()}
@@ -1095,5 +1165,166 @@ func TestTradingRestartFailure(t *testing.T) {
 	before := rt.restarts
 	if err := s.UpdateTradingConnectionSettings(systemCtx(), "created", "", `{"apiKey":"another-key"}`); !errors.Is(err, domain.ErrAlreadyExists) || rt.restarts != before {
 		t.Fatal("failed node update restarted runtime")
+	}
+}
+
+// tradingTestAgent is an agent over MCP: the caller that may only tighten.
+var tradingTestAgent = domain.Caller{
+	Source: domain.SourceMCP, Principal: domain.PrincipalOperator,
+}
+
+// tradingTestOperators are the callers a trading write serves as it always
+// did: the panel, the REST API and the system.
+var tradingTestOperators = map[string]domain.Caller{
+	"panel":  {Source: domain.SourcePanel, Principal: domain.PrincipalOperator},
+	"api":    {Source: domain.SourceAPI, Principal: domain.PrincipalOperator},
+	"system": auth.SystemCaller(),
+}
+
+// TestTradingAgentCreateRefusedBeforeVenue refuses an agent's create with
+// ErrLoosening before the venue is asked for the account: nothing is stored
+// and the runtime is not restarted. Every operator caller creates the
+// connection as before.
+func TestTradingAgentCreateRefusedBeforeVenue(t *testing.T) {
+	t.Run("agent", func(t *testing.T) {
+		s, n, rt := newTradingTestService(t)
+		ctx := auth.ContextWithCaller(context.Background(), tradingTestAgent)
+		_, err := s.CreateTradingConnection(ctx, tradingTestConnection())
+		if !errors.Is(err, domain.ErrLoosening) {
+			t.Fatalf("agent create = %v, want ErrLoosening", err)
+		}
+		if len(rt.checks) != 0 || len(n.writes) != 0 || rt.restarts != 0 {
+			t.Fatalf(
+				"refused create: venue checks %d, writes %v, restarts %d, want none",
+				len(rt.checks), n.writes, rt.restarts,
+			)
+		}
+	})
+	for name, caller := range tradingTestOperators {
+		t.Run(name, func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			ctx := auth.ContextWithCaller(context.Background(), caller)
+			if _, err := s.CreateTradingConnection(ctx, tradingTestConnection()); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if len(rt.checks) != 1 || len(n.connections) != 1 || rt.restarts != 1 ||
+				!reflect.DeepEqual(n.callers, []domain.Caller{caller}) {
+				t.Fatalf(
+					"create: venue checks %d, connections %d, restarts %d, callers %v",
+					len(rt.checks), len(n.connections), rt.restarts, n.callers,
+				)
+			}
+		})
+	}
+}
+
+// TestTradingAgentCredentialChangeRefusedBeforeVenue refuses an agent's
+// credential change with ErrLoosening before the venue is called: the stored
+// connection is kept and the runtime is not restarted. An agent's update that
+// changes no credential - a label alone, or credentials equal to the stored
+// ones - passes as before, without a venue check or a restart. Every operator
+// caller changes the credentials as before.
+func TestTradingAgentCredentialChangeRefusedBeforeVenue(t *testing.T) {
+	agent := auth.ContextWithCaller(context.Background(), tradingTestAgent)
+	for _, tc := range []struct {
+		name, credentials string
+		refused           bool
+	}{
+		{name: "credential change", credentials: `{"apiKey":"new-key"}`, refused: true},
+		{name: "label only"},
+		{name: "stored credentials", credentials: `{"apiKey":"test-key-value"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			n.connections = []domain.TradingConnection{tradingTestConnection()}
+			before := n.connections[0]
+			err := s.UpdateTradingConnectionSettings(agent, "connection-1", "Renamed", tc.credentials)
+			if len(rt.checks) != 0 || rt.restarts != 0 {
+				t.Fatalf("agent update: venue checks %d, restarts %d, want none", len(rt.checks), rt.restarts)
+			}
+			if tc.refused {
+				if !errors.Is(err, domain.ErrLoosening) {
+					t.Fatalf("agent credential change = %v, want ErrLoosening", err)
+				}
+				if n.connections[0] != before || len(n.writes) != 0 {
+					t.Fatalf("refused update changed the connection: %+v writes %v", n.connections[0], n.writes)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("agent update: %v", err)
+			}
+			want := before
+			want.Label = "Renamed"
+			if n.connections[0] != want || !reflect.DeepEqual(n.callers, []domain.Caller{tradingTestAgent}) {
+				t.Fatalf("agent update stored %+v by %v, want %+v by the agent", n.connections[0], n.callers, want)
+			}
+		})
+	}
+	for name, caller := range tradingTestOperators {
+		t.Run(name, func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			n.connections = []domain.TradingConnection{tradingTestConnection()}
+			ctx := auth.ContextWithCaller(context.Background(), caller)
+			if err := s.UpdateTradingConnectionSettings(ctx, "connection-1", "", `{"apiKey":"new-key"}`); err != nil {
+				t.Fatalf("credential change: %v", err)
+			}
+			const want = `{"apiKey":"new-key","apiSecret":"test-secret-value"}`
+			if got := n.connections[0].Credentials; len(rt.checks) != 1 || rt.restarts != 1 || got != want {
+				t.Fatalf("credential change: venue checks %d, restarts %d, credentials %s", len(rt.checks), rt.restarts, got)
+			}
+		})
+	}
+}
+
+// TestTradingAgentCredentialIntegerChangeRefused refuses an agent's change of
+// a stored integer member above 2^53 to its neighbour, which a float64 decode
+// takes for the same value, with ErrLoosening: nothing is written, the venue
+// is not called and the runtime is not restarted. Every operator caller
+// stores the same update as before, without a venue check or a restart.
+func TestTradingAgentCredentialIntegerChangeRefused(t *testing.T) {
+	// 2^53+1 and 2^53 decode to the same float64.
+	const (
+		stored = `{"apiKey":"test-key-value","apiSecret":"test-secret-value","account":9007199254740993}`
+		update = `{"account":9007199254740992}`
+	)
+	newService := func(t *testing.T) (*Service, *tradingTestNode, *tradingTestRuntime) {
+		t.Helper()
+		s, n, rt := newTradingTestService(t)
+		n.connections = []domain.TradingConnection{tradingTestConnection()}
+		n.connections[0].Credentials = stored
+		return s, n, rt
+	}
+	t.Run("agent", func(t *testing.T) {
+		s, n, rt := newService(t)
+		before := n.connections[0]
+		ctx := auth.ContextWithCaller(context.Background(), tradingTestAgent)
+		err := s.UpdateTradingConnectionSettings(ctx, "connection-1", "", update)
+		if !errors.Is(err, domain.ErrLoosening) {
+			t.Fatalf("agent integer change = %v, want ErrLoosening", err)
+		}
+		if n.connections[0] != before || len(n.writes) != 0 || len(rt.checks) != 0 || rt.restarts != 0 {
+			t.Fatalf(
+				"refused update: connection %+v, writes %v, venue checks %d, restarts %d, want it unchanged with none",
+				n.connections[0], n.writes, len(rt.checks), rt.restarts,
+			)
+		}
+	})
+	for name, caller := range tradingTestOperators {
+		t.Run(name, func(t *testing.T) {
+			s, n, rt := newService(t)
+			ctx := auth.ContextWithCaller(context.Background(), caller)
+			if err := s.UpdateTradingConnectionSettings(ctx, "connection-1", "", update); err != nil {
+				t.Fatalf("integer change: %v", err)
+			}
+			const want = `{"account":9007199254740992,"apiKey":"test-key-value","apiSecret":"test-secret-value"}`
+			if got := n.connections[0].Credentials; got != want || len(rt.checks) != 0 || rt.restarts != 0 ||
+				!reflect.DeepEqual(n.callers, []domain.Caller{caller}) {
+				t.Fatalf(
+					"integer change: credentials %s by %v, venue checks %d, restarts %d",
+					got, n.callers, len(rt.checks), rt.restarts,
+				)
+			}
+		})
 	}
 }

@@ -57,10 +57,14 @@ type Source interface {
 	GetAccountState(ctx context.Context, id domain.AccountID) (
 		domain.Account, node.AccountLimits, error)
 	// CreateAccount creates an account under its public code with its title and
-	// currency and returns the stored row.
+	// currency and returns the stored row. A tighten-only caller (an agent) is
+	// refused with domain.ErrLoosening.
 	CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error)
 	// UpdateAccount replaces the public code and title of the account oldID
-	// names and returns the stored row.
+	// names and returns the stored row. A tighten-only caller (an agent) is
+	// refused a code change with domain.ErrLoosening for a blocked account, an
+	// account in a blocked group or in a group carrying a group-scoped Spot
+	// Funds P&L bound, and an account carrying a barrier of its own.
 	UpdateAccount(
 		ctx context.Context, oldID domain.AccountID, account domain.Account,
 	) (domain.Account, error)
@@ -68,7 +72,12 @@ type Source interface {
 	// rows is refused; force deletes them with it, the account's venue-fee
 	// adjustments included, so fees it received may be booked again to the
 	// connection's current fee account on the next restart. A trading
-	// connection's fee account is refused even with force.
+	// connection's fee account is refused even with force. A tighten-only
+	// caller (an agent) is refused with domain.ErrLoosening, with or without
+	// force, for a blocked account, an account in a blocked group or in a group
+	// carrying a group-scoped Spot Funds P&L bound, an account carrying a
+	// barrier of its own, and any account while a rate-limit barrier is
+	// configured.
 	DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error
 	// SetAccountCurrency sets the account's own realized P&L currency, or
 	// clears it when currency is empty. A change of the account's effective
@@ -82,7 +91,15 @@ type Source interface {
 	// non-zero externalID is the record's handle, a zero one leaves it to the
 	// store, and missing decides whether an account that does not exist yet
 	// is registered or refused. An adjustment the engine reports as changing
-	// nothing is not recorded and returns domain.ErrNoChange.
+	// nothing is not recorded and returns domain.ErrNoChange. A tighten-only
+	// caller (an agent) may only lower the balance, held or incoming of the
+	// account's own currency, and is refused with domain.ErrLoosening an
+	// adjustment of any other asset or of an account without a currency of its
+	// own, one that raises a balance field it names - a delta above zero, or an
+	// absolute above the field's current value - that names an average entry
+	// price or a realized P&L other than the current one, or that carries a
+	// realized P&L while the position's P&L calculation is halted, and the
+	// registration of an account or an asset that does not exist yet.
 	ApplyAdjustment(
 		ctx context.Context,
 		account domain.AccountID,
@@ -94,14 +111,22 @@ type Source interface {
 	// asset class and returns the stored row.
 	CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error)
 	// UpdateAsset replaces the public code, title and asset class of the asset
-	// oldCode names and returns the stored row.
+	// oldCode names and returns the stored row. A tighten-only caller (an
+	// agent) is refused a code change with domain.ErrLoosening while a
+	// rate-limit or order-size barrier references the asset or a Spot Funds P&L
+	// bound is denominated in it.
 	UpdateAsset(
 		ctx context.Context, oldCode string, asset domain.Asset,
 	) (domain.Asset, error)
 	// DeleteAsset removes an asset. Without force an asset with dependent rows
 	// is refused; force deletes them with it, the market-data and trading
 	// instruments that reference the asset included. An asset an account or
-	// group holds as its currency is refused even with force.
+	// group holds as its currency is refused even with force. A tighten-only
+	// caller (an agent) is refused with domain.ErrLoosening: with force whatever
+	// the asset carries, since force would delete the asset's balances, orders,
+	// trades and adjustments with it, and without force while a rate-limit or
+	// order-size barrier references the asset or a Spot Funds P&L bound is
+	// denominated in it.
 	DeleteAsset(ctx context.Context, code string, force bool) error
 	// CreateGroup creates an account group under its public code with its
 	// title, currency and notes and returns the stored row.
@@ -115,8 +140,11 @@ type Source interface {
 	) (domain.AccountGroup, error)
 	// DeleteGroup removes an account group and detaches its member accounts.
 	// Without force a group with dependent rows is refused; force deletes them
-	// with it. A delete that would change the effective currency of a member
-	// carrying protected state is refused with a
+	// with it. A tighten-only caller (an agent) is refused with
+	// domain.ErrLoosening, with or without force, for a blocked group, for a
+	// group carrying a group-scoped Spot Funds P&L bound, and for any group
+	// while a rate-limit barrier is configured. A delete that would change the
+	// effective currency of a member carrying protected state is refused with a
 	// domain.CurrencyChangeBlockedError even with force.
 	DeleteGroup(ctx context.Context, code string, force bool) error
 	// ListGroups returns every account group with its block state. An account
@@ -149,6 +177,42 @@ type Source interface {
 	// ListLimits returns the typed barriers filtered by account code.
 	ListLimits(ctx context.Context, account domain.AccountID) (
 		node.AccountLimits, error)
+	// PutRateLimit validates the rate-limit barrier and upserts it. missing
+	// decides whether an account the barrier names that does not exist yet is
+	// registered or refused. A caller passes none for a barrier that names no
+	// account, as REST does: where a composition fixes one account, the core
+	// applies a policy passed with such a barrier to that account. A
+	// tighten-only caller (an agent) is refused with domain.ErrLoosening the
+	// registration of an account that does not exist yet, and a barrier that
+	// admits more orders than the one it replaces, or counts them over another
+	// window on a broker or asset scope or a shorter one on an account or
+	// account_asset scope.
+	PutRateLimit(
+		ctx context.Context,
+		limit domain.LimitRate,
+		missing domain.MissingAccountPolicy,
+	) error
+	// PutOrderSizeLimit validates the order-size barrier and upserts it;
+	// missing follows PutRateLimit. A tighten-only caller (an agent) is refused
+	// with domain.ErrLoosening a barrier that drops or raises a cap of the one
+	// it replaces or of the asset-tier barrier an account-tier one overrides,
+	// and the policy's first barrier while a rate-limit barrier is configured.
+	PutOrderSizeLimit(
+		ctx context.Context,
+		limit domain.LimitOrderSize,
+		missing domain.MissingAccountPolicy,
+	) error
+	// PutSpotFundsPnlBoundsLimit validates the Spot Funds P&L-bounds barrier
+	// and upserts it; missing follows PutRateLimit. A tighten-only caller (an
+	// agent) is refused with domain.ErrLoosening a bound in another currency
+	// than the bound it replaces or takes over from - a new account_group
+	// bound the global one, a new account bound the one that applies to the
+	// account now - or one that drops or loosens a bound of it.
+	PutSpotFundsPnlBoundsLimit(
+		ctx context.Context,
+		limit domain.LimitSpotFundsPnlBounds,
+		missing domain.MissingAccountPolicy,
+	) error
 	// ListAudit returns the most recent n audit rows.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
 	// ListAuditFiltered returns the most recent n audit rows matching the filter.
@@ -159,7 +223,9 @@ type Source interface {
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
 	// GetOrder returns one order addressed by its external id.
 	GetOrder(ctx context.Context, externalID string) (domain.OrderDetail, error)
-	// SetMarketDataInstrumentEnabled toggles one configured market-data instrument.
+	// SetMarketDataInstrumentEnabled toggles one configured market-data
+	// instrument. A tighten-only caller (an agent) is refused an enable with
+	// domain.ErrLoosening; a disable passes.
 	SetMarketDataInstrumentEnabled(
 		ctx context.Context, instanceID, externalSymbol string, enabled bool,
 	) error
@@ -170,29 +236,42 @@ type Source interface {
 	// hold keys in plain text.
 	CredentialStorage(ctx context.Context) (backend.CredentialStorage, error)
 	// CreateTradingConnection stores a connection, assigning an id when empty.
+	// A tighten-only caller (an agent) is refused with domain.ErrLoosening
+	// before the venue is called.
 	CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error)
 	// UpdateTradingConnectionSettings updates label and write-only credentials;
-	// empty values keep the corresponding stored values.
+	// empty values keep the corresponding stored values. A tighten-only caller
+	// (an agent) is refused a credential change with domain.ErrLoosening before
+	// the venue is called; a label-only update passes.
 	UpdateTradingConnectionSettings(ctx context.Context, id, label, credentials string) error
-	// SetTradingConnectionEnabled enables or disables a stored connection.
+	// SetTradingConnectionEnabled enables or disables a stored connection. A
+	// tighten-only caller (an agent) is refused an enable with
+	// domain.ErrLoosening; a disable passes.
 	SetTradingConnectionEnabled(ctx context.Context, id string, enabled bool) error
 	// CheckTradingConnection queries the venue's account identity and status.
 	CheckTradingConnection(ctx context.Context, id string) (trading.AccountInfo, error)
-	// UpsertTradingInstrument stores a venue symbol's Officer asset mapping.
+	// UpsertTradingInstrument stores a venue symbol's Officer asset mapping. A
+	// tighten-only caller (an agent) is refused with domain.ErrLoosening.
 	UpsertTradingInstrument(ctx context.Context, instrument domain.TradingInstrument) error
-	// DeleteTradingInstrument removes the connection's venue symbol mapping.
+	// DeleteTradingInstrument removes the connection's venue symbol mapping. A
+	// tighten-only caller (an agent) is refused with domain.ErrLoosening.
 	DeleteTradingInstrument(ctx context.Context, connection, externalSymbol string) error
 	// VerifyTradingSymbol reports venue symbol existence and tradability.
 	VerifyTradingSymbol(ctx context.Context, id, external string) (backend.TradingSymbolVerification, error)
 	// SearchTradingSymbols queries venue symbols and reports search support.
 	SearchTradingSymbols(ctx context.Context, id, query string) (backend.TradingSymbolSearch, error)
 	// PutTradingAccess grants an Officer account or an account group access to
-	// a venue connection.
+	// a venue connection. A tighten-only caller (an agent) is refused with
+	// domain.ErrLoosening.
 	PutTradingAccess(ctx context.Context, access domain.TradingAccess) error
 	// RemoveTradingAccess revokes the access of exactly one subject, account or
-	// accountGroup with the other empty, to a connection.
+	// accountGroup with the other empty, to a connection. On a provider with
+	// unlinked fees, a tighten-only caller (an agent) is refused with
+	// domain.ErrLoosening the revoke of the last account that can send through
+	// a connection without a fee account.
 	RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error
-	// SetTradingFeeAccount assigns the unlinked-fee account; empty clears it.
+	// SetTradingFeeAccount assigns the unlinked-fee account; empty clears it. A
+	// tighten-only caller (an agent) is refused either with domain.ErrLoosening.
 	SetTradingFeeAccount(ctx context.Context, connection domain.ExternalID, account domain.AccountID) error
 	// ListTradingDestinations returns account destinations; empty mode lists all.
 	ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]backend.TradingDestinationStatus, error)
@@ -202,7 +281,8 @@ type Source interface {
 	CommandEnabled(ctx context.Context, command string) (bool, error)
 	// SubmitOrder runs the pre-trade pipeline and issues a signed approval.
 	// missing is the caller's explicit choice for an order naming an account that
-	// does not exist yet.
+	// does not exist yet; a tighten-only caller (an agent) is refused its
+	// registration with domain.ErrLoosening.
 	SubmitOrder(
 		ctx context.Context,
 		o domain.Order,
@@ -211,7 +291,10 @@ type Source interface {
 	) (SubmitOrderResult, error)
 	// SubmitDropCopyOrder submits through the distinct unsigned operation. missing
 	// accepts only domain.MissingAccountCreate: a drop-copy reports an execution
-	// that already happened, so it cannot refuse an unknown account.
+	// that already happened, so it cannot refuse an unknown account. A
+	// tighten-only caller (an agent) is refused, with domain.ErrLoosening, a
+	// drop-copy naming an account that does not exist yet, as it would register
+	// the account.
 	SubmitDropCopyOrder(
 		ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 	) (SubmitDropCopyOrderResult, error)
@@ -856,6 +939,26 @@ func (s controlPlaneSource) ListLimits(
 	ctx context.Context, account domain.AccountID,
 ) (node.AccountLimits, error) {
 	return s.cp.ListLimits(ctx, account)
+}
+
+func (s controlPlaneSource) PutRateLimit(
+	ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy,
+) error {
+	return s.cp.PutRateLimit(ctx, limit, missing)
+}
+
+func (s controlPlaneSource) PutOrderSizeLimit(
+	ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy,
+) error {
+	return s.cp.PutOrderSizeLimit(ctx, limit, missing)
+}
+
+func (s controlPlaneSource) PutSpotFundsPnlBoundsLimit(
+	ctx context.Context,
+	limit domain.LimitSpotFundsPnlBounds,
+	missing domain.MissingAccountPolicy,
+) error {
+	return s.cp.PutSpotFundsPnlBoundsLimit(ctx, limit, missing)
 }
 
 func (s controlPlaneSource) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error) {

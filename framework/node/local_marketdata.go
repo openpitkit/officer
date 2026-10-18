@@ -195,9 +195,19 @@ func (n *localNode) ensureMarketDataAssets(
 	return err
 }
 
+// SetMarketDataInstrumentEnabled refuses a tighten-only caller's enable before
+// anything changes: an enable widens the quotes the engine prices orders with.
+// A disable passes.
 func (n *localNode) SetMarketDataInstrumentEnabled(
 	ctx context.Context, instance domain.ExternalID, externalSymbol string, enabled bool, caller domain.Caller,
 ) error {
+	if enabled && caller.TightenOnly() {
+		return fmt.Errorf(
+			"enable market-data instrument %s/%s: an enable widens the quotes the "+
+				"engine prices orders with: %w",
+			instance, externalSymbol, domain.ErrLoosening,
+		)
+	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}

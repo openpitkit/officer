@@ -783,3 +783,15 @@ func (s *guardSource) ApplyExecutionReport(ctx context.Context, in domain.Execut
 func (s *guardSource) ApplyAdjustment(ctx context.Context, account domain.AccountID, externalID domain.ExternalID, req domain.AdjustmentRequest, missing domain.MissingAccountPolicy) (domain.AccountAdjustmentRecord, error) {
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
+
+func (s *guardSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *guardSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *guardSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}

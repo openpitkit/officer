@@ -136,8 +136,25 @@ func (s *recordingScope) ManageAccounts(caller domain.Caller) error {
 }
 
 // scopeTradingRuntime is a venue runtime with one paper provider that keeps
-// unlinked fees and a venue that accepts every pre-check and send.
+// unlinked fees and a venue that accepts every pre-check and send. Its account
+// check answers a connection's own venue identity, so a credential change
+// reaches the same venue account, and venue-2 for a connection without one, as
+// the service clears it before checking a new connection, so a create stores
+// a connection of its own; its restart succeeds. A create, credential change
+// or enable that passes the service therefore completes and changes what it
+// stores, instead of calling the embedded nil runtime.
 type scopeTradingRuntime struct{ backend.TradingRuntime }
+
+func (scopeTradingRuntime) CheckAccount(
+	_ context.Context, c domain.TradingConnection,
+) (trading.AccountInfo, error) {
+	if c.VenueIdentity != "" {
+		return trading.AccountInfo{Identity: c.VenueIdentity}, nil
+	}
+	return trading.AccountInfo{Identity: "venue-2"}, nil
+}
+
+func (scopeTradingRuntime) Restart() error { return nil }
 
 func (scopeTradingRuntime) Providers() []trading.Provider {
 	return []trading.Provider{{

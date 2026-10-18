@@ -26,8 +26,28 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+// guardTightenOnlyAccountCreation refuses a tighten-only caller the creation
+// of account id, explicit or automatic, with domain.ErrLoosening: a new
+// account starts unblocked, with no barrier of its own and no balance or P&L
+// history, so it would bring back a code that was deleted or renamed away
+// without what that account carried.
+func guardTightenOnlyAccountCreation(
+	operation string, id domain.AccountID, caller domain.Caller,
+) error {
+	if !caller.TightenOnly() {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s: a new account %q would start unblocked, with no barrier of its "+
+			"own and no balance or P&L history: %w",
+		operation, id, domain.ErrLoosening,
+	)
+}
+
 // ensureAutoCreatedAccount creates a missing account and publishes its stable
-// numeric id before any account lane can admit work for the alias.
+// numeric id before any account lane can admit work for the alias. Every
+// automatic creation of an account comes here, so it is where a tighten-only
+// caller is refused one; an account that exists passes for every caller.
 func (n *localNode) ensureAutoCreatedAccount(
 	ctx context.Context, id domain.AccountID, operation string, caller domain.Caller,
 ) error {
@@ -37,6 +57,9 @@ func (n *localNode) ensureAutoCreatedAccount(
 		return nil
 	}
 	if err := domain.ValidateAccountID(id); err != nil {
+		return err
+	}
+	if err := guardTightenOnlyAccountCreation(operation, id, caller); err != nil {
 		return err
 	}
 	resolver := n.currentEngine()

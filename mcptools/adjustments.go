@@ -37,9 +37,15 @@ const applyAdjustmentToolName = "apply_adjustment"
 
 const applyAdjustmentToolDescription = "Apply an adjustment to an account's " +
 	"balances of one asset through the engine and return the recorded " +
-	"adjustment. Each of balance (available), held and incoming is set to a " +
-	"value (absolute) or changed by one (delta), given as exact decimal strings. " +
-	"A bound constrains the value the adjustment results in, not the change: a " +
+	"adjustment. An agent may only lower the balance (available), held and " +
+	"incoming of the account's own currency, each set to a value (absolute) or " +
+	"changed by one (delta), given as exact decimal strings: another asset, a " +
+	"position included, an account without a currency of its own, a delta " +
+	"above zero or an absolute above the field's current value refuses the " +
+	"whole adjustment with loosening_refused and changes nothing, and so does " +
+	"an averageEntryPrice or a realizedPnl other than the current one, or any " +
+	"realizedPnl while the position's P&L calculation is halted, as it would " +
+	"restart it. A bound constrains the value the adjustment results in, not the change: a " +
 	"result outside it records the adjustment as rejected with a structured " +
 	"reason and changes no balance, a policy outcome rather than an error. An " +
 	"adjustment that changes nothing, such as one naming no field, is not " +
@@ -48,7 +54,7 @@ const applyAdjustmentToolDescription = "Apply an adjustment to an account's " +
 
 type applyAdjustmentInput struct {
 	Account        string                     `json:"account" jsonschema:"Account code"`
-	MissingAccount string                     `json:"missingAccount" jsonschema:"Required: create to register an account that does not exist yet, reject to fail the adjustment instead"`
+	MissingAccount string                     `json:"missingAccount" jsonschema:"Required: create or reject; for an account that does not exist yet, create is refused for an agent with loosening_refused, and reject fails the adjustment instead"`
 	Adjustment     httpx.AdjustmentRequestDTO `json:"adjustment" jsonschema:"Adjustment to apply to the account's balances of one asset"`
 }
 
@@ -59,8 +65,8 @@ type applyAdjustmentOutput struct {
 }
 
 // applyAdjustmentHandler applies the adjustment as REST does: a supplied id is
-// parsed by the core, an omitted one is left to the store, and the policy goes
-// to the backend, which validates it.
+// parsed by the core, an omitted one is left to the store, and the policy of
+// a named account goes to the backend, which validates it.
 func applyAdjustmentHandler(
 	src frameworkmcp.Source,
 ) frameworkmcp.ToolBody[applyAdjustmentInput, applyAdjustmentOutput] {
@@ -77,12 +83,13 @@ func applyAdjustmentHandler(
 			}
 			externalID = id
 		}
+		account := domain.AccountID(in.Account)
 		record, err := src.ApplyAdjustment(
 			ctx,
-			domain.AccountID(in.Account),
+			account,
 			externalID,
 			httpx.FromAdjustmentRequestDTO(in.Adjustment),
-			domain.MissingAccountPolicy(in.MissingAccount),
+			missingAccountPolicy(account, in.MissingAccount),
 		)
 		if errors.Is(err, domain.ErrNoChange) {
 			return "the engine reported no change; no adjustment was recorded", applyAdjustmentOutput{}, nil

@@ -99,7 +99,7 @@ func (w *worker) intakeFee(ctx context.Context, reader FeeReader, fee Fee, accou
 		w.logFee(fee, "missing fee id or invalid fee status", domain.ErrInvalid)
 		return w.reportFeeSkip(fee, "invalid fee status")
 	}
-	id := domain.ExternalID("trading:" + w.connection.ExternalID.String() + ":fee:" + fee.ID)
+	id := domain.ExternalID(domain.TradingRuntimeIDPrefix + w.connection.ExternalID.String() + ":fee:" + fee.ID)
 	page, err := w.r.store.ListAdjustmentRows(ctx, store.AdjustmentListFilter{
 		ExternalID: id,
 		Page:       store.PageSpec{Limit: 1},

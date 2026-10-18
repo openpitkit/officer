@@ -114,6 +114,12 @@ var (
 	// ErrUnsupportedMediaType marks a state-changing HTTP request whose body is
 	// not declared as JSON.
 	ErrUnsupportedMediaType = registerSentinel(errors.New("request body must be application/json"))
+	// ErrLoosening marks a request of a tighten-only caller (see
+	// Caller.TightenOnly) that would loosen risk state or widen what the caller
+	// may do. The concrete error names what the request would loosen.
+	ErrLoosening = registerSentinel(errors.New(
+		"an agent may only tighten, never loosen",
+	))
 	// ErrTooLarge marks an input that exceeds a hard server-side size limit.
 	// HTTP surfaces map it to 413 so callers can split bulk payloads instead of
 	// retrying the same request.

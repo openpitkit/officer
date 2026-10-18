@@ -1660,7 +1660,7 @@ func (n *fakeNode) RecordVenueFeeSkipped(ctx context.Context, connection domain.
 	return domain.ErrNotImplemented
 }
 
-func (n *fakeNode) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string, caller domain.Caller) error {
+func (n *fakeNode) RemoveTradingAccess(ctx context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string, requireFeeAccount bool, caller domain.Caller) error {
 	n.recordCall("RemoveTradingAccess", account, accountGroup)
 	return nil
 }

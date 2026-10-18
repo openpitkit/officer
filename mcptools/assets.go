@@ -42,14 +42,19 @@ const (
 		"Officer control-plane config; protected and disabled by default."
 	updateAssetToolDescription = "Change an asset's code, title and asset " +
 		"class; the title and the asset class replace the stored ones, and an " +
-		"omitted or empty one clears it. Mutates Officer control-plane config; " +
-		"protected and disabled by default."
+		"omitted or empty one clears it. A code change is refused with " +
+		"loosening_refused while a rate-limit or order-size barrier references " +
+		"the asset or a Spot Funds P&L bound is denominated in it. Mutates " +
+		"Officer control-plane config; protected and disabled by default."
 	deleteAssetToolDescription = "Delete an asset. An asset with dependent " +
-		"rows is refused with has_dependents unless force deletes them with it, " +
-		"the market-data and trading instruments that reference the asset " +
-		"included; an asset an account or group holds as its currency is " +
-		"refused with has_dependents, even with force. Mutates Officer " +
-		"control-plane config; protected and disabled by default."
+		"rows, the market-data and trading instruments that reference it " +
+		"included, is refused with has_dependents, and so is an asset an " +
+		"account or group holds as its currency. The delete is refused with " +
+		"loosening_refused while a rate-limit or order-size barrier references " +
+		"the asset or a Spot Funds P&L bound is denominated in it, and always " +
+		"with force: force would delete the asset's dependent rows with it - " +
+		"balances, orders, trades, adjustments and barriers among them. " +
+		"Mutates Officer control-plane config; protected and disabled by default."
 )
 
 type createAssetInput struct {
@@ -67,7 +72,7 @@ type updateAssetInput struct {
 
 type deleteAssetInput struct {
 	Asset string `json:"asset" jsonschema:"Asset code"`
-	Force bool   `json:"force,omitempty" jsonschema:"Also delete the asset's dependent rows, the market-data and trading instruments that reference it included; without it an asset with dependents is refused with has_dependents. An asset an account or group holds as its currency is refused even with force"`
+	Force bool   `json:"force,omitempty" jsonschema:"Refused with loosening_refused whatever the asset carries: an agent may not force a delete, which would also delete the asset's dependent rows - balances, orders, trades, adjustments and barriers among them, and the market-data and trading instruments that reference it. Without it an asset with dependents is refused with has_dependents"`
 }
 
 // assetOutput is the REST asset body, {"asset": {...}}.

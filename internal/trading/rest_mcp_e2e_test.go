@@ -403,6 +403,19 @@ func (f *tradingE2E) mcp(name string, input any, wantError bool) *sdkmcp.CallToo
 	return result
 }
 
+// mcpLoosening calls the MCP tool name as the agent and requires its refusal
+// as a loosening.
+func (f *tradingE2E) mcpLoosening(name string, input any) {
+	f.t.Helper()
+	result := f.mcp(name, input, true)
+	if len(result.Content) != 1 {
+		f.t.Fatalf("%s content = %v", name, result.Content)
+	}
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok || !strings.HasPrefix(text.Text, "loosening_refused: ") {
+		f.t.Fatalf("%s refusal = %+v, want loosening_refused", name, result.Content[0])
+	}
+}
+
 func tradingE2EStructured[T any](t *testing.T, result *sdkmcp.CallToolResult) T {
 	t.Helper()
 	if result.StructuredContent == nil {
@@ -512,6 +525,13 @@ func (f *tradingE2E) assertVenueReads() {
 	}
 }
 
+// accountChecks counts the venue account checks so far.
+func (f *tradingE2E) accountChecks() int {
+	f.venueMu.Lock()
+	defer f.venueMu.Unlock()
+	return f.requests["/v2/account"]
+}
+
 func TestTradingRESTEndToEnd(t *testing.T) {
 	for _, sealed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("sealed=%t", sealed), func(t *testing.T) {
@@ -556,8 +576,7 @@ func TestTradingRESTEndToEnd(t *testing.T) {
 
 func TestTradingMCPEndToEnd(t *testing.T) {
 	f := newTradingE2E(t, true)
-	input := tradingE2ECreateInput("Paper", "paper")
-	result := f.mcp("create_trading_connection", input, false)
+	result := f.mcp("create_trading_connection", tradingE2ECreateInput("Paper", "paper"), false)
 	if len(result.Content) != 1 {
 		t.Fatalf("disabled tool content = %v", result.Content)
 	}
@@ -569,19 +588,13 @@ func TestTradingMCPEndToEnd(t *testing.T) {
 	if len(connections) != 0 {
 		t.Fatal("disabled mutating tool created a connection")
 	}
-	f.venueMu.Lock()
-	accountCalls := f.requests["/v2/account"]
-	f.venueMu.Unlock()
-	if accountCalls != 0 {
+	if f.accountChecks() != 0 {
 		t.Fatal("disabled mutating tool reached the venue")
 	}
-	for _, name := range []string{"create_trading_connection", "check_trading_connection", "set_trading_instrument", "grant_trading_access"} {
-		f.rest(http.MethodPut, "/mcp-access/"+name, map[string]any{"enabled": true}, http.StatusOK)
-	}
-	c := tradingE2EStructured[tradingE2ECreated](t, f.mcp("create_trading_connection", input, false)).Connection
-	tradingE2EAssertCreated(t, c)
+	// An agent may not create, map or grant, so the operator does it over REST.
+	id := f.setupSend("REST")
+	f.rest(http.MethodPut, "/mcp-access/check_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
 	tradingE2EAssertStorage(t, tradingE2EStructured[map[string]bool](t, f.mcp("get_credential_storage", map[string]any{}, false)), true)
-	id := c.ID
 	check := tradingE2EStructured[struct {
 		VenueIdentity string
 		VenueStatus   string
@@ -590,7 +603,6 @@ func TestTradingMCPEndToEnd(t *testing.T) {
 	if check.VenueIdentity != "paper-account" || check.VenueStatus != "ACTIVE" {
 		t.Fatalf("MCP check = %+v", check)
 	}
-	f.mcp("set_trading_instrument", map[string]any{"connection": id, "externalSymbol": "AAPL", "baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, false)
 	verification := tradingE2EStructured[struct {
 		Supported bool
 		Exists    bool
@@ -604,7 +616,6 @@ func TestTradingMCPEndToEnd(t *testing.T) {
 	if !search.Supported || len(search.Matches) != 1 || search.Matches[0].Name != "Fake Apple" || search.Matches[0].Symbol != "AAPL" || !search.Matches[0].Tradable {
 		t.Fatalf("MCP search = %+v", search)
 	}
-	f.mcp("grant_trading_access", map[string]any{"connection": id, "account": "desk", "venueAccount": ""}, false)
 	tradingE2EAssertDestinations(t, tradingE2EStructured[tradingE2EDestinations](t, f.mcp("list_trading_destinations", map[string]any{"account": "desk", "mode": "paper"}, false)), id)
 	tradingE2EAssertSnapshot(t, tradingE2EStructured[tradingE2ESnapshot](t, f.mcp("get_trading", map[string]any{}, false)), id)
 	f.assertVenueReads()
@@ -618,13 +629,8 @@ func TestTradingRefusalsEndToEnd(t *testing.T) {
 		t.Fatalf("live error code = %s", errBody.Error.Code)
 	}
 	f.rest(http.MethodPut, "/mcp-access/create_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
-	result := f.mcp("create_trading_connection", live, true)
-	if len(result.Content) != 1 {
-		t.Fatalf("live MCP content = %v", result.Content)
-	}
-	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok || !strings.HasPrefix(text.Text, "live_trading_unavailable: ") {
-		t.Fatalf("live MCP error = %v", result.Content)
-	}
+	// The agent is refused before its mode is read.
+	f.mcpLoosening("create_trading_connection", live)
 	f.createREST()
 	second := tradingE2ECreateInput("Second", "paper")
 	second["credentials"] = map[string]string{"apiKey": "second-key-marker", "apiSecret": "second-secret-marker"}
@@ -633,12 +639,12 @@ func TestTradingRefusalsEndToEnd(t *testing.T) {
 	if errBody.Error.Code != "conflict" {
 		t.Fatalf("duplicate venue error = %s", errBody.Error.Code)
 	}
-	duplicate := f.mcp("create_trading_connection", tradingE2ECreateInput("Third", "paper"), true)
-	if len(duplicate.Content) != 1 {
-		t.Fatalf("duplicate MCP content = %v", duplicate.Content)
-	}
-	if text, ok := duplicate.Content[0].(*sdkmcp.TextContent); !ok || !strings.Contains(text.Text, `trading connection venue identity "paper-account": already exists`) {
-		t.Fatalf("duplicate MCP error = %v", duplicate.Content)
+	// The agent is refused before its venue account is compared.
+	f.mcpLoosening("create_trading_connection", tradingE2ECreateInput("Third", "paper"))
+	connections, err := f.realm.ListTradingConnections(f.ctx)
+	tradingE2EMust(t, err)
+	if len(connections) != 1 {
+		t.Fatalf("connections after the refused creates = %d, want the operator's one", len(connections))
 	}
 }
 
@@ -654,23 +660,12 @@ func TestTradingBlankCredentialEndToEnd(t *testing.T) {
 		t.Fatalf("blank key problem = %+v", problem)
 	}
 	f.rest(http.MethodPut, "/mcp-access/create_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
-	// A single-space value must not be redacted out of the refusal text.
-	blank["credentials"] = map[string]string{"apiKey": "test-key-marker", "apiSecret": " "}
-	result := f.mcp("create_trading_connection", blank, true)
-	if len(result.Content) != 1 {
-		t.Fatalf("blank secret MCP content = %v", result.Content)
-	}
-	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok ||
-		text.Text != "validation: trading: build connector: alpaca: apiSecret is required" {
-		t.Fatalf("blank secret MCP error = %v", result.Content)
-	}
+	// The agent is refused before its credentials are validated.
+	f.mcpLoosening("create_trading_connection", blank)
 	connections, err := f.realm.ListTradingConnections(f.ctx)
 	tradingE2EMust(t, err)
-	f.venueMu.Lock()
-	accountCalls := f.requests["/v2/account"]
-	f.venueMu.Unlock()
-	if len(connections) != 0 || accountCalls != 0 {
-		t.Fatalf("blank credentials created %d connections and reached the venue %d times", len(connections), accountCalls)
+	if checks := f.accountChecks(); len(connections) != 0 || checks != 0 {
+		t.Fatalf("blank credentials created %d connections and reached the venue %d times", len(connections), checks)
 	}
 }
 
@@ -690,14 +685,8 @@ func TestTradingMissingAssetEndToEnd(t *testing.T) {
 		t.Fatalf("missing asset error = %+v", missing.Error)
 	}
 	f.rest(http.MethodPut, "/mcp-access/set_trading_instrument", map[string]any{"enabled": true}, http.StatusOK)
-	result := f.mcp("set_trading_instrument", map[string]any{"connection": id, "externalSymbol": "BTC/USDT", "baseAsset": "BTC", "quoteAsset": "USDT", "enabled": true}, true)
-	if len(result.Content) != 1 {
-		t.Fatalf("missing asset MCP content = %v", result.Content)
-	}
-	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok ||
-		!strings.HasPrefix(text.Text, "asset_missing: ") || !strings.Contains(text.Text, `"USDT"`) {
-		t.Fatalf("missing asset MCP error = %v", result.Content)
-	}
+	// The agent is refused before its assets are looked up.
+	f.mcpLoosening("set_trading_instrument", map[string]any{"connection": id, "externalSymbol": "BTC/USDT", "baseAsset": "BTC", "quoteAsset": "USDT", "enabled": true})
 	assets, err := f.realm.ListAssets(f.ctx)
 	tradingE2EMust(t, err)
 	for _, asset := range assets {
@@ -753,25 +742,18 @@ func (f *tradingE2E) sendPaper(surface string, input map[string]any, status int,
 	return raw
 }
 
+// setupSend has the operator create a connection, map AAPL and grant desk over
+// REST, and returns the connection id. For the MCP surface it also enables
+// send_paper_order, the call the agent then makes.
 func (f *tradingE2E) setupSend(surface string) string {
 	f.t.Helper()
-	var id string
-	if surface == "REST" {
-		id = f.createREST()
-		path := "/trading/connections/" + id
-		f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "AAPL",
-			"baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, http.StatusOK)
-		f.rest(http.MethodPut, path+"/access", map[string]any{"account": "desk"}, http.StatusOK)
-	} else {
-		for _, name := range []string{"create_trading_connection", "set_trading_instrument",
-			"grant_trading_access", "send_paper_order", "set_trading_fee_account"} {
-			f.rest(http.MethodPut, "/mcp-access/"+name, map[string]any{"enabled": true}, http.StatusOK)
-		}
-		id = tradingE2EStructured[tradingE2ECreated](f.t,
-			f.mcp("create_trading_connection", tradingE2ECreateInput("Paper", "paper"), false)).Connection.ID
-		f.mcp("set_trading_instrument", map[string]any{"connection": id, "externalSymbol": "AAPL",
-			"baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, false)
-		f.mcp("grant_trading_access", map[string]any{"connection": id, "account": "desk"}, false)
+	id := f.createREST()
+	path := "/trading/connections/" + id
+	f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "AAPL",
+		"baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, http.StatusOK)
+	f.rest(http.MethodPut, path+"/access", map[string]any{"account": "desk"}, http.StatusOK)
+	if surface == "MCP" {
+		f.rest(http.MethodPut, "/mcp-access/send_paper_order", map[string]any{"enabled": true}, http.StatusOK)
 	}
 	return id
 }
@@ -793,12 +775,8 @@ func TestTradingSendPaperEndToEnd(t *testing.T) {
 					map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 						"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
 			}
-			if surface == "REST" {
-				f.rest(http.MethodPut, "/trading/connections/"+id+"/fee-account",
-					map[string]any{"account": "fees"}, http.StatusOK)
-			} else {
-				f.mcp("set_trading_fee_account", map[string]any{"connection": id, "account": "fees"}, false)
-			}
+			f.rest(http.MethodPut, "/trading/connections/"+id+"/fee-account",
+				map[string]any{"account": "fees"}, http.StatusOK)
 			raw := f.sendPaper(surface, tradingE2ESendInput(id), http.StatusCreated, "")
 			sent := tradingE2EDecode[struct {
 				ID, Verdict, SignedApproval, KeyID string
@@ -1289,21 +1267,6 @@ func TestTradingGroupAccessMCPEndToEnd(t *testing.T) {
 	for _, name := range []string{"grant_trading_access", "revoke_trading_access"} {
 		f.rest(http.MethodPut, "/mcp-access/"+name, map[string]any{"enabled": true}, http.StatusOK)
 	}
-	group := map[string]any{"connection": id, "accountGroup": "team"}
-	refused := f.mcp("grant_trading_access", group, true)
-	if text, ok := refused.Content[0].(*sdkmcp.TextContent); !ok || !strings.HasPrefix(text.Text, "fee_account_required: ") {
-		t.Fatalf("group grant without a fee account = %v", refused.Content)
-	}
-	feeAccount := "/trading/connections/" + id + "/fee-account"
-	f.rest(http.MethodPut, feeAccount, map[string]any{"account": "fees"}, http.StatusOK)
-	if granted := tradingE2EStructured[map[string]any](t, f.mcp("grant_trading_access", group, false)); !reflect.DeepEqual(granted, group) {
-		t.Fatalf("group grant output = %v", granted)
-	}
-	// team has a single member, so only the group grant refuses the clear.
-	type refusal struct{ Error struct{ Code string } }
-	if code := tradingE2EDecode[refusal](t, f.rest(http.MethodDelete, feeAccount, nil, http.StatusConflict)).Error.Code; code != "fee_account_required" {
-		t.Fatalf("fee account clear under a group grant: %s", code)
-	}
 	access := func() []map[string]string {
 		t.Helper()
 		snapshot := tradingE2EStructured[struct {
@@ -1313,6 +1276,21 @@ func TestTradingGroupAccessMCPEndToEnd(t *testing.T) {
 			t.Fatalf("connections = %+v", snapshot.Connections)
 		}
 		return snapshot.Connections[0].Access
+	}
+	group := map[string]any{"connection": id, "accountGroup": "team"}
+	// The agent is refused before the fee account is asked for.
+	f.mcpLoosening("grant_trading_access", group)
+	if got := access(); len(got) != 0 {
+		t.Fatalf("access after the refused group grant = %v", got)
+	}
+	path := "/trading/connections/" + id
+	feeAccount := path + "/fee-account"
+	f.rest(http.MethodPut, feeAccount, map[string]any{"account": "fees"}, http.StatusOK)
+	f.rest(http.MethodPut, path+"/access", map[string]any{"accountGroup": "team"}, http.StatusOK)
+	// team has a single member, so only the group grant refuses the clear.
+	type refusal struct{ Error struct{ Code string } }
+	if code := tradingE2EDecode[refusal](t, f.rest(http.MethodDelete, feeAccount, nil, http.StatusConflict)).Error.Code; code != "fee_account_required" {
+		t.Fatalf("fee account clear under a group grant: %s", code)
 	}
 	if got, want := access(), []map[string]string{{"account": "", "accountGroup": "team", "venueAccount": "", "group": ""}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("group grant access = %v", got)
@@ -1329,6 +1307,117 @@ func TestTradingGroupAccessMCPEndToEnd(t *testing.T) {
 		t.Fatalf("member destinations after the group revoke = %+v", left)
 	}
 	f.rest(http.MethodDelete, feeAccount, nil, http.StatusNoContent)
+}
+
+// agentState reads what an agent's trading call could change: the only
+// connection as GET /trading serves it, without the health its venue stream
+// moves, and the credentials stored for it, which no surface serves.
+func (f *tradingE2E) agentState(id string) (tradingE2EConnection, string) {
+	f.t.Helper()
+	c := f.health()
+	c.State, c.Error, c.Diagnostics = "", "", nil
+	stored, found, err := f.realm.GetTradingConnection(f.ctx, domain.ExternalID(id))
+	tradingE2EMust(f.t, err)
+	if !found {
+		f.t.Fatalf("trading connection %s is not stored", id)
+	}
+	return c, stored.Credentials
+}
+
+// An agent drives the trading tools over MCP into the real core and the fake
+// venue. Each call an operator could make that widens what can be sent or
+// moves where venue fees are booked - among them the revoke of the last
+// account that can send through a connection without a fee account - answers
+// loosening_refused and changes nothing, and the create and the credential
+// change reach no venue; a label-only update, any other revoke and a disable
+// pass.
+func TestTradingAgentTightenOnlyEndToEnd(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		f := newTradingE2E(t, false)
+		f.rest(http.MethodPut, "/mcp-access/create_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
+		f.mcpLoosening("create_trading_connection", tradingE2ECreateInput("Paper", "paper"))
+		connections, err := f.realm.ListTradingConnections(f.ctx)
+		tradingE2EMust(t, err)
+		if checks := f.accountChecks(); len(connections) != 0 || checks != 0 {
+			t.Fatalf("refused create stored %d connections and reached the venue %d times", len(connections), checks)
+		}
+	})
+	// configured has the operator create a connection over REST, map AAPL,
+	// grant desk and set the fee account fees, beside the group team and the
+	// asset MSFT, and enables tools for the agent.
+	configured := func(t *testing.T, tools ...string) (*tradingE2E, string) {
+		t.Helper()
+		f := newTradingE2E(t, false)
+		f.group("team")
+		f.rest(http.MethodPost, "/assets", map[string]any{"code": "MSFT"}, http.StatusCreated)
+		id := f.setupSend("REST")
+		f.rest(http.MethodPut, "/trading/connections/"+id+"/fee-account", map[string]any{"account": "fees"}, http.StatusOK)
+		for _, name := range tools {
+			f.rest(http.MethodPut, "/mcp-access/"+name, map[string]any{"enabled": true}, http.StatusOK)
+		}
+		return f, id
+	}
+	for _, tc := range []struct {
+		name, tool string
+		input      map[string]any
+	}{
+		{"credential change", "update_trading_connection", map[string]any{
+			"credentials": map[string]string{"apiKey": "second-key-marker", "apiSecret": "second-secret-marker"}}},
+		{"mapping add", "set_trading_instrument", map[string]any{
+			"externalSymbol": "MSFT", "baseAsset": "MSFT", "quoteAsset": "USD", "enabled": true}},
+		{"mapping disable", "set_trading_instrument", map[string]any{
+			"externalSymbol": "AAPL", "baseAsset": "AAPL", "quoteAsset": "USD", "enabled": false}},
+		{"mapping delete", "delete_trading_instrument", map[string]any{"externalSymbol": "AAPL"}},
+		{"account grant", "grant_trading_access", map[string]any{"account": "other"}},
+		{"group grant", "grant_trading_access", map[string]any{"accountGroup": "team"}},
+		{"fee account set", "set_trading_fee_account", map[string]any{"account": "other"}},
+		{"fee account clear", "clear_trading_fee_account", map[string]any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, id := configured(t, tc.tool)
+			before, credentials := f.agentState(id)
+			checks := f.accountChecks()
+			tc.input["connection"] = id
+			f.mcpLoosening(tc.tool, tc.input)
+			after, stored := f.agentState(id)
+			if !reflect.DeepEqual(after, before) || stored != credentials || f.accountChecks() != checks {
+				t.Fatalf("refused %s left %+v, credentials changed %t, venue checks %d -> %d",
+					tc.name, after, stored != credentials, checks, f.accountChecks())
+			}
+		})
+	}
+	t.Run("narrowing", func(t *testing.T) {
+		f, id := configured(t, "update_trading_connection", "revoke_trading_access", "set_trading_connection_enabled")
+		want, credentials := f.agentState(id)
+		checks := f.accountChecks()
+		f.mcp("update_trading_connection", map[string]any{"connection": id, "label": "Renamed"}, false)
+		f.mcp("revoke_trading_access", map[string]any{"connection": id, "account": "desk"}, false)
+		f.mcp("set_trading_connection_enabled", map[string]any{"connection": id, "enabled": false}, false)
+		want.Label, want.Access, want.Enabled = "Renamed", []domain.TradingAccess{}, false
+		narrowed, stored := f.agentState(id)
+		if !reflect.DeepEqual(narrowed, want) || stored != credentials || f.accountChecks() != checks {
+			t.Fatalf("narrowed connection = %+v, want %+v with its credentials and no venue check", narrowed, want)
+		}
+		// The connection the agent disabled stays disabled.
+		f.mcpLoosening("set_trading_connection_enabled", map[string]any{"connection": id, "enabled": true})
+		if after, _ := f.agentState(id); !reflect.DeepEqual(after, narrowed) {
+			t.Fatalf("refused enable left %+v", after)
+		}
+	})
+	// Without a fee account the Alpaca connection's venue fees are debited to
+	// the one account that can send through it, so the agent may not revoke
+	// that account's grant: the fees would then be skipped.
+	t.Run("last sender revoke", func(t *testing.T) {
+		f := newTradingE2E(t, false)
+		id := f.setupSend("REST")
+		f.rest(http.MethodPut, "/mcp-access/revoke_trading_access", map[string]any{"enabled": true}, http.StatusOK)
+		before, _ := f.agentState(id)
+		f.mcpLoosening("revoke_trading_access", map[string]any{"connection": id, "account": "desk"})
+		after, _ := f.agentState(id)
+		if !reflect.DeepEqual(after, before) || len(after.Access) != 1 || after.Access[0].Account != "desk" {
+			t.Fatalf("refused revoke left %+v, want the grant to desk kept", after)
+		}
+	})
 }
 
 func TestTradingSecretsEndToEnd(t *testing.T) {

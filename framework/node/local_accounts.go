@@ -35,10 +35,16 @@ import (
 // live resolver, applies the initial runtime state through synchronized lanes,
 // and audits the action. The live identity gate keeps the engine, dispatcher,
 // and market-data sink in place while no admitted lane can observe a partial
-// identity publication.
+// identity publication. A tighten-only caller is refused with
+// domain.ErrLoosening before anything is read or written.
 func (n *localNode) CreateAccount(
 	ctx context.Context, account domain.Account, caller domain.Caller,
 ) (domain.Account, error) {
+	if err := guardTightenOnlyAccountCreation(
+		"create account", account.Code, caller,
+	); err != nil {
+		return domain.Account{}, err
+	}
 	if err := n.beginLiveIdentityPublication(); err != nil {
 		return domain.Account{}, err
 	}
@@ -1072,7 +1078,9 @@ func (n *localNode) SetAccountNotes(
 // UpdateAccount replaces an account's public code and title and atomically
 // renames its live resolver alias without replacing the engine. The stable
 // EngineAccountID keeps every SDK-owned account state attached to the same
-// account while the operator-facing code changes.
+// account while the operator-facing code changes. A tighten-only caller's code
+// change is refused before anything changes while the account is protected
+// (see guardTightenOnlyAccountRelease); a title change alone passes.
 func (n *localNode) UpdateAccount(
 	ctx context.Context,
 	oldCode domain.AccountID,
@@ -1091,6 +1099,12 @@ func (n *localNode) UpdateAccount(
 	if !ok {
 		return domain.Account{},
 			fmt.Errorf("account %q: %w", oldCode, domain.ErrNotFound)
+	}
+	if account.Code != prev.Code {
+		if err := n.guardTightenOnlyAccountRelease(ctx, prev, caller); err != nil {
+			return domain.Account{},
+				fmt.Errorf("rename account %q: %w", prev.Code, err)
+		}
 	}
 	updated, err := n.realm.UpdateAccount(ctx, oldCode, account)
 	if err != nil {
@@ -1142,6 +1156,10 @@ func (n *localNode) UpdateAccount(
 // DeleteAccount removes an account from the store, rebuilds the engine from the
 // surviving rows, and audits the action. Account retirement is not available
 // through the SDK runtime API yet, so this remains an intentional rebuild path.
+// A tighten-only caller's delete, with or without force, is refused before
+// anything changes while the account is protected (see
+// guardTightenOnlyAccountRelease), and while any rate-limit barrier is
+// configured, since the engine rebuild would reset every rate-limit window.
 func (n *localNode) DeleteAccount(
 	ctx context.Context, code domain.AccountID, force bool, caller domain.Caller,
 ) error {
@@ -1156,6 +1174,12 @@ func (n *localNode) DeleteAccount(
 	}
 	if !ok {
 		return fmt.Errorf("account %q: %w", code, domain.ErrNotFound)
+	}
+	if err := n.guardTightenOnlyAccountRelease(ctx, account, caller); err != nil {
+		return fmt.Errorf("delete account %q: %w", account.Code, err)
+	}
+	if err := n.guardTightenOnlyRebuild(ctx, caller); err != nil {
+		return fmt.Errorf("delete account %q: %w", account.Code, err)
 	}
 
 	snapshot, _, err := n.loadSnapshot(ctx)
@@ -1198,6 +1222,50 @@ func (n *localNode) DeleteAccount(
 		return n.fatalPostEngineAuditByCode(
 			"audit delete account", "account", account.Code.String(),
 			fmt.Errorf("audit delete account: %w", err),
+		)
+	}
+	return nil
+}
+
+// guardTightenOnlyAccountRelease refuses a tighten-only caller's release of
+// account - its delete or a change of its code - while the account is
+// protected: it is blocked, by an operator or by the engine; it is in a group
+// that protects its members (see groupProtection); or it carries a rate-limit,
+// order-size or Spot Funds P&L barrier of its own. A release frees the code,
+// and an account recreated under it - created by name, or auto-created by an
+// order, an adjustment or a limit naming the code - has no block, no group and
+// no barrier. It returns nil for a caller that is not tighten-only.
+func (n *localNode) guardTightenOnlyAccountRelease(
+	ctx context.Context, account domain.Account, caller domain.Caller,
+) error {
+	if !caller.TightenOnly() {
+		return nil
+	}
+	if account.Blocked {
+		return fmt.Errorf("the account is blocked: %w", domain.ErrLoosening)
+	}
+	if account.GroupCode != "" {
+		group, ok, err := n.realm.GetGroup(ctx, account.GroupCode)
+		if err != nil {
+			return fmt.Errorf("read group %q: %w", account.GroupCode, err)
+		}
+		if !ok {
+			return fmt.Errorf(
+				"the account's group %q is not stored", account.GroupCode,
+			)
+		}
+		if err := n.groupProtection(ctx, group); err != nil {
+			return err
+		}
+	}
+	limits, err := n.listLimits(ctx, account.Code)
+	if err != nil {
+		return err
+	}
+	if len(limits.RateLimits) > 0 || len(limits.OrderSizeLimits) > 0 ||
+		len(limits.SpotFundsPnlBoundsLimits) > 0 {
+		return fmt.Errorf(
+			"the account carries a barrier of its own: %w", domain.ErrLoosening,
 		)
 	}
 	return nil

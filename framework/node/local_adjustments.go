@@ -108,13 +108,19 @@ func snapshotAdjustmentRequest(snapshot domain.Balance) domain.AdjustmentRequest
 // ApplyAdjustment applies one spot-funds adjustment through the engine, which
 // is the authority for the resulting holdings. missing decides whether an
 // adjustment naming an unknown account registers it or is rejected; an asset
-// that does not exist yet is always auto-created, so an operator can fund a
-// fresh asset in one call. On accept it writes the recomputed balance snapshot
+// that does not exist yet is auto-created, so an operator can fund a fresh
+// asset in one call. On accept it writes the recomputed balance snapshot
 // and the accepted record; on reject it records the rejected adjustment and
 // leaves balances unchanged. The engine outcome is authoritative: when the
 // engine reports neither an accepted nor a rejected outcome the call returns
 // ErrNoChange and records no adjustment, balance, or audit, even when the
-// request carried a realized P&L.
+// request carried a realized P&L. A tighten-only caller is refused, with
+// domain.ErrLoosening and no change, an id in the trading runtime's namespace
+// (domain.AdjustmentIDOutsideTradingRuntime), an adjustment of any asset but
+// the account's own currency, one that raises a balance field it names, changes
+// the average entry price or the realized P&L, or restarts a halted position
+// P&L (domain.AdjustmentRequest.NoLooserThan), and the registration of an
+// account or an asset that does not exist yet.
 func (n *localNode) ApplyAdjustment(
 	ctx context.Context, account domain.AccountID, externalID domain.ExternalID,
 	req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
@@ -128,10 +134,29 @@ func (n *localNode) ApplyAdjustment(
 	if err := domain.ValidateAsset(req.Asset); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
+	// A tighten-only caller may not take an id in the trading runtime's
+	// namespace, refused before anything is read. It may adjust only its
+	// account's own currency, an asset that exists, so any other is refused
+	// before anything is provisioned, and provisioning is handed no asset it
+	// could create should this one disappear before the chain, which decides
+	// the adjustment again against the state it applies to. A missing account
+	// is left to provisioning, which never creates one for this caller.
+	assets := []string{req.Asset}
+	if caller.TightenOnly() {
+		if err := domain.AdjustmentIDOutsideTradingRuntime(externalID); err != nil {
+			return domain.AccountAdjustmentRecord{},
+				fmt.Errorf("apply adjustment for account %q: %w", account, err)
+		}
+		if _, _, err := n.tightenOnlyAdjustmentAccount(ctx, account, req); err != nil {
+			return domain.AccountAdjustmentRecord{},
+				fmt.Errorf("apply adjustment for account %q: %w", account, err)
+		}
+		assets = nil
+	}
 	// Resolve the account and auto-create the asset before entering the chain,
 	// publishing a new account's stable id through the live resolver first.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, account, missing, "adjustment", caller, req.Asset,
+		ctx, account, missing, "adjustment", caller, assets...,
 	); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
@@ -158,6 +183,16 @@ func (n *localNode) ApplyAdjustment(
 		if ctxErr := state.ctx.Err(); ctxErr != nil {
 			state.err = fmt.Errorf("engine: adjustment cancelled: %w", ctxErr)
 			return nil, state.err
+		}
+		// The account chain serializes every change of this account's balances,
+		// so the state read here is the state the adjustment applies to.
+		if caller.TightenOnly() {
+			if err := n.guardTightenOnlyAdjustment(ctx, account, req); err != nil {
+				state.err = fmt.Errorf(
+					"apply adjustment for account %q: %w", account, err,
+				)
+				return nil, state.err
+			}
 		}
 		requiresExistingBalance := adjustmentRequiresExistingBalance(req)
 		if requiresExistingBalance {
@@ -318,6 +353,62 @@ func (n *localNode) ApplyAdjustment(
 		return domain.AccountAdjustmentRecord{}, runErr
 	}
 	return state.stored, nil
+}
+
+// tightenOnlyAdjustmentAccount reads account for a tighten-only caller's
+// adjustment req, and whether its asset exists, and refuses, with an error
+// wrapping domain.ErrLoosening, an asset that is not the account's own
+// currency or that does not exist, as adjusting it would create it
+// (domain.AdjustmentRequest.InExistingAccountCurrency). found reports whether
+// the account exists; a missing one is not decided here. A failed read returns
+// its error, never a pass.
+func (n *localNode) tightenOnlyAdjustmentAccount(
+	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
+) (domain.Account, bool, error) {
+	stored, found, err := n.realm.GetAccount(ctx, account)
+	if err != nil {
+		return domain.Account{}, false,
+			fmt.Errorf("read account for adjustment: %w", err)
+	}
+	if !found {
+		return domain.Account{}, false, nil
+	}
+	_, exists, err := n.realm.GetAsset(ctx, req.Asset)
+	if err != nil {
+		return domain.Account{}, true,
+			fmt.Errorf("read asset for adjustment: %w", err)
+	}
+	if err := req.InExistingAccountCurrency(stored.Currency, exists); err != nil {
+		return domain.Account{}, true, err
+	}
+	return stored, true, nil
+}
+
+// guardTightenOnlyAdjustment decides a tighten-only caller's adjustment req of
+// account against the state it applies to, read inside the account chain: it
+// refuses what tightenOnlyAdjustmentAccount refuses, on the account's currency
+// and the asset read again, as either may have changed since the check before
+// provisioning, and what domain.AdjustmentRequest.NoLooserThan refuses against the stored
+// balance, a missing one being the zero balance. A failed read returns its
+// error, never a pass.
+func (n *localNode) guardTightenOnlyAdjustment(
+	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
+) error {
+	stored, found, err := n.tightenOnlyAdjustmentAccount(ctx, account, req)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return domain.NewAccountMissingError(account)
+	}
+	current, found, err := n.realm.GetBalance(ctx, account, req.Asset)
+	if err != nil {
+		return fmt.Errorf("read balance before adjustment: %w", err)
+	}
+	if !found {
+		current = domain.Balance{}
+	}
+	return req.NoLooserThan(stored.Currency, current)
 }
 
 // SetBalanceRealizedPnl writes the current realized-P&L control-plane value for

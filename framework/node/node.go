@@ -746,9 +746,15 @@ type Node interface {
 	// RemoveTradingAccess removes the grant of a connection to exactly one
 	// subject, account or accountGroup with the other empty.
 	// It audits the action after the store write succeeds.
+	// When requireFeeAccount is true, the connection has no fee account and
+	// caller is tighten-only, a revoke after which the connection's grants
+	// would reach no account while before it they reached exactly one is
+	// refused with domain.ErrLoosening, as the connection's venue fees would
+	// then be skipped instead of debited.
 	RemoveTradingAccess(
 		ctx context.Context, connection domain.ExternalID,
-		account domain.AccountID, accountGroup string, caller domain.Caller,
+		account domain.AccountID, accountGroup string, requireFeeAccount bool,
+		caller domain.Caller,
 	) error
 
 	// GetTradingConnection returns one connection. The bool is false when absent.

@@ -51,12 +51,12 @@ const (
 		"refused with validation. Mutates Officer control-plane config; " +
 		"protected and disabled by default."
 	deleteGroupToolDescription = "Delete an account group. Its member accounts " +
-		"leave the group and keep their trading and compliance history, and a " +
-		"block the group carries no longer applies to them; the delete is " +
-		"refused with currency_change_blocked, even with force, when " +
-		"leaving would change the effective currency of a member carrying " +
-		"protected state. A group with a group-scoped Spot Funds P&L bound is " +
-		"refused with has_dependents unless force deletes the bound with it. " +
+		"leave the group and keep their trading and compliance history. The " +
+		"delete is refused with loosening_refused, even with force, when the " +
+		"group is blocked, when it carries a group-scoped Spot Funds P&L " +
+		"bound, or while any rate-limit barrier is configured; it is refused " +
+		"with currency_change_blocked, even with force, when leaving would " +
+		"change the effective currency of a member carrying protected state. " +
 		"The group's trading access grants are deleted with it; its former " +
 		"members keep only their own. The default group cannot be deleted. " +
 		"Mutates Officer control-plane config; protected and disabled by default."
@@ -77,7 +77,7 @@ type updateGroupInput struct {
 
 type deleteGroupInput struct {
 	Group string `json:"group" jsonschema:"Group code"`
-	Force bool   `json:"force,omitempty" jsonschema:"Also delete the group's dependent rows, its group-scoped Spot Funds P&L bounds; without it a group with dependents is refused with has_dependents. A delete that would change the effective currency of a member carrying protected state is refused even with force"`
+	Force bool   `json:"force,omitempty" jsonschema:"Does not change whether the delete succeeds: a group carrying a group-scoped Spot Funds P&L bound, the only rows force would delete with it, is refused with loosening_refused with or without force, and a delete that would change the effective currency of a member carrying protected state is refused even with force"`
 }
 
 // groupOutput is the REST group body, {"group": {...}}.

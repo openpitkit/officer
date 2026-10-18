@@ -55,6 +55,33 @@ func TestExecutionReportRequestFromInputOmitsInternalSettlementContext(t *testin
 	}
 }
 
+// TestCallerTightenOnly pins that an agent over MCP is the only caller that may
+// only tighten risk state.
+func TestCallerTightenOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		source domain.Source
+		want   bool
+	}{
+		{domain.SourceMCP, true},
+		{domain.SourcePanel, false},
+		{domain.SourceAPI, false},
+		{domain.SourceSystem, false},
+		{"", false},
+	} {
+		caller := domain.Caller{
+			Source: tc.source, Principal: domain.PrincipalOperator,
+		}
+		if got := caller.TightenOnly(); got != tc.want {
+			t.Errorf(
+				"Caller{Source: %q}.TightenOnly() = %v, want %v",
+				tc.source, got, tc.want,
+			)
+		}
+	}
+}
+
 // --- ValidateAccountID ---
 
 func TestValidateAccountID(t *testing.T) {
@@ -1582,6 +1609,107 @@ func TestLimitSpotFundsPnlBounds_EitherOrValidationUsesRequestRoot(t *testing.T)
 	}
 }
 
+// TestLimitSpotFundsPnlBounds_ValidateRefusesHugeExponent refuses a bound
+// written with an exponent the comparison of the two bounds would rescale by -
+// compared as written, "-1e-2000000000" and "0" build 10^2000000000 - as a
+// validation error on the field it came from, before the bounds are compared,
+// and within a second, so a comparison that builds the power fails the test
+// instead of hanging it.
+func TestLimitSpotFundsPnlBounds_ValidateRefusesHugeExponent(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		lower, upper, pointer string
+	}{
+		"lower bound": {"-1e-2000000000", "0", "/lowerBound"},
+		"upper bound": {"0", "1e-2000000000", "/upperBound"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var err error
+			requireWithinASecond(t, "Validate", func() {
+				err = (domain.LimitSpotFundsPnlBounds{
+					Scope: domain.ScopeGlobal, Currency: "USD",
+					LowerBound: tc.lower, UpperBound: tc.upper,
+				}).Validate()
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("Validate = %v, want ErrInvalid", err)
+			}
+			if got := domain.ValidationPointer(err); got != tc.pointer {
+				t.Fatalf("pointer = %q, want %q", got, tc.pointer)
+			}
+			if got := domain.ValidationConstraint(err); got != "decimal" {
+				t.Fatalf("constraint = %q, want decimal", got)
+			}
+		})
+	}
+}
+
+// TestLimitSpotFundsPnlBounds_ValidateTakesEngineWritingsOnly accepts, as
+// either bound, a decimal written the way the engine's exact parser reads it,
+// and refuses one that parser does not take though ParseEngineDecimal does -
+// in exponent notation, with a sign after its point, with more than 28 digits
+// after its point, or with digits that, read as one integer, do not fit in 96
+// bits, also when trailing zeros alone take it past a limit - as a decimal
+// validation error on the field it came from.
+func TestLimitSpotFundsPnlBounds_ValidateTakesEngineWritingsOnly(t *testing.T) {
+	t.Parallel()
+	// The largest digits an engine decimal holds, 2^96 - 1.
+	const maxDigits = "79228162514264337593543950335"
+	for _, tc := range []struct {
+		value    string
+		accepted bool
+	}{
+		{"-100", true},
+		{"100.5", true},
+		{"-0.0001", true},
+		{"+5", true},
+		{".5", true},
+		{"5.", true},
+		{"-0", true},
+		{"0." + strings.Repeat("0", 27) + "1", true},
+		{maxDigits, true},
+		{maxDigits[:1] + "." + maxDigits[1:], true},
+		{"-1e2", false},
+		{"1E2", false},
+		{"1.5e-3", false},
+		{".-5", false},
+		{"1." + strings.Repeat("0", 29), false},
+		{"0." + strings.Repeat("0", 29), false},
+		{"10." + strings.Repeat("0", 28), false},
+		{maxDigits + ".0", false},
+	} {
+		for _, bound := range []struct {
+			name, pointer, lower, upper string
+		}{
+			{"lower", "/lowerBound", tc.value, ""},
+			{"upper", "/upperBound", "", tc.value},
+		} {
+			t.Run(bound.name+"="+tc.value, func(t *testing.T) {
+				t.Parallel()
+				err := (domain.LimitSpotFundsPnlBounds{
+					Scope: domain.ScopeGlobal, Currency: "USD",
+					LowerBound: bound.lower, UpperBound: bound.upper,
+				}).Validate()
+				if tc.accepted {
+					if err != nil {
+						t.Fatalf("Validate = %v, want nil", err)
+					}
+					return
+				}
+				if _, parseErr := domain.ParseEngineDecimal(tc.value); parseErr != nil {
+					t.Fatalf("ParseEngineDecimal(%q) = %v, want it accepted", tc.value, parseErr)
+				}
+				if !errors.Is(err, domain.ErrInvalid) ||
+					domain.ValidationPointer(err) != bound.pointer ||
+					domain.ValidationConstraint(err) != "decimal" {
+					t.Fatalf("Validate = %v, want a decimal validation error at %s", err, bound.pointer)
+				}
+			})
+		}
+	}
+}
+
 // --- Audit categories ---
 
 func TestAuditAction_Category(t *testing.T) {
@@ -1821,6 +1949,24 @@ func TestParseEngineDecimal(t *testing.T) {
 	}
 }
 
+// requireWithinASecond runs call and fails t unless it returns within a
+// second, so a call whose work grows with a value's exponent fails at once
+// instead of stalling the suite until its timeout. what names the call in that
+// failure.
+func requireWithinASecond(t *testing.T, what string, call func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		call()
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not return within a second", what)
+	}
+}
+
 // TestParseEngineDecimalIsBoundedByLength proves the work never follows the
 // exponent, and that a value past the length limit is refused before it is
 // parsed: each value must be refused well inside the time budget, where
@@ -1840,18 +1986,12 @@ func TestParseEngineDecimalIsBoundedByLength(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			done := make(chan error, 1)
-			go func() {
-				_, err := domain.ParseEngineDecimal(tc.value)
-				done <- err
-			}()
-			select {
-			case err := <-done:
-				if !errors.Is(err, domain.ErrInvalid) {
-					t.Fatalf("ParseEngineDecimal(%.24q) error = %v, want one wrapping ErrInvalid", tc.value, err)
-				}
-			case <-time.After(time.Second):
-				t.Fatalf("ParseEngineDecimal(%.24q) did not return within a second", tc.value)
+			var err error
+			requireWithinASecond(t, fmt.Sprintf("ParseEngineDecimal(%.24q)", tc.value), func() {
+				_, err = domain.ParseEngineDecimal(tc.value)
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ParseEngineDecimal(%.24q) error = %v, want one wrapping ErrInvalid", tc.value, err)
 			}
 		})
 	}
@@ -1892,6 +2032,7 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrHostNotAllowed":          domain.ErrHostNotAllowed,
 		"ErrInvalid":                 domain.ErrInvalid,
 		"ErrLiveTradingUnavailable":  domain.ErrLiveTradingUnavailable,
+		"ErrLoosening":               domain.ErrLoosening,
 		"ErrMasterKeyRequired":       domain.ErrMasterKeyRequired,
 		"ErrNoChange":                domain.ErrNoChange,
 		"ErrNoDestination":           domain.ErrNoDestination,

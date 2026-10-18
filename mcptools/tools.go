@@ -50,12 +50,15 @@ const healthToolDescription = "Report Pit Officer deployment health: per-node " 
 
 const getAccountStateToolName = "get_account_state"
 const getAccountStateToolDescription = "Return account row and its " +
-	"account-scoped risk barriers. Read-only - no secrets, no order-flow " +
-	"control."
+	"account-scoped risk barriers, each with the fields set_limit takes, the " +
+	"rate window as windowMs in milliseconds. Read-only - no secrets, no " +
+	"order-flow control."
 
 const getLimitsToolName = "get_limits"
 const getLimitsToolDescription = "Return risk barriers and P&L-bound currencies, " +
-	"optionally filtered by account. Read-only - no secrets, no order-flow control."
+	"optionally filtered by account; each barrier has the fields set_limit " +
+	"takes, the rate window as windowMs in milliseconds. Read-only - no " +
+	"secrets, no order-flow control."
 
 const getOrderToolName = "get_order"
 const getOrderToolDescription = "Return one order addressed by its id: " +
@@ -76,8 +79,10 @@ const checkOrderToolDescription = "Run a non-mutating pre-trade dry-run for an "
 
 const setMarketDataInstrumentToolName = "set_market_data_instrument"
 const setMarketDataInstrumentToolDescription = "Enable or disable one " +
-	"configured market-data instrument. Mutates Officer control-plane config " +
-	"only; protected and disabled by default."
+	"configured market-data instrument. An enable is refused with " +
+	"loosening_refused, as it widens the quotes the engine prices orders " +
+	"with. Mutates Officer control-plane config only; protected and disabled " +
+	"by default."
 
 const submitOrderToolName = "submit_order"
 const submitOrderToolDescription = "Submit an order intent through pre-trade " +
@@ -211,21 +216,21 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		true,
 		true,
 	), checkOrderHandler)
-	reg.Register(descriptor(
-		"set_limit",
+	registerTool(reg, descriptor(
+		setLimitToolName,
 		"Set limit",
-		"",
-		"Create or change a risk-limit / policy barrier.",
+		setLimitToolDescription,
+		"Tighten a risk barrier: add one or make it stricter; loosening and removal are refused.",
+		true,
 		true,
 		true,
 		false,
-		false,
-	))
+	), setLimitHandler)
 	registerTool(reg, descriptor(
 		createAccountToolName,
 		"Create account",
 		createAccountToolDescription,
-		"Create an account with a code, an optional title and an optional currency.",
+		"Create an account with a code, an optional title and an optional currency; refused for an agent.",
 		true,
 		true,
 		true,
@@ -235,7 +240,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		updateAccountToolName,
 		"Update account",
 		updateAccountToolDescription,
-		"Change an account's code and title.",
+		"Change an account's code and title; a code change is refused while it or its group is blocked, its group carries a group-scoped P&L bound, or it carries its own barrier.",
 		true,
 		true,
 		true,
@@ -245,7 +250,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		deleteAccountToolName,
 		"Delete account",
 		deleteAccountToolDescription,
-		"Delete an account, with force together with its dependent rows.",
+		"Delete an account; refused while it or its group is blocked, its group carries a group-scoped P&L bound, it carries its own barrier, or a rate barrier is configured.",
 		true,
 		true,
 		true,
@@ -265,7 +270,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		applyAdjustmentToolName,
 		"Apply adjustment",
 		applyAdjustmentToolDescription,
-		"Apply a deposit, withdrawal, venue fee or correction to an account's balances.",
+		"Apply a withdrawal, venue fee or correction that lowers the balances of an account's own currency; any other asset, a raise, or a change of the average entry price or realized P&L is refused for an agent.",
 		true,
 		true,
 		true,
@@ -285,7 +290,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		updateAssetToolName,
 		"Update asset",
 		updateAssetToolDescription,
-		"Change an asset's code, title and asset class.",
+		"Change an asset's code, title and asset class; a code change is refused while a barrier references the asset.",
 		true,
 		true,
 		true,
@@ -295,7 +300,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		deleteAssetToolName,
 		"Delete asset",
 		deleteAssetToolDescription,
-		"Delete an asset, with force together with its dependent rows.",
+		"Delete an asset; refused while a barrier references it, and always with force.",
 		true,
 		true,
 		true,
@@ -325,7 +330,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		deleteGroupToolName,
 		"Delete group",
 		deleteGroupToolDescription,
-		"Delete an account group, with force together with its dependent rows.",
+		"Delete an account group; refused while it is blocked, carries a group-scoped P&L bound, or a rate barrier is configured.",
 		true,
 		true,
 		true,
@@ -335,7 +340,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		setMarketDataInstrumentToolName,
 		"Set market-data instrument",
 		setMarketDataInstrumentToolDescription,
-		"Enable or disable one configured market-data instrument.",
+		"Enable or disable one configured market-data instrument; an enable is refused for an agent.",
 		true,
 		true,
 		true,
@@ -409,23 +414,23 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		"Report whether stored credentials are sealed under the master key and, when they are not, whether trading connections or market-data sources hold keys in plain text. Read-only - credentials are never exposed.",
 		"Read whether stored credentials are sealed and which hold plaintext keys.", false, false, true, true), getCredentialStorageHandler)
 	registerTool(reg, descriptor("create_trading_connection", "Create trading connection",
-		"Create a trading connection with write-only credentials. Mutates Officer control-plane config; protected and disabled by default.",
-		"Create a trading connection with write-only credentials.", true, true, true, false), createTradingConnectionHandler)
+		"Create a trading connection with write-only credentials. The create is refused with loosening_refused, as a new connection widens what can be sent. Mutates Officer control-plane config; protected and disabled by default.",
+		"Create a trading connection with write-only credentials; refused for an agent.", true, true, true, false), createTradingConnectionHandler)
 	registerTool(reg, descriptor("update_trading_connection", "Update trading connection",
-		"Update a trading connection label or write-only credentials. Mutates Officer control-plane config; protected and disabled by default.",
-		"Update a trading connection label or write-only credentials.", true, true, true, false), updateTradingConnectionHandler)
+		"Update a trading connection label or write-only credentials. A credential change is refused with loosening_refused, as it restarts the trading runtime and so brings unavailable connections back. Mutates Officer control-plane config; protected and disabled by default.",
+		"Update a trading connection label or write-only credentials; a credential change is refused for an agent.", true, true, true, false), updateTradingConnectionHandler)
 	registerTool(reg, descriptor("set_trading_connection_enabled", "Set trading connection enabled",
-		"Enable or disable a trading connection. Mutates Officer control-plane config; protected and disabled by default.",
-		"Enable or disable a trading connection.", true, true, true, false), setTradingConnectionEnabledHandler)
+		"Enable or disable a trading connection. An enable is refused with loosening_refused, as it widens what can be sent. Mutates Officer control-plane config; protected and disabled by default.",
+		"Enable or disable a trading connection; an enable is refused for an agent.", true, true, true, false), setTradingConnectionEnabledHandler)
 	registerTool(reg, descriptor("check_trading_connection", "Check trading connection",
 		"Check the venue identity and status of a trading connection. Read-only - credentials are never exposed.",
 		"Check the venue identity and status of a trading connection.", false, false, true, true), checkTradingConnectionHandler)
 	registerTool(reg, descriptor("set_trading_instrument", "Set trading instrument",
-		"Set a trading instrument mapping. Mutates Officer control-plane config; protected and disabled by default.",
-		"Set a trading instrument mapping.", true, true, true, false), setTradingInstrumentHandler)
+		"Set a trading instrument mapping. The change is refused with loosening_refused, as a mapping decides what can be sent and which asset a venue fee is booked in. Mutates Officer control-plane config; protected and disabled by default.",
+		"Set a trading instrument mapping; refused for an agent.", true, true, true, false), setTradingInstrumentHandler)
 	registerTool(reg, descriptor("delete_trading_instrument", "Delete trading instrument",
-		"Delete a trading instrument mapping. Mutates Officer control-plane config; protected and disabled by default.",
-		"Delete a trading instrument mapping.", true, true, true, false), deleteTradingInstrumentHandler)
+		"Delete a trading instrument mapping. The delete is refused with loosening_refused, as a mapping decides what can be sent and which asset a venue fee is booked in. Mutates Officer control-plane config; protected and disabled by default.",
+		"Delete a trading instrument mapping; refused for an agent.", true, true, true, false), deleteTradingInstrumentHandler)
 	registerTool(reg, descriptor("verify_trading_symbol", "Verify trading symbol",
 		"Verify whether a venue symbol exists and is tradable. Read-only - credentials are never exposed.",
 		"Verify whether a venue symbol exists and is tradable.", false, false, true, true), verifyTradingSymbolHandler)
@@ -433,17 +438,17 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		"Search venue symbols for a trading connection. Read-only - credentials are never exposed.",
 		"Search venue symbols for a trading connection.", false, false, true, true), searchTradingSymbolsHandler)
 	registerTool(reg, descriptor("grant_trading_access", "Grant trading access",
-		"Grant an Officer account access to a trading connection, or an account group where the server offers account groups. A group grant needs the connection's fee account on providers with unlinked fees. Mutates Officer control-plane config; protected and disabled by default.",
-		"Grant an Officer account access to a trading connection, or an account group where the server offers account groups; a group grant needs the connection's fee account on providers with unlinked fees.", true, true, true, false), grantTradingAccessHandler)
+		"Grant an Officer account access to a trading connection, or an account group where the server offers account groups. The grant is refused with loosening_refused, as it widens what can be sent. Mutates Officer control-plane config; protected and disabled by default.",
+		"Grant an Officer account access to a trading connection, or an account group where the server offers account groups; refused for an agent.", true, true, true, false), grantTradingAccessHandler)
 	registerTool(reg, descriptor("revoke_trading_access", "Revoke trading access",
-		"Revoke the access of an Officer account to a trading connection, or of an account group where the server offers account groups. Mutates Officer control-plane config; protected and disabled by default.",
-		"Revoke the access of an Officer account to a trading connection, or of an account group where the server offers account groups.", true, true, true, false), revokeTradingAccessHandler)
+		"Revoke the access of an Officer account to a trading connection, or of an account group where the server offers account groups. Revoking the last sender of a connection with no fee account on a provider with unlinked fees is refused with loosening_refused, as the connection's venue fees would then be skipped. Mutates Officer control-plane config; protected and disabled by default.",
+		"Revoke the access of an Officer account to a trading connection, or of an account group where the server offers account groups; revoking the last sender of a connection with no fee account on a provider with unlinked fees is refused for an agent.", true, true, true, false), revokeTradingAccessHandler)
 	registerTool(reg, descriptor("set_trading_fee_account", "Set trading fee account",
-		"Set the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default.",
-		"Set the Officer account receiving unlinked venue fees.", true, true, true, false), setTradingFeeAccountHandler)
+		"Set the Officer account receiving unlinked venue fees. The set is refused with loosening_refused, as it moves where future venue fees are debited. Mutates Officer control-plane config; protected and disabled by default.",
+		"Set the Officer account receiving unlinked venue fees; refused for an agent.", true, true, true, false), setTradingFeeAccountHandler)
 	registerTool(reg, descriptor("clear_trading_fee_account", "Clear trading fee account",
-		"Clear the Officer account receiving unlinked venue fees. Mutates Officer control-plane config; protected and disabled by default.",
-		"Clear the Officer account receiving unlinked venue fees.", true, true, true, false), clearTradingFeeAccountHandler)
+		"Clear the Officer account receiving unlinked venue fees. The clear is refused with loosening_refused, as it moves where future venue fees are debited. Mutates Officer control-plane config; protected and disabled by default.",
+		"Clear the Officer account receiving unlinked venue fees; refused for an agent.", true, true, true, false), clearTradingFeeAccountHandler)
 	registerTool(reg, descriptor("list_trading_destinations", "List trading destinations",
 		"List the trading destinations available to an Officer account. Read-only - credentials are never exposed.",
 		"List the trading destinations available to an Officer account.", false, false, true, true), listTradingDestinationsHandler)
@@ -666,8 +671,8 @@ type getAccountStateInput struct {
 }
 
 type getAccountStateOutput struct {
-	Account accountDTO `json:"account"`
-	Limits  limitsDTO  `json:"limits"`
+	Account accountDTO             `json:"account"`
+	Limits  httpx.AccountLimitsDTO `json:"limits"`
 }
 
 type getLimitsInput struct {
@@ -675,7 +680,7 @@ type getLimitsInput struct {
 }
 
 type getLimitsOutput struct {
-	Limits limitsDTO `json:"limits"`
+	Limits httpx.AccountLimitsDTO `json:"limits"`
 }
 
 type getOrderInput struct {
@@ -739,7 +744,7 @@ type submitOrderInput struct {
 	Mode        string `json:"mode" jsonschema:"Required: immediate commits and settles at the order price and requires price, hold waits for execution reports"`
 	ExternalID  string `json:"id,omitempty" jsonschema:"Optional caller-supplied unique order id; omit to have the server generate one"`
 
-	MissingAccount string `json:"missingAccount" jsonschema:"Required: create to register an account that does not exist yet, reject to fail the submit instead"`
+	MissingAccount string `json:"missingAccount" jsonschema:"Required: create or reject; for an account that does not exist yet, create is refused for an agent with loosening_refused, and reject fails the submit instead"`
 }
 
 type submitDropCopyOrderInput struct {
@@ -752,7 +757,7 @@ type submitDropCopyOrderInput struct {
 	Price       string `json:"price,omitempty" jsonschema:"Required limit price as an exact decimal string; market orders are rejected for drop-copy"`
 	ExternalID  string `json:"id,omitempty" jsonschema:"Optional caller-supplied unique order id; omit to have the store assign one"`
 
-	MissingAccount string `json:"missingAccount" jsonschema:"Required: must be create; a drop-copy reports an execution that already happened and cannot reject an account that does not exist yet"`
+	MissingAccount string `json:"missingAccount" jsonschema:"Required: must be create, as a drop-copy reports an execution that already happened and cannot reject an account that does not exist yet; for such an account, create is refused for an agent with loosening_refused"`
 }
 
 type submitOrderOutput struct {
@@ -808,37 +813,6 @@ type accountDTO struct {
 	Blocked            bool   `json:"blocked"`
 	AccountBlocked     bool   `json:"accountBlocked"`
 	GroupBlocked       bool   `json:"groupBlocked"`
-}
-
-type limitsDTO struct {
-	RateLimits               []rateLimitDTO               `json:"rateLimits"`
-	OrderSizeLimits          []orderSizeLimitDTO          `json:"orderSizeLimits"`
-	SpotFundsPnlBoundsLimits []spotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimits"`
-}
-
-type rateLimitDTO struct {
-	Scope     string `json:"scope"`
-	Account   string `json:"account"`
-	Asset     string `json:"asset"`
-	Window    string `json:"window"`
-	MaxOrders uint64 `json:"maxOrders"`
-}
-
-type orderSizeLimitDTO struct {
-	Scope       string `json:"scope"`
-	Account     string `json:"account"`
-	Asset       string `json:"asset"`
-	MaxQuantity string `json:"maxQuantity"`
-	MaxNotional string `json:"maxNotional"`
-}
-
-type spotFundsPnlBoundsLimitDTO struct {
-	Scope        string `json:"scope"`
-	Account      string `json:"account"`
-	AccountGroup string `json:"accountGroup"`
-	Currency     string `json:"currency"`
-	LowerBound   string `json:"lowerBound"`
-	UpperBound   string `json:"upperBound"`
 }
 
 type auditDTO struct {
@@ -942,49 +916,6 @@ func accountBlock(
 		return domain.AccountBlockState{}, err
 	}
 	return domain.NewGroupBlockIndex(groups).Resolve(a), nil
-}
-
-func toLimitsDTO(l node.AccountLimits) limitsDTO {
-	rate := make([]rateLimitDTO, 0, len(l.RateLimits))
-	for _, r := range l.RateLimits {
-		rate = append(rate, rateLimitDTO{
-			Scope:     string(r.Scope),
-			Account:   string(r.Account),
-			Asset:     r.Asset,
-			Window:    r.Window.String(),
-			MaxOrders: r.MaxOrders,
-		})
-	}
-	size := make([]orderSizeLimitDTO, 0, len(l.OrderSizeLimits))
-	for _, o := range l.OrderSizeLimits {
-		size = append(size, orderSizeLimitDTO{
-			Scope:       string(o.Scope),
-			Account:     string(o.Account),
-			Asset:       o.Asset,
-			MaxQuantity: o.MaxQuantity,
-			MaxNotional: o.MaxNotional,
-		})
-	}
-	spotFundsPnl := make(
-		[]spotFundsPnlBoundsLimitDTO,
-		0,
-		len(l.SpotFundsPnlBoundsLimits),
-	)
-	for _, p := range l.SpotFundsPnlBoundsLimits {
-		spotFundsPnl = append(spotFundsPnl, spotFundsPnlBoundsLimitDTO{
-			Scope:        string(p.Scope),
-			Account:      string(p.Account),
-			AccountGroup: p.AccountGroup,
-			Currency:     p.Currency,
-			LowerBound:   p.LowerBound,
-			UpperBound:   p.UpperBound,
-		})
-	}
-	return limitsDTO{
-		RateLimits:               rate,
-		OrderSizeLimits:          size,
-		SpotFundsPnlBoundsLimits: spotFundsPnl,
-	}
 }
 
 func limitsCount(l node.AccountLimits) int {
@@ -1190,7 +1121,7 @@ func getAccountStateHandler(
 		}
 		out := getAccountStateOutput{
 			Account: toAccountDTO(acc, block),
-			Limits:  toLimitsDTO(limits),
+			Limits:  httpx.ToAccountLimitsDTO(limits),
 		}
 		summary := fmt.Sprintf(
 			"account %s: %d limit(s)", acc.Code, limitsCount(limits),
@@ -1217,7 +1148,7 @@ func getLimitsHandler(
 		if err != nil {
 			return "", getLimitsOutput{}, toolError(err)
 		}
-		out := getLimitsOutput{Limits: toLimitsDTO(limits)}
+		out := getLimitsOutput{Limits: httpx.ToAccountLimitsDTO(limits)}
 		return fmt.Sprintf("%d limit(s)", limitsCount(limits)), out, nil
 	}
 }
@@ -1373,6 +1304,21 @@ func setMarketDataInstrumentHandler(
 	}
 }
 
+// missingAccountPolicy is the missing-account policy a tool passes the core:
+// the missingAccount argument when the call names account, and none when it
+// names no account, as REST ignores the query parameter of a request that
+// names none. A composition that fixes one account resolves an omitted
+// account to that account, and the core would apply a policy passed with it
+// there.
+func missingAccountPolicy(
+	account domain.AccountID, missingAccount string,
+) domain.MissingAccountPolicy {
+	if account == "" {
+		return ""
+	}
+	return domain.MissingAccountPolicy(missingAccount)
+}
+
 func submitOrderHandler(
 	src frameworkmcp.Source,
 ) frameworkmcp.ToolBody[submitOrderInput, submitOrderOutput] {
@@ -1383,18 +1329,14 @@ func submitOrderHandler(
 	) (string, submitOrderOutput, error) {
 		// A composition that fixes one account resolves an omitted one in the
 		// Source. The missing-account policy belongs to an account the caller
-		// named, so only then is it parsed, as over REST.
+		// named, so only then is it passed and parsed, as over REST.
 		account := domain.AccountID(strings.TrimSpace(in.Account))
 		if account == "" && src.AccountFeatures().Accounts() {
 			return "", submitOrderOutput{}, fmt.Errorf("account is required")
 		}
-		var missing domain.MissingAccountPolicy
+		missing := missingAccountPolicy(account, strings.TrimSpace(in.MissingAccount))
 		if account != "" {
-			var err error
-			missing, err = domain.ParseMissingAccountPolicy(
-				strings.TrimSpace(in.MissingAccount),
-			)
-			if err != nil {
+			if err := domain.ValidateMissingAccountPolicy(missing); err != nil {
 				return "", submitOrderOutput{}, err
 			}
 		}
@@ -1450,14 +1392,13 @@ func submitDropCopyOrderHandler(
 	) (string, submitDropCopyOrderOutput, error) {
 		// A composition that fixes one account resolves an omitted one in the
 		// Source. The missing-account policy belongs to an account the caller
-		// named, so only then is it checked, as over REST.
+		// named, so only then is it passed and checked, as over REST.
 		account := domain.AccountID(strings.TrimSpace(in.Account))
 		if account == "" && src.AccountFeatures().Accounts() {
 			return "", submitDropCopyOrderOutput{}, fmt.Errorf("account is required")
 		}
-		var missing domain.MissingAccountPolicy
+		missing := missingAccountPolicy(account, strings.TrimSpace(in.MissingAccount))
 		if account != "" {
-			missing = domain.MissingAccountPolicy(strings.TrimSpace(in.MissingAccount))
 			if err := domain.ValidateDropCopyMissingAccountPolicy(missing); err != nil {
 				return "", submitDropCopyOrderOutput{}, err
 			}

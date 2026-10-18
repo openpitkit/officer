@@ -955,6 +955,30 @@ func (n *localNode) endEngineRestart() {
 	n.laneGate.Unlock()
 }
 
+// guardTightenOnlyRebuild refuses a tighten-only caller's mutation that
+// rebuilds the engine while any rate-limit barrier is configured. Every engine
+// build starts a fresh rate-limit policy with empty counters, so the rebuild
+// would reset every live rate window and let the caller exceed a rate limit.
+// It returns nil for a caller that is not tighten-only.
+func (n *localNode) guardTightenOnlyRebuild(
+	ctx context.Context, caller domain.Caller,
+) error {
+	if !caller.TightenOnly() {
+		return nil
+	}
+	limits, err := n.realm.ListRateLimits(ctx, "")
+	if err != nil {
+		return fmt.Errorf("read rate limits for engine rebuild: %w", err)
+	}
+	if len(limits) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"the engine rebuild would reset every rate-limit window: %w",
+		domain.ErrLoosening,
+	)
+}
+
 func (n *localNode) rollbackStore(
 	ctx context.Context,
 	rollback backup.Archive,

@@ -23,6 +23,7 @@ import (
 
 	"go.openpit.dev/officer/engine"
 	"go.openpit.dev/officer/framework/domain"
+	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/framework/store"
@@ -35,6 +36,15 @@ import (
 // with a master key, which signing keys need. The node is closed when the test
 // ends.
 func newLocalNode(t *testing.T) (node.Node, store.RealmStore) {
+	t.Helper()
+	return newLocalNodeBuiltBy(t, engine.NewOpenPitEngineBuildFunc())
+}
+
+// newLocalNodeBuiltBy is newLocalNode with every engine of the node, the first
+// one and each rebuild, built by build.
+func newLocalNodeBuiltBy(
+	t *testing.T, build fwengine.BuildFunc,
+) (node.Node, store.RealmStore) {
 	t.Helper()
 	ctx := systemCtx()
 	masterKey, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
@@ -57,7 +67,7 @@ func newLocalNode(t *testing.T) (node.Node, store.RealmStore) {
 		ctx,
 		domain.DefaultRealm,
 		st,
-		engine.NewOpenPitEngineBuildFunc(),
+		build,
 		func(err error) { t.Errorf("unexpected fatal shutdown: %v", err) },
 	)
 	if err != nil {

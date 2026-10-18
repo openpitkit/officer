@@ -168,6 +168,41 @@ func TestWriteErrAccountsNotManaged(t *testing.T) {
 	}
 }
 
+// TestWriteErrLoosening maps a refused loosening to a 403 carrying its own code
+// and the error's own text, which names what the request would have loosened,
+// also when the refusal wraps a sentinel DescribeErr would otherwise match
+// first.
+func TestWriteErrLoosening(t *testing.T) {
+	t.Parallel()
+	refusal := fmt.Errorf(
+		"delete group %q: its block would stop applying to its members: %w",
+		"desk", domain.ErrLoosening,
+	)
+	for name, err := range map[string]error{
+		"refusal":           refusal,
+		"over another code": fmt.Errorf("%w: %w", domain.ErrTooLarge, refusal),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			WriteErr(rec, err)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status=%d want=%d", rec.Code, http.StatusForbidden)
+			}
+			var body struct {
+				Error struct{ Code, Message string }
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error.Code != "loosening_refused" ||
+				body.Error.Message != err.Error() {
+				t.Fatalf("body=%s", rec.Body)
+			}
+		})
+	}
+}
+
 func TestWriteErrDestinationCandidates(t *testing.T) {
 	id, err := domain.ParseExternalID("connection-1")
 	if err != nil {

@@ -5699,7 +5699,7 @@ components:
                 `terminal_order`, `approval_required`,
                 `execution_report_required`, `precondition`, `too_large`,
                 `forbidden`, `host_not_allowed`, `origin_not_allowed`,
-                `unsupported_media_type`, `reserved_group`,
+                `unsupported_media_type`, `reserved_group`, `loosening_refused`,
                 `live_trading_unavailable`, `trading_mode_mismatch`,
                 `fee_account_required`, `venue_order_managed`, `no_destination`,
                 `destination_ambiguous`, `accounts_not_managed`,
@@ -7194,7 +7194,9 @@ components:
         windowMs:
           type: integer
           format: int64
-          description: Rolling rate-limit window in milliseconds.
+          description: >
+            Rate-limit window in milliseconds: a fixed window for the broker and
+            asset scopes, a rolling one for the account and account_asset scopes.
         maxOrders:
           type: integer
           minimum: 1
@@ -7265,10 +7267,17 @@ components:
           description: Required asset code that denominates both P&L bounds.
         lowerBound:
           type: string
-          description: Lower P&L bound - exact decimal string; empty when unset.
+          description: >
+            Lower P&L bound - exact decimal string; empty when unset. Plain
+            notation only: an optional leading sign, digits with at most one
+            point, at most 28 digits after the point and all digits, read as one
+            integer as written, below 2^96. Exponent notation is refused with
+            validation.
         upperBound:
           type: string
-          description: Upper P&L bound - exact decimal string; empty when unset.
+          description: >
+            Upper P&L bound - exact decimal string; empty when unset. Written as
+            lowerBound must be.
     AccountLimits:
       type: object
       required: [rateLimits, orderSizeLimits, spotFundsPnlBoundsLimits]
@@ -7326,7 +7335,10 @@ components:
                 windowMs:
                   type: integer
                   format: int64
-                  description: Rolling rate-limit window in milliseconds.
+                  description: >
+                    Rate-limit window in milliseconds: a fixed window for the
+                    broker and asset scopes, a rolling one for the account and
+                    account_asset scopes.
                 maxOrders:
                   type: integer
                   minimum: 1
@@ -7353,10 +7365,14 @@ components:
                   description: Required asset code that denominates both P&L bounds.
                 lowerBound:
                   type: string
-                  description: Lower P&L bound - exact decimal string; empty when unset.
+                  description: >
+                    Lower P&L bound - exact decimal string; empty when unset.
+                    Plain notation only, as in SpotFundsPnlBoundsLimit.
                 upperBound:
                   type: string
-                  description: Upper P&L bound - exact decimal string; empty when unset.
+                  description: >
+                    Upper P&L bound - exact decimal string; empty when unset.
+                    Plain notation only, as in SpotFundsPnlBoundsLimit.
     # Audit
 
     AuditEntry:

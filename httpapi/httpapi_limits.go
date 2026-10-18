@@ -18,9 +18,7 @@
 package httpapi
 
 import (
-	"context"
 	"net/http"
-	"time"
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -57,16 +55,14 @@ func handleListLimits(svc backend.ControlPlane) http.HandlerFunc {
 // parameter is required when the scope names an account.
 func handlePutRateLimit(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req rateLimitDTO
+		var req httpx.RateLimitDTO
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		limit := domain.LimitRate{
-			Scope:     domain.LimitScope(req.Scope),
-			Account:   domain.AccountID(req.Account),
-			Asset:     req.Asset,
-			Window:    time.Duration(req.WindowMs) * time.Millisecond,
-			MaxOrders: req.MaxOrders,
+		limit, err := httpx.FromRateLimitDTO(req)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
 		}
 		missing, err := missingAccountQuery(r, limit.Account)
 		if err != nil {
@@ -77,12 +73,13 @@ func handlePutRateLimit(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		persisted, err := persistedRateLimit(r.Context(), svc, limit)
+		persisted, err := httpx.PersistedRateLimit(r.Context(), svc, limit)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"rateLimit": toRateLimitDTO(persisted)})
+		stored := httpx.ToRateLimitDTO(persisted)
+		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{RateLimit: &stored})
 	}
 }
 
@@ -92,17 +89,11 @@ func handlePutRateLimit(svc backend.ControlPlane) http.HandlerFunc {
 // query parameter is required when the scope names an account.
 func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req orderSizeLimitDTO
+		var req httpx.OrderSizeLimitDTO
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		limit := domain.LimitOrderSize{
-			Scope:       domain.LimitScope(req.Scope),
-			Account:     domain.AccountID(req.Account),
-			Asset:       req.Asset,
-			MaxQuantity: req.MaxQuantity,
-			MaxNotional: req.MaxNotional,
-		}
+		limit := httpx.FromOrderSizeLimitDTO(req)
 		missing, err := missingAccountQuery(r, limit.Account)
 		if err != nil {
 			httpx.WriteErr(w, err)
@@ -112,12 +103,13 @@ func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		persisted, err := persistedOrderSizeLimit(r.Context(), svc, limit)
+		persisted, err := httpx.PersistedOrderSizeLimit(r.Context(), svc, limit)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"orderSizeLimit": toOrderSizeLimitDTO(persisted)})
+		stored := httpx.ToOrderSizeLimitDTO(persisted)
+		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{OrderSizeLimit: &stored})
 	}
 }
 
@@ -128,18 +120,11 @@ func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
 // scope names an account.
 func handlePutSpotFundsPnlBoundsLimit(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req spotFundsPnlBoundsLimitDTO
+		var req httpx.SpotFundsPnlBoundsLimitDTO
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		limit := domain.LimitSpotFundsPnlBounds{
-			Scope:        domain.LimitScope(req.Scope),
-			Account:      domain.AccountID(req.Account),
-			AccountGroup: req.AccountGroup,
-			Currency:     req.Currency,
-			LowerBound:   req.LowerBound,
-			UpperBound:   req.UpperBound,
-		}
+		limit := httpx.FromSpotFundsPnlBoundsLimitDTO(req)
 		missing, err := missingAccountQuery(r, limit.Account)
 		if err != nil {
 			httpx.WriteErr(w, err)
@@ -151,96 +136,18 @@ func handlePutSpotFundsPnlBoundsLimit(svc backend.ControlPlane) http.HandlerFunc
 			httpx.WriteErr(w, err)
 			return
 		}
-		persisted, err := persistedSpotFundsPnlBoundsLimit(
+		persisted, err := httpx.PersistedSpotFundsPnlBoundsLimit(
 			r.Context(), svc, limit,
 		)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{
-			"spotFundsPnlBoundsLimit": toSpotFundsPnlBoundsLimitDTO(persisted),
+		stored := httpx.ToSpotFundsPnlBoundsLimitDTO(persisted)
+		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{
+			SpotFundsPnlBoundsLimit: &stored,
 		})
 	}
-}
-
-// storedLimitAccount is the account a barrier put with account is stored
-// under: account itself, except that a scope with an account axis naming none,
-// in a composition that does not offer accounts, is stored under the one
-// account the service's account scope supplied.
-func storedLimitAccount(
-	svc backend.ControlPlane, scope domain.LimitScope, account domain.AccountID,
-) domain.AccountID {
-	if scope.HasAccountAxis() {
-		return svc.AccountFeatures().AccountFor(account)
-	}
-	return account
-}
-
-func persistedRateLimit(
-	ctx context.Context, svc backend.ControlPlane, target domain.LimitRate,
-) (domain.LimitRate, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	limits, err := svc.ListLimits(ctx, target.Account)
-	if err != nil {
-		return domain.LimitRate{}, err
-	}
-	for _, limit := range limits.RateLimits {
-		if sameLimitAddress(limit.Scope, limit.Account, limit.Asset,
-			target.Scope, target.Account, target.Asset) {
-			return limit, nil
-		}
-	}
-	return domain.LimitRate{}, domain.ErrNotFound
-}
-
-func persistedOrderSizeLimit(
-	ctx context.Context, svc backend.ControlPlane, target domain.LimitOrderSize,
-) (domain.LimitOrderSize, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	limits, err := svc.ListLimits(ctx, target.Account)
-	if err != nil {
-		return domain.LimitOrderSize{}, err
-	}
-	for _, limit := range limits.OrderSizeLimits {
-		if sameLimitAddress(limit.Scope, limit.Account, limit.Asset,
-			target.Scope, target.Account, target.Asset) {
-			return limit, nil
-		}
-	}
-	return domain.LimitOrderSize{}, domain.ErrNotFound
-}
-
-func persistedSpotFundsPnlBoundsLimit(
-	ctx context.Context, svc backend.ControlPlane, target domain.LimitSpotFundsPnlBounds,
-) (domain.LimitSpotFundsPnlBounds, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	limits, err := svc.ListLimits(ctx, target.Account)
-	if err != nil {
-		return domain.LimitSpotFundsPnlBounds{}, err
-	}
-	for _, limit := range limits.SpotFundsPnlBoundsLimits {
-		if sameSpotFundsPnlBoundsAddress(limit, target) {
-			return limit, nil
-		}
-	}
-	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotFound
-}
-
-func sameLimitAddress(
-	leftScope domain.LimitScope, leftAccount domain.AccountID, leftAsset string,
-	rightScope domain.LimitScope, rightAccount domain.AccountID, rightAsset string,
-) bool {
-	return leftScope == rightScope && leftAccount == rightAccount && leftAsset == rightAsset
-}
-
-func sameSpotFundsPnlBoundsAddress(
-	left domain.LimitSpotFundsPnlBounds,
-	right domain.LimitSpotFundsPnlBounds,
-) bool {
-	return left.Scope == right.Scope &&
-		left.Account == right.Account &&
-		left.AccountGroup == right.AccountGroup
 }
 
 // handleDeleteLimit handles

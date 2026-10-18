@@ -656,7 +656,7 @@ func eligible(detail domain.OrderDetail, claim domain.ExternalID) error {
 }
 
 func reportID(coid, suffix string) domain.ExternalID {
-	return domain.ExternalID("trading:" + coid + ":" + suffix)
+	return domain.ExternalID(domain.TradingRuntimeIDPrefix + coid + ":" + suffix)
 }
 
 func (w *worker) send(id domain.ExternalID, dest domain.TradingDestination) (link domain.VenueOrder, err error) {

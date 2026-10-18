@@ -102,6 +102,16 @@ func (n *localNode) PutRateLimit(
 	if err != nil {
 		return nil, err
 	}
+	// Every matching rate barrier applies, so a tighten-only caller may add one
+	// under a new key, the policy's first included: with no rate barrier
+	// configured, the engine rebuild that installs it resets no rate window.
+	// A barrier under an existing key replaces that one, so it must be no
+	// looser.
+	if caller.TightenOnly() && hadPrev {
+		if err := limit.NoLooserThan(prev); err != nil {
+			return nil, fmt.Errorf("put rate limit: %w", err)
+		}
+	}
 	if err := n.ensureLimitAccount(
 		ctx, limit.Scope, limit.Account, missing, "put rate limit", caller,
 	); err != nil {
@@ -175,6 +185,11 @@ func (n *localNode) PutOrderSizeLimit(
 	prev, hadPrev, err := n.readOrderSizeBarrier(ctx, target)
 	if err != nil {
 		return nil, err
+	}
+	if err := n.guardTightenOnlyOrderSize(
+		ctx, limit, prev, hadPrev, caller,
+	); err != nil {
+		return nil, fmt.Errorf("put order-size limit: %w", err)
 	}
 	if err := n.ensureLimitAccount(
 		ctx, limit.Scope, limit.Account, missing, "put order-size limit", caller,
@@ -258,6 +273,11 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	if err != nil {
 		return nil, err
 	}
+	if err := n.guardTightenOnlySpotFundsPnlBounds(
+		ctx, limit, prev, hadPrev, caller,
+	); err != nil {
+		return nil, fmt.Errorf("put spot funds pnl-bounds limit: %w", err)
+	}
 	if err := n.ensureLimitAccount(
 		ctx, limit.Scope, limit.Account, missing,
 		"put spot-funds P&L bounds limit", caller,
@@ -295,13 +315,181 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	return sink, nil
 }
 
+// guardTightenOnlyOrderSize refuses a tighten-only caller's order-size barrier
+// that is looser than the barrier it replaces, prev when hadPrev, or else than
+// the asset-tier cap it would override: an account_underlying_asset cap
+// overrides the underlying_asset cap on the same asset, and an
+// account_settlement_asset cap the settlement_asset cap. Broker caps apply on
+// top of every other cap and an asset-tier cap overrides none, so those scopes
+// compare with the same key only. The policy's first barrier is installed by
+// an engine rebuild, so it is refused while a rate-limit barrier is configured
+// (see guardTightenOnlyRebuild). It returns nil for a caller that is not
+// tighten-only.
+func (n *localNode) guardTightenOnlyOrderSize(
+	ctx context.Context,
+	limit, prev domain.LimitOrderSize,
+	hadPrev bool,
+	caller domain.Caller,
+) error {
+	if !caller.TightenOnly() {
+		return nil
+	}
+	if hadPrev {
+		return limit.NoLooserThan(prev)
+	}
+	limits, err := n.realm.ListOrderSizeLimits(ctx, "")
+	if err != nil {
+		return fmt.Errorf("read order-size barriers: %w", err)
+	}
+	if len(limits) == 0 {
+		return n.guardTightenOnlyRebuild(ctx, caller)
+	}
+	var overridden domain.LimitScope
+	switch limit.Scope {
+	case domain.ScopeAccountUnderlyingAsset:
+		overridden = domain.ScopeUnderlyingAsset
+	case domain.ScopeAccountSettlementAsset:
+		overridden = domain.ScopeSettlementAsset
+	case domain.ScopeBroker, domain.ScopeUnderlyingAsset, domain.ScopeSettlementAsset:
+		return nil
+	default:
+		return fmt.Errorf(
+			"scope %q not allowed for policy %q: %w",
+			limit.Scope, domain.PolicyOrderSizeLimit, domain.ErrInvalid,
+		)
+	}
+	ref, ok, err := n.readOrderSizeBarrier(ctx, LimitTarget{
+		Policy: domain.PolicyOrderSizeLimit, Scope: overridden, Asset: limit.Asset,
+	})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return limit.NoLooserThan(ref)
+}
+
+// guardTightenOnlySpotFundsPnlBounds refuses a tighten-only caller's Spot
+// Funds P&L bound that is looser than the bound it takes over from: the bound
+// it replaces, prev when hadPrev; else, for an account_group bound, the global
+// bound, whose currency it must share and which it must not loosen - on
+// purpose a stricter contract than the per-member cascade; else, for an
+// account bound, the bound the cascade resolves for the account now (see
+// resolvedSpotFundsPnlBounds). A new global bound only adds a tier. It returns
+// nil for a caller that is not tighten-only.
+func (n *localNode) guardTightenOnlySpotFundsPnlBounds(
+	ctx context.Context,
+	limit, prev domain.LimitSpotFundsPnlBounds,
+	hadPrev bool,
+	caller domain.Caller,
+) error {
+	if !caller.TightenOnly() {
+		return nil
+	}
+	if hadPrev {
+		return limit.NoLooserThan(prev)
+	}
+	var (
+		ref domain.LimitSpotFundsPnlBounds
+		ok  bool
+		err error
+	)
+	switch limit.Scope {
+	case domain.ScopeGlobal:
+		return nil
+	case domain.ScopeAccountGroup:
+		ref, ok, err = n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
+			Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
+			Scope:  domain.ScopeGlobal,
+		})
+	case domain.ScopeAccount:
+		ref, ok, err = n.resolvedSpotFundsPnlBounds(ctx, limit.Account)
+	default:
+		return fmt.Errorf(
+			"scope %q not allowed for policy %q: %w",
+			limit.Scope, domain.PolicySpotFundsPnlBoundsKillSwitch, domain.ErrInvalid,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return limit.NoLooserThan(ref)
+}
+
+// resolvedSpotFundsPnlBounds returns the Spot Funds P&L bound the engine's
+// cascade applies to account while it has no bound of its own: its group's
+// bound when that bound is in the account's effective currency or the account
+// has none, else the global bound on the same currency test. An account
+// Officer does not know yet resolves as the account a barrier would create: in
+// no group and with no currency of its own, so its effective currency is the
+// default group's. The bool is false when no bound applies.
+func (n *localNode) resolvedSpotFundsPnlBounds(
+	ctx context.Context, account domain.AccountID,
+) (domain.LimitSpotFundsPnlBounds, bool, error) {
+	stored, ok, err := n.realm.GetAccount(ctx, account)
+	if err != nil {
+		return domain.LimitSpotFundsPnlBounds{}, false,
+			fmt.Errorf("read account for spot funds pnl bounds: %w", err)
+	}
+	groupCode, currency := stored.GroupCode, stored.EffectiveCurrency
+	if !ok {
+		groupCode, currency = "", ""
+		defaultGroup, hasDefault, err := n.realm.GetGroup(ctx, "")
+		if err != nil {
+			return domain.LimitSpotFundsPnlBounds{}, false,
+				fmt.Errorf("read default group currency: %w", err)
+		}
+		if hasDefault {
+			currency = defaultGroup.Currency
+		}
+	}
+	applies := func(bound domain.LimitSpotFundsPnlBounds) bool {
+		return currency == "" || bound.Currency == currency
+	}
+	if groupCode != "" {
+		bound, ok, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
+			Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: groupCode,
+		})
+		if err != nil {
+			return domain.LimitSpotFundsPnlBounds{}, false, err
+		}
+		if ok && applies(bound) {
+			return bound, true, nil
+		}
+	}
+	bound, ok, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
+		Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Scope:  domain.ScopeGlobal,
+	})
+	if err != nil {
+		return domain.LimitSpotFundsPnlBounds{}, false, err
+	}
+	if ok && applies(bound) {
+		return bound, true, nil
+	}
+	return domain.LimitSpotFundsPnlBounds{}, false, nil
+}
+
 // DeleteLimit removes the barrier addressed by target from its typed table,
 // reconfigures the named policy from the persisted full barrier set, reverts the
 // store on engine-apply failure, and audits the action. It returns a replacement
-// market-data sink only when the policy change had to rebuild the engine.
+// market-data sink only when the policy change had to rebuild the engine. A
+// tighten-only caller is refused outright, since removing a barrier only
+// loosens.
 func (n *localNode) DeleteLimit(
 	ctx context.Context, target LimitTarget, caller domain.Caller,
 ) (marketdata.Sink, error) {
+	if caller.TightenOnly() {
+		return nil, fmt.Errorf(
+			"delete limit: removing a barrier only loosens: %w", domain.ErrLoosening,
+		)
+	}
 	if err := n.beginLivePolicyConfiguration(); err != nil {
 		return nil, err
 	}

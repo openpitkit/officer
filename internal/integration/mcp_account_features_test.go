@@ -100,7 +100,8 @@ func requiredAccountFields(shape inputShape) []string {
 // account or a group. The default composition advertises today's schemas; a
 // composition that fixes one account requires neither account nor
 // missingAccount and offers no accountGroup, describes the account and policy
-// it relaxes as such, and leaves every other tool's schema as it is.
+// it relaxes as such, keeps the text of a policy it does not relax, and
+// leaves every other tool's schema as it is.
 func TestInputSchemasByAccountFeatures(t *testing.T) {
 	t.Parallel()
 	accountTools := []struct {
@@ -110,7 +111,8 @@ func TestInputSchemasByAccountFeatures(t *testing.T) {
 		// group reports whether the default composition offers accountGroup.
 		group bool
 		// missingValues is what the single-mode missingAccount description
-		// says after it names when the policy applies.
+		// says after it names when the policy applies, for a policy the
+		// default composition requires.
 		missingValues string
 	}{
 		{"get_account_state", []string{"account"}, false, ""},
@@ -120,12 +122,13 @@ func TestInputSchemasByAccountFeatures(t *testing.T) {
 		{"update_account", []string{"account"}, false, ""},
 		{"delete_account", []string{"account"}, false, ""},
 		{"set_account_currency", []string{"account"}, false, ""},
+		{"set_limit", nil, true, ""},
 		{"apply_adjustment", []string{"account", "missingAccount"}, false,
-			"create to register an account that does not exist yet, reject to fail the adjustment instead"},
+			"create or reject; for an account that does not exist yet, create is refused for an agent with loosening_refused, and reject fails the adjustment instead"},
 		{"submit_order", []string{"account", "missingAccount"}, false,
-			"create to register an account that does not exist yet, reject to fail the submit instead"},
+			"create or reject; for an account that does not exist yet, create is refused for an agent with loosening_refused, and reject fails the submit instead"},
 		{"submit_drop_copy_order", []string{"account", "missingAccount"}, false,
-			"must be create; a drop-copy reports an execution that already happened and cannot reject an account that does not exist yet"},
+			"must be create, as a drop-copy reports an execution that already happened and cannot reject an account that does not exist yet; for such an account, create is refused for an agent with loosening_refused"},
 		{"send_paper_order", []string{"account"}, false, ""},
 		{"grant_trading_access", nil, true, ""},
 		{"revoke_trading_access", nil, true, ""},
@@ -174,13 +177,22 @@ func TestInputSchemasByAccountFeatures(t *testing.T) {
 				t.Fatalf("one account describes account as %q, want %q",
 					account.Description, wantAccount)
 			}
+			_, offered := def.Properties["missingAccount"]
 			missing, ok := one.Properties["missingAccount"]
-			if ok != (tc.missingValues != "") {
-				t.Fatalf("one account offers missingAccount %v: %s", ok, oneWire)
+			if ok != offered {
+				t.Fatalf("one account offers missingAccount %v, the default %v: %s",
+					ok, offered, oneWire)
 			}
-			if want := oneAccountMissingAccountText + tc.missingValues; ok && missing.Description != want {
+			// A policy the default composition requires is described as
+			// applying only to a named account; an optional one keeps its
+			// text.
+			wantMissing := def.Properties["missingAccount"].Description
+			if slices.Contains(tc.required, "missingAccount") {
+				wantMissing = oneAccountMissingAccountText + tc.missingValues
+			}
+			if ok && missing.Description != wantMissing {
 				t.Fatalf("one account describes missingAccount as %q, want %q",
-					missing.Description, want)
+					missing.Description, wantMissing)
 			}
 		})
 	}

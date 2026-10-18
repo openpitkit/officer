@@ -83,9 +83,19 @@ func (n *localNode) UpdateTradingConnectionSettings(
 	return nil
 }
 
+// SetTradingConnectionEnabled refuses a tighten-only caller's enable before
+// anything changes, whether the connection is disabled or not: an enable
+// widens what can be sent, and the backend restarts the trading runtime after
+// it. A disable passes.
 func (n *localNode) SetTradingConnectionEnabled(
 	ctx context.Context, id domain.ExternalID, enabled bool, caller domain.Caller,
 ) error {
+	if enabled && caller.TightenOnly() {
+		return fmt.Errorf(
+			"enable trading connection %s: an enable widens what can be sent: %w",
+			id, domain.ErrLoosening,
+		)
+	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
@@ -103,9 +113,21 @@ func (n *localNode) SetTradingConnectionEnabled(
 	return nil
 }
 
+// UpsertTradingInstrument refuses a tighten-only caller before anything
+// changes, whatever the upsert would do - add, enable, remap or disable a
+// mapping: a mapping decides what can be sent and which Officer asset a venue
+// fee is booked in, and a fee whose venue asset maps to no asset or to several
+// is skipped (see the trading runtime's fee booking).
 func (n *localNode) UpsertTradingInstrument(
 	ctx context.Context, instrument domain.TradingInstrument, caller domain.Caller,
 ) error {
+	if caller.TightenOnly() {
+		return fmt.Errorf(
+			"upsert trading instrument %s/%s: a mapping decides what can be sent "+
+				"and which asset a venue fee is booked in: %w",
+			instrument.Connection, instrument.ExternalSymbol, domain.ErrLoosening,
+		)
+	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
@@ -123,9 +145,19 @@ func (n *localNode) UpsertTradingInstrument(
 	return nil
 }
 
+// DeleteTradingInstrument refuses a tighten-only caller before anything
+// changes, for the reason UpsertTradingInstrument gives: a removed mapping can
+// leave a venue fee's asset unresolved, and the fee is then skipped.
 func (n *localNode) DeleteTradingInstrument(
 	ctx context.Context, connection domain.ExternalID, externalSymbol string, caller domain.Caller,
 ) error {
+	if caller.TightenOnly() {
+		return fmt.Errorf(
+			"delete trading instrument %s/%s: a mapping decides what can be sent "+
+				"and which asset a venue fee is booked in: %w",
+			connection, externalSymbol, domain.ErrLoosening,
+		)
+	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
@@ -143,10 +175,18 @@ func (n *localNode) DeleteTradingInstrument(
 	return nil
 }
 
+// PutTradingAccess refuses a tighten-only caller's grant before anything is
+// read or changed: a grant widens what its account or group may send to.
 func (n *localNode) PutTradingAccess(
 	ctx context.Context, access domain.TradingAccess, requireFeeAccount bool,
 	caller domain.Caller,
 ) error {
+	if caller.TightenOnly() {
+		return fmt.Errorf(
+			"put trading access %s: a grant widens what can be sent: %w",
+			access.Connection, domain.ErrLoosening,
+		)
+	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
@@ -191,10 +231,21 @@ func (n *localNode) PutTradingAccess(
 	return nil
 }
 
+// SetTradingConnectionFeeAccount refuses a tighten-only caller's set and clear
+// alike before anything is read or changed: either moves where future venue
+// fees are debited, and a set fee account also lets the connection take a
+// group grant or a grant to a second account.
 func (n *localNode) SetTradingConnectionFeeAccount(
 	ctx context.Context, connection domain.ExternalID, account domain.AccountID,
 	caller domain.Caller,
 ) error {
+	if caller.TightenOnly() {
+		return fmt.Errorf(
+			"set trading connection fee account %s: a set or clear moves where "+
+				"future venue fees are debited: %w",
+			connection, domain.ErrLoosening,
+		)
+	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
@@ -253,15 +304,46 @@ func (n *localNode) RecordVenueFeeSkipped(
 	return nil
 }
 
+// RemoveTradingAccess refuses a tighten-only caller, when requireFeeAccount is
+// true and the connection has no fee account, the revoke after which no grant
+// of the connection reaches an account while before it they reached exactly
+// one: the trading runtime debits such a connection's venue fees to the one
+// account its grants reach and skips them when they reach none or several, so
+// only that revoke turns a debit into a skip. The fee account and the grants
+// are read under the mutation lock the write takes, so the check holds for the
+// write. Every other revoke passes for every caller.
 func (n *localNode) RemoveTradingAccess(
 	ctx context.Context, connection domain.ExternalID,
-	account domain.AccountID, accountGroup string, caller domain.Caller,
+	account domain.AccountID, accountGroup string, requireFeeAccount bool,
+	caller domain.Caller,
 ) error {
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
 
+	if requireFeeAccount && caller.TightenOnly() {
+		feeAccount, senders, err := n.realm.GetTradingFeeAccounts(ctx, connection)
+		if err != nil {
+			return fmt.Errorf("read trading connection fee accounts: %w", err)
+		}
+		if feeAccount == "" && len(senders) == 1 {
+			reached, err := n.otherGrantsReachAnAccount(ctx, connection, domain.TradingAccess{
+				Account: account, AccountGroup: accountGroup,
+			})
+			if err != nil {
+				return err
+			}
+			if !reached {
+				return fmt.Errorf(
+					"remove trading access %s: the connection has no fee account, its "+
+						"grants reach exactly one account and no other grant reaches "+
+						"it, so its venue fees would be skipped instead of debited: %w",
+					connection, domain.ErrLoosening,
+				)
+			}
+		}
+	}
 	if err := n.realm.RemoveTradingAccess(ctx, connection, account, accountGroup); err != nil {
 		return fmt.Errorf("remove trading access: %w", err)
 	}
@@ -271,6 +353,35 @@ func (n *localNode) RemoveTradingAccess(
 		return fmt.Errorf("audit remove trading access: %w", err)
 	}
 	return nil
+}
+
+// otherGrantsReachAnAccount reports whether a grant of connection other than
+// the one to revoked's subject reaches an account, by the rule the store's
+// GetTradingFeeAccounts applies: an account grant reaches its account, a group
+// grant its group's current members.
+func (n *localNode) otherGrantsReachAnAccount(
+	ctx context.Context, connection domain.ExternalID, revoked domain.TradingAccess,
+) (bool, error) {
+	rows, err := n.realm.ListTradingAccessForConnection(ctx, connection)
+	if err != nil {
+		return false, fmt.Errorf("read trading access: %w", err)
+	}
+	for _, row := range rows {
+		if row.Access.SameSubject(revoked) {
+			continue
+		}
+		if row.Access.Account != "" {
+			return true, nil
+		}
+		members, err := n.realm.ListGroupAccounts(ctx, row.Access.AccountGroup)
+		if err != nil {
+			return false, fmt.Errorf("list group accounts: %w", err)
+		}
+		if len(members) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // tradingAccessAudit describes a grant change. The entry's Account or Group is

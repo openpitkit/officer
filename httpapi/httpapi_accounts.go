@@ -96,7 +96,7 @@ func handleGetAccount(svc backend.ControlPlane) http.HandlerFunc {
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"account": httpx.ToAccountDTO(account, block),
-			"limits":  toAccountLimitsDTO(limits),
+			"limits":  httpx.ToAccountLimitsDTO(limits),
 		})
 	}
 }

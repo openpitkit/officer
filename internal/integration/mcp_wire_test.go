@@ -99,6 +99,7 @@ type limitsDTO struct {
 
 type rateLimitDTO struct {
 	Account   string `json:"account"`
+	WindowMs  int64  `json:"windowMs"`
 	MaxOrders uint64 `json:"maxOrders"`
 }
 

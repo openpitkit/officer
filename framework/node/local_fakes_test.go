@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"go.openpit.dev/openpit/configure"
@@ -1287,12 +1288,15 @@ func (s *failOrderSettlementRealm) RecordOrderSettlement(
 
 // laneProbeRealm can hold a block/group store write open. A node test submits a
 // second task on the same SDK lane while the write is held to prove the caller's
-// persistence remains inside the administrative chain.
+// persistence remains inside the administrative chain. Set, holdBalanceRead
+// holds the next balance read open the same way, to prove a decision on the
+// stored balance is read inside the account chain.
 type laneProbeRealm struct {
 	store.RealmStore
-	failErr error
-	entered chan<- struct{}
-	release <-chan struct{}
+	failErr         error
+	entered         chan<- struct{}
+	release         <-chan struct{}
+	holdBalanceRead atomic.Bool
 }
 
 func (s *laneProbeRealm) holdWrite() {
@@ -1302,6 +1306,15 @@ func (s *laneProbeRealm) holdWrite() {
 	if s.release != nil {
 		<-s.release
 	}
+}
+
+func (s *laneProbeRealm) GetBalance(
+	ctx context.Context, account domain.AccountID, asset string,
+) (domain.Balance, bool, error) {
+	if s.holdBalanceRead.CompareAndSwap(true, false) {
+		s.holdWrite()
+	}
+	return s.RealmStore.GetBalance(ctx, account, asset)
 }
 
 func (s *laneProbeRealm) SetAccountBlocked(

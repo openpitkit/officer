@@ -92,18 +92,27 @@ func serveWithin(t *testing.T, list boundsList, query string) (*httptest.Respons
 	if err != nil {
 		t.Fatal(err)
 	}
+	rec := serveWithinASecond(t, r, httptest.NewRequest(http.MethodGet, list.path+"?"+query, nil))
+	return rec, svc
+}
+
+// serveWithinASecond answers req on h and fails t unless the answer comes
+// within a second, so a value that sizes work by its exponent fails the test
+// instead of stalling the suite.
+func serveWithinASecond(t *testing.T, h http.Handler, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, list.path+"?"+query, nil))
+		h.ServeHTTP(rec, req)
 	}()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatalf("GET %s?%.80s did not answer within a second", list.path, query)
+		t.Fatalf("%s %.80s did not answer within a second", req.Method, req.URL.RequestURI())
 	}
-	return rec, svc
+	return rec
 }
 
 func TestListBoundsRejectBeforeRead(t *testing.T) {

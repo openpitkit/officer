@@ -407,6 +407,9 @@ func TestGetAccountStateHappyPath(t *testing.T) {
 	if rate.MaxOrders != 100 {
 		t.Errorf("wrong max_orders: %d", rate.MaxOrders)
 	}
+	if rate.WindowMs != 1000 {
+		t.Errorf("wrong windowMs: %d", rate.WindowMs)
+	}
 	if rate.Account != "acc-1" {
 		t.Errorf("wrong account: %q", rate.Account)
 	}
@@ -632,6 +635,9 @@ func TestGetLimitsHappyPath(t *testing.T) {
 	}
 	if len(got.RateLimits) != 1 {
 		t.Fatalf("want 1 rate limit, got %d", len(got.RateLimits))
+	}
+	if rate := got.RateLimits[0]; rate.WindowMs != 60000 || rate.MaxOrders != 10 {
+		t.Errorf("wrong rate limit: %+v", rate)
 	}
 	orderSize := got.OrderSizeLimits[0]
 	if orderSize.Scope != "account_settlement_asset" ||
@@ -1452,4 +1458,28 @@ func (s *fakeSource) ApplyAdjustment(ctx context.Context, account domain.Account
 
 func (s *captureNSource) ApplyAdjustment(ctx context.Context, account domain.AccountID, externalID domain.ExternalID, req domain.AdjustmentRequest, missing domain.MissingAccountPolicy) (domain.AccountAdjustmentRecord, error) {
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
+}
+
+func (s *fakeSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *captureNSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *fakeSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *captureNSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *fakeSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *captureNSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
 }

@@ -68,6 +68,12 @@ type Caller struct {
 	Role string
 }
 
+// TightenOnly reports whether the caller may only tighten risk state and
+// narrow what it may do - an agent over MCP.
+func (c Caller) TightenOnly() bool {
+	return c.Source == SourceMCP
+}
+
 // PnlHaltReason identifies why the engine stopped a realized-P&L calculation.
 // Empty means that the engine reported an authoritative P&L amount.
 type PnlHaltReason string

@@ -110,6 +110,54 @@ argument the tool parses itself, except in the list tools (below) - and from
 the MCP gate's own refusals: an unauthorized caller, a failed command-access
 check, and a disabled command.
 
+The core answers a tool call that would loosen risk state - lift a block, drop
+or weaken a barrier, reset a rate window - with `loosening_refused` and changes
+nothing; REST and the operator panel are not affected. `delete_group` is
+refused for a blocked group and for a group with a group-scoped Spot Funds P&L
+bound, with or without `force`, and for any group while a rate-limit barrier is
+configured, as the delete rebuilds the engine and so resets every rate window.
+`delete_account`, with or without `force`, and a code change in
+`update_account` are refused for a blocked account, an account in a blocked
+group or in a group with a group-scoped Spot Funds P&L bound, and an account
+carrying a barrier of its own, as an account recreated under the freed code
+would have none of them; `delete_account` is also refused while a rate-limit
+barrier is configured. `create_account` is refused, and so is
+`missingAccount=create` for an account that does not exist yet in
+`apply_adjustment`, `set_limit`, `submit_order` and `submit_drop_copy_order`,
+as a new account starts unblocked, with no barrier of its own and no balance
+or P&L history. `apply_adjustment` may only lower the balance, held or incoming
+of the account's own currency, and may not change the average entry price or
+the realized P&L: another asset - a position included - an account without a
+currency of its own, a delta above zero, an absolute above the field's current
+value and an `averageEntryPrice` or `realizedPnl` other than the current one
+are refused, and so is any `realizedPnl` while the position's P&L calculation
+is halted, as it would restart it. An `id` starting with `trading:` is refused
+too, as that namespace is reserved for the trading runtime. `delete_asset`
+without `force` and a code change in
+`update_asset` are refused while a rate-limit or order-size barrier references
+the asset or a Spot Funds P&L bound is denominated in it, and `delete_asset`
+with `force` is refused whatever the asset carries, as it would delete the
+asset's dependent rows with it - balances, orders, trades, adjustments and
+barriers among them. `set_limit` stores a new barrier, or one no looser than
+the barrier at its address: no more orders, the same window on a broker or
+asset scope and none shorter on an account or account_asset scope, every cap
+and bound kept, no cap or upper bound raised and no lower bound lowered, and
+the same currency. A new account-tier order-size cap must be no looser than
+the asset-tier cap it overrides, a new account or group bound no looser than,
+and in the currency of, the bound it takes over from, and the first order-size
+barrier is refused while a rate-limit barrier is configured, as installing it
+rebuilds the engine and so resets every rate window. Trading and market data
+may only be narrowed: `grant_trading_access`, `create_trading_connection`,
+`set_trading_instrument`, `delete_trading_instrument`,
+`set_trading_fee_account` and `clear_trading_fee_account` are always refused,
+as are an enable through `set_trading_connection_enabled` or
+`set_market_data_instrument`, a credential change through
+`update_trading_connection`, which restarts the trading runtime, and a
+`revoke_trading_access` after which no account can send through a connection
+with no fee account on a provider with unlinked fees while exactly one could
+before, as the connection's venue fees would then be skipped instead of
+debited; any other revoke, a disable and a label-only update pass.
+
 ### List tools
 
 `list_orders`, `list_trades`, `list_accounts` and `list_groups` are read-only
@@ -162,13 +210,20 @@ Each of these tools makes the core call of one REST operation:
   `PUT /assets/{code}`, `DELETE /assets/{code}`;
 - `create_group`, `update_group`, `delete_group`: `POST /groups`,
   `PUT /groups/{code}`, `DELETE /groups/{code}`;
+- `set_limit`: `PUT /limits/rate`, `PUT /limits/order-size` or
+  `PUT /limits/spot-funds-pnl-bounds`, by its `policy` argument;
 - `report_fill`: `POST /orders/{id}/execution-reports`.
 
-All twelve are mutating and protective and ship disabled. The path code or id
+All thirteen are mutating and protective and ship disabled. The path code or id
 is the `account`, `asset`, `group` or `order` argument, a delete's `force` query
 parameter is the `force` argument, `missingAccount` keeps its query name, and
 body fields keep their REST names; `apply_adjustment` takes the whole REST body
-as its `adjustment` argument. The `update_*` tools replace the code and title,
+as its `adjustment` argument, and `set_limit` takes the body of its policy's
+`PUT` as flat arguments next to `policy` and refuses a field of another policy
+with `validation`. `get_limits` and `get_account_state` answer every barrier
+with those fields, so a rate barrier's window is `windowMs` in integer
+milliseconds, as `set_limit` takes it, in place of the `window` duration string
+they answered before. The `update_*` tools replace the code and title,
 `update_asset` also the asset class, as `PUT` does.
 
 Arguments reach the core as given, and the core decides every value rule, the
@@ -180,7 +235,8 @@ retryable `engine_restarting` - except that the default group `-` given as
 `group` is refused with `validation`, where REST answers `reserved_group`.
 
 A tool answers the body its REST operation answers: `{"account": ...}`,
-`{"asset": ...}`, `{"group": ...}`, `{"adjustment": ...}` or the
+`{"asset": ...}`, `{"group": ...}`, `{"adjustment": ...}`, `{"rateLimit": ...}`,
+`{"orderSizeLimit": ...}`, `{"spotFundsPnlBoundsLimit": ...}` or the
 execution-report body. A delete, which REST answers without a body, answers its
 own input. An adjustment the engine rejects, such as one whose resulting
 balance leaves its bounds, is recorded and answered with its `rejected`
@@ -224,12 +280,14 @@ tools follow the catalog rule above: mutating tools ship disabled.
 Access to a connection is granted to an Officer account or an account group:
 `PUT` and `DELETE /trading/connections/{id}/access` take `account` or
 `accountGroup`, as do the MCP tools `grant_trading_access` and
-`revoke_trading_access`. A member account sends through its group's grant; the
-account's own grant on the same connection wins. On providers with unlinked fees
-a connection without a fee account books them to the one account that can send
-through it; when none or several can, each fee is skipped with a
-`venue_fee_skipped` audit. A group grant, or a grant to a second account, needs
-the fee account there and is refused with `fee_account_required` without one.
+`revoke_trading_access`, though a grant through MCP is refused with
+`loosening_refused` (see MCP tools). A member account sends through its
+group's grant; the account's own grant on the same connection wins. On
+providers with unlinked fees a connection without a fee account books them to
+the one account that can send through it; when none or several can, each fee
+is skipped with a `venue_fee_skipped` audit. A group grant, or a grant to a
+second account, needs the fee account there and is refused with
+`fee_account_required` without one.
 
 Paper sends use `POST /orders/send-paper` or `send_paper_order`; live counterparts
 `POST /orders/send-live` and `send_live_order` come with the live-trading token.

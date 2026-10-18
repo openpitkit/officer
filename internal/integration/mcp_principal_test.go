@@ -57,6 +57,12 @@ func TestMCPGuardPersistsOperatorPrincipal(t *testing.T) {
 			t.Fatalf("CreateAsset(%s): %v", code, err)
 		}
 	}
+	// The account exists, as an agent may not register one.
+	if _, err := target.CreateAccount(
+		ctx, domain.Account{Code: "mcp-account"}, domain.Caller{Source: domain.SourceSystem},
+	); err != nil {
+		t.Fatalf("CreateAccount(mcp-account): %v", err)
+	}
 	service := newOfficerService(t, target, nil, nil)
 	source := &principalStoreSource{
 		fakeSource: &fakeSource{},

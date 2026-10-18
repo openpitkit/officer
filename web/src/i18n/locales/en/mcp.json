@@ -66,7 +66,7 @@
       "description": "Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons); changes no state."
     },
     "set_limit": {
-      "description": "Create or change a risk-limit / policy barrier."
+      "description": "Tighten a risk barrier: add one or make it stricter; loosening and removal are refused."
     },
     "submit_order": {
       "description": "Submit an order intent through pre-trade and obtain an approval envelope."

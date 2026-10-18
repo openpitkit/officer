@@ -42,18 +42,29 @@ const (
 	createAccountToolDescription = "Create an account with a code, an optional " +
 		"title and an optional realized P&L currency. Without its own currency " +
 		"the account inherits its group's, then the default group's; with no " +
-		"tier set it tracks no realized P&L. Mutates Officer control-plane " +
+		"tier set it tracks no realized P&L. The create is refused with " +
+		"loosening_refused, as a new account starts unblocked, with no barrier " +
+		"of its own and no balance or P&L history, so it could bring back a " +
+		"code that was deleted or renamed away. Mutates Officer control-plane " +
 		"config; protected and disabled by default."
 	updateAccountToolDescription = "Change an account's code and title; the " +
-		"title replaces the stored one and an empty title clears it. Mutates " +
-		"Officer control-plane config; protected and disabled by default."
+		"title replaces the stored one and an empty title clears it. A code " +
+		"change is refused with loosening_refused when the account is blocked, " +
+		"when it is in a blocked group or in a group with a group-scoped Spot " +
+		"Funds P&L bound, or when it carries a rate-limit, order-size or Spot " +
+		"Funds P&L barrier of its own. Mutates Officer control-plane config; " +
+		"protected and disabled by default."
 	deleteAccountToolDescription = "Delete an account. An account with " +
 		"dependent rows is refused with has_dependents unless force deletes them " +
 		"with it; a trading connection's fee account is refused with conflict, " +
-		"even with force. Force-deleting removes the account's venue-fee " +
-		"adjustments, so fees it received may be booked again to the " +
-		"connection's current fee account on the next restart. Mutates Officer " +
-		"control-plane config; protected and disabled by default."
+		"even with force. The delete is refused with loosening_refused, even " +
+		"with force, when the account is blocked, when it is in a blocked group " +
+		"or in a group with a group-scoped Spot Funds P&L bound, when it carries " +
+		"a rate-limit, order-size or Spot Funds P&L barrier of its own, or while " +
+		"any rate-limit barrier is configured. Force-deleting removes the " +
+		"account's venue-fee adjustments, so fees it received may be booked " +
+		"again to the connection's current fee account on the next restart. " +
+		"Mutates Officer control-plane config; protected and disabled by default."
 	setAccountCurrencyToolDescription = "Set or clear an account's own " +
 		"realized P&L currency; an empty currency clears it, so the account " +
 		"inherits its group's, then the default group's, and tracks no realized " +
@@ -78,7 +89,7 @@ type updateAccountInput struct {
 
 type deleteAccountInput struct {
 	Account string `json:"account" jsonschema:"Account code"`
-	Force   bool   `json:"force,omitempty" jsonschema:"Also delete the account's dependent rows, its venue-fee adjustments included, so fees it received may be booked again to the connection's current fee account on the next restart; without it an account with dependents is refused with has_dependents. A trading connection's fee account is refused even with force"`
+	Force   bool   `json:"force,omitempty" jsonschema:"Also delete the account's dependent rows, its venue-fee adjustments included, so fees it received may be booked again to the connection's current fee account on the next restart; without it an account with dependents is refused with has_dependents. A trading connection's fee account is refused even with force, and force deletes no barrier: an account carrying a barrier of its own is refused with loosening_refused even with force"`
 }
 
 type setAccountCurrencyInput struct {
