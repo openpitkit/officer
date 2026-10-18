@@ -658,6 +658,145 @@ func TestForRealmConcurrentOpensLeaveOneRealmRow(t *testing.T) {
 	}
 }
 
+func TestResetUpdatesOpenDatabaseAndPersistsNewContents(t *testing.T) {
+	ctx := context.Background()
+	s, rs := newTestStore(t)
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	db := rs.(*realmStore).rawDB()
+	if err := s.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM asset`).Scan(&count); err != nil {
+		t.Fatalf("read existing connection after Reset: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("existing connection sees %d assets after Reset, want 0", count)
+	}
+	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+		t.Fatalf("CreateAsset after Reset: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := New(s.(*sqliteStore).path, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("New after Reset: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	realm, err := reopened.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm after Reset: %v", err)
+	}
+	assets, err := realm.ListAssets(ctx)
+	if err != nil {
+		t.Fatalf("ListAssets after reopen: %v", err)
+	}
+	if len(assets) != 1 || assets[0].Code != "EUR" {
+		t.Fatalf("persisted assets after Reset = %+v, want EUR", assets)
+	}
+}
+
+func TestResetCanceledContextPreservesContents(t *testing.T) {
+	s, rs := newTestStore(t)
+	if _, err := rs.CreateAsset(context.Background(), domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Reset(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Reset canceled context = %v, want context.Canceled", err)
+	}
+	if _, ok, err := rs.GetAsset(context.Background(), "USD"); err != nil || !ok {
+		t.Fatalf("GetAsset after failed Reset: ok=%v err=%v", ok, err)
+	}
+	temporary, err := filepath.Glob(s.(*sqliteStore).path + ".reset-*")
+	if err != nil {
+		t.Fatalf("Glob reset files: %v", err)
+	}
+	if len(temporary) != 0 {
+		t.Fatalf("failed Reset left temporary files: %v", temporary)
+	}
+}
+
+func TestResetCleanupFailureReportsCommitState(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("committed=%t", committed), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			s, rs := newTestStore(t)
+			if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+				t.Fatalf("CreateAsset: %v", err)
+			}
+			db := rs.(*realmStore).rawDB()
+			conn, err := db.Conn(ctx)
+			if err != nil {
+				t.Fatalf("hold SQLite connection: %v", err)
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+			waitCount := db.Stats().WaitCount
+			result := make(chan error, 1)
+			go func() { result <- s.Reset(ctx) }()
+
+			// Reset waits for the live connection only after closing the migrated
+			// temporary database. Block its cleanup without changing that database.
+			ticker := time.NewTicker(time.Millisecond)
+			defer ticker.Stop()
+			for db.Stats().WaitCount == waitCount {
+				select {
+				case <-ctx.Done():
+					t.Fatalf("Reset did not reach connection acquisition: %v", ctx.Err())
+				case <-ticker.C:
+				}
+			}
+			temporary, err := filepath.Glob(s.Path() + ".reset-*.db")
+			if err != nil || len(temporary) != 1 {
+				t.Fatalf("reset temporary databases = %v, error = %v, want one", temporary, err)
+			}
+			blocker := temporary[0] + "-shm"
+			if err := os.Mkdir(blocker, 0o700); err != nil {
+				t.Fatalf("create cleanup blocker: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(blocker, "keep"), nil, 0o600); err != nil {
+				t.Fatalf("populate cleanup blocker: %v", err)
+			}
+			if committed {
+				if err := conn.Close(); err != nil {
+					t.Fatalf("release SQLite connection: %v", err)
+				}
+			} else {
+				cancel()
+			}
+			var resetErr error
+			select {
+			case resetErr = <-result:
+			case <-time.After(10 * time.Second):
+				t.Fatal("Reset did not return")
+			}
+			if !committed {
+				if err := conn.Close(); err != nil {
+					t.Fatalf("close held SQLite connection: %v", err)
+				}
+			}
+			if errors.Is(resetErr, fwstore.ErrResetCommitted) != committed {
+				t.Fatalf("Reset error = %v, want committed=%t", resetErr, committed)
+			}
+			if resetErr == nil || !strings.Contains(resetErr.Error(), "remove reset temporary sqlite") {
+				t.Fatalf("Reset error = %v, want cleanup failure", resetErr)
+			}
+			if !committed && !errors.Is(resetErr, context.Canceled) {
+				t.Fatalf("Reset error = %v, want context.Canceled", resetErr)
+			}
+			_, exists, err := rs.GetAsset(context.Background(), "USD")
+			if err != nil || exists == committed {
+				t.Fatalf("asset after Reset: exists=%t error=%v, want exists=%t", exists, err, !committed)
+			}
+		})
+	}
+}
+
 func TestResetDoesNotExposeNilOrUnmigratedDBToReaders(t *testing.T) {
 	ctx := context.Background()
 	s, rs := newTestStore(t)

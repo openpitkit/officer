@@ -687,6 +687,11 @@ func (n *localNode) ResetDatabase(
 	defer n.endEngineRestart()
 
 	if err := n.db.Reset(ctx); err != nil {
+		if errors.Is(err, store.ErrResetCommitted) {
+			return n.currentMarketDataSink(), n.fatalReconciliation(
+				"complete committed database reset", err,
+			)
+		}
 		return n.currentMarketDataSink(), fmt.Errorf("reset database: %w", err)
 	}
 	durableCtx := context.WithoutCancel(ctx)

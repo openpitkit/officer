@@ -1385,6 +1385,40 @@ func TestLocalNode_RestoreBackupJoinsRollbackRestoreFailure(t *testing.T) {
 	}
 }
 
+func TestLocalNode_ResetDatabaseCommittedStoreFailureIsFatal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newMemoryStore("reset-committed-store-failure.db")
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
+	if _, err := n.CreateAccount(ctx, testAccount("reset-me"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	cleanupErr := errors.New("reset temporary database cleanup failed")
+	st.resetCommittedErr = errors.Join(store.ErrResetCommitted, cleanupErr)
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	_, err := n.ResetDatabase(ctx, testCaller)
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("ResetDatabase error = %v, want cleanup failure", err)
+	}
+	if !errors.Is(fatalErr, cleanupErr) {
+		t.Fatalf("fatal error = %v, want cleanup failure", fatalErr)
+	}
+	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm after ResetDatabase: %v", err)
+	}
+	accounts, err := realm.ListAccounts(ctx)
+	if err != nil || len(accounts) != 0 {
+		t.Fatalf("accounts after committed failure = %v, error = %v, want empty", accounts, err)
+	}
+}
+
 func TestLocalNode_ResetDatabaseRebuildFailureIsFatal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

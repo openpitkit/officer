@@ -35,8 +35,7 @@ import (
 	fwstore "go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/store/schema"
 
-	// modernc.org/sqlite is a pure-Go SQLite driver registered under "sqlite".
-	_ "modernc.org/sqlite"
+	sqlitedriver "modernc.org/sqlite"
 )
 
 const driverName = "sqlite"
@@ -62,7 +61,6 @@ type sqliteStore struct {
 
 	mu        sync.Mutex
 	reachable bool
-	staleDBs  []*sql.DB
 }
 
 // Option customizes a SQLite store instance.
@@ -303,8 +301,8 @@ func (s *sqliteStore) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Reset recreates the SQLite file and reapplies the bundled migration.
-func (s *sqliteStore) Reset(ctx context.Context) error {
+// Reset replaces the SQLite contents with a freshly migrated database.
+func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 	path := s.path
 	oldDB := s.currentDB()
 	if oldDB == nil {
@@ -318,6 +316,13 @@ func (s *sqliteStore) Reset(ctx context.Context) error {
 		return fmt.Errorf("store: reset create temporary sqlite: %w", err)
 	}
 	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		result = errors.Join(result, cleanupSQLiteResetTemp(tmpPath))
+		if committed && result != nil {
+			result = errors.Join(fwstore.ErrResetCommitted, result)
+		}
+	}()
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("store: reset close temporary sqlite file: %w", err)
 	}
@@ -332,31 +337,37 @@ func (s *sqliteStore) Reset(ctx context.Context) error {
 	}
 	if err := s.migrateDB(ctx, tmpDB, true); err != nil {
 		_ = tmpDB.Close()
-		return errors.Join(
-			fmt.Errorf("store: reset migrate: %w", err),
-			cleanupSQLiteResetTemp(tmpPath),
-		)
+		return fmt.Errorf("store: reset migrate: %w", err)
 	}
 	if err := tmpDB.Close(); err != nil {
-		return errors.Join(
-			fmt.Errorf("store: reset close migrated temporary sqlite: %w", err),
-			cleanupSQLiteResetTemp(tmpPath),
-		)
+		return fmt.Errorf("store: reset close migrated temporary sqlite: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return errors.Join(
-			fmt.Errorf("store: reset replace sqlite at %q: %w", path, err),
-			cleanupSQLiteResetTemp(tmpPath),
-		)
-	}
-	db, err := openSQLiteDB(path)
+	conn, err := oldDB.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("store: reset reopen sqlite at %q: %w", path, err)
+		return fmt.Errorf("store: reset acquire sqlite connection: %w", err)
 	}
-	s.db.Store(db)
-	s.mu.Lock()
-	s.staleDBs = append(s.staleDBs, oldDB)
-	s.mu.Unlock()
+	defer func() {
+		result = errors.Join(result, conn.Close())
+	}()
+	if err := conn.Raw(func(driverConn any) error {
+		restorer, ok := driverConn.(interface {
+			NewRestore(string) (*sqlitedriver.Backup, error)
+		})
+		if !ok {
+			return fmt.Errorf("store: sqlite driver does not support online restore")
+		}
+		restore, err := restorer.NewRestore(tmpPath)
+		if err != nil {
+			return err
+		}
+		_, err = restore.Step(-1)
+		// Step commits the replacement before Finish and the deferred cleanup.
+		// Any later failure must not be reported as an unchanged database.
+		committed = err == nil
+		return errors.Join(err, restore.Finish())
+	}); err != nil {
+		return fmt.Errorf("store: reset replace sqlite at %q: %w", path, err)
+	}
 	return nil
 }
 
@@ -398,19 +409,10 @@ func (s *sqliteStore) Path() string { return s.path }
 // Close releases the connection pool. Idempotent.
 func (s *sqliteStore) Close() error {
 	current := s.db.Swap(nil)
-	s.mu.Lock()
-	stale := s.staleDBs
-	s.staleDBs = nil
-	s.mu.Unlock()
 
 	var err error
 	if current != nil {
 		err = errors.Join(err, current.Close())
-	}
-	for _, db := range stale {
-		if db != nil && db != current {
-			err = errors.Join(err, db.Close())
-		}
 	}
 	if err != nil {
 		return fmt.Errorf("store: close: %w", err)

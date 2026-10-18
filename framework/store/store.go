@@ -38,6 +38,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -1121,6 +1122,11 @@ type StoreHealth struct {
 	Reachable bool
 }
 
+// ErrResetCommitted marks a Reset failure after the replacement database became
+// durable. The previous contents cannot be recovered by continuing to use the
+// old engine; callers must stop serving it and recover from the committed store.
+var ErrResetCommitted = errors.New("store: database reset committed")
+
 // Store is the backend handle for the Pit Officer control plane. It owns the
 // connection lifecycle and the schema; all data access goes through a
 // realm-scoped RealmStore from ForRealm.
@@ -1145,7 +1151,9 @@ type Store interface {
 	// Path returns the on-disk location of the database.
 	Path() string
 
-	// Reset closes, recreates, and migrates the backing database from scratch.
+	// Reset replaces the backing database contents with a freshly migrated
+	// database. An error wrapping ErrResetCommitted means replacement succeeded
+	// but a later operation failed; callers must not keep serving the old engine.
 	Reset(ctx context.Context) error
 
 	// Close releases the database connection. It is idempotent.
