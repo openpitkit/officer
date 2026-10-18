@@ -46,6 +46,10 @@ jobs:
   publish:
     name: Publish image (ghcr.io/openpitkit/officer)
     runs-on: ubuntu-latest
+    # Every run but a dispatch waits for approval in the protected `release`
+    # environment. It admits only `v*` tags, so the dispatch, which the mode
+    # step holds to the dry run, gets an empty name and binds no environment.
+    environment: ${{ github.event_name != 'workflow_dispatch' && 'release' || '' }}
     permissions:
       contents: read
       packages: write
