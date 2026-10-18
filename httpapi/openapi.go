@@ -25,16 +25,29 @@ import (
 //go:embed openapi.yaml
 var openapiSpec []byte
 
-// serveOpenAPISpec serves the embedded OpenAPI spec as application/yaml.
-func serveOpenAPISpec(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(openapiSpec)
-}
+//go:embed swaggerui/swagger-ui.css
+var swaggerUICSS []byte
 
-// serveSwaggerUI serves a minimal Swagger UI page that loads swagger-ui-dist@5
-// from jsDelivr CDN and points at /api/openapi.yaml. An offline build would
-// have to vendor the swagger-ui-dist assets and serve them from a local route.
+//go:embed swaggerui/swagger-ui-bundle.js
+var swaggerUIBundle []byte
+
+//go:embed swagger-initializer.js
+var swaggerUIInitializer []byte
+
+//go:embed swaggerui/swagger-ui-bundle.js.LICENSE.txt
+var swaggerUIBundleLicense []byte
+
+//go:embed swaggerui/LICENSE
+var swaggerUILicense []byte
+
+//go:embed swaggerui/NOTICE
+var swaggerUINotice []byte
+
+// serveSwaggerUI serves the /docs page, Swagger UI for /api/openapi.yaml. The
+// page loads the vendored swagger-ui-dist files and Officer's initializer from
+// the /docs routes beside it, and its content security policy admits only
+// same-origin scripts, styles and requests. `just vendor-swagger-ui` refreshes
+// the vendored files.
 func serveSwaggerUI(w http.ResponseWriter, _ *http.Request) {
 	const html = `<!DOCTYPE html>
 <html lang="en">
@@ -42,25 +55,32 @@ func serveSwaggerUI(w http.ResponseWriter, _ *http.Request) {
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Pit Officer API</title>
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"/>
+  <link rel="stylesheet" href="/docs/swagger-ui.css"/>
 </head>
 <body>
 <div id="swagger-ui"></div>
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-<script>
-  SwaggerUIBundle({
-    url: "/api/openapi.yaml",
-    dom_id: "#swagger-ui",
-    presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
-    layout: "BaseLayout",
-    deepLinking: true,
-  });
-</script>
+<script src="/docs/swagger-ui-bundle.js"></script>
+<script src="/docs/swagger-initializer.js"></script>
 </body>
 </html>
 `
+	// The data: images are the icons swagger-ui.css inlines.
+	const policy = "default-src 'none'; script-src 'self'; style-src 'self'; " +
+		"img-src 'self' data:; connect-src 'self'; font-src 'self'; " +
+		"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", policy)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(html))
+}
+
+// serveEmbeddedFile serves an embedded file's bytes as contentType, with MIME
+// sniffing off, so the browser uses them only as that type.
+func serveEmbeddedFile(contentType string, body []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}
 }

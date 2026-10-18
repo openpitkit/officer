@@ -444,6 +444,12 @@ func DescribeErr(err error) PublicError {
 		return PublicError{http.StatusConflict, "destination_ambiguous", domain.ErrDestinationAmbiguous.Error()}
 	case errors.Is(err, domain.ErrForbidden):
 		return PublicError{http.StatusForbidden, "forbidden", domain.ErrForbidden.Error()}
+	case errors.Is(err, domain.ErrHostNotAllowed):
+		return PublicError{http.StatusForbidden, "host_not_allowed", domain.ErrHostNotAllowed.Error()}
+	case errors.Is(err, domain.ErrOriginNotAllowed):
+		return PublicError{http.StatusForbidden, "origin_not_allowed", domain.ErrOriginNotAllowed.Error()}
+	case errors.Is(err, domain.ErrUnsupportedMediaType):
+		return PublicError{http.StatusUnsupportedMediaType, "unsupported_media_type", domain.ErrUnsupportedMediaType.Error()}
 	// A rejected missing account is matched before the generic not-found case so
 	// it keeps its own code and its structured account field.
 	case errors.Is(err, domain.ErrAccountMissing):

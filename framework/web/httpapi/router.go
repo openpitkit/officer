@@ -19,8 +19,10 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"slices"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -28,12 +30,26 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+// The v1 REST surface and its panel mirror.
+const (
+	apiPrefix   = "/api/v1"
+	panelPrefix = "/app/api/v1"
+)
+
+// mcpMethods are the methods of the streamable-HTTP MCP transport, the only
+// ones NewRouter routes to the MCP handler.
+var mcpMethods = []string{http.MethodGet, http.MethodPost, http.MethodDelete}
+
 // ExtraMount is a non-v1 route the host application mounts before the SPA
-// fallback.
+// fallback; NewRouter refuses one on /api/v1, /app/api/v1 or under either.
 type ExtraMount struct {
 	Method  string
 	Pattern string
 	Handler http.Handler
+	// Access is what the mount requires. Extra mounts bypass ResolveCaller and
+	// Authorize, so each declares it; only AccessPublic and AccessAgent are
+	// valid, and NewRouter panics on any other.
+	Access Access
 }
 
 // LogSource is a source of recent service log lines.
@@ -43,7 +59,10 @@ type LogSource interface {
 
 // RouterConfig configures NewRouter.
 type RouterConfig struct {
-	Routes         *RouteRegistry
+	Routes *RouteRegistry
+	// PanelRoutes are routes served only on /app/api/v1, after the Routes
+	// mirror and through the same chain; nil means none.
+	PanelRoutes    *RouteRegistry
 	Authorizer     Authorizer
 	CallerResolver auth.CallerResolver
 	SPA            fs.FS
@@ -52,9 +71,18 @@ type RouterConfig struct {
 	Logs           LogSource
 	BodyLimit      func(*http.Request) int64
 	ExtraMounts    []ExtraMount
+	Guards         BrowserGuards
+	// AccessMode is the access state the route manifest reports; NewRouter
+	// refuses a value that is not an AccessMode constant.
+	AccessMode AccessMode
 }
 
-// NewRouter builds the framework HTTP handler.
+// NewRouter builds the framework HTTP handler. It panics on a public Routes
+// route and on an extra mount without a valid access kind, and refuses an
+// operation mounted twice, a route id in both Routes and PanelRoutes, and an
+// extra mount or MCP path under a v1 prefix. Behind Guards, the MCP mount
+// refuses, with domain.ErrOriginNotAllowed, a request a browser sent from
+// another origin on every method, GET included.
 func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	if cfg.Routes == nil {
 		return nil, errors.New("httpapi: nil route registry")
@@ -71,26 +99,60 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	if cfg.BodyLimit == nil {
 		return nil, errors.New("httpapi: nil body limit policy")
 	}
+	if cfg.Guards.Host == nil {
+		return nil, errors.New("httpapi: nil host guard")
+	}
+	if cfg.Guards.Origin == nil {
+		return nil, errors.New("httpapi: nil origin guard")
+	}
+	if cfg.Guards.ContentType == nil {
+		return nil, errors.New("httpapi: nil content-type guard")
+	}
+	switch cfg.AccessMode {
+	case AccessModeSetup, AccessModeToken, AccessModeOpen:
+	default:
+		return nil, fmt.Errorf("httpapi: invalid access mode %q", cfg.AccessMode)
+	}
+
+	routes := cfg.Routes.Routes()
+	panelRoutes := cfg.PanelRoutes.Routes()
+	mcpPath := ""
+	if cfg.MCP != nil {
+		mcpPath = cfg.MCPPath
+		if mcpPath == "" {
+			mcpPath = "/mcp"
+		}
+	}
+	operations, err := mountedOperations(
+		routes, panelRoutes, mcpPath, cfg.ExtraMounts,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Recoverer)
+	router.Use(cfg.Guards.Host)
+	router.Use(cfg.Guards.Origin)
+	router.Use(cfg.Guards.ContentType)
 
-	routes := cfg.Routes.Routes()
 	mountV1(
 		router,
-		"/api/v1",
+		apiPrefix,
 		routes,
 		cfg.Authorizer,
 		cfg.CallerResolver,
 		domain.SourceAPI,
 		cfg.BodyLimit,
-		newRuntimeRouteManifestHandler(routes, cfg.Authorizer),
+		newRuntimeRouteManifestHandler(
+			cfg.AccessMode, operations, cfg.Authorizer,
+		),
 	)
 	mountV1(
 		router,
-		"/app/api/v1",
-		routes,
+		panelPrefix,
+		slices.Concat(routes, panelRoutes),
 		cfg.Authorizer,
 		cfg.CallerResolver,
 		domain.SourcePanel,
@@ -99,11 +161,10 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	)
 
 	if cfg.MCP != nil {
-		mcpPath := cfg.MCPPath
-		if mcpPath == "" {
-			mcpPath = "/mcp"
+		mcp := Chain{sameOriginOnEveryMethod(), LimitBody(cfg.BodyLimit)}.Then(cfg.MCP)
+		for _, method := range mcpMethods {
+			register(router, method, mcpPath, mcp)
 		}
-		router.Mount(mcpPath, LimitBody(cfg.BodyLimit)(cfg.MCP))
 	}
 	for _, mount := range cfg.ExtraMounts {
 		register(router, mount.Method, mount.Pattern, mount.Handler)

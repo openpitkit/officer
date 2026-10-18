@@ -93,6 +93,29 @@ func TestSetupRejectsARuntimeLibraryPathTheProcessDidNotStartWith(t *testing.T) 
 	}
 }
 
+func TestSetupHandsAllowedHostsToRegister(t *testing.T) {
+	cfg, err := config.Load([]string{
+		"-mode", "serve", "-sqlite-path", filepath.Join(t.TempDir(), "officer.db"),
+	}, os.LookupEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Load refuses this name itself; setting it after Load shows the name
+	// reaches Register.
+	cfg.AllowedHosts = []string{"officer:8787"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	app, err := setup(context.Background(), cfg, logger, func(err error) {
+		t.Errorf("unexpected fatal shutdown: %v", err)
+	})
+	if err == nil {
+		_ = app.Close()
+		t.Fatal("setup accepted the allowed host officer:8787")
+	}
+	if !strings.Contains(err.Error(), `"officer:8787"`) {
+		t.Fatalf("setup() error = %v, want it to name the refused host", err)
+	}
+}
+
 func TestCheckRuntimeLibraryPath(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

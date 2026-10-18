@@ -30,16 +30,18 @@ import (
 func Routes(cp backend.ControlPlane) []httpx.Route {
 	return []httpx.Route{
 		{
-			ID:      "account-mode.get",
-			Method:  http.MethodGet,
-			Pattern: "/account-mode",
-			Handler: handleGetAccountMode(cp),
+			ID:          "account-mode.get",
+			Method:      http.MethodGet,
+			Pattern:     "/account-mode",
+			Handler:     handleGetAccountMode(cp),
+			DuringSetup: true,
 		},
 		{
-			ID:      "account-mode.put",
-			Method:  http.MethodPut,
-			Pattern: "/account-mode",
-			Handler: handleSetAccountMode(cp),
+			ID:          "account-mode.put",
+			Method:      http.MethodPut,
+			Pattern:     "/account-mode",
+			Handler:     handleSetAccountMode(cp),
+			DuringSetup: true,
 		},
 	}
 }

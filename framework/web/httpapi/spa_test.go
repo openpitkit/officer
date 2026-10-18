@@ -50,3 +50,32 @@ func TestSPAHandlerServesExistingAsset(t *testing.T) {
 		t.Fatalf("body = %q, want favicon asset", got)
 	}
 }
+
+// TestSPAHandlerServesOnlyReads checks that the fallback serves the shell to
+// GET and HEAD and answers any other method with the typed 404.
+func TestSPAHandlerServesOnlyReads(t *testing.T) {
+	handler, err := newSPAHandler(fstest.MapFS{
+		"index.html": {Data: []byte("<html>shell</html>")},
+	})
+	if err != nil {
+		t.Fatalf("newSPAHandler: %v", err)
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(method, "/accounts", nil))
+		if got := recorder.Header().Get("Content-Type"); recorder.Code != http.StatusOK ||
+			got != "text/html; charset=utf-8" {
+			t.Fatalf("%s = %d %q, want the 200 shell", method, recorder.Code, got)
+		}
+	}
+	for _, method := range []string{
+		http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions,
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(method, "/accounts", nil))
+		if recorder.Code != http.StatusNotFound || errorCode(t, recorder) != "not_found" {
+			t.Fatalf("%s = %d %s, want 404 not_found", method, recorder.Code, recorder.Body)
+		}
+	}
+}

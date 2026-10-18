@@ -501,9 +501,10 @@ func TestRESTMutationAuditUsesResolvedPrincipal(t *testing.T) {
 	}
 	req := httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/mcp-access/get_account_state",
+		"http://127.0.0.1/api/v1/mcp-access/get_account_state",
 		strings.NewReader(`{"enabled":false}`),
 	)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -735,22 +736,33 @@ func TestRegisterSingleAccountModeMCPSchemas(t *testing.T) {
 	}
 }
 
-// TestRegisterRouteBaseline pins the v1 surface of the assembled app: the
-// httpapi registry, then the account-mode routes, then the route manifest.
+// TestRegisterRouteBaseline pins the route manifest of the assembled serve
+// handler: the open access mode; every v1 route - the httpapi registry, the
+// account-mode routes, then the lifecycle routes the serve wrapper adds - as api
+// on /api/v1 and as panel on /app/api/v1, with the manifest on /api/v1 only; the
+// agent MCP methods; the public mounts and SPA; and exactly the panel routes
+// that answer during first-run setup.
 func TestRegisterRouteBaseline(t *testing.T) {
 	app, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{Principal: domain.PrincipalOperator}, nil
 	})
-	handler, err := app.BuildServeHandler(nil, "/mcp")
+	handler, err := app.BuildServeHandler(nil, "/mcp", httpapi.ServiceLifecycleRoutes(
+		http.NotFoundHandler(), http.NotFoundHandler(),
+	)...)
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/route-manifest.json", nil))
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "http://127.0.0.1/api/v1/route-manifest.json", nil,
+	))
 	var manifest struct {
-		Routes []struct {
-			Method string `json:"method"`
-			Path   string `json:"path"`
+		AccessMode string `json:"accessMode"`
+		Routes     []struct {
+			Method      string `json:"method"`
+			Path        string `json:"path"`
+			Access      string `json:"access"`
+			DuringSetup bool   `json:"duringSetup"`
 		} `json:"routes"`
 	}
 	if rec.Code != http.StatusOK {
@@ -759,18 +771,239 @@ func TestRegisterRouteBaseline(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &manifest); err != nil {
 		t.Fatalf("decode route manifest: %v", err)
 	}
-	got := make([]string, 0, len(manifest.Routes))
+	if manifest.AccessMode != "open" {
+		t.Fatalf("access mode = %q, want open", manifest.AccessMode)
+	}
+	var got, duringSetup []string
 	for _, route := range manifest.Routes {
-		got = append(got, route.Method+" "+route.Path)
+		got = append(got, route.Method+" "+route.Path+" "+route.Access)
+		if route.DuringSetup {
+			duringSetup = append(duringSetup, route.Method+" "+route.Path)
+		}
 	}
-	var want []string
+	type operation struct{ method, pattern string }
+	var v1 []operation
 	for _, route := range httpapi.NewRouteRegistry(app.Service(), nil).Routes() {
-		want = append(want, route.Method+" "+route.Pattern)
+		v1 = append(v1, operation{route.Method, route.Pattern})
 	}
-	want = append(want, "GET /account-mode", "PUT /account-mode", "GET /route-manifest.json")
+	v1 = append(v1,
+		operation{http.MethodGet, "/account-mode"},
+		operation{http.MethodPut, "/account-mode"},
+		operation{http.MethodPost, "/service/restart"},
+		operation{http.MethodPost, "/service/stop"},
+	)
+	var want []string
+	for _, op := range v1 {
+		want = append(want, op.method+" /api/v1"+op.pattern+" api")
+	}
+	want = append(want, "GET /api/v1/route-manifest.json api")
+	for _, op := range v1 {
+		want = append(want, op.method+" /app/api/v1"+op.pattern+" panel")
+	}
+	want = append(want,
+		"GET /mcp agent", "POST /mcp agent", "DELETE /mcp agent",
+		"GET /healthz public", "GET /api/openapi.yaml public", "GET /docs public",
+		"GET /docs/swagger-ui.css public", "GET /docs/swagger-ui-bundle.js public",
+		"GET /docs/swagger-initializer.js public",
+		"GET /docs/swagger-ui-bundle.js.LICENSE.txt public",
+		"GET /docs/LICENSE public", "GET /docs/NOTICE public",
+		"GET /* public",
+	)
 	if !slices.Equal(got, want) {
 		t.Fatalf("assembled route surface mismatch\ngot:  %v\nwant: %v", got, want)
 	}
+	wantDuringSetup := []string{
+		"GET /app/api/v1/credential-storage",
+		"GET /app/api/v1/accounts",
+		"POST /app/api/v1/signing/keys/generate",
+		"POST /app/api/v1/signing/keys/import",
+		"GET /app/api/v1/signing/keys",
+		"GET /app/api/v1/signing/keys/active/public",
+		"GET /app/api/v1/signing/keys/{keyId}/public",
+		"GET /app/api/v1/signing/config",
+		"PUT /app/api/v1/signing/config",
+		"GET /app/api/v1/account-mode",
+		"PUT /app/api/v1/account-mode",
+		"POST /app/api/v1/service/restart",
+	}
+	slices.Sort(duringSetup)
+	slices.Sort(wantDuringSetup)
+	if !slices.Equal(duringSetup, wantDuringSetup) {
+		t.Fatalf("routes answering during setup mismatch\ngot:  %v\nwant: %v",
+			duringSetup, wantDuringSetup)
+	}
+}
+
+// TestRegisterBrowserGuards drives the real composition the way a page open in
+// the operator's browser can: a cross-site or text/plain write and a write
+// under a re-bound host are refused before any handler runs and change
+// nothing, while the panel's own same-origin JSON writes still work on both
+// mounts.
+func TestRegisterBrowserGuards(t *testing.T) {
+	app, handler := serveSeededApp(
+		t, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")}, nil,
+	)
+	if mcpCommandEnabled(t, app, "create_account") {
+		t.Fatal("create_account is enabled before the hostile writes")
+	}
+	for _, tc := range []struct {
+		name, method, target, contentType, body string
+		header                                  map[string]string
+		status                                  int
+		code                                    string
+	}{
+		{
+			name: "cross-site database reset", method: http.MethodPost,
+			target:      "http://127.0.0.1/api/v1/database/reset",
+			contentType: "text/plain", body: `{"confirm":true}`,
+			header: map[string]string{"Origin": "http://attacker.example"},
+			status: http.StatusForbidden, code: "origin_not_allowed",
+		},
+		{
+			name: "cross-site MCP access change", method: http.MethodPut,
+			target:      "http://127.0.0.1/api/v1/mcp-access/create_account",
+			contentType: "text/plain", body: `{"enabled":true}`,
+			header: map[string]string{"Origin": "http://attacker.example"},
+			status: http.StatusForbidden, code: "origin_not_allowed",
+		},
+		{
+			name: "text/plain database reset", method: http.MethodPost,
+			target:      "http://127.0.0.1/api/v1/database/reset",
+			contentType: "text/plain", body: `{"confirm":true}`,
+			status: http.StatusUnsupportedMediaType, code: "unsupported_media_type",
+		},
+		{
+			// A page on a domain re-bound to loopback is same-origin with
+			// itself, so only the Host guard tells it apart.
+			name: "re-bound host database reset", method: http.MethodPost,
+			target:      "http://attacker.example/api/v1/database/reset",
+			contentType: "application/json", body: `{"confirm":true}`,
+			header: map[string]string{
+				"Origin": "http://attacker.example", "Sec-Fetch-Site": "same-origin",
+			},
+			status: http.StatusForbidden, code: "host_not_allowed",
+		},
+		{
+			name: "foreign host health check", method: http.MethodGet,
+			target: "http://officer.example/healthz",
+			status: http.StatusForbidden, code: "host_not_allowed",
+		},
+	} {
+		req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", tc.contentType)
+		for name, value := range tc.header {
+			req.Header.Set(name, value)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		var answer struct {
+			Error struct{ Code string } `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
+			rec.Code != tc.status || answer.Error.Code != tc.code {
+			t.Fatalf("%s = %d %s, want %d %s", tc.name, rec.Code, rec.Body, tc.status, tc.code)
+		}
+	}
+	got := listedAccounts(t, handler)
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"default", "other"}) {
+		t.Fatalf("listed accounts after the refused writes = %v, want default and other", got)
+	}
+	if mcpCommandEnabled(t, app, "create_account") {
+		t.Fatal("a refused write enabled create_account")
+	}
+
+	// Officer answers under its loopback names, on any port.
+	for _, host := range []string{"localhost:8787", "[::1]:8787", "127.0.0.1:9000"} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(
+			http.MethodGet, "http://"+host+"/healthz", nil,
+		))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /healthz under %s = %d %s, want 200", host, rec.Code, rec.Body)
+		}
+	}
+
+	// The panel's own writes: same origin, JSON bodies, on both mounts.
+	for _, tc := range []struct {
+		prefix  string
+		enabled bool
+	}{
+		{"/app/api/v1", false},
+		{"/api/v1", true},
+	} {
+		req := httptest.NewRequest(
+			http.MethodPut,
+			"http://127.0.0.1:8787"+tc.prefix+"/mcp-access/get_account_state",
+			strings.NewReader(fmt.Sprintf(`{"enabled":%t}`, tc.enabled)),
+		)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:8787")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("same-origin JSON write on %s = %d %s, want 200", tc.prefix, rec.Code, rec.Body)
+		}
+		if got := mcpCommandEnabled(t, app, "get_account_state"); got != tc.enabled {
+			t.Fatalf("get_account_state enabled after the write on %s = %v, want %v",
+				tc.prefix, got, tc.enabled)
+		}
+	}
+}
+
+// TestRegisterAllowedHosts pins that the operator's host names add to the
+// loopback names rather than replace them, and that an invalid one fails
+// Register.
+func TestRegisterAllowedHosts(t *testing.T) {
+	_, handler := serveSeededApp(t, Config{
+		SQLitePath:   filepath.Join(t.TempDir(), "officer.db"),
+		AllowedHosts: []string{"officer"},
+	}, nil)
+	for _, host := range []string{"officer:8787", "OFFICER", "127.0.0.1:8787", "localhost"} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(
+			http.MethodGet, "http://"+host+"/healthz", nil,
+		))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /healthz under %s = %d %s, want 200", host, rec.Code, rec.Body)
+		}
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "http://attacker.example/healthz", nil,
+	))
+	var answer struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
+		rec.Code != http.StatusForbidden || answer.Error.Code != "host_not_allowed" {
+		t.Fatalf("GET /healthz under attacker.example = %d %s, want 403 host_not_allowed",
+			rec.Code, rec.Body)
+	}
+
+	if err := Register(frameworkapp.NewBuilder(), Config{
+		AllowedHosts: []string{"officer:8787"},
+	}); err == nil {
+		t.Fatal("Register accepted the allowed host officer:8787")
+	}
+}
+
+// mcpCommandEnabled reports whether the composed MCP catalogue of app enables
+// the command name.
+func mcpCommandEnabled(t *testing.T, app *frameworkapp.App, name string) bool {
+	t.Helper()
+	commands, err := app.Service().ListMcpAccess(
+		auth.ContextWithCaller(context.Background(), auth.SystemCaller()),
+	)
+	if err != nil {
+		t.Fatalf("ListMcpAccess: %v", err)
+	}
+	command, ok := findCommand(commands, name)
+	if !ok {
+		t.Fatalf("%s missing from the composed MCP catalogue", name)
+	}
+	return command.Enabled
 }
 
 // serveSeededApp builds the real composition - Register over cfg, with
@@ -866,7 +1099,7 @@ func assertAccountMode(t *testing.T, handler http.Handler, method, body, want st
 }
 
 func serveREST(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body))
+	req := httptest.NewRequest(method, "http://127.0.0.1/api/v1"+path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

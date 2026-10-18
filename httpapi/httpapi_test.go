@@ -42,6 +42,10 @@ func fakeSPA() fs.FS {
 }
 
 func newRouter(svc backend.ControlPlane) (http.Handler, error) {
+	guards, err := testGuards()
+	if err != nil {
+		return nil, err
+	}
 	return httpx.NewRouter(httpx.RouterConfig{
 		Routes:         NewRouteRegistry(svc, nil),
 		Authorizer:     httpx.AllowAll{},
@@ -49,7 +53,25 @@ func newRouter(svc backend.ControlPlane) (http.Handler, error) {
 		SPA:            fakeSPA(),
 		BodyLimit:      BodyLimitPolicy(),
 		ExtraMounts:    ExtraMounts(),
+		Guards:         guards,
+		AccessMode:     httpx.AccessModeOpen,
 	})
+}
+
+// testGuards returns the browser guards the handler tests serve behind: the
+// real Host guard, allowing the example.com host httptest.NewRequest
+// addresses, the real Origin guard, and no media-type guard.
+func testGuards() (httpx.BrowserGuards, error) {
+	host, err := httpx.AllowedHosts([]string{"example.com"})
+	if err != nil {
+		return httpx.BrowserGuards{}, err
+	}
+	return httpx.BrowserGuards{
+		Host:   host,
+		Origin: httpx.SameOrigin(),
+		// Bodies here are untyped; guards_test.go and register_test.go test JSONBody.
+		ContentType: func(next http.Handler) http.Handler { return next },
+	}, nil
 }
 
 func testCallerResolver(*http.Request) (domain.Caller, error) {
@@ -325,26 +347,36 @@ func assertHasDependents409(t *testing.T, rec *httptest.ResponseRecorder, wantKi
 }
 
 func TestNewRouter_MissingService(t *testing.T) {
-	_, err := httpx.NewRouter(httpx.RouterConfig{
+	guards, err := testGuards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = httpx.NewRouter(httpx.RouterConfig{
 		Authorizer:     httpx.AllowAll{},
 		CallerResolver: testCallerResolver,
 		SPA:            fakeSPA(),
 		BodyLimit:      BodyLimitPolicy(),
+		Guards:         guards,
 	})
-	if err == nil {
-		t.Fatal("want error for nil route registry")
+	if err == nil || err.Error() != "httpapi: nil route registry" {
+		t.Fatalf("NewRouter error = %v, want the nil route registry named", err)
 	}
 }
 
 func TestNewRouter_MissingSPA(t *testing.T) {
-	_, err := httpx.NewRouter(httpx.RouterConfig{
+	guards, err := testGuards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = httpx.NewRouter(httpx.RouterConfig{
 		Routes:         NewRouteRegistry(&fakeService{}, nil),
 		Authorizer:     httpx.AllowAll{},
 		CallerResolver: testCallerResolver,
 		BodyLimit:      BodyLimitPolicy(),
+		Guards:         guards,
 	})
-	if err == nil {
-		t.Fatal("want error for nil SPA")
+	if err == nil || err.Error() != "httpapi: nil SPA filesystem" {
+		t.Fatalf("NewRouter error = %v, want the nil SPA named", err)
 	}
 }
 

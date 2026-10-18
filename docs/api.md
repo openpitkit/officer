@@ -8,7 +8,11 @@ what it answers with, and the two error shapes.
 REST is mounted at `/api/v1`. A mirror at `/app/api/v1` is reserved for the
 operator panel. The two carry the same routes except the route manifest, which
 is published only on `/api/v1`; otherwise they differ only in the source stamped
-on the audit record.
+on the audit record. Outside them, MCP over HTTP is mounted at `/mcp`, liveness
+at `/healthz`, the OpenAPI document at `/api/openapi.yaml`, its docs page at
+`/docs`, and the Swagger UI files under `/docs/` (`GET` only). The dashboard
+answers `GET` and `HEAD` on every other path; any other standard method there
+answers `404` `not_found`.
 
 ## Discovering the surface
 
@@ -17,15 +21,30 @@ The OpenAPI 3.1 document describes the `/api/v1` surface. It is served at
 the binary, and what lives outside `/api/v1` - liveness, the document itself,
 the docs page, MCP over HTTP - is not in it.
 
-`/docs` loads Swagger UI from a public CDN, so it needs outbound internet and is
-blank on an isolated host. The document at `/api/openapi.yaml` is served from
-the binary and needs nothing.
+`/docs` serves Swagger UI from the binary, pinned to the vendored
+`swagger-ui-dist` release that `just vendor-swagger-ui` refreshes, under a
+content security policy that keeps its scripts, styles and requests on
+Officer's own origin. The document at `/api/openapi.yaml` is served from the
+binary and needs nothing.
+
+The route manifest, `GET /api/v1/route-manifest.json`, lists every mounted
+route - the REST routes on `/api/v1` and `/app/api/v1`, MCP over HTTP,
+liveness, the document, the docs page and its files, and the dashboard - with
+its full path and the access it requires (`public`, `api`, `agent`, or
+`panel`), and the service's `accessMode`. Officer reports `open`: no route asks
+for credentials, and the browser checks under Errors still apply. The REST
+entries are filtered for the caller; the others are listed for every caller.
 
 ## Media types
 
 Control endpoints answer `application/json`. Endpoints that hand back a file -
 the backup and business-CSV exports, the service-log download - answer with that
 file's own media type as an attachment.
+
+A request other than `GET`, `HEAD`, or `OPTIONS` that carries a body declares
+it with one `Content-Type: application/json`, with no parameter but
+`charset=utf-8`. Any other body is refused with `415` before it is read; a
+request with `Content-Length: 0` needs no `Content-Type`.
 
 ## Errors
 
@@ -37,6 +56,20 @@ Two shapes, decided by what failed:
   `400` for broken syntax and `422` for a constraint violation.
 - Every other error answers `application/json` with
   `{"error": {"code": "...", "message": "..."}}`.
+
+Three browser checks refuse a request before it reaches a handler, in the
+second shape:
+
+- `403` `host_not_allowed` - the `Host` header names a host Officer does not
+  answer to; see `PIT_OFFICER_ALLOWED_HOSTS` in the
+  [configuration reference](configuration.md).
+- `403` `origin_not_allowed` - a browser sent a request other than `GET`,
+  `HEAD`, or `OPTIONS` from another origin. MCP over HTTP checks the origin
+  on every method, `GET` included, since a `GET` there opens an event stream
+  and an MCP session. A request carrying neither `Sec-Fetch-Site` nor
+  `Origin` passes.
+- `415` `unsupported_media_type` - a request other than `GET`, `HEAD`, or
+  `OPTIONS` carries a body not declared as JSON (see Media types).
 
 ## Values
 

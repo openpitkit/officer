@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"go.openpit.dev/officer/engine"
 	frameworkapp "go.openpit.dev/officer/framework/app"
@@ -47,13 +48,22 @@ import (
 )
 
 // Config carries the default composition's runtime inputs: the SQLite database
-// path and the master key that seals stored secrets (nil when none is
-// configured). The native OpenPit runtime is not one of them: the SDK loads it
-// at process start (see engine.NewOpenPitEngineBuildFunc).
+// path, the master key that seals stored secrets (nil when none is
+// configured), and the operator's extra host names. The native OpenPit runtime
+// is not one of them: the SDK loads it at process start (see
+// engine.NewOpenPitEngineBuildFunc).
 type Config struct {
 	SQLitePath string
 	MasterKey  *secret.MasterKey
+	// AllowedHosts are extra host names the HTTP surface answers besides
+	// loopback; Register refuses an invalid one.
+	AllowedHosts []string
 }
+
+// loopbackHosts are the host names the HTTP surface always answers to, since
+// it listens on loopback by default; Register adds Config.AllowedHosts after
+// them.
+var loopbackHosts = []string{"localhost", "127.0.0.1", "::1"}
 
 // Register populates b with the Pit Officer concrete implementations built
 // from cfg. The composition serves domain.DefaultRealm through one local node.
@@ -87,6 +97,15 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	b.SetAuthorizer(httpx.AllowAll{})
 	b.SetCallerResolver(func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{Principal: domain.PrincipalOperator}, nil
+	})
+	host, err := httpx.AllowedHosts(slices.Concat(loopbackHosts, cfg.AllowedHosts))
+	if err != nil {
+		return fmt.Errorf("officer: browser guards: %w", err)
+	}
+	b.SetBrowserGuards(httpx.BrowserGuards{
+		Host:        host,
+		Origin:      httpx.SameOrigin(),
+		ContentType: httpx.JSONBody(),
 	})
 	for _, provider := range appmarketdata.FirstPartyProviders() {
 		if err := b.RegisterMarketDataProvider(provider); err != nil {

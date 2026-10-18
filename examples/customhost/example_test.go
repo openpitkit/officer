@@ -209,7 +209,7 @@ func assertHostRouteAdded(t *testing.T, router http.Handler) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(
 		rec,
-		httptest.NewRequest(http.MethodGet, "/api/v1"+hostRoutePattern, nil),
+		httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1"+hostRoutePattern, nil),
 	)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("custom host route status = %d, want 200", rec.Code)
@@ -231,7 +231,7 @@ func assertAccountModeServed(t *testing.T, router http.Handler) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(
 		rec,
-		httptest.NewRequest(http.MethodGet, "/api/v1/account-mode", nil),
+		httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/account-mode", nil),
 	)
 	const want = `{"mode":null,"account":"",` +
 		`"features":{"accounts":true,"account":""},"restartRequired":false}`
@@ -280,7 +280,7 @@ func assertRouteAndToolReplacement(
 	t.Helper()
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/health", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "replaced") {
 		t.Fatalf("replacement route = %d %q", rec.Code, rec.Body.String())
 	}
@@ -302,7 +302,7 @@ func assertRouteAndToolHidden(
 	t.Helper()
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/status", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/status", nil))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("hidden route status = %d, want 403", rec.Code)
 	}
@@ -343,7 +343,7 @@ func assertRouteAndToolRemoved(
 	t.Helper()
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/accounts", nil))
 	if rec.Code != http.StatusMethodNotAllowed || strings.TrimSpace(rec.Body.String()) != "" {
 		t.Fatalf(
 			"removed route response = %d %q, want method not allowed",

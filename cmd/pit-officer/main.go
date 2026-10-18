@@ -151,8 +151,9 @@ func setup(
 
 	builder := frameworkapp.NewBuilder()
 	if err := officer.Register(builder, officer.Config{
-		SQLitePath: cfg.SQLitePath,
-		MasterKey:  masterKey,
+		SQLitePath:   cfg.SQLitePath,
+		MasterKey:    masterKey,
+		AllowedHosts: cfg.AllowedHosts,
 	}); err != nil {
 		return nil, err
 	}

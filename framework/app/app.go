@@ -73,9 +73,15 @@ type ServiceFactory func(
 
 // RouteConfig carries an app's registered HTTP surface.
 type RouteConfig struct {
-	Routes      *httpx.RouteRegistry
+	Routes *httpx.RouteRegistry
+	// PanelRoutes are routes served only on the panel mirror /app/api/v1; nil
+	// means none.
+	PanelRoutes *httpx.RouteRegistry
 	BodyLimit   func(*http.Request) int64
 	ExtraMounts []httpx.ExtraMount
+	// AccessMode is the access state the route manifest reports; the router
+	// refuses a value that is not an httpx.AccessMode constant.
+	AccessMode httpx.AccessMode
 }
 
 // RouteConfigBuilder builds the HTTP route registry for a service.
@@ -98,6 +104,7 @@ type Builder struct {
 	spaFactory      SPAFactory
 	authorizer      httpx.Authorizer
 	callerResolver  auth.CallerResolver
+	browserGuards   httpx.BrowserGuards
 	mdRegistry      *marketdata.Registry
 	tradingRegistry *trading.Registry
 }
@@ -155,6 +162,12 @@ func (b *Builder) SetAuthorizer(authorizer httpx.Authorizer) {
 // SetCallerResolver sets the app-wide request identity resolver.
 func (b *Builder) SetCallerResolver(resolver auth.CallerResolver) {
 	b.callerResolver = resolver
+}
+
+// SetBrowserGuards sets the app-wide browser request guards the HTTP router
+// applies to every request; BuildServeHandler fails without all three.
+func (b *Builder) SetBrowserGuards(guards httpx.BrowserGuards) {
+	b.browserGuards = guards
 }
 
 // RegisterMarketDataProvider adds or replaces a market-data provider.
@@ -305,6 +318,7 @@ func (b *Builder) Build(
 		version:        nodeVersionSource{node: localNode},
 		authorizer:     b.authorizer,
 		callerResolver: b.callerResolver,
+		browserGuards:  b.browserGuards,
 		routeConfig:    b.routeConfig,
 		spaFactory:     b.spaFactory,
 	}, nil
@@ -351,6 +365,7 @@ type App struct {
 	version        frameworkmcp.VersionSource
 	authorizer     httpx.Authorizer
 	callerResolver auth.CallerResolver
+	browserGuards  httpx.BrowserGuards
 	routeConfig    RouteConfigBuilder
 	spaFactory     SPAFactory
 }
@@ -441,6 +456,7 @@ func (a *App) BuildServeHandler(
 	}
 	router, err := httpx.NewRouter(httpx.RouterConfig{
 		Routes:         routes.Routes,
+		PanelRoutes:    routes.PanelRoutes,
 		Authorizer:     a.authorizer,
 		CallerResolver: a.callerResolver,
 		SPA:            spa,
@@ -449,6 +465,8 @@ func (a *App) BuildServeHandler(
 		Logs:           logs,
 		BodyLimit:      routes.BodyLimit,
 		ExtraMounts:    routes.ExtraMounts,
+		Guards:         a.browserGuards,
+		AccessMode:     routes.AccessMode,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build router: %w", err)

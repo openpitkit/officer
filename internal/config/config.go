@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"go.openpit.dev/officer/framework/secret"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 // RunMode selects which long-running surface the process exposes.
@@ -65,8 +66,8 @@ const DefaultSQLitePath = "pit-officer.db"
 
 // Environment variable names honored by Load. Flags take precedence over the
 // environment; the environment takes precedence over the defaults. These names
-// are part of the deployment contract: the container image and docker-compose
-// set them by these exact names.
+// are part of the deployment contract: where the container image or
+// docker-compose sets one of them, it uses the exact name given here.
 const (
 	// EnvHTTPAddr overrides Config.HTTPAddr. The container sets it to
 	// 0.0.0.0:8787 to bind all interfaces inside the container network.
@@ -88,6 +89,12 @@ const (
 	// EnvMasterKeyFile names a file holding the operator master key as standard
 	// base64.
 	EnvMasterKeyFile = "PIT_OFFICER_MASTER_KEY_FILE"
+	// EnvAllowedHosts sets Config.AllowedHosts: a comma-separated list of extra
+	// host names the HTTP surface answers besides loopback. It is needed when
+	// Officer is reached by a container service name, through
+	// host.docker.internal, or on a widened bind. Neither the container image
+	// nor docker-compose sets it. It has no command-line flag.
+	EnvAllowedHosts = "PIT_OFFICER_ALLOWED_HOSTS"
 )
 
 // Config is the fully resolved Pit Officer configuration for one process. A
@@ -113,6 +120,10 @@ type Config struct {
 	// OpenBrowser, when true, has serve open the dashboard URL in the default
 	// browser on start. It defaults to true and is ignored in mcp mode.
 	OpenBrowser bool
+	// AllowedHosts are the operator's extra host names from EnvAllowedHosts, in
+	// order, without the loopback names the HTTP surface always answers. It is
+	// nil when the variable is unset or empty.
+	AllowedHosts []string
 	// masterKeyFile is the resolved path from the flag or environment.
 	masterKeyFile string
 	// masterKeyFileConfigured distinguishes an absent file source from a
@@ -127,18 +138,19 @@ type Config struct {
 //
 // Precedence is flags > environment > defaults. The recognized environment
 // variables are EnvHTTPAddr, EnvSQLitePath, EnvRuntimeLibraryPath,
-// EnvOpenBrowser, and EnvMasterKeyFile; the recognized flags are -mode,
-// -http-addr, -sqlite-path, -runtime-library-path, -open-browser, and
-// -master-key-file. The master key itself is intentionally not accepted as a
-// flag because process arguments are visible to other local processes. The MCP
-// transport is derived from the run mode (stdio for mcp, http for serve) and is
-// not separately configurable.
+// EnvOpenBrowser, EnvMasterKeyFile, and EnvAllowedHosts; the recognized flags
+// are -mode, -http-addr, -sqlite-path, -runtime-library-path, -open-browser,
+// and -master-key-file. The master key itself is intentionally not accepted as
+// a flag because process arguments are visible to other local processes, and
+// EnvAllowedHosts has no flag either. The MCP transport is derived from the run
+// mode (stdio for mcp, http for serve) and is not separately configurable.
 //
 // Load applies defaults (loopback HTTP bind, default SQLite path), records
 // whether the master key file source is configured, and resolves its path
 // without reading or parsing it. It returns an error for unknown flags, a
-// missing or unknown run mode, a flag parse failure, or a configured master key
-// file whose resolved path is empty. Commands that build the application call
+// missing or unknown run mode, a flag parse failure, a configured master key
+// file whose resolved path is empty, or an EnvAllowedHosts list that
+// httpx.AllowedHosts refuses. Commands that build the application call
 // ResolveMasterKey to read and parse the file and environment sources.
 func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) {
 	if lookupEnv == nil {
@@ -192,6 +204,18 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	if masterKeyFileConfigured && *masterKeyFile == "" {
 		return Config{}, fmt.Errorf("config: master key file is configured but path is empty")
 	}
+	// An empty or blank value is unset; any other value is validated whole, so
+	// an empty element is refused rather than dropped.
+	var allowedHosts []string
+	if value, ok := lookupEnv(EnvAllowedHosts); ok && strings.TrimSpace(value) != "" {
+		allowedHosts = strings.Split(value, ",")
+		for i, name := range allowedHosts {
+			allowedHosts[i] = strings.TrimSpace(name)
+		}
+		if _, err := httpx.AllowedHosts(allowedHosts); err != nil {
+			return Config{}, fmt.Errorf("config: %s: %w", EnvAllowedHosts, err)
+		}
+	}
 
 	cfg := Config{
 		Mode:                    parsedMode,
@@ -200,6 +224,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 		SQLitePath:              *sqlitePath,
 		RuntimeLibraryPath:      *runtimeLibraryPath,
 		OpenBrowser:             *openBrowser,
+		AllowedHosts:            allowedHosts,
 		masterKeyFile:           *masterKeyFile,
 		masterKeyFileConfigured: masterKeyFileConfigured,
 	}

@@ -60,6 +60,8 @@ func RouteConfig(svc backend.ControlPlane, logs httpx.LogSource) frameworkapp.Ro
 		Routes:      NewRouteRegistry(svc, logs),
 		BodyLimit:   BodyLimitPolicy(),
 		ExtraMounts: ExtraMounts(),
+		// Officer has no access modes yet: it runs unauthenticated behind the browser guards.
+		AccessMode: httpx.AccessModeOpen,
 	}
 }
 
@@ -68,7 +70,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, log
 	register(registry, "health.get", http.MethodGet, "/health", handleV1Health)
 	register(registry, "status.get", http.MethodGet, "/status", handleV1Status(svc))
 	register(registry, "service.get", http.MethodGet, "/service", handleServiceInfo(svc))
-	register(registry, "credential-storage.get", http.MethodGet, "/credential-storage", handleGetCredentialStorage(svc))
+	registerDuringSetup(registry, "credential-storage.get", http.MethodGet, "/credential-storage", handleGetCredentialStorage(svc))
 	// The log tail is optional: only the serve path supplies it, so the routes
 	// register only when a source is present.
 	if logs != nil {
@@ -94,7 +96,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, log
 	register(registry, "asset_classes.update.put", http.MethodPut, "/asset-classes/{code}", handleUpdateAssetClass(svc))
 	register(registry, "asset_classes.delete.delete", http.MethodDelete, "/asset-classes/{code}", handleDeleteAssetClass(svc))
 
-	register(registry, "accounts.list.get", http.MethodGet, "/accounts", handleListAccounts(svc))
+	registerDuringSetup(registry, "accounts.list.get", http.MethodGet, "/accounts", handleListAccounts(svc))
 	register(registry, "accounts.create.post", http.MethodPost, "/accounts", handleCreateAccount(svc))
 	register(registry, "accounts.get", http.MethodGet, "/accounts/{code}", handleGetAccount(svc))
 	register(registry, "accounts.update.put", http.MethodPut, "/accounts/{code}", handleUpdateAccount(svc))
@@ -144,13 +146,13 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, log
 	register(registry, "user-settings.get", http.MethodGet, "/user-settings", handleGetUserSettings(svc))
 	register(registry, "user-settings.put", http.MethodPut, "/user-settings", handleSetUserSettings(svc))
 
-	register(registry, "signing.keys.generate.post", http.MethodPost, "/signing/keys/generate", handleGenerateSigningKey(svc))
-	register(registry, "signing.keys.import.post", http.MethodPost, "/signing/keys/import", handleImportSigningKey(svc))
-	register(registry, "signing.keys.list.get", http.MethodGet, "/signing/keys", handleListSigningKeys(svc))
-	register(registry, "signing.keys.active-public.get", http.MethodGet, "/signing/keys/active/public", handleGetActivePublicKey(svc))
-	register(registry, "signing.keys.public.get", http.MethodGet, "/signing/keys/{keyId}/public", handleGetSigningKeyPublic(svc))
-	register(registry, "signing.config.get", http.MethodGet, "/signing/config", handleGetSigningConfig(svc))
-	register(registry, "signing.config.put", http.MethodPut, "/signing/config", handleSetSigningConfig(svc))
+	registerDuringSetup(registry, "signing.keys.generate.post", http.MethodPost, "/signing/keys/generate", handleGenerateSigningKey(svc))
+	registerDuringSetup(registry, "signing.keys.import.post", http.MethodPost, "/signing/keys/import", handleImportSigningKey(svc))
+	registerDuringSetup(registry, "signing.keys.list.get", http.MethodGet, "/signing/keys", handleListSigningKeys(svc))
+	registerDuringSetup(registry, "signing.keys.active-public.get", http.MethodGet, "/signing/keys/active/public", handleGetActivePublicKey(svc))
+	registerDuringSetup(registry, "signing.keys.public.get", http.MethodGet, "/signing/keys/{keyId}/public", handleGetSigningKeyPublic(svc))
+	registerDuringSetup(registry, "signing.config.get", http.MethodGet, "/signing/config", handleGetSigningConfig(svc))
+	registerDuringSetup(registry, "signing.config.put", http.MethodPut, "/signing/config", handleSetSigningConfig(svc))
 	register(registry, "orders.submit.post", http.MethodPost, "/orders/submit", handleSubmitOrder(svc))
 	register(registry, "orders.send-paper.post", http.MethodPost, "/orders/send-paper", handleSendPaperOrder(svc))
 	register(registry, "orders.submit-drop-copy.post", http.MethodPost, "/orders/drop-copy/submit", handleSubmitDropCopyOrder(svc))
@@ -207,16 +209,57 @@ func ExtraMounts() []httpx.ExtraMount {
 			Method:  http.MethodGet,
 			Pattern: "/healthz",
 			Handler: http.HandlerFunc(handleHealthz),
+			Access:  httpx.AccessPublic,
 		},
 		{
 			Method:  http.MethodGet,
 			Pattern: "/api/openapi.yaml",
-			Handler: http.HandlerFunc(serveOpenAPISpec),
+			Handler: serveEmbeddedFile("application/yaml; charset=utf-8", openapiSpec),
+			Access:  httpx.AccessPublic,
 		},
 		{
 			Method:  http.MethodGet,
 			Pattern: "/docs",
 			Handler: http.HandlerFunc(serveSwaggerUI),
+			Access:  httpx.AccessPublic,
+		},
+		{
+			Method:  http.MethodGet,
+			Pattern: "/docs/swagger-ui.css",
+			Handler: serveEmbeddedFile("text/css; charset=utf-8", swaggerUICSS),
+			Access:  httpx.AccessPublic,
+		},
+		{
+			Method:  http.MethodGet,
+			Pattern: "/docs/swagger-ui-bundle.js",
+			Handler: serveEmbeddedFile("text/javascript; charset=utf-8", swaggerUIBundle),
+			Access:  httpx.AccessPublic,
+		},
+		{
+			Method:  http.MethodGet,
+			Pattern: "/docs/swagger-initializer.js",
+			Handler: serveEmbeddedFile("text/javascript; charset=utf-8", swaggerUIInitializer),
+			Access:  httpx.AccessPublic,
+		},
+		// The notices of the vendored code travel with it; the bundle's first
+		// line points at its LICENSE.txt beside it.
+		{
+			Method:  http.MethodGet,
+			Pattern: "/docs/swagger-ui-bundle.js.LICENSE.txt",
+			Handler: serveEmbeddedFile("text/plain; charset=utf-8", swaggerUIBundleLicense),
+			Access:  httpx.AccessPublic,
+		},
+		{
+			Method:  http.MethodGet,
+			Pattern: "/docs/LICENSE",
+			Handler: serveEmbeddedFile("text/plain; charset=utf-8", swaggerUILicense),
+			Access:  httpx.AccessPublic,
+		},
+		{
+			Method:  http.MethodGet,
+			Pattern: "/docs/NOTICE",
+			Handler: serveEmbeddedFile("text/plain; charset=utf-8", swaggerUINotice),
+			Access:  httpx.AccessPublic,
 		},
 	}
 }
@@ -226,10 +269,11 @@ func ExtraMounts() []httpx.ExtraMount {
 func ServiceLifecycleRoutes(restart, stop http.Handler) []httpx.Route {
 	return []httpx.Route{
 		{
-			ID:      "service.restart.post",
-			Method:  http.MethodPost,
-			Pattern: "/service/restart",
-			Handler: restart,
+			ID:          "service.restart.post",
+			Method:      http.MethodPost,
+			Pattern:     "/service/restart",
+			Handler:     restart,
+			DuringSetup: true,
 		},
 		{
 			ID:      "service.stop.post",
@@ -252,6 +296,24 @@ func register(
 		Method:  method,
 		Pattern: pattern,
 		Handler: handler,
+	})
+}
+
+// registerDuringSetup registers like register a route whose panel mirror
+// answers before first-run setup completes.
+func registerDuringSetup(
+	registry *httpx.RouteRegistry,
+	id string,
+	method string,
+	pattern string,
+	handler http.HandlerFunc,
+) {
+	registry.Register(httpx.Route{
+		ID:          id,
+		Method:      method,
+		Pattern:     pattern,
+		Handler:     handler,
+		DuringSetup: true,
 	})
 }
 

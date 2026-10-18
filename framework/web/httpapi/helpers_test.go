@@ -113,6 +113,39 @@ func TestWriteErrSentinelCodes(t *testing.T) {
 	}
 }
 
+// TestWriteErrBrowserGuardCodes maps each browser guard refusal to its own
+// status and code, with the sentinel's text and not the wrapping context.
+func TestWriteErrBrowserGuardCodes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		code   string
+		err    error
+		status int
+	}{
+		{"host_not_allowed", domain.ErrHostNotAllowed, http.StatusForbidden},
+		{"origin_not_allowed", domain.ErrOriginNotAllowed, http.StatusForbidden},
+		{"unsupported_media_type", domain.ErrUnsupportedMediaType, http.StatusUnsupportedMediaType},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			WriteErr(rec, fmt.Errorf("guard refusal: %w", tc.err))
+			if rec.Code != tc.status {
+				t.Fatalf("status=%d want=%d", rec.Code, tc.status)
+			}
+			var body struct {
+				Error struct{ Code, Message string }
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error.Code != tc.code || body.Error.Message != tc.err.Error() {
+				t.Fatalf("body=%s", rec.Body)
+			}
+		})
+	}
+}
+
 // TestWriteErrAccountsNotManaged maps a refused change of the account set to a
 // 409 carrying its own code and the error's own text, so a refusal that says
 // what to do instead reaches the client.

@@ -57,8 +57,10 @@ an `internal` path element drift from the list.
 `Register` fills a builder with the default composition: the SQLite store, one
 local node over the default realm running the OpenPit engine, the signer, the
 control-plane service, the built-in market-data and trading providers, the REST
-routes, the MCP tools, the dashboard, allow-all authorization, and an operator
-caller for every request. A `Set` call after it replaces that part;
+routes, the MCP tools, the dashboard, allow-all authorization, an operator
+caller for every request, and the browser guards - the host check over loopback
+and `Config.AllowedHosts`, the cross-origin check, and the JSON-body check. A
+`Set` call after it replaces that part, `SetBrowserGuards` the guards;
 `AddToolRegistrar`, `RegisterMarketDataProvider`, and `RegisterTradingProvider`
 add to it. `Build` then opens and migrates the store and builds the node:
 
@@ -85,7 +87,22 @@ defer officerApp.Close()
 and exits. It is required: `Build` rejects a nil hook.
 `officerApp.RunMCPStdio` serves MCP over stdio as a given caller, and
 `officerApp.BuildServeHandler` returns the HTTP handler for the dashboard, REST,
-and MCP over HTTP; `cmd/pit-officer` runs both.
+and MCP over HTTP; `cmd/pit-officer` runs both. `BuildServeHandler` fails
+without all three guards, so a builder that skips `Register` sets them with
+`SetBrowserGuards`; `framework/web/httpapi` builds the default ones with
+`AllowedHosts`, `SameOrigin`, and `JSONBody`.
+
+A host that composes its own `app.RouteConfig` sets its `AccessMode` -
+`httpapi.RouteConfig` sets `open` - and the `Access` of each extra mount,
+`public` or `agent`. `BuildServeHandler` fails without them, and on an extra
+mount or an MCP path at or under `/api/v1` or `/app/api/v1`. `AccessMode` and
+`Access`, with a route's `Public` and `DuringSetup`, are what the route manifest
+reports; no request is checked against them.
+
+`BuildServeHandler` also refuses an operation mounted twice: each method and
+path, parameter names ignored, may be mounted only once across the REST routes
+on both prefixes, `PanelRoutes`, the route manifest, the MCP methods, the extra
+mounts, and the dashboard's `GET /*`.
 
 The account mode is part of `Register`'s service factory and private to
 Officer, so a host that replaces the service factory runs every account and

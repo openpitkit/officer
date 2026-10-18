@@ -26,6 +26,12 @@ type Route struct {
 	Method  string
 	Pattern string
 	Handler http.Handler
+	// Public marks a route that needs no credentials; only a
+	// RouterConfig.PanelRoutes route may carry it.
+	Public bool
+	// DuringSetup marks a route whose panel mirror answers before first-run
+	// setup completes.
+	DuringSetup bool
 }
 
 // RouteRegistry collects v1 routes in insertion order, keyed by stable route id.

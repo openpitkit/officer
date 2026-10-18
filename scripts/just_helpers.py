@@ -21,13 +21,17 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import base64
+import hashlib
 import http.client
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -41,6 +45,10 @@ BUILD_MODES = {"debug", "release"}
 # Covers the image's HEALTHCHECK start period and retries, under emulation too.
 DOCKER_START_TIMEOUT_SECONDS = 180
 SERVE_CONTAINER_PORT = "8787/tcp"
+# The swagger-ui-dist release /docs serves and the npm registry integrity of
+# its tarball. A refresh changes both and runs `just vendor-swagger-ui`.
+SWAGGER_UI_VERSION = "5.33.2"
+SWAGGER_UI_INTEGRITY = "sha512-MyrWX06zkJRYPnIau8Qj8F6KfzS+Qj8D9AR36vCWkkC9ts1r1DYF84apgCvZBzO2Wzm7G7loCd5VS+4JLWoyLQ=="
 _WINDOWS_CGO_COMPILER_COMMANDS: dict[tuple[str, ...], str] = {}
 _WINDOWS_CGO_WRAPPER_DIRS: set[Path] = set()
 
@@ -524,6 +532,55 @@ def command_docker_start_check(args: argparse.Namespace) -> None:
         run(["docker", "rm", "--force", "--volumes", container], capture=True)
 
 
+def command_vendor_swagger_ui(_: argparse.Namespace) -> None:
+    url = (
+        "https://registry.npmjs.org/swagger-ui-dist/-/"
+        f"swagger-ui-dist-{SWAGGER_UI_VERSION}.tgz"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            tarball = response.read()
+    except (OSError, http.client.HTTPException) as exc:
+        raise SystemExit(f"could not download {url}: {exc}") from None
+    digest = base64.b64encode(hashlib.sha512(tarball).digest()).decode("ascii")
+    if f"sha512-{digest}" != SWAGGER_UI_INTEGRITY:
+        raise SystemExit(
+            f"{url} has integrity sha512-{digest}, "
+            f"not the pinned {SWAGGER_UI_INTEGRITY}"
+        )
+
+    # Read every file before writing any, so a tarball that lacks one leaves
+    # the vendored copy untouched.
+    contents: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as archive:
+        for name in (
+            "LICENSE",
+            "NOTICE",
+            "swagger-ui-bundle.js",
+            "swagger-ui-bundle.js.LICENSE.txt",
+            "swagger-ui.css",
+        ):
+            try:
+                member = archive.getmember(f"package/{name}")
+            except KeyError:
+                raise SystemExit(f"{url} has no package/{name}") from None
+            extracted = archive.extractfile(member) if member.isfile() else None
+            if extracted is None:
+                raise SystemExit(f"package/{name} in {url} is not a regular file")
+            contents[name] = extracted.read()
+
+    target = ROOT / "httpapi" / "swaggerui"
+    target.mkdir(exist_ok=True)
+    for name, content in contents.items():
+        (target / name).write_bytes(content)
+    sums = "".join(
+        f"{hashlib.sha256(contents[name]).hexdigest()}  {name}\n"
+        for name in sorted(contents)
+    )
+    (target / "SHA256SUMS").write_bytes(sums.encode("ascii"))
+    print(f"swagger-ui-dist {SWAGGER_UI_VERSION} vendored into {target}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -583,6 +640,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparser.add_argument("image")
     subparser.add_argument("platform")
     subparser.set_defaults(func=command_docker_start_check)
+
+    subparsers.add_parser("vendor-swagger-ui").set_defaults(
+        func=command_vendor_swagger_ui
+    )
 
     return parser
 

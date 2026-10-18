@@ -169,6 +169,10 @@ vet:
 tidy:
     {{ python }} {{ just_helper }} go mod tidy -go={{ go_version }}
 
+# Vendor the pinned swagger-ui-dist files that /docs serves.
+vendor-swagger-ui:
+    {{ python }} {{ just_helper }} vendor-swagger-ui
+
 # Create the Semgrep venv only when it is not at the pinned version.
 install-semgrep:
     {{ python }} {{ just_helper }} install-semgrep

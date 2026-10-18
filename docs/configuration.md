@@ -5,9 +5,9 @@ Precedence is flags, then the environment, then the built-in defaults - except
 for the runtime library path, whose flag must match the environment (see
 below). An empty
 environment value is treated as unset for `PIT_OFFICER_HTTP_ADDR`,
-`PIT_OFFICER_SQLITE_PATH`, and `OPENPIT_RUNTIME_LIBRARY_PATH`, so it does not
-shadow the default; for the two master-key variables an empty value is
-configured but invalid, not absent.
+`PIT_OFFICER_SQLITE_PATH`, `OPENPIT_RUNTIME_LIBRARY_PATH`, and
+`PIT_OFFICER_ALLOWED_HOSTS`, so it does not shadow the default; for the two
+master-key variables an empty value is configured but invalid, not absent.
 
 To install and start Officer from the published Docker image, see the
 [quickstart](quickstart.md).
@@ -17,6 +17,7 @@ The run mode is not configured here - it comes from the subcommand.
 | Environment variable | Flag | Default | Applies to |
 | --- | --- | --- | --- |
 | `PIT_OFFICER_HTTP_ADDR` | `-http-addr` | `127.0.0.1:0` | `serve`; also read by `healthcheck` as the fallback address when no runtime-state file is found |
+| `PIT_OFFICER_ALLOWED_HOSTS` | - | _(empty)_ | `serve`; every subcommand refuses to start on an invalid value |
 | `PIT_OFFICER_SQLITE_PATH` | `-sqlite-path` | `pit-officer.db` | all subcommands; the runtime-state file path derives from it, and from it alone |
 | `OPENPIT_RUNTIME_LIBRARY_PATH` | `-runtime-library-path` | _(empty)_ | `mcp`, `serve` |
 | `PIT_OFFICER_OPEN_BROWSER` | `-open-browser` | `true` | `serve` |
@@ -40,9 +41,27 @@ The run mode is not configured here - it comes from the subcommand.
 
 ## Authorization
 
-Pit Officer authorizes every request that reaches it: there is no authentication
-in front of the panel, the API, or MCP-over-HTTP. Loopback is the boundary, and
-binding a non-loopback address is a deliberate operator decision.
+There is no authentication in front of the panel, the API, or MCP-over-HTTP:
+Pit Officer authorizes every request that passes three checks, made before
+the request reaches a handler:
+
+- the `Host` header must name an allowed host (see below), or the request is
+  refused with `403` `host_not_allowed`;
+- a request other than `GET`, `HEAD`, or `OPTIONS` that a browser sent from
+  another origin is refused with `403` `origin_not_allowed`; MCP over HTTP
+  checks the origin on every method, `GET` included, since a `GET` there opens
+  an event stream and an MCP session; a request carrying neither
+  `Sec-Fetch-Site` nor `Origin`, as a program sends it, passes;
+- a request other than `GET`, `HEAD`, or `OPTIONS` that carries a body not
+  declared as `application/json` is refused with `415`
+  `unsupported_media_type`, before the body is read.
+
+The checks refuse a state-changing request that a page from another site, open
+in the operator's browser, sends as a form or a script, and a request to a
+domain re-bound to Officer's address. Loopback is the network boundary.
+Binding a non-loopback address is a deliberate operator decision, and clients
+that reach it by a name or address other than loopback need that name in
+`PIT_OFFICER_ALLOWED_HOSTS`.
 
 ## HTTP address
 
@@ -50,6 +69,25 @@ The default binds loopback with an OS-assigned free port, so the address is not
 known until the listener is up. Use `pit-officer dashboard` to discover it. The
 container image overrides this to `0.0.0.0:8787` so a fixed, mapped port can be
 reached from the host.
+
+## Allowed hosts
+
+`serve` answers a request only when its `Host` names an allowed host:
+`localhost`, `127.0.0.1`, and `::1` always, plus the names in
+`PIT_OFFICER_ALLOWED_HOSTS`. Add a name when clients reach Officer by another
+one - a container service name, `host.docker.internal`, or the address of a
+widened bind. A request to any other name, the dashboard's included, answers
+`403` with code `host_not_allowed`.
+
+The value is a comma-separated list, each name trimmed of surrounding
+whitespace. A name is an IP address - IPv6 without brackets or zone - or an
+ASCII DNS name: labels of letters, digits, `-`, and `_` joined by single dots,
+the last label not a number. A name with a port, a wildcard, or brackets, an
+empty entry, and any other name fail the start of every subcommand. Unset or
+blank, the variable adds no name. It has no flag.
+
+A name matches the request's host exactly and case-insensitively, an IP
+address in its canonical form; the port is not checked.
 
 ## SQLite path
 

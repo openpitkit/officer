@@ -105,6 +105,15 @@ var (
 	// ErrForbidden marks a request whose caller is known but not authorized for
 	// the requested route or command.
 	ErrForbidden = registerSentinel(errors.New("forbidden"))
+	// ErrHostNotAllowed marks an HTTP request whose Host names a host the server
+	// does not answer to, such as a page on a domain re-bound to its address.
+	ErrHostNotAllowed = registerSentinel(errors.New("request host is not allowed"))
+	// ErrOriginNotAllowed marks a state-changing HTTP request that a browser sent
+	// from another origin.
+	ErrOriginNotAllowed = registerSentinel(errors.New("cross-origin request is not allowed"))
+	// ErrUnsupportedMediaType marks a state-changing HTTP request whose body is
+	// not declared as JSON.
+	ErrUnsupportedMediaType = registerSentinel(errors.New("request body must be application/json"))
 	// ErrTooLarge marks an input that exceeds a hard server-side size limit.
 	// HTTP surfaces map it to 413 so callers can split bulk payloads instead of
 	// retrying the same request.

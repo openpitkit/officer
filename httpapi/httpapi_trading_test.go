@@ -602,19 +602,8 @@ func TestSendPaperOrderErrors(t *testing.T) {
 func TestOpenAPITradingContract(t *testing.T) {
 	spec := string(openapiSpec)
 	paths := map[string]bool{}
-	path := ""
-	for _, line := range strings.Split(spec, "\n") {
-		if line == "components:" {
-			break
-		}
-		if strings.HasPrefix(line, "  /") && strings.HasSuffix(line, ":") {
-			path = strings.TrimSuffix(strings.TrimSpace(line), ":")
-		}
-		for _, method := range []string{"get", "post", "put", "delete"} {
-			if line == "    "+method+":" {
-				paths[strings.ToUpper(method)+" "+path] = true
-			}
-		}
+	for _, operation := range openAPIOperations(spec) {
+		paths[operation.Method+" "+operation.Path] = true
 	}
 	for _, route := range NewRouteRegistry(&fakeService{}, nil).Routes() {
 		if strings.HasPrefix(route.Pattern, "/trading") || strings.HasSuffix(route.Pattern, "/trading-destinations") {

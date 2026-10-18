@@ -22,3 +22,6 @@
 !**/*_test.go
 !**/*.test.ts
 !**/*.test.tsx
+
+# Vendored third-party files, byte-identical to the pinned release (SHA256SUMS).
+httpapi/swaggerui/

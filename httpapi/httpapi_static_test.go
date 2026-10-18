@@ -18,8 +18,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -29,7 +32,7 @@ import (
 const spaIndexBody = "<html></html>"
 
 // TestServeOpenAPISpec covers GET /api/openapi.yaml: 200, the application/yaml
-// content type, and a non-empty body (the embedded spec).
+// content type, MIME sniffing off, and a non-empty body (the embedded spec).
 func TestServeOpenAPISpec(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {
@@ -43,6 +46,9 @@ func TestServeOpenAPISpec(t *testing.T) {
 	ct := rec.Result().Header.Get("Content-Type")
 	if !strings.HasPrefix(ct, "application/yaml") {
 		t.Fatalf("want application/yaml content type, got %q", ct)
+	}
+	if got := rec.Result().Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("want X-Content-Type-Options nosniff, got %q", got)
 	}
 	if rec.Body.Len() == 0 {
 		t.Fatal("want non-empty spec body")
@@ -118,8 +124,11 @@ func TestServeOpenAPISpec_WrongMethod(t *testing.T) {
 	}
 }
 
-// TestServeSwaggerUI covers GET /docs: 200, the text/html content type, and a
-// non-empty HTML body that wires Swagger UI to the spec route.
+// TestServeSwaggerUI covers GET /docs: 200, the text/html content type, the
+// exact content security policy, which admits only same-origin scripts, styles
+// and requests, and a page that loads the stylesheet, the bundle and then the
+// initializer from /docs, with no inline script or style element and no
+// external URL. The initializer wires Swagger UI to the spec route.
 func TestServeSwaggerUI(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {
@@ -134,13 +143,81 @@ func TestServeSwaggerUI(t *testing.T) {
 	if !strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("want text/html content type, got %q", ct)
 	}
-	body := rec.Body.String()
-	if body == "" {
-		t.Fatal("want non-empty HTML body")
+	const wantPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; " +
+		"img-src 'self' data:; connect-src 'self'; font-src 'self'; " +
+		"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+	if policy := rec.Result().Header.Get("Content-Security-Policy"); policy != wantPolicy {
+		t.Fatalf("content security policy mismatch\ngot:  %q\nwant: %q",
+			policy, wantPolicy)
 	}
-	// The page must point Swagger UI at the spec route.
-	if !strings.Contains(body, "/api/openapi.yaml") {
-		t.Fatal("Swagger UI page does not reference the spec URL")
+	body := rec.Body.String()
+	for _, tag := range regexp.MustCompile(`(?i)<script\b[^>]*>`).FindAllString(body, -1) {
+		if !regexp.MustCompile(`(?i)\ssrc\s*=`).MatchString(tag) {
+			t.Fatalf("page has an inline script: %s", tag)
+		}
+	}
+	if regexp.MustCompile(`(?i)<style\b`).MatchString(body) {
+		t.Fatal("page has an inline style element")
+	}
+	external := regexp.MustCompile(`(?i)\b(?:src|href)\s*=\s*["']?\s*(?:https?:)?//`)
+	if found := external.FindString(body); found != "" {
+		t.Fatalf("page loads an external URL: %s", found)
+	}
+	css := strings.Index(body, `href="/docs/swagger-ui.css"`)
+	bundle := strings.Index(body, `src="/docs/swagger-ui-bundle.js"`)
+	initializer := strings.Index(body, `src="/docs/swagger-initializer.js"`)
+	if css < 0 || bundle < 0 || initializer < bundle {
+		t.Fatalf("page does not load the stylesheet, the bundle and then the "+
+			"initializer from /docs:\n%s", body)
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/docs/swagger-initializer.js", nil,
+	))
+	if !strings.Contains(rec.Body.String(), `url: "/api/openapi.yaml"`) {
+		t.Fatal("Swagger UI initializer does not reference the spec URL")
+	}
+}
+
+// TestServeSwaggerUIAssets covers the files served under /docs - the ones the
+// page loads and the vendored code's license and notices: each answers 200 with
+// its content type, MIME sniffing off, and the file's bytes as the source tree
+// holds them.
+func TestServeSwaggerUIAssets(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ path, contentType, file string }{
+		{"/docs/swagger-ui.css", "text/css; charset=utf-8", "swaggerui/swagger-ui.css"},
+		{"/docs/swagger-ui-bundle.js", "text/javascript; charset=utf-8", "swaggerui/swagger-ui-bundle.js"},
+		{"/docs/swagger-initializer.js", "text/javascript; charset=utf-8", "swagger-initializer.js"},
+		{"/docs/swagger-ui-bundle.js.LICENSE.txt", "text/plain; charset=utf-8", "swaggerui/swagger-ui-bundle.js.LICENSE.txt"},
+		{"/docs/LICENSE", "text/plain; charset=utf-8", "swaggerui/LICENSE"},
+		{"/docs/NOTICE", "text/plain; charset=utf-8", "swaggerui/NOTICE"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			want, err := os.ReadFile(tc.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d", rec.Code)
+			}
+			if ct := rec.Result().Header.Get("Content-Type"); ct != tc.contentType {
+				t.Fatalf("want content type %q, got %q", tc.contentType, ct)
+			}
+			if got := rec.Result().Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Fatalf("want X-Content-Type-Options nosniff, got %q", got)
+			}
+			if !bytes.Equal(rec.Body.Bytes(), want) {
+				t.Fatalf("body is not %s: %d bytes, want %d",
+					tc.file, rec.Body.Len(), len(want))
+			}
+		})
 	}
 }
 

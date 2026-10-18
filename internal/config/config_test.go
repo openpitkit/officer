@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -222,6 +223,56 @@ func TestLoadMasterKey(t *testing.T) {
 			}
 			if !equal {
 				t.Fatal("ResolveMasterKey() returned the wrong key")
+			}
+		})
+	}
+}
+
+func TestLoadAllowedHosts(t *testing.T) {
+	tests := []struct {
+		name      string
+		env       map[string]string
+		want      []string
+		wantError bool
+	}{
+		{name: "unset"},
+		{name: "empty", env: map[string]string{EnvAllowedHosts: ""}},
+		{name: "blank", env: map[string]string{EnvAllowedHosts: "  "}},
+		{
+			name: "names",
+			env:  map[string]string{EnvAllowedHosts: "officer, host.docker.internal"},
+			want: []string{"officer", "host.docker.internal"},
+		},
+		{
+			name: "IPv6 literal",
+			env:  map[string]string{EnvAllowedHosts: "fd00::1"},
+			want: []string{"fd00::1"},
+		},
+		{name: "empty element", env: map[string]string{EnvAllowedHosts: "a,,b"}, wantError: true},
+		{name: "trailing comma", env: map[string]string{EnvAllowedHosts: "a,"}, wantError: true},
+		{name: "port", env: map[string]string{EnvAllowedHosts: "officer:8787"}, wantError: true},
+		{name: "wildcard", env: map[string]string{EnvAllowedHosts: "*.example.com"}, wantError: true},
+		{name: "bracketed IPv6", env: map[string]string{EnvAllowedHosts: "[::1]"}, wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load([]string{"-mode", "mcp"}, envLookup(tt.env))
+			if tt.wantError {
+				if err == nil {
+					t.Fatalf("Load() error = nil, AllowedHosts = %q", cfg.AllowedHosts)
+				}
+				if !strings.Contains(err.Error(), EnvAllowedHosts) {
+					t.Fatalf("Load() error = %v, want source %q", err, EnvAllowedHosts)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if (cfg.AllowedHosts == nil) != (tt.want == nil) ||
+				!slices.Equal(cfg.AllowedHosts, tt.want) {
+				t.Fatalf("AllowedHosts = %#v, want %#v", cfg.AllowedHosts, tt.want)
 			}
 		})
 	}

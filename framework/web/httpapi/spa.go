@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // indexFile is the SPA shell filename expected at the root of the dist filesystem.
@@ -58,8 +60,13 @@ func newSPAHandler(files fs.FS) (*spaHandler, error) {
 // ServeHTTP serves the requested asset, or the SPA shell as a fallback. A
 // request for an existing file (for example /assets/app.js) is served by the
 // embedded file server; anything else - the root, or a client-side route like
-// /accounts - returns index.html with a 200 so the SPA can route it.
+// /accounts - returns index.html with a 200 so the SPA can route it. Only GET
+// and HEAD are served: any other method gets the typed 404.
 func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		WriteErr(w, domain.ErrNotFound)
+		return
+	}
 	name := assetName(r.URL.Path)
 	if name != "" && h.assetExists(name) {
 		h.fileSrv.ServeHTTP(w, r)
