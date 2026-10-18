@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Package fixture holds the regression cases of the default-domain-status
 // rule. The violations are deliberate; the file is never compiled.

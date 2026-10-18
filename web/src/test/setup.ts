@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Global test setup: register jest-dom matchers, initialize the app i18n so
 // react-i18next has resources during render, show accounts by default, and

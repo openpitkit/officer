@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://openpit.dev and the OWNERS file for details.
+# Please see https://officer.openpit.dev and the OWNERS file for details.
 
 # golangci-lint's errcheck runs with its default config here (officer has no
 # .golangci.yml), which means check-blank is false: `_ = someCall()` is the

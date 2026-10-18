@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Signing group of the SQLite store: Ed25519 signing keys. A signing key is a
 // dictionary entity, but unlike the code-keyed dictionaries it is addressed by

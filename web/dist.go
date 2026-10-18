@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Package web embeds the built operator dashboard so the single binary serves
 // the SPA with no external assets. The Go embed directive cannot reference

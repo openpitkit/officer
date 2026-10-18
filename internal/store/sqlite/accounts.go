@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Group 1 of the SQLite store: the dictionary entities the rest of the schema
 // references - assets, principals, account groups and accounts. Dictionaries are

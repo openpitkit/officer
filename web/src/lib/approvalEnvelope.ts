@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Approval-envelope decode + Ed25519 verify helpers used by the order
 // reproduction / verification panel. These decode the artifacts CLIENT-SIDE for

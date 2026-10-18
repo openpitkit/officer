@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://openpit.dev and the OWNERS file for details.
+# Please see https://officer.openpit.dev and the OWNERS file for details.
 
 # Paths are written relative to the repository or to a documented location.
 # An absolute path into one contributor's home directory resolves on no other

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Order statuses split by lifecycle phase. Active/working orders can still
 // change; terminal orders are resolved. The Orders status filter is a set over

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Settings group of the SQLite store: the realm-wide settings, the per-command
 // MCP access overrides and the per-user UI settings. All are plain key/value

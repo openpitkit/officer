@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // List tests for the mandatory account restriction: every list query applies
 // it in SQL before the total and the page are taken, keeps rows with no

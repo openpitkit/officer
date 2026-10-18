@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import i18n, { type Resource, type ResourceLanguage } from "i18next";
 import LanguageDetector from "i18next-browser-languagedetector";

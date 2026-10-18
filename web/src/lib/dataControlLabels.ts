@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Consumer-side localized labels for the edition-agnostic data-control
 // widgets under components/data. The widgets keep English defaults; pages

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://openpit.dev and the OWNERS file for details.
+# Please see https://officer.openpit.dev and the OWNERS file for details.
 
 # A bare return from a worker that has already delivered the error through a
 # channel, or from a goroutine stopping on context cancellation, does not drop

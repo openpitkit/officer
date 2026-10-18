@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Pure builders for the per-platform "Connect your agent" artifacts. Every
 // string here is agent-facing copy and stays English regardless of UI locale;

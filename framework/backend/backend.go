@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Package backend implements the Pit Officer control-plane service. The service
 // is the single entry point the MCP and HTTP surfaces call into. It depends

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // These tests exercise the OpenPit pretrade lock binding and so require the
 // native runtime dylib at run time (set OPENPIT_RUNTIME_LIBRARY_PATH or build

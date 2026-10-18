@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Orders group of the SQLite store: orders and their 1:1 signed approval, the
 // immutable order-event stream, per-fill trade ("reports"), order counts and

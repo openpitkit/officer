@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Client-side mirrors of the backend's domain.Validate* rules. The backend is
 // authoritative; these only catch obvious mistakes before a request goes out

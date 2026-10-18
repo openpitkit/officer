@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Cross-cutting invariant tests that span multiple table groups. These tests
 // complement (and never duplicate) the per-group tests; each one is noted with

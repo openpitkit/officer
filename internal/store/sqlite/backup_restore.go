@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Backup group of the SQLite store: the restore-side per-table insert helpers
 // used by restoreTx.run to land one archive section into the bound realm.

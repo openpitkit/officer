@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
--- Please see https://openpit.dev and the OWNERS file for details.
+-- Please see https://officer.openpit.dev and the OWNERS file for details.
 
 -- Canonical control-plane schema for one realm, created from scratch in a
 -- single migration. It is backend-agnostic: the dialect substitutes {{PK}}

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Settings-group tests: MCP access map get/set/list round-trips keyed by command,
 // per-user settings get/set/list round-trips keyed by the

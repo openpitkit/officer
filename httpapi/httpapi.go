@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Package httpapi is Pit Officer's HTTP surface for the `serve` run mode. It
 // serves, behind one chi router, a liveness probe (/healthz), the REST

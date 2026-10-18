@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Backup group of the SQLite store: the pruning helpers restoreTx.prune uses to
 // remove rows outside the archive scope under a replace-all restore, plus the

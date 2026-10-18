@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Signing-group tests: key upsert/get/list round-trips addressed by the UUID
 // key_id, byte-exact private/public BLOB round-trip, active switching and

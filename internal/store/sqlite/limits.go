@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Limits group of the SQLite store: one typed table per policy
 // (limit_rate, limit_order_size, limit_spot_funds_pnl_bound).

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 /** Resolve an in-app path to an absolute, shareable URL against the current
  *  origin. Falls back to the raw path during SSR / non-browser rendering. */

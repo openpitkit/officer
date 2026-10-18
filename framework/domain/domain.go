@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Package domain holds the transport-agnostic value types shared across the
 // Pit Officer control plane. These types are Pit Officer's own vocabulary; they

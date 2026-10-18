@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Skeleton tests for the rebuilt SQLite store: schema migration and foreign-key
 // enforcement, single-realm ForRealm enforcement, the shared external-id and

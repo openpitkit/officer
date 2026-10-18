@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://openpit.dev and the OWNERS file for details.
+# Please see https://officer.openpit.dev and the OWNERS file for details.
 #
 # Demo data only. Every account name, group, and note below is fiction: a
 # satirical archetype of trader *behaviour*, not a portrait of any real person,

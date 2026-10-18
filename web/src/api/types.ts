@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Normalized view of the control-plane types. The raw wire shape is normalized
 // in api/client.ts so the UI does not depend on the JSON casing the Go handler

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Package store defines the pluggable database connector seam for Pit Officer.
 // The seam is built around the Realm choke-point: a Store opens a backend, and

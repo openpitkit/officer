@@ -1,0 +1,21 @@
+# Regression cases of the file-header-site-link rule: the header sentence in
+# the comment styles the repository uses. A `ruleid` line marks the next line
+# as a finding, an `ok` line marks it clean.
+
+# ruleid: file-header-site-link
+// Please see https://openpit.dev and the OWNERS file for details.
+# ruleid: file-header-site-link
+# Please see https://pitofficer.com and the OWNERS file for details.
+# ruleid: file-header-site-link
+Please see https://officer.openpit.dev/ and the OWNERS file for details.
+# ruleid: file-header-site-link
+ * Please see http://officer.openpit.dev and the OWNERS file for details.
+
+# ok: file-header-site-link
+// Please see https://officer.openpit.dev and the OWNERS file for details.
+# ok: file-header-site-link
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+# ok: file-header-site-link
+Please see https://officer.openpit.dev and the OWNERS file for details.
+# ok: file-header-site-link
+Pit Officer is a control plane for the embeddable OpenPit (https://openpit.dev).

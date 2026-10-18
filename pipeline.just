@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://openpit.dev and the OWNERS file for details.
+# Please see https://officer.openpit.dev and the OWNERS file for details.
 
 # CI-only aggregate recipes, invoked from .github/workflows/* via:
 #   just --justfile pipeline.just <recipe>. Imports the project justfile.

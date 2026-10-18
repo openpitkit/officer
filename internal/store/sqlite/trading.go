@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Trading group of the SQLite store: connections, instrument mappings, access
 // grants and durable venue-order links. Public entities carry external ids and

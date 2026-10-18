@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Audit group of the SQLite store: the append-only compliance trail. An audit
 // row is a machine record addressed by its opaque external id; the surrogate id

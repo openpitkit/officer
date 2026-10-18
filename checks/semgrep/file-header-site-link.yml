@@ -1,0 +1,51 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# A file header links the Pit Officer site.
+#
+# Every file header names the project site before the OWNERS file, so the
+# owners of any single file can be found from it. This repository is Pit
+# Officer, and its site is https://officer.openpit.dev - not the engine site
+# and not the SaaS site. A new file copies its header from a neighbour, so one
+# wrong link spreads.
+#
+# It is a text rule over the header sentence: any link in it other than the
+# exact officer site URL is a finding. A link elsewhere in a file, such as the
+# engine site in prose, is not a header and is not read.
+#
+# There is no approval marker: the header link has one correct value.
+
+rules:
+  - id: file-header-site-link
+    message: >-
+      The file header links a site other than Pit Officer. Write the header
+      sentence with https://officer.openpit.dev, exactly as every other file
+      in this repository does.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: 'Please see (?!https://officer\.openpit\.dev )\S+ and the OWNERS file'
+    paths:
+      exclude:
+        - /web/node_modules
+        - /web/dist
+        - /web/lib
+        - .venv
+        - .ruff_cache
+        - __pycache__
+        - .tmp
+        - .git
+        - /checks/semgrep/testdata/file-header-site-link.txt

@@ -39,9 +39,10 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 
 `testdata/` holds rule fixtures: deliberate violations and non-violations
 annotated for `semgrep --test`, one file per rule, named after it:
-`default-domain-status.go` and `locale-latin-words.txt`. A fixture runs only
+`default-domain-status.go`, `locale-latin-words.txt` and
+`file-header-site-link.txt`. A fixture runs only
 through its own `--test` line in `check-semgrep`, after the tree scan, so a new
-fixture adds its own line there. A rule with a fixture keeps `testdata/` out of
+fixture adds its own line there. A rule with a fixture keeps its fixture out of
 its `paths`, so the tree scan does not report the fixture. The directory is
 named `testdata` so the Go tool ignores it, and it is in the justfile's
 `go_dirs`, so `lint-go` gofmt-checks the Go fixtures.
@@ -107,6 +108,16 @@ with the term the locale already uses, or, for a term that stays as written in
 every translated catalog, by adding it to the keep list. Placeholders, tags,
 code spans, figures, URL paths and comma-separated identifier lists such as a
 CSV header are not words.
+
+This rule has no approval marker.
+
+### `file-header-site-link`
+
+`checks/semgrep/file-header-site-link.yml` forbids a file header whose
+project-site link, in the sentence that points to the OWNERS file, is anything
+but `https://officer.openpit.dev`. Fix a finding by writing that link. The rule
+excludes only its own fixture, not the rest of `testdata/`, so the other
+fixtures' headers are checked too.
 
 This rule has no approval marker.
 

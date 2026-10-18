@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://openpit.dev and the OWNERS file for details.
+// Please see https://officer.openpit.dev and the OWNERS file for details.
 
 // Package logtail captures slog output into a bounded in-memory ring buffer and
 // exposes it for read-back over the HTTP surface. The buffer is bounded by both
