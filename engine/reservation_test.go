@@ -1663,7 +1663,7 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		}
 	})
 
-	t.Run("market lock", func(t *testing.T) {
+	t.Run("market order refused despite a lock", func(t *testing.T) {
 		e := newTestEngine(t)
 		if err := e.MarketDataSink().Push(marketdata.QuoteUpdate{
 			Base: testMarketDataAssetID(testBase), Quote: testMarketDataAssetID(testQuote), Mark: testLimit,
@@ -1675,51 +1675,10 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		order.AmountValue = "500"
 		order.Price = ""
 
-		result, err := materializeImmediateResult(e, order)
-		if err != nil {
-			t.Fatalf("SubmitImmediate(volume market): %v", err)
-		}
-		if !result.Accepted {
-			t.Fatalf("SubmitImmediate(volume market) rejected: %+v", result.Rejects)
-		}
-		mark, err := param.NewPriceFromString(testLimit)
-		if err != nil {
-			t.Fatalf("parse market mark: %v", err)
-		}
-		lockPrice, err := mark.CheckedMulUint(
-			uint64(10_000 + defaultMarketOrderSlippageBps),
-		)
-		if err != nil {
-			t.Fatalf("apply market-order slippage: %v", err)
-		}
-		lockPrice, err = lockPrice.CheckedDivUint(10_000)
-		if err != nil {
-			t.Fatalf("scale market-order slippage: %v", err)
-		}
-		volume, err := param.NewVolumeFromString(order.AmountValue)
-		if err != nil {
-			t.Fatalf("parse market volume: %v", err)
-		}
-		fillQuantity, err := volume.CalculateQuantity(lockPrice)
-		if err != nil {
-			t.Fatalf("calculate market fill quantity: %v", err)
-		}
-		gotLockPrice, err := param.NewPriceFromString(result.TradePrice)
-		if err != nil {
-			t.Fatalf("parse market lock price: %v", err)
-		}
-		gotFillQuantity, err := param.NewQuantityFromString(result.FillQuantity)
-		if err != nil {
-			t.Fatalf("parse market fill quantity: %v", err)
-		}
-		if !gotLockPrice.Equal(lockPrice) || !gotFillQuantity.Equal(fillQuantity) {
-			t.Fatalf(
-				"volume market fill = (%q, %q), want lock price %s and engine delta %s",
-				result.TradePrice,
-				result.FillQuantity,
-				lockPrice,
-				fillQuantity,
-			)
+		// The pushed mark gives the reservation a lock price; the fill still
+		// does not settle at it.
+		if _, err := materializeImmediateResult(e, order); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("SubmitImmediate(volume market) = %v, want ErrInvalid", err)
 		}
 	})
 }
@@ -1820,18 +1779,13 @@ func TestSubmitImmediate_DropCopyVolumeUsesEngineDelta(t *testing.T) {
 	}
 }
 
-func TestImmediateTradePrice_UsesRequestOrMarketLock(t *testing.T) {
-	limit, err := immediateTradePrice(domain.Order{Price: "99"}, "101")
+func TestImmediateTradePrice_UsesRequestPriceOnly(t *testing.T) {
+	limit, err := immediateTradePrice(domain.Order{Price: "99"})
 	if err != nil || limit != "99" {
 		t.Fatalf("limit trade price = (%q, %v), want request price 99", limit, err)
 	}
 
-	market, err := immediateTradePrice(domain.Order{}, "101")
-	if err != nil || market != "101" {
-		t.Fatalf("market trade price = (%q, %v), want lock price 101", market, err)
-	}
-
-	if _, err := immediateTradePrice(domain.Order{}, ""); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("market trade price without lock = %v, want ErrInvalid", err)
+	if market, err := immediateTradePrice(domain.Order{}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("market trade price = (%q, %v), want ErrInvalid", market, err)
 	}
 }

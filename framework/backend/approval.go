@@ -35,8 +35,8 @@ import (
 )
 
 // Submit modes for a signed approval. SubmitModeImmediate commits and settles
-// at the lock price; SubmitModeHold is the workflow submit, whose later state
-// changes arrive as execution reports.
+// at the order's own price and refuses an order without one; SubmitModeHold is
+// the workflow submit, whose later state changes arrive as execution reports.
 const (
 	SubmitModeImmediate = "immediate"
 	SubmitModeHold      = "hold"
@@ -299,12 +299,12 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 // accept, issues a signed (or eSign-off) approval. Mode "hold" uses the
 // normal workflow submit: the engine commits the pre-trade effects and later
 // execution reports settle or release them. Mode "immediate" also settles a
-// fill at the engine lock price in the same call. A pre-trade reject is a
-// successful signed decision and returns the reject reasons with the same
-// envelope shape as an accept verdict. The post-commit approval_issued audit
-// write is best-effort: because the operation is already committed, a failure
-// is logged rather than returned. missing is the caller's required choice for
-// an order naming
+// fill at the order's own price in the same call and refuses an order without
+// a price. A pre-trade reject is a successful signed decision and returns the
+// reject reasons with the same envelope shape as an accept verdict. The
+// post-commit approval_issued audit write is best-effort: because the
+// operation is already committed, a failure is logged rather than returned.
+// missing is the caller's required choice for an order naming
 // an account that does not exist yet: register it with no group and no currency,
 // or fail with domain.ErrAccountMissing.
 func (s *Service) SubmitOrder(

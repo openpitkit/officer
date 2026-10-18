@@ -922,6 +922,11 @@ func (n *fakeNode) SubmitImmediate(
 	_ context.Context, o domain.Order,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (domain.Order, fwengine.ImmediateResult, error) {
+	if o.Price == "" {
+		return domain.Order{}, fwengine.ImmediateResult{},
+			domain.NewValidationError("/price", "required",
+				"fake node: immediate order has no price")
+	}
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	if n.submitErr != nil {
 		return domain.Order{}, fwengine.ImmediateResult{}, n.submitErr
@@ -943,14 +948,10 @@ func (n *fakeNode) SubmitImmediate(
 	order.Status = domain.OrderStatusFilled
 	n.orders[order.ExternalID] = order
 	n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
-	tradePrice := o.Price
-	if tradePrice == "" {
-		tradePrice = "100"
-	}
 	return order, completeFakeImmediateResult(order, fwengine.ImmediateResult{
 		Accepted:            true,
 		SettlementLockPrice: "100",
-		TradePrice:          tradePrice,
+		TradePrice:          o.Price,
 		FillQuantity:        o.AmountValue,
 	}), nil
 }
@@ -966,9 +967,6 @@ func completeFakeImmediateResult(
 	}
 	if result.TradePrice == "" {
 		result.TradePrice = order.Price
-		if result.TradePrice == "" {
-			result.TradePrice = result.SettlementLockPrice
-		}
 	}
 	if result.ExecutionReport == nil {
 		result.ExecutionReport = domain.ExecutionReportRequestFromInput(

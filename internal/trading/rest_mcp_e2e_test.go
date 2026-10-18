@@ -1149,6 +1149,54 @@ func TestAdjustmentBoundsEndToEnd(t *testing.T) {
 	}
 }
 
+// An immediate order without a price is refused on REST and MCP alike as a
+// validation error at /price with the same core message; neither surface
+// records the order nor creates the account it names, and the refused attempt
+// is audited as approval_failed.
+func TestImmediateWithoutPriceRefusedEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, false)
+	order := map[string]any{"account": "fresh", "baseAsset": "AAPL", "quoteAsset": "USD",
+		"side": "buy", "amountKind": "quantity", "amountValue": "1", "mode": "immediate"}
+	problem := tradingE2EDecode[httpx.ProblemDetails](t, f.rest(http.MethodPost, "/orders/submit?missingAccount=create",
+		order, http.StatusUnprocessableEntity))
+	if problem.Status != http.StatusUnprocessableEntity || len(problem.Errors) != 1 ||
+		problem.Errors[0].Code != "validation" || problem.Errors[0].Pointer != "/price" ||
+		problem.Errors[0].Constraint != "required" {
+		t.Fatalf("priceless immediate problem = %+v", problem)
+	}
+	f.rest(http.MethodPut, "/mcp-access/submit_order", map[string]any{"enabled": true}, http.StatusOK)
+	input := map[string]any{"missingAccount": "create"}
+	for key, value := range order {
+		input[key] = value
+	}
+	result := f.mcp("submit_order", input, true)
+	want := "validation: " + problem.Detail
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok || text.Text != want {
+		t.Fatalf("priceless immediate MCP error = %+v, want %q", result.Content[0], want)
+	}
+	listed := tradingE2EDecode[struct{ Total int }](t, f.rest(http.MethodGet, "/orders", nil, http.StatusOK))
+	if listed.Total != 0 {
+		t.Fatalf("refused immediate recorded %d orders", listed.Total)
+	}
+	if _, ok, err := f.realm.GetAccount(f.ctx, "fresh"); err != nil || ok {
+		t.Fatalf("GetAccount(fresh) = ok %v err %v, want not created", ok, err)
+	}
+	failed, err := f.realm.ListAuditFiltered(f.ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionApprovalFailed}}, 10)
+	if err != nil || len(failed) != 2 {
+		t.Fatalf("approval_failed audit = %+v err %v, want one row per refused attempt", failed, err)
+	}
+	sources := map[domain.Source]int{}
+	for _, row := range failed {
+		if row.Account != "fresh" {
+			t.Fatalf("approval_failed audit row = %+v, want account fresh", row)
+		}
+		sources[row.Source]++
+	}
+	if sources[domain.SourceAPI] != 1 || sources[domain.SourceMCP] != 1 {
+		t.Fatalf("approval_failed audit sources = %v, want one api and one mcp", sources)
+	}
+}
+
 // group creates an account group and moves members into it.
 func (f *tradingE2E) group(code string, members ...string) {
 	f.t.Helper()

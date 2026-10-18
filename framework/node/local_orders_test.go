@@ -1370,10 +1370,13 @@ func (e *fakeEngine) prepareFakeImmediate(
 	}
 	tradePrice := e.submitTradePrice
 	if tradePrice == "" {
-		tradePrice = o.Price
-		if tradePrice == "" {
-			tradePrice = settlementPrice
+		if o.Price == "" {
+			return engine.ImmediatePreparation{}, fmt.Errorf(
+				"fake engine: immediate order has no price to settle at: %w",
+				domain.ErrInvalid,
+			)
 		}
+		tradePrice = o.Price
 	}
 	reportInput := domain.ExecutionReportInput{
 		BaseAsset:      o.BaseAsset,
@@ -1643,6 +1646,51 @@ func TestLocalNode_SubmitImmediateDropCopyRejectsPersistedAccountMismatchBeforeE
 	}
 	if len(eng.submitCalls) != 0 {
 		t.Fatalf("engine mutations = %+v, want none", eng.submitCalls)
+	}
+}
+
+// TestLocalNode_SubmitImmediateWithoutPriceRefusedBeforeWrite verifies an
+// immediate order without a price is refused as a validation error at /price
+// before the missing account is created, the order is recorded, or the engine
+// is reached.
+func TestLocalNode_SubmitImmediateWithoutPriceRefusedBeforeWrite(t *testing.T) {
+	t.Parallel()
+	for _, dropCopy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dropCopy=%v", dropCopy), func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+			const id = domain.ExternalID("priceless-immediate")
+
+			_, _, err := n.SubmitImmediate(ctx, domain.Order{
+				ExternalID:  id,
+				Account:     "fresh",
+				BaseAsset:   "AAPL",
+				QuoteAsset:  "USD",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "2",
+				DropCopy:    dropCopy,
+			}, domain.MissingAccountCreate, testCaller)
+			if !errors.Is(err, domain.ErrInvalid) ||
+				domain.ValidationPointer(err) != "/price" ||
+				domain.ValidationConstraint(err) != "required" {
+				t.Fatalf(
+					"SubmitImmediate error = %v (pointer %q, constraint %q), want ErrInvalid at /price required",
+					err, domain.ValidationPointer(err), domain.ValidationConstraint(err),
+				)
+			}
+			if _, ok, getErr := st.GetAccount(ctx, "fresh"); getErr != nil || ok {
+				t.Fatalf("GetAccount(fresh) = ok %v err %v, want not created", ok, getErr)
+			}
+			if _, getErr := st.GetOrder(ctx, id); !errors.Is(getErr, domain.ErrNotFound) {
+				t.Fatalf("GetOrder(%s) error = %v, want ErrNotFound", id, getErr)
+			}
+			if len(eng.submitCalls) != 0 {
+				t.Fatalf("engine mutations = %+v, want none", eng.submitCalls)
+			}
+		})
 	}
 }
 

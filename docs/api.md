@@ -159,6 +159,18 @@ ordinary order is attested, and signed unless eSign-off is set. REST's `force`
 is not offered, and a present `commission` is passed as given: REST reads an
 all-empty commission as none, the core refuses it.
 
+## Order submission
+
+Mode `immediate` books the fill at the order's own `price`. An order without
+`price` in `immediate` is refused before the order is recorded, the account is
+created or the engine reserves: `POST /orders/submit` answers `422` with code
+`validation` and constraint `required` at pointer `/price`, the MCP tool
+`submit_order` answers `validation: <message>`. The refused attempt is audited
+as `approval_failed`. A market order goes in `hold`, and its fill arrives as an
+execution report. This is an incompatible REST and MCP change in 0.1: before
+it, a market order in `immediate` settled at the engine's reservation lock
+price.
+
 ## Trading
 
 Trading credentials are JSON objects accepted on write; no trading route or

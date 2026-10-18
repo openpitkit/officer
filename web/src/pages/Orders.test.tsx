@@ -655,6 +655,24 @@ async function fillOrderFieldsAfterAccount(
   await user.type(within(dialog).getByLabelText("Amount"), "10");
 }
 
+async function expectPriceRequired(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  submit: HTMLElement,
+  label: string,
+  hint: string | RegExp,
+) {
+  const price = within(dialog).getByLabelText(label);
+  expect(price).toHaveAttribute("placeholder", "required");
+  expect(within(dialog).getByText(hint)).toBeInTheDocument();
+  expect(submit).toBeDisabled();
+  await user.type(price, "0");
+  expect(submit).toBeDisabled();
+  await user.clear(price);
+  await user.type(price, "10");
+  expect(submit).toBeEnabled();
+}
+
 async function enablePaperSending(
   user: ReturnType<typeof userEvent.setup>,
   dialog: HTMLElement,
@@ -896,7 +914,7 @@ describe("Orders side & amount-kind toggles", () => {
       within(dialog).getByLabelText("Base asset"),
       within(dialog).getByLabelText("Quote asset"),
       within(dialog).getByLabelText("Amount"),
-      within(dialog).getByLabelText("Limit price (optional)"),
+      within(dialog).getByLabelText("Limit price (required to settle)"),
     ];
     for (const field of fields) {
       await user.type(field, "A");
@@ -981,33 +999,36 @@ describe("Orders submit mode", () => {
   it.each([
     [
       "Submit and settle",
-      "Run pre-trade, reserve, and settle at the lock price now.",
+      "Run pre-trade, reserve, and settle at the order price now.",
+      "Limit price (required to settle)",
     ],
     [
       "Submit and wait",
       "Run pre-trade, record the lock, and wait for execution reports.",
+      "Limit price (optional)",
     ],
-  ])("shows the own fields and help for %s", async (label, help) => {
-    const user = userEvent.setup();
-    renderOrders("/orders");
-    const dialog = await openDialog(user, false);
-    await user.click(within(dialog).getByRole("tab", { name: label }));
-    const content = within(dialog).getByRole("tabpanel", { name: label });
-    expect(within(content).getByText(help)).toBeInTheDocument();
-    expect(
-      within(content).getByRole("link", { name: "OpenAPI" }),
-    ).toHaveAttribute("href", "/docs");
-    expect(
-      within(content).queryByRole("group", { name: "Mode" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(content).getByLabelText("Limit price (optional)"),
-    ).toBeInTheDocument();
-    await fillOrderFields(user, dialog);
-    expect(
-      await within(content).findByText("Preview: would pass"),
-    ).toBeInTheDocument();
-  });
+  ])(
+    "shows the own fields and help for %s",
+    async (label, help, priceLabel) => {
+      const user = userEvent.setup();
+      renderOrders("/orders");
+      const dialog = await openDialog(user, false);
+      await user.click(within(dialog).getByRole("tab", { name: label }));
+      const content = within(dialog).getByRole("tabpanel", { name: label });
+      expect(within(content).getByText(help)).toBeInTheDocument();
+      expect(
+        within(content).getByRole("link", { name: "OpenAPI" }),
+      ).toHaveAttribute("href", "/docs");
+      expect(
+        within(content).queryByRole("group", { name: "Mode" }),
+      ).not.toBeInTheDocument();
+      expect(within(content).getByLabelText(priceLabel)).toBeInTheDocument();
+      await fillOrderFields(user, dialog);
+      expect(
+        await within(content).findByText("Preview: would pass"),
+      ).toBeInTheDocument();
+    },
+  );
 
   it("shows the own drop-copy fields without a live check preview", async () => {
     const user = userEvent.setup();
@@ -1132,9 +1153,9 @@ describe("Orders submit mode", () => {
     expect(within(dialog).getByLabelText("Base asset")).toHaveValue("AAPL");
     expect(within(dialog).getByLabelText("Quote asset")).toHaveValue("USD");
     expect(within(dialog).getByLabelText("Amount")).toHaveValue("100");
-    expect(within(dialog).getByLabelText("Limit price (optional)")).toHaveValue(
-      "123",
-    );
+    expect(
+      within(dialog).getByLabelText("Limit price (required to settle)"),
+    ).toHaveValue("123");
     expect(within(dialog).getByRole("button", { name: "Buy" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -1159,6 +1180,10 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
     await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required to settle)"),
+      "100",
+    );
 
     const submitButton = within(dialog).getByRole("button", {
       name: /add order/i,
@@ -1215,6 +1240,10 @@ describe("Orders submit mode", () => {
     await user.click(
       within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required to settle)"),
+      "10",
+    );
 
     expect(
       within(dialog).getByRole("button", { name: /add order/i }),
@@ -1222,6 +1251,9 @@ describe("Orders submit mode", () => {
     expect(createOrderMock).not.toHaveBeenCalled();
 
     await user.click(within(dialog).getByRole("tab", { name: /^drop copy/i }));
+    await user.clear(
+      within(dialog).getByLabelText("Limit price (required for drop-copy)"),
+    );
     await user.type(
       within(dialog).getByLabelText("Limit price (required for drop-copy)"),
       "10",
@@ -1274,21 +1306,13 @@ describe("Orders submit mode", () => {
     const submit = within(dialog).getByRole("button", {
       name: /submit drop-copy/i,
     });
-    const price = within(dialog).getByLabelText(
+    await expectPriceRequired(
+      user,
+      dialog,
+      submit,
       "Limit price (required for drop-copy)",
+      /market orders cannot be submitted as drop-copy/i,
     );
-    expect(price).toHaveAttribute("placeholder", "required");
-    expect(
-      within(dialog).getByText(
-        /market orders cannot be submitted as drop-copy/i,
-      ),
-    ).toBeInTheDocument();
-    expect(submit).toBeDisabled();
-    await user.type(price, "0");
-    expect(submit).toBeDisabled();
-    await user.clear(price);
-    await user.type(price, "10");
-    expect(submit).toBeEnabled();
 
     await user.click(submit);
     expect(createOrderMock).not.toHaveBeenCalled();
@@ -1325,6 +1349,27 @@ describe("Orders submit mode", () => {
     expect(createOrderMock.mock.calls[0][1]).toBe("create");
   });
 
+  it("requires a positive limit price to submit and settle", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    await fillOrderFields(user, dialog);
+    await user.click(
+      within(dialog).getByRole("tab", { name: /submit and settle/i }),
+    );
+
+    const submit = within(dialog).getByRole("button", { name: /add order/i });
+    await expectPriceRequired(
+      user,
+      dialog,
+      submit,
+      "Limit price (required to settle)",
+      "Market orders cannot be settled on submit. Use Submit and wait instead.",
+    );
+    expect(createOrderMock).not.toHaveBeenCalled();
+  });
+
   it("offers to create a missing account for an immediate submit and resubmits with create", async () => {
     const user = userEvent.setup();
     createOrderMock.mockRejectedValueOnce(
@@ -1348,6 +1393,10 @@ describe("Orders submit mode", () => {
     await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
       within(dialog).getByRole("tab", { name: /submit and settle/i }),
+    );
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required to settle)"),
+      "100",
     );
     await user.click(
       within(dialog).getByRole("button", { name: /add order/i }),
@@ -1439,8 +1488,9 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Amount"), "0");
     await user.click(within(dialog).getByRole("button", { name: /buy/i }));
     await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
+    // The price is optional on hold; immediate requires it (tested apart).
     await user.click(
-      within(dialog).getByRole("tab", { name: /submit and settle/i }),
+      within(dialog).getByRole("tab", { name: /submit and wait/i }),
     );
 
     const submit = within(dialog).getByRole("button", { name: /add order/i });
@@ -1482,6 +1532,10 @@ describe("Orders submit mode", () => {
     await user.click(
       within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required to settle)"),
+      "100",
+    );
     await user.click(
       within(dialog).getByRole("button", { name: /add order/i }),
     );
@@ -1515,6 +1569,10 @@ describe("Orders submit mode", () => {
     await user.click(
       within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required to settle)"),
+      "100",
+    );
     await user.click(
       within(dialog).getByRole("button", { name: /add order/i }),
     );
@@ -1534,6 +1592,10 @@ describe("Orders submit mode", () => {
     await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
       within(dialog).getByRole("tab", { name: /submit and settle/i }),
+    );
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required to settle)"),
+      "100",
     );
 
     expect(
@@ -4288,7 +4350,7 @@ describe("Orders venue sending", () => {
     await user.type(within(dialog).getByLabelText("ID (optional)"), "client-9");
     await fillOrderFields(user, dialog);
     await user.type(
-      within(dialog).getByLabelText("Limit price (optional)"),
+      within(dialog).getByLabelText("Limit price (required to settle)"),
       "42.5",
     );
     await enablePaperSending(user, dialog);

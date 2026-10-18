@@ -322,7 +322,7 @@ func TestSubmitOrder_ForwardsCallerSuppliedID(t *testing.T) {
 	}
 	body := bytes.NewBufferString(
 		`{"id":"` + supplied.String() + `","account":"acc-1","baseAsset":"AAPL",` +
-			`"quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","mode":"immediate"}`)
+			`"quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"immediate"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {

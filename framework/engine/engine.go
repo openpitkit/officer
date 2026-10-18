@@ -164,9 +164,9 @@ type BalanceOutcome struct {
 
 // ImmediateResult is the outcome of one SubmitImmediate call. On accept the
 // reservation is committed and settled in the same call via an execution
-// report carrying the request quantity, request limit price (or the lock price
-// for a market order), and the original engine lock. On reject Rejects holds
-// the engine rejects and nothing settles.
+// report carrying the request quantity, the order's own price (an order
+// without a price is refused), and the original engine lock. On reject
+// Rejects holds the engine rejects and nothing settles.
 type ImmediateResult struct {
 	// Persistence is the authoritative execution-report write set produced by
 	// the same adapter path as a caller-driven execution report.
@@ -197,7 +197,7 @@ type ImmediateResult struct {
 	// FillQuantity is the request's base quantity settled by the immediate fill.
 	FillQuantity string
 	// TradePrice is the fill price recorded for the immediate order. It is the
-	// request limit price, or the engine lock price for a market order.
+	// order's own price; an order without a price is refused.
 	TradePrice string
 	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
 	Rejects []domain.OrderReject

@@ -81,7 +81,7 @@ func (e *openPitEngine) prepareImmediate(
 	if err != nil {
 		return fwengine.ImmediatePreparation{}, err
 	}
-	tradePrice, err := immediateTradePrice(o, settlement)
+	tradePrice, err := immediateTradePrice(o)
 	if err != nil {
 		return fwengine.ImmediatePreparation{}, err
 	}
@@ -228,17 +228,14 @@ func immediateReconciliationError(
 	)
 }
 
-func immediateTradePrice(o domain.Order, settlementLockPrice string) (string, error) {
-	if o.Price != "" {
-		return o.Price, nil
-	}
-	if settlementLockPrice == "" {
+func immediateTradePrice(o domain.Order) (string, error) {
+	if o.Price == "" {
 		return "", fmt.Errorf(
-			"engine: market immediate order has no lock price: %w",
+			"engine: immediate order has no price to settle at: %w",
 			domain.ErrInvalid,
 		)
 	}
-	return settlementLockPrice, nil
+	return o.Price, nil
 }
 
 func orderExternalIDForError(id domain.ExternalID) string {

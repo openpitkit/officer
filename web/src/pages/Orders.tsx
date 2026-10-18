@@ -926,13 +926,16 @@ function SubmitOrderDialog({
     }
     if (
       !isOptionalPositiveDecimalString(price) ||
-      (tab === "drop_copy" && !isPositiveDecimalString(price))
+      ((tab === "drop_copy" || tab === "immediate") &&
+        !isPositiveDecimalString(price))
     ) {
       setError(
         t(
           tab === "drop_copy"
             ? "addOrder.dialog.dropCopyPriceRequired"
-            : "addOrder.dialog.validationError",
+            : tab === "immediate"
+              ? "addOrder.dialog.immediatePriceRequired"
+              : "addOrder.dialog.validationError",
         ),
       );
       return;
@@ -1013,7 +1016,9 @@ function SubmitOrderDialog({
 
   // Every required choice must be made before the order can be submitted; the
   // button stays disabled until then so nothing slips through without a mode.
-  const dropCopyPriceRequired = tab === "drop_copy";
+  // Immediate books its fill at the order's own price; drop-copy needs a limit
+  // price because the engine cannot value a market order that already executed.
+  const priceRequired = tab === "drop_copy" || tab === "immediate";
   const commonFieldsValid =
     account.trim() !== "" &&
     baseAsset.trim() !== "" &&
@@ -1021,7 +1026,7 @@ function SubmitOrderDialog({
     amountValue.trim() !== "" &&
     isPositiveDecimalString(amountValue) &&
     isOptionalPositiveDecimalString(price) &&
-    (!dropCopyPriceRequired || isPositiveDecimalString(price)) &&
+    (!priceRequired || isPositiveDecimalString(price)) &&
     side !== "";
   const canSubmit =
     tab === "venue"
@@ -1361,9 +1366,11 @@ function SubmitOrderDialog({
       <div className="space-y-1.5">
         <Label htmlFor="so-price">
           {t(
-            dropCopyPriceRequired
+            tab === "drop_copy"
               ? "addOrder.dialog.limitPriceDropCopy"
-              : "addOrder.dialog.limitPrice",
+              : tab === "immediate"
+                ? "addOrder.dialog.limitPriceImmediate"
+                : "addOrder.dialog.limitPrice",
           )}
         </Label>
         <NumberStepper
@@ -1371,7 +1378,7 @@ function SubmitOrderDialog({
           value={price}
           onChange={setPrice}
           placeholder={t(
-            dropCopyPriceRequired
+            priceRequired
               ? "addOrder.dialog.limitPriceDropCopyPlaceholder"
               : "addOrder.dialog.limitPricePlaceholder",
           )}
@@ -1380,9 +1387,13 @@ function SubmitOrderDialog({
           onClear={() => setPrice("")}
           clearLabel={tc("filters.clearField")}
         />
-        {dropCopyPriceRequired && (
+        {priceRequired && (
           <p className="text-xs text-muted">
-            {t("addOrder.dialog.limitPriceDropCopyHint")}
+            {t(
+              tab === "drop_copy"
+                ? "addOrder.dialog.limitPriceDropCopyHint"
+                : "addOrder.dialog.limitPriceImmediateHint",
+            )}
           </p>
         )}
       </div>

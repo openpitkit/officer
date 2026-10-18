@@ -8225,8 +8225,11 @@ components:
             mode:
               type: string
               description: >
-                Submit mode. `immediate` commits and settles at the lock
-                price; `hold` waits for execution reports.
+                Submit mode. `immediate` commits and settles at the order's
+                own `price` and requires it: an order without `price` is
+                refused with 422 (constraint `required` at `/price`) before
+                the order is recorded or the account is created; the refused
+                attempt is audited. `hold` waits for execution reports.
               enum: [immediate, hold]
       unevaluatedProperties: false
 

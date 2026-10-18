@@ -735,8 +735,8 @@ type submitOrderInput struct {
 	Side        string `json:"side" jsonschema:"buy or sell"`
 	AmountKind  string `json:"amountKind" jsonschema:"quantity or volume"`
 	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
-	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
-	Mode        string `json:"mode" jsonschema:"Required: immediate commits and settles at the lock price, hold waits for execution reports"`
+	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; required for immediate, omit for a market order in hold"`
+	Mode        string `json:"mode" jsonschema:"Required: immediate commits and settles at the order price and requires price, hold waits for execution reports"`
 	ExternalID  string `json:"id,omitempty" jsonschema:"Optional caller-supplied unique order id; omit to have the server generate one"`
 
 	MissingAccount string `json:"missingAccount" jsonschema:"Required: create to register an account that does not exist yet, reject to fail the submit instead"`

@@ -616,6 +616,14 @@ func (n *localNode) submitImmediate(
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
+	// An immediate fill is booked at the order's own price, so an order without
+	// one is refused before anything is written or reserved.
+	if o.Price == "" {
+		return domain.Order{}, engine.ImmediateResult{},
+			domain.NewValidationError("/price", "required",
+				"submit immediate: price is required because an immediate "+
+					"order settles at its own price and a market order has none")
+	}
 	// Resolve the account and register both order assets before converting the
 	// chain source (see SubmitOrder).
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(

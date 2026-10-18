@@ -421,12 +421,13 @@ type Node interface {
 	) (domain.Order, engine.OrderResult, error)
 
 	// SubmitImmediate records the order, runs the engine pre-trade and, on accept,
-	// commits and settles the fill in the same engine call at the captured lock
+	// commits and settles the fill in the same engine call at the order's own
 	// price, persists the lifecycle (filled on accept, rejected on reject), and
-	// returns the recorded order with the engine immediate result. missing follows
-	// SubmitOrder. It does not audit the submission itself - the backend audits
-	// approval_issued - but it audits the settled execution report and any
-	// engine block the fill raised.
+	// returns the recorded order with the engine immediate result. An order
+	// without a price is refused with a validation error before anything is
+	// written. missing follows SubmitOrder. It does not audit the submission
+	// itself - the backend audits approval_issued - but it audits the settled
+	// execution report and any engine block the fill raised.
 	SubmitImmediate(
 		ctx context.Context, o domain.Order,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
