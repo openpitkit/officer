@@ -15,12 +15,13 @@
 #
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
-# Publishes the `serve` image to GHCR: a release from version tags on `main`,
-# and a dry run from a dispatch on the `release-dry-run` branch.
+# Publishes the `serve` image to GHCR after CI on `main`, from version tags,
+# and from a dry-run dispatch on the `release-dry-run` branch.
 
 name: Release image
 
 on:
+  workflow_call:
   push:
     tags: ['v*.*.*']
   workflow_dispatch:
@@ -34,9 +35,8 @@ on:
 permissions:
   contents: read
 
-# Each run ranks the tags it sees when it starts, so an overlapping run could
-# move `latest` back. Runs go one at a time; `queue: max` keeps every pending
-# release waiting instead of replacing it with the next one.
+# Runs go one at a time; `queue: max` keeps every pending image publication
+# waiting instead of replacing it with the next one.
 concurrency:
   group: release-image
   cancel-in-progress: false
@@ -46,10 +46,9 @@ jobs:
   publish:
     name: Publish image (ghcr.io/openpitkit/officer)
     runs-on: ubuntu-latest
-    # Every run but a dispatch waits for approval in the protected `release`
-    # environment. It admits only `v*` tags, so the dispatch, which the mode
-    # step holds to the dry run, gets an empty name and binds no environment.
-    environment: ${{ github.event_name != 'workflow_dispatch' && 'release' || '' }}
+    # Version tags wait for approval in the protected `release` environment.
+    # Main CI and the dry-run dispatch bind no environment.
+    environment: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && 'release' || '' }}
     permissions:
       contents: read
       packages: write
@@ -62,6 +61,7 @@ jobs:
       - name: Check out officer
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       # A dispatched run is always a dry run: it publishes one test image under
@@ -74,7 +74,18 @@ jobs:
         run: |
           case "$GITHUB_EVENT_NAME" in
             push)
-              echo "release_mode=production" >> "$GITHUB_OUTPUT"
+              case "$GITHUB_REF" in
+                refs/heads/main)
+                  echo "release_mode=main" >> "$GITHUB_OUTPUT"
+                  ;;
+                refs/tags/v*)
+                  echo "release_mode=production" >> "$GITHUB_OUTPUT"
+                  ;;
+                *)
+                  echo "::error::image publication requires main or a version tag"
+                  exit 1
+                  ;;
+              esac
               ;;
             workflow_dispatch)
               if [[ "$GITHUB_REF" != refs/heads/release-dry-run ]]; then
@@ -161,8 +172,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Stable versions always get X.Y.Z; moving tags follow the rank outputs.
-      # A dry run gets only its own tag.
+      # Main CI publishes latest and the checked commit's full SHA.
+      # Version tags follow the rank outputs; a dry run gets only its own tag.
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -170,9 +181,10 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=semver,pattern={{version}},enable=${{ steps.mode.outputs.release_mode == 'production' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ steps.rank.outputs.minor == 'true' }}
-            type=raw,value=latest,enable=${{ steps.rank.outputs.latest == 'true' }}
+            type=raw,value=latest,enable=${{ steps.mode.outputs.release_mode == 'main' || steps.rank.outputs.latest == 'true' }}
+            type=sha,format=long,enable=${{ steps.mode.outputs.release_mode == 'main' }}
             type=raw,value=${{ steps.mode.outputs.dry_run_tag }},enable=${{ steps.mode.outputs.release_mode == 'dry-run' }}
 
       - name: Require only the dry-run tag
