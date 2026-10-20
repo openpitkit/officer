@@ -25,13 +25,21 @@ import (
 
 const (
 	unsupportedMediaTypeRef = "#/components/responses/UnsupportedMediaTypeError"
+	unauthorizedResponse    = "        \"401\":\n          $ref: \"#/components/responses/UnauthorizedError\"\n"
 	foreignHostResponse     = "        \"403\":\n          $ref: \"#/components/responses/ForeignHostError\"\n"
 	mediaTypeResponse       = "        \"415\":\n          $ref: \"" + unsupportedMediaTypeRef + "\"\n"
+	// bearerSecurity is the global requirement of the API token.
+	bearerSecurity = "\nsecurity:\n  - bearerAuth: []\n"
+	// bearerScheme opens the security scheme of the API token.
+	bearerScheme = "\n  securitySchemes:\n    bearerAuth:\n      type: http\n      scheme: bearer\n"
 )
 
-// TestOpenAPIBrowserGuardsContract holds the browser-guard refusals every
-// operation documents: the Host guard answers every operation, the Origin and
-// JSON-body guards answer the unsafe ones only.
+// TestOpenAPIBrowserGuardsContract holds the refusals every operation
+// documents before its handler runs: the access resolver's 401 and its 403
+// wrong_token, which answer every operation in token mode; the Host guard,
+// which answers every operation; and the Origin and JSON-body guards, which
+// answer the unsafe ones only. The API token's security scheme is required
+// globally.
 func TestOpenAPIBrowserGuardsContract(t *testing.T) {
 	safe, unsafe, problems := browserGuardProblems(string(openapiSpec))
 	if len(problems) > 0 {
@@ -55,6 +63,22 @@ func TestOpenAPIBrowserGuardsContractBites(t *testing.T) {
 		want string
 	}{
 		{"empty spec", "", "no operations found"},
+		{"GET without 401", editOperation(t, spec, getStatus, unauthorizedResponse, ""),
+			"GET /status: no 401 response"},
+		{"POST without 401", editOperation(t, spec, postExport, unauthorizedResponse, ""),
+			"POST /backup/export: no 401 response"},
+		{"401 to a missing component", editOperation(t, spec, getStatus, "UnauthorizedError", "UnauthorizedErrors"),
+			"GET /status: 401 references missing components/responses/UnauthorizedErrors"},
+		{"401 without the challenge", strings.Replace(spec, "        WWW-Authenticate:\n", "        X-Challenge:\n", 1),
+			"components/responses/UnauthorizedError does not name WWW-Authenticate"},
+		{"403 without wrong_token", strings.Replace(spec,
+			"(`host_not_allowed`), or it carries the agent token, which is accepted\n        only on `/mcp` (`wrong_token`).",
+			"(`host_not_allowed`).", 1),
+			"GET /status: 403 does not name wrong_token"},
+		{"no global security", strings.Replace(spec, bearerSecurity, "\n", 1),
+			"no global bearerAuth security requirement"},
+		{"no bearer scheme", strings.Replace(spec, bearerScheme, "\n", 1),
+			"no components/securitySchemes/bearerAuth bearer scheme"},
 		{"GET without 403", editOperation(t, spec, getStatus, foreignHostResponse, ""),
 			"GET /status: no 403 response"},
 		{"POST without 415", editOperation(t, spec, postExport, mediaTypeResponse, ""),
@@ -114,6 +138,18 @@ func browserGuardProblems(spec string) (safe, unsafe int, problems []string) {
 	if !strings.Contains(components["UnsupportedMediaTypeError"], "unsupported_media_type") {
 		problems = append(problems, "components/responses/UnsupportedMediaTypeError does not name unsupported_media_type")
 	}
+	for _, name := range []string{"`unauthorized`", "WWW-Authenticate:"} {
+		if !strings.Contains(components["UnauthorizedError"], name) {
+			problems = append(problems, "components/responses/UnauthorizedError does not name "+
+				strings.Trim(name, "`:"))
+		}
+	}
+	if !strings.Contains(spec, bearerSecurity) {
+		problems = append(problems, "no global bearerAuth security requirement")
+	}
+	if !strings.Contains(spec, bearerScheme) {
+		problems = append(problems, "no components/securitySchemes/bearerAuth bearer scheme")
+	}
 	for _, operation := range openAPIOperations(spec) {
 		isSafe := operation.Method == "GET" || operation.Method == "HEAD" || operation.Method == "OPTIONS"
 		if isSafe {
@@ -143,8 +179,8 @@ func browserGuardProblems(spec string) (safe, unsafe int, problems []string) {
 	return safe, unsafe, problems
 }
 
-// operationGuardProblems checks the 403 and 415 responses of one operation,
-// given the lines nested under its method key.
+// operationGuardProblems checks the 401, 403 and 415 responses of one
+// operation, given the lines nested under its method key.
 func operationGuardProblems(name string, safe bool, operation []string, components map[string]string) []string {
 	var responses map[string]string
 	for i, line := range operation {
@@ -153,14 +189,28 @@ func operationGuardProblems(name string, safe bool, operation []string, componen
 		}
 	}
 	var problems []string
+	unauthorized, hasUnauthorized := responses["401"]
+	unauthorized, missing := resolveResponse(unauthorized, components)
+	switch {
+	case !hasUnauthorized:
+		problems = append(problems, name+": no 401 response")
+	case missing != "":
+		problems = append(problems, name+": 401 references missing components/responses/"+missing)
+	case !strings.Contains(unauthorized, "`unauthorized`"):
+		problems = append(problems, name+": 401 does not name unauthorized")
+	}
 	forbidden, hasForbidden := responses["403"]
-	forbidden, missing := resolveResponse(forbidden, components)
+	forbidden, missing = resolveResponse(forbidden, components)
 	if !hasForbidden {
 		problems = append(problems, name+": no 403 response")
 	} else if missing != "" {
 		return append(problems, name+": 403 references missing components/responses/"+missing)
-	} else if !strings.Contains(forbidden, "host_not_allowed") {
-		problems = append(problems, name+": 403 does not name host_not_allowed")
+	} else {
+		for _, code := range []string{"host_not_allowed", "wrong_token"} {
+			if !strings.Contains(forbidden, code) {
+				problems = append(problems, name+": 403 does not name "+code)
+			}
+		}
 	}
 	unsupported, hasUnsupported := responses["415"]
 	if safe {

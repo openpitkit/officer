@@ -605,7 +605,7 @@ func TestOpenAPITradingContract(t *testing.T) {
 	for _, operation := range openAPIOperations(spec) {
 		paths[operation.Method+" "+operation.Path] = true
 	}
-	for _, route := range NewRouteRegistry(&fakeService{}, nil).Routes() {
+	for _, route := range NewRouteRegistry(&fakeService{}, nil, noSealReport).Routes() {
 		if strings.HasPrefix(route.Pattern, "/trading") || strings.HasSuffix(route.Pattern, "/trading-destinations") {
 			if !paths[route.Method+" "+route.Pattern] {
 				t.Fatalf("undocumented route: %s %s", route.Method, route.Pattern)
@@ -684,10 +684,20 @@ func TestOpenAPITradingContract(t *testing.T) {
 }
 
 // jsonMembers lists the JSON member names of a struct type, sorted: the ones
-// encoded always, without omitempty, and all of them.
+// encoded always, without omitempty, and all of them. An embedded struct
+// without a JSON tag contributes its own members, as encoding/json flattens
+// it.
 func jsonMembers(typ reflect.Type) (required, properties []string) {
 	for i := 0; i < typ.NumField(); i++ {
-		name, options, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		field := typ.Field(i)
+		tag := field.Tag.Get("json")
+		if field.Anonymous && tag == "" && field.Type.Kind() == reflect.Struct {
+			embeddedRequired, embeddedProperties := jsonMembers(field.Type)
+			required = append(required, embeddedRequired...)
+			properties = append(properties, embeddedProperties...)
+			continue
+		}
+		name, options, _ := strings.Cut(tag, ",")
 		properties = append(properties, name)
 		if options != "omitempty" {
 			required = append(required, name)

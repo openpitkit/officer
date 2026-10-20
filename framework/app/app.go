@@ -79,9 +79,12 @@ type RouteConfig struct {
 	PanelRoutes *httpx.RouteRegistry
 	BodyLimit   func(*http.Request) int64
 	ExtraMounts []httpx.ExtraMount
-	// AccessMode is the access state the route manifest reports; the router
-	// refuses a value that is not an httpx.AccessMode constant.
-	AccessMode httpx.AccessMode
+	// AccessMode reports the access state of the service. The router calls it
+	// on every route manifest request, concurrently from request goroutines,
+	// so it must be safe for concurrent use. A value that is not an
+	// httpx.AccessMode constant answers an internal error; the router refuses
+	// a nil one.
+	AccessMode func() httpx.AccessMode
 }
 
 // RouteConfigBuilder builds the HTTP route registry for a service.
@@ -140,6 +143,14 @@ func (b *Builder) SetServiceFactory(factory ServiceFactory) {
 // SetRouteConfigBuilder sets the HTTP route registration hook.
 func (b *Builder) SetRouteConfigBuilder(builder RouteConfigBuilder) {
 	b.routeConfig = builder
+}
+
+// RouteConfigBuilder returns the HTTP route registration hook currently set,
+// nil when none is. A host wraps it to extend the surface a composition
+// installed - its routes, mounts or access mode - instead of rebuilding that
+// surface, and sets the wrapper with SetRouteConfigBuilder.
+func (b *Builder) RouteConfigBuilder() RouteConfigBuilder {
+	return b.routeConfig
 }
 
 // AddToolRegistrar appends an MCP tool registration hook.

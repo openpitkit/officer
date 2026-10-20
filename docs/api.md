@@ -1,22 +1,35 @@
 # API notes
 
 What a client needs beyond the endpoint reference: where the surface is mounted,
-what it answers with, and the two error shapes.
+what credentials it takes, what it answers with, and the two error shapes.
 
 ## Mount points
 
 REST is mounted at `/api/v1`. A mirror at `/app/api/v1` is reserved for the
-operator panel. The two carry the same routes except the route manifest, which
-is published only on `/api/v1`; otherwise they differ only in the source stamped
-on the audit record. Outside them, MCP over HTTP is mounted at `/mcp`, liveness
+operator panel. The two carry the same REST routes except the route manifest,
+which is published only on `/api/v1`; otherwise they differ only in the
+credential they take and the source stamped on the audit record. `/app/api/v1`
+also carries the panel's own access routes (see Panel access), which are not in
+the OpenAPI document. Outside them, MCP over HTTP is mounted at `/mcp`, liveness
 at `/healthz`, the OpenAPI document at `/api/openapi.yaml`, its docs page at
 `/docs`, and the Swagger UI files under `/docs/` (`GET` only). The dashboard
 answers `GET` and `HEAD` on every other path; any other standard method there
 answers `404` `not_found`.
 
+In the `open` access mode no mount takes credentials. In `token` each takes one
+(see Authorization in the [configuration reference](configuration.md)):
+
+- `/api/v1` - the API token, `Authorization: Bearer pit_api_...`;
+- `/mcp` - the agent token, `Authorization: Bearer pit_mcp_...`;
+- `/app/api/v1` - the panel session cookie, which signing in sets; a bearer
+  token is not read there, and the cookie is not read on the other two;
+- liveness, the OpenAPI document, the docs page and its files, the dashboard,
+  and the public panel access routes - none.
+
 ## Discovering the surface
 
-The OpenAPI 3.1 document describes the `/api/v1` surface. It is served at
+The OpenAPI 3.1 document describes the `/api/v1` surface, the API token
+included as its `bearerAuth` scheme. It is served at
 `/api/openapi.yaml` and browsable at `/docs`. It is hand-written and embedded in
 the binary, and what lives outside `/api/v1` - liveness, the document itself,
 the docs page, MCP over HTTP - is not in it.
@@ -28,12 +41,18 @@ Officer's own origin. The document at `/api/openapi.yaml` is served from the
 binary and needs nothing.
 
 The route manifest, `GET /api/v1/route-manifest.json`, lists every mounted
-route - the REST routes on `/api/v1` and `/app/api/v1`, MCP over HTTP,
-liveness, the document, the docs page and its files, and the dashboard - with
-its full path and the access it requires (`public`, `api`, `agent`, or
-`panel`), and the service's `accessMode`. Officer reports `open`: no route asks
-for credentials, and the browser checks under Errors still apply. The REST
-entries are filtered for the caller; the others are listed for every caller.
+route - the REST routes on `/api/v1` and `/app/api/v1`, the panel access routes,
+MCP over HTTP, liveness, the document, the docs page and its files, and the
+dashboard - with its full path and the access it requires in `token` mode
+(`public`, `api`, `agent`, or `panel`), and the service's `accessMode`, the
+mode in force at the request: `open` or `token`. An entry under `/app/api/v1`
+carries `duringSetup: true` when its route answers before first-run setup
+completes; this build has no setup state, so nothing acts on it. The REST
+entries and the panel access routes that are not public are filtered for the
+caller; the others are listed for every caller. The manifest itself requires
+`api` access, so in `token` mode a request without the API token answers `401`
+`unauthorized`; the public `GET /app/api/v1/session` answers the mode without
+credentials.
 
 ## Media types
 
@@ -57,8 +76,8 @@ Two shapes, decided by what failed:
 - Every other error answers `application/json` with
   `{"error": {"code": "...", "message": "..."}}`.
 
-Three browser checks refuse a request before it reaches a handler, in the
-second shape:
+Three browser checks refuse a request in either access mode, before its
+credentials are read and before it reaches a handler, in the second shape:
 
 - `403` `host_not_allowed` - the `Host` header names a host Officer does not
   answer to; see `PIT_OFFICER_ALLOWED_HOSTS` in the
@@ -70,6 +89,73 @@ second shape:
   `Origin` passes.
 - `415` `unsupported_media_type` - a request other than `GET`, `HEAD`, or
   `OPTIONS` carries a body not declared as JSON (see Media types).
+
+In `token` mode the credential check refuses a request next, in the second
+shape. MCP over HTTP answers it as this HTTP error, before any JSON-RPC.
+
+- `401` `unauthorized` - no credential, or one Officer does not accept: an
+  unknown token, a missing or ended session. On `/api/v1` and `/mcp` it carries
+  `WWW-Authenticate: Bearer realm="pit-officer"`; on `/app/api/v1` it carries
+  none.
+- `403` `wrong_token` - the other surface's token: the agent token on
+  `/api/v1`, the API token on `/mcp`. The message names the surface the token
+  belongs to.
+
+The panel access routes (see Panel access) add their own, in the second shape:
+
+- `401` `invalid_password` - a wrong password on sign-in, with `Retry-After`;
+- `429` `too_many_attempts`, with `Retry-After` - a sign-in during the delay
+  after a failed one, which doubles from 1 to 30 seconds and is shared by all
+  clients; a recovery request less than a minute after the last code was
+  issued, when no code is valid;
+- `401` `invalid_recovery_code` - a wrong recovery code, or no valid one;
+- `403` `current_password_invalid` - a wrong current password on a switch to
+  `open` or a password change; the session stays signed in;
+- `409` `conflict` - a route `open` mode does not serve (sign-in, both recovery
+  routes, the token routes, and the password change), or a switch to the mode
+  already in force.
+
+`Retry-After` is the number of seconds until the next attempt is accepted.
+
+## Panel access
+
+The panel's own access routes are mounted only under `/app/api/v1` and are not
+in the OpenAPI document. Paths below are relative to that prefix.
+`GET /session`, `POST /session`, and the two recovery routes are public; the
+rest take the panel session in `token` mode.
+
+- `GET /session` - `{accessMode, setupComplete, authenticated}`;
+  `setupComplete` is `true`, and `authenticated` is whether the request carries
+  a live session, always `false` in `open`.
+- `POST /session` - sign in with `{password}`; sets the session cookie.
+- `DELETE /session` - sign out; clears the cookie.
+- `DELETE /sessions` - end every session; clears the cookie.
+- `POST /session/recovery` - print a recovery code to Officer's standard error
+  (see Authorization in the [configuration reference](configuration.md));
+  answers `{issued, expiresAt}`, with `issued` `false` and that code's expiry
+  while an earlier code is still valid.
+- `POST /session/recovery/reset` - `{code, password}`: set the password with
+  the code; ends every session and sets a new cookie.
+- `GET /access` - `{mode, passwordSetAt, sessions}`; `passwordSetAt` is `null`
+  in `open`, `sessions` the number of live sessions.
+- `PUT /access/mode` - `{"mode": "token", "password": "..."}` sets the password,
+  issues both tokens and sets the cookie;
+  `{"mode": "open", "currentPassword": "...", "acknowledged": true}` deletes the
+  password, both tokens and every session and clears the cookie.
+- `PUT /access/password` - `{currentPassword, password}`; ends every other
+  session.
+- `GET /access/tokens/{kind}` - `{token}`, the current value; `kind` is `api`
+  or `agent`.
+- `POST /access/tokens/{kind}/regenerate` - `{token}`, a new value; the old one
+  stops working at once.
+
+A new password - `password` in `PUT /access/mode` to `token`, in
+`PUT /access/password`, and in `POST /session/recovery/reset` - is 15 to 256
+characters, and one outside that range answers `422` `validation`; a sign-in
+password and `currentPassword` are only compared with the stored one. The
+session cookie is `pit_officer_session`, set with
+`Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000`. A session ends 30 days
+after sign-in or 7 days after its last request, and survives a restart.
 
 ## Values
 
@@ -269,7 +355,10 @@ market-data credentials. Modes are `paper` and `live`; live connection creation
 is refused until the live-trading token exists. `GET /credential-storage` and
 the MCP tool `get_credential_storage` report whether stored credentials are
 sealed under the master key and, when they are not, whether trading connections
-or market-data sources hold keys in plain text.
+or market-data sources hold keys in plain text. `GET /credential-storage` also
+reports `sealedAt`, when the database was sealed, and `resealedSecrets`, how
+many stored secret values that sealing re-sealed - `null` and `0` for a
+database never sealed; the MCP tool reports neither.
 An instrument mapping whose base or quote asset Officer does not know is refused
 with `asset_missing`, naming the asset; Officer never creates the asset itself.
 

@@ -41,9 +41,56 @@ The run mode is not configured here - it comes from the subcommand.
 
 ## Authorization
 
-There is no authentication in front of the panel, the API, or MCP-over-HTTP:
-Pit Officer authorizes every request that passes three checks, made before
-the request reaches a handler:
+Pit Officer runs in one of two access modes. The mode is kept in the database,
+not in the environment: a new database starts in `open`, and so does the one
+`POST /database/reset` recreates; the operator switches the mode with
+`PUT /app/api/v1/access/mode` while Officer runs, with no restart. A backup
+carries no access state, so a restore keeps the mode, the password, the tokens,
+and the sessions.
+
+- **`open`** - no surface asks for credentials: Officer authorizes every
+  request that passes the browser checks below.
+- **`token`** - each HTTP surface admits only its own credential: the REST API
+  on `/api/v1` the API token, `pit_api_...`; MCP over HTTP on `/mcp` the agent
+  token, `pit_mcp_...`; the panel's API on `/app/api/v1` a session that
+  signing in with the panel password (`POST /app/api/v1/session`) opens. A
+  token is sent as `Authorization: Bearer <token>`. The other surface's token
+  is refused with `403` `wrong_token`, a missing or unknown credential with
+  `401` `unauthorized`.
+
+Switching to `token` sets the panel password, 15 to 256 characters, and issues
+both tokens. `GET /app/api/v1/access/tokens/{kind}` answers a token and
+`POST /app/api/v1/access/tokens/{kind}/regenerate` reissues it; a reissued token
+replaces the old one at once. Switching to `open` deletes the password, both
+tokens, and every session. The stdio `mcp` subcommand asks for no credentials
+in either mode. The bodies of these routes are in
+[Panel access](api.md#panel-access) in the API notes.
+
+This build's dashboard has no screen for signing in, recovery, the mode, or the
+tokens: in `token` mode, without a session, each request it makes to
+`/app/api/v1` answers `401` `unauthorized`, which it handles like any other
+failed request.
+
+A forgotten panel password is reset with a one-time recovery code:
+`POST /app/api/v1/session/recovery` asks for one, and
+`POST /app/api/v1/session/recovery/reset` sets a new password with it. Officer
+prints the code to its standard error - under Docker the container log
+(`docker logs pit-officer` for the container the [quickstart](quickstart.md)
+starts), otherwise the terminal running `pit-officer serve`:
+
+```text
+Pit Officer panel recovery code: XXXX-XXXX-XXXX (single use, valid 15 minutes)
+```
+
+The code is written there and nowhere else: neither the service log the panel
+shows, nor the audit record, nor any response carries it. It is valid for 15
+minutes and one use; five wrong attempts, a password change, or a restart void
+it. While a code is valid, a new request issues no other, and a new code is
+issued at most once a minute. A reset with the code ends every session and
+leaves both tokens as they are.
+
+In both modes every request first passes three checks, made before credentials
+are read and before the request reaches a handler:
 
 - the `Host` header must name an allowed host (see below), or the request is
   refused with `403` `host_not_allowed`;
@@ -140,7 +187,9 @@ for printing the URLs without opening anything. That flag belongs to
 `PIT_OFFICER_MASTER_KEY` and `PIT_OFFICER_MASTER_KEY_FILE` supply the key that
 seals stored secrets at rest. The value is exactly 32 bytes in standard base64,
 in the variable itself or in the named file. Officer never generates, stores, or
-recovers it; the operator supplies it whole.
+recovers it; the operator supplies it whole. The access tokens and the panel
+password hash (see Authorization) are stored secrets too, sealed like the
+others.
 
 The key has no command-line flag of its own, deliberately: process arguments are
 visible to other local processes. Only the _path_ to a key file is a flag.
@@ -155,24 +204,29 @@ signing key is refused with `master_key_required` (HTTP 409), and the panel's
 Signing Keys screen says why. To enable signing, configure the key and restart
 Officer.
 
-Startup resolves to one of six states:
+Startup resolves to one of seven states:
 
-- **Unsealed database, no key** - trading and market-data credentials are stored
-  as plaintext; an approval signing private key is never stored. This is the
-  default.
+- **Unsealed database, no key** - trading and market-data credentials and the
+  access tokens are stored as plaintext; an approval signing private key is
+  never stored. This is the default.
 - **Unsealed database holding an approval signing private key in the clear, no
   key** - Officer refuses to start. Only an earlier build could have written
   that key. Start Officer with the master key, which seals the key in place -
   it must then be considered exposed and reissued - or start from a new
   database.
 - **Unsealed database, key supplied** - the database is sealed, then vacuumed.
-  For a database that already existed, Officer logs that previously stored
-  secrets must be considered exposed and should be reissued: they were on disk
-  in the clear, and sealing cannot undo that.
+  When sealing re-sealed at least one stored secret value, an empty credential
+  not counted, Officer logs that previously stored secrets must be considered
+  exposed and should be reissued: they were on disk in the clear, and sealing
+  cannot undo that.
 - **Sealed database, matching key** - Officer starts with stored secrets
   sealed. If an earlier sealing never recorded its vacuum, the database is
-  vacuumed first, and Officer logs that previously stored secrets must be
-  considered exposed and should be reissued.
+  vacuumed first, and Officer logs the same warning when that sealing
+  re-sealed at least one stored secret value.
+- **Sealed database without a seal report, matching key** - Officer refuses to
+  start and asks for the database to be recreated. Sealing records when it ran
+  and how many values it re-sealed; only an earlier build could have sealed a
+  database without that record.
 - **Sealed database, no key** - Officer refuses to start.
 - **Sealed database, wrong key** - Officer refuses to start.
 

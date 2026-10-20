@@ -120,6 +120,25 @@ var (
 	ErrLoosening = registerSentinel(errors.New(
 		"an agent may only tighten, never loosen",
 	))
+	// ErrUnauthorized marks a request without accepted credentials: no token or
+	// panel session, or one that is unknown or expired.
+	ErrUnauthorized = registerSentinel(errors.New("missing or invalid token or session"))
+	// ErrInvalidPassword marks a panel sign-in with a wrong password.
+	ErrInvalidPassword = registerSentinel(errors.New("invalid password"))
+	// ErrInvalidRecoveryCode marks a password recovery with a wrong or expired
+	// recovery code.
+	ErrInvalidRecoveryCode = registerSentinel(errors.New("invalid or expired recovery code"))
+	// ErrCurrentPasswordInvalid marks a password change whose current password
+	// is wrong. The session itself is valid, so it is a refusal, not a missing
+	// authentication.
+	ErrCurrentPasswordInvalid = registerSentinel(errors.New("current password is invalid"))
+	// ErrWrongToken marks a valid token presented on a surface it was not issued
+	// for. The surface layer answers with the full error text, so the wrapper
+	// names the surface the token belongs to and never carries the token.
+	ErrWrongToken = registerSentinel(errors.New("token issued for another surface"))
+	// ErrTooManyAttempts marks a credential check refused because too many
+	// recent attempts failed.
+	ErrTooManyAttempts = registerSentinel(errors.New("too many attempts"))
 	// ErrTooLarge marks an input that exceeds a hard server-side size limit.
 	// HTTP surfaces map it to 413 so callers can split bulk payloads instead of
 	// retrying the same request.
@@ -561,6 +580,13 @@ const (
 	AuditActionApprovalFailed    AuditAction = "approval_failed"
 	AuditActionApprovalConfirmed AuditAction = "approval_confirmed"
 	AuditActionApprovalCancelled AuditAction = "approval_cancelled"
+
+	// Access control.
+	AuditActionSetAccessMode     AuditAction = "set_access_mode"
+	AuditActionIssueAccessToken  AuditAction = "issue_access_token"
+	AuditActionSetPanelPassword  AuditAction = "set_panel_password"
+	AuditActionIssueRecoveryCode AuditAction = "issue_recovery_code"
+	AuditActionUseRecoveryCode   AuditAction = "use_recovery_code"
 )
 
 // AuditCategory groups audit actions by operator relevance. Trading actions are
@@ -635,6 +661,11 @@ func AllAuditActions() []AuditAction {
 		AuditActionApprovalFailed,
 		AuditActionApprovalConfirmed,
 		AuditActionApprovalCancelled,
+		AuditActionSetAccessMode,
+		AuditActionIssueAccessToken,
+		AuditActionSetPanelPassword,
+		AuditActionIssueRecoveryCode,
+		AuditActionUseRecoveryCode,
 		AuditActionSubmitOrder,
 		AuditActionSubmitDropCopy,
 		AuditActionExecutionReport,

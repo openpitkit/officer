@@ -42,19 +42,27 @@ func fakeSPA() fs.FS {
 }
 
 func newRouter(svc backend.ControlPlane) (http.Handler, error) {
+	return newRouterOver(svc, nil, noSealReport)
+}
+
+// newRouterOver builds the router over svc with the log tail logs, nil for
+// none, and the seal reports of sealReports.
+func newRouterOver(
+	svc backend.ControlPlane, logs httpx.LogSource, sealReports SealReportSource,
+) (http.Handler, error) {
 	guards, err := testGuards()
 	if err != nil {
 		return nil, err
 	}
 	return httpx.NewRouter(httpx.RouterConfig{
-		Routes:         NewRouteRegistry(svc, nil),
+		Routes:         NewRouteRegistry(svc, logs, sealReports),
 		Authorizer:     httpx.AllowAll{},
 		CallerResolver: testCallerResolver,
 		SPA:            fakeSPA(),
 		BodyLimit:      BodyLimitPolicy(),
 		ExtraMounts:    ExtraMounts(),
 		Guards:         guards,
-		AccessMode:     httpx.AccessModeOpen,
+		AccessMode:     func() httpx.AccessMode { return httpx.AccessModeOpen },
 	})
 }
 
@@ -79,7 +87,7 @@ func testCallerResolver(*http.Request) (domain.Caller, error) {
 }
 
 func TestRouteRegistrySurfaceBaseline(t *testing.T) {
-	routes := NewRouteRegistry(&fakeService{}, nil).Routes()
+	routes := NewRouteRegistry(&fakeService{}, nil, noSealReport).Routes()
 	got := make([]string, 0, len(routes))
 	for _, route := range routes {
 		got = append(got, route.Method+" "+route.Pattern)
@@ -369,7 +377,7 @@ func TestNewRouter_MissingSPA(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = httpx.NewRouter(httpx.RouterConfig{
-		Routes:         NewRouteRegistry(&fakeService{}, nil),
+		Routes:         NewRouteRegistry(&fakeService{}, nil, noSealReport),
 		Authorizer:     httpx.AllowAll{},
 		CallerResolver: testCallerResolver,
 		BodyLimit:      BodyLimitPolicy(),

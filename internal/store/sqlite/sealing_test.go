@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -727,12 +728,37 @@ func TestMigrateFreshSealedRealmDoesNotWarnOfExposure(t *testing.T) {
 	}
 }
 
-func TestMigrateExistingEmptyRealmWarnsOfExposure(t *testing.T) {
+func TestMigrateExistingEmptyRealmDoesNotWarnOfExposure(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	plaintextStore := openSQLiteStoreForTest(t, path)
 	if err := plaintextStore.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate plaintext store: %v", err)
+	}
+	plaintextRealm, err := plaintextStore.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm plaintext store: %v", err)
+	}
+	// Empty secrets pass through sealing like any value but expose nothing.
+	if _, err := plaintextRealm.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+		Provider: domain.MarketDataProviderBYO, Label: "credential-free-feed",
+	}); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if _, err := plaintextRealm.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "credential-free-trading",
+		VenueIdentity: "credential-free-account",
+		Mode:          domain.TradingModePaper,
+		Credentials:   `{}`,
+	}); err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	if err := plaintextRealm.UpsertSigningKey(ctx, domain.SigningKey{
+		CreatedAt: time.Now().UTC(),
+		KeyID:     "verify-only-key", Alg: "ed25519", PublicKey: []byte("public"),
+	}); err != nil {
+		t.Fatalf("UpsertSigningKey(verify-only): %v", err)
 	}
 	if err := plaintextStore.Close(); err != nil {
 		t.Fatalf("close plaintext store: %v", err)
@@ -745,8 +771,15 @@ func TestMigrateExistingEmptyRealmWarnsOfExposure(t *testing.T) {
 	if err := sealedStore.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate existing empty store: %v", err)
 	}
-	if !strings.Contains(logOutput.String(), sealingExposureWarning) {
-		t.Fatal("sealing an existing empty store did not log the exposure warning")
+	if strings.Contains(logOutput.String(), sealingExposureWarning) {
+		t.Fatal("sealing a store without stored secrets logged the exposure warning")
+	}
+	report, sealed, err := sealedStore.SealReport(ctx)
+	if err != nil || !sealed {
+		t.Fatalf("SealReport = sealed %v, err %v; want a report", sealed, err)
+	}
+	if report.ResealedSecrets != 0 {
+		t.Fatalf("ResealedSecrets = %d, want 0", report.ResealedSecrets)
 	}
 }
 
@@ -794,33 +827,6 @@ func TestMigrateWarnsBeforeRecordingVacuumCompletion(t *testing.T) {
 	}
 }
 
-func TestMigrateExistingDatabaseThroughDSNWarnsOfExposure(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "officer.db")
-	plaintextStore := openSQLiteStoreForTest(t, path)
-	if err := plaintextStore.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate plaintext store: %v", err)
-	}
-	if err := plaintextStore.Close(); err != nil {
-		t.Fatalf("close plaintext store: %v", err)
-	}
-
-	logOutput := captureSlogForTest(t)
-	sealedStore := openSQLiteStoreForTest(
-		t, path+"?_txlock=immediate",
-		WithMasterKey(mustStoreMasterKey(t, 0x5c)),
-	)
-	if sealedStore.databaseCreated {
-		t.Fatal("DSN path for existing database was treated as newly created")
-	}
-	if err := sealedStore.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate existing store through DSN: %v", err)
-	}
-	if !strings.Contains(logOutput.String(), sealingExposureWarning) {
-		t.Fatal("sealing existing store through DSN did not log the exposure warning")
-	}
-}
-
 func TestMigrateMatchingKeyWarnsBeforeRecordingVacuumCompletion(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
@@ -832,6 +838,12 @@ func TestMigrateMatchingKeyWarnsBeforeRecordingVacuumCompletion(t *testing.T) {
 		ctx, `UPDATE secret_state SET vacuumed_at = NULL WHERE singleton = 1`,
 	); err != nil {
 		t.Fatalf("clear vacuum completion marker: %v", err)
+	}
+	// The resumed scrub warns from the count sealing recorded.
+	if _, err := setup.currentDB().ExecContext(
+		ctx, `UPDATE seal_report SET resealed_secrets = 1 WHERE singleton = 1`,
+	); err != nil {
+		t.Fatalf("record a resealed secret: %v", err)
 	}
 	if _, err := setup.currentDB().ExecContext(ctx, `
 		CREATE TRIGGER reject_resumed_vacuum_completion
@@ -865,32 +877,11 @@ func TestMigrateMatchingKeyCompletesOwedVacuumBeforeInstallingSealer(t *testing.
 	sealFreshDatabaseForTest(t, path, key)
 
 	setup := openSQLiteStoreForTest(t, path)
-	if _, err := setup.currentDB().ExecContext(
-		ctx, `CREATE TABLE scrub_probe (value BLOB NOT NULL)`,
-	); err != nil {
-		t.Fatalf("create scrub probe: %v", err)
-	}
-	if _, err := setup.currentDB().ExecContext(
-		ctx, `INSERT INTO scrub_probe (value) VALUES (zeroblob(262144))`,
-	); err != nil {
-		t.Fatalf("populate scrub probe: %v", err)
-	}
-	if _, err := setup.currentDB().ExecContext(ctx, `DROP TABLE scrub_probe`); err != nil {
-		t.Fatalf("drop scrub probe: %v", err)
-	}
+	freePagesForTest(t, setup.currentDB())
 	if _, err := setup.currentDB().ExecContext(
 		ctx, `UPDATE secret_state SET vacuumed_at = NULL WHERE singleton = 1`,
 	); err != nil {
 		t.Fatalf("clear vacuum completion marker: %v", err)
-	}
-	var freelistBefore int
-	if err := setup.currentDB().QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(
-		&freelistBefore,
-	); err != nil {
-		t.Fatalf("read freelist before restart: %v", err)
-	}
-	if freelistBefore == 0 {
-		t.Fatal("scrub probe did not leave pages on the freelist")
 	}
 	if err := setup.Close(); err != nil {
 		t.Fatalf("close setup store: %v", err)
@@ -907,8 +898,9 @@ func TestMigrateMatchingKeyCompletesOwedVacuumBeforeInstallingSealer(t *testing.
 	if reopened.sealer.Load() == nil {
 		t.Fatal("owed vacuum completion did not install the sealer")
 	}
-	if !strings.Contains(logOutput.String(), sealingExposureWarning) {
-		t.Fatal("resumed scrub did not log the exposure warning")
+	// Sealing the fresh fixture resealed nothing, as its seal report records.
+	if strings.Contains(logOutput.String(), sealingExposureWarning) {
+		t.Fatal("resumed scrub of a database that resealed nothing logged the exposure warning")
 	}
 
 	var vacuumedAt string
@@ -920,17 +912,72 @@ func TestMigrateMatchingKeyCompletesOwedVacuumBeforeInstallingSealer(t *testing.
 	if _, err := time.Parse(time.RFC3339Nano, vacuumedAt); err != nil {
 		t.Fatalf("vacuumed_at is not RFC3339Nano: %v", err)
 	}
-	var freelistAfter int
-	if err := reopened.currentDB().QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(
-		&freelistAfter,
-	); err != nil {
-		t.Fatalf("read freelist after restart: %v", err)
-	}
-	if freelistAfter != 0 {
-		t.Fatalf("freelist after resumed scrub = %d, want 0", freelistAfter)
+	if freelist := freelistCountForTest(t, reopened.currentDB()); freelist != 0 {
+		t.Fatalf("freelist after resumed scrub = %d, want 0", freelist)
 	}
 	if _, err := reopened.ForRealm(ctx, domain.DefaultRealm); err != nil {
 		t.Fatalf("ForRealm after resumed scrub: %v", err)
+	}
+}
+
+func TestMigrateMatchingKeyRefusesSealedDatabaseWithoutSealReport(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		vacuumed bool
+	}{
+		{name: "vacuumed", vacuumed: true},
+		{name: "vacuum owed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "officer.db")
+			key := mustStoreMasterKey(t, 0x5f)
+			sealFreshDatabaseForTest(t, path, key)
+
+			setup := openSQLiteStoreForTest(t, path)
+			freePagesForTest(t, setup.currentDB())
+			if _, err := setup.currentDB().ExecContext(ctx, `DELETE FROM seal_report`); err != nil {
+				t.Fatalf("delete seal report: %v", err)
+			}
+			if !test.vacuumed {
+				if _, err := setup.currentDB().ExecContext(
+					ctx, `UPDATE secret_state SET vacuumed_at = NULL WHERE singleton = 1`,
+				); err != nil {
+					t.Fatalf("clear vacuum completion marker: %v", err)
+				}
+			}
+			vacuumedBefore := vacuumedAtForTest(t, setup.currentDB())
+			if err := setup.Close(); err != nil {
+				t.Fatalf("close setup store: %v", err)
+			}
+
+			reopened := openSQLiteStoreForTest(t, path, WithMasterKey(key))
+			err := reopened.Migrate(ctx)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("Migrate without a seal report = %v, want ErrInvalid", err)
+			}
+			for _, want := range []string{path, "holds no seal report", "recreate the database"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Migrate error %q does not mention %q", err, want)
+				}
+			}
+			if reopened.sealer.Load() != nil {
+				t.Error("a refused Migrate installed the sealer")
+			}
+			if reopened.accessSnapshot.Load() != nil {
+				t.Error("a refused Migrate published an access snapshot")
+			}
+			if freelistCountForTest(t, reopened.currentDB()) == 0 {
+				t.Error("a refused Migrate vacuumed the database")
+			}
+			vacuumedAfter := vacuumedAtForTest(t, reopened.currentDB())
+			if vacuumedAfter != vacuumedBefore {
+				t.Errorf(
+					"vacuumed_at after a refused Migrate = %v, want %v",
+					vacuumedAfter, vacuumedBefore,
+				)
+			}
+		})
 	}
 }
 
@@ -1226,6 +1273,45 @@ func sealFreshDatabaseForTest(t *testing.T, path string, key secret.MasterKey) {
 	if err := store.Close(); err != nil {
 		t.Fatalf("close sealed fixture: %v", err)
 	}
+}
+
+// freePagesForTest leaves pages on db's freelist, which only VACUUM empties.
+func freePagesForTest(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, statement := range []string{
+		`CREATE TABLE scrub_probe (value BLOB NOT NULL)`,
+		`INSERT INTO scrub_probe (value) VALUES (zeroblob(262144))`,
+		`DROP TABLE scrub_probe`,
+	} {
+		if _, err := db.ExecContext(context.Background(), statement); err != nil {
+			t.Fatalf("scrub probe %q: %v", statement, err)
+		}
+	}
+	if freelistCountForTest(t, db) == 0 {
+		t.Fatal("scrub probe did not leave pages on the freelist")
+	}
+}
+
+func freelistCountForTest(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRowContext(
+		context.Background(), `PRAGMA freelist_count`,
+	).Scan(&count); err != nil {
+		t.Fatalf("read freelist: %v", err)
+	}
+	return count
+}
+
+func vacuumedAtForTest(t *testing.T, db *sql.DB) sql.NullString {
+	t.Helper()
+	var vacuumedAt sql.NullString
+	if err := db.QueryRowContext(
+		context.Background(), `SELECT vacuumed_at FROM secret_state WHERE singleton = 1`,
+	).Scan(&vacuumedAt); err != nil {
+		t.Fatalf("read vacuum completion marker: %v", err)
+	}
+	return vacuumedAt
 }
 
 func mustStoreMasterKey(t *testing.T, fill byte) secret.MasterKey {

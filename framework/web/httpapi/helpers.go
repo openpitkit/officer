@@ -385,6 +385,11 @@ func PathAccountID(r *http.Request) (domain.AccountID, error) {
 	return domain.AccountID(decoded), err
 }
 
+// PathTokenKind reads the decoded {kind} chi path parameter.
+func PathTokenKind(r *http.Request) (string, error) {
+	return pathString(r, "kind", "invalid URL encoding in token kind")
+}
+
 func pathString(r *http.Request, key, msg string) (string, error) {
 	raw := chi.URLParam(r, key)
 	// Chi reads Path directly unless RawPath preserves a non-canonical escape.
@@ -446,6 +451,21 @@ func DescribeErr(err error) PublicError {
 		return PublicError{http.StatusConflict, "no_destination", domain.ErrNoDestination.Error()}
 	case errors.Is(err, domain.ErrDestinationAmbiguous):
 		return PublicError{http.StatusConflict, "destination_ambiguous", domain.ErrDestinationAmbiguous.Error()}
+	// The access refusals are matched before the generic forbidden and conflict
+	// cases, the narrower first, so a refusal that also wraps a broader one
+	// keeps its own code.
+	case errors.Is(err, domain.ErrTooManyAttempts):
+		return PublicError{http.StatusTooManyRequests, "too_many_attempts", domain.ErrTooManyAttempts.Error()}
+	case errors.Is(err, domain.ErrWrongToken):
+		return PublicError{http.StatusForbidden, "wrong_token", err.Error()}
+	case errors.Is(err, domain.ErrCurrentPasswordInvalid):
+		return PublicError{http.StatusForbidden, "current_password_invalid", domain.ErrCurrentPasswordInvalid.Error()}
+	case errors.Is(err, domain.ErrInvalidPassword):
+		return PublicError{http.StatusUnauthorized, "invalid_password", domain.ErrInvalidPassword.Error()}
+	case errors.Is(err, domain.ErrInvalidRecoveryCode):
+		return PublicError{http.StatusUnauthorized, "invalid_recovery_code", domain.ErrInvalidRecoveryCode.Error()}
+	case errors.Is(err, domain.ErrUnauthorized):
+		return PublicError{http.StatusUnauthorized, "unauthorized", domain.ErrUnauthorized.Error()}
 	case errors.Is(err, domain.ErrForbidden):
 		return PublicError{http.StatusForbidden, "forbidden", domain.ErrForbidden.Error()}
 	case errors.Is(err, domain.ErrHostNotAllowed):
@@ -497,13 +517,14 @@ func DescribeErr(err error) PublicError {
 	}
 }
 
-// WriteErr writes the response that DescribeErr maps err to. A code that
-// carries structured members on REST gets them next to its code and message:
-// the RFC 9457 problem body for validation, candidates for
-// destination_ambiguous, account for account_missing, asset for
-// asset_missing, dependents for has_dependents and the blocked target for
-// currency_change_blocked.
+// WriteErr writes the response that DescribeErr maps err to, with every header
+// WithResponseHeader attached anywhere in err's chain. A code that carries
+// structured members on REST gets them next to its code and message: the
+// RFC 9457 problem body for validation, candidates for destination_ambiguous,
+// account for account_missing, asset for asset_missing, dependents for
+// has_dependents and the blocked target for currency_change_blocked.
 func WriteErr(w http.ResponseWriter, err error) {
+	setCarriedHeaders(w.Header(), err)
 	public := DescribeErr(err)
 	switch public.Code {
 	case "validation":
@@ -529,6 +550,45 @@ func WriteErr(w http.ResponseWriter, err error) {
 		writeCurrencyChangeBlockedErr(w, public, err)
 	default:
 		WriteErrMsg(w, public.Status, public.Code, public.Message)
+	}
+}
+
+// WithResponseHeader returns err carrying the HTTP response header name with
+// value, for WriteErr to set on the answer. The wrapper adds no text, and
+// errors.Is, errors.As and DescribeErr see through it, so it changes nothing
+// but the headers of a REST answer; the MCP tools ignore it. Where the chain
+// carries one name more than once, the wrapper errors.Is reaches first wins.
+// err must not be nil.
+func WithResponseHeader(err error, name, value string) error {
+	return &responseHeaderError{err: err, name: name, value: value}
+}
+
+// responseHeaderError is an error carrying one HTTP response header.
+type responseHeaderError struct {
+	err   error
+	name  string
+	value string
+}
+
+func (e *responseHeaderError) Error() string { return e.err.Error() }
+
+func (e *responseHeaderError) Unwrap() error { return e.err }
+
+// setCarriedHeaders sets on header every header carried in err's tree. It
+// visits the tree in the reverse of the order errors.Is does, inner and later
+// errors first, so the wrapper errors.Is reaches first is set last and wins.
+func setCarriedHeaders(header http.Header, err error) {
+	switch e := err.(type) {
+	case *responseHeaderError:
+		setCarriedHeaders(header, e.err)
+		header.Set(e.name, e.value)
+	case interface{ Unwrap() error }:
+		setCarriedHeaders(header, e.Unwrap())
+	case interface{ Unwrap() []error }:
+		causes := e.Unwrap()
+		for i := len(causes) - 1; i >= 0; i-- {
+			setCarriedHeaders(header, causes[i])
+		}
 	}
 }
 

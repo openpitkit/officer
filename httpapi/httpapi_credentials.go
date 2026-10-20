@@ -18,20 +18,53 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"go.openpit.dev/officer/framework/backend"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
+// SealReportSource answers when the credential store was sealed and how many
+// secrets that resealed; sealed is false when it never was.
+type SealReportSource func(ctx context.Context) (
+	sealedAt time.Time, resealedSecrets int, sealed bool, err error,
+)
+
+// credentialStorageDTO is the REST answer of GET /credential-storage: the
+// storage state the MCP tool also reports, and when the store was sealed with
+// how many secrets that resealed. SealedAt is null and ResealedSecrets 0 for a
+// store never sealed.
+type credentialStorageDTO struct {
+	httpx.CredentialStorageDTO
+	SealedAt        *time.Time `json:"sealedAt"`
+	ResealedSecrets int        `json:"resealedSecrets"`
+}
+
 // handleGetCredentialStorage handles GET /api/v1/credential-storage.
-func handleGetCredentialStorage(svc backend.ControlPlane) http.HandlerFunc {
+func handleGetCredentialStorage(
+	svc backend.ControlPlane, sealReports SealReportSource,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		storage, err := svc.CredentialStorage(r.Context())
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, httpx.ToCredentialStorageDTO(storage))
+		sealedAt, resealedSecrets, sealed, err := sealReports(r.Context())
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		dto := credentialStorageDTO{
+			CredentialStorageDTO: httpx.ToCredentialStorageDTO(storage),
+		}
+		if sealed {
+			sealedAt = sealedAt.UTC()
+			dto.SealedAt = &sealedAt
+			dto.ResealedSecrets = resealedSecrets
+		}
+		httpx.WriteJSON(w, http.StatusOK, dto)
 	}
 }

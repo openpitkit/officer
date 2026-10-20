@@ -20,8 +20,11 @@ package integration_test
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/engine"
+	"go.openpit.dev/officer/framework/auth"
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
@@ -80,4 +83,43 @@ func newLocalNodeBuiltBy(
 		t.Fatalf("bind the node store to its realm: %v", err)
 	}
 	return target, realm
+}
+
+func TestLocalNode_RestoreBackupNarrowedUserSettingsWithTradingConnection(t *testing.T) {
+	t.Parallel()
+	ctx := systemCtx()
+	target, realm := newLocalNode(t)
+	if _, err := realm.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider:      domain.TradingProviderAlpaca,
+		Label:         "Alpaca paper",
+		Mode:          domain.TradingModePaper,
+		VenueIdentity: "venue-account-1",
+		Credentials:   `{"key":"secret"}`,
+	}); err != nil {
+		t.Fatalf("CreateTradingConnection: %v", err)
+	}
+	scope := backup.Scope{
+		Sections: []backup.Section{backup.SectionUserSettings},
+		Accounts: backup.EntitySelector{Accounts: []string{"selected-account"}},
+	}
+	archive := backup.NewArchive(
+		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+		"test",
+		backup.RealmLabel{Code: string(domain.DefaultRealm)},
+		scope,
+		backup.Data{UserSettings: []domain.UserSetting{{
+			UserID: domain.DefaultUserID, Key: domain.UserSettingWelcomeSeen, Value: "1",
+		}}},
+		backup.CredentialFormPlaintext,
+	)
+
+	if _, _, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope, Mode: backup.RestoreModeReplaceAll,
+	}, auth.SystemCaller()); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	connections, err := realm.ListTradingConnections(ctx)
+	if err != nil || len(connections) != 1 {
+		t.Fatalf("trading connections after restore = %+v, err=%v", connections, err)
+	}
 }

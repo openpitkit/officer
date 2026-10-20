@@ -26,8 +26,8 @@ import (
 )
 
 // Access is what credentials a route requires once access modes are enforced.
-// The route manifest publishes it for every mounted route; today nothing
-// enforces it.
+// The route manifest publishes it for every mounted route; the router acts on
+// it only by serving a public route without resolving a caller.
 type Access string
 
 const (
@@ -41,8 +41,9 @@ const (
 	AccessPanel Access = "panel"
 )
 
-// AccessMode is the access state of the service. Today only the route manifest
-// reads it.
+// AccessMode is the access state of the service. Within the framework only the
+// route manifest reads it, from RouterConfig.AccessMode on every request, so a
+// mode the application switches at runtime shows on the next request.
 type AccessMode string
 
 const (
@@ -125,12 +126,14 @@ func mountedOperations(
 				"httpapi: route id %q is in both Routes and PanelRoutes", route.ID,
 			)
 		}
-		access := AccessPanel
+		access, routeID := AccessPanel, route.ID
 		if route.Public {
-			access = AccessPublic
+			// The router serves a public route without the Authorizer, so the
+			// entry is listed for every caller.
+			access, routeID = AccessPublic, ""
 		}
 		operations = append(operations, runtimeRouteManifestEntry{
-			routeID:     route.ID,
+			routeID:     routeID,
 			Method:      route.Method,
 			Path:        panelPrefix + route.Pattern,
 			Access:      access,
@@ -247,11 +250,13 @@ func v1PrefixOf(path string) string {
 	return ""
 }
 
-// newRuntimeRouteManifestHandler serves the manifest of operations in mode:
-// each registry route the Authorizer allows the caller, and every other
-// operation as it is.
+// newRuntimeRouteManifestHandler serves the manifest of operations in the
+// mode accessMode returns when the request arrives: each non-public registry
+// route the Authorizer allows the caller, and every other operation, public
+// panel routes included, as it is. A mode that is not an AccessMode constant
+// answers an internal error.
 func newRuntimeRouteManifestHandler(
-	mode AccessMode,
+	accessMode func() AccessMode,
 	operations []runtimeRouteManifestEntry,
 	authorizer Authorizer,
 ) http.Handler {
@@ -259,6 +264,13 @@ func newRuntimeRouteManifestHandler(
 		caller, err := auth.CallerFromContext(r.Context())
 		if err != nil {
 			WriteErr(w, err)
+			return
+		}
+		mode := accessMode()
+		switch mode {
+		case AccessModeSetup, AccessModeToken, AccessModeOpen:
+		default:
+			WriteErr(w, fmt.Errorf("httpapi: invalid access mode %q", mode))
 			return
 		}
 		entries := make([]runtimeRouteManifestEntry, 0, len(operations))

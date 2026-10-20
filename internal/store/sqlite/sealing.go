@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/secret"
@@ -35,6 +36,8 @@ const (
 	marketDataCredentialsColumn = "credentials"
 	tradingConnectionTable      = "trading_connection"
 	tradingCredentialsColumn    = "credentials"
+	accessCredentialTable       = "access_credential"
+	accessCredentialValueColumn = "value"
 )
 
 // sealValue seals plaintext for its table, column and row with the installed
@@ -105,13 +108,16 @@ func (s *sqliteStore) setSealer(key *secret.MasterKey) {
 // plaintext; unsealed without a key but holding a signing private key in the
 // clear refuses with domain.ErrMasterKeyRequired; unsealed with a key seals;
 // sealed without a key refuses; and sealed with a key verifies it and refuses a
-// mismatch. It must run in migrateDB so Reset seals its fresh file.
+// mismatch. Sealing always records a seal report, so a sealed database without
+// one is refused with an error wrapping domain.ErrInvalid, whether or not its
+// scrub finished. It must run in migrateDB so Reset seals its fresh file.
 // Sealing commits an owed scrub before VACUUM, which cannot run in a transaction,
 // and records completion only after VACUUM succeeds. A matching-key restart must
-// finish any owed scrub before installing the sealer.
-func (s *sqliteStore) configureSealing(
-	ctx context.Context, db *sql.DB, databaseCreated bool,
-) error {
+// finish any owed scrub before installing the sealer. The exposure warning is
+// logged only when sealing re-sealed a stored secret that held a value: the
+// count commits in seal_report with the sealed values, and a restart that
+// finishes the scrub reads it from there.
+func (s *sqliteStore) configureSealing(ctx context.Context, db *sql.DB) error {
 	var storedVerifier []byte
 	var vacuumedAt sql.NullString
 	err := db.QueryRowContext(
@@ -136,17 +142,14 @@ func (s *sqliteStore) configureSealing(
 			}
 			return nil
 		}
-		if err := s.sealRealm(ctx, db, *s.configuredMasterKey); err != nil {
+		resealed, err := s.sealRealm(ctx, db, *s.configuredMasterKey)
+		if err != nil {
 			return err
 		}
 		if _, err := db.ExecContext(ctx, `VACUUM`); err != nil {
 			return fmt.Errorf("store: vacuum sqlite after sealing: %w", err)
 		}
-		if !databaseCreated {
-			slog.Warn(
-				"SQLite realm sealed; previously stored secrets must be considered exposed and should be reissued",
-			)
-		}
+		warnOfExposure(resealed)
 		if _, err := db.ExecContext(
 			ctx, `UPDATE secret_state SET vacuumed_at = ? WHERE singleton = 1`, nowStr(),
 		); err != nil {
@@ -173,13 +176,22 @@ func (s *sqliteStore) configureSealing(
 	if !match {
 		return errors.New("store: supplied master key does not match the key used to seal this database")
 	}
+	report, sealed, err := readSealReport(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !sealed {
+		return fmt.Errorf(
+			"store: database at %q is sealed but holds no seal report; "+
+				"recreate the database: %w",
+			s.path, domain.ErrInvalid,
+		)
+	}
 	if !vacuumedAt.Valid {
 		if _, err := db.ExecContext(ctx, `VACUUM`); err != nil {
 			return fmt.Errorf("store: vacuum sqlite after sealing: %w", err)
 		}
-		slog.Warn(
-			"SQLite realm sealed; previously stored secrets must be considered exposed and should be reissued",
-		)
+		warnOfExposure(report.ResealedSecrets)
 		if _, err := db.ExecContext(
 			ctx, `UPDATE secret_state SET vacuumed_at = ? WHERE singleton = 1`, nowStr(),
 		); err != nil {
@@ -190,95 +202,139 @@ func (s *sqliteStore) configureSealing(
 	return nil
 }
 
+// sealRealm seals every stored secret in place under key, in one transaction
+// that also records the key verifier and the seal report. It returns how many
+// of the sealed values held a secret.
 func (s *sqliteStore) sealRealm(
 	ctx context.Context, db *sql.DB, key secret.MasterKey,
-) (err error) {
+) (_ int, err error) {
 	verifier, err := secret.KeyVerifier(key)
 	if err != nil {
-		return fmt.Errorf("store: derive master key verifier for sealing: %w", err)
+		return 0, fmt.Errorf("store: derive master key verifier for sealing: %w", err)
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("store: begin secret sealing: %w", err)
+		return 0, fmt.Errorf("store: begin secret sealing: %w", err)
 	}
 	defer rollbackTransaction(&err, tx)
 
-	if err := s.sealSigningPrivateKeys(ctx, tx, key); err != nil {
-		return err
+	signingKeys, err := s.sealTextKeyedSecrets(
+		ctx, tx, key,
+		signingKeyTable, "key_id", signingPrivateKeyColumn, "signing key",
+	)
+	if err != nil {
+		return 0, err
 	}
-	if err := s.sealCredentials(
+	marketData, err := s.sealCredentials(
 		ctx, tx, key,
 		marketDataInstanceTable, marketDataCredentialsColumn, "market data",
-	); err != nil {
-		return err
+	)
+	if err != nil {
+		return 0, err
 	}
-	if err := s.sealCredentials(
+	trading, err := s.sealCredentials(
 		ctx, tx, key,
 		tradingConnectionTable, tradingCredentialsColumn, "trading",
-	); err != nil {
-		return err
+	)
+	if err != nil {
+		return 0, err
 	}
-	// The verifier and owed scrub must commit with the sealed values so a restart
-	// can neither miss the scrub nor seal the values a second time.
+	accessCredentials, err := s.sealTextKeyedSecrets(
+		ctx, tx, key,
+		accessCredentialTable, "kind", accessCredentialValueColumn, "access credential",
+	)
+	if err != nil {
+		return 0, err
+	}
+	resealed := signingKeys + marketData + trading + accessCredentials
+	sealedAt := nowStr()
+	// The verifier, the owed scrub and the seal report commit with the sealed
+	// values, so a restart can neither miss the scrub nor seal the values a
+	// second time, and a restart that finishes the scrub warns from the same
+	// count.
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO secret_state (
 			singleton, key_verifier, sealed_at, vacuumed_at
 		) VALUES (1, ?, ?, NULL)`,
-		verifier, nowStr(),
+		verifier, sealedAt,
 	); err != nil {
-		return fmt.Errorf("store: record secret sealing state: %w", err)
+		return 0, fmt.Errorf("store: record secret sealing state: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO seal_report (singleton, resealed_secrets, sealed_at)
+		 VALUES (1, ?, ?)`,
+		resealed, sealedAt,
+	); err != nil {
+		return 0, fmt.Errorf("store: record seal report: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit secret sealing: %w", err)
+		return 0, fmt.Errorf("store: commit secret sealing: %w", err)
 	}
-	return nil
+	return resealed, nil
 }
 
-func (s *sqliteStore) sealSigningPrivateKeys(
-	ctx context.Context, tx *sql.Tx, key secret.MasterKey,
-) error {
-	type signingSecret struct {
-		keyID      string
-		privateKey []byte
+// sealTextKeyedSecrets seals every value of valueColumn in table in place,
+// each bound to its row's text id in idColumn, and returns how many held a
+// secret. noun names a row of table in errors. Rows are sealed in rowid
+// order, which for signing_key is its surrogate id.
+func (s *sqliteStore) sealTextKeyedSecrets(
+	ctx context.Context,
+	tx *sql.Tx,
+	key secret.MasterKey,
+	table string,
+	idColumn string,
+	valueColumn string,
+	noun string,
+) (int, error) {
+	type storedSecret struct {
+		id    string
+		value []byte
 	}
 
-	rows, err := tx.QueryContext(ctx, `SELECT key_id, private_key FROM signing_key ORDER BY id`)
+	rows, err := tx.QueryContext(
+		ctx,
+		fmt.Sprintf("SELECT %s, %s FROM %s ORDER BY rowid", idColumn, valueColumn, table),
+	)
 	if err != nil {
-		return fmt.Errorf("store: read signing keys for sealing: %w", err)
+		return 0, fmt.Errorf("store: read %s rows for sealing: %w", noun, err)
 	}
-	secrets := make([]signingSecret, 0)
+	secrets := make([]storedSecret, 0)
 	for rows.Next() {
-		var item signingSecret
-		if err := rows.Scan(&item.keyID, &item.privateKey); err != nil {
+		var item storedSecret
+		if err := rows.Scan(&item.id, &item.value); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("store: scan signing key for sealing: %w", err)
+			return 0, fmt.Errorf("store: scan %s for sealing: %w", noun, err)
 		}
 		secrets = append(secrets, item)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("store: iterate signing keys for sealing: %w", err)
+		return 0, fmt.Errorf("store: iterate %s rows for sealing: %w", noun, err)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("store: close signing keys for sealing: %w", err)
+		return 0, fmt.Errorf("store: close %s rows for sealing: %w", noun, err)
 	}
 
+	resealed := 0
 	for _, item := range secrets {
-		sealed, err := s.sealValueWithKey(
-			key, signingKeyTable, signingPrivateKeyColumn, item.keyID, item.privateKey,
-		)
+		sealed, err := s.sealValueWithKey(key, table, valueColumn, item.id, item.value)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(
-			ctx, `UPDATE signing_key SET private_key = ? WHERE key_id = ?`,
-			sealed, item.keyID,
+			ctx,
+			fmt.Sprintf("UPDATE %s SET %s = ? WHERE %s = ?", table, valueColumn, idColumn),
+			sealed, item.id,
 		); err != nil {
-			return fmt.Errorf("store: seal signing key private material: %w", err)
+			return 0, fmt.Errorf("store: seal %s %q: %w", noun, item.id, err)
+		}
+		if holdsSecret(item.value) {
+			resealed++
 		}
 	}
-	return nil
+	return resealed, nil
 }
 
 func (s *sqliteStore) sealCredentials(
@@ -288,7 +344,7 @@ func (s *sqliteStore) sealCredentials(
 	table string,
 	column string,
 	noun string,
-) error {
+) (int, error) {
 	type storedCredential struct {
 		externalID  domain.ExternalID
 		credentials []byte
@@ -298,19 +354,19 @@ func (s *sqliteStore) sealCredentials(
 		ctx, fmt.Sprintf("SELECT external_id, %s FROM %s", column, table),
 	)
 	if err != nil {
-		return fmt.Errorf("store: read %s credentials for sealing: %w", noun, err)
+		return 0, fmt.Errorf("store: read %s credentials for sealing: %w", noun, err)
 	}
 	secrets := make([]storedCredential, 0)
 	for rows.Next() {
 		var rawID, credentials []byte
 		if err := rows.Scan(&rawID, &credentials); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("store: scan %s credentials for sealing: %w", noun, err)
+			return 0, fmt.Errorf("store: scan %s credentials for sealing: %w", noun, err)
 		}
 		externalID, err := domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			_ = rows.Close()
-			return fmt.Errorf(
+			return 0, fmt.Errorf(
 				"store: decode %s external id for sealing: %w", noun, err,
 			)
 		}
@@ -320,19 +376,20 @@ func (s *sqliteStore) sealCredentials(
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("store: iterate %s credentials for sealing: %w", noun, err)
+		return 0, fmt.Errorf("store: iterate %s credentials for sealing: %w", noun, err)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("store: close %s credentials for sealing: %w", noun, err)
+		return 0, fmt.Errorf("store: close %s credentials for sealing: %w", noun, err)
 	}
 
+	resealed := 0
 	for _, item := range secrets {
 		sealed, err := s.sealValueWithKey(
 			key, table, column,
 			item.externalID.String(), item.credentials,
 		)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(
 			ctx,
@@ -341,8 +398,72 @@ func (s *sqliteStore) sealCredentials(
 			),
 			sealed, item.externalID.Bytes(),
 		); err != nil {
-			return fmt.Errorf("store: seal %s credentials: %w", noun, err)
+			return 0, fmt.Errorf("store: seal %s credentials: %w", noun, err)
+		}
+		if holdsSecret(item.credentials) {
+			resealed++
 		}
 	}
-	return nil
+	return resealed, nil
+}
+
+// holdsSecret reports whether a stored secret value holds anything that
+// sealing it after the fact leaves exposed. Every secret column passes
+// through sealing, its empty form included, and the store writes these
+// empty forms: zero bytes for a verify-only signing key's private material,
+// zero bytes for a market-data instance without credentials (BYO, mock, or a
+// restore that could not open the archived ones), and {} for a trading
+// connection without them, whose credentials are always a JSON object. An
+// access credential is never empty.
+func holdsSecret(value []byte) bool {
+	return len(value) > 0 && string(value) != "{}"
+}
+
+// warnOfExposure logs that the secrets sealing found stored in the clear must
+// be considered exposed. It logs nothing when sealing found none.
+func warnOfExposure(resealed int) {
+	if resealed > 0 {
+		slog.Warn(
+			"SQLite realm sealed; previously stored secrets must be considered exposed and should be reissued",
+		)
+	}
+}
+
+// SealReport is what sealing the database recorded.
+type SealReport struct {
+	// SealedAt is when the database was sealed.
+	SealedAt time.Time
+	// ResealedSecrets is how many stored secrets held a value when the
+	// database was sealed. They had been stored in the clear, so they must be
+	// considered exposed.
+	ResealedSecrets int
+}
+
+// SealReport returns what sealing the database recorded. The bool is false
+// when the database has not been sealed.
+func (s *sqliteStore) SealReport(ctx context.Context) (SealReport, bool, error) {
+	db, err := s.liveDB()
+	if err != nil {
+		return SealReport{}, false, err
+	}
+	return readSealReport(ctx, db)
+}
+
+func readSealReport(ctx context.Context, q sqlQueryer) (SealReport, bool, error) {
+	var resealed int
+	var sealedAt string
+	err := q.QueryRowContext(
+		ctx, `SELECT resealed_secrets, sealed_at FROM seal_report WHERE singleton = 1`,
+	).Scan(&resealed, &sealedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SealReport{}, false, nil
+	}
+	if err != nil {
+		return SealReport{}, false, fmt.Errorf("store: read seal report: %w", err)
+	}
+	at, err := parseStoredTime("seal_report.sealed_at", sealedAt)
+	if err != nil {
+		return SealReport{}, false, err
+	}
+	return SealReport{SealedAt: at, ResealedSecrets: resealed}, true, nil
 }

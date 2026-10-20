@@ -18,6 +18,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -55,11 +56,18 @@ func newCustomHostComposition(cfg officer.Config) (customHostComposition, error)
 			fmt.Errorf("register custom host market data provider: %w", err)
 	}
 	builder.AddToolRegistrar(registerCustomHostTools)
+	// The host starts from the route config Register installed, so the
+	// account mode and the access mode it enforces stay served.
+	installed := builder.RouteConfigBuilder()
+	if installed == nil {
+		return customHostComposition{},
+			errors.New("officer.Register installed no route config builder")
+	}
 	builder.SetRouteConfigBuilder(func(
 		svc backend.ControlPlane,
 		logs httpx.LogSource,
 	) frameworkapp.RouteConfig {
-		cfg := officer.RouteConfig(svc, logs)
+		cfg := installed(svc, logs)
 		composeCustomHostRoutes(cfg.Routes)
 		return cfg
 	})

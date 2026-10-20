@@ -42,6 +42,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	fwstore "go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/internal/access"
 )
 
 // rawDB returns the realm's shared connection pool directly, for tests that
@@ -734,6 +735,9 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			s, rs := newTestStore(t)
+			accessStore := s.(*sqliteStore)
+			session := testSession("reset-cleanup-session", accessTestStart)
+			enableTokenModeForTest(t, accessStore, session)
 			if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 				t.Fatalf("CreateAsset: %v", err)
 			}
@@ -799,6 +803,19 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 			_, exists, err := rs.GetAsset(context.Background(), "USD")
 			if err != nil || exists == committed {
 				t.Fatalf("asset after Reset: exists=%t error=%v, want exists=%t", exists, err, !committed)
+			}
+			if committed {
+				assertSnapshot(t, accessStore.Snapshot(), access.Snapshot{Mode: access.ModeOpen})
+				assertStoredMode(t, accessStore, access.ModeOpen)
+				if _, err := accessStore.Session(context.Background(), session.IDHash); !errors.Is(err, domain.ErrNotFound) {
+					t.Fatalf("Session after committed Reset = %s, want ErrNotFound", redactAccess(t, err))
+				}
+			} else {
+				assertSnapshot(t, accessStore.Snapshot(), fixtureTokenSnapshot())
+				assertStoredMode(t, accessStore, access.ModeToken)
+				if _, err := accessStore.Session(context.Background(), session.IDHash); err != nil {
+					t.Fatalf("Session after uncommitted Reset: %s", redactAccess(t, err))
+				}
 			}
 		})
 	}

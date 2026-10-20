@@ -54,23 +54,37 @@ const (
 
 // RouteConfig returns the Officer HTTP surface over svc: the v1 route registry
 // (with the service log routes when logs is non-nil), the per-path body limits,
-// and the non-v1 mounts.
-func RouteConfig(svc backend.ControlPlane, logs httpx.LogSource) frameworkapp.RouteConfig {
+// and the non-v1 mounts. sealReports answers when the credential store was
+// sealed; nil panics. The config carries no AccessMode: the composer, which
+// owns the access state, sets it.
+func RouteConfig(
+	svc backend.ControlPlane,
+	logs httpx.LogSource,
+	sealReports SealReportSource,
+) frameworkapp.RouteConfig {
 	return frameworkapp.RouteConfig{
-		Routes:      NewRouteRegistry(svc, logs),
+		Routes:      NewRouteRegistry(svc, logs, sealReports),
 		BodyLimit:   BodyLimitPolicy(),
 		ExtraMounts: ExtraMounts(),
-		// Officer has no access modes yet: it runs unauthenticated behind the browser guards.
-		AccessMode: httpx.AccessModeOpen,
 	}
 }
 
 // RegisterRoutes registers the application's v1 route table into registry.
-func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, logs httpx.LogSource) {
+// sealReports answers when the credential store was sealed; nil panics, as a
+// route table that cannot answer a registered route is a wiring defect.
+func RegisterRoutes(
+	registry *httpx.RouteRegistry,
+	svc backend.ControlPlane,
+	logs httpx.LogSource,
+	sealReports SealReportSource,
+) {
+	if sealReports == nil {
+		panic("httpapi: RegisterRoutes needs a seal report source")
+	}
 	register(registry, "health.get", http.MethodGet, "/health", handleV1Health)
 	register(registry, "status.get", http.MethodGet, "/status", handleV1Status(svc))
 	register(registry, "service.get", http.MethodGet, "/service", handleServiceInfo(svc))
-	registerDuringSetup(registry, "credential-storage.get", http.MethodGet, "/credential-storage", handleGetCredentialStorage(svc))
+	registerDuringSetup(registry, "credential-storage.get", http.MethodGet, "/credential-storage", handleGetCredentialStorage(svc, sealReports))
 	// The log tail is optional: only the serve path supplies it, so the routes
 	// register only when a source is present.
 	if logs != nil {
@@ -187,10 +201,15 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane, log
 	register(registry, "accounts.trading-destinations.list.get", http.MethodGet, "/accounts/{code}/trading-destinations", handleListTradingDestinations(svc))
 }
 
-// NewRouteRegistry builds the application's v1 route registry.
-func NewRouteRegistry(svc backend.ControlPlane, logs httpx.LogSource) *httpx.RouteRegistry {
+// NewRouteRegistry builds the application's v1 route registry. sealReports
+// answers when the credential store was sealed; nil panics.
+func NewRouteRegistry(
+	svc backend.ControlPlane,
+	logs httpx.LogSource,
+	sealReports SealReportSource,
+) *httpx.RouteRegistry {
 	registry := &httpx.RouteRegistry{}
-	RegisterRoutes(registry, svc, logs)
+	RegisterRoutes(registry, svc, logs, sealReports)
 	return registry
 }
 

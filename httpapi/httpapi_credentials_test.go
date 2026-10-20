@@ -18,6 +18,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,15 +26,29 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
-	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+// noSealReport is the SealReportSource of a credential store never sealed.
+func noSealReport(context.Context) (time.Time, int, bool, error) {
+	return time.Time{}, 0, false, nil
+}
 
 func getCredentialStorage(t *testing.T, svc *fakeService) *httptest.ResponseRecorder {
 	t.Helper()
-	r, err := newRouter(svc)
+	return getCredentialStorageSealed(t, svc, noSealReport)
+}
+
+// getCredentialStorageSealed serves GET /credential-storage over svc with the
+// seal reports of sealReports.
+func getCredentialStorageSealed(
+	t *testing.T, svc *fakeService, sealReports SealReportSource,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	r, err := newRouterOver(svc, nil, sealReports)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,17 +58,45 @@ func getCredentialStorage(t *testing.T, svc *fakeService) *httptest.ResponseReco
 }
 
 func TestGetCredentialStorage(t *testing.T) {
+	const neverSealed = `"sealedAt":null,"resealedSecrets":0}`
 	for _, tc := range []struct {
 		name    string
 		storage backend.CredentialStorage
 		want    string
 	}{
-		{"sealed", backend.CredentialStorage{Sealed: true}, `{"credentialsSealed":true,"plaintextTradingKeys":false,"plaintextMarketDataKeys":false}`},
-		{"unsealed-trading-keys", backend.CredentialStorage{PlaintextTradingKeys: true}, `{"credentialsSealed":false,"plaintextTradingKeys":true,"plaintextMarketDataKeys":false}`},
-		{"unsealed-market-data-keys", backend.CredentialStorage{PlaintextMarketDataKeys: true}, `{"credentialsSealed":false,"plaintextTradingKeys":false,"plaintextMarketDataKeys":true}`},
+		{"sealed", backend.CredentialStorage{Sealed: true}, `{"credentialsSealed":true,"plaintextTradingKeys":false,"plaintextMarketDataKeys":false,` + neverSealed},
+		{"unsealed-trading-keys", backend.CredentialStorage{PlaintextTradingKeys: true}, `{"credentialsSealed":false,"plaintextTradingKeys":true,"plaintextMarketDataKeys":false,` + neverSealed},
+		{"unsealed-market-data-keys", backend.CredentialStorage{PlaintextMarketDataKeys: true}, `{"credentialsSealed":false,"plaintextTradingKeys":false,"plaintextMarketDataKeys":true,` + neverSealed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := getCredentialStorage(t, &fakeService{credentialStorage: tc.storage})
+			if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != tc.want {
+				t.Fatalf("GET /credential-storage = %d %s, want 200 %s", rec.Code, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGetCredentialStorage_SealReport checks the seal report fields of the
+// REST answer: null and 0 before the store is sealed, and after it the seal
+// time in UTC and how many secrets the seal resealed.
+func TestGetCredentialStorage_SealReport(t *testing.T) {
+	svc := &fakeService{credentialStorage: backend.CredentialStorage{Sealed: true}}
+	const storage = `{"credentialsSealed":true,"plaintextTradingKeys":false,"plaintextMarketDataKeys":false,`
+	sealedAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.FixedZone("UTC+2", 2*60*60))
+	for _, tc := range []struct {
+		name        string
+		sealReports SealReportSource
+		want        string
+	}{
+		{"before sealing", noSealReport,
+			storage + `"sealedAt":null,"resealedSecrets":0}`},
+		{"after sealing", func(context.Context) (time.Time, int, bool, error) {
+			return sealedAt, 3, true, nil
+		}, storage + `"sealedAt":"2026-03-04T03:06:07Z","resealedSecrets":3}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := getCredentialStorageSealed(t, svc, tc.sealReports)
 			if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != tc.want {
 				t.Fatalf("GET /credential-storage = %d %s, want 200 %s", rec.Code, got, tc.want)
 			}
@@ -69,6 +112,32 @@ func TestGetCredentialStorage_ServiceError(t *testing.T) {
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusInternalServerError || got != want {
 		t.Fatalf("GET /credential-storage = %d %s, want 500 %s", rec.Code, got, want)
 	}
+}
+
+// TestGetCredentialStorage_SealReportError checks that a seal report that
+// cannot be read fails the request with the generic 500 envelope instead of
+// answering without the report.
+func TestGetCredentialStorage_SealReportError(t *testing.T) {
+	rec := getCredentialStorageSealed(t, &fakeService{},
+		func(context.Context) (time.Time, int, bool, error) {
+			return time.Time{}, 0, false, errors.New("seal report unreadable")
+		})
+	want := `{"error":{"code":"internal","message":"internal error"}}`
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusInternalServerError || got != want {
+		t.Fatalf("GET /credential-storage = %d %s, want 500 %s", rec.Code, got, want)
+	}
+}
+
+// TestRegisterRoutesRefusesNilSealReports checks that the route table is not
+// built without a seal report source.
+func TestRegisterRoutesRefusesNilSealReports(t *testing.T) {
+	defer func() {
+		got := recover()
+		if got != "httpapi: RegisterRoutes needs a seal report source" {
+			t.Fatalf("NewRouteRegistry with a nil seal report source panicked with %v", got)
+		}
+	}()
+	NewRouteRegistry(&fakeService{}, nil, nil)
 }
 
 // TestGetCredentialStorage_InvalidStoredCredentials checks that a service
@@ -94,7 +163,7 @@ func TestOpenAPICredentialStorageContract(t *testing.T) {
 	if !strings.Contains(spec, "\n  /credential-storage:\n    get:\n") {
 		t.Fatal("GET /credential-storage is undocumented")
 	}
-	wantRequired, wantProperties := jsonMembers(reflect.TypeOf(httpx.CredentialStorageDTO{}))
+	wantRequired, wantProperties := jsonMembers(reflect.TypeOf(credentialStorageDTO{}))
 	gotRequired, gotProperties := openAPISchemaMembers(t, spec, "CredentialStorage")
 	if !reflect.DeepEqual(gotRequired, wantRequired) || !reflect.DeepEqual(gotProperties, wantProperties) {
 		t.Fatalf("OpenAPI CredentialStorage = required %v properties %v, want required %v properties %v as its Go type encodes",

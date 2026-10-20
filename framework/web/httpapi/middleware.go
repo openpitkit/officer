@@ -60,10 +60,14 @@ func AuthorizeMiddleware(a Authorizer, identifier string) Middleware {
 	}
 }
 
-// ResolveCaller resolves the request identity and stamps the server-owned source.
+// ResolveCaller resolves the request identity and stamps the server-owned
+// source: into the request context as its surface before it calls resolver,
+// which reads it with SurfaceFromContext, and as the Source of the caller it
+// stores for the handler.
 func ResolveCaller(resolver auth.CallerResolver, source domain.Source) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r = r.WithContext(ContextWithSurface(r.Context(), source))
 			caller, err := resolver(r)
 			if err != nil {
 				WriteErr(w, err)
@@ -72,6 +76,34 @@ func ResolveCaller(resolver auth.CallerResolver, source domain.Source) Middlewar
 			caller.Source = source
 			ctx := auth.ContextWithCaller(r.Context(), caller)
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// surfaceContextKey is the unexported context key the request surface is
+// carried under.
+type surfaceContextKey struct{}
+
+// ContextWithSurface returns a copy of ctx carrying surface, the surface a
+// request arrived on. The router stamps it from the mount that serves the
+// request, never from the request itself, before any caller is resolved, so a
+// CallerResolver reads it to admit only the credentials of that surface.
+func ContextWithSurface(ctx context.Context, surface domain.Source) context.Context {
+	return context.WithValue(ctx, surfaceContextKey{}, surface)
+}
+
+// SurfaceFromContext returns the surface stamped into ctx, and false when none
+// is.
+func SurfaceFromContext(ctx context.Context) (domain.Source, bool) {
+	surface, ok := ctx.Value(surfaceContextKey{}).(domain.Source)
+	return surface, ok
+}
+
+// withSurface stamps surface into the request context of every request.
+func withSurface(surface domain.Source) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(ContextWithSurface(r.Context(), surface)))
 		})
 	}
 }

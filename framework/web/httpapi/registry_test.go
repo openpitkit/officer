@@ -19,8 +19,8 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +29,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 )
 
@@ -45,6 +46,12 @@ func testGuards(t *testing.T) BrowserGuards {
 		t.Fatalf("AllowedHosts: %v", err)
 	}
 	return BrowserGuards{Host: host, Origin: SameOrigin(), ContentType: JSONBody()}
+}
+
+// fixedAccessMode returns a RouterConfig.AccessMode that reports mode on every
+// call.
+func fixedAccessMode(mode AccessMode) func() AccessMode {
+	return func() AccessMode { return mode }
 }
 
 func TestRouteRegistryReplaceAndUnregister(t *testing.T) {
@@ -94,7 +101,7 @@ func TestRouteRegistryReplaceAndUnregister(t *testing.T) {
 		},
 		BodyLimit:  BodyLimitPolicy(1024, nil),
 		Guards:     testGuards(t),
-		AccessMode: AccessModeOpen,
+		AccessMode: fixedAccessMode(AccessModeOpen),
 	})
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -159,7 +166,7 @@ func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
 			Handler: http.NotFoundHandler(), Access: AccessAgent,
 		},
 	}
-	cfg.AccessMode = AccessModeToken
+	cfg.AccessMode = fixedAccessMode(AccessModeToken)
 	router, err := NewRouter(cfg)
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -233,8 +240,9 @@ func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
 
 // TestRuntimeRouteManifestOmitsUnauthorizedRoutes checks that a registry route
 // is listed, on either prefix and from PanelRoutes, only when the Authorizer
-// allows the caller its id, while the manifest, MCP, extra mount and SPA
-// entries are listed whatever the Authorizer answers.
+// allows the caller its id, while a public panel route, whose id it refuses,
+// and the manifest, MCP, extra mount and SPA entries are listed whatever the
+// Authorizer answers.
 func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
 	var registry, panel RouteRegistry
 	registry.Register(Route{
@@ -252,6 +260,10 @@ func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
 	panel.Register(Route{
 		ID: "panel.denied", Method: http.MethodPost, Pattern: "/panel-denied",
 		Handler: http.NotFoundHandler(),
+	})
+	panel.Register(Route{
+		ID: "session.post", Method: http.MethodPost, Pattern: "/session",
+		Handler: http.NotFoundHandler(), Public: true,
 	})
 	cfg := guardedRouterConfig(&registry, testGuards(t))
 	cfg.PanelRoutes = &panel
@@ -280,6 +292,7 @@ func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
 		`{"method":"GET","path":"/api/v1/route-manifest.json","access":"api"},` +
 		`{"method":"GET","path":"/app/api/v1/allowed","access":"panel"},` +
 		`{"method":"GET","path":"/app/api/v1/panel-allowed","access":"panel"},` +
+		`{"method":"POST","path":"/app/api/v1/session","access":"public"},` +
 		`{"method":"GET","path":"/mcp","access":"agent"},` +
 		`{"method":"POST","path":"/mcp","access":"agent"},` +
 		`{"method":"DELETE","path":"/mcp","access":"agent"},` +
@@ -332,20 +345,63 @@ func TestPanelRoutesServeOnlyThePanelMirror(t *testing.T) {
 func TestNewRouterRequiresAccessMode(t *testing.T) {
 	t.Parallel()
 
-	for _, mode := range []AccessMode{AccessModeSetup, AccessModeToken, AccessModeOpen} {
-		cfg := guardedRouterConfig(&RouteRegistry{}, testGuards(t))
-		cfg.AccessMode = mode
-		if _, err := NewRouter(cfg); err != nil {
-			t.Fatalf("NewRouter(%q): %v", mode, err)
-		}
+	cfg := guardedRouterConfig(&RouteRegistry{}, testGuards(t))
+	cfg.AccessMode = nil
+	_, err := NewRouter(cfg)
+	if err == nil || err.Error() != "httpapi: nil access mode" {
+		t.Fatalf("NewRouter error = %v, want the nil access mode named", err)
 	}
-	for _, mode := range []AccessMode{"", "closed"} {
-		cfg := guardedRouterConfig(&RouteRegistry{}, testGuards(t))
-		cfg.AccessMode = mode
-		_, err := NewRouter(cfg)
-		want := fmt.Sprintf("httpapi: invalid access mode %q", mode)
-		if err == nil || err.Error() != want {
-			t.Fatalf("NewRouter(%q) error = %v, want %q", mode, err, want)
+}
+
+// TestRuntimeRouteManifestReadsAccessModeOnEveryRequest checks that the
+// manifest reports the mode the AccessMode func returns when each request
+// arrives, and answers 500 internal for a value that is not an AccessMode
+// constant.
+func TestRuntimeRouteManifestReadsAccessModeOnEveryRequest(t *testing.T) {
+	t.Parallel()
+
+	mode := AccessModeOpen
+	cfg := guardedRouterConfig(&RouteRegistry{}, testGuards(t))
+	cfg.AccessMode = func() AccessMode { return mode }
+	router, err := NewRouter(cfg)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	for _, tc := range []struct {
+		mode   AccessMode
+		status int
+		code   string
+	}{
+		{AccessModeOpen, http.StatusOK, ""},
+		{AccessModeToken, http.StatusOK, ""},
+		{AccessModeSetup, http.StatusOK, ""},
+		{"", http.StatusInternalServerError, "internal"},
+		{"closed", http.StatusInternalServerError, "internal"},
+	} {
+		mode = tc.mode
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(
+			http.MethodGet, "/api/v1/route-manifest.json", nil,
+		))
+		if tc.code != "" {
+			if rec.Code != tc.status || errorCode(t, rec) != tc.code {
+				t.Fatalf("manifest in mode %q = %d %s, want %d %s",
+					tc.mode, rec.Code, rec.Body, tc.status, tc.code)
+			}
+			continue
+		}
+		var manifest struct {
+			AccessMode AccessMode `json:"accessMode"`
+		}
+		if rec.Code != tc.status {
+			t.Fatalf("manifest in mode %q = %d %s, want %d",
+				tc.mode, rec.Code, rec.Body, tc.status)
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &manifest); err != nil {
+			t.Fatalf("decode manifest %q: %v", rec.Body, err)
+		}
+		if manifest.AccessMode != tc.mode {
+			t.Fatalf("manifest access mode = %q, want %q", manifest.AccessMode, tc.mode)
 		}
 	}
 }
@@ -598,7 +654,7 @@ func TestNewRouterCustomAuthorizer(t *testing.T) {
 		},
 		BodyLimit:  BodyLimitPolicy(1024, nil),
 		Guards:     testGuards(t),
-		AccessMode: AccessModeOpen,
+		AccessMode: fixedAccessMode(AccessModeOpen),
 	})
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -639,7 +695,7 @@ func TestRouteAuthorizerReceivesRouteID(t *testing.T) {
 		},
 		BodyLimit:  BodyLimitPolicy(1024, nil),
 		Guards:     testGuards(t),
-		AccessMode: AccessModeOpen,
+		AccessMode: fixedAccessMode(AccessModeOpen),
 	})
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -677,7 +733,7 @@ func TestResolverErrorRejectsRequestBeforeHandler(t *testing.T) {
 		SPA:        fstest.MapFS{"index.html": {Data: []byte("<html></html>")}},
 		BodyLimit:  BodyLimitPolicy(1024, nil),
 		Guards:     testGuards(t),
-		AccessMode: AccessModeOpen,
+		AccessMode: fixedAccessMode(AccessModeOpen),
 	})
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -690,6 +746,182 @@ func TestResolverErrorRejectsRequestBeforeHandler(t *testing.T) {
 	}
 	if handlerCalled {
 		t.Fatal("handler ran after caller resolver rejected the request")
+	}
+}
+
+// TestResolveCallerStampsSurface checks that ResolveCaller, mounted by itself
+// as a host mounts it without NewRouter, stamps its source as the request
+// surface for both the resolver and the next handler.
+func TestResolveCallerStampsSurface(t *testing.T) {
+	t.Parallel()
+
+	var resolverSurface, handlerSurface domain.Source
+	var resolverStamped, handlerStamped bool
+	resolver := func(r *http.Request) (domain.Caller, error) {
+		resolverSurface, resolverStamped = SurfaceFromContext(r.Context())
+		return testCallerResolver(r)
+	}
+	handler := ResolveCaller(resolver, domain.SourceAPI)(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			handlerSurface, handlerStamped = SurfaceFromContext(r.Context())
+			w.WriteHeader(http.StatusNoContent)
+		},
+	))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/accounts", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d %s, want 204", rec.Code, rec.Body)
+	}
+	if !resolverStamped || resolverSurface != domain.SourceAPI {
+		t.Fatalf("resolver surface = %q (stamped %t), want %q",
+			resolverSurface, resolverStamped, domain.SourceAPI)
+	}
+	if !handlerStamped || handlerSurface != domain.SourceAPI {
+		t.Fatalf("handler surface = %q (stamped %t), want %q",
+			handlerSurface, handlerStamped, domain.SourceAPI)
+	}
+}
+
+// TestRouterStampsRequestSurface checks that the caller resolver and the
+// handler of every v1 route, the panel-only and public panel routes included,
+// and of the MCP mount see the surface of their mount: the API on /api/v1, its
+// route manifest included, the panel on /app/api/v1, and MCP on the MCP path,
+// whose handler resolves the caller itself as the MCP handler does.
+func TestRouterStampsRequestSurface(t *testing.T) {
+	var resolverSaw, handlerSaw []string
+	surfaceOf := func(r *http.Request) string {
+		surface, ok := SurfaceFromContext(r.Context())
+		if !ok {
+			return "none"
+		}
+		return string(surface)
+	}
+	resolver := func(r *http.Request) (domain.Caller, error) {
+		resolverSaw = append(resolverSaw, surfaceOf(r))
+		return testCallerResolver(r)
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerSaw = append(handlerSaw, surfaceOf(r))
+		w.WriteHeader(http.StatusNoContent)
+	})
+	var registry, panel RouteRegistry
+	registry.Register(Route{
+		ID: "probe", Method: http.MethodGet, Pattern: "/probe", Handler: handler,
+	})
+	panel.Register(Route{
+		ID: "panel.probe", Method: http.MethodGet, Pattern: "/panel-probe",
+		Handler: handler,
+	})
+	panel.Register(Route{
+		ID: "public.probe", Method: http.MethodGet, Pattern: "/public-probe",
+		Handler: handler, Public: true,
+	})
+	cfg := guardedRouterConfig(&registry, testGuards(t))
+	cfg.PanelRoutes = &panel
+	cfg.CallerResolver = resolver
+	cfg.MCP = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := resolver(r); err != nil {
+			WriteErr(w, err)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
+	router, err := NewRouter(cfg)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+
+	for _, tc := range []struct {
+		path     string
+		status   int
+		resolver []string
+		handler  []string
+	}{
+		{"/api/v1/probe", http.StatusNoContent, []string{"api"}, []string{"api"}},
+		{"/api/v1/route-manifest.json", http.StatusOK, []string{"api"}, nil},
+		{"/app/api/v1/probe", http.StatusNoContent, []string{"panel"}, []string{"panel"}},
+		{"/app/api/v1/panel-probe", http.StatusNoContent, []string{"panel"}, []string{"panel"}},
+		{"/app/api/v1/public-probe", http.StatusNoContent, nil, []string{"panel"}},
+		{"/mcp", http.StatusNoContent, []string{"mcp"}, []string{"mcp"}},
+	} {
+		resolverSaw, handlerSaw = nil, nil
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if rec.Code != tc.status || !slices.Equal(resolverSaw, tc.resolver) ||
+			!slices.Equal(handlerSaw, tc.handler) {
+			t.Fatalf("%s = %d, resolver saw %q, handler saw %q; want %d, %q, %q",
+				tc.path, rec.Code, resolverSaw, handlerSaw,
+				tc.status, tc.resolver, tc.handler)
+		}
+	}
+}
+
+// TestPublicPanelRouteRunsWithoutCaller checks that a public panel route
+// reaches its handler, with no caller in the request context, while the
+// caller resolver fails and the authorizer refuses every route, and that the
+// same resolver failure answers 401 on the other panel routes and on an API
+// route before their handlers run.
+func TestPublicPanelRouteRunsWithoutCaller(t *testing.T) {
+	var served []string
+	var callerErr error
+	mark := func(name string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			served = append(served, name)
+			_, callerErr = auth.CallerFromContext(r.Context())
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
+	var registry, panel RouteRegistry
+	registry.Register(Route{
+		ID: "probe", Method: http.MethodPost, Pattern: "/probe", Handler: mark("route"),
+	})
+	panel.Register(Route{
+		ID: "panel.probe", Method: http.MethodPost, Pattern: "/panel-probe",
+		Handler: mark("panel"),
+	})
+	panel.Register(Route{
+		ID: "session.post", Method: http.MethodPost, Pattern: "/session",
+		Handler: mark("public"), Public: true,
+	})
+	cfg := guardedRouterConfig(&registry, testGuards(t))
+	cfg.PanelRoutes = &panel
+	cfg.CallerResolver = func(*http.Request) (domain.Caller, error) {
+		return domain.Caller{}, domain.ErrUnauthorized
+	}
+	cfg.Authorizer = allowIdentifiers{}
+	router, err := NewRouter(cfg)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	post := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := post("/app/api/v1/session")
+	if rec.Code != http.StatusNoContent || !slices.Equal(served, []string{"public"}) {
+		t.Fatalf("public route = %d %s, served %q; want 204 from its handler",
+			rec.Code, rec.Body, served)
+	}
+	if callerErr == nil {
+		t.Fatal("the public route's handler found a caller in the request context")
+	}
+
+	for _, path := range []string{
+		"/app/api/v1/panel-probe", "/app/api/v1/probe", "/api/v1/probe",
+	} {
+		served = nil
+		rec := post(path)
+		if len(served) != 0 {
+			t.Fatalf("%s reached its handler after the caller resolver failed", path)
+		}
+		if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "unauthorized" {
+			t.Fatalf("%s = %d %s, want 401 unauthorized", path, rec.Code, rec.Body)
+		}
 	}
 }
 
@@ -712,7 +944,7 @@ func TestNewRouterCustomMCPPath(t *testing.T) {
 		MCPPath:    "/custom/mcp",
 		BodyLimit:  BodyLimitPolicy(1024, nil),
 		Guards:     testGuards(t),
-		AccessMode: AccessModeOpen,
+		AccessMode: fixedAccessMode(AccessModeOpen),
 	})
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -779,7 +1011,7 @@ func newMCPBodyLimitRouter(
 		MCPPath:    "/mcp",
 		BodyLimit:  BodyLimitPolicy(limit, nil),
 		Guards:     testGuards(t),
-		AccessMode: AccessModeOpen,
+		AccessMode: fixedAccessMode(AccessModeOpen),
 	})
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)

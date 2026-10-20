@@ -259,7 +259,26 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 		options = append(options, sqlite.WithMasterKey(key))
 	}
 	f.builder = app.NewBuilder()
-	f.builder.SetStoreFactory(func() (store.Store, error) { return sqlite.New(dbPath, domain.DefaultRealm, options...) })
+	// Each start opens the store anew; the route config reads its seal report.
+	var sealReports httpapi.SealReportSource
+	f.builder.SetStoreFactory(func() (store.Store, error) {
+		st, err := sqlite.New(dbPath, domain.DefaultRealm, options...)
+		if err != nil {
+			return nil, err
+		}
+		reader, ok := st.(interface {
+			SealReport(ctx context.Context) (sqlite.SealReport, bool, error)
+		})
+		if !ok {
+			_ = st.Close()
+			return nil, errors.New("the SQLite store does not implement SealReport")
+		}
+		sealReports = func(ctx context.Context) (time.Time, int, bool, error) {
+			report, sealed, err := reader.SealReport(ctx)
+			return report.SealedAt, report.ResealedSecrets, sealed, err
+		}
+		return st, nil
+	})
 	f.builder.SetNodeBuilder(func(ctx context.Context, st store.Store, fatal app.FatalShutdownHook) (node.Node, fwengine.Engine, error) {
 		var err error
 		f.realm, err = st.ForRealm(ctx, domain.DefaultRealm)
@@ -279,7 +298,11 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 	host, err := httpx.AllowedHosts([]string{"127.0.0.1"})
 	tradingE2EMust(t, err)
 	f.builder.SetBrowserGuards(httpx.BrowserGuards{Host: host, Origin: httpx.SameOrigin(), ContentType: httpx.JSONBody()})
-	f.builder.SetRouteConfigBuilder(httpapi.RouteConfig)
+	f.builder.SetRouteConfigBuilder(func(svc backend.ControlPlane, logs httpx.LogSource) app.RouteConfig {
+		config := httpapi.RouteConfig(svc, logs, sealReports)
+		config.AccessMode = func() httpx.AccessMode { return httpx.AccessModeOpen }
+		return config
+	})
 	f.builder.SetSPAFactory(func() (fs.FS, error) { return fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("test")}}, nil })
 	tradingE2EMust(t, f.builder.RegisterTradingProvider(provider))
 	oldLogger := slog.Default()
@@ -509,6 +532,40 @@ func tradingE2EAssertStorage(t *testing.T, got map[string]bool, sealed bool) {
 	}
 }
 
+// tradingE2EAssertRESTStorage checks the REST credential-storage answer: the
+// fact the MCP tool also serves, and the seal report - null and 0 on a
+// database never sealed, and on one sealed when it was created an RFC 3339
+// seal time with no resealed secret. A map makes a missing or extra field
+// fail too.
+func tradingE2EAssertRESTStorage(t *testing.T, got map[string]any, sealed bool) {
+	t.Helper()
+	sealedAt, present := got["sealedAt"]
+	if !present {
+		t.Fatalf("credential storage %v carries no sealedAt", got)
+	}
+	delete(got, "sealedAt")
+	want := map[string]any{
+		"credentialsSealed": sealed, "plaintextTradingKeys": !sealed,
+		"plaintextMarketDataKeys": false, "resealedSecrets": float64(0),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential storage = %v, want %v", got, want)
+	}
+	if !sealed {
+		if sealedAt != nil {
+			t.Fatalf("sealedAt = %v on a database never sealed, want null", sealedAt)
+		}
+		return
+	}
+	text, ok := sealedAt.(string)
+	if !ok {
+		t.Fatalf("sealedAt = %v on a sealed database, want a time", sealedAt)
+	}
+	if _, err := time.Parse(time.RFC3339, text); err != nil {
+		t.Fatalf("sealedAt = %q, want RFC 3339: %v", text, err)
+	}
+}
+
 func tradingE2EAssertDestinations(t *testing.T, d tradingE2EDestinations, id string) {
 	t.Helper()
 	if len(d.Destinations) != 1 || d.Destinations[0].Connection != id || d.Destinations[0].Mode != "paper" || !d.Destinations[0].Enabled {
@@ -539,7 +596,7 @@ func TestTradingRESTEndToEnd(t *testing.T) {
 		t.Run(fmt.Sprintf("sealed=%t", sealed), func(t *testing.T) {
 			f := newTradingE2E(t, sealed)
 			id := f.createREST()
-			tradingE2EAssertStorage(t, tradingE2EDecode[map[string]bool](t, f.rest(http.MethodGet, "/credential-storage", nil, http.StatusOK)), sealed)
+			tradingE2EAssertRESTStorage(t, tradingE2EDecode[map[string]any](t, f.rest(http.MethodGet, "/credential-storage", nil, http.StatusOK)), sealed)
 			path := "/trading/connections/" + id
 			check := tradingE2EDecode[struct {
 				Check struct {

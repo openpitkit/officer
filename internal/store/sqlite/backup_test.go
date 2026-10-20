@@ -3526,7 +3526,12 @@ var backupExportedTables = map[string]bool{
 var backupExcludedTables = map[string]bool{
 	"realm":                    true, // realm identity row, re-established by the target connector
 	"schema_migration":         true, // migration bookkeeping, owned by Migrate
+	"app_schema_migration":     true, // application migration bookkeeping, owned by Migrate
 	"secret_state":             true, // installation key verifier, invalid across archive boundaries
+	"seal_report":              true, // installation sealing record, kept with secret_state
+	"access_state":             true, // installation access mode, which a restore must never switch
+	"access_credential":        true, // installation access secrets, never carried in an archive
+	"panel_session":            true, // installation panel sessions, never carried in an archive
 	"source_kind":              true, // immutable enum dictionary, seeded by Migrate
 	"order_event_type":         true, // immutable enum dictionary, seeded by Migrate
 	"order_side":               true, // immutable enum dictionary, seeded by Migrate

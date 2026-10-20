@@ -18,8 +18,8 @@ that.
 These are the packages, by path under `go.openpit.dev/officer`; everything else
 is a command or under `internal/`, and cannot be imported:
 
-- the root - `Register` and `Config`, the default composition `pit-officer` runs,
-  and `RouteConfig`, its REST route surface, which a host rebuilds routes from.
+- the root - `Register` and `Config`, the default composition `pit-officer`
+  runs.
 - `web` - the embedded dashboard build (`Dist`).
 - `httpapi` - the REST routes (`RouteConfig`) and the service lifecycle routes.
 - `mcptools` - the MCP tool set (`RegisterTools`).
@@ -57,10 +57,10 @@ an `internal` path element drift from the list.
 `Register` fills a builder with the default composition: the SQLite store, one
 local node over the default realm running the OpenPit engine, the signer, the
 control-plane service, the built-in market-data and trading providers, the REST
-routes, the MCP tools, the dashboard, allow-all authorization, an operator
-caller for every request, and the browser guards - the host check over loopback
-and `Config.AllowedHosts`, the cross-origin check, and the JSON-body check. A
-`Set` call after it replaces that part, `SetBrowserGuards` the guards;
+routes, the MCP tools, the dashboard, allow-all authorization, a caller resolver
+that follows the access mode, and the browser guards - the host check over
+loopback and `Config.AllowedHosts`, the cross-origin check, and the JSON-body
+check. A `Set` call after it replaces that part, `SetBrowserGuards` the guards;
 `AddToolRegistrar`, `RegisterMarketDataProvider`, and `RegisterTradingProvider`
 add to it. `Build` then opens and migrates the store and builds the node:
 
@@ -92,22 +92,38 @@ without all three guards, so a builder that skips `Register` sets them with
 `SetBrowserGuards`; `framework/web/httpapi` builds the default ones with
 `AllowedHosts`, `SameOrigin`, and `JSONBody`.
 
-A host that composes its own `app.RouteConfig` sets its `AccessMode` -
-`httpapi.RouteConfig` sets `open` - and the `Access` of each extra mount,
-`public` or `agent`. `BuildServeHandler` fails without them, and on an extra
-mount or an MCP path at or under `/api/v1` or `/app/api/v1`. `AccessMode` and
-`Access`, with a route's `Public` and `DuringSetup`, are what the route manifest
-reports; no request is checked against them.
+A host that composes its own `app.RouteConfig` sets its `AccessMode`, a
+function the route manifest calls on every request, and the `Access` of each
+extra mount, `public` or `agent`. `BuildServeHandler` fails without them, and on
+an extra mount or an MCP path at or under `/api/v1` or `/app/api/v1`. The router
+serves a `PanelRoutes` route marked `Public` without resolving or authorizing a
+caller; `AccessMode`, `Access`, and `DuringSetup` are what the route manifest
+reports, and no request is checked against them.
 
 `BuildServeHandler` also refuses an operation mounted twice: each method and
 path, parameter names ignored, may be mounted only once across the REST routes
 on both prefixes, `PanelRoutes`, the route manifest, the MCP methods, the extra
 mounts, and the dashboard's `GET /*`.
 
-The account mode is part of `Register`'s service factory and private to
-Officer, so a host that replaces the service factory runs every account and
-should not serve the account-mode routes `RouteConfig` adds; it builds its
-routes from `httpapi.RouteConfig` instead.
+A host extends the route surface `Register` installs by wrapping
+`builder.RouteConfigBuilder()` and setting the wrapper with
+`SetRouteConfigBuilder`, as `examples/customhost/main.go` does, so the account
+mode and the access mode stay served.
+
+The account mode and the access state are part of `Register`'s factories and
+private to Officer. The access state lives in Officer's SQLite store, so
+`Build` fails when a host replaces the store factory and keeps the service
+factory. A host that replaces the service factory runs every account, gets no
+access service, and should not serve the account-mode routes `Register`'s route
+config adds. `Register`'s caller resolver then answers 500 on every
+authenticated route until the host installs its own with `SetCallerResolver`.
+`Register`'s route config builder, if the host keeps it, serves the panel access
+routes and the route manifest answering 500. A route config the host builds
+from `httpapi.RouteConfig(svc, logs, sealReports)` needs a seal-report source
+the host supplies, since nil panics and Officer's own is not reachable outside
+`Register`, and its own `AccessMode`, without which `BuildServeHandler` fails;
+its `PanelRoutes` are the host's own, since Officer's panel access routes live
+in an internal package.
 
 A host that calls the control plane itself, outside a request, puts a caller
 in the context first (`auth.ContextWithCaller`): every call that reads or

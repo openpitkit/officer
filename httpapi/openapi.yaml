@@ -21,6 +21,12 @@ info:
     than `GET` may also answer `403` `origin_not_allowed` for a browser request
     from another origin, or `415` `unsupported_media_type` for a request body
     not sent as `application/json`.
+    In token access mode every operation requires the API token as
+    `Authorization: Bearer pit_api_...` and answers `401` `unauthorized`, with
+    a `WWW-Authenticate: Bearer` challenge, without it; the agent token is
+    refused with `403` `wrong_token`. In open access mode no operation requires
+    a credential. The dashboard mirror authenticates with its panel session,
+    never with a bearer token.
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -28,6 +34,9 @@ info:
 servers:
   - url: /api/v1
     description: Public REST API
+
+security:
+  - bearerAuth: []
 
 tags:
   - name: health
@@ -89,6 +98,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RuntimeRouteManifest"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
 
@@ -108,6 +119,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
 
@@ -123,6 +136,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Status"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "503":
@@ -180,6 +195,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -236,6 +253,8 @@ paths:
                 properties:
                   summary:
                     $ref: "#/components/schemas/BackupRestoreSummary"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -283,6 +302,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -325,6 +346,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -388,6 +411,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -432,6 +457,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -490,6 +517,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -514,6 +543,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -569,6 +600,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -613,6 +646,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -671,6 +706,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -695,6 +732,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -818,6 +857,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -861,6 +902,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -894,6 +937,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "404":
@@ -935,6 +980,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -963,6 +1010,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1012,6 +1061,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1052,6 +1103,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1105,6 +1158,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1153,6 +1208,8 @@ paths:
                     $ref: "#/components/schemas/Account"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1200,6 +1257,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1236,6 +1295,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -1278,6 +1339,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1379,6 +1442,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -1430,6 +1495,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1465,6 +1532,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ReservedGroupOrForeignHostError"
         "404":
@@ -1510,6 +1579,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ReservedGroupOrForeignRequestError"
         "415":
@@ -1543,6 +1614,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ReservedGroupOrForeignRequestError"
         "415":
@@ -1603,6 +1676,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -1649,6 +1724,8 @@ paths:
                     $ref: "#/components/schemas/Group"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ReservedGroupOrForeignRequestError"
         "415":
@@ -1696,6 +1773,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ReservedGroupOrForeignRequestError"
         "415":
@@ -1741,6 +1820,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ReservedGroupOrForeignRequestError"
         "415":
@@ -1781,6 +1862,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ReservedGroupOrForeignRequestError"
         "415":
@@ -1827,6 +1910,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -2040,6 +2125,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -2141,6 +2228,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -2272,6 +2361,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -2339,6 +2430,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -2382,6 +2475,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "404":
@@ -2421,6 +2516,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "404":
@@ -2613,6 +2710,8 @@ paths:
                 $ref: "#/components/schemas/ExecutionReportResponse"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -2767,6 +2866,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -2848,6 +2949,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -2898,6 +3001,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -2945,6 +3050,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -2997,6 +3104,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3045,6 +3154,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3178,6 +3289,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -3205,6 +3318,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AuditActionGroup"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -3238,6 +3353,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/McpCommand"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -3287,6 +3404,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3312,6 +3431,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserSettings"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -3337,6 +3458,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3367,6 +3490,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AccountMode"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -3403,6 +3528,8 @@ paths:
                 $ref: "#/components/schemas/AccountMode"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3448,6 +3575,8 @@ paths:
                 properties:
                   key:
                     $ref: "#/components/schemas/SigningKey"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3497,6 +3626,8 @@ paths:
                     $ref: "#/components/schemas/SigningKey"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3530,6 +3661,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/SigningKey"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -3560,6 +3693,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -3600,6 +3735,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "404":
@@ -3619,6 +3756,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SigningConfig"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -3644,6 +3783,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3686,6 +3827,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3730,12 +3873,15 @@ paths:
                 $ref: "#/components/schemas/SendPaperOrderResponse"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           description: >-
             Forbidden destination, the request's Host is not an allowed name
-            (`host_not_allowed`), or a browser sent the request from another
-            origin (`origin_not_allowed`). Names beyond loopback come from
-            `PIT_OFFICER_ALLOWED_HOSTS`.
+            (`host_not_allowed`), a browser sent the request from another
+            origin (`origin_not_allowed`), or the request carries the agent
+            token, which is accepted only on `/mcp` (`wrong_token`). Names
+            beyond loopback come from `PIT_OFFICER_ALLOWED_HOSTS`.
           content:
             application/json:
               schema:
@@ -3799,6 +3945,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3836,6 +3984,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3896,6 +4046,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -3923,6 +4075,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TradingResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "501":
@@ -3964,6 +4118,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4006,6 +4162,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4045,6 +4203,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4078,6 +4238,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4121,6 +4283,8 @@ paths:
           $ref: "#/components/responses/AssetMissingOrNotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4154,6 +4318,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4193,6 +4359,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4233,6 +4401,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4284,6 +4454,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4329,6 +4501,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4368,6 +4542,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4394,6 +4570,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
         "415":
@@ -4434,6 +4612,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/TradingConflictError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/LiveTradingUnavailableOrForeignHostError"
         "502":
@@ -4463,6 +4643,8 @@ paths:
                 properties:
                   marketData:
                     $ref: "#/components/schemas/MarketData"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -4488,6 +4670,8 @@ paths:
                 properties:
                   marketData:
                     $ref: "#/components/schemas/MarketData"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4521,6 +4705,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4564,6 +4750,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4601,6 +4789,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4626,6 +4816,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4663,6 +4855,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4698,6 +4892,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4737,6 +4933,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4761,6 +4959,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4807,6 +5007,8 @@ paths:
           $ref: "#/components/responses/MalformedRequestError"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4845,6 +5047,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Overview"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -4862,6 +5066,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Service"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -4883,6 +5089,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceLifecycleAccepted"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4905,6 +5113,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceLifecycleAccepted"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignRequestError"
         "415":
@@ -4928,6 +5138,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceLogs"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
 
@@ -4951,6 +5163,8 @@ paths:
             text/plain:
               schema:
                 type: string
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
 
@@ -4961,8 +5175,9 @@ paths:
       description: >
         Reports whether stored credentials are sealed under the master key and,
         when they are not, whether trading connections or market-data sources
-        hold keys in plain text. The response never carries credential values
-        or key names.
+        hold keys in plain text; and, once the database has been sealed, when
+        and how many secrets stored in the clear before it were resealed. The
+        response never carries credential values or key names.
       tags: [dashboard]
       responses:
         "200":
@@ -4973,6 +5188,8 @@ paths:
                 $ref: "#/components/schemas/CredentialStorage"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "500":
@@ -4983,6 +5200,20 @@ paths:
 # =============================================================================
 
 components:
+
+  # ---------------------------------------------------------------------------
+  # Security schemes
+  # ---------------------------------------------------------------------------
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        The API token, `pit_api_...`, sent as `Authorization: Bearer <token>`.
+        It is required in token access mode and ignored in open access mode.
+        The agent token, `pit_mcp_...`, is accepted only on `/mcp`: presented
+        here it is refused with `403` `wrong_token`.
 
   # ---------------------------------------------------------------------------
   # Parameters
@@ -5277,11 +5508,29 @@ components:
           schema:
             $ref: "#/components/schemas/ProblemDetails"
 
+    UnauthorizedError:
+      description: >-
+        Token access mode is on and the request carries no API token: the
+        `Authorization` header is missing, is not one `Bearer` token, or holds
+        a token that is not accepted (`unauthorized`). The answer carries the
+        bearer challenge.
+      headers:
+        WWW-Authenticate:
+          description: The bearer challenge, `Bearer realm="pit-officer"`.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     ForeignHostError:
       description: >-
         The request's `Host` is not a name the server answers to
-        (`host_not_allowed`). Loopback names (`localhost`, `127.0.0.1`, `::1`)
-        are always allowed; further names come from `PIT_OFFICER_ALLOWED_HOSTS`.
+        (`host_not_allowed`), or it carries the agent token, which is accepted
+        only on `/mcp` (`wrong_token`). Loopback names (`localhost`,
+        `127.0.0.1`, `::1`) are always allowed; further names come from
+        `PIT_OFFICER_ALLOWED_HOSTS`.
       content:
         application/json:
           schema:
@@ -5290,8 +5539,9 @@ components:
     ForeignRequestError:
       description: >-
         The request's `Host` is not a name the server answers to
-        (`host_not_allowed`), or a browser sent the request from another origin
-        (`origin_not_allowed`). Names beyond loopback come from
+        (`host_not_allowed`), a browser sent the request from another origin
+        (`origin_not_allowed`), or it carries the agent token, which is
+        accepted only on `/mcp` (`wrong_token`). Names beyond loopback come from
         `PIT_OFFICER_ALLOWED_HOSTS`.
       content:
         application/json:
@@ -5369,9 +5619,10 @@ components:
         The operation targets the reserved default account group, addressed as
         `-`. That group is the terminal tier of the currency cascade every
         account resolves through, not an operator-owned group, so no operation
-        addressed at it is carried out, reads included (`reserved_group`); or
-        the request's `Host` is not a name the server answers to
-        (`host_not_allowed`). Names beyond loopback come from
+        addressed at it is carried out, reads included (`reserved_group`); the
+        request's `Host` is not a name the server answers to
+        (`host_not_allowed`); or the request carries the agent token, which is
+        accepted only on `/mcp` (`wrong_token`). Names beyond loopback come from
         `PIT_OFFICER_ALLOWED_HOSTS`.
       content:
         application/json:
@@ -5385,9 +5636,10 @@ components:
         account resolves through, not an operator-owned group, so no operation
         addressed at it is carried out, reads included (`reserved_group`); the
         request's `Host` is not a name the server answers to
-        (`host_not_allowed`); or a browser sent the request from another origin
-        (`origin_not_allowed`). Names beyond loopback come from
-        `PIT_OFFICER_ALLOWED_HOSTS`.
+        (`host_not_allowed`); a browser sent the request from another origin
+        (`origin_not_allowed`); or the request carries the agent token, which
+        is accepted only on `/mcp` (`wrong_token`). Names beyond loopback come
+        from `PIT_OFFICER_ALLOWED_HOSTS`.
       content:
         application/json:
           schema:
@@ -5483,9 +5735,10 @@ components:
     LiveTradingUnavailableOrForeignHostError:
       description: >-
         Live trading is refused until the live token exists
-        (`live_trading_unavailable`), or the request's `Host` is not a name the
-        server answers to (`host_not_allowed`). Names beyond loopback come from
-        `PIT_OFFICER_ALLOWED_HOSTS`.
+        (`live_trading_unavailable`), the request's `Host` is not a name the
+        server answers to (`host_not_allowed`), or the request carries the
+        agent token, which is accepted only on `/mcp` (`wrong_token`). Names
+        beyond loopback come from `PIT_OFFICER_ALLOWED_HOSTS`.
       content:
         application/json:
           schema:
@@ -5495,9 +5748,10 @@ components:
       description: >-
         Live trading is refused until the live token exists
         (`live_trading_unavailable`), the request's `Host` is not a name the
-        server answers to (`host_not_allowed`), or a browser sent the request
-        from another origin (`origin_not_allowed`). Names beyond loopback come
-        from `PIT_OFFICER_ALLOWED_HOSTS`.
+        server answers to (`host_not_allowed`), a browser sent the request from
+        another origin (`origin_not_allowed`), or the request carries the agent
+        token, which is accepted only on `/mcp` (`wrong_token`). Names beyond
+        loopback come from `PIT_OFFICER_ALLOWED_HOSTS`.
       content:
         application/json:
           schema:
@@ -5699,6 +5953,7 @@ components:
                 `terminal_order`, `approval_required`,
                 `execution_report_required`, `precondition`, `too_large`,
                 `forbidden`, `host_not_allowed`, `origin_not_allowed`,
+                `unauthorized`, `wrong_token`,
                 `unsupported_media_type`, `reserved_group`, `loosening_refused`,
                 `live_trading_unavailable`, `trading_mode_mismatch`,
                 `fee_account_required`, `venue_order_managed`, `no_destination`,
@@ -7554,10 +7809,11 @@ components:
       type: object
       additionalProperties: false
       description: >
-        How stored credentials sit at rest. It never carries a credential value
-        or a key name; every flag is present even when false, and both
-        plaintext flags are false while credentials are sealed.
-      required: [credentialsSealed, plaintextTradingKeys, plaintextMarketDataKeys]
+        How stored credentials sit at rest, and when the database was sealed.
+        It never carries a credential value or a key name; every member is
+        present even when false or null, and both plaintext flags are false
+        while credentials are sealed.
+      required: [credentialsSealed, plaintextTradingKeys, plaintextMarketDataKeys, sealedAt, resealedSecrets]
       properties:
         credentialsSealed:
           type: boolean
@@ -7572,6 +7828,19 @@ components:
           description: >-
             Credentials are not sealed and at least one market-data source holds
             a key.
+        sealedAt:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When the database was sealed under the master key, in UTC; null
+            when it has never been sealed.
+        resealedSecrets:
+          type: integer
+          minimum: 0
+          description: >-
+            How many stored secrets held a value when the database was sealed.
+            They had been stored in the clear, so they must be considered
+            exposed. 0 when the database has never been sealed.
 
     # User settings
 

@@ -20,9 +20,11 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -141,6 +143,126 @@ func TestWriteErrBrowserGuardCodes(t *testing.T) {
 			}
 			if body.Error.Code != tc.code || body.Error.Message != tc.err.Error() {
 				t.Fatalf("body=%s", rec.Body)
+			}
+		})
+	}
+}
+
+// TestDescribeErrAccessSentinels checks the status and code of each access
+// refusal, matched before the generic forbidden and conflict cases it may also
+// wrap, and its message: the full text for a wrong token, whose wrapper names
+// the surface the token belongs to, and the sentinel text for the rest.
+func TestDescribeErrAccessSentinels(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		err      error
+		status   int
+		code     string
+		fullText bool
+	}{
+		{domain.ErrUnauthorized, http.StatusUnauthorized, "unauthorized", false},
+		{domain.ErrInvalidPassword, http.StatusUnauthorized, "invalid_password", false},
+		{domain.ErrInvalidRecoveryCode, http.StatusUnauthorized, "invalid_recovery_code", false},
+		{domain.ErrCurrentPasswordInvalid, http.StatusForbidden, "current_password_invalid", false},
+		{domain.ErrWrongToken, http.StatusForbidden, "wrong_token", true},
+		{domain.ErrTooManyAttempts, http.StatusTooManyRequests, "too_many_attempts", false},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			t.Parallel()
+			err := fmt.Errorf(
+				"the agent token on the REST API: %w: %w: %w",
+				domain.ErrForbidden, domain.ErrConflict, tc.err,
+			)
+			message := tc.err.Error()
+			if tc.fullText {
+				message = err.Error()
+			}
+			want := PublicError{tc.status, tc.code, message}
+			if got := DescribeErr(err); got != want {
+				t.Fatalf("DescribeErr(%q) = %+v, want %+v", err, got, want)
+			}
+		})
+	}
+}
+
+// TestWriteErrSetsCarriedHeaders checks that WriteErr answers a sentinel
+// wrapped with response headers as DescribeErr maps the bare sentinel, with
+// every carried header set, and that errors.Is and errors.As see through the
+// wrappers, a typed error keeping its structured answer.
+func TestWriteErrSetsCarriedHeaders(t *testing.T) {
+	t.Parallel()
+
+	err := fmt.Errorf("sign in: %w", WithResponseHeader(
+		WithResponseHeader(domain.ErrInvalidPassword, "Retry-After", "2"),
+		"WWW-Authenticate", `Bearer realm="pit-officer"`,
+	))
+	if !errors.Is(err, domain.ErrInvalidPassword) {
+		t.Fatal("errors.Is lost the sentinel under the header wrappers")
+	}
+	if got, want := DescribeErr(err), DescribeErr(domain.ErrInvalidPassword); got != want {
+		t.Fatalf("DescribeErr = %+v, want the bare sentinel's %+v", got, want)
+	}
+	rec := httptest.NewRecorder()
+	WriteErr(rec, err)
+	var body struct {
+		Error struct{ Code, Message string }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusUnauthorized || body.Error.Code != "invalid_password" ||
+		body.Error.Message != domain.ErrInvalidPassword.Error() {
+		t.Fatalf("answer = %d %s, want 401 invalid_password", rec.Code, rec.Body)
+	}
+	for name, want := range map[string]string{
+		"Retry-After":      "2",
+		"WWW-Authenticate": `Bearer realm="pit-officer"`,
+	} {
+		if got := rec.Header().Values(name); !slices.Equal(got, []string{want}) {
+			t.Fatalf("%s = %q, want [%s]", name, got, want)
+		}
+	}
+
+	missing := WithResponseHeader(
+		domain.NewAssetMissingError("USDT"), "Cache-Control", "no-store",
+	)
+	var assetMissing domain.AssetMissingError
+	if !errors.As(missing, &assetMissing) || assetMissing.Asset != "USDT" {
+		t.Fatalf("errors.As = %+v, want the asset missing error", assetMissing)
+	}
+	rec = httptest.NewRecorder()
+	WriteErr(rec, missing)
+	if rec.Code != http.StatusNotFound || rec.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(rec.Body.String(), `"asset":"USDT"`) {
+		t.Fatalf("answer = %d %v %s, want 404 asset_missing with the header",
+			rec.Code, rec.Header(), rec.Body)
+	}
+}
+
+// TestWriteErrCarriedHeaderFirstReachedWins checks that a header carried more
+// than once takes the value of the wrapper errors.Is reaches first: the outer
+// over the inner, and the earlier of two wrapped errors over the later.
+func TestWriteErrCarriedHeaderFirstReachedWins(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"outer over inner", WithResponseHeader(
+			WithResponseHeader(domain.ErrTooManyAttempts, "Retry-After", "2"),
+			"Retry-After", "30",
+		)},
+		{"earlier over later", fmt.Errorf("%w; %w",
+			WithResponseHeader(domain.ErrTooManyAttempts, "Retry-After", "30"),
+			WithResponseHeader(domain.ErrInvalidPassword, "Retry-After", "2"),
+		)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			WriteErr(rec, tc.err)
+			if got := rec.Header().Values("Retry-After"); !slices.Equal(got, []string{"30"}) {
+				t.Fatalf("Retry-After = %q, want [30]", got)
 			}
 		})
 	}

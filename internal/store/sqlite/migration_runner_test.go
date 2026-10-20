@@ -27,12 +27,6 @@ import (
 	"go.openpit.dev/officer/framework/migration"
 )
 
-type testMigrationSource []migration.Migration
-
-func (s testMigrationSource) Migrations() ([]migration.Migration, error) {
-	return s, nil
-}
-
 func TestSQLiteDialectBindVar(t *testing.T) {
 	for _, position := range []int{1, 2, 99} {
 		if got := (sqliteDialect{}).BindVar(position); got != "?" {
@@ -48,7 +42,7 @@ func TestMigrationRunner(t *testing.T) {
 	t.Run("applies and records once", func(t *testing.T) {
 		db := openMigrationTestDB(t)
 		ctx := context.Background()
-		source := testMigrationSource{{
+		source := migrationList{{
 			Version: 1,
 			Name:    "create_applied_migration.sql",
 			SQL: "CREATE TABLE applied_migration " +
@@ -69,7 +63,7 @@ func TestMigrationRunner(t *testing.T) {
 		db := openMigrationTestDB(t)
 		ctx := context.Background()
 		err := migration.Apply(
-			ctx, db, testMigrationSource{{
+			ctx, db, migrationList{{
 				Version: 1,
 				Name:    "rollback.sql",
 				SQL: "CREATE TABLE rolled_back_migration " +
@@ -110,7 +104,7 @@ func TestMigrationRunner(t *testing.T) {
 				db := openMigrationTestDB(t)
 				ctx := context.Background()
 				cfg := migration.Config{Table: test.table}
-				source := testMigrationSource{{
+				source := migrationList{{
 					Version: 7,
 					Name:    "quoted_bookkeeping.sql",
 					SQL: "CREATE TABLE quoted_bookkeeping_migration " +
@@ -177,7 +171,7 @@ func TestMigrationRunner(t *testing.T) {
 		cfg := migration.Config{Schema: "migration schema"}
 		if err := migration.Apply(
 			ctx, db,
-			testMigrationSource{{
+			migrationList{{
 				Version: 9,
 				Name:    "attached_schema.sql",
 				SQL: "CREATE TABLE attached_schema_migration " +

@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -31,7 +30,6 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
-	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 func TestLocalNode_ExportBackupAudits(t *testing.T) {
@@ -1290,49 +1288,6 @@ func TestLocalNode_RestoreBackupRollbackKeepsTradingFeeSeam(t *testing.T) {
 	}
 	if _, err := rollback.TradingProviderRequiresFeeAccount("probe-provider"); !errors.Is(err, errSeam) || !reflect.DeepEqual(asked, []string{"probe-provider"}) {
 		t.Fatalf("rollback seam answered %v after asking %q, want the caller's seam", err, asked)
-	}
-}
-
-func TestLocalNode_RestoreBackupNarrowedUserSettingsWithTradingConnection(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st, err := sqlite.New(
-		filepath.Join(t.TempDir(), "narrowed-user-settings.db"),
-		domain.DefaultRealm,
-	)
-	if err != nil {
-		t.Fatalf("New sqlite store: %v", err)
-	}
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
-	if _, err := n.realm.CreateTradingConnection(ctx, domain.TradingConnection{
-		Provider:      domain.TradingProviderAlpaca,
-		Label:         "Alpaca paper",
-		Mode:          domain.TradingModePaper,
-		VenueIdentity: "venue-account-1",
-		Credentials:   `{"key":"secret"}`,
-	}); err != nil {
-		t.Fatalf("CreateTradingConnection: %v", err)
-	}
-	scope := backup.Scope{
-		Sections: []backup.Section{backup.SectionUserSettings},
-		Accounts: backup.EntitySelector{Accounts: []string{"selected-account"}},
-	}
-	archive := testArchive(scope, backup.Data{UserSettings: []domain.UserSetting{{
-		UserID: domain.DefaultUserID, Key: domain.UserSettingWelcomeSeen, Value: "1",
-	}}})
-
-	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
-		Scope: scope, Mode: backup.RestoreModeReplaceAll,
-	}, testCaller); err != nil {
-		t.Fatalf("RestoreBackup: %v", err)
-	}
-	connections, err := n.realm.ListTradingConnections(ctx)
-	if err != nil || len(connections) != 1 {
-		t.Fatalf("trading connections after restore = %+v, err=%v", connections, err)
 	}
 }
 

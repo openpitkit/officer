@@ -41,20 +41,7 @@ func (f *fakeLogs) Snapshot() []string {
 // newRouterWithLogs builds the router with the log tail wired in, so the
 // /service/logs routes are registered.
 func newRouterWithLogs(svc backend.ControlPlane, logs httpx.LogSource) (http.Handler, error) {
-	guards, err := testGuards()
-	if err != nil {
-		return nil, err
-	}
-	return httpx.NewRouter(httpx.RouterConfig{
-		Routes:         NewRouteRegistry(svc, logs),
-		Authorizer:     httpx.AllowAll{},
-		CallerResolver: testCallerResolver,
-		SPA:            fakeSPA(),
-		BodyLimit:      BodyLimitPolicy(),
-		ExtraMounts:    ExtraMounts(),
-		Guards:         guards,
-		AccessMode:     httpx.AccessModeOpen,
-	})
+	return newRouterOver(svc, logs, noSealReport)
 }
 
 // TestServiceLogs covers GET /api/v1/service/logs: 200, JSON with the lines

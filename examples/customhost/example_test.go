@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -44,6 +45,7 @@ import (
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/officer/internal/access"
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/configure"
@@ -61,9 +63,15 @@ func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newCustomHostComposition: %v", err)
 	}
+	var accessState access.Store
 	composition.Builder.SetNodeBuilder(func(
 		buildCtx context.Context, st store.Store, fatalHook app.FatalShutdownHook,
 	) (node.Node, engine.Engine, error) {
+		state, ok := st.(access.Store)
+		if !ok {
+			return nil, nil, errors.New("the store holds no access state")
+		}
+		accessState = state
 		return node.NewLocalNode(
 			buildCtx,
 			domain.DefaultRealm,
@@ -100,6 +108,7 @@ func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
 	assertRouteAndToolReplacement(t, ctx, router, service)
 	assertRouteAndToolHidden(t, router, composition.Authorizer, service)
 	assertRouteAndToolRemoved(t, router, service)
+	assertAccessModeServed(t, router, accessState)
 }
 
 func TestHostConnectorSubscribeEmptyClosesImmediately(t *testing.T) {
@@ -223,8 +232,8 @@ func assertHostRouteAdded(t *testing.T, router http.Handler) {
 	}
 }
 
-// assertAccountModeServed checks that the host, which rebuilds its routes from
-// officer.RouteConfig, still serves the account mode Register enforces.
+// assertAccountModeServed checks that the host, which wraps the route config
+// Register installed, still serves the account mode Register enforces.
 func assertAccountModeServed(t *testing.T, router http.Handler) {
 	t.Helper()
 
@@ -237,6 +246,63 @@ func assertAccountModeServed(t *testing.T, router http.Handler) {
 		`"features":{"accounts":true,"account":""},"restartRequired":false}`
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
 		t.Fatalf("GET /account-mode = %d %s, want 200 %s", rec.Code, got, want)
+	}
+}
+
+// assertAccessModeServed checks that the host, which wraps the route config
+// Register installed, keeps the access resolver and the route manifest's access
+// mode: once the stored mode is token mode, the REST API refuses a request
+// without the API token with the bearer challenge, answers one with it, and
+// the manifest reports token mode.
+func assertAccessModeServed(
+	t *testing.T, router http.Handler, state access.Store,
+) {
+	t.Helper()
+
+	const apiToken = "pit_api_customhost"
+	now := time.Now()
+	if err := state.EnableTokenMode(context.Background(), access.Credentials{
+		Password:   access.Password{Hash: "$argon2id$customhost", SetAt: now},
+		APIToken:   apiToken,
+		AgentToken: "pit_mcp_customhost",
+	}, access.Session{
+		IDHash:     sha256.Sum256([]byte("customhost")),
+		CreatedAt:  now,
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("EnableTokenMode: %v", err)
+	}
+	get := func(path, authorization string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1"+path, nil)
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	rec := get("/account-mode", "")
+	if challenge := rec.Header().Get("WWW-Authenticate"); rec.Code != http.StatusUnauthorized ||
+		challenge != `Bearer realm="pit-officer"` {
+		t.Fatalf("GET /account-mode without a token = %d with WWW-Authenticate %q, "+
+			"want 401 with the bearer challenge", rec.Code, challenge)
+	}
+	if rec = get("/account-mode", "Bearer "+apiToken); rec.Code != http.StatusOK {
+		t.Fatalf("GET /account-mode with the API token = %d, want 200", rec.Code)
+	}
+	rec = get("/route-manifest.json", "Bearer "+apiToken)
+	var manifest struct {
+		AccessMode string `json:"accessMode"`
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /route-manifest.json = %d, want 200", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &manifest); err != nil {
+		t.Fatalf("decode route manifest: %v", err)
+	}
+	if manifest.AccessMode != "token" {
+		t.Fatalf("access mode = %q, want token", manifest.AccessMode)
 	}
 }
 

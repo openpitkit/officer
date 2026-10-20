@@ -21,11 +21,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -58,8 +60,10 @@ import (
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/secret"
+	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/httpapi"
+	"go.openpit.dev/officer/internal/access"
 	"go.openpit.dev/officer/internal/accountmode"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
@@ -173,16 +177,18 @@ func TestManualReportRefusesVenueLinkCreatedAfterServiceEntry(t *testing.T) {
 func TestRegisterTradingComposition(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	st, err := sqlite.New(filepath.Join(t.TempDir(), "officer.db"), domain.DefaultRealm)
+	path := filepath.Join(t.TempDir(), "officer.db")
+	st, err := sqlite.New(path, domain.DefaultRealm)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = st.Close() })
 	if err := st.Migrate(ctx); err != nil {
+		_ = st.Close()
 		t.Fatal(err)
 	}
 	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
 	if err != nil {
+		_ = st.Close()
 		t.Fatal(err)
 	}
 	// Invalid credentials exercise the registered constructor without
@@ -192,13 +198,16 @@ func TestRegisterTradingComposition(t *testing.T) {
 		Credentials: "{}", Enabled: true,
 	})
 	if err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
 	builder := frameworkapp.NewBuilder()
-	if err := Register(builder, Config{}); err != nil {
+	if err := Register(builder, Config{SQLitePath: path}); err != nil {
 		t.Fatal(err)
 	}
-	builder.SetStoreFactory(func() (store.Store, error) { return st, nil })
 	builder.SetNodeBuilder(fakeEngineNodeBuilder)
 	var logs bytes.Buffer
 	app, err := builder.Build(ctx, slog.New(slog.NewTextHandler(&logs, nil)), failOnFatal(t))
@@ -489,9 +498,9 @@ func failOnFatal(t *testing.T) frameworkapp.FatalShutdownHook {
 
 func TestRESTMutationAuditUsesResolvedPrincipal(t *testing.T) {
 	const principal = "alice"
-	app, realm := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+	app, realm, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{Principal: principal, Role: "admin"}, nil
-	})
+	}, nil)
 	if err := realm.CreatePrincipal(context.Background(), domain.Principal{Code: principal}); err != nil {
 		t.Fatalf("CreatePrincipal: %v", err)
 	}
@@ -525,9 +534,9 @@ func TestRESTMutationAuditUsesResolvedPrincipal(t *testing.T) {
 
 func TestRecordServiceLifecycleUsesContextCaller(t *testing.T) {
 	const principal = "lifecycle-admin"
-	app, realm := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+	app, realm, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{Principal: domain.PrincipalOperator}, nil
-	})
+	}, nil)
 	if err := realm.CreatePrincipal(context.Background(), domain.Principal{Code: principal}); err != nil {
 		t.Fatalf("CreatePrincipal: %v", err)
 	}
@@ -553,9 +562,9 @@ func TestRecordServiceLifecycleUsesContextCaller(t *testing.T) {
 
 func TestRecordServiceLifecycleRejectsUnresolvedCaller(t *testing.T) {
 	ctx := context.Background()
-	app, realm := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+	app, realm, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{Principal: domain.PrincipalOperator}, nil
-	})
+	}, nil)
 	before, err := realm.ListAudit(ctx, 1000)
 	if err != nil {
 		t.Fatalf("ListAudit before: %v", err)
@@ -577,9 +586,9 @@ func TestRecordServiceLifecycleRejectsUnresolvedCaller(t *testing.T) {
 }
 
 func TestRecordServiceLifecycleRecordsExplicitSystemCaller(t *testing.T) {
-	app, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+	app, _, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{Principal: domain.PrincipalOperator}, nil
-	})
+	}, nil)
 	if err := app.RecordServiceLifecycle(
 		auth.ContextWithCaller(
 			context.Background(), domain.Caller{Source: domain.SourceSystem},
@@ -740,12 +749,17 @@ func TestRegisterSingleAccountModeMCPSchemas(t *testing.T) {
 // handler: the open access mode; every v1 route - the httpapi registry, the
 // account-mode routes, then the lifecycle routes the serve wrapper adds - as api
 // on /api/v1 and as panel on /app/api/v1, with the manifest on /api/v1 only; the
-// agent MCP methods; the public mounts and SPA; and exactly the panel routes
-// that answer during first-run setup.
+// panel-only access routes, public or panel; the agent MCP methods; the public
+// mounts and SPA; and exactly the panel routes that answer during first-run
+// setup.
 func TestRegisterRouteBaseline(t *testing.T) {
-	app, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+	app, _, opened := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{Principal: domain.PrincipalOperator}, nil
-	})
+	}, nil)
+	sealReports, err := sealReportSource(opened)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := app.BuildServeHandler(nil, "/mcp", httpapi.ServiceLifecycleRoutes(
 		http.NotFoundHandler(), http.NotFoundHandler(),
 	)...)
@@ -783,7 +797,7 @@ func TestRegisterRouteBaseline(t *testing.T) {
 	}
 	type operation struct{ method, pattern string }
 	var v1 []operation
-	for _, route := range httpapi.NewRouteRegistry(app.Service(), nil).Routes() {
+	for _, route := range httpapi.NewRouteRegistry(app.Service(), nil, sealReports).Routes() {
 		v1 = append(v1, operation{route.Method, route.Pattern})
 	}
 	v1 = append(v1,
@@ -801,6 +815,17 @@ func TestRegisterRouteBaseline(t *testing.T) {
 		want = append(want, op.method+" /app/api/v1"+op.pattern+" panel")
 	}
 	want = append(want,
+		"GET /app/api/v1/session public",
+		"POST /app/api/v1/session public",
+		"DELETE /app/api/v1/session panel",
+		"DELETE /app/api/v1/sessions panel",
+		"POST /app/api/v1/session/recovery public",
+		"POST /app/api/v1/session/recovery/reset public",
+		"GET /app/api/v1/access panel",
+		"PUT /app/api/v1/access/mode panel",
+		"PUT /app/api/v1/access/password panel",
+		"GET /app/api/v1/access/tokens/{kind} panel",
+		"POST /app/api/v1/access/tokens/{kind}/regenerate panel",
 		"GET /mcp agent", "POST /mcp agent", "DELETE /mcp agent",
 		"GET /healthz public", "GET /api/openapi.yaml public", "GET /docs public",
 		"GET /docs/swagger-ui.css public", "GET /docs/swagger-ui-bundle.js public",
@@ -825,12 +850,175 @@ func TestRegisterRouteBaseline(t *testing.T) {
 		"GET /app/api/v1/account-mode",
 		"PUT /app/api/v1/account-mode",
 		"POST /app/api/v1/service/restart",
+		"GET /app/api/v1/session",
 	}
 	slices.Sort(duringSetup)
 	slices.Sort(wantDuringSetup)
 	if !slices.Equal(duringSetup, wantDuringSetup) {
 		t.Fatalf("routes answering during setup mismatch\ngot:  %v\nwant: %v",
 			duringSetup, wantDuringSetup)
+	}
+}
+
+// TestRegisterAccessModeFollowsService drives the real composition, with
+// Register's own caller resolver, across a switch of the stored access mode:
+// the route manifest and the panel's GET /session report open mode to a
+// request without credentials; once token mode is on, the same handler
+// refuses that manifest request with the bearer challenge and reports token
+// mode to a request with the API token, and GET /session reports token mode.
+func TestRegisterAccessModeFollowsService(t *testing.T) {
+	app, _, opened := buildTestApp(t, nil, nil)
+	accessState, ok := opened.(access.Store)
+	if !ok {
+		t.Fatal("the composed store holds no access state")
+	}
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatalf("BuildServeHandler: %v", err)
+	}
+	manifestMode := func(authorization string, wantStatus int) string {
+		t.Helper()
+		req := httptest.NewRequest(
+			http.MethodGet, "http://127.0.0.1/api/v1/route-manifest.json", nil,
+		)
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != wantStatus {
+			t.Fatalf("route manifest = %d, want %d", rec.Code, wantStatus)
+		}
+		if wantStatus != http.StatusOK {
+			return rec.Header().Get("WWW-Authenticate")
+		}
+		var manifest struct {
+			AccessMode string `json:"accessMode"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &manifest); err != nil {
+			t.Fatalf("decode route manifest: %v", err)
+		}
+		return manifest.AccessMode
+	}
+	sessionMode := func() string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(
+			http.MethodGet, "http://127.0.0.1/app/api/v1/session", nil,
+		))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /app/api/v1/session = %d, want 200: %s", rec.Code, rec.Body)
+		}
+		var status struct {
+			AccessMode string `json:"accessMode"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+			t.Fatalf("decode GET /app/api/v1/session: %v", err)
+		}
+		return status.AccessMode
+	}
+	if mode := manifestMode("", http.StatusOK); mode != "open" {
+		t.Fatalf("access mode = %q, want open", mode)
+	}
+	if mode := sessionMode(); mode != "open" {
+		t.Fatalf("session access mode = %q, want open", mode)
+	}
+	const apiToken = "pit_api_register-test"
+	enableTokenMode(t, accessState, apiToken)
+	if challenge := manifestMode("", http.StatusUnauthorized); challenge !=
+		`Bearer realm="pit-officer"` {
+		t.Fatalf("WWW-Authenticate = %q, want the bearer challenge", challenge)
+	}
+	if mode := manifestMode("Bearer "+apiToken, http.StatusOK); mode != "token" {
+		t.Fatalf("access mode = %q, want token", mode)
+	}
+	if mode := sessionMode(); mode != "token" {
+		t.Fatalf("session access mode = %q, want token", mode)
+	}
+}
+
+// TestRegisterPanelAccessRoutesWithoutAccessService builds Register's
+// composition with a service factory a host replaced, which leaves it no
+// access Service: the public GET /app/api/v1/session answers 500 internal
+// through WriteErr, the resolver's failure, instead of reaching the missing
+// Service.
+func TestRegisterPanelAccessRoutesWithoutAccessService(t *testing.T) {
+	app, _, _ := buildTestApp(t, nil, func(
+		_ context.Context,
+		n node.Node,
+		md backend.MarketDataRuntime,
+		rt backend.TradingRuntime,
+		signer fwsigning.Service,
+		_ *marketdata.Registry,
+		_ *frameworkmcp.ToolRegistry,
+	) (backend.ControlPlane, error) {
+		return backend.New(n, md, signer, func([]byte, domain.Order) (string, error) {
+			return "", errUnexpectedOrderChain
+		}, backend.WithTradingRuntime(rt))
+	})
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatalf("BuildServeHandler: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "http://127.0.0.1/app/api/v1/session", nil,
+	))
+	var answer struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	err = json.Unmarshal(rec.Body.Bytes(), &answer)
+	if rec.Code != http.StatusInternalServerError || err != nil ||
+		answer.Error.Code != "internal" {
+		t.Fatalf("GET /app/api/v1/session = %d %q, want 500 internal",
+			rec.Code, rec.Body)
+	}
+}
+
+// enableTokenMode switches the stored access mode to token mode with apiToken
+// as the API token, past the access Service, which no app exposes.
+func enableTokenMode(t *testing.T, state access.Store, apiToken string) {
+	t.Helper()
+	now := time.Now()
+	if err := state.EnableTokenMode(context.Background(), access.Credentials{
+		Password:   access.Password{Hash: "$argon2id$test", SetAt: now},
+		APIToken:   apiToken,
+		AgentToken: "pit_mcp_register-test",
+	}, access.Session{
+		IDHash:     sha256.Sum256([]byte("register-test")),
+		CreatedAt:  now,
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("EnableTokenMode: %v", err)
+	}
+}
+
+// unknownModeAccessStore is an access.Store that publishes a mode the route
+// manifest does not know; it implements Snapshot only.
+type unknownModeAccessStore struct{ access.Store }
+
+func (unknownModeAccessStore) Snapshot() access.Snapshot {
+	return access.Snapshot{Mode: "unknown"}
+}
+
+// TestManifestAccessModeFailsClosed checks that the route manifest gets the
+// empty access mode, which it refuses as an internal error, never open mode:
+// without an access Service and for a mode it does not know.
+func TestManifestAccessModeFailsClosed(t *testing.T) {
+	if mode := manifestAccessMode(nil); mode != "" {
+		t.Fatalf("manifestAccessMode(nil) = %q, want the empty mode", mode)
+	}
+	service, err := access.New(
+		unknownModeAccessStore{}, struct{ access.Auditor }{}, io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("access.New: %v", err)
+	}
+	if mode := manifestAccessMode(service); mode != "" {
+		t.Fatalf("manifestAccessMode(unknown mode) = %q, want the empty mode", mode)
 	}
 }
 
@@ -1126,25 +1314,36 @@ func firstOf(items []any) any {
 	return items[0]
 }
 
+// buildTestApp builds Register's composition, over a fake engine, on a fresh
+// database and returns the app, its realm and the store Register opened.
+// resolver replaces Register's caller resolver and serviceFactory its service
+// factory; nil keeps Register's.
 func buildTestApp(
 	t *testing.T,
 	resolver func(*http.Request) (domain.Caller, error),
-) (*frameworkapp.App, store.RealmStore) {
+	serviceFactory frameworkapp.ServiceFactory,
+) (*frameworkapp.App, store.RealmStore, store.Store) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := sqlite.New(
-		filepath.Join(t.TempDir(), "officer.db"), domain.DefaultRealm,
-	)
-	if err != nil {
-		t.Fatalf("sqlite.New: %v", err)
-	}
 	builder := frameworkapp.NewBuilder()
-	if err := Register(builder, Config{}); err != nil {
+	if err := Register(
+		builder, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	builder.SetStoreFactory(func() (store.Store, error) { return st, nil })
-	builder.SetNodeBuilder(fakeEngineNodeBuilder)
-	builder.SetCallerResolver(resolver)
+	var opened store.Store
+	builder.SetNodeBuilder(func(
+		buildCtx context.Context, st store.Store, fatalHook frameworkapp.FatalShutdownHook,
+	) (node.Node, engine.Engine, error) {
+		opened = st
+		return fakeEngineNodeBuilder(buildCtx, st, fatalHook)
+	})
+	if resolver != nil {
+		builder.SetCallerResolver(resolver)
+	}
+	if serviceFactory != nil {
+		builder.SetServiceFactory(serviceFactory)
+	}
 	builder.SetSPAFactory(func() (fs.FS, error) {
 		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
 	})
@@ -1153,11 +1352,11 @@ func buildTestApp(
 		t.Fatalf("Build: %v", err)
 	}
 	t.Cleanup(func() { _ = app.Close() })
-	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	realm, err := opened.ForRealm(ctx, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("ForRealm: %v", err)
 	}
-	return app, realm
+	return app, realm, opened
 }
 
 func auditRowForAction(

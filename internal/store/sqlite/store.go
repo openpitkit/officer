@@ -20,6 +20,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -34,16 +35,19 @@ import (
 	"go.openpit.dev/officer/framework/secret"
 	fwstore "go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/store/schema"
+	"go.openpit.dev/officer/internal/access"
 
 	sqlitedriver "modernc.org/sqlite"
 )
 
 const driverName = "sqlite"
 
-// Compile-time assertions that the SQLite connector satisfies both seams.
+// Compile-time assertions that the SQLite connector satisfies both framework
+// seams and is the application's access store.
 var (
 	_ fwstore.Store      = (*sqliteStore)(nil)
 	_ fwstore.RealmStore = (*realmStore)(nil)
+	_ access.Store       = (*sqliteStore)(nil)
 )
 
 // sqliteStore is the SQLite-backed Store. It is single-realm: it serves exactly
@@ -57,7 +61,15 @@ type sqliteStore struct {
 	dialect             sqliteDialect
 	path                string
 	realm               domain.RealmID
-	databaseCreated     bool
+
+	// accessSnapshot is the access state the live database last committed;
+	// Migrate publishes the first one.
+	accessSnapshot atomic.Pointer[access.Snapshot]
+	// accessMu orders every write that changes the access snapshot, and the
+	// database swap of Reset, with the publication of the snapshot it
+	// leaves, so the published snapshot is always the last one committed.
+	// A writer resolves the database only once it holds accessMu.
+	accessMu sync.Mutex
 
 	mu        sync.Mutex
 	reachable bool
@@ -90,12 +102,6 @@ func New(
 	if err := domain.ValidateRealmID(realm); err != nil {
 		return nil, fmt.Errorf("store: bind realm: %w", err)
 	}
-	filesystemPath, _, _ := strings.Cut(path, "?")
-	_, statErr := os.Stat(filesystemPath)
-	databaseCreated := errors.Is(statErr, os.ErrNotExist)
-	if statErr != nil && !databaseCreated {
-		return nil, fmt.Errorf("store: stat sqlite at %q: %w", path, statErr)
-	}
 	db, err := openSQLiteDB(path)
 	if err != nil {
 		return nil, fmt.Errorf("store: open sqlite at %q: %w", path, err)
@@ -106,10 +112,9 @@ func New(
 		displayPath = abs
 	}
 	s := &sqliteStore{
-		dialect:         sqliteDialect{},
-		path:            displayPath,
-		realm:           realm,
-		databaseCreated: databaseCreated,
+		dialect: sqliteDialect{},
+		path:    displayPath,
+		realm:   realm,
 	}
 	s.db.Store(db)
 	for _, opt := range opts {
@@ -211,17 +216,48 @@ func (s *sqliteStore) ensureRealmRowDB(ctx context.Context, db *sql.DB) error {
 // Migrate brings the schema up to the version this build expects. Idempotent.
 // The one canonical migration is rendered through the dialect before it runs, so
 // the surrogate-PK, external-id and boolean tokens become backend-specific DDL.
+// The application's own tables follow, and Migrate then publishes the access
+// snapshot of the database.
 func (s *sqliteStore) Migrate(ctx context.Context) error {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
 	db := s.currentDB()
 	if db == nil {
 		return fmt.Errorf("store: sqlite is closed")
 	}
-	return s.migrateDB(ctx, db, s.databaseCreated)
+	snapshot, err := s.migrateDB(ctx, db)
+	if err != nil {
+		return err
+	}
+	s.accessSnapshot.Store(&snapshot)
+	return nil
 }
 
+// appSchemaSQL creates the tables Pit Officer keeps apart from the shared
+// framework schema. It is the single migration of the application's own set,
+// edited in place.
+//
+//go:embed app_schema.sql
+var appSchemaSQL string
+
+// appMigrationTable is the bookkeeping table of the application's migration
+// set, apart from the shared set's.
+const appMigrationTable = "app_schema_migration"
+
+// migrationList is a migration set held in memory.
+type migrationList []migration.Migration
+
+// Migrations returns the set as it is.
+func (l migrationList) Migrations() ([]migration.Migration, error) {
+	return l, nil
+}
+
+// migrateDB applies the shared and the application's migration sets to db,
+// configures sealing and returns db's access snapshot without publishing it:
+// the caller publishes it once db is the live database.
 func (s *sqliteStore) migrateDB(
-	ctx context.Context, db *sql.DB, databaseCreated bool,
-) error {
+	ctx context.Context, db *sql.DB,
+) (access.Snapshot, error) {
 	if err := migration.Apply(
 		ctx,
 		db,
@@ -229,23 +265,40 @@ func (s *sqliteStore) migrateDB(
 		migration.Config{},
 		s.dialect,
 	); err != nil {
-		return err
+		return access.Snapshot{}, err
 	}
 	if err := s.requireSignedEnvelopeColumnDB(ctx, db); err != nil {
-		return err
+		return access.Snapshot{}, err
 	}
 	if err := s.ensureRealmRowDB(ctx, db); err != nil {
-		return err
+		return access.Snapshot{}, err
 	}
 	dictionaries, err := seedEnumDictionaries(ctx, db)
 	if err != nil {
-		return err
+		return access.Snapshot{}, err
 	}
-	if err := s.configureSealing(ctx, db, databaseCreated); err != nil {
-		return err
+	// Sealing covers the access credentials, so their table exists first. It
+	// comes after the checks above, so a foreign or outdated database is
+	// refused before the application's tables are added to it.
+	if err := migration.Apply(
+		ctx,
+		db,
+		migrationList{{Version: 1, Name: "app_schema.sql", SQL: appSchemaSQL}},
+		migration.Config{Table: appMigrationTable},
+		s.dialect,
+	); err != nil {
+		return access.Snapshot{}, err
+	}
+	if err := s.configureSealing(ctx, db); err != nil {
+		return access.Snapshot{}, err
+	}
+	// The snapshot opens the stored tokens, so sealing is configured first.
+	snapshot, err := s.loadAccessSnapshot(ctx, db)
+	if err != nil {
+		return access.Snapshot{}, err
 	}
 	s.enumCodes.Store(dictionaries)
-	return nil
+	return snapshot, nil
 }
 
 // requireSignedEnvelopeColumnDB refuses a database created before
@@ -302,6 +355,8 @@ func (s *sqliteStore) Ping(ctx context.Context) error {
 }
 
 // Reset replaces the SQLite contents with a freshly migrated database.
+// Access writes wait until restore and snapshot publication complete. An
+// error before the restore commits leaves the previous snapshot intact.
 func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 	path := s.path
 	oldDB := s.currentDB()
@@ -335,13 +390,18 @@ func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 	if err != nil {
 		return fmt.Errorf("store: reset open temporary sqlite at %q: %w", tmpPath, err)
 	}
-	if err := s.migrateDB(ctx, tmpDB, true); err != nil {
+	snapshot, err := s.migrateDB(ctx, tmpDB)
+	if err != nil {
 		_ = tmpDB.Close()
 		return fmt.Errorf("store: reset migrate: %w", err)
 	}
 	if err := tmpDB.Close(); err != nil {
 		return fmt.Errorf("store: reset close migrated temporary sqlite: %w", err)
 	}
+	// Keep access writes and their snapshot publication on the same side
+	// of the restore, even when Finish or cleanup fails after it commits.
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
 	conn, err := oldDB.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("store: reset acquire sqlite connection: %w", err)
@@ -364,6 +424,9 @@ func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 		// Step commits the replacement before Finish and the deferred cleanup.
 		// Any later failure must not be reported as an unchanged database.
 		committed = err == nil
+		if committed {
+			s.accessSnapshot.Store(&snapshot)
+		}
 		return errors.Join(err, restore.Finish())
 	}); err != nil {
 		return fmt.Errorf("store: reset replace sqlite at %q: %w", path, err)
@@ -430,16 +493,22 @@ type realmStore struct {
 
 func (s *sqliteStore) currentDB() *sql.DB { return s.db.Load() }
 
+// liveDB returns the shared connection pool, or the closed-store error once
+// Close has swapped the pool out.
+func (s *sqliteStore) liveDB() (*sql.DB, error) {
+	db := s.currentDB()
+	if db == nil {
+		return nil, fmt.Errorf("store: sqlite is closed")
+	}
+	return db, nil
+}
+
 // db returns the shared connection pool, or the closed-store error once Close
 // has swapped the pool out. Every realm data method resolves the pool through
 // here so a shutdown/Close race fails gracefully with the same error the
 // lifecycle methods return instead of dereferencing a nil pool.
 func (r *realmStore) db() (*sql.DB, error) {
-	db := r.store.currentDB()
-	if db == nil {
-		return nil, fmt.Errorf("store: sqlite is closed")
-	}
-	return db, nil
+	return r.store.liveDB()
 }
 
 func (r *realmStore) dictionaries() (*enumDictionaries, error) {
@@ -471,6 +540,16 @@ func nowStr() string {
 func nowStored() (time.Time, string) {
 	now := time.Now().UTC().Round(0)
 	return now, timeStr(now)
+}
+
+// parseStoredTime parses the text of a stored timestamp column, naming the
+// column in the error.
+func parseStoredTime(column, text string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("store: parse %s %q: %w", column, text, err)
+	}
+	return parsed, nil
 }
 
 // newExternalID draws 16 crypto/rand bytes and encodes them as a domain external

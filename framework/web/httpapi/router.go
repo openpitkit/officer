@@ -19,7 +19,6 @@ package httpapi
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"slices"
@@ -72,9 +71,11 @@ type RouterConfig struct {
 	BodyLimit      func(*http.Request) int64
 	ExtraMounts    []ExtraMount
 	Guards         BrowserGuards
-	// AccessMode is the access state the route manifest reports; NewRouter
-	// refuses a value that is not an AccessMode constant.
-	AccessMode AccessMode
+	// AccessMode reports the access state of the service. The router calls it
+	// on every route manifest request, concurrently from request goroutines,
+	// so it must be safe for concurrent use. A value that is not an AccessMode
+	// constant answers an internal error; NewRouter refuses a nil one.
+	AccessMode func() AccessMode
 }
 
 // NewRouter builds the framework HTTP handler. It panics on a public Routes
@@ -82,7 +83,10 @@ type RouterConfig struct {
 // operation mounted twice, a route id in both Routes and PanelRoutes, and an
 // extra mount or MCP path under a v1 prefix. Behind Guards, the MCP mount
 // refuses, with domain.ErrOriginNotAllowed, a request a browser sent from
-// another origin on every method, GET included.
+// another origin on every method, GET included. Every v1 route and the MCP
+// mount carry their surface in the request context for SurfaceFromContext:
+// domain.SourceAPI on /api/v1, domain.SourcePanel on /app/api/v1 and
+// domain.SourceMCP on the MCP path.
 func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	if cfg.Routes == nil {
 		return nil, errors.New("httpapi: nil route registry")
@@ -108,10 +112,8 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	if cfg.Guards.ContentType == nil {
 		return nil, errors.New("httpapi: nil content-type guard")
 	}
-	switch cfg.AccessMode {
-	case AccessModeSetup, AccessModeToken, AccessModeOpen:
-	default:
-		return nil, fmt.Errorf("httpapi: invalid access mode %q", cfg.AccessMode)
+	if cfg.AccessMode == nil {
+		return nil, errors.New("httpapi: nil access mode")
 	}
 
 	routes := cfg.Routes.Routes()
@@ -161,7 +163,13 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	)
 
 	if cfg.MCP != nil {
-		mcp := Chain{sameOriginOnEveryMethod(), LimitBody(cfg.BodyLimit)}.Then(cfg.MCP)
+		// The MCP handler resolves the caller itself, so the surface is stamped
+		// before it.
+		mcp := Chain{
+			sameOriginOnEveryMethod(),
+			LimitBody(cfg.BodyLimit),
+			withSurface(domain.SourceMCP),
+		}.Then(cfg.MCP)
 		for _, method := range mcpMethods {
 			register(router, method, mcpPath, mcp)
 		}
@@ -190,7 +198,11 @@ func mountV1(
 	manifest http.Handler,
 ) {
 	router.Route(prefix, func(v1 chi.Router) {
-		base := Chain{LimitBody(bodyLimit), ResolveCaller(callerResolver, source)}
+		limit := LimitBody(bodyLimit)
+		base := Chain{limit, ResolveCaller(callerResolver, source)}
+		// A public route carries no credentials: nothing resolves a caller for
+		// it or authorizes it, so only the surface is stamped.
+		public := Chain{limit, withSurface(source)}
 		if manifest != nil {
 			register(
 				v1,
@@ -200,6 +212,10 @@ func mountV1(
 			)
 		}
 		for _, route := range routes {
+			if route.Public {
+				register(v1, route.Method, route.Pattern, public.Then(route.Handler))
+				continue
+			}
 			chain := make(Chain, 0, len(base)+1)
 			chain = append(chain, base...)
 			chain = append(chain, AuthorizeMiddleware(authorizer, route.ID))

@@ -281,7 +281,7 @@ func guardedRouterConfig(registry *RouteRegistry, guards BrowserGuards) RouterCo
 		SPA:            fstest.MapFS{"index.html": {Data: []byte("<html></html>")}},
 		BodyLimit:      BodyLimitPolicy(1024, nil),
 		Guards:         guards,
-		AccessMode:     AccessModeOpen,
+		AccessMode:     fixedAccessMode(AccessModeOpen),
 	}
 }
 

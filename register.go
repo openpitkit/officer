@@ -23,7 +23,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"slices"
+	"time"
 
 	"go.openpit.dev/officer/engine"
 	frameworkapp "go.openpit.dev/officer/framework/app"
@@ -38,6 +40,7 @@ import (
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
+	"go.openpit.dev/officer/internal/access"
 	"go.openpit.dev/officer/internal/accountmode"
 	appmarketdata "go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/store/sqlite"
@@ -65,18 +68,58 @@ type Config struct {
 // them.
 var loopbackHosts = []string{"localhost", "127.0.0.1", "::1"}
 
+// errNoAccessService fails the caller resolver and every panel access route
+// of a composition whose service factory a host replaced, which builds no
+// access Service.
+var errNoAccessService = errors.New("officer: no access service")
+
 // Register populates b with the Pit Officer concrete implementations built
 // from cfg. The composition serves domain.DefaultRealm through one local node.
+//
+// The access mode guards the HTTP surfaces: the installed caller resolver,
+// the route manifest's access mode and the panel access routes, which the
+// route config serves as its PanelRoutes, all read the access Service the
+// service factory builds over the SQLite store the store factory opens. Build
+// fails when that store does not implement access.Store or the seal-report
+// reader, and when a host replaced the store factory, which leaves the Service
+// without a store. A host that replaces the service factory gets no access
+// Service: the installed caller resolver answers 500 on every authenticated
+// route until the host sets its own, and the route config, if kept, serves the
+// panel access routes and the route manifest answering 500. A route config
+// built from httpapi.RouteConfig needs the host's own seal-report source (nil
+// panics), AccessMode (BuildServeHandler fails without one) and PanelRoutes.
 func Register(b *frameworkapp.Builder, cfg Config) error {
 	if b == nil {
 		return errors.New("officer: nil builder")
 	}
+	// Build sets these, in the store and service factories, before the app
+	// serves; the resolver and the route config read them afterwards.
+	var (
+		accessStore   access.Store
+		sealReports   httpapi.SealReportSource
+		accessService *access.Service
+	)
 	b.SetStoreFactory(func() (store.Store, error) {
 		var opts []sqlite.Option
 		if cfg.MasterKey != nil {
 			opts = append(opts, sqlite.WithMasterKey(*cfg.MasterKey))
 		}
-		return sqlite.New(cfg.SQLitePath, domain.DefaultRealm, opts...)
+		st, err := sqlite.New(cfg.SQLitePath, domain.DefaultRealm, opts...)
+		if err != nil {
+			return nil, err
+		}
+		accessState, ok := st.(access.Store)
+		if !ok {
+			_ = st.Close()
+			return nil, errors.New("officer: the store does not implement access.Store")
+		}
+		reports, err := sealReportSource(st)
+		if err != nil {
+			_ = st.Close()
+			return nil, err
+		}
+		accessStore, sealReports = accessState, reports
+		return st, nil
 	})
 	b.SetNodeBuilder(func(
 		ctx context.Context,
@@ -95,8 +138,11 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		return signing.New(st)
 	})
 	b.SetAuthorizer(httpx.AllowAll{})
-	b.SetCallerResolver(func(*http.Request) (domain.Caller, error) {
-		return domain.Caller{Principal: domain.PrincipalOperator}, nil
+	b.SetCallerResolver(func(r *http.Request) (domain.Caller, error) {
+		if accessService == nil {
+			return domain.Caller{}, errNoAccessService
+		}
+		return accessService.ResolveCaller(r)
 	})
 	host, err := httpx.AllowedHosts(slices.Concat(loopbackHosts, cfg.AllowedHosts))
 	if err != nil {
@@ -132,6 +178,10 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		if err != nil {
 			return nil, err
 		}
+		accessService, err = access.New(accessStore, n, os.Stderr)
+		if err != nil {
+			return nil, fmt.Errorf("officer: build access service: %w", err)
+		}
 		service, err := fwbackend.New(
 			n,
 			md,
@@ -147,21 +197,67 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		}
 		return service, nil
 	})
-	b.SetRouteConfigBuilder(RouteConfig)
+	// A host that customises routes wraps b.RouteConfigBuilder(), so the
+	// account mode and the access mode Register enforces stay served.
+	b.SetRouteConfigBuilder(func(
+		svc fwbackend.ControlPlane, logs httpx.LogSource,
+	) frameworkapp.RouteConfig {
+		config := httpapi.RouteConfig(svc, logs, sealReports)
+		for _, route := range accountmode.Routes(svc) {
+			config.Routes.Register(route)
+		}
+		config.PanelRoutes = &httpx.RouteRegistry{}
+		for _, route := range access.Routes(accessService) {
+			if accessService == nil {
+				// The routes stay listed and answer the resolver's failure
+				// instead of reaching the missing Service.
+				route.Handler = http.HandlerFunc(
+					func(w http.ResponseWriter, _ *http.Request) {
+						httpx.WriteErr(w, errNoAccessService)
+					},
+				)
+			}
+			config.PanelRoutes.Register(route)
+		}
+		config.AccessMode = func() httpx.AccessMode {
+			return manifestAccessMode(accessService)
+		}
+		return config
+	})
 	b.AddToolRegistrar(mcptools.RegisterTools)
 	b.SetSPAFactory(web.Dist)
 	return nil
 }
 
-// RouteConfig returns the default Officer route surface over svc, the one
-// Register installs: httpapi.RouteConfig followed by the account-mode routes.
-// A host that customises routes on top of Register starts from it, not from
-// httpapi.RouteConfig, so the account mode Register enforces stays readable
-// and changeable.
-func RouteConfig(svc fwbackend.ControlPlane, logs httpx.LogSource) frameworkapp.RouteConfig {
-	config := httpapi.RouteConfig(svc, logs)
-	for _, route := range accountmode.Routes(svc) {
-		config.Routes.Register(route)
+// sealReportSource adapts the seal report of st, the store the store factory
+// opened, to the source GET /credential-storage reads. It fails when st does
+// not implement SealReport.
+func sealReportSource(st store.Store) (httpapi.SealReportSource, error) {
+	reader, ok := st.(interface {
+		SealReport(ctx context.Context) (sqlite.SealReport, bool, error)
+	})
+	if !ok {
+		return nil, errors.New("officer: the store does not implement SealReport")
 	}
-	return config
+	return func(ctx context.Context) (time.Time, int, bool, error) {
+		report, sealed, err := reader.SealReport(ctx)
+		return report.SealedAt, report.ResealedSecrets, sealed, err
+	}, nil
+}
+
+// manifestAccessMode is the route manifest's access mode for service's mode.
+// Without a service, or for a mode it does not know, it answers the empty
+// mode, which the manifest refuses as an internal error.
+func manifestAccessMode(service *access.Service) httpx.AccessMode {
+	if service == nil {
+		return ""
+	}
+	switch service.Mode() {
+	case access.ModeOpen:
+		return httpx.AccessModeOpen
+	case access.ModeToken:
+		return httpx.AccessModeToken
+	default:
+		return ""
+	}
 }

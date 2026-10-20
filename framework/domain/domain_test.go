@@ -2023,6 +2023,7 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrAlreadyExists":           domain.ErrAlreadyExists,
 		"ErrConflict":                domain.ErrConflict,
 		"ErrCurrencyValuedLimit":     domain.ErrCurrencyValuedLimit,
+		"ErrCurrentPasswordInvalid":  domain.ErrCurrentPasswordInvalid,
 		"ErrDestinationAmbiguous":    domain.ErrDestinationAmbiguous,
 		"ErrEngineRestarting":        domain.ErrEngineRestarting,
 		"ErrExecutionReportRequired": domain.ErrExecutionReportRequired,
@@ -2031,6 +2032,8 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrHasDependents":           domain.ErrHasDependents,
 		"ErrHostNotAllowed":          domain.ErrHostNotAllowed,
 		"ErrInvalid":                 domain.ErrInvalid,
+		"ErrInvalidPassword":         domain.ErrInvalidPassword,
+		"ErrInvalidRecoveryCode":     domain.ErrInvalidRecoveryCode,
 		"ErrLiveTradingUnavailable":  domain.ErrLiveTradingUnavailable,
 		"ErrLoosening":               domain.ErrLoosening,
 		"ErrMasterKeyRequired":       domain.ErrMasterKeyRequired,
@@ -2042,10 +2045,13 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrReservedGroup":           domain.ErrReservedGroup,
 		"ErrTerminalOrder":           domain.ErrTerminalOrder,
 		"ErrTooLarge":                domain.ErrTooLarge,
+		"ErrTooManyAttempts":         domain.ErrTooManyAttempts,
 		"ErrTradingModeMismatch":     domain.ErrTradingModeMismatch,
+		"ErrUnauthorized":            domain.ErrUnauthorized,
 		"ErrUnsupportedMediaType":    domain.ErrUnsupportedMediaType,
 		"ErrUpstream":                domain.ErrUpstream,
 		"ErrVenueOrderManaged":       domain.ErrVenueOrderManaged,
+		"ErrWrongToken":              domain.ErrWrongToken,
 	}
 	declared := exportedDomainErrorVariableNames(t)
 	registered := make([]string, 0, len(sentinels))
