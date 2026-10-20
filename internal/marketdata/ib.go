@@ -708,7 +708,8 @@ func (c *ibConnector) connectClient(
 	case <-connectCtx.Done():
 		disconnectErr := disconnectIBClient(client)
 		select {
-		case <-result:
+		//nolint:staticcheck // S1005: drain; return cancellation below.
+		case _ = <-result:
 		case <-time.After(defaultIBConnectDrainTimeout):
 		}
 		if disconnectErr != nil {

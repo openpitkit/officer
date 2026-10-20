@@ -487,7 +487,8 @@ func TestRuntimeCallsDuringStart(t *testing.T) {
 	releaseBuild()
 	must(t, <-started)
 	if blocked {
-		<-calls
+		//nolint:staticcheck // S1005: drain before reporting the blocked call.
+		_ = <-calls
 		t.Fatal("calls blocked on connector construction")
 	}
 	must(t, f.runtime.PreCheck(testCtx, f.draft("1"), f.dest))

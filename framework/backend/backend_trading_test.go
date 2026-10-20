@@ -451,7 +451,8 @@ func TestTradingSearchDoesNotBlockEnable(t *testing.T) {
 		t.Error(err)
 	}
 	if blocked {
-		<-enableDone
+		//nolint:staticcheck // S1005: drain before reporting the blocked call.
+		_ = <-enableDone
 		t.Fatal("slow symbol search blocked connection enable")
 	}
 	if !n.connections[0].Enabled || rt.restarts != 1 {
