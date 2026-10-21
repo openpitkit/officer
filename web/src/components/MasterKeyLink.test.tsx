@@ -16,7 +16,9 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { I18nextProvider } from "react-i18next";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { MasterKeyLink } from "@/components/MasterKeyLink";
@@ -26,19 +28,36 @@ beforeEach(async () => {
   await i18n.changeLanguage("en");
 });
 
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <output aria-label="Current location">
+      {location.pathname + location.hash}
+    </output>
+  );
+}
+
 describe("MasterKeyLink", () => {
-  it("opens the master-key guide in a new tab", () => {
+  it("leads in the app to the Security tab of Service", async () => {
+    const user = userEvent.setup();
     render(
       <I18nextProvider i18n={i18n}>
-        <MasterKeyLink />
+        <MemoryRouter initialEntries={["/trading-connections"]}>
+          <Routes>
+            <Route path="/trading-connections" element={<MasterKeyLink />} />
+            <Route path="/service" element={<LocationProbe />} />
+          </Routes>
+        </MemoryRouter>
       </I18nextProvider>,
     );
+
     const link = screen.getByRole("link", { name: "How to set a master key" });
-    expect(link).toHaveAttribute(
-      "href",
-      "https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key",
+    expect(link).toHaveAttribute("href", "/service#security");
+    expect(link).not.toHaveAttribute("target");
+    await user.click(link);
+
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(
+      "/service#security",
     );
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 });

@@ -75,13 +75,14 @@ rules:
         | Alpaca | Binance | Bybit | Coinbase\ Exchange | Coinbase | Kraken
         | OKX | OANDA | Finnhub
         | Claude\ Desktop | Claude\ Agent\ Skill | Claude\ Skill | Claude
-        | ChatGPT | GPT | GitHub | OpenSSH
+        | Docker\ Desktop
+        | ChatGPT | GPT | Codex | Cursor | GitHub | OpenSSH
         # Protocol, format, platform, language and key names.
         | MCP | REST | FIX | OpenAPI | Swagger | streamable\ HTTP | HTTPS | HTTP
         | stdio | WebSocket | WebCrypto | JSON | CSV | ZIP | PEM | PKCS
         | Ed25519 | raw-base64 | base64url | base64 | authorized_keys
-        | crypto/ed25519 | JavaScript | Go | macOS | Windows | Linux
-        | localhost | Cmd | Ctrl
+        | crypto/ed25519 | JavaScript | Go | macOS | Windows | Linux | Docker
+        | PowerShell | localhost | Cmd | Ctrl
         # Abbreviations, trading codes and the trade abbreviations.
         | API | SDK | CLI | URL | CPU | LTO | AI | ID | GET | FX
         | P&L | PnL | uPnL | rPnL | PX | QTY | NTL | MTM | TIF | CCY

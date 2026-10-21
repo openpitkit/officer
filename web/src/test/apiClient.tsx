@@ -79,6 +79,39 @@ export function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+export type Route = (init: RequestInit) => Response;
+
+// Answers each request from `routes`, keyed by method and path; any other
+// request fails as unreachable.
+export function serving(routes: Record<string, Route>) {
+  return vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+    async (url, init) => {
+      const route = routes[`${init.method} ${url}`];
+      if (route === undefined) {
+        throw new TypeError(`unexpected ${init.method} ${url}`);
+      }
+      return route(init);
+    },
+  );
+}
+
+/**
+ * A failure in the shared `{"error":{"code","message"}}` body, with `headers`
+ * such as `Retry-After`. The code doubles as the message unless one is given.
+ */
+export function errorResponse(
+  status: number,
+  code: string,
+  headers: Record<string, string> = {},
+  message = code,
+): Response {
+  const res = jsonResponse({ error: { code, message } }, status);
+  for (const [name, value] of Object.entries(headers)) {
+    res.headers.set(name, value);
+  }
+  return res;
+}
+
 /** Answers GET /account-mode with `state` until a PUT stores `stored`, and
  *  with the stored state from then on, as the server does. */
 export function answeringAccountMode(

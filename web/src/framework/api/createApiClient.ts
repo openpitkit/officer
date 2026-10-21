@@ -39,6 +39,17 @@ export type ApiErrorCode =
   | "not_implemented"
   | "account_missing"
   | "asset_missing"
+  | "unauthorized"
+  | "invalid_password"
+  | "invalid_recovery_code"
+  | "current_password_invalid"
+  | "wrong_token"
+  | "host_not_allowed"
+  | "origin_not_allowed"
+  | "setup_complete"
+  | "unsupported_media_type"
+  | "too_many_attempts"
+  | "setup_required"
   | "internal"
   | "network"
   | "signing";
@@ -52,6 +63,11 @@ export class ApiError extends Error {
   readonly account?: string;
   /** The asset code the request named, when `code` is "asset_missing". */
   readonly asset?: string;
+  /**
+   * Seconds until the next accepted attempt, from the response's
+   * `Retry-After` header; undefined when the header is absent or unparseable.
+   */
+  readonly retryAfterSeconds?: number;
 
   constructor(
     message: string,
@@ -60,6 +76,7 @@ export class ApiError extends Error {
     dependents?: ApiErrorDependent[],
     account?: string,
     asset?: string,
+    retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
@@ -68,6 +85,7 @@ export class ApiError extends Error {
     this.dependents = dependents;
     this.account = account;
     this.asset = asset;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -83,6 +101,13 @@ export interface ApiClientConfig {
   getHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
   /** Error-message localization. Defaults to English framework fallbacks. */
   translate?: (key: string, params?: Record<string, unknown>) => string;
+  /**
+   * Called once for every failed response, from `request` and `requestBlob`,
+   * whose decoded error code is "unauthorized": after the error is decoded and
+   * before it is thrown. Not called for any other code, for a network failure,
+   * or for an aborted request.
+   */
+  onUnauthorized?: () => void;
 }
 
 /** JSON request options shared by all endpoint methods. */
@@ -153,6 +178,17 @@ function asCode(v: unknown): ApiErrorCode {
     case "not_implemented":
     case "account_missing":
     case "asset_missing":
+    case "unauthorized":
+    case "invalid_password":
+    case "invalid_recovery_code":
+    case "current_password_invalid":
+    case "wrong_token":
+    case "host_not_allowed":
+    case "origin_not_allowed":
+    case "setup_complete":
+    case "unsupported_media_type":
+    case "too_many_attempts":
+    case "setup_required":
     case "internal":
     case "signing":
       return v;
@@ -189,6 +225,18 @@ function defaultTranslate(
     not_implemented: "The requested operation is not implemented.",
     account_missing: "The account does not exist.",
     asset_missing: "The asset does not exist.",
+    unauthorized: "The session or access token is missing or invalid.",
+    invalid_password: "The password is incorrect.",
+    invalid_recovery_code: "The recovery code is incorrect or has expired.",
+    current_password_invalid: "The current password is incorrect.",
+    wrong_token: "The token is not valid for this interface.",
+    host_not_allowed:
+      "The Host header names a host this service does not answer to.",
+    origin_not_allowed: "Browser requests from another origin are not allowed.",
+    setup_complete: "First-run setup is already complete.",
+    unsupported_media_type: "The request body is not JSON.",
+    too_many_attempts: "Too many attempts; try again later.",
+    setup_required: "First-run setup is not complete.",
     internal: "The service encountered an internal error.",
     network: "Could not reach the service.",
     signing: "The signing operation was rejected.",
@@ -246,6 +294,23 @@ function asEntityCode(v: unknown): string | undefined {
   return s.length > 0 ? s : undefined;
 }
 
+/**
+ * Reads a `Retry-After` value (RFC 9110 section 10.2.3): delta-seconds as is,
+ * or an IMF-fixdate as whole seconds from now, rounded up and never below 0.
+ * An absent or unparseable value is undefined. A date must round-trip through
+ * `toUTCString`, which prints IMF-fixdate, because `Date.parse` alone also
+ * accepts strings that are no date at all.
+ */
+function asRetryAfterSeconds(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  if (/^\d+$/.test(value)) return Number(value);
+  const at = Date.parse(value);
+  if (Number.isNaN(at) || new Date(at).toUTCString() !== value) {
+    return undefined;
+  }
+  return Math.max(0, Math.ceil((at - Date.now()) / 1000));
+}
+
 async function toApiError(
   res: Response,
   requestPath: string,
@@ -298,7 +363,15 @@ async function toApiError(
       : code === "internal"
         ? t("errors:http", { path: requestPath, status: res.status })
         : defaultMessage(code, t);
-  return new ApiError(message, code, res.status, dependents, account, asset);
+  return new ApiError(
+    message,
+    code,
+    res.status,
+    dependents,
+    account,
+    asset,
+    asRetryAfterSeconds(res.headers.get("Retry-After")),
+  );
 }
 
 function filenameFromDisposition(value: string | null): string {
@@ -342,6 +415,17 @@ async function requestHeaders(
 export function createApiClient(config: ApiClientConfig): ApiClient {
   const translate = config.translate ?? defaultTranslate;
 
+  async function failure(
+    res: Response,
+    requestPath: string,
+  ): Promise<ApiError> {
+    const err = await toApiError(res, requestPath, translate);
+    if (err.code === "unauthorized") {
+      config.onUnauthorized?.();
+    }
+    return err;
+  }
+
   async function request(
     requestPath: string,
     opts: RequestOptions = {},
@@ -372,7 +456,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     }
 
     if (!res.ok) {
-      throw await toApiError(res, requestPath, translate);
+      throw await failure(res, requestPath);
     }
     if (res.status === 204) {
       return undefined;
@@ -425,7 +509,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     }
 
     if (!res.ok) {
-      throw await toApiError(res, requestPath, translate);
+      throw await failure(res, requestPath);
     }
     const filename = filenameFromDisposition(
       res.headers.get("Content-Disposition"),

@@ -90,16 +90,30 @@
   "connect": {
     "title": "连接您的智能体",
     "subtitle": "通过 MCP 将 AI 智能体连接至本 Pit Officer 实例，或下载预制集成包。",
+    "address": "MCP 地址",
+    "token": "智能体令牌",
+    "tokenNote": "仅用于 MCP。无法用它调用 REST API 或打开面板。",
+    "openNote": "Officer 在无令牌模式下运行：此智能体不需要令牌，本机上的任何其他程序、容器或智能体也不需要。",
+    "openLink": "服务 › 安全",
     "tab": {
       "claude": "Claude",
+      "codex": "Codex",
+      "cursor": "Cursor",
       "chatgpt": "ChatGPT",
       "prompt": "提示词"
     },
     "claude": {
       "cliLabel": "通过 Claude CLI 添加连接器",
       "desktopLabel": "或将此条目添加至您的 Claude Desktop 配置",
+      "bridgeNote": "Claude Desktop 通过 {{bridge}} 桥接连接本地服务器，需要 {{runtime}}。",
       "skillHint": "偏好打包好的技能？下载自包含的 Claude Agent Skill。",
       "skillButton": "下载 Claude Skill"
+    },
+    "codex": {
+      "label": "将此条目添加至 {{path}}"
+    },
+    "cursor": {
+      "label": "将此条目添加至 {{path}}"
     },
     "chatgpt": {
       "urlLabel": "MCP 连接器 URL",

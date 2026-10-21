@@ -20,26 +20,86 @@
 // each builder is parameterized by the live MCP endpoint URL. The generated
 // SKILL.md / instruction text is a downloadable artifact, not a source file, so
 // it carries no license header.
+//
+// The connect commands and configurations also take the agent token: the
+// value in `token` access, `null` in `open` access, which has no token. They
+// are the design's exact instructions, character for character, with the URL
+// and the token substituted.
 
-/** Claude CLI command that registers the Officer MCP over streamable HTTP. */
-export function claudeMcpAddCommand(url: string): string {
-  return `claude mcp add --transport http pit-officer ${url}`;
+/**
+ * Claude CLI command that registers the Officer MCP over streamable HTTP. It
+ * is one line in both forms, so it pastes into any shell, PowerShell and cmd
+ * included.
+ */
+export function claudeMcpAddCommand(url: string, token: string | null): string {
+  const add = `claude mcp add --transport http pit-officer ${url}`;
+  if (token === null) {
+    return add;
+  }
+  return `${add} --header "Authorization: Bearer ${token}"`;
 }
 
-/** Claude Desktop config snippet: an `mcpServers` entry of type http. */
-export function claudeDesktopConfig(url: string): string {
-  return JSON.stringify(
-    {
-      mcpServers: {
-        "pit-officer": {
-          type: "http",
-          url,
-        },
-      },
-    },
-    null,
-    2,
-  );
+/**
+ * Claude Desktop config snippet: an `mcpServers` entry that runs the
+ * `mcp-remote` bridge, which passes the token from its `env` as a header.
+ */
+export function claudeDesktopConfig(url: string, token: string | null): string {
+  if (token === null) {
+    return `{
+  "mcpServers": {
+    "pit-officer": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote", "${url}"
+      ]
+    }
+  }
+}`;
+  }
+  return `{
+  "mcpServers": {
+    "pit-officer": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote", "${url}",
+        "--header", "Authorization:\${PIT_OFFICER_AUTH}"
+      ],
+      "env": { "PIT_OFFICER_AUTH": "Bearer ${token}" }
+    }
+  }
+}`;
+}
+
+/** Codex `~/.codex/config.toml` entry for the Officer MCP. */
+export function codexConfig(url: string, token: string | null): string {
+  const entry = `[mcp_servers.pit-officer]
+url = "${url}"`;
+  if (token === null) {
+    return entry;
+  }
+  return `${entry}
+http_headers = { Authorization = "Bearer ${token}" }`;
+}
+
+/** Cursor `~/.cursor/mcp.json` entry for the Officer MCP. */
+export function cursorConfig(url: string, token: string | null): string {
+  if (token === null) {
+    return `{
+  "mcpServers": {
+    "pit-officer": {
+      "url": "${url}"
+    }
+  }
+}`;
+  }
+  return `{
+  "mcpServers": {
+    "pit-officer": {
+      "url": "${url}",
+      "headers": { "Authorization": "Bearer ${token}" }
+    }
+  }
+}`;
 }
 
 /** Self-contained Claude Agent Skill SKILL.md body for operating Officer. */

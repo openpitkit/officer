@@ -29,6 +29,7 @@ import {
   RefreshCw,
   RotateCcw,
   Server,
+  ShieldCheck,
   Trash2,
   Upload,
   Users,
@@ -64,6 +65,11 @@ import {
   StaleState,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
+import {
+  AccessSection,
+  AccessTokensProvider,
+} from "@/components/security/AccessSection";
+import { StorageSection } from "@/components/security/StorageSection";
 import { StatRow } from "@/components/StatRow";
 import { StatusDot } from "@/components/StatusDot";
 import { Badge } from "@/components/ui/badge";
@@ -98,7 +104,13 @@ interface ProfileRow {
   value: string;
 }
 
-type ServiceTab = "application" | "account-mode" | "api" | "database" | "logs";
+type ServiceTab =
+  | "application"
+  | "account-mode"
+  | "api"
+  | "database"
+  | "logs"
+  | "security";
 type BackupWorkflow = "export" | "restore";
 type ServiceLifecycleAction = "restart" | "stop";
 
@@ -112,6 +124,7 @@ const serviceTabs: {
   { id: "api", labelKey: "tabs.api", icon: Plug },
   { id: "database", labelKey: "tabs.database", icon: Database },
   { id: "logs", labelKey: "tabs.logs", icon: Logs },
+  { id: "security", labelKey: "tabs.security", icon: ShieldCheck },
 ];
 
 const backupWorkflowTabs: {
@@ -194,16 +207,33 @@ function parseProfileRows(raw: string): ProfileRow[] {
 /**
  * The captured service log tail with a download affordance. The recent lines
  * render in a height-capped monospace block (oldest first); the Download button
- * fetches the full buffer over the same-origin download route.
+ * fetches the full buffer through the API client and saves it as a file.
  */
 function LogsCard() {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
   const apiClient = useApiClient();
   const { load, reload } = useServiceLogs();
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const refreshing = load.state === "loading";
   const lines = load.state === "ready" ? load.data.lines : [];
-  const downloadUrl = serviceLogsDownloadUrl(apiClient.baseUrl);
+
+  const download = async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const { blob, filename } = await apiClient.requestBlob(
+        serviceLogsDownloadUrl(apiClient.baseUrl),
+        { accept: "text/plain", fallbackFilename: "pit-officer.log" },
+      );
+      downloadArchive(blob, filename);
+    } catch (err) {
+      setDownloadError(errorText(err));
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <Card id="logs" className="scroll-mt-4">
@@ -224,15 +254,23 @@ function LogsCard() {
             )}
             {tc("actions.refresh")}
           </Button>
-          <Button asChild variant="ghost" size="sm">
-            <a href={downloadUrl} download>
-              <Download className="h-3.5 w-3.5" />
-              {t("logs.download")}
-            </a>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              void download();
+            }}
+            disabled={downloading}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {t("logs.download")}
           </Button>
         </div>
       </CardHeader>
       <CardContent>
+        {downloadError !== null && (
+          <ErrorBanner className="mb-3" message={downloadError} />
+        )}
         <StaleState load={load} reload={reload} />
         {load.state === "error" ? (
           <p className="text-xs text-muted-lt italic">{load.error}</p>
@@ -1358,6 +1396,13 @@ export function ServiceCard({
       <TabsContent value="logs">
         <LogsCard />
       </TabsContent>
+
+      <TabsContent value="security" className="space-y-4">
+        <AccessTokensProvider>
+          <AccessSection />
+          <StorageSection />
+        </AccessTokensProvider>
+      </TabsContent>
     </Tabs>
   );
 }
@@ -1381,7 +1426,9 @@ export function Service() {
       ? "logs"
       : location.hash === "#account-mode"
         ? "account-mode"
-        : activeTab;
+        : location.hash === "#security"
+          ? "security"
+          : activeTab;
 
   useEffect(() => {
     if (location.hash !== "#logs") {

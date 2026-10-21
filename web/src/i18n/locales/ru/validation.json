@@ -46,5 +46,8 @@
     "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch требует указать валюту",
     "pnlRequires": "spot_funds_pnl_bounds_kill_switch требует lower_bound или upper_bound",
     "pnlBoundOrder": "lower_bound должен быть <= upper_bound"
+  },
+  "password": {
+    "mismatch": "Пароли не совпадают."
   }
 }

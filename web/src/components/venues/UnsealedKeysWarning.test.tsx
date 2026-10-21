@@ -17,6 +17,7 @@
 
 import { render, screen, within } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { CredentialStorage } from "@/api/types";
@@ -31,6 +32,8 @@ function ready(credentialsSealed: boolean): LoadState<CredentialStorage> {
       credentialsSealed,
       plaintextTradingKeys: false,
       plaintextMarketDataKeys: false,
+      sealedAt: null,
+      resealedSecrets: 0,
     },
     error: null,
   };
@@ -39,7 +42,9 @@ function ready(credentialsSealed: boolean): LoadState<CredentialStorage> {
 function renderWarning(storage: LoadState<CredentialStorage>) {
   return render(
     <I18nextProvider i18n={i18n}>
-      <UnsealedKeysWarning storage={storage} />
+      <MemoryRouter>
+        <UnsealedKeysWarning storage={storage} />
+      </MemoryRouter>
     </I18nextProvider>,
   );
 }

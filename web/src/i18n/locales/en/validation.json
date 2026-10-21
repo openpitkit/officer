@@ -46,5 +46,8 @@
     "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch requires currency",
     "pnlRequires": "spot_funds_pnl_bounds_kill_switch requires lower_bound or upper_bound",
     "pnlBoundOrder": "lower_bound must be <= upper_bound"
+  },
+  "password": {
+    "mismatch": "The passwords do not match."
   }
 }

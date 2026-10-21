@@ -25,8 +25,14 @@ import type {
   TradingSnapshot,
   VenueOrder,
 } from "@/api/types";
-import { ApiError, createApiClient, createOfficerApi } from "@/framework";
-import { jsonResponse } from "@/test/apiClient";
+import {
+  ApiError,
+  createApiClient,
+  createOfficerApi,
+  type ApiClient,
+} from "@/framework";
+import { appLocaleResources } from "@/i18n";
+import { errorResponse, jsonResponse } from "@/test/apiClient";
 
 function api() {
   return createOfficerApi(
@@ -1181,6 +1187,8 @@ describe("credential storage client", () => {
     credentialsSealed: false,
     plaintextTradingKeys: true,
     plaintextMarketDataKeys: false,
+    sealedAt: null,
+    resealedSecrets: 0,
   };
 
   it("reads the installation's credential storage", async () => {
@@ -1230,6 +1238,71 @@ describe("credential storage client", () => {
       await expect(result).rejects.toMatchObject({
         code: "internal",
         message: "Credential storage is missing from the API response",
+      });
+    },
+  );
+
+  it.each([
+    ["2026-10-15T14:05:00Z", 3],
+    ["2026-10-15T14:05:00.123456789+03:00", 0],
+  ])(
+    "reads a sealing at %s that re-encrypted %i values",
+    async (sealedAt, resealedSecrets) => {
+      const sealed: CredentialStorage = {
+        credentialsSealed: true,
+        plaintextTradingKeys: false,
+        plaintextMarketDataKeys: false,
+        sealedAt,
+        resealedSecrets,
+      };
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(sealed));
+
+      expect(await api().fetchCredentialStorage()).toEqual(sealed);
+    },
+  );
+
+  it.each([
+    undefined,
+    "",
+    "2026-10-15",
+    "2026-10-15 14:05:00Z",
+    "2026-10-15T14:05:00",
+    "2026-02-30T14:05:00Z",
+    "2026-10-15T24:00:00Z",
+    1760537100,
+    false,
+  ])(
+    "rejects a sealedAt %s that is neither null nor an RFC 3339 time",
+    async (sealedAt) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ ...storage, sealedAt }),
+      );
+
+      const result = api().fetchCredentialStorage();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message:
+          "Invalid or missing credential storage sealedAt in the API response",
+      });
+    },
+  );
+
+  it.each([undefined, null, -1, 1.5, "3", true])(
+    "rejects a resealedSecrets %s that is not a non-negative integer",
+    async (resealedSecrets) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ ...storage, resealedSecrets }),
+      );
+
+      const result = api().fetchCredentialStorage();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message:
+          "Invalid or missing credential storage resealedSecrets in the API response",
       });
     },
   );
@@ -4713,5 +4786,232 @@ describe("Orders conflict error decode", () => {
       code: "terminal_order",
       status: 409,
     });
+  });
+});
+
+describe("access error decode", () => {
+  const accessCodes = [
+    [401, "unauthorized"],
+    [401, "invalid_password"],
+    [401, "invalid_recovery_code"],
+    [403, "current_password_invalid"],
+    [403, "wrong_token"],
+    [403, "host_not_allowed"],
+    [403, "origin_not_allowed"],
+    [409, "setup_complete"],
+    [415, "unsupported_media_type"],
+    [429, "too_many_attempts"],
+    [503, "setup_required"],
+  ] as const;
+
+  const channels = {
+    request: (client: ApiClient) => client.request("/app/api/v1/session"),
+    requestBlob: (client: ApiClient) =>
+      client.requestBlob("/app/api/v1/session", {
+        accept: "text/csv",
+        fallbackFilename: "session.csv",
+      }),
+  };
+
+  function client(onUnauthorized?: () => void): ApiClient {
+    return createApiClient({
+      baseUrl: "/app/api/v1",
+      fetch: globalThis.fetch,
+      onUnauthorized,
+    });
+  }
+
+  it.each(accessCodes)(
+    "passes %i %s through with the server message",
+    async (status, code) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        errorResponse(status, code, {}, "server detail"),
+      );
+
+      await expect(channels.request(client())).rejects.toMatchObject({
+        name: "ApiError",
+        code,
+        status,
+        message: "server detail",
+      });
+    },
+  );
+
+  it.each(accessCodes)(
+    "uses the catalog text for %i %s without a server message",
+    async (status, code) => {
+      const catalogs = ["en", "ru", "zh-CN"].map(
+        (locale) =>
+          (
+            appLocaleResources[locale]?.errors as {
+              code: Record<string, string>;
+            }
+          ).code[code],
+      );
+      vi.mocked(fetch).mockResolvedValueOnce(
+        errorResponse(status, code, {}, ""),
+      );
+
+      await expect(channels.request(client())).rejects.toMatchObject({
+        code,
+        message: catalogs[0],
+      });
+      for (const text of catalogs) {
+        expect(text).toEqual(expect.stringMatching(/\S/));
+      }
+    },
+  );
+
+  it.each([
+    ["an unknown code", errorResponse(401, "session_gone", {}, "")],
+    ["a code-less 401", new Response("", { status: 401 })],
+    ["a code-less 429", new Response("", { status: 429 })],
+  ])("decodes %s as internal", async (_name, response) => {
+    vi.mocked(fetch).mockResolvedValueOnce(response);
+
+    await expect(channels.request(client())).rejects.toMatchObject({
+      code: "internal",
+    });
+  });
+
+  it("keeps a code-less 503 as engine_restarting", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("", { status: 503 }));
+
+    await expect(channels.request(client())).rejects.toMatchObject({
+      code: "engine_restarting",
+      status: 503,
+    });
+  });
+
+  it("decodes a 503 carrying setup_required as setup_required", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      errorResponse(503, "setup_required", {}, ""),
+    );
+
+    await expect(channels.request(client())).rejects.toMatchObject({
+      code: "setup_required",
+      status: 503,
+    });
+  });
+
+  it.each([
+    [401, "invalid_password", "120", 120],
+    [429, "too_many_attempts", "0", 0],
+  ])(
+    "reads delta-seconds Retry-After on %i %s",
+    async (status, code, header, seconds) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        errorResponse(status, code, { "Retry-After": header }, ""),
+      );
+
+      await expect(channels.request(client())).rejects.toMatchObject({
+        code,
+        retryAfterSeconds: seconds,
+      });
+    },
+  );
+
+  it.each([
+    ["rounded up", Date.UTC(2026, 9, 16, 12, 0, 0, 250), 30],
+    ["never below zero", Date.UTC(2026, 9, 16, 12, 5, 0), 0],
+  ])(
+    "reads an HTTP-date Retry-After as whole seconds from now, %s",
+    async (_name, now, seconds) => {
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      vi.mocked(fetch).mockResolvedValueOnce(
+        errorResponse(
+          429,
+          "too_many_attempts",
+          {
+            "Retry-After": "Fri, 16 Oct 2026 12:00:30 GMT",
+          },
+          "",
+        ),
+      );
+
+      await expect(channels.request(client())).rejects.toMatchObject({
+        retryAfterSeconds: seconds,
+      });
+    },
+  );
+
+  it("leaves retryAfterSeconds undefined without a Retry-After header", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      errorResponse(429, "too_many_attempts", {}, ""),
+    );
+
+    await expect(channels.request(client())).rejects.toMatchObject({
+      code: "too_many_attempts",
+      retryAfterSeconds: undefined,
+    });
+  });
+
+  it.each(["soon", "1.5", "-5", "abc 12", "2026-10-16T12:00:30Z"])(
+    "leaves retryAfterSeconds undefined for an unparseable Retry-After %j",
+    async (header) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        errorResponse(429, "too_many_attempts", { "Retry-After": header }, ""),
+      );
+
+      await expect(channels.request(client())).rejects.toMatchObject({
+        code: "too_many_attempts",
+        retryAfterSeconds: undefined,
+      });
+    },
+  );
+
+  it.each(["request", "requestBlob"] as const)(
+    "calls onUnauthorized once, before throwing, for a 401 unauthorized through %s",
+    async (channel) => {
+      const seen: string[] = [];
+      vi.mocked(fetch).mockResolvedValueOnce(
+        errorResponse(401, "unauthorized", {}, ""),
+      );
+
+      await channels[channel](client(() => seen.push("hook"))).catch(
+        (err: unknown) => {
+          expect(err).toMatchObject({ code: "unauthorized", status: 401 });
+          seen.push("thrown");
+        },
+      );
+
+      expect(seen).toEqual(["hook", "thrown"]);
+    },
+  );
+
+  it.each([
+    [401, "invalid_password"],
+    [401, "invalid_recovery_code"],
+    [403, "wrong_token"],
+  ])("does not call onUnauthorized for %i %s", async (status, code) => {
+    const onUnauthorized = vi.fn();
+    vi.mocked(fetch).mockResolvedValueOnce(errorResponse(status, code, {}, ""));
+
+    await expect(
+      channels.request(client(onUnauthorized)),
+    ).rejects.toMatchObject({ code, status });
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it("does not call onUnauthorized for a network failure", async () => {
+    const onUnauthorized = vi.fn();
+    vi.mocked(fetch).mockRejectedValueOnce(new Error("connection reset"));
+
+    await expect(
+      channels.request(client(onUnauthorized)),
+    ).rejects.toMatchObject({ code: "network" });
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it("does not call onUnauthorized for an aborted request", async () => {
+    const onUnauthorized = vi.fn();
+    vi.mocked(fetch).mockRejectedValueOnce(
+      new DOMException("The operation was aborted.", "AbortError"),
+    );
+
+    await expect(
+      channels.request(client(onUnauthorized)),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(onUnauthorized).not.toHaveBeenCalled();
   });
 });

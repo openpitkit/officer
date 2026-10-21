@@ -15,14 +15,16 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { AlertTriangle, ExternalLink, Info } from "lucide-react";
+import { AlertTriangle, ExternalLink, Info, LogOut } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 
+import { logOut } from "@/api/access";
 import { useMarketData } from "@/api/useMarketData";
 import { useService } from "@/api/useService";
-import { CompactStaleState } from "@/components/PageStates";
+import { errMessage } from "@/components/AccountDialogs";
+import { CompactStaleState, ErrorBanner } from "@/components/PageStates";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { useSidebar } from "@/components/sidebar-context";
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { useApiClient } from "@/framework";
+import { checkSession } from "@/lib/panelSession";
 
 export function RestartRequiredNavEntry() {
   const { pathname } = useLocation();
@@ -90,6 +94,49 @@ function NonReleaseNavIndicator() {
       <span className="flex-1 text-left">{t("brand.nonRelease")}</span>
       <CompactStaleState load={load} />
     </Link>
+  );
+}
+
+/**
+ * Ends this browser's session with `DELETE /session`, then asks the startup
+ * gate to check the session, which shows the login screen. A failure shows in
+ * the entry and leaves the session as it was.
+ */
+export function LogoutNavEntry() {
+  const { t } = useTranslation();
+  const client = useApiClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const leave = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await logOut(client);
+    } catch (err) {
+      setError(errMessage(err));
+      return;
+    } finally {
+      setBusy(false);
+    }
+    checkSession();
+  };
+
+  return (
+    <div>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          void leave();
+        }}
+        className="flex w-full items-center gap-[var(--dens-nav-gap)] rounded-[3px] px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-left text-[length:var(--dens-footer-fz)] text-muted transition-colors hover:bg-surface-hover hover:text-muted-lt disabled:pointer-events-none disabled:opacity-50"
+      >
+        <LogOut className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
+        <span className="flex-1">{t("nav.logOut")}</span>
+      </button>
+      {error !== null && <ErrorBanner className="mt-1" message={error} />}
+    </div>
   );
 }
 

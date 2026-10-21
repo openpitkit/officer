@@ -37,7 +37,10 @@
     "dismissError": "Dismiss error",
     "increment": "Increase",
     "decrement": "Decrease",
-    "setUpTradingConnection": "Set up a trading connection"
+    "setUpTradingConnection": "Set up a trading connection",
+    "back": "Back",
+    "show": "Show",
+    "hide": "Hide"
   },
   "filters": {
     "venueLabel": "Venue",
@@ -364,7 +367,8 @@
     "marketData": "Market Data",
     "tradingConnections": "Trading connections",
     "service": "Service",
-    "signingKeys": "Signing Keys"
+    "signingKeys": "Signing Keys",
+    "logOut": "Log out"
   },
   "brand": {
     "name": "Pit Officer",

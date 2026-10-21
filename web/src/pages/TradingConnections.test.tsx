@@ -193,6 +193,8 @@ function storage(sealed: boolean): CredentialStorage {
     credentialsSealed: sealed,
     plaintextTradingKeys: !sealed,
     plaintextMarketDataKeys: false,
+    sealedAt: null,
+    resealedSecrets: 0,
   };
 }
 

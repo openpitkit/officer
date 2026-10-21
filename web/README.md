@@ -85,13 +85,21 @@ catalogs under stable ids. A host application can replace an entry by
 registering the same id or remove it with the matching unregister API.
 
 `src/App.tsx` wraps the framework `Sidebar` and `AppRoutes` in the app's
-startup flow. `AccountScopeGate` reads `GET /account-mode` before the shell
-renders and keeps polling it; a restart into another account mode reloads the
-page. While no account mode is stored, the app asks for one before the welcome
+startup flow. `StartupGate` asks `GET /session` first: in `token` access mode
+it shows the login or password recovery screen until the browser has a
+session, and a `401 unauthorized` from any request returns it there. It then
+reads `GET /account-mode` before the shell renders and keeps polling it; a
+restart into another account mode reloads the page. While no account mode is stored, the app asks for one before the welcome
 dialog opens. App code asks `accountScope()` (`src/lib/accountScope.ts`)
 whether accounts are shown and which account a request carries, never whether
 the mode is single; `src/register.ts` switches the Accounts navigation entry
 and page through `when` predicates.
+
+Service > Security shows and changes the access mode, the panel password,
+browser sessions and both tokens; its storage section shows encryption with
+the master key guide, decision signing and the account mode. Connect your
+agent carries the agent token in every connect command and configuration in
+`token` access mode.
 
 ## Consuming the web library
 
@@ -103,9 +111,12 @@ The SPA is a thin consumer of the same library: `src/main.tsx` imports
 
 Host applications provide transport through `createApiClient`,
 `createOfficerApi`, and `ApiClientProvider`. `ApiClientProvider` accepts the
-base URL plus optional `fetch`, static `headers`, async `getHeaders`, and
-`translate` hooks, so a consuming app can route requests through its own
-origin, proxy, or authenticated fetch implementation.
+base URL plus optional `fetch`, static `headers`, async `getHeaders`,
+`translate`, and `onUnauthorized` hooks, so a consuming app can route requests
+through its own origin, proxy, or authenticated fetch implementation;
+`onUnauthorized` runs once for every failed response whose error code is
+`unauthorized`, before the `ApiError` is thrown. A failed call's
+`ApiError.retryAfterSeconds` carries the response's `Retry-After` in seconds.
 
 The UI extension points are stable-id registries exported from the package
 root. Routes use `registerRoute`, `getRoutes`, and `unregisterRoute`; page

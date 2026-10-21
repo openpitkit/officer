@@ -90,16 +90,30 @@
   "connect": {
     "title": "Подключить агента",
     "subtitle": "Подключите ИИ-агента к этому экземпляру Pit Officer через MCP или загрузите готовый артефакт.",
+    "address": "Адрес MCP",
+    "token": "Токен агента",
+    "tokenNote": "Действует только для MCP. С ним нельзя обратиться к REST API или открыть панель.",
+    "openNote": "Officer работает без токена: этому агенту токен не нужен - как и любой другой программе, контейнеру или агенту на этом компьютере.",
+    "openLink": "Сервис › Безопасность",
     "tab": {
       "claude": "Claude",
+      "codex": "Codex",
+      "cursor": "Cursor",
       "chatgpt": "ChatGPT",
       "prompt": "Промпт"
     },
     "claude": {
       "cliLabel": "Добавить коннектор через Claude CLI",
       "desktopLabel": "Или добавьте эту запись в конфигурацию Claude Desktop",
+      "bridgeNote": "Claude Desktop подключается к локальному серверу через мост {{bridge}}, которому нужен {{runtime}}.",
       "skillHint": "Предпочитаете упакованный скилл? Загрузите готовый Claude Agent Skill.",
       "skillButton": "Скачать Claude Skill"
+    },
+    "codex": {
+      "label": "Добавьте эту запись в {{path}}"
+    },
+    "cursor": {
+      "label": "Добавьте эту запись в {{path}}"
     },
     "chatgpt": {
       "urlLabel": "URL MCP-коннектора",

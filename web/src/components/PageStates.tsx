@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { AlertTriangle, Inbox, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, Inbox, Loader2, RefreshCw, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -51,6 +51,16 @@ export function TableSkeleton({
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+/** A spinner announced as loading, for one part of a page. */
+export function LoadingStatus() {
+  const { t } = useTranslation();
+  return (
+    <div role="status" aria-busy="true" aria-label={t("states.loading")}>
+      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-lt" />
+    </div>
   );
 }
 

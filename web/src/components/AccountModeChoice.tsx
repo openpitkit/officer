@@ -36,6 +36,7 @@ import {
   CompactStaleState,
   ErrorBanner,
   ErrorState,
+  LoadingStatus,
   StaleState,
 } from "@/components/PageStates";
 import { StatRow } from "@/components/StatRow";
@@ -103,15 +104,6 @@ function isStored(request: AccountModeRequest, state: AccountModeState) {
   return (
     request.mode === state.mode &&
     (request.mode === "multi" || request.account === state.account)
-  );
-}
-
-function LoadingStatus() {
-  const { t } = useTranslation();
-  return (
-    <div role="status" aria-busy="true" aria-label={t("states.loading")}>
-      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-lt" />
-    </div>
   );
 }
 

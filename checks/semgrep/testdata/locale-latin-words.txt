@@ -24,6 +24,14 @@
     # ok: locale-latin-words
     "phrases": "Pit Officer, Claude Agent Skill, API key и IB Gateway; HTTPS-URL.",
     # ok: locale-latin-words
+    "platform": "Без Docker код в терминале macOS, Windows или Linux.",
+    # ok: locale-latin-words
+    "shell": "Команды для Windows PowerShell.",
+    # ok: locale-latin-words
+    "clients": "Подключите агента в Codex или Cursor.",
+    # ok: locale-latin-words
+    "desktop": "При Docker Desktop - через копию тома, без Docker - через папку.",
+    # ok: locale-latin-words
     "markup": "Ключ {{venueAccount}} на странице <tradingLink>Подключения</tradingLink> и `pit-officer mcp`.",
     # ok: locale-latin-words
     "figures": "целое число > 0, <= 1e9; 500ms, 24h, 7d",

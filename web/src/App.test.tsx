@@ -33,6 +33,19 @@ vi.mock("@/framework", async () => {
   return { ...actual, AppRoutes: () => null, Sidebar: () => null };
 });
 
+// The startup gate asks GET /session before the account mode; it is tested on
+// its own, and these cases run in open access mode.
+vi.mock("@/api/access", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/api/access")>("@/api/access");
+  return {
+    ...actual,
+    fetchSession: vi
+      .fn()
+      .mockResolvedValue({ accessMode: "open", authenticated: false }),
+  };
+});
+
 const MODE_TITLE = "How many accounts will you use?";
 const WELCOME_TITLE = "Welcome to Pit Officer";
 
@@ -108,5 +121,45 @@ describe("App", () => {
 
     expect(fetchWelcomeSeen).toHaveBeenCalledTimes(1);
     expect(screen.queryAllByRole("dialog", { hidden: true })).toHaveLength(0);
+  });
+
+  it("reads the welcome state only after the account mode answered", async () => {
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const fetchMock = vi.fn(async () => {
+      await answered;
+      return jsonResponse({
+        mode: "multi",
+        account: "",
+        features: { accounts: true, account: "" },
+        restartRequired: false,
+      });
+    });
+    const fetchWelcomeSeen = vi.fn().mockResolvedValue(true);
+    renderWithApi(
+      <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+        <MemoryRouter>
+          <App />
+        </MemoryRouter>
+      </ThemeProvider>,
+      {
+        fetch: fetchMock as unknown as typeof fetch,
+        api: { fetchWelcomeSeen },
+      },
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(fetchWelcomeSeen).not.toHaveBeenCalled();
+
+    await act(async () => {
+      answer();
+    });
+
+    await waitFor(() => expect(fetchWelcomeSeen).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(fetchWelcomeSeen).toHaveBeenCalledTimes(1);
   });
 });

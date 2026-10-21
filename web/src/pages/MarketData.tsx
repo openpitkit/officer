@@ -46,6 +46,7 @@ import {
   StaleState,
   TableSkeleton,
 } from "@/components/PageStates";
+import { SecretInput } from "@/components/SecretInput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -1171,6 +1172,8 @@ function ProviderSettingsFields({
 }) {
   const { t } = useTranslation("marketData");
   const set = (key: string, value: string) => onChange({ [key]: value });
+  const storedPlaceholder = (key: string) =>
+    hasSecret(instance, key) ? t("venues:settings.keepStoredSecret") : "";
   if (providerType === IB_PROVIDER) {
     return (
       <div className="space-y-4">
@@ -1260,7 +1263,7 @@ function ProviderSettingsFields({
             id="md-settings-api-key"
             label={t("venues:settings.apiKey")}
             value={draft.apiKey ?? ""}
-            hasStored={hasSecret(instance, "apiKey")}
+            placeholder={storedPlaceholder("apiKey")}
             disabled={busy}
             onChange={(value) => set("apiKey", value)}
           />
@@ -1268,7 +1271,7 @@ function ProviderSettingsFields({
             id="md-settings-api-secret"
             label={t("venues:settings.apiSecret")}
             value={draft.apiSecret ?? ""}
-            hasStored={hasSecret(instance, "apiSecret")}
+            placeholder={storedPlaceholder("apiSecret")}
             disabled={busy}
             onChange={(value) => set("apiSecret", value)}
           />
@@ -1321,7 +1324,7 @@ function ProviderSettingsFields({
             id="md-settings-token"
             label={t("settings.token")}
             value={draft.token ?? ""}
-            hasStored={hasSecret(instance, "token")}
+            placeholder={storedPlaceholder("token")}
             disabled={busy}
             onChange={(value) => set("token", value)}
           />
@@ -1378,7 +1381,7 @@ function ProviderSettingsFields({
           id="md-settings-finnhub-token"
           label={t("settings.token")}
           value={draft.token ?? ""}
-          hasStored={hasSecret(instance, "token")}
+          placeholder={storedPlaceholder("token")}
           disabled={busy}
           onChange={(value) => set("token", value)}
         />
@@ -1386,37 +1389,6 @@ function ProviderSettingsFields({
     );
   }
   return null;
-}
-
-function SecretInput({
-  id,
-  label,
-  value,
-  hasStored,
-  disabled,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  hasStored: boolean;
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  const { t } = useTranslation("marketData");
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        type="password"
-        value={value}
-        placeholder={hasStored ? t("venues:settings.keepStoredSecret") : ""}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-      />
-    </div>
-  );
 }
 
 function StateToggleField({

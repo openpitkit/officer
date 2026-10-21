@@ -17,6 +17,7 @@
 
 import { useCallback } from "react";
 
+import { invalid, isRecord } from "@/api/decode";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useApiClient, type ApiClient } from "@/framework";
 
@@ -43,43 +44,38 @@ export interface AccountModeState {
   restartRequired: boolean;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function invalid(field: string, requirement: string): Error {
-  return new Error(`account mode response: ${field} ${requirement}`);
-}
+const RESPONSE = "account mode";
 
 function decodeAccountMode(value: unknown): AccountModeState {
   if (!isRecord(value)) {
-    throw invalid("body", "must be an object");
+    throw invalid(RESPONSE, "body", "must be an object");
   }
   const { mode, account, features, restartRequired } = value;
   if (mode !== "single" && mode !== "multi" && mode !== null) {
-    throw invalid("mode", 'must be "single", "multi" or null');
+    throw invalid(RESPONSE, "mode", 'must be "single", "multi" or null');
   }
   if (typeof account !== "string") {
-    throw invalid("account", "must be a string");
+    throw invalid(RESPONSE, "account", "must be a string");
   }
   if (!isRecord(features)) {
-    throw invalid("features", "must be an object");
+    throw invalid(RESPONSE, "features", "must be an object");
   }
   const { accounts, account: defaultAccount } = features;
   if (typeof accounts !== "boolean") {
-    throw invalid("features.accounts", "must be a boolean");
+    throw invalid(RESPONSE, "features.accounts", "must be a boolean");
   }
   if (typeof defaultAccount !== "string") {
-    throw invalid("features.account", "must be a string");
+    throw invalid(RESPONSE, "features.account", "must be a string");
   }
   if (!accounts && defaultAccount === "") {
     throw invalid(
+      RESPONSE,
       "features.account",
       "must name the default account while accounts are hidden",
     );
   }
   if (typeof restartRequired !== "boolean") {
-    throw invalid("restartRequired", "must be a boolean");
+    throw invalid(RESPONSE, "restartRequired", "must be a boolean");
   }
   return {
     mode,

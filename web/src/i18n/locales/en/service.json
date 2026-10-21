@@ -8,7 +8,8 @@
     "accountMode": "Account mode",
     "api": "API",
     "database": "Database",
-    "logs": "Logs"
+    "logs": "Logs",
+    "security": "Security"
   },
   "application": {
     "title": "Application",
@@ -165,5 +166,146 @@
     "download": "Download",
     "empty": "No log lines captured yet.",
     "refreshAriaLabel": "Refresh logs"
+  },
+  "access": {
+    "boundary": "An agent, a script or a person with a terminal on this computer under your user controls Officer fully, past the token and the password: with Docker Desktop through <exec/>, a copy of the data volume and <inspect/>; without Docker through Officer's data folder. The token and the password keep out web pages, other containers, and agents in a sandbox that cannot reach Docker or Officer's files.",
+    "isolation": {
+      "title": "Run an agent that cannot touch Officer",
+      "sandbox": "In a sandbox without the Docker socket and without access to Officer's data.",
+      "user": "Under a separate user account on this computer.",
+      "computer": "On another computer."
+    },
+    "choice": "Who may use Officer",
+    "recommended": "Recommended",
+    "modes": {
+      "token": {
+        "title": "Token and password",
+        "description": "Programs and agents show a token. The panel asks for a password once per browser."
+      },
+      "open": {
+        "title": "No token",
+        "description": "Any software on this computer uses Officer without being asked."
+      }
+    },
+    "password": {
+      "new": "New panel password",
+      "repeat": "Repeat the new password",
+      "generate": "Generate",
+      "hint": "At least {{min}} characters. Keep it in your password manager.",
+      "tooShort": "Too short: {{length}} of {{min}} characters.",
+      "tooLong": "Too long: {{length}} characters, at most {{max}}."
+    },
+    "facts": {
+      "session": "The panel asks for it once per browser and keeps you logged in for up to 30 days. A week without visits, or logging out, ends the session.",
+      "agent": "Your agent gets its own token. It works only over MCP, within the commands you allow.",
+      "programs": "Your own programs get an API token on Service › Security.",
+      "recovery": "Forgot the password? Officer prints a one-time recovery code to its log."
+    },
+    "warning": {
+      "title": "Without a token, Officer is open to everything on this computer",
+      "who": "Who can use it:",
+      "programs": "any program on this computer;",
+      "containers": "any container on Docker's default network;",
+      "agents": "any AI agent with a terminal here - it calls the REST API directly and steps around the limits you set for it in MCP.",
+      "what": "What they can do: read everything, change and remove limits, unblock accounts, turn on agent commands, delete all data, send orders through your trading connections.",
+      "pages": "Web pages open in your browser stay locked out in both modes.",
+      "close": "To close it, choose Token and password and set a panel password. Officer switches at once, without a restart.",
+      "acknowledge": "I understand: any software on this computer can control Officer."
+    }
+  },
+  "masterKeyGuide": {
+    "where": "Do this in a terminal on this computer",
+    "chooseSystem": "Choose the system of this computer to see its commands.",
+    "deployment": {
+      "label": "How Officer runs",
+      "docker": "Docker",
+      "binary": "Without Docker"
+    },
+    "system": {
+      "label": "System",
+      "windows": "Windows PowerShell",
+      "mac": "macOS",
+      "linux": "Linux"
+    },
+    "create": {
+      "title": "Create the key file",
+      "detail": "32 random bytes, in a folder only you can open.",
+      "detailDocker": "32 random bytes, in a folder only you can open. The file itself stays readable, so Officer's container can read it."
+    },
+    "keep": {
+      "title": "Keep a copy of the key somewhere else",
+      "detail": "Put it into your password manager, or print it and store it safely. Lose the key and Officer never opens its database again: there is no recovery."
+    },
+    "start": {
+      "title": "Start Officer again with the key",
+      "detailDocker": "This replaces the container. Your data stays in the volume <volume/>.",
+      "detailBinary": "Stop the running <running/> with <keys/>, then start it like this, with the options you used before."
+    }
+  },
+  "security": {
+    "access": {
+      "title": "Access",
+      "mode": "Access",
+      "token": "Token",
+      "switchToOpen": "Switch to no token…",
+      "switchDialog": {
+        "title": "Switch to no token?",
+        "description": "Officer deletes the panel password, both tokens and every browser session, then answers any program on this computer without a token.",
+        "confirm": "Switch to no token"
+      },
+      "turnOn": "Turn on token access",
+      "currentPassword": "Current password",
+      "password": "Panel password",
+      "passwordSet": "Set {{date}}",
+      "change": "Change…",
+      "changeDialog": {
+        "title": "Change the panel password",
+        "description": "Every other browser is logged out; this one stays logged in.",
+        "submit": "Change the password"
+      },
+      "passwordChanged": "The panel password is changed. Every other browser is logged out.",
+      "sessions": "Browser sessions",
+      "sessionCount_one": "Logged in from {{count}} browser",
+      "sessionCount_other": "Logged in from {{count}} browsers",
+      "logOutEverywhere": "Log out everywhere"
+    },
+    "tokens": {
+      "regenerate": "Regenerate",
+      "agent": {
+        "label": "Agent token · MCP",
+        "note": "The same token as in Connect your agent on MCP access. Regenerating stops the old one at once.",
+        "confirmTitle": "Regenerate the agent token?",
+        "confirmDescription": "The current agent token stops working at once: an agent that uses it loses MCP until its configuration gets the new one."
+      },
+      "api": {
+        "label": "API token · REST",
+        "note": "Full control over REST - the same access the panel holds through its session. Never give it to an agent.",
+        "confirmTitle": "Regenerate the API token?",
+        "confirmDescription": "The current API token stops working at once: a program that uses it loses REST until it gets the new one."
+      }
+    },
+    "storage": {
+      "title": "Storage, signing and accounts",
+      "encryption": "Encryption",
+      "masterKey": "Master key",
+      "noMasterKey": "None",
+      "encryptionOn": "On",
+      "sealed": "On · sealed {{date}}",
+      "plainText": "Off · stored keys are plain text",
+      "signing": "Decision signing",
+      "signingOff": "Off",
+      "signingOn": "On · key {{key}}",
+      "signingWithoutKey": "On · no signing key",
+      "accountMode": "Account mode",
+      "oneAccount": "One account · {{account}}",
+      "openAccountMode": "Account mode tab"
+    },
+    "exposed": {
+      "title": "Secrets stored before the master key was set must be considered exposed",
+      "detail_one": "Sealing re-encrypted {{count}} stored secret that had lain in the database file as plain text: anyone who copied the file or a backup before then can read it.",
+      "detail_other": "Sealing re-encrypted {{count}} stored secrets that had lain in the database file as plain text: anyone who copied the file or a backup before then can read them.",
+      "keys": "Issue new keys with your providers and enter them on the connection pages.",
+      "tokens": "Regenerate both tokens: each old value stops working at once."
+    }
   }
 }

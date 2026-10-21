@@ -90,16 +90,30 @@
   "connect": {
     "title": "Connect your agent",
     "subtitle": "Connect an AI agent to this Pit Officer instance over MCP, or download a ready-made artifact.",
+    "address": "MCP address",
+    "token": "Agent token",
+    "tokenNote": "Works only for MCP. It cannot call the REST API or open the panel.",
+    "openNote": "Officer runs without a token: this agent needs none - and neither does any other program, container or agent on this computer.",
+    "openLink": "Service › Security",
     "tab": {
       "claude": "Claude",
+      "codex": "Codex",
+      "cursor": "Cursor",
       "chatgpt": "ChatGPT",
       "prompt": "Prompt"
     },
     "claude": {
       "cliLabel": "Add the connector with the Claude CLI",
       "desktopLabel": "Or add this entry to your Claude Desktop config",
+      "bridgeNote": "Claude Desktop reaches a local server through the {{bridge}} bridge, which needs {{runtime}}.",
       "skillHint": "Prefer a packaged skill? Download a self-contained Claude Agent Skill.",
       "skillButton": "Download Claude Skill"
+    },
+    "codex": {
+      "label": "Add this entry to {{path}}"
+    },
+    "cursor": {
+      "label": "Add this entry to {{path}}"
     },
     "chatgpt": {
       "urlLabel": "MCP connector URL",

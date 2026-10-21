@@ -37,7 +37,10 @@
     "dismissError": "Скрыть ошибку",
     "increment": "Увеличить",
     "decrement": "Уменьшить",
-    "setUpTradingConnection": "Настроить торговое подключение"
+    "setUpTradingConnection": "Настроить торговое подключение",
+    "back": "Назад",
+    "show": "Показать",
+    "hide": "Скрыть"
   },
   "filters": {
     "venueLabel": "Торговая площадка",
@@ -364,7 +367,8 @@
     "marketData": "Рыночные данные",
     "tradingConnections": "Торговые подключения",
     "service": "Сервис",
-    "signingKeys": "Ключи подписи"
+    "signingKeys": "Ключи подписи",
+    "logOut": "Выйти"
   },
   "brand": {
     "name": "Pit Officer",

@@ -17,6 +17,7 @@
 
 import { act, screen } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CredentialStorage } from "@/api/types";
@@ -30,12 +31,16 @@ const unsealed: CredentialStorage = {
   credentialsSealed: false,
   plaintextTradingKeys: true,
   plaintextMarketDataKeys: false,
+  sealedAt: null,
+  resealedSecrets: 0,
 };
 
 function renderBanner() {
   return renderWithApi(
     <I18nextProvider i18n={i18n}>
-      <SensitiveDataBanner />
+      <MemoryRouter>
+        <SensitiveDataBanner />
+      </MemoryRouter>
     </I18nextProvider>,
     { api: { fetchCredentialStorage } },
   );
@@ -82,6 +87,8 @@ describe("SensitiveDataBanner", () => {
       credentialsSealed: false,
       plaintextTradingKeys: false,
       plaintextMarketDataKeys: false,
+      sealedAt: null,
+      resealedSecrets: 0,
       ...flags,
     });
     const { container } = renderBanner();
@@ -107,6 +114,8 @@ describe("SensitiveDataBanner", () => {
         credentialsSealed: true,
         plaintextTradingKeys: false,
         plaintextMarketDataKeys: false,
+        sealedAt: null,
+        resealedSecrets: 0,
       },
     ],
     [
@@ -115,6 +124,8 @@ describe("SensitiveDataBanner", () => {
         credentialsSealed: false,
         plaintextTradingKeys: false,
         plaintextMarketDataKeys: false,
+        sealedAt: null,
+        resealedSecrets: 0,
       },
     ],
   ])("hides when %s", async (_, data) => {

@@ -37,7 +37,10 @@
     "dismissError": "关闭错误",
     "increment": "增加",
     "decrement": "减少",
-    "setUpTradingConnection": "设置交易连接"
+    "setUpTradingConnection": "设置交易连接",
+    "back": "返回",
+    "show": "显示",
+    "hide": "隐藏"
   },
   "filters": {
     "venueLabel": "交易场所",
@@ -364,7 +367,8 @@
     "marketData": "行情数据",
     "tradingConnections": "交易连接",
     "service": "服务",
-    "signingKeys": "签名密钥"
+    "signingKeys": "签名密钥",
+    "logOut": "退出登录"
   },
   "brand": {
     "name": "Pit Officer",

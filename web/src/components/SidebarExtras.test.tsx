@@ -15,16 +15,23 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useMarketData } from "@/api/useMarketData";
 import { useService } from "@/api/useService";
 import {
+  LogoutNavEntry,
   NonReleaseNavEntry,
   RestartRequiredNavEntry,
 } from "@/components/SidebarExtras";
+import { getNav } from "@/framework";
+import { onCheckSession, setPanelSession } from "@/lib/panelSession";
+// Side-effect import: the application's own registration.
+import "@/register";
+import { jsonResponse, renderWithApi } from "@/test/apiClient";
 
 vi.mock("@/api/useMarketData", () => ({ useMarketData: vi.fn() }));
 vi.mock("@/api/useService", () => ({ useService: vi.fn() }));
@@ -109,5 +116,89 @@ describe("SidebarExtras page request ownership", () => {
 
     expect(useServiceMock).toHaveBeenCalledOnce();
     expect(screen.getByRole("link")).toHaveAttribute("href", "/service");
+  });
+});
+
+describe("LogoutNavEntry", () => {
+  const check = vi.fn();
+  let unsubscribe = () => {};
+
+  beforeEach(() => {
+    unsubscribe = onCheckSession(check);
+  });
+
+  afterEach(() => {
+    unsubscribe();
+  });
+
+  function renderLogout(answer: () => Response | Promise<Response>) {
+    const fetchMock = vi.fn<
+      (url: string, init: RequestInit) => Promise<Response>
+    >(async () => answer());
+    renderWithApi(<LogoutNavEntry />, {
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    return { fetchMock };
+  }
+
+  function logoutButton() {
+    return screen.getByRole("button", { name: "Log out" });
+  }
+
+  it("sits between Service and About and shows only in token access mode", () => {
+    const footer = getNav("footer");
+    const ids = footer.map((entry) => entry.id);
+    expect(ids.indexOf("logout")).toBeGreaterThan(ids.indexOf("service"));
+    expect(ids.indexOf("logout")).toBeLessThan(ids.indexOf("about"));
+    const entry = footer.find((candidate) => candidate.id === "logout");
+
+    setPanelSession("token");
+    expect(entry?.when?.()).toBe(true);
+
+    setPanelSession("open");
+    expect(entry?.when?.()).toBe(false);
+  });
+
+  it("ends the session with DELETE /session, then asks for a session check", async () => {
+    const user = userEvent.setup();
+    let answer: (response: Response) => void = () => {};
+    const { fetchMock } = renderLogout(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+
+    await user.click(logoutButton());
+
+    expect(logoutButton()).toBeDisabled();
+    expect(check).not.toHaveBeenCalled();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/app/api/v1/session");
+    expect(init.method).toBe("DELETE");
+
+    await act(async () => {
+      answer(new Response(null, { status: 204 }));
+    });
+
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a failure in the entry and keeps the session", async () => {
+    const user = userEvent.setup();
+    renderLogout(() =>
+      jsonResponse(
+        { error: { code: "internal", message: "database is locked" } },
+        500,
+      ),
+    );
+
+    await user.click(logoutButton());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "database is locked",
+    );
+    expect(check).not.toHaveBeenCalled();
+    expect(logoutButton()).toBeEnabled();
   });
 });

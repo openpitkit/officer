@@ -19,7 +19,7 @@ import { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router-dom";
 
-import { BrandMark } from "../components/BrandMark";
+import { BrandLockup } from "../components/BrandLockup";
 import { useSidebar } from "../components/sidebar-context";
 import { useHasPermission } from "./auth/auth-context";
 import { getNav, type NavEntry } from "./registries/nav";
@@ -78,7 +78,6 @@ function renderEntry(entry: NavEntry, footer: boolean) {
 }
 
 export function Sidebar() {
-  const { t } = useTranslation();
   const { open, close } = useSidebar();
   const hasPermission = useHasPermission();
 
@@ -99,15 +98,7 @@ export function Sidebar() {
         )}
       >
         <div className="ledger-masthead flex h-[var(--topbar-height)] shrink-0 items-center gap-[var(--dens-nav-gap)] overflow-hidden bg-bg/30 px-[var(--dens-shell-x)]">
-          <BrandMark className="h-[var(--dens-brand-logo)] w-[var(--dens-brand-logo)]" />
-          <div className="min-w-0 leading-tight">
-            <div className="text-[length:var(--dens-brand-title-fz)] font-bold tracking-tight text-text">
-              {t("brand.name")}
-            </div>
-            <div className="text-[length:var(--dens-brand-label-fz)] uppercase tracking-[0.12em] text-muted">
-              {t("brand.controlPlane")}
-            </div>
-          </div>
+          <BrandLockup />
         </div>
 
         <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-[var(--dens-sidebar-pad)]">

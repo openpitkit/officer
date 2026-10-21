@@ -30,6 +30,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
 import { setAccountScope } from "@/lib/accountScope";
+import { setPanelSession } from "@/lib/panelSession";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -98,6 +99,8 @@ const sealedStorage: CredentialStorage = {
   credentialsSealed: true,
   plaintextTradingKeys: false,
   plaintextMarketDataKeys: false,
+  sealedAt: null,
+  resealedSecrets: 0,
 };
 
 function unsealedStorage(
@@ -108,6 +111,8 @@ function unsealedStorage(
     credentialsSealed: false,
     plaintextTradingKeys,
     plaintextMarketDataKeys,
+    sealedAt: null,
+    resealedSecrets: 0,
   };
 }
 
@@ -213,7 +218,12 @@ describe("ServiceCard", () => {
 
     function ControlledServiceCard() {
       const [activeTab, setActiveTab] = useState<
-        "application" | "account-mode" | "api" | "database" | "logs"
+        | "application"
+        | "account-mode"
+        | "api"
+        | "database"
+        | "logs"
+        | "security"
       >("application");
       return (
         <ServiceCard
@@ -312,6 +322,9 @@ describe("Service", () => {
           fetchServiceInfo: vi.fn().mockResolvedValue(serviceInfo),
           fetchTrading: fetchTradingMock,
           fetchCredentialStorage: fetchCredentialStorageMock,
+          fetchSigningKeys: vi
+            .fn()
+            .mockResolvedValue({ keys: [], eSignEnabled: false }),
           getMcpCommands: vi.fn().mockResolvedValue([]),
           fetchServiceLogs: vi
             .fn()
@@ -360,6 +373,77 @@ describe("Service", () => {
     },
   );
 
+  describe("logs download", () => {
+    const DOWNLOAD_URL = "/app/api/v1/service/logs/download";
+
+    // Answers the logs download with `answer`; nothing else is served.
+    function servingDownload(answer: () => Response) {
+      return vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+        async (url) => {
+          if (url !== DOWNLOAD_URL) {
+            throw new TypeError("connection refused");
+          }
+          return answer();
+        },
+      );
+    }
+
+    async function clickDownload(fetch: ReturnType<typeof servingDownload>) {
+      const user = userEvent.setup();
+      vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+      renderService("/service#logs", {}, fetch);
+      expect(await screen.findByText("Service log")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Download" }));
+    }
+
+    it("fetches the logs through the API client and saves them", async () => {
+      const fetch = servingDownload(
+        () =>
+          new Response("first line\nsecond line\n", {
+            status: 200,
+            headers: {
+              "Content-Type": "text/plain; charset=utf-8",
+              "Content-Disposition": 'attachment; filename="pit-officer.log"',
+            },
+          }),
+      );
+
+      await clickDownload(fetch);
+
+      await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1));
+      const download = fetch.mock.calls.find(([url]) => url === DOWNLOAD_URL);
+      expect(download?.[1]).toMatchObject({
+        method: "GET",
+        headers: { Accept: "text/plain" },
+      });
+      const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
+      expect(blob.size).toBe("first line\nsecond line\n".length);
+      const click = vi.mocked(HTMLAnchorElement.prototype.click);
+      expect(click).toHaveBeenCalledTimes(1);
+      expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe(
+        "pit-officer.log",
+      );
+    });
+
+    it("shows a failed download in the logs card", async () => {
+      const fetch = servingDownload(() =>
+        jsonResponse(
+          { error: { code: "internal", message: "log buffer unavailable" } },
+          500,
+        ),
+      );
+
+      await clickDownload(fetch);
+
+      const panel = screen.getByRole("tabpanel", { name: "Logs" });
+      expect(await within(panel).findByRole("alert")).toHaveTextContent(
+        "log buffer unavailable",
+      );
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Download" })).toBeEnabled();
+    });
+  });
+
   it.each(["{Enter}", " "])(
     "clears the hash when %s activates the Logs tab selected by it",
     async (key) => {
@@ -404,6 +488,47 @@ describe("Service", () => {
     await user.click(screen.getByRole("tab", { name: "Application" }));
 
     expectHashClearedOn("Application");
+  });
+
+  it("shows the security tab from the hash and clears it on another tab", async () => {
+    const user = userEvent.setup();
+    setPanelSession("open");
+    renderService("/service#security");
+
+    const tab = await screen.findByRole("tab", { name: "Security" });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    const panel = screen.getByRole("tabpanel", { name: "Security" });
+    const access = within(panel).getByRole("group", { name: "Access" });
+    expect(
+      within(access).getByRole("radio", { name: "No token" }),
+    ).toBeChecked();
+
+    await user.click(screen.getByRole("tab", { name: "Application" }));
+
+    expectHashClearedOn("Application");
+  });
+
+  it("opens the Access section and the storage section under it from the security tab", async () => {
+    const user = userEvent.setup();
+    setPanelSession("open");
+    renderService("/service");
+
+    await user.click(await screen.findByRole("tab", { name: "Security" }));
+
+    const panel = screen.getByRole("tabpanel", { name: "Security" });
+    expect(
+      within(panel).getByRole("radiogroup", { name: "Who may use Officer" }),
+    ).toBeInTheDocument();
+    expect(
+      within(panel)
+        .getAllByRole("heading")
+        .map((heading) => heading.textContent),
+    ).toEqual(["Access", "Storage, signing and accounts"]);
+    expect(
+      await within(
+        within(panel).getByRole("group", { name: "Encryption" }),
+      ).findByText("On"),
+    ).toBeInTheDocument();
   });
 
   it.each([true, false])(

@@ -71,6 +71,8 @@ function storage(sealed: boolean): CredentialStorage {
     credentialsSealed: sealed,
     plaintextTradingKeys: false,
     plaintextMarketDataKeys: !sealed,
+    sealedAt: null,
+    resealedSecrets: 0,
   };
 }
 
@@ -90,7 +92,9 @@ function renderMarketDataPage() {
           tradeStyleStorageKey="pit-test-style"
         >
           <SidebarProvider>
-            <MarketData />
+            <MemoryRouter>
+              <MarketData />
+            </MemoryRouter>
           </SidebarProvider>
         </DisplayPreferencesProvider>
       </ThemeProvider>
@@ -1659,5 +1663,37 @@ describe("unsealed key warning", () => {
     expect(dialog.queryByText(warningText)).not.toBeInTheDocument();
     await user.type(dialog.getByLabelText("Token"), "usable-token");
     expect(dialog.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+});
+
+describe("stored secret placeholder", () => {
+  it("marks only the stored secret in a source's settings form", () => {
+    render(
+      <I18nextProvider i18n={i18n}>
+        <InstanceSettingsDialog
+          instance={ibInstance({
+            id: "alpaca-1",
+            provider: "alpaca",
+            label: "Alpaca",
+            settings: {},
+            secrets: { apiKey: true },
+          })}
+          busy={false}
+          existingLabels={[]}
+          credentialStorage={sealedStorageLoad}
+          onOpenChange={vi.fn()}
+          onSave={vi.fn().mockResolvedValue(true)}
+        />
+      </I18nextProvider>,
+    );
+
+    expect(screen.getByLabelText("API key")).toHaveAttribute(
+      "placeholder",
+      "Keep stored secret",
+    );
+    expect(screen.getByLabelText("API secret")).toHaveAttribute(
+      "placeholder",
+      "",
+    );
   });
 });

@@ -46,5 +46,8 @@
     "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch 需要指定货币",
     "pnlRequires": "spot_funds_pnl_bounds_kill_switch 需要指定 lower_bound 或 upper_bound",
     "pnlBoundOrder": "lower_bound 必须 <= upper_bound"
+  },
+  "password": {
+    "mismatch": "两次输入的密码不一致。"
   }
 }

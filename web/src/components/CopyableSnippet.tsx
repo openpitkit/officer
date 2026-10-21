@@ -15,50 +15,47 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { Check, Copy } from "lucide-react";
+import type { ClipboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 
-import { copyText } from "@/lib/clipboard";
-import { useCopyFeedback } from "@/lib/useCopyFeedback";
+import { CopyButton } from "@/components/CopyButton";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 
 // ---------------------------------------------------------------------------
 
-/** Read-only copyable text block with a transient "Copied" confirmation. */
+/**
+ * Read-only copyable text block with a transient "Copied" confirmation. Copy
+ * writes `copyText` when given, so a block can show a masked secret while
+ * copying the real value, and `text` otherwise.
+ */
 export function CopyableSnippet({
   text,
+  copyText,
   label,
   rows = 6,
   className,
 }: {
   text: string;
+  /**
+   * The value every copy of the block writes instead of `text`: the Copy
+   * button, and a keyboard or context-menu copy of the text area, which
+   * replaces whatever selection it holds with the whole `copyText`. Without
+   * it, both copy `text` as usual.
+   */
+  copyText?: string;
   label?: string;
   rows?: number;
   className?: string;
 }) {
   const { t } = useTranslation();
-  const [copied, markCopied] = useCopyFeedback(1500);
-
-  function handleCopy() {
-    void copyText(text).then(markCopied);
-  }
-
-  const copyBtn = (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={handleCopy}
-      aria-label={t("actions.copy")}
-    >
-      {copied ? (
-        <Check className="h-3.5 w-3.5 text-accent" />
-      ) : (
-        <Copy className="h-3.5 w-3.5" />
-      )}
-      {copied ? t("actions.copied") : t("actions.copy")}
-    </Button>
-  );
+  const copyBtn = <CopyButton text={copyText ?? text} />;
+  const onCopy =
+    copyText === undefined
+      ? undefined
+      : (event: ClipboardEvent<HTMLTextAreaElement>) => {
+          event.preventDefault();
+          event.clipboardData.setData("text/plain", copyText);
+        };
 
   return (
     <div className={cn("space-y-1.5", className)}>
@@ -74,6 +71,7 @@ export function CopyableSnippet({
         readOnly
         rows={rows}
         value={text}
+        onCopy={onCopy}
         spellCheck={false}
         className="w-full resize-none select-all rounded-card border border-border bg-surface-2 p-2 font-mono text-[0.6875rem] text-muted-lt focus:outline-none focus:ring-1 focus:ring-ring"
         aria-label={label ?? t("states.copyableSnippet")}

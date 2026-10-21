@@ -20,6 +20,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { useState } from "react";
 import { I18nextProvider } from "react-i18next";
+import { MemoryRouter } from "react-router-dom";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -108,6 +109,8 @@ function storage(credentialsSealed: boolean): LoadState<CredentialStorage> {
       credentialsSealed,
       plaintextTradingKeys: false,
       plaintextMarketDataKeys: false,
+      sealedAt: null,
+      resealedSecrets: 0,
     },
     error: null,
   };
@@ -125,9 +128,11 @@ function renderPage() {
           densityStorageKey="pit-test-density"
           tradeStyleStorageKey="pit-test-style"
         >
-          <SidebarProvider>
-            <SigningKeys />
-          </SidebarProvider>
+          <MemoryRouter>
+            <SidebarProvider>
+              <SigningKeys />
+            </SidebarProvider>
+          </MemoryRouter>
         </DisplayPreferencesProvider>
       </ThemeProvider>
     </I18nextProvider>,

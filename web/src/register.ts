@@ -26,6 +26,7 @@ import {
   Info,
   KeyRound,
   LayoutDashboard,
+  LogOut,
   Route,
   Settings,
   ShieldCheck,
@@ -37,6 +38,7 @@ import {
 import { registerAppRowActions, registerAppVocabulary } from "@/appDefaults";
 import {
   AboutNavEntry,
+  LogoutNavEntry,
   NonReleaseNavEntry,
   RestartRequiredNavEntry,
 } from "@/components/SidebarExtras";
@@ -49,6 +51,7 @@ import {
 } from "@/framework";
 import { appLocaleResources } from "@/i18n";
 import { accountScope } from "@/lib/accountScope";
+import { panelSession } from "@/lib/panelSession";
 import { Account } from "@/pages/Account";
 import { Accounts } from "@/pages/Accounts";
 import { Assets } from "@/pages/Assets";
@@ -180,7 +183,7 @@ export function registerOfficerDefaults(): void {
 
   // Nav ids: dashboard, accounts, account, positions, orders, policies,
   // restart-required, audit, mcp-access, signing-keys, trading-connections,
-  // market-data, service, non-release, about.
+  // market-data, service, non-release, logout, about.
   registerNav({
     id: "dashboard",
     to: "/",
@@ -305,6 +308,16 @@ export function registerOfficerDefaults(): void {
     section: "footer",
     order: 60,
     render: () => createElement(NonReleaseNavEntry),
+  });
+  registerNav({
+    id: "logout",
+    to: "#logout",
+    labelKey: "nav.logOut",
+    icon: LogOut,
+    section: "footer",
+    order: 65,
+    when: () => panelSession().accessMode === "token",
+    render: () => createElement(LogoutNavEntry),
   });
   registerNav({
     id: "about",

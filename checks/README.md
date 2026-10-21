@@ -121,6 +121,17 @@ fixtures' headers are checked too.
 
 This rule has no approval marker.
 
+### Panel access reuse
+
+`checks/semgrep/panel-access-reuse.yml` keeps panel access implementations in
+their shared homes: `errorResponse` in `web/src/test/apiClient.tsx`, strict
+RFC 3339 decoding in `web/src/framework/api/rfc3339.ts`, new-password inputs
+in `PasswordPairFields`, and Show/Hide controls in `RevealButton`. The rules
+scan `web/src`, excluding only each shared implementation. They catch the
+copied response-and-headers factory, calendar round-trip comparisons,
+new-password fields, and translated Show/Hide labels. Their positive and
+negative fixtures run as part of `check-semgrep`.
+
 ### Approval marker
 
 `unapproved-entity-autocreate` is not an absolute prohibition. The construct

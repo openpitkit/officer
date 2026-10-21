@@ -8,7 +8,8 @@
     "accountMode": "账户模式",
     "api": "API",
     "database": "数据库",
-    "logs": "日志"
+    "logs": "日志",
+    "security": "安全"
   },
   "application": {
     "title": "应用",
@@ -165,5 +166,146 @@
     "download": "下载",
     "empty": "尚未捕获日志行。",
     "refreshAriaLabel": "刷新日志"
+  },
+  "access": {
+    "boundary": "在本机上以您的用户身份使用终端的智能体、脚本或人员，可以绕过令牌和密码完全控制 Officer：使用 Docker Desktop 时，通过 <exec/>、数据卷副本和 <inspect/>；不使用 Docker 时，通过 Officer 的数据文件夹。令牌和密码能够挡住网页、其他容器，以及在无法访问 Docker 或 Officer 文件的沙箱中运行的智能体。",
+    "isolation": {
+      "title": "如何运行无法触及 Officer 的智能体",
+      "sandbox": "在没有 Docker 套接字、也无法访问 Officer 数据的沙箱中运行。",
+      "user": "在本机的另一个用户账户下运行。",
+      "computer": "在另一台计算机上运行。"
+    },
+    "choice": "谁可以使用 Officer",
+    "recommended": "推荐",
+    "modes": {
+      "token": {
+        "title": "令牌和密码",
+        "description": "程序和智能体出示令牌。面板在每个浏览器中只询问一次密码。"
+      },
+      "open": {
+        "title": "无令牌",
+        "description": "本机上的任何软件都可以直接使用 Officer。"
+      }
+    },
+    "password": {
+      "new": "新面板密码",
+      "repeat": "再次输入新密码",
+      "generate": "生成",
+      "hint": "至少 {{min}} 个字符。请保存在密码管理器中。",
+      "tooShort": "过短：{{length}}/{{min}} 个字符。",
+      "tooLong": "过长：{{length}} 个字符，最多 {{max}} 个。"
+    },
+    "facts": {
+      "session": "面板在每个浏览器中只询问一次，登录最长保持 30 天。一周未访问或退出登录都会结束会话。",
+      "agent": "您的智能体会获得自己的令牌。该令牌仅用于 MCP，且仅限您允许的命令。",
+      "programs": "您自己的程序可在 服务 › 安全 中获取 API 令牌。",
+      "recovery": "忘记密码？Officer 会将一次性恢复码写入其日志。"
+    },
+    "warning": {
+      "title": "没有令牌时，Officer 对本机上的一切开放",
+      "who": "谁可以使用：",
+      "programs": "本机上的任何程序；",
+      "containers": "Docker 默认网络中的任何容器；",
+      "agents": "本机上任何拥有终端权限的 AI 智能体 - 它会直接调用 REST API，绕过您在 MCP 中为其设定的限制。",
+      "what": "他们能做什么：读取全部数据，修改和删除限制，解除账户阻止，开启智能体命令，删除全部数据，通过您的交易连接发送订单。",
+      "pages": "在两种模式下，浏览器中打开的网页均无法访问。",
+      "close": "如需关闭，请选择“令牌和密码”并设置面板密码。Officer 会立即切换，无需重启。",
+      "acknowledge": "我已了解：本机上的任何软件都可以控制 Officer。"
+    }
+  },
+  "masterKeyGuide": {
+    "where": "请在本机终端中执行",
+    "chooseSystem": "请选择本机的系统以查看相应命令。",
+    "deployment": {
+      "label": "Officer 的运行方式",
+      "docker": "Docker",
+      "binary": "不使用 Docker"
+    },
+    "system": {
+      "label": "系统",
+      "windows": "Windows PowerShell",
+      "mac": "macOS",
+      "linux": "Linux"
+    },
+    "create": {
+      "title": "创建密钥文件",
+      "detail": "32 个随机字节，存放在仅您可访问的文件夹中。",
+      "detailDocker": "32 个随机字节，存放在仅您可访问的文件夹中。文件本身保持可读，以便 Officer 容器读取。"
+    },
+    "keep": {
+      "title": "在其他位置保存密钥副本",
+      "detail": "将其存入密码管理器，或打印后妥善保管。密钥一旦丢失，Officer 将永远无法再打开其数据库：无法恢复。"
+    },
+    "start": {
+      "title": "使用密钥重新启动 Officer",
+      "detailDocker": "此操作将替换容器。数据保留在卷 <volume/> 中。",
+      "detailBinary": "按 <keys/> 停止正在运行的 <running/>，然后以之前的参数按如下方式启动。"
+    }
+  },
+  "security": {
+    "access": {
+      "title": "访问",
+      "mode": "访问",
+      "token": "令牌",
+      "switchToOpen": "切换为无令牌…",
+      "switchDialog": {
+        "title": "切换为无令牌？",
+        "description": "Officer 将删除面板密码、两个令牌和所有浏览器会话，此后无需令牌即可响应本机上的任何程序。",
+        "confirm": "切换为无令牌"
+      },
+      "turnOn": "开启令牌访问",
+      "currentPassword": "当前密码",
+      "password": "面板密码",
+      "passwordSet": "设置于 {{date}}",
+      "change": "修改…",
+      "changeDialog": {
+        "title": "修改面板密码",
+        "description": "其他所有浏览器都将退出登录；当前浏览器保持登录。",
+        "submit": "修改密码"
+      },
+      "passwordChanged": "面板密码已修改。其他所有浏览器均已退出登录。",
+      "sessions": "浏览器会话",
+      "sessionCount_one": "已在 {{count}} 个浏览器中登录",
+      "sessionCount_other": "已在 {{count}} 个浏览器中登录",
+      "logOutEverywhere": "全部退出登录"
+    },
+    "tokens": {
+      "regenerate": "重新签发",
+      "agent": {
+        "label": "智能体令牌 · MCP",
+        "note": "与 MCP 访问 中“连接您的智能体”所示令牌相同。重新签发后旧令牌立即失效。",
+        "confirmTitle": "重新签发智能体令牌？",
+        "confirmDescription": "当前智能体令牌将立即失效：使用它的智能体将无法访问 MCP，直到其配置换上新令牌。"
+      },
+      "api": {
+        "label": "API 令牌 · REST",
+        "note": "对 REST 拥有完全控制权 - 与面板通过会话持有的访问权限相同。切勿交给智能体。",
+        "confirmTitle": "重新签发 API 令牌？",
+        "confirmDescription": "当前 API 令牌将立即失效：使用它的程序将无法访问 REST，直到获得新令牌。"
+      }
+    },
+    "storage": {
+      "title": "存储、签名与账户",
+      "encryption": "加密",
+      "masterKey": "主密钥",
+      "noMasterKey": "无",
+      "encryptionOn": "已开启",
+      "sealed": "已开启 · 密封于 {{date}}",
+      "plainText": "已关闭 · 存储的密钥为明文",
+      "signing": "决定签名",
+      "signingOff": "已关闭",
+      "signingOn": "已开启 · 密钥 {{key}}",
+      "signingWithoutKey": "已开启 · 无签名密钥",
+      "accountMode": "账户模式",
+      "oneAccount": "单个账户 · {{account}}",
+      "openAccountMode": "“账户模式”选项卡"
+    },
+    "exposed": {
+      "title": "设置主密钥之前存储的机密应视为已泄露",
+      "detail_one": "密封时重新加密了 {{count}} 个此前以明文存放在数据库文件中的存储机密：在此之前复制过该文件或备份的任何人都能读取它。",
+      "detail_other": "密封时重新加密了 {{count}} 个此前以明文存放在数据库文件中的存储机密：在此之前复制过该文件或备份的任何人都能读取它们。",
+      "keys": "请向提供商申请新密钥，并在连接页面中填入。",
+      "tokens": "请重新签发两个令牌：每个旧值都将立即失效。"
+    }
   }
 }

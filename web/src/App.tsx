@@ -18,16 +18,35 @@
 import { useEffect, useState } from "react";
 
 import { AccountModeDialog } from "@/components/AccountModeDialog";
-import {
-  AccountScopeGate,
-  useStartupAccountMode,
-} from "@/components/AccountScopeGate";
 import { SidebarProvider } from "@/components/SidebarContext";
+import { StartupGate, useStartupAccountMode } from "@/components/StartupGate";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { AppRoutes, Sidebar, useOfficerApi } from "@/framework";
 
 export default function App() {
+  return (
+    <StartupGate>
+      <SidebarProvider>
+        <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
+          <Sidebar />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <AppRoutes />
+          </div>
+        </div>
+        <StartupDialogs />
+      </SidebarProvider>
+    </StartupGate>
+  );
+}
+
+/**
+ * The account-mode question while no mode is stored, then the welcome dialog,
+ * which never opens over the question.
+ */
+function StartupDialogs() {
+  const { mode } = useStartupAccountMode();
   const { fetchWelcomeSeen } = useOfficerApi();
+  const [asking, setAsking] = useState(mode === null);
   // The welcome dialog shows on every load until the operator dismisses it with
   // "don't show again", which the backend persists in user settings.
   const [welcomeOpen, setWelcomeOpen] = useState(false);
@@ -49,43 +68,11 @@ export default function App() {
   }, [fetchWelcomeSeen]);
 
   return (
-    <AccountScopeGate>
-      <SidebarProvider>
-        <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
-          <Sidebar />
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <AppRoutes />
-          </div>
-        </div>
-        <StartupDialogs
-          welcomeOpen={welcomeOpen}
-          onWelcomeOpenChange={setWelcomeOpen}
-        />
-      </SidebarProvider>
-    </AccountScopeGate>
-  );
-}
-
-/**
- * The account-mode question while no mode is stored, then the welcome dialog,
- * which never opens over the question.
- */
-function StartupDialogs({
-  welcomeOpen,
-  onWelcomeOpenChange,
-}: {
-  welcomeOpen: boolean;
-  onWelcomeOpenChange: (open: boolean) => void;
-}) {
-  const { mode } = useStartupAccountMode();
-  const [asking, setAsking] = useState(mode === null);
-
-  return (
     <>
       {asking && <AccountModeDialog onDone={() => setAsking(false)} />}
       <WelcomeDialog
         open={!asking && welcomeOpen}
-        onOpenChange={onWelcomeOpenChange}
+        onOpenChange={setWelcomeOpen}
       />
     </>
   );

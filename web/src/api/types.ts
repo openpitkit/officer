@@ -813,6 +813,16 @@ export interface CredentialStorage {
   plaintextTradingKeys: boolean;
   /** Not sealed, and at least one market-data source holds a key. */
   plaintextMarketDataKeys: boolean;
+  /**
+   * When sealing re-encrypted the stored values, an RFC 3339 timestamp; null
+   * when it never did.
+   */
+  sealedAt: string | null;
+  /**
+   * How many non-empty stored values that sealing re-encrypted from plain
+   * text; 0 when nothing stored had been exposed.
+   */
+  resealedSecrets: number;
 }
 
 /** Venue identity and status returned by a connection check. */

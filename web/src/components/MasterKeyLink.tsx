@@ -16,21 +16,14 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
-const MASTER_KEY_GUIDE =
-  "https://github.com/openpitkit/officer/blob/main/docs/configuration.md#master-key";
-
-/** Opens the master-key setup guide in a new tab. */
+/** Leads to Service › Security, where the master-key guide is. */
 export function MasterKeyLink() {
   const { t } = useTranslation();
   return (
-    <a
-      href={MASTER_KEY_GUIDE}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="underline underline-offset-4"
-    >
+    <Link to="/service#security" className="underline underline-offset-4">
       {t("sensitiveData.masterKeyLink")}
-    </a>
+    </Link>
   );
 }

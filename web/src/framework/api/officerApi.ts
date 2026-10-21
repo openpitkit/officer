@@ -16,6 +16,7 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { ApiError, type ApiClient } from "./createApiClient";
+import { isRfc3339Time } from "./rfc3339";
 import type {
   Account,
   AccountBlockSource,
@@ -1855,20 +1856,40 @@ function normalizeCredentialStorage(v: unknown): CredentialStorage {
       "internal",
     );
   }
-  const flag = (field: keyof CredentialStorage): boolean => {
+  const invalid = (field: keyof CredentialStorage) =>
+    new ApiError(
+      `Invalid or missing credential storage ${field} in the API response`,
+      "internal",
+    );
+  const flag = (
+    field:
+      | "credentialsSealed"
+      | "plaintextTradingKeys"
+      | "plaintextMarketDataKeys",
+  ): boolean => {
     const value = v[field];
     if (typeof value !== "boolean") {
-      throw new ApiError(
-        `Invalid or missing credential storage ${field} in the API response`,
-        "internal",
-      );
+      throw invalid(field);
     }
     return value;
   };
+  const { sealedAt, resealedSecrets } = v;
+  if (sealedAt !== null && !isRfc3339Time(sealedAt)) {
+    throw invalid("sealedAt");
+  }
+  if (
+    typeof resealedSecrets !== "number" ||
+    !Number.isSafeInteger(resealedSecrets) ||
+    resealedSecrets < 0
+  ) {
+    throw invalid("resealedSecrets");
+  }
   return {
     credentialsSealed: flag("credentialsSealed"),
     plaintextTradingKeys: flag("plaintextTradingKeys"),
     plaintextMarketDataKeys: flag("plaintextMarketDataKeys"),
+    sealedAt,
+    resealedSecrets,
   };
 }
 

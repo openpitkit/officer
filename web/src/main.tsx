@@ -23,6 +23,7 @@ import App from "@/App";
 import { ApiClientProvider, AuthProvider } from "@/framework";
 import i18n from "@/i18n";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { checkSession } from "@/lib/panelSession";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import "@/index.css";
@@ -37,6 +38,7 @@ const apiConfig = {
   baseUrl: "/app/api/v1",
   translate: (key: string, params?: Record<string, unknown>) =>
     i18n.t(key, params),
+  onUnauthorized: checkSession,
 };
 
 // Resources are bundled eagerly (see i18n/index.ts glob), so i18next is ready
