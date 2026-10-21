@@ -26,13 +26,13 @@ Linux. Copy the command below, paste it there, and press Enter. The command
 is the same on all three systems:
 
 ```sh
-docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer
+docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer:latest
 ```
 
-The first run downloads Officer, which may take a few minutes. It then runs
-in the background, so you can close the terminal. Your settings and records
-are saved on your computer in storage named `pit-officer-data` and kept when
-you stop or restart Officer.
+`latest` is the newest stable release of Officer. The first run downloads
+Officer, which may take a few minutes. It then runs in the background, so you
+can close the terminal. Your settings and records are saved on your computer
+in storage named `pit-officer-data` and kept when you stop or restart Officer.
 
 To check whether it is ready, run:
 
@@ -54,6 +54,18 @@ running the long command: for example, replace `-p 127.0.0.1:8787:8787` with
 To stop Officer, run `docker stop pit-officer`. To start it again, run
 `docker start pit-officer` and open your bookmark. Use these commands after
 the first installation; you do not need to repeat the long command.
+
+To try changes before they are released, run the `edge` build instead: the
+newest version under development that passed its checks. It changes often and
+may not work, so give it its own name, port, and storage, apart from your
+stable installation:
+
+```sh
+docker run -d --name pit-officer-edge --restart unless-stopped -p 127.0.0.1:8788:8787 -v pit-officer-edge-data:/data ghcr.io/openpitkit/officer:edge
+```
+
+Then open <http://127.0.0.1:8788>, and use `pit-officer-edge` instead of
+`pit-officer` in the commands above.
 
 For help with installation, changing the port of an existing installation,
 or a panel that will not open, see the [quickstart](docs/quickstart.md).

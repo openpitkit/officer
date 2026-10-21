@@ -15,8 +15,9 @@
 #
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
-# Publishes the `serve` image to GHCR after CI on `main`, from version tags,
-# and from a dry-run dispatch on the `release-dry-run` branch.
+# Publishes the `serve` image to GHCR after CI on `main` (the edge channel),
+# from version tags (the stable channel and pre-releases), and from a dry-run
+# dispatch on the `release-dry-run` branch.
 
 name: Release image
 
@@ -65,7 +66,7 @@ jobs:
           fetch-depth: 0
 
       # A dispatched run is always a dry run: it publishes one test image under
-      # a tag of its own and never touches X.Y.Z, X.Y or latest.
+      # a tag of its own and never touches X.Y.Z, X.Y, latest or edge.
       - name: Resolve release mode
         id: mode
         shell: bash
@@ -172,8 +173,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Main CI publishes latest and the checked commit's full SHA.
-      # Version tags follow the rank outputs; a dry run gets only its own tag.
+      # Main CI publishes edge and sha-<short SHA> of the checked commit.
+      # Version tags publish X.Y.Z (or the exact pre-release version), and X.Y
+      # and latest only as the rank outputs allow; a dry run gets only its own
+      # tag.
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -183,8 +186,9 @@ jobs:
           tags: |
             type=semver,pattern={{version}},enable=${{ steps.mode.outputs.release_mode == 'production' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ steps.rank.outputs.minor == 'true' }}
-            type=raw,value=latest,enable=${{ steps.mode.outputs.release_mode == 'main' || steps.rank.outputs.latest == 'true' }}
-            type=sha,format=long,enable=${{ steps.mode.outputs.release_mode == 'main' }}
+            type=raw,value=latest,enable=${{ steps.rank.outputs.latest == 'true' }}
+            type=edge,branch=main,enable=${{ steps.mode.outputs.release_mode == 'main' }}
+            type=sha,enable=${{ steps.mode.outputs.release_mode == 'main' }}
             type=raw,value=${{ steps.mode.outputs.dry_run_tag }},enable=${{ steps.mode.outputs.release_mode == 'dry-run' }}
 
       - name: Require only the dry-run tag
