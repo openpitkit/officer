@@ -201,8 +201,10 @@ start rather than silently running unencrypted.
 Approval signing needs the master key. Officer stores an approval signing
 private key only sealed under it, so without a key generating or importing a
 signing key is refused with `master_key_required` (HTTP 409), and the panel's
-Signing Keys screen says why. To enable signing, configure the key and restart
-Officer.
+Signing Keys screen says why. Approval signing is off on a fresh Officer. To
+turn it on, configure the key and restart Officer, generate or import a signing
+key on the Signing Keys screen, and switch on "Require signature on approval and
+attestation envelopes".
 
 Startup resolves to one of seven states:
 
