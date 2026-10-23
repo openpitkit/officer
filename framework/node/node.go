@@ -80,14 +80,13 @@ type LimitTarget struct {
 // Node is the execution target of one realm: an engine plus that realm's
 // store.
 //
-// The command methods below are the operations a remote node serves over RPC;
-// the local node runs them in-process against its engine and the bound realm
-// store. Every mutation follows one protocol (see
-// localNode): the store is the source of truth and is written first, the engine
-// is applied from persisted state, the store is reverted on engine failure, and
-// an audit row is appended last. Administrative resets/restores and transitions
-// the SDK cannot express online rebuild the engine and reject new mutating
-// requests while the rebuild is in progress.
+// The command methods below are the node's operations; the local node runs
+// them in-process against its engine and the bound realm store. Every mutation
+// follows one protocol (see localNode): the store is the source of truth and is
+// written first, the engine is applied from persisted state, the store is
+// reverted on engine failure, and an audit row is appended last. Administrative
+// resets/restores and transitions the SDK cannot express online rebuild the
+// engine and reject new mutating requests while the rebuild is in progress.
 type Node interface {
 	// Health returns the current aggregate health of the node's engine and
 	// store.

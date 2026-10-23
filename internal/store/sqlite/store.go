@@ -485,8 +485,7 @@ func (s *sqliteStore) Close() error {
 
 // realmStore is the realm-scoped data-access handle the single-realm SQLite
 // connector returns. It shares the connector's connection pool; all data access
-// for the bound realm goes through it. A future multi-realm connector would bind
-// each handle to its own schema or route here instead.
+// for the bound realm goes through it.
 type realmStore struct {
 	store *sqliteStore
 }

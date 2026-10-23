@@ -170,7 +170,7 @@ func handleGetOrder(svc backend.ControlPlane) http.HandlerFunc {
 //
 // It shares the order-read auth seam: the request reaches here only through the
 // same middleware/authorizer as GET /orders/{id}, and GetOrder enforces whatever
-// account/tenant scoping order reads already apply, so a controller cannot
+// account/realm scoping order reads already apply, so a controller cannot
 // reproduce an event they could not already read.
 func handleGetOrderEventReproduction(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
