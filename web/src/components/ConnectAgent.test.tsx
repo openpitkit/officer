@@ -278,7 +278,7 @@ describe("ConnectAgent", () => {
     expect(snippet("MCP connector URL")).toHaveValue(mcpUrl());
     expect(
       screen.getByText(
-        "Hosted ChatGPT can only reach a publicly resolvable HTTPS URL. A loopback or localhost Officer is not reachable - expose the service on a public HTTPS endpoint first.",
+        "Hosted ChatGPT runs outside this computer and reaches only a public HTTPS address. Officer stays on this computer and serves plain HTTP, so hosted ChatGPT cannot connect to it. Connect an agent that runs on this computer instead.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: CLI })).toBeNull();

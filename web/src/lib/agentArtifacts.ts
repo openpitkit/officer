@@ -157,9 +157,9 @@ In ChatGPT this is configured as an MCP connector pointing at the URL above.
 Alternatively, build a ChatGPT Action from the Officer OpenAPI description
 served at the \`/docs\` endpoint of the same service.
 
-Note: a hosted ChatGPT can only reach a publicly resolvable HTTPS URL. A
-loopback or localhost Officer is not reachable from ChatGPT; expose the service
-on a public HTTPS endpoint first.
+Note: hosted ChatGPT runs outside the operator's computer and reaches only a
+public HTTPS address. Officer stays on the operator's computer and serves plain
+HTTP, so hosted ChatGPT cannot connect to it.
 
 ## Discover the command surface
 

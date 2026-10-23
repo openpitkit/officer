@@ -120,7 +120,7 @@
       "step1": "打开您的自定义 GPT 或 ChatGPT 连接器设置。",
       "step2": "添加指向上方 URL 的 MCP 连接器。",
       "step3": "或通过 /docs 的 OpenAPI 描述构建 ChatGPT 操作。",
-      "publicUrlCaveat": "托管版 ChatGPT 仅能访问可公开解析的 HTTPS URL。回环地址或 localhost 的 Officer 实例无法被访问，请先将服务发布至公开的 HTTPS 端点。",
+      "publicUrlCaveat": "托管版 ChatGPT 运行在本机之外，仅能访问公开的 HTTPS 地址。Officer 仅在本机运行并使用普通 HTTP，因此托管版 ChatGPT 无法连接到它。请改为连接在本机运行的智能体。",
       "instructionsHint": "下载用于自定义 GPT 的指令文本。",
       "instructionsButton": "下载 GPT 指令"
     },

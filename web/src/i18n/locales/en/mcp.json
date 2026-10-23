@@ -120,7 +120,7 @@
       "step1": "Open your custom GPT or ChatGPT connector settings.",
       "step2": "Add an MCP connector pointing at the URL above.",
       "step3": "Or build a ChatGPT Action from the OpenAPI description at /docs.",
-      "publicUrlCaveat": "Hosted ChatGPT can only reach a publicly resolvable HTTPS URL. A loopback or localhost Officer is not reachable - expose the service on a public HTTPS endpoint first.",
+      "publicUrlCaveat": "Hosted ChatGPT runs outside this computer and reaches only a public HTTPS address. Officer stays on this computer and serves plain HTTP, so hosted ChatGPT cannot connect to it. Connect an agent that runs on this computer instead.",
       "instructionsHint": "Download instruction text for a custom GPT.",
       "instructionsButton": "Download GPT instructions"
     },
