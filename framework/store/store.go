@@ -1984,8 +1984,8 @@ type RealmStore interface {
 	// SetUserSetting upserts one per-user key-value setting.
 	SetUserSetting(ctx context.Context, userID, key, value string) error
 
-	// ListUserSettings returns every persisted user setting, ordered for stable
-	// backups. An empty store returns a non-nil empty slice.
+	// ListUserSettings returns every persisted user setting, ordered by
+	// (user_id, setting_key). An empty store returns a non-nil empty slice.
 	ListUserSettings(ctx context.Context) ([]domain.UserSetting, error)
 
 	// --- Backup / restore (realm-portable) ---

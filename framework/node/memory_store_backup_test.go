@@ -103,9 +103,6 @@ func (r *memoryRealm) RestoreBackup(
 		for key, value := range data.McpAccess {
 			r.mcpAccess[key] = value
 		}
-		for _, setting := range data.UserSettings {
-			r.userSettings[settingKey(setting.UserID, setting.Key)] = setting
-		}
 	}
 	summary := backup.NewSummary()
 	for _, section := range opts.Scope.Normalize().IncludedSections() {
@@ -139,7 +136,6 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		SigningKeys:           make([]backup.SigningKey, 0, len(r.signingKeys)),
 		Settings:              make([]backup.SettingEntry, 0, len(r.settings)),
 		McpAccess:             make(map[string]bool, len(r.mcpAccess)),
-		UserSettings:          make([]domain.UserSetting, 0, len(r.userSettings)),
 	}
 	for _, asset := range r.assets {
 		data.Assets = append(data.Assets, backup.Asset{
@@ -230,9 +226,6 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 	}
 	for key, value := range r.mcpAccess {
 		data.McpAccess[key] = value
-	}
-	for _, setting := range r.userSettings {
-		data.UserSettings = append(data.UserSettings, setting)
 	}
 	return data
 }
@@ -400,10 +393,6 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 	for key, value := range data.McpAccess {
 		r.mcpAccess[key] = value
 	}
-	r.userSettings = map[string]domain.UserSetting{}
-	for _, setting := range data.UserSettings {
-		r.userSettings[settingKey(setting.UserID, setting.Key)] = setting
-	}
 }
 
 func (r *memoryRealm) restoreSigningKeys(
@@ -449,8 +438,6 @@ func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) in
 		return len(r.instances) + len(r.instruments)
 	case backup.SectionGeneralSettings:
 		return len(r.mcpAccess) + len(r.settings)
-	case backup.SectionUserSettings:
-		return len(r.userSettings)
 	case backup.SectionActivityHistory:
 		return len(r.adjustments) + len(r.orders) + len(r.events) + len(r.trades)
 	case backup.SectionAuditLog:

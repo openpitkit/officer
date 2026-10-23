@@ -216,9 +216,8 @@ func mountV1(
 				register(v1, route.Method, route.Pattern, public.Then(route.Handler))
 				continue
 			}
-			chain := make(Chain, 0, len(base)+1)
-			chain = append(chain, base...)
-			chain = append(chain, AuthorizeMiddleware(authorizer, route.ID))
+			chain := slices.Concat(Chain{withDuringSetup(route.DuringSetup)}, base,
+				Chain{AuthorizeMiddleware(authorizer, route.ID)})
 			register(v1, route.Method, route.Pattern, chain.Then(route.Handler))
 		}
 	})

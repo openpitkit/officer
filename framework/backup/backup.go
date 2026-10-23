@@ -41,7 +41,7 @@ import (
 )
 
 // FormatVersion is the current portable archive shape.
-const FormatVersion = 4
+const FormatVersion = 5
 
 const (
 	// CredentialFormPlaintext declares that archived credentials are plaintext.
@@ -66,8 +66,6 @@ const (
 	// SectionGeneralSettings carries the MCP access overrides and the realm
 	// settings.
 	SectionGeneralSettings Section = "general_settings"
-	// SectionUserSettings carries the per-user UI settings.
-	SectionUserSettings Section = "user_settings"
 	// SectionActivityHistory carries adjustments, orders (with approvals),
 	// order events and trades.
 	SectionActivityHistory Section = "activity_history"
@@ -88,7 +86,6 @@ var AllSections = []Section{
 	SectionRiskLimits,
 	SectionMarketData,
 	SectionGeneralSettings,
-	SectionUserSettings,
 	SectionActivityHistory,
 	SectionTrading,
 	SectionAuditLog,
@@ -607,8 +604,6 @@ type Data struct {
 	Settings []SettingEntry `json:"settings,omitempty"`
 	// McpAccess is the per-command MCP enable/disable overrides.
 	McpAccess map[string]bool `json:"mcpAccess,omitempty"`
-	// UserSettings are the per-user UI settings.
-	UserSettings []domain.UserSetting `json:"userSettings,omitempty"`
 }
 
 // Archive is the single JSON document copied between Officer realms. It is one
@@ -665,7 +660,7 @@ func Filename(createdAt time.Time) string {
 
 // RuntimeSection reports whether restoring section changes live runtime state.
 // The accounts+groups, positions, risk-limits and market-data sections are
-// projected into the live engine; general/user settings, activity history and
+// projected into the live engine; general settings, activity history and
 // the audit log are observational. A runtime delta can usually be published
 // online and does not by itself imply an engine replacement.
 //
@@ -851,9 +846,6 @@ func FilterData(data Data, scope Scope) Data {
 		}
 		out.Settings = append([]SettingEntry(nil), data.Settings...)
 		out.SigningKeys = append([]SigningKey(nil), data.SigningKeys...)
-	}
-	if scope.Included(SectionUserSettings) && data.UserSettings != nil {
-		out.UserSettings = append([]domain.UserSetting(nil), data.UserSettings...)
 	}
 	if scope.Included(SectionActivityHistory) {
 		out.Adjustments = filterAdjustments(data.Adjustments, scope.Accounts, groupByAccount)

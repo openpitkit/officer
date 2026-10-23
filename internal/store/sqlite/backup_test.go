@@ -29,6 +29,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"reflect"
@@ -174,9 +175,6 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 	}
 	if err := rs.SetMcpAccess(ctx, "submit_order", true); err != nil {
 		t.Fatalf("SetMcpAccess: %v", err)
-	}
-	if err := rs.SetUserSetting(ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen, "1"); err != nil {
-		t.Fatalf("SetUserSetting: %v", err)
 	}
 	return order.ExternalID
 }
@@ -3098,7 +3096,7 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 
 	// seedExtra adds rows the archive does NOT carry: an extra account (with a
 	// balance, a limit, an adjustment and an audit row), an extra group, an extra
-	// market-data instance, an extra MCP override and an extra user setting.
+	// market-data instance and an extra MCP override.
 	seedExtra := func(t *testing.T, rs fwstore.RealmStore) {
 		t.Helper()
 		// Assets the extra rows reference; the archive also carries them, so a
@@ -3146,9 +3144,6 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 		}
 		if err := rs.SetMcpAccess(ctx, "cancel_order", true); err != nil {
 			t.Fatalf("SetMcpAccess(extra): %v", err)
-		}
-		if err := rs.SetUserSetting(ctx, "extra-user", domain.UserSettingWelcomeSeen, "1"); err != nil {
-			t.Fatalf("SetUserSetting(extra): %v", err)
 		}
 	}
 
@@ -3210,15 +3205,6 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 	access, _ := dst.ListMcpAccess(ctx)
 	if access["cancel_order"] {
 		t.Fatalf("replace_all kept an absent mcp override: %+v", access)
-	}
-	settings, err := dst.ListUserSettings(ctx)
-	if err != nil {
-		t.Fatalf("ListUserSettings: %v", err)
-	}
-	for _, s := range settings {
-		if s.UserID == "extra-user" {
-			t.Fatalf("replace_all kept an absent user setting: %+v", s)
-		}
 	}
 	instances, err := dst.ListMarketDataInstances(ctx)
 	if err != nil {
@@ -3518,7 +3504,6 @@ var backupExportedTables = map[string]bool{
 	"signing_key":                true,
 	"setting":                    true,
 	"mcp_access":                 true,
-	"user_setting":               true,
 }
 
 // backupExcludedTables is the explicit allowlist of user tables the backup does
@@ -3532,6 +3517,7 @@ var backupExcludedTables = map[string]bool{
 	"access_state":             true, // installation access mode, which a restore must never switch
 	"access_credential":        true, // installation access secrets, never carried in an archive
 	"panel_session":            true, // installation panel sessions, never carried in an archive
+	"user_setting":             true, // per-user settings, absent since format 5; restore leaves them unchanged
 	"source_kind":              true, // immutable enum dictionary, seeded by Migrate
 	"order_event_type":         true, // immutable enum dictionary, seeded by Migrate
 	"order_side":               true, // immutable enum dictionary, seeded by Migrate
@@ -3738,16 +3724,16 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 		_, source := newRealmStore(t, "trading-narrow-settings-export")
 		seedTradingBackupState(t, ctx, source)
 		archive, err := source.ExportBackup(ctx, backup.Scope{
-			Sections: []backup.Section{backup.SectionUserSettings},
+			Sections: []backup.Section{backup.SectionGeneralSettings},
 			Accounts: backup.EntitySelector{Accounts: []string{"acc-1"}},
 		})
 		if err != nil {
 			t.Fatalf("ExportBackup: %v", err)
 		}
 		if !reflect.DeepEqual(
-			archive.Manifest.Sections, []backup.Section{backup.SectionUserSettings},
+			archive.Manifest.Sections, []backup.Section{backup.SectionGeneralSettings},
 		) {
-			t.Fatalf("archive sections = %v, want user settings only", archive.Manifest.Sections)
+			t.Fatalf("archive sections = %v, want general settings only", archive.Manifest.Sections)
 		}
 	})
 
@@ -3807,7 +3793,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 		_, source := newRealmStore(t, "trading-missing-section-source")
 		seedRealm(t, ctx, source)
 		archive, err := source.ExportBackup(ctx, backup.Scope{
-			Sections: []backup.Section{backup.SectionUserSettings},
+			Sections: []backup.Section{backup.SectionGeneralSettings},
 		})
 		if err != nil {
 			t.Fatalf("ExportBackup: %v", err)
@@ -5067,16 +5053,19 @@ func TestBackupRestoreFormatVersionRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportBackup: %v", err)
 	}
-	archive.Manifest.FormatVersion = backup.FormatVersion + 1
-
-	_, dst := newRealmStore(t, domain.DefaultRealm)
-	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
-		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
-	}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("RestoreBackup(bad formatVersion) error = %v, want ErrInvalid", err)
-	}
-	if _, ok, _ := dst.GetAccount(ctx, "acc-1"); ok {
-		t.Fatal("rejected restore still wrote rows")
+	for _, version := range []int{backup.FormatVersion - 1, backup.FormatVersion + 1} {
+		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
+			archive.Manifest.FormatVersion = version
+			_, dst := newRealmStore(t, domain.DefaultRealm)
+			if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+			}); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup(formatVersion=%d) error = %v, want ErrInvalid", version, err)
+			}
+			if _, ok, _ := dst.GetAccount(ctx, "acc-1"); ok {
+				t.Fatal("rejected restore still wrote rows")
+			}
+		})
 	}
 }
 
@@ -5223,11 +5212,6 @@ func assertRealmsEqualOnPublicIdentity(
 		t.Fatal("audit external ids not preserved across restore")
 	}
 
-	srcUser, _ := src.ListUserSettings(ctx)
-	dstUser, _ := dst.ListUserSettings(ctx)
-	if len(srcUser) != len(dstUser) || len(dstUser) != 1 || dstUser[0].Value != "1" {
-		t.Fatalf("user settings differ: %v vs %v", srcUser, dstUser)
-	}
 }
 
 func sameAssetCodes(a, b []domain.Asset) bool {

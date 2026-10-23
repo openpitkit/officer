@@ -62,11 +62,6 @@ func (rt *restoreTx) prune(ctx context.Context, scope backup.Scope, data backup.
 			return err
 		}
 	}
-	if scope.Included(backup.SectionUserSettings) {
-		if err := rt.pruneUserSettings(ctx, data.UserSettings); err != nil {
-			return err
-		}
-	}
 	if scope.Included(backup.SectionActivityHistory) {
 		if err := rt.pruneActivity(ctx, accountScope, data); err != nil {
 			return err
@@ -633,35 +628,6 @@ func (rt *restoreTx) pruneGeneralSettings(ctx context.Context, data backup.Data)
 			ctx, `DELETE FROM signing_key WHERE key_id = ?`, keyID,
 		); err != nil {
 			return fmt.Errorf("store: prune signing key %q: %w", keyID, err)
-		}
-	}
-	return nil
-}
-
-// pruneUserSettings deletes the per-user UI settings the archive omits.
-func (rt *restoreTx) pruneUserSettings(ctx context.Context, settings []domain.UserSetting) error {
-	keep := make(map[string]bool, len(settings))
-	for _, s := range settings {
-		keep[s.UserID+"\x00"+s.Key] = true
-	}
-	rows, err := rt.tx.QueryContext(
-		ctx, `SELECT user_id, setting_key FROM user_setting`,
-	)
-	if err != nil {
-		return fmt.Errorf("store: prune user settings scan: %w", err)
-	}
-	pairs, err := scanCodePairs(rows)
-	if err != nil {
-		return err
-	}
-	for _, p := range pairs {
-		if keep[p.a+"\x00"+p.b] {
-			continue
-		}
-		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM user_setting WHERE user_id = ? AND setting_key = ?`, p.a, p.b,
-		); err != nil {
-			return fmt.Errorf("store: prune user setting %q/%q: %w", p.a, p.b, err)
 		}
 	}
 	return nil

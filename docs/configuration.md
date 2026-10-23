@@ -41,13 +41,17 @@ The run mode is not configured here - it comes from the subcommand.
 
 ## Authorization
 
-Pit Officer runs in one of two access modes. The mode is kept in the database,
-not in the environment: a new database starts in `open`, and so does the one
-`POST /database/reset` recreates; the operator switches the mode with
-`PUT /app/api/v1/access/mode` while Officer runs, with no restart. A backup
-carries no access state, so a restore keeps the mode, the password, the tokens,
-and the sessions.
+Pit Officer has three access states. The state is kept in the database, not
+in the environment: a new database starts in `setup`, and so does the one
+`POST /database/reset` recreates. First-run setup completes in the panel with
+`POST /app/api/v1/setup/complete`, choosing `open` or `token`. The operator can
+then switch between those modes with `PUT /app/api/v1/access/mode`, with no
+restart; only a database reset returns to `setup`. A backup carries no access
+state, so a restore keeps the state, the password, the tokens, and the sessions.
 
+- **`setup`** - `/api/v1`, including the route manifest, and `/mcp` answer
+  `503` `setup_required`. The panel's API on `/app/api/v1` admits only routes
+  marked `duringSetup`, without credentials; the rest answer the same error.
 - **`open`** - no surface asks for credentials: Officer authorizes every
   request that passes the browser checks below.
 - **`token`** - each HTTP surface admits only its own credential: the REST API
@@ -58,18 +62,23 @@ and the sessions.
   is refused with `403` `wrong_token`, a missing or unknown credential with
   `401` `unauthorized`.
 
-Switching to `token` sets the panel password, 15 to 256 characters, and issues
-both tokens. `GET /app/api/v1/access/tokens/{kind}` answers a token and
+In `setup`, `/healthz`, `/docs` and its files, `/api/openapi.yaml`, and the
+panel's static files answer. `GET /app/api/v1/session`, the four setup routes,
+and the panel mirror's routes marked `duringSetup` answer; public sign-in and
+recovery routes refuse with `503` `setup_required`. The stdio `mcp` subcommand
+works in `setup` as in the other modes and asks for no credentials.
+
+Completing setup in `token` or switching to it sets the panel password,
+15 to 256 characters, and issues both tokens.
+`GET /app/api/v1/access/tokens/{kind}` answers a token and
 `POST /app/api/v1/access/tokens/{kind}/regenerate` reissues it; a reissued token
 replaces the old one at once. Switching to `open` deletes the password, both
-tokens, and every session. The stdio `mcp` subcommand asks for no credentials
-in either mode. The bodies of these routes are in
+tokens, and every session. The bodies of these routes are in
 [Panel access](api.md#panel-access) in the API notes.
 
-This build's dashboard has no screen for signing in, recovery, the mode, or the
-tokens: in `token` mode, without a session, each request it makes to
-`/app/api/v1` answers `401` `unauthorized`, which it handles like any other
-failed request.
+In `token` mode the server refuses a protected `/app/api/v1` request without a
+live panel session with `401` `unauthorized`. The public session and recovery
+routes need no session.
 
 A forgotten panel password is reset with a one-time recovery code:
 `POST /app/api/v1/session/recovery` asks for one, and
@@ -89,8 +98,8 @@ it. While a code is valid, a new request issues no other, and a new code is
 issued at most once a minute. A reset with the code ends every session and
 leaves both tokens as they are.
 
-In both modes every request first passes three checks, made before credentials
-are read and before the request reaches a handler:
+In every state each HTTP request first passes three checks, made before
+credentials are read and before the request reaches a handler:
 
 - the `Host` header must name an allowed host (see below), or the request is
   refused with `403` `host_not_allowed`;

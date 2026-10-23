@@ -286,9 +286,6 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.McpAccess, err = r.ListMcpAccess(ctx); err != nil {
 		return backup.Data{}, err
 	}
-	if data.UserSettings, err = r.ListUserSettings(ctx); err != nil {
-		return backup.Data{}, err
-	}
 	return data, nil
 }
 
@@ -537,11 +534,6 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 	}
 	if scope.Included(backup.SectionGeneralSettings) {
 		if err := rt.restoreGeneralSettings(ctx, data); err != nil {
-			return err
-		}
-	}
-	if scope.Included(backup.SectionUserSettings) {
-		if err := rt.restoreUserSettings(ctx, data.UserSettings); err != nil {
 			return err
 		}
 	}

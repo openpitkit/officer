@@ -121,12 +121,14 @@ func (a *fakeAuditor) Fail(err error) {
 // fakeStore keeps the access state in memory and holds the Store contract:
 // every method is atomic under one lock, the snapshot changes together with
 // the state it describes, and a write that requires a mode changes nothing
-// in another one and returns domain.ErrConflict.
+// in another one. It returns domain.ErrSetupComplete for a setup requirement
+// and domain.ErrConflict otherwise.
 type fakeStore struct {
-	mu       sync.Mutex
-	snapshot Snapshot
-	password *Password
-	sessions map[[sha256.Size]byte]Session
+	mu         sync.Mutex
+	snapshot   Snapshot
+	password   *Password
+	sessions   map[[sha256.Size]byte]Session
+	setupState SetupState
 	// lookups counts the Session calls.
 	lookups int
 	// afterPasswordRead and afterSessionRead, when set, run once
@@ -141,8 +143,9 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		snapshot: Snapshot{Mode: ModeOpen},
-		sessions: map[[sha256.Size]byte]Session{},
+		snapshot:   Snapshot{Mode: ModeOpen},
+		sessions:   map[[sha256.Size]byte]Session{},
+		setupState: SetupState{Step: SetupStepWelcome},
 	}
 }
 
@@ -150,9 +153,13 @@ func newFakeStore() *fakeStore {
 // holds the lock.
 func (f *fakeStore) requireMode(want Mode) error {
 	if f.snapshot.Mode != want {
+		cause := domain.ErrConflict
+		if want == ModeSetup {
+			cause = domain.ErrSetupComplete
+		}
 		return fmt.Errorf(
 			"fake store: mode is %s, not %s: %w",
-			f.snapshot.Mode, want, domain.ErrConflict,
+			f.snapshot.Mode, want, cause,
 		)
 	}
 	return nil
@@ -162,6 +169,70 @@ func (f *fakeStore) Snapshot() Snapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.snapshot
+}
+
+func (f *fakeStore) SetupState(context.Context) (SetupState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.requireMode(ModeSetup); err != nil {
+		return SetupState{}, err
+	}
+	state := f.setupState
+	if state.EncryptionDeclinedAt != nil {
+		at := *state.EncryptionDeclinedAt
+		state.EncryptionDeclinedAt = &at
+	}
+	return state, nil
+}
+
+func (f *fakeStore) SetSetupStep(_ context.Context, step SetupStep) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.requireMode(ModeSetup); err != nil {
+		return err
+	}
+	if _, err := ParseSetupStep(string(step)); err != nil {
+		return err
+	}
+	f.setupState.Step = step
+	return nil
+}
+
+func (f *fakeStore) DeclineEncryption(_ context.Context, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.requireMode(ModeSetup); err != nil {
+		return err
+	}
+	if f.setupState.EncryptionDeclinedAt == nil {
+		f.setupState.EncryptionDeclinedAt = &at
+	}
+	return nil
+}
+
+func (f *fakeStore) CompleteSetupOpen(
+	_ context.Context, completedAt time.Time,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.requireMode(ModeSetup); err != nil {
+		return err
+	}
+	f.snapshot = Snapshot{Mode: ModeOpen}
+	return nil
+}
+
+func (f *fakeStore) CompleteSetupToken(
+	_ context.Context, credentials Credentials, session Session,
+	completedAt time.Time,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.requireMode(ModeSetup); err != nil {
+		return err
+	}
+	f.storeTokenMode(credentials, session)
+	return nil
 }
 
 func (f *fakeStore) PanelPassword(context.Context) (Password, error) {
@@ -185,6 +256,12 @@ func (f *fakeStore) EnableTokenMode(
 	if err := f.requireMode(ModeOpen); err != nil {
 		return err
 	}
+	f.storeTokenMode(credentials, session)
+	return nil
+}
+
+// storeTokenMode shares the credential write; the caller holds the lock.
+func (f *fakeStore) storeTokenMode(credentials Credentials, session Session) {
 	password := credentials.Password
 	f.password = &password
 	f.sessions[session.IDHash] = session
@@ -193,7 +270,6 @@ func (f *fakeStore) EnableTokenMode(
 		APIToken:   credentials.APIToken,
 		AgentToken: credentials.AgentToken,
 	}
-	return nil
 }
 
 func (f *fakeStore) DisableTokenMode(context.Context) error {
@@ -423,24 +499,47 @@ func idHashOf(t *testing.T, id string) [sha256.Size]byte {
 // harness is a Service over the fakes, with the clock at start and the
 // recovery output in a buffer.
 type harness struct {
-	t       *testing.T
-	store   *fakeStore
-	auditor *fakeAuditor
-	clock   *fakeClock
-	out     *bytes.Buffer
-	service *Service
+	t         *testing.T
+	store     *fakeStore
+	auditor   *fakeAuditor
+	clock     *fakeClock
+	out       *bytes.Buffer
+	service   *Service
+	decisions *fakeSetupDecisions
+}
+
+type fakeSetupDecisions struct {
+	chosen bool
+	sealed bool
+	err    error
+}
+
+func (d *fakeSetupDecisions) AccountModeChosen(context.Context) (bool, error) {
+	return d.chosen, d.err
+}
+
+func (d *fakeSetupDecisions) CredentialsSealed() bool { return d.sealed }
+
+func (f *fakeStore) seedSetup() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapshot = Snapshot{Mode: ModeSetup}
+	f.password = nil
+	f.sessions = map[[sha256.Size]byte]Session{}
+	f.setupState = SetupState{Step: SetupStepWelcome}
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{
-		t:       t,
-		store:   newFakeStore(),
-		auditor: &fakeAuditor{},
-		clock:   &fakeClock{now: start},
-		out:     &bytes.Buffer{},
+		t:         t,
+		store:     newFakeStore(),
+		auditor:   &fakeAuditor{},
+		clock:     &fakeClock{now: start},
+		out:       &bytes.Buffer{},
+		decisions: &fakeSetupDecisions{},
 	}
-	service, err := New(h.store, h.auditor, h.out)
+	service, err := New(h.store, h.auditor, h.out, h.decisions)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

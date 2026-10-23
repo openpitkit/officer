@@ -753,12 +753,6 @@ var backupParitySpecs = []paritySpec{
 		source:  reflect.TypeOf(backup.SettingEntry{}),
 		target:  reflect.TypeOf(backup.SettingEntry{}),
 	},
-	{
-		surface: driftBackup,
-		entity:  "user-settings",
-		source:  reflect.TypeOf(domain.UserSetting{}),
-		target:  reflect.TypeOf(domain.UserSetting{}),
-	},
 }
 
 var businessCSVEntityContracts = []businessCSVEntityContract{
@@ -1908,9 +1902,6 @@ func seedClientDataDriftRealm(
 	))
 	must(t, "SetSetting", rs.SetSetting(ctx, "no_esign", "0"))
 	must(t, "SetMcpAccess", rs.SetMcpAccess(ctx, "submit_order", true))
-	must(t, "SetUserSetting", rs.SetUserSetting(
-		ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen, "1",
-	))
 }
 
 func buildBusinessCSVColumnSpecs() []csvColumnSpec {
@@ -2085,7 +2076,6 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"signing-keys", data.SigningKeys},
 		{"settings", data.Settings},
 		{"mcp-access", data.McpAccess},
-		{"user-settings", data.UserSettings},
 	}
 	var findings []clientDataDrift
 	for _, check := range checks {

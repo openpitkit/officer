@@ -147,13 +147,39 @@ func TestParseTokenKind(t *testing.T) {
 	}
 }
 
+func TestParseSetupStep(t *testing.T) {
+	t.Parallel()
+	steps := []SetupStep{
+		SetupStepWelcome, SetupStepAccounts, SetupStepEncryption,
+		SetupStepSigning, SetupStepAccess,
+	}
+	for _, step := range steps {
+		got, err := ParseSetupStep(string(step))
+		if err != nil || got != step {
+			t.Errorf("ParseSetupStep(%q) = %q, %v", step, got, err)
+		}
+	}
+	for _, value := range []string{"", "agent", "done", "WELCOME"} {
+		got, err := ParseSetupStep(value)
+		if !errors.Is(err, domain.ErrInvalid) || got != "" {
+			t.Fatalf("ParseSetupStep(%q) = %q, %v; want ErrInvalid", value, got, err)
+		}
+		for _, step := range steps {
+			if !strings.Contains(err.Error(), string(step)) {
+				t.Errorf("ParseSetupStep error does not name allowed step %q", step)
+			}
+		}
+	}
+}
+
 func TestNewRefusesMissingDependency(t *testing.T) {
 	t.Parallel()
 	accessStore, auditor, out := newFakeStore(), &fakeAuditor{}, &bytes.Buffer{}
 	for name, build := range map[string]func() (*Service, error){
-		"store":   func() (*Service, error) { return New(nil, auditor, out) },
-		"auditor": func() (*Service, error) { return New(accessStore, nil, out) },
-		"output":  func() (*Service, error) { return New(accessStore, auditor, nil) },
+		"store":     func() (*Service, error) { return New(nil, auditor, out, &fakeSetupDecisions{}) },
+		"auditor":   func() (*Service, error) { return New(accessStore, nil, out, &fakeSetupDecisions{}) },
+		"output":    func() (*Service, error) { return New(accessStore, auditor, nil, &fakeSetupDecisions{}) },
+		"decisions": func() (*Service, error) { return New(accessStore, auditor, out, nil) },
 	} {
 		if service, err := build(); err == nil || service != nil {
 			t.Errorf("New without the %s = %v, %v; want an error", name, service, err)

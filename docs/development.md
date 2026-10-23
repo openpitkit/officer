@@ -57,7 +57,7 @@ an `internal` path element drift from the list.
 `Register` fills a builder with the default composition: the SQLite store, one
 local node over the default realm running the OpenPit engine, the signer, the
 control-plane service, the built-in market-data and trading providers, the REST
-routes, the MCP tools, the dashboard, allow-all authorization, a caller resolver
+routes, the MCP tools, the dashboard, Officer's authorizer, a caller resolver
 that follows the access mode, and the browser guards - the host check over
 loopback and `Config.AllowedHosts`, the cross-origin check, and the JSON-body
 check. A `Set` call after it replaces that part, `SetBrowserGuards` the guards;
@@ -70,7 +70,12 @@ cfg := officer.Config{SQLitePath: "officer.db"}
 if err := officer.Register(builder, cfg); err != nil {
     return err
 }
-builder.SetAuthorizer(authorizer) // decides per REST route ID or MCP tool name
+installedAuthorizer := builder.Authorizer()
+if installedAuthorizer == nil {
+    return errors.New("officer.Register installed no authorizer")
+}
+authorizer := newDenyOneAuthorizer(hiddenBaseRouteID, hiddenToolID, installedAuthorizer)
+builder.SetAuthorizer(authorizer)
 if err := builder.RegisterMarketDataProvider(provider); err != nil {
     return err
 }
@@ -82,6 +87,19 @@ if err != nil {
 }
 defer officerApp.Close()
 ```
+
+The authorizer wrapper above is the one in `examples/customhost`: it refuses
+its chosen REST route ID and MCP tool name and delegates every other decision
+to `builder.Authorizer()`, the authorizer `Register` installed. `Register`'s
+caller resolver refuses REST, MCP over HTTP and non-`DuringSetup` panel routes
+in `setup` before any authorizer runs; it alone closes MCP over HTTP. Replacing
+the authorizer keeps this resolver guard. The installed authorizer repeats the
+refusal for REST and panel routes, including with a host resolver, and passes
+MCP for stdio. A host that keeps `Register`'s service factory and calls
+`SetCallerResolver` must refuse REST and MCP over HTTP in `setup` itself and
+keep `builder.Authorizer()` in its authorizer chain; the refusals
+`builder.Authorizer()` returns in `setup` carry `domain.ErrSetupRequired`'s
+message, which names the panel instead of an address.
 
 `onFatal` receives an unrecoverable persistence error; `cmd/pit-officer` logs it
 and exits. It is required: `Build` rejects a nil hook.
@@ -97,8 +115,11 @@ function the route manifest calls on every request, and the `Access` of each
 extra mount, `public` or `agent`. `BuildServeHandler` fails without them, and on
 an extra mount or an MCP path at or under `/api/v1` or `/app/api/v1`. The router
 serves a `PanelRoutes` route marked `Public` without resolving or authorizing a
-caller; `AccessMode`, `Access`, and `DuringSetup` are what the route manifest
-reports, and no request is checked against them.
+caller. `AccessMode` and `Access` are reported by the route manifest.
+`DuringSetup` is also reported, and Officer's resolver and authorizer enforce
+it in `setup`: only a panel route marked with it is admitted. The flag does not
+open the corresponding `/api/v1` route. Public panel routes bypass the
+authorizer, so their handlers must enforce any setup restriction themselves.
 
 `BuildServeHandler` also refuses an operation mounted twice: each method and
 path, parameter names ignored, may be mounted only once across the REST routes
@@ -115,8 +136,12 @@ private to Officer. The access state lives in Officer's SQLite store, so
 `Build` fails when a host replaces the store factory and keeps the service
 factory. A host that replaces the service factory runs every account, gets no
 access service, and should not serve the account-mode routes `Register`'s route
-config adds. `Register`'s caller resolver then answers 500 on every
-authenticated route until the host installs its own with `SetCallerResolver`.
+config adds. `Register`'s caller resolver and authorizer then return
+`errNoAccessService`: every authenticated REST, panel and MCP-over-HTTP request
+answers 500 and every stdio MCP tool is refused, even through a wrapper over
+`builder.Authorizer()`. The host must install its own resolver with
+`SetCallerResolver` and its own authorizer with `SetAuthorizer`, without
+delegating to `builder.Authorizer()`.
 `Register`'s route config builder, if the host keeps it, serves the panel access
 routes and the route manifest answering 500. A route config the host builds
 from `httpapi.RouteConfig(svc, logs, sealReports)` needs a seal-report source
@@ -130,9 +155,9 @@ in the context first (`auth.ContextWithCaller`): every call that reads or
 changes account-owned data asks the account scope about that caller and is
 refused without one, in every account mode.
 
-`examples/customhost` is the worked example: it replaces the authorizer, adds a
-market-data provider, and adds, replaces, and removes MCP tools and REST routes
-on top of the default composition.
+`examples/customhost` is the worked example: it composes the installed
+authorizer, adds a market-data provider, and adds, replaces, and removes MCP
+tools and REST routes on top of the default composition.
 
 ## Two build modes
 

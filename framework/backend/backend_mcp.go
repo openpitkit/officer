@@ -132,34 +132,3 @@ type staticCatalogProvider struct {
 func (p staticCatalogProvider) Catalog() catalog.Catalog {
 	return p.catalog
 }
-
-// --- User settings ----------------------------------------------------------
-
-// WelcomeSeen reports whether the operator has dismissed the first-run welcome
-// dialog with "don't show again". Until then the dialog is shown on every load.
-func (s *Service) WelcomeSeen(ctx context.Context) (bool, error) {
-	n := s.node
-	value, ok, err := n.GetUserSetting(
-		ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen,
-	)
-	if err != nil {
-		return false, fmt.Errorf("backend: read welcome seen: %w", err)
-	}
-	return ok && value == "1", nil
-}
-
-// SetWelcomeSeen records (or clears) the operator's "don't show again" choice
-// for the first-run welcome dialog.
-func (s *Service) SetWelcomeSeen(ctx context.Context, seen bool) error {
-	n := s.node
-	value := ""
-	if seen {
-		value = "1"
-	}
-	if err := n.SetUserSetting(
-		ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen, value,
-	); err != nil {
-		return fmt.Errorf("backend: set welcome seen: %w", err)
-	}
-	return nil
-}

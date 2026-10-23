@@ -68,26 +68,51 @@ type Config struct {
 // them.
 var loopbackHosts = []string{"localhost", "127.0.0.1", "::1"}
 
-// errNoAccessService fails the caller resolver and every panel access route
+// errNoAccessService fails the authorizer, caller resolver and panel access routes
 // of a composition whose service factory a host replaced, which builds no
 // access Service.
 var errNoAccessService = errors.New("officer: no access service")
 
+type accessAuthorizer func(context.Context, domain.Caller, string) error
+
+func (a accessAuthorizer) Authorize(ctx context.Context, caller domain.Caller, identifier string) error {
+	return a(ctx, caller, identifier)
+}
+
+type setupDecisions struct {
+	service fwbackend.ControlPlane
+	node    node.Node
+}
+
+func (d setupDecisions) AccountModeChosen(ctx context.Context) (bool, error) {
+	state, err := accountmode.Read(ctx, d.service)
+	if err != nil {
+		return false, err
+	}
+	return state.Mode != nil, nil
+}
+
+func (d setupDecisions) CredentialsSealed() bool { return d.node.CredentialsSealed() }
+
 // Register populates b with the Pit Officer concrete implementations built
 // from cfg. The composition serves domain.DefaultRealm through one local node.
 //
-// The access mode guards the HTTP surfaces: the installed caller resolver,
+// During setup the caller resolver refuses API, MCP over HTTP and non-setup
+// panel routes, and the installed authorizer repeats the refusal for API and
+// panel routes. The caller resolver,
 // the route manifest's access mode and the panel access routes, which the
 // route config serves as its PanelRoutes, all read the access Service the
 // service factory builds over the SQLite store the store factory opens. Build
 // fails when that store does not implement access.Store or the seal-report
 // reader, and when a host replaced the store factory, which leaves the Service
 // without a store. A host that replaces the service factory gets no access
-// Service: the installed caller resolver answers 500 on every authenticated
-// route until the host sets its own, and the route config, if kept, serves the
-// panel access routes and the route manifest answering 500. A route config
-// built from httpapi.RouteConfig needs the host's own seal-report source (nil
-// panics), AccessMode (BuildServeHandler fails without one) and PanelRoutes.
+// Service: the installed authorizer and caller resolver answer 500 on
+// non-public HTTP routes until the host sets its own. The authorizer also
+// makes every stdio `pit-officer mcp` tool answer "permission denied".
+// The route config, if kept, serves the panel access routes and the route
+// manifest answering 500. A route config built from httpapi.RouteConfig needs
+// the host's own seal-report source (nil panics), AccessMode
+// (BuildServeHandler fails without one) and PanelRoutes.
 func Register(b *frameworkapp.Builder, cfg Config) error {
 	if b == nil {
 		return errors.New("officer: nil builder")
@@ -137,7 +162,12 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	b.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) {
 		return signing.New(st)
 	})
-	b.SetAuthorizer(httpx.AllowAll{})
+	b.SetAuthorizer(accessAuthorizer(func(ctx context.Context, caller domain.Caller, identifier string) error {
+		if accessService == nil {
+			return errNoAccessService
+		}
+		return accessService.Authorize(ctx, caller, identifier)
+	}))
 	b.SetCallerResolver(func(r *http.Request) (domain.Caller, error) {
 		if accessService == nil {
 			return domain.Caller{}, errNoAccessService
@@ -178,10 +208,6 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		if err != nil {
 			return nil, err
 		}
-		accessService, err = access.New(accessStore, n, os.Stderr)
-		if err != nil {
-			return nil, fmt.Errorf("officer: build access service: %w", err)
-		}
 		service, err := fwbackend.New(
 			n,
 			md,
@@ -194,6 +220,10 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		)
 		if err != nil {
 			return nil, err
+		}
+		accessService, err = access.New(accessStore, n, os.Stderr, setupDecisions{service: service, node: n})
+		if err != nil {
+			return nil, fmt.Errorf("officer: build access service: %w", err)
 		}
 		return service, nil
 	})
@@ -253,6 +283,8 @@ func manifestAccessMode(service *access.Service) httpx.AccessMode {
 		return ""
 	}
 	switch service.Mode() {
+	case access.ModeSetup:
+		return httpx.AccessModeSetup
 	case access.ModeOpen:
 		return httpx.AccessModeOpen
 	case access.ModeToken:

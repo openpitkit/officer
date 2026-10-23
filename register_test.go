@@ -62,9 +62,12 @@ import (
 	"go.openpit.dev/officer/framework/secret"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
 	"go.openpit.dev/officer/internal/access"
+	"go.openpit.dev/officer/internal/access/accesstest"
 	"go.openpit.dev/officer/internal/accountmode"
+	"go.openpit.dev/officer/internal/apitest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 )
@@ -316,6 +319,7 @@ func TestRegisterSigningKeyRequiresMasterKey(t *testing.T) {
 
 	clearPath := filepath.Join(t.TempDir(), "officer.db")
 	app, handler := serveSeededApp(t, Config{SQLitePath: clearPath}, nil)
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
 	for _, route := range []struct{ path, body string }{
 		{"/signing/keys/generate", ""},
 		{"/signing/keys/import", importBody},
@@ -336,6 +340,7 @@ func TestRegisterSigningKeyRequiresMasterKey(t *testing.T) {
 	key := testMasterKey(t)
 	sealedPath := filepath.Join(t.TempDir(), "officer.db")
 	app, handler = serveSeededApp(t, Config{SQLitePath: sealedPath, MasterKey: &key}, nil)
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, true)
 	restCall(t, handler, http.MethodPost, "/signing/keys/generate", "", http.StatusCreated)
 	restCall(t, handler, http.MethodPost, "/signing/keys/import", importBody, http.StatusCreated)
 	if err := app.Close(); err != nil {
@@ -508,6 +513,7 @@ func TestRESTMutationAuditUsesResolvedPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
 	req := httptest.NewRequest(
 		http.MethodPut,
 		"http://127.0.0.1/api/v1/mcp-access/get_account_state",
@@ -623,9 +629,14 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 	}, map[string]string{
 		accountmode.SettingKeyMode: "single:default",
 	})
-	assertAccountMode(t, handler, http.MethodGet, "",
+	assertAccountMode(t, handler, "/app/api/v1", http.MethodGet, "",
 		`{"mode":"single","account":"default",`+
 			`"features":{"accounts":false,"account":"default"},"restartRequired":false}`)
+	if got := listedAccounts(t, handler, "/app/api/v1"); !slices.Equal(got, []string{"default"}) {
+		t.Fatalf("listed accounts in setup = %v, want the default account alone", got)
+	}
+	accesstest.CompleteOpen(t, handler,
+		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, true)
 
 	restCall(t, handler, http.MethodPost, "/signing/keys/generate", "", http.StatusCreated)
 	order := `"baseAsset":"AAPL","quoteAsset":"USD","side":"buy",` +
@@ -646,7 +657,7 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 		t.Fatalf("check naming another account = %v, want single_account_mode at /account", refused)
 	}
 
-	if got := listedAccounts(t, handler); !slices.Equal(got, []string{"default"}) {
+	if got := listedAccounts(t, handler, "/api/v1"); !slices.Equal(got, []string{"default"}) {
 		t.Fatalf("listed accounts = %v, want the default account alone", got)
 	}
 	created := restCall(t, handler, http.MethodPost, "/accounts", `{"code":"desk"}`, http.StatusConflict)
@@ -654,10 +665,10 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 		t.Fatalf("account create = %v, want accounts_not_managed", created)
 	}
 
-	assertAccountMode(t, handler, http.MethodPut, `{"mode":"multi"}`,
+	assertAccountMode(t, handler, "/api/v1", http.MethodPut, `{"mode":"multi"}`,
 		`{"mode":"multi","account":"",`+
 			`"features":{"accounts":false,"account":"default"},"restartRequired":true}`)
-	if got := listedAccounts(t, handler); !slices.Equal(got, []string{"default"}) {
+	if got := listedAccounts(t, handler, "/api/v1"); !slices.Equal(got, []string{"default"}) {
 		t.Fatalf("listed accounts after the stored switch = %v, want the default account alone", got)
 	}
 	switched := restCall(t, handler, http.MethodPut, "/account-mode",
@@ -676,21 +687,21 @@ func TestRegisterWithoutAccountMode(t *testing.T) {
 	_, handler := serveSeededApp(
 		t, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")}, nil,
 	)
-	assertAccountMode(t, handler, http.MethodGet, "",
+	assertAccountMode(t, handler, "/app/api/v1", http.MethodGet, "",
 		`{"mode":null,"account":"","features":{"accounts":true,"account":""},"restartRequired":false}`)
-	got := listedAccounts(t, handler)
+	got := listedAccounts(t, handler, "/app/api/v1")
 	slices.Sort(got)
 	if !slices.Equal(got, []string{"default", "other"}) {
 		t.Fatalf("listed accounts = %v, want every account", got)
 	}
-	refused := restCall(t, handler, http.MethodPut, "/account-mode", `{"mode":"solo"}`,
+	refused := restCall(t, handler, http.MethodPut, "/app/api/v1/account-mode", `{"mode":"solo"}`,
 		http.StatusUnprocessableEntity)
 	problems, _ := refused["errors"].([]any)
 	if problem, _ := firstOf(problems).(map[string]any); len(problems) != 1 ||
 		problem["pointer"] != "/mode" || problem["constraint"] != "enum" {
 		t.Fatalf("unknown mode = %v, want enum at /mode", refused)
 	}
-	missing := restCall(t, handler, http.MethodPut, "/account-mode",
+	missing := restCall(t, handler, http.MethodPut, "/app/api/v1/account-mode",
 		`{"mode":"single","account":"ghost"}`, http.StatusNotFound)
 	if errObj, _ := missing["error"].(map[string]any); errObj["code"] != "account_missing" ||
 		errObj["account"] != "ghost" {
@@ -708,6 +719,8 @@ func TestRegisterSingleAccountModeMCPSchemas(t *testing.T) {
 	}, map[string]string{
 		accountmode.SettingKeyMode: "single:default",
 	})
+	accesstest.CompleteOpen(t, handler,
+		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, false)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -766,6 +779,7 @@ func TestRegisterRouteBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodGet, "http://127.0.0.1/api/v1/route-manifest.json", nil,
@@ -821,6 +835,10 @@ func TestRegisterRouteBaseline(t *testing.T) {
 		"DELETE /app/api/v1/sessions panel",
 		"POST /app/api/v1/session/recovery public",
 		"POST /app/api/v1/session/recovery/reset public",
+		"GET /app/api/v1/setup panel",
+		"PUT /app/api/v1/setup/progress panel",
+		"PUT /app/api/v1/setup/encryption panel",
+		"POST /app/api/v1/setup/complete panel",
 		"GET /app/api/v1/access panel",
 		"PUT /app/api/v1/access/mode panel",
 		"PUT /app/api/v1/access/password panel",
@@ -851,6 +869,10 @@ func TestRegisterRouteBaseline(t *testing.T) {
 		"PUT /app/api/v1/account-mode",
 		"POST /app/api/v1/service/restart",
 		"GET /app/api/v1/session",
+		"GET /app/api/v1/setup",
+		"PUT /app/api/v1/setup/progress",
+		"PUT /app/api/v1/setup/encryption",
+		"POST /app/api/v1/setup/complete",
 	}
 	slices.Sort(duringSetup)
 	slices.Sort(wantDuringSetup)
@@ -876,6 +898,7 @@ func TestRegisterAccessModeFollowsService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
 	manifestMode := func(authorization string, wantStatus int) string {
 		t.Helper()
 		req := httptest.NewRequest(
@@ -939,11 +962,13 @@ func TestRegisterAccessModeFollowsService(t *testing.T) {
 
 // TestRegisterPanelAccessRoutesWithoutAccessService builds Register's
 // composition with a service factory a host replaced, which leaves it no
-// access Service: the public GET /app/api/v1/session answers 500 internal
-// through WriteErr, the resolver's failure, instead of reaching the missing
-// Service.
+// access Service: the public GET /app/api/v1/session and a non-public route
+// with a host resolver answer 500 internal instead of reaching a missing
+// Service or passing the installed authorizer.
 func TestRegisterPanelAccessRoutesWithoutAccessService(t *testing.T) {
-	app, _, _ := buildTestApp(t, nil, func(
+	app, _, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+		return domain.Caller{Principal: domain.PrincipalOperator}, nil
+	}, func(
 		_ context.Context,
 		n node.Node,
 		md backend.MarketDataRuntime,
@@ -960,20 +985,22 @@ func TestRegisterPanelAccessRoutesWithoutAccessService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(
-		http.MethodGet, "http://127.0.0.1/app/api/v1/session", nil,
-	))
-	var answer struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	err = json.Unmarshal(rec.Body.Bytes(), &answer)
-	if rec.Code != http.StatusInternalServerError || err != nil ||
-		answer.Error.Code != "internal" {
-		t.Fatalf("GET /app/api/v1/session = %d %q, want 500 internal",
-			rec.Code, rec.Body)
+	for _, path := range []string{"/app/api/v1/session", "/app/api/v1/mcp-access"} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(
+			http.MethodGet, "http://127.0.0.1"+path, nil,
+		))
+		var answer struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		err = json.Unmarshal(rec.Body.Bytes(), &answer)
+		if rec.Code != http.StatusInternalServerError || err != nil ||
+			answer.Error.Code != "internal" {
+			t.Fatalf("GET %s = %d, error code %q, want 500 internal",
+				path, rec.Code, answer.Error.Code)
+		}
 	}
 }
 
@@ -996,12 +1023,14 @@ func enableTokenMode(t *testing.T, state access.Store, apiToken string) {
 	}
 }
 
-// unknownModeAccessStore is an access.Store that publishes a mode the route
-// manifest does not know; it implements Snapshot only.
-type unknownModeAccessStore struct{ access.Store }
+// fixedModeAccessStore publishes a chosen mode and implements Snapshot only.
+type fixedModeAccessStore struct {
+	access.Store
+	mode access.Mode
+}
 
-func (unknownModeAccessStore) Snapshot() access.Snapshot {
-	return access.Snapshot{Mode: "unknown"}
+func (s fixedModeAccessStore) Snapshot() access.Snapshot {
+	return access.Snapshot{Mode: s.mode}
 }
 
 // TestManifestAccessModeFailsClosed checks that the route manifest gets the
@@ -1012,7 +1041,8 @@ func TestManifestAccessModeFailsClosed(t *testing.T) {
 		t.Fatalf("manifestAccessMode(nil) = %q, want the empty mode", mode)
 	}
 	service, err := access.New(
-		unknownModeAccessStore{}, struct{ access.Auditor }{}, io.Discard,
+		fixedModeAccessStore{mode: "unknown"}, struct{ access.Auditor }{}, io.Discard,
+		struct{ access.SetupDecisions }{},
 	)
 	if err != nil {
 		t.Fatalf("access.New: %v", err)
@@ -1031,6 +1061,7 @@ func TestRegisterBrowserGuards(t *testing.T) {
 	app, handler := serveSeededApp(
 		t, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")}, nil,
 	)
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
 	if mcpCommandEnabled(t, app, "create_account") {
 		t.Fatal("create_account is enabled before the hostile writes")
 	}
@@ -1092,7 +1123,7 @@ func TestRegisterBrowserGuards(t *testing.T) {
 			t.Fatalf("%s = %d %s, want %d %s", tc.name, rec.Code, rec.Body, tc.status, tc.code)
 		}
 	}
-	got := listedAccounts(t, handler)
+	got := listedAccounts(t, handler, "/api/v1")
 	slices.Sort(got)
 	if !slices.Equal(got, []string{"default", "other"}) {
 		t.Fatalf("listed accounts after the refused writes = %v, want default and other", got)
@@ -1259,8 +1290,9 @@ func serveSeededApp(
 	return app, handler
 }
 
-// restCall serves one /api/v1 request through handler and decodes its JSON
-// answer, failing the test unless the status is want.
+// restCall serves a request through handler and decodes its JSON answer,
+// failing unless the status is want. A path starting with /app/api/v1/ is
+// served as given; any other path gets the /api/v1 prefix.
 func restCall(
 	t *testing.T, handler http.Handler, method, path, body string, want int,
 ) map[string]any {
@@ -1278,16 +1310,22 @@ func restCall(
 
 // assertAccountMode serves one /account-mode request and checks its exact wire
 // answer.
-func assertAccountMode(t *testing.T, handler http.Handler, method, body, want string) {
+func assertAccountMode(t *testing.T, handler http.Handler, prefix, method, body, want string) {
 	t.Helper()
-	rec := serveREST(handler, method, "/account-mode", body)
+	path := strings.TrimPrefix(prefix, "/api/v1") + "/account-mode"
+	rec := serveREST(handler, method, path, body)
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
 		t.Fatalf("%s /account-mode = %d %s, want 200 %s", method, rec.Code, got, want)
 	}
 }
 
+// serveREST serves a path starting with /app/api/v1/ as given; any other path
+// gets the /api/v1 prefix.
 func serveREST(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, "http://127.0.0.1/api/v1"+path, strings.NewReader(body))
+	if !strings.HasPrefix(path, "/app/api/v1/") {
+		path = "/api/v1" + path
+	}
+	req := httptest.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1295,9 +1333,10 @@ func serveREST(handler http.Handler, method, path, body string) *httptest.Respon
 }
 
 // listedAccounts returns the codes GET /accounts lists.
-func listedAccounts(t *testing.T, handler http.Handler) []string {
+func listedAccounts(t *testing.T, handler http.Handler, prefix string) []string {
 	t.Helper()
-	listed, _ := restCall(t, handler, http.MethodGet, "/accounts", "", http.StatusOK)["accounts"].([]any)
+	path := strings.TrimPrefix(prefix, "/api/v1") + "/accounts"
+	listed, _ := restCall(t, handler, http.MethodGet, path, "", http.StatusOK)["accounts"].([]any)
 	codes := make([]string, 0, len(listed))
 	for _, account := range listed {
 		row, _ := account.(map[string]any)
@@ -1439,6 +1478,201 @@ type fakeEngine struct {
 }
 
 var errUnexpectedOrderChain = errors.New("unexpected order chain call")
+
+func TestManifestAccessModeSetup(t *testing.T) {
+	service, err := access.New(
+		fixedModeAccessStore{mode: access.ModeSetup}, struct{ access.Auditor }{},
+		io.Discard, struct{ access.SetupDecisions }{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifestAccessMode(service); got != httpx.AccessModeSetup {
+		t.Fatalf("manifestAccessMode(setup) = %q, want setup", got)
+	}
+}
+
+func TestRegisterFirstRun(t *testing.T) {
+	for _, mode := range []string{"open", "token"} {
+		t.Run(mode, func(t *testing.T) {
+			app, _, _ := buildTestApp(t, nil, nil)
+			handler, err := app.BuildServeHandler(nil, "/mcp")
+			if err != nil {
+				t.Fatalf("BuildServeHandler: %v", err)
+			}
+			var cookie *http.Cookie
+			call := func(method, path, body string, want int) *httptest.ResponseRecorder {
+				t.Helper()
+				req := httptest.NewRequest(method, "http://127.0.0.1:8787"+path,
+					strings.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				if cookie != nil {
+					req.AddCookie(cookie)
+				}
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				apitest.ExpectStatus(t, method+" "+path, rec, want)
+				return rec
+			}
+			assertSetup := func() {
+				t.Helper()
+				rec := call(http.MethodGet, "/app/api/v1/session", "", http.StatusOK)
+				const want = `{"accessMode":"setup","setupComplete":false,"authenticated":false}`
+				if strings.TrimSpace(rec.Body.String()) != want {
+					t.Fatalf("session before setup = %s, want %s", rec.Body, want)
+				}
+				for _, path := range []string{
+					"/api/v1/accounts", "/api/v1/route-manifest.json", "/mcp", "/app/api/v1/mcp-access",
+				} {
+					rec := call(http.MethodGet, path, "", http.StatusServiceUnavailable)
+					var answer struct {
+						Error struct{ Code, Message string } `json:"error"`
+					}
+					const message = "Pit Officer is not set up yet. Open http://127.0.0.1:8787" +
+						" in a browser on this computer and finish the first-run setup."
+					if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
+						answer.Error.Code != "setup_required" || answer.Error.Message != message {
+						t.Fatalf("GET %s = %s, want setup_required with the addressed sentence", path, rec.Body)
+					}
+				}
+			}
+			assertSetup()
+			rec := call(http.MethodGet, "/app/api/v1/setup", "", http.StatusOK)
+			if strings.TrimSpace(rec.Body.String()) != `{"step":"welcome","encryptionDeclinedAt":null}` {
+				t.Fatalf("fresh setup state = %s, want welcome with no encryption decision", rec.Body)
+			}
+			call(http.MethodPut, "/app/api/v1/setup/progress", `{"step":"accounts"}`, http.StatusNoContent)
+			rec = call(http.MethodPost, "/app/api/v1/setup/complete",
+				`{"access":"open","acknowledged":true}`, http.StatusConflict)
+			if !strings.Contains(rec.Body.String(), "account mode") ||
+				!strings.Contains(rec.Body.String(), "encryption") {
+				t.Fatalf("completion without decisions = %s, want both missing decisions", rec.Body)
+			}
+			accounts := accountmode.Request{Mode: accountmode.ModeMulti}
+			if mode == "open" {
+				accesstest.CompleteOpen(t, handler, accounts, false)
+			} else {
+				cookie = accesstest.CompleteToken(t, handler, accounts, "first run test password")
+				if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" {
+					t.Fatal("setup completion issued a session cookie without the panel protections")
+				}
+				for kind, prefix := range map[string]string{"api": "pit_api_", "agent": "pit_mcp_"} {
+					rec := call(http.MethodGet, "/app/api/v1/access/tokens/"+kind, "", http.StatusOK)
+					var answer struct{ Token string }
+					if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
+						!strings.HasPrefix(answer.Token, prefix) || answer.Token == prefix {
+						t.Fatalf("setup completion issued no %s token", kind)
+					}
+					method, path, body := http.MethodGet, "/api/v1/accounts", ""
+					if kind == "agent" {
+						method, path = http.MethodPost, "/mcp"
+						body = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
+							`"protocolVersion":"2025-03-26","capabilities":{},` +
+							`"clientInfo":{"name":"first-run-test","version":"1"}}}`
+					}
+					req := httptest.NewRequest(method, "http://127.0.0.1:8787"+path, strings.NewReader(body))
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("Accept", "application/json, text/event-stream")
+					req.Header.Set("Authorization", "Bearer "+answer.Token)
+					authRec := httptest.NewRecorder()
+					handler.ServeHTTP(authRec, req)
+					apitest.ExpectStatus(t, kind+" token "+method+" "+path, authRec, http.StatusOK)
+					if kind == "agent" && (!strings.Contains(authRec.Body.String(), `"result":`) ||
+						strings.Contains(authRec.Body.String(), `"error":`)) {
+						t.Fatal("agent token MCP initialize returned no success result")
+					}
+				}
+			}
+			rec = call(http.MethodGet, "/app/api/v1/session", "", http.StatusOK)
+			want := fmt.Sprintf(`{"accessMode":%q,"setupComplete":true,"authenticated":%t}`, mode, mode == "token")
+			if strings.TrimSpace(rec.Body.String()) != want {
+				t.Fatalf("session after setup = %s, want %s", rec.Body, want)
+			}
+			if mode == "open" {
+				call(http.MethodGet, "/api/v1/accounts", "", http.StatusOK)
+			} else {
+				call(http.MethodGet, "/api/v1/accounts", "", http.StatusUnauthorized)
+			}
+			for _, route := range []struct{ method, path, body string }{
+				{http.MethodGet, "/setup", ""},
+				{http.MethodPut, "/setup/progress", `{"step":"access"}`},
+				{http.MethodPut, "/setup/encryption", `{"encryption":"none","acknowledged":true}`},
+				{http.MethodPost, "/setup/complete", `{"access":"open","acknowledged":true}`},
+			} {
+				rec := call(route.method, "/app/api/v1"+route.path, route.body, http.StatusConflict)
+				if code, _ := apitest.Refusal(rec); code != "setup_complete" {
+					t.Fatalf("%s %s after completion = %s, want setup_complete", route.method, route.path, rec.Body)
+				}
+			}
+			call(http.MethodPost, "/app/api/v1/database/reset", `{"confirm":true}`, http.StatusOK)
+			assertSetup()
+			rec = call(http.MethodGet, "/app/api/v1/setup", "", http.StatusOK)
+			if strings.TrimSpace(rec.Body.String()) != `{"step":"welcome","encryptionDeclinedAt":null}` {
+				t.Fatalf("setup after reset = %s, want welcome with no encryption decision", rec.Body)
+			}
+		})
+	}
+}
+
+func TestRegisterSetupAccessAuthorizer(t *testing.T) {
+	app, _, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+		return domain.Caller{Principal: domain.PrincipalOperator}, nil
+	}, nil)
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		path   string
+		status int
+		code   string
+	}{
+		{"/app/api/v1/setup", 200, ""},
+		{"/app/api/v1/mcp-access", 503, "setup_required"},
+		{"/api/v1/accounts", 503, "setup_required"},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest("GET", "http://127.0.0.1"+tc.path, nil))
+		var answer struct {
+			Step  string `json:"step"`
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		err := json.Unmarshal(rec.Body.Bytes(), &answer)
+		if rec.Code != tc.status || err != nil || answer.Error.Code != tc.code {
+			t.Fatalf("GET %s = %d, error code %q, want %d %s",
+				tc.path, rec.Code, answer.Error.Code, tc.status, tc.code)
+		}
+		if tc.status == 200 && answer.Step != "welcome" {
+			t.Fatalf("GET /setup step = %q, want welcome", answer.Step)
+		}
+		if tc.code == "setup_required" && answer.Error.Message != domain.ErrSetupRequired.Error() {
+			t.Fatalf("GET %s message = %q, want bare setup_required %q",
+				tc.path, answer.Error.Message, domain.ErrSetupRequired.Error())
+		}
+	}
+
+	decisions := setupDecisions{service: app.Service()}
+	chosen, err := decisions.AccountModeChosen(context.Background())
+	if err != nil || chosen {
+		t.Fatalf("unchosen account mode = %t, %v, want false", chosen, err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("PUT", "http://127.0.0.1/app/api/v1/account-mode",
+		strings.NewReader(`{"mode":"multi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("choose account mode = %d %s", rec.Code, rec.Body)
+	}
+	chosen, err = decisions.AccountModeChosen(context.Background())
+	if err != nil || !chosen {
+		t.Fatalf("saved account mode = %t, %v, want true", chosen, err)
+	}
+}
 
 func (*fakeEngine) AsyncEngine() *asyncengine.AsyncEngine {
 	panic(errUnexpectedOrderChain)

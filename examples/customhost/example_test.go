@@ -46,6 +46,8 @@ import (
 	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/access"
+	"go.openpit.dev/officer/internal/access/accesstest"
+	"go.openpit.dev/officer/internal/accountmode"
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/configure"
@@ -55,14 +57,9 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
+func buildCustomHost(t *testing.T, composition customHostComposition) (*app.App, http.Handler, access.Store) {
+	t.Helper()
 	ctx := context.Background()
-	composition, err := newCustomHostComposition(
-		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
-	)
-	if err != nil {
-		t.Fatalf("newCustomHostComposition: %v", err)
-	}
 	var accessState access.Store
 	composition.Builder.SetNodeBuilder(func(
 		buildCtx context.Context, st store.Store, fatalHook app.FatalShutdownHook,
@@ -98,8 +95,20 @@ func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
+	return built, router, accessState
+}
+
+func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
+	composition, err := newCustomHostComposition(
+		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	)
+	if err != nil {
+		t.Fatalf("newCustomHostComposition: %v", err)
+	}
+	built, router, accessState := buildCustomHost(t, composition)
 	service := built.Service()
-	ctx = auth.ContextWithCaller(ctx, auth.SystemCaller())
+	ctx := auth.ContextWithCaller(context.Background(), auth.SystemCaller())
+	accesstest.CompleteOpen(t, router, accountmode.Request{Mode: accountmode.ModeMulti}, false)
 
 	assertHostRouteAdded(t, router)
 	assertAccountModeServed(t, router)
@@ -109,6 +118,40 @@ func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
 	assertRouteAndToolHidden(t, router, composition.Authorizer, service)
 	assertRouteAndToolRemoved(t, router, service)
 	assertAccessModeServed(t, router, accessState)
+}
+
+func TestCustomHostAuthorizerKeepsSetupClosed(t *testing.T) {
+	if app.NewBuilder().Authorizer() != nil {
+		t.Fatal("a new builder already has an authorizer")
+	}
+	composition, err := newCustomHostComposition(
+		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	)
+	if err != nil {
+		t.Fatalf("newCustomHostComposition: %v", err)
+	}
+	composition.Builder.SetCallerResolver(func(*http.Request) (domain.Caller, error) {
+		return domain.Caller{Principal: domain.PrincipalOperator}, nil
+	})
+	_, router, _ := buildCustomHost(t, composition)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"http://127.0.0.1/app/api/v1/assets", nil))
+	var answer struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
+		rec.Code != http.StatusServiceUnavailable || answer.Error.Code != "setup_required" {
+		t.Fatalf("host-admitted operator during setup = %d %s, want 503 setup_required",
+			rec.Code, rec.Body)
+	}
+	accesstest.CompleteOpen(t, router, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"http://127.0.0.1/app/api/v1/assets", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("host-admitted operator after setup = %d %s, want 200", rec.Code, rec.Body)
+	}
 }
 
 func TestHostConnectorSubscribeEmptyClosesImmediately(t *testing.T) {
@@ -242,7 +285,7 @@ func assertAccountModeServed(t *testing.T, router http.Handler) {
 		rec,
 		httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/account-mode", nil),
 	)
-	const want = `{"mode":null,"account":"",` +
+	const want = `{"mode":"multi","account":"",` +
 		`"features":{"accounts":true,"account":""},"restartRequired":false}`
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
 		t.Fatalf("GET /account-mode = %d %s, want 200 %s", rec.Code, got, want)

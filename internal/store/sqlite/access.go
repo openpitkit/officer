@@ -54,6 +54,130 @@ func (s *sqliteStore) Snapshot() access.Snapshot {
 	return *snapshot
 }
 
+// SetupState reads first-run progress in the transaction checking setup mode.
+func (s *sqliteStore) SetupState(ctx context.Context) (_ access.SetupState, err error) {
+	tx, err := s.beginAccessWrite(ctx, access.ModeSetup)
+	if err != nil {
+		return access.SetupState{}, err
+	}
+	defer rollbackTransaction(&err, tx)
+
+	var step string
+	var declinedAt sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT setup_step, encryption_declined_at
+		 FROM access_state WHERE singleton = 1`,
+	).Scan(&step, &declinedAt); err != nil {
+		return access.SetupState{}, fmt.Errorf("store: read setup state: %w", err)
+	}
+	state := access.SetupState{}
+	state.Step, err = access.ParseSetupStep(step)
+	if err != nil {
+		return access.SetupState{}, fmt.Errorf("store: unknown setup step %q", step)
+	}
+	if declinedAt.Valid {
+		at, err := parseStoredTime("access_state.encryption_declined_at", declinedAt.String)
+		if err != nil {
+			return access.SetupState{}, err
+		}
+		state.EncryptionDeclinedAt = &at
+	}
+	if err := tx.Commit(); err != nil {
+		return access.SetupState{}, fmt.Errorf("store: commit setup read: %w", err)
+	}
+	return state, nil
+}
+
+// SetSetupStep saves progress without enforcing an order on the steps.
+func (s *sqliteStore) SetSetupStep(
+	ctx context.Context, step access.SetupStep,
+) (err error) {
+	tx, err := s.beginAccessWrite(ctx, access.ModeSetup)
+	if err != nil {
+		return err
+	}
+	defer rollbackTransaction(&err, tx)
+	if _, err := access.ParseSetupStep(string(step)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE access_state SET setup_step = ? WHERE singleton = 1`, string(step),
+	); err != nil {
+		return fmt.Errorf("store: set setup step: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit setup step: %w", err)
+	}
+	return nil
+}
+
+// DeclineEncryption keeps the time of the first decline, including on repeats.
+func (s *sqliteStore) DeclineEncryption(ctx context.Context, at time.Time) (err error) {
+	tx, err := s.beginAccessWrite(ctx, access.ModeSetup)
+	if err != nil {
+		return err
+	}
+	defer rollbackTransaction(&err, tx)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE access_state
+		 SET encryption_declined_at = COALESCE(encryption_declined_at, ?)
+		 WHERE singleton = 1`, timeStr(at),
+	); err != nil {
+		return fmt.Errorf("store: record encryption decline: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit encryption decline: %w", err)
+	}
+	return nil
+}
+
+// CompleteSetupOpen completes first-run setup without credentials.
+func (s *sqliteStore) CompleteSetupOpen(
+	ctx context.Context, completedAt time.Time,
+) (err error) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
+	tx, err := s.beginAccessWrite(ctx, access.ModeSetup)
+	if err != nil {
+		return err
+	}
+	defer rollbackTransaction(&err, tx)
+	if err := setAccessMode(ctx, tx, access.ModeOpen); err != nil {
+		return err
+	}
+	return s.commitSetup(ctx, tx, completedAt)
+}
+
+// CompleteSetupToken completes setup with all credentials and the first session.
+func (s *sqliteStore) CompleteSetupToken(
+	ctx context.Context, credentials access.Credentials, session access.Session,
+	completedAt time.Time,
+) (err error) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
+	tx, err := s.beginAccessWrite(ctx, access.ModeSetup)
+	if err != nil {
+		return err
+	}
+	defer rollbackTransaction(&err, tx)
+	if err := s.storeTokenMode(ctx, tx, credentials, session); err != nil {
+		return err
+	}
+	return s.commitSetup(ctx, tx, completedAt)
+}
+
+func (s *sqliteStore) commitSetup(
+	ctx context.Context, tx *sql.Tx, completedAt time.Time,
+) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE access_state SET completed_at = ? WHERE singleton = 1`,
+		timeStr(completedAt),
+	); err != nil {
+		return fmt.Errorf("store: record setup completion: %w", err)
+	}
+	return s.commitAccess(ctx, tx)
+}
+
 // PanelPassword returns the panel password's hash and when it was set. Open
 // mode holds none, and the error wraps domain.ErrNotFound.
 func (s *sqliteStore) PanelPassword(ctx context.Context) (access.Password, error) {
@@ -81,6 +205,17 @@ func (s *sqliteStore) EnableTokenMode(
 	}
 	defer rollbackTransaction(&err, tx)
 
+	if err := s.storeTokenMode(ctx, tx, credentials, session); err != nil {
+		return err
+	}
+	return s.commitAccess(ctx, tx)
+}
+
+// storeTokenMode writes token mode inside the caller's checked transaction.
+func (s *sqliteStore) storeTokenMode(
+	ctx context.Context, tx *sql.Tx,
+	credentials access.Credentials, session access.Session,
+) error {
 	if err := s.putAccessCredential(
 		ctx, tx, panelPasswordKind,
 		[]byte(credentials.Password.Hash), credentials.Password.SetAt,
@@ -101,10 +236,7 @@ func (s *sqliteStore) EnableTokenMode(
 	if err := storeSession(ctx, tx, session); err != nil {
 		return err
 	}
-	if err := setAccessMode(ctx, tx, access.ModeToken); err != nil {
-		return err
-	}
-	return s.commitAccess(ctx, tx)
+	return setAccessMode(ctx, tx, access.ModeToken)
 }
 
 // DisableTokenMode deletes the panel password, both tokens and every session
@@ -355,7 +487,8 @@ func (s *sqliteStore) CountSessions(
 // beginAccessWrite begins a transaction on the live database and checks,
 // inside it, that the stored access mode is want, so the write and its
 // precondition see one state. When the mode differs it rolls the transaction
-// back and returns an error wrapping domain.ErrConflict.
+// back and returns an error wrapping domain.ErrSetupComplete when want is
+// setup, and domain.ErrConflict otherwise.
 func (s *sqliteStore) beginAccessWrite(
 	ctx context.Context, want access.Mode,
 ) (*sql.Tx, error) {
@@ -369,8 +502,12 @@ func (s *sqliteStore) beginAccessWrite(
 	}
 	mode, err := readAccessMode(ctx, tx)
 	if err == nil && mode != want {
+		cause := domain.ErrConflict
+		if want == access.ModeSetup {
+			cause = domain.ErrSetupComplete
+		}
 		err = fmt.Errorf(
-			"store: access mode is %s, not %s: %w", mode, want, domain.ErrConflict,
+			"store: access mode is %s, not %s: %w", mode, want, cause,
 		)
 	}
 	if err != nil {
@@ -405,8 +542,14 @@ func (s *sqliteStore) loadAccessSnapshot(
 	if err != nil {
 		return access.Snapshot{}, err
 	}
-	if mode == access.ModeOpen {
+	switch mode {
+	case access.ModeSetup:
+		return access.Snapshot{Mode: access.ModeSetup}, nil
+	case access.ModeOpen:
 		return access.Snapshot{Mode: access.ModeOpen}, nil
+	case access.ModeToken:
+	default:
+		return access.Snapshot{}, fmt.Errorf("store: unknown access mode %q", mode)
 	}
 	apiToken, _, err := s.readAccessCredential(ctx, q, apiTokenKind)
 	if err != nil {
@@ -424,8 +567,8 @@ func (s *sqliteStore) loadAccessSnapshot(
 }
 
 // readAccessMode returns the stored access mode, which the schema holds to
-// open or token. A database without the access state row is refused rather
-// than given a mode.
+// setup, open or token. A database without the access state row is refused
+// rather than given a mode.
 func readAccessMode(ctx context.Context, q sqlQueryer) (access.Mode, error) {
 	var mode string
 	err := q.QueryRowContext(

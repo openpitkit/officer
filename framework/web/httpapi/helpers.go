@@ -456,6 +456,10 @@ func DescribeErr(err error) PublicError {
 	// keeps its own code.
 	case errors.Is(err, domain.ErrTooManyAttempts):
 		return PublicError{http.StatusTooManyRequests, "too_many_attempts", domain.ErrTooManyAttempts.Error()}
+	case errors.Is(err, domain.ErrSetupRequired):
+		return PublicError{http.StatusServiceUnavailable, "setup_required", err.Error()}
+	case errors.Is(err, domain.ErrSetupComplete):
+		return PublicError{http.StatusConflict, "setup_complete", domain.ErrSetupComplete.Error()}
 	case errors.Is(err, domain.ErrWrongToken):
 		return PublicError{http.StatusForbidden, "wrong_token", err.Error()}
 	case errors.Is(err, domain.ErrCurrentPasswordInvalid):

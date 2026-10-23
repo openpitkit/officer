@@ -21,24 +21,26 @@ import (
 	"context"
 
 	"go.openpit.dev/officer/framework/domain"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 type denyOneAuthorizer struct {
 	routeID  string
 	toolName string
+	next     httpx.Authorizer
 }
 
-func newDenyOneAuthorizer(routeID, toolName string) denyOneAuthorizer {
-	return denyOneAuthorizer{routeID: routeID, toolName: toolName}
+func newDenyOneAuthorizer(routeID, toolName string, next httpx.Authorizer) denyOneAuthorizer {
+	return denyOneAuthorizer{routeID: routeID, toolName: toolName, next: next}
 }
 
 func (a denyOneAuthorizer) Authorize(
-	_ context.Context,
-	_ domain.Caller,
+	ctx context.Context,
+	caller domain.Caller,
 	identifier string,
 ) error {
 	if identifier == a.routeID || identifier == a.toolName {
 		return domain.ErrForbidden
 	}
-	return nil
+	return a.next.Authorize(ctx, caller, identifier)
 }

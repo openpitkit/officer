@@ -85,7 +85,7 @@ func newLocalNodeBuiltBy(
 	return target, realm
 }
 
-func TestLocalNode_RestoreBackupNarrowedUserSettingsWithTradingConnection(t *testing.T) {
+func TestLocalNode_RestoreBackupNarrowedGeneralSettingsWithTradingConnection(t *testing.T) {
 	t.Parallel()
 	ctx := systemCtx()
 	target, realm := newLocalNode(t)
@@ -99,7 +99,7 @@ func TestLocalNode_RestoreBackupNarrowedUserSettingsWithTradingConnection(t *tes
 		t.Fatalf("CreateTradingConnection: %v", err)
 	}
 	scope := backup.Scope{
-		Sections: []backup.Section{backup.SectionUserSettings},
+		Sections: []backup.Section{backup.SectionGeneralSettings},
 		Accounts: backup.EntitySelector{Accounts: []string{"selected-account"}},
 	}
 	archive := backup.NewArchive(
@@ -107,8 +107,8 @@ func TestLocalNode_RestoreBackupNarrowedUserSettingsWithTradingConnection(t *tes
 		"test",
 		backup.RealmLabel{Code: string(domain.DefaultRealm)},
 		scope,
-		backup.Data{UserSettings: []domain.UserSetting{{
-			UserID: domain.DefaultUserID, Key: domain.UserSettingWelcomeSeen, Value: "1",
+		backup.Data{Settings: []backup.SettingEntry{{
+			Key: "no_esign", Value: "0",
 		}}},
 		backup.CredentialFormPlaintext,
 	)

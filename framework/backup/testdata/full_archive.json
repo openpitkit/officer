@@ -1,6 +1,7 @@
 {
   "credentialForm": "plaintext",
   "manifest": {
+    "formatVersion": 5,
     "createdAt": "2026-06-22T10:00:00Z",
     "source": "fixture",
     "realm": {
@@ -12,7 +13,6 @@
       "risk_limits",
       "market_data_settings",
       "general_settings",
-      "user_settings",
       "activity_history",
       "audit_log"
     ]
@@ -192,13 +192,6 @@
     ],
     "mcpAccess": {
       "submit_order": true
-    },
-    "userSettings": [
-      {
-        "UserID": "00000000-0000-4000-8000-000000000001",
-        "Key": "welcome_seen",
-        "Value": "1"
-      }
-    ]
+    }
   }
 }

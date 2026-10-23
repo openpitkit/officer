@@ -31,6 +31,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/officer/internal/apitest"
 )
 
 // The attributes of the session cookie the panel routes set and clear, in
@@ -432,10 +433,7 @@ func expectStatus(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := serve(t, router, call)
-	if rec.Code != status {
-		code, pointer := refusalOf(rec)
-		t.Fatalf("%s = %d %s %q, want %d", call, rec.Code, code, pointer, status)
-	}
+	apitest.ExpectStatus(t, call.String(), rec, status)
 	return rec
 }
 
@@ -487,34 +485,12 @@ func expectRefusal(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := serve(t, router, call)
-	gotCode, gotPointer := refusalOf(rec)
+	gotCode, gotPointer := apitest.Refusal(rec)
 	if rec.Code != status || gotCode != code || gotPointer != pointer {
 		t.Fatalf("%s = %d %s %q, want %d %s %q",
 			call, rec.Code, gotCode, gotPointer, status, code, pointer)
 	}
 	return rec
-}
-
-// refusalOf returns the error code of a refused request's answer and, for a
-// validation problem, the pointer of its first error. Both are empty for an
-// answer that carries no error.
-func refusalOf(rec *httptest.ResponseRecorder) (code, pointer string) {
-	var answer struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-		Errors []struct {
-			Code    string `json:"code"`
-			Pointer string `json:"pointer"`
-		} `json:"errors"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
-		return "", ""
-	}
-	if len(answer.Errors) > 0 {
-		return answer.Errors[0].Code, answer.Errors[0].Pointer
-	}
-	return answer.Error.Code, ""
 }
 
 // expectRetryAfter checks the Retry-After header of the answer to call.

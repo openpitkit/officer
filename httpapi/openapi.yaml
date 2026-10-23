@@ -63,8 +63,6 @@ tags:
     description: Append-only audit trail
   - name: mcp-access
     description: MCP command access control
-  - name: user-settings
-    description: Operator UI preferences
   - name: account-mode
     description: Single- or multi-account mode of the control plane
   - name: market-data
@@ -102,6 +100,8 @@ paths:
           $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Health / status
@@ -123,6 +123,8 @@ paths:
           $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /status:
     get:
@@ -141,7 +143,8 @@ paths:
         "403":
           $ref: "#/components/responses/ForeignHostError"
         "503":
-          description: Status unavailable.
+          description: >
+            Officer is not set up yet (`setup_required`), or status is unavailable.
           content:
             application/json:
               schema:
@@ -203,6 +206,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /backup/restore:
     post:
@@ -266,7 +271,7 @@ paths:
         "409":
           $ref: "#/components/responses/TradingConflictError"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -310,6 +315,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /database/reset:
     post:
@@ -353,7 +360,7 @@ paths:
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -417,6 +424,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     post:
       operationId: createAsset
@@ -467,6 +476,8 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /assets/{code}:
     parameters:
@@ -526,7 +537,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -555,6 +566,8 @@ paths:
           $ref: "#/components/responses/HasDependentsError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /asset-classes:
     get:
@@ -606,6 +619,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     post:
       operationId: createAssetClass
@@ -656,6 +671,8 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /asset-classes/{code}:
     parameters:
@@ -718,6 +735,8 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     delete:
       operationId: deleteAssetClass
@@ -744,6 +763,8 @@ paths:
           $ref: "#/components/responses/HasDependentsError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts:
     get:
@@ -863,6 +884,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     post:
       operationId: createAccount
@@ -912,6 +935,8 @@ paths:
           $ref: "#/components/responses/AccountSetConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts/{code}:
     parameters:
@@ -945,6 +970,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
     put:
       operationId: updateAccount
       summary: Update account code and title
@@ -992,6 +1019,8 @@ paths:
           $ref: "#/components/responses/AccountSetConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
     delete:
       operationId: deleteAccount
       summary: Delete an account
@@ -1021,7 +1050,7 @@ paths:
         "409":
           $ref: "#/components/responses/AccountHasDependentsOrConflictError"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1071,6 +1100,8 @@ paths:
           $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts/{code}/unblock:
     parameters:
@@ -1113,6 +1144,8 @@ paths:
           $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts/{code}/group:
     parameters:
@@ -1170,6 +1203,8 @@ paths:
           $ref: "#/components/responses/CurrencyChangeBlockedOrAccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts/{code}/currency:
     parameters:
@@ -1222,6 +1257,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts/{code}/notes:
     parameters:
@@ -1267,6 +1304,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts/{code}/adjustments:
     parameters:
@@ -1301,6 +1340,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     post:
       operationId: applyAdjustment
@@ -1351,6 +1392,8 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Groups
@@ -1448,6 +1491,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     post:
       operationId: createGroup
@@ -1505,6 +1550,8 @@ paths:
           $ref: "#/components/responses/AccountSetConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /groups/{code}:
     parameters:
@@ -1540,6 +1587,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     put:
       operationId: updateGroup
@@ -1591,6 +1640,8 @@ paths:
           $ref: "#/components/responses/AccountSetConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     delete:
       operationId: deleteGroup
@@ -1635,7 +1686,7 @@ paths:
                   - $ref: "#/components/schemas/HasDependentsError"
                   - $ref: "#/components/schemas/Error"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1686,6 +1737,8 @@ paths:
           $ref: "#/components/responses/CurrencyChangeBlockedOrAccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /groups/{code}/currency:
     parameters:
@@ -1738,6 +1791,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /groups/{code}/notes:
     parameters:
@@ -1785,6 +1840,8 @@ paths:
           $ref: "#/components/responses/AccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /groups/{code}/block:
     parameters:
@@ -1832,6 +1889,8 @@ paths:
           $ref: "#/components/responses/AccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /groups/{code}/unblock:
     parameters:
@@ -1874,6 +1933,8 @@ paths:
           $ref: "#/components/responses/AccountsNotManagedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts/{code}/balances/realized-pnl:
     parameters:
@@ -1920,6 +1981,8 @@ paths:
           $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Balances
@@ -2131,6 +2194,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Global adjustments list
@@ -2234,6 +2299,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Orders
@@ -2367,6 +2434,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/check:
     post:
@@ -2438,6 +2507,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/{id}:
     parameters:
@@ -2483,6 +2554,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/{id}/events/{eventId}/reproduction:
     parameters:
@@ -2524,6 +2597,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/{id}/execution-reports:
     parameters:
@@ -2724,6 +2799,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Trades
@@ -2872,6 +2949,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Limits
@@ -2955,6 +3034,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     delete:
       operationId: deleteLimit
@@ -3010,7 +3091,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -3061,7 +3142,7 @@ paths:
         "501":
           $ref: "#/components/responses/NotImplementedError"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -3115,7 +3196,7 @@ paths:
         "501":
           $ref: "#/components/responses/NotImplementedError"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -3165,7 +3246,7 @@ paths:
         "501":
           $ref: "#/components/responses/NotImplementedError"
         "503":
-          $ref: "#/components/responses/EngineRestartingError"
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -3295,6 +3376,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /audit/actions:
     get:
@@ -3324,6 +3407,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # MCP access control
@@ -3359,6 +3444,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /mcp-access/{command}:
     parameters:
@@ -3414,58 +3501,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
-
-  # ---------------------------------------------------------------------------
-  # User settings
-  # ---------------------------------------------------------------------------
-
-  /user-settings:
-    get:
-      operationId: getUserSettings
-      summary: Read the current operator's UI preferences
-      tags: [user-settings]
-      responses:
-        "200":
-          description: Current operator UI preferences.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UserSettings"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForeignHostError"
-        "500":
-          $ref: "#/components/responses/InternalError"
-    put:
-      operationId: setUserSettings
-      summary: Persist the current operator's UI preferences
-      tags: [user-settings]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UserSettings"
-      responses:
-        "200":
-          description: Preferences persisted; returns the stored state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UserSettings"
-        "400":
-          $ref: "#/components/responses/MalformedRequestError"
-        "422":
-          $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "403":
-          $ref: "#/components/responses/ForeignRequestError"
-        "415":
-          $ref: "#/components/responses/UnsupportedMediaTypeError"
-        "500":
-          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Account mode
@@ -3496,6 +3533,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
     put:
       operationId: setAccountMode
       summary: Store the account mode for the next start
@@ -3548,6 +3587,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Signing keys and order approval flow
@@ -3585,6 +3626,8 @@ paths:
           $ref: "#/components/responses/MasterKeyRequiredError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /signing/keys/import:
     post:
@@ -3638,6 +3681,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /signing/keys:
     get:
@@ -3667,6 +3712,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /signing/keys/active/public:
     get:
@@ -3699,6 +3746,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /signing/keys/{keyId}/public:
     get:
@@ -3743,6 +3792,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /signing/config:
     get:
@@ -3762,6 +3813,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
     put:
       operationId: setSigningConfig
       summary: Update the signing configuration
@@ -3791,6 +3844,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/submit:
     post:
@@ -3839,6 +3894,8 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/send-paper:
     post:
@@ -3906,6 +3963,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/drop-copy/submit:
     post:
@@ -3955,6 +4014,8 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/{id}/confirm:
     parameters:
@@ -3996,6 +4057,8 @@ paths:
           $ref: "#/components/responses/OrderShortcutConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /orders/{id}/cancel:
     parameters:
@@ -4058,6 +4121,8 @@ paths:
           $ref: "#/components/responses/OrderShortcutConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Trading
@@ -4083,6 +4148,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections:
     post:
@@ -4130,6 +4197,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections/{id}/settings:
     parameters:
@@ -4174,6 +4243,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections/{id}/enabled:
     parameters:
@@ -4215,6 +4286,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections/{id}/check:
     parameters:
@@ -4250,6 +4323,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections/{id}/instruments:
     parameters:
@@ -4295,6 +4370,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     delete:
       operationId: deleteTradingInstrument
@@ -4330,6 +4407,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections/{id}/verify-symbol:
     parameters:
@@ -4371,6 +4450,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections/{id}/search-symbols:
     parameters:
@@ -4413,6 +4494,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections/{id}/access:
     parameters:
@@ -4466,6 +4549,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     delete:
       operationId: removeTradingAccess
@@ -4513,6 +4598,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /trading/connections/{id}/fee-account:
     parameters:
@@ -4554,6 +4641,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
     delete:
       operationId: deleteTradingFeeAccount
@@ -4582,6 +4671,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /accounts/{code}/trading-destinations:
     parameters:
@@ -4622,6 +4713,8 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Market data
@@ -4649,6 +4742,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/restart:
     post:
@@ -4678,6 +4773,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/instances:
     post:
@@ -4715,6 +4812,8 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/instances/{id}/enabled:
     parameters:
@@ -4760,6 +4859,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/instances/{id}/settings:
     parameters:
@@ -4801,6 +4902,8 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/instances/{id}:
     parameters:
@@ -4826,6 +4929,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/instances/{id}/verify-symbol:
     parameters:
@@ -4867,6 +4972,8 @@ paths:
           $ref: "#/components/responses/UpstreamError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/instances/{id}/search-symbols:
     parameters:
@@ -4904,6 +5011,8 @@ paths:
           $ref: "#/components/responses/UpstreamError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/instances/{id}/instruments:
     parameters:
@@ -4941,6 +5050,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
     delete:
       operationId: deleteMarketDataInstrument
       summary: Delete one market-data instrument mapping
@@ -4969,6 +5080,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /market-data/instances/{id}/instruments/enabled:
     parameters:
@@ -5017,6 +5130,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Dashboard / service
@@ -5053,6 +5168,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /service:
     get:
@@ -5072,6 +5189,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /service/restart:
     post:
@@ -5097,6 +5216,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /service/stop:
     post:
@@ -5121,6 +5242,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /service/logs:
     get:
@@ -5142,6 +5265,8 @@ paths:
           $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /service/logs/download:
     get:
@@ -5167,6 +5292,8 @@ paths:
           $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForeignHostError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   /credential-storage:
     get:
@@ -5194,6 +5321,8 @@ paths:
           $ref: "#/components/responses/ForeignHostError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
 # =============================================================================
 # Components
@@ -5785,8 +5914,19 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
-    EngineRestartingError:
-      description: Engine is being rebuilt; mutating requests are rejected.
+    SetupRequiredError:
+      description: >
+        Officer is not set up yet (`setup_required`); every operation
+        answers this until first-run setup is finished in the panel.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    SetupRequiredOrEngineRestartingError:
+      description: >
+        Officer is not set up yet (`setup_required`), or the engine is being
+        rebuilt and the mutating request is rejected (`engine_restarting`).
       content:
         application/json:
           schema:
@@ -5958,7 +6098,7 @@ components:
                 `live_trading_unavailable`, `trading_mode_mismatch`,
                 `fee_account_required`, `venue_order_managed`, `no_destination`,
                 `destination_ambiguous`, `accounts_not_managed`,
-                `engine_restarting`, `signing`, `master_key_required`,
+                `setup_required`, `engine_restarting`, `signing`, `master_key_required`,
                 `upstream`, `not_implemented`, or `internal`.
               example: not_found
             message:
@@ -6421,11 +6561,6 @@ components:
         settings:
           type: array
           description: Serialized realm setting rows.
-          items:
-            type: object
-        userSettings:
-          type: array
-          description: Serialized user setting rows.
           items:
             type: object
 
@@ -7841,17 +7976,6 @@ components:
             How many stored secrets held a value when the database was sealed.
             They had been stored in the clear, so they must be considered
             exposed. 0 when the database has never been sealed.
-
-    # User settings
-
-    UserSettings:
-      type: object
-      additionalProperties: false
-      required: [welcomeSeen]
-      properties:
-        welcomeSeen:
-          type: boolean
-          description: Whether the operator dismissed the first-run welcome dialog.
 
     # Account mode
 

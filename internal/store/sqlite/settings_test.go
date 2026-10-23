@@ -72,6 +72,7 @@ func TestMcpAccessRoundTrip(t *testing.T) {
 }
 
 func TestUserSettingsRoundTrip(t *testing.T) {
+	const testKey = "layout"
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -86,39 +87,39 @@ func TestUserSettingsRoundTrip(t *testing.T) {
 	if len(settings) != 0 {
 		t.Fatalf("ListUserSettings len = %d, want 0", len(settings))
 	}
-	if _, ok, err := rs.GetUserSetting(ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen); err != nil || ok {
+	if _, ok, err := rs.GetUserSetting(ctx, domain.DefaultUserID, testKey); err != nil || ok {
 		t.Fatalf("GetUserSetting(absent): ok=%v err=%v, want ok=false", ok, err)
 	}
 
 	// Set under the default user, read back.
-	if err := rs.SetUserSetting(ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen, "1"); err != nil {
+	if err := rs.SetUserSetting(ctx, domain.DefaultUserID, testKey, "1"); err != nil {
 		t.Fatalf("SetUserSetting: %v", err)
 	}
-	v, ok, err := rs.GetUserSetting(ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen)
+	v, ok, err := rs.GetUserSetting(ctx, domain.DefaultUserID, testKey)
 	if err != nil || !ok {
 		t.Fatalf("GetUserSetting: ok=%v err=%v", ok, err)
 	}
 	if v != "1" {
-		t.Fatalf("welcome_seen = %q, want 1", v)
+		t.Fatalf("layout = %q, want 1", v)
 	}
 
 	// The composite key is (user_id, setting_key): a different user is a distinct
 	// row, not an overwrite.
-	if err := rs.SetUserSetting(ctx, "other-user", domain.UserSettingWelcomeSeen, "0"); err != nil {
+	if err := rs.SetUserSetting(ctx, "other-user", testKey, "0"); err != nil {
 		t.Fatalf("SetUserSetting(other): %v", err)
 	}
-	v, _, _ = rs.GetUserSetting(ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen)
+	v, _, _ = rs.GetUserSetting(ctx, domain.DefaultUserID, testKey)
 	if v != "1" {
-		t.Fatalf("default user welcome_seen after other-user write = %q, want 1", v)
+		t.Fatalf("default user layout after other-user write = %q, want 1", v)
 	}
 
 	// Upsert on the same composite key replaces in place.
-	if err := rs.SetUserSetting(ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen, "0"); err != nil {
+	if err := rs.SetUserSetting(ctx, domain.DefaultUserID, testKey, "0"); err != nil {
 		t.Fatalf("SetUserSetting(replace): %v", err)
 	}
-	v, _, _ = rs.GetUserSetting(ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen)
+	v, _, _ = rs.GetUserSetting(ctx, domain.DefaultUserID, testKey)
 	if v != "0" {
-		t.Fatalf("welcome_seen after replace = %q, want 0", v)
+		t.Fatalf("layout after replace = %q, want 0", v)
 	}
 
 	// List returns both rows, ordered by (user_id, setting_key).

@@ -32,11 +32,11 @@ const sessionCookieMaxAge = int(sessionLifetime / time.Second)
 
 // Routes returns the panel access routes over s, which belong in the
 // panel-only route registry: sign-in and sign-out, password recovery, and the
-// access state, mode switch, password change and tokens the panel's security
-// page shows. GET /session, sign-in and password recovery are public, and GET
-// /session, which the panel reads before it renders, also answers during
-// first-run setup. The routes translate HTTP to the operations of s, which
-// apply every rule of the access policy.
+// setup progress, access state, mode switch, password change and tokens.
+// GET /session, sign-in and password recovery are public. GET /session and
+// the setup routes answer during first-run setup; sign-in and recovery answer
+// 503 setup_required in setup. The routes translate HTTP to the operations
+// of s, which apply every rule of the access policy.
 func Routes(s *Service) []httpx.Route {
 	return []httpx.Route{
 		{
@@ -51,7 +51,7 @@ func Routes(s *Service) []httpx.Route {
 			ID:      "session.create.post",
 			Method:  http.MethodPost,
 			Pattern: "/session",
-			Handler: handleSignIn(s),
+			Handler: outsideSetup(s, handleSignIn(s)),
 			Public:  true,
 		},
 		{
@@ -70,15 +70,43 @@ func Routes(s *Service) []httpx.Route {
 			ID:      "session.recovery.post",
 			Method:  http.MethodPost,
 			Pattern: "/session/recovery",
-			Handler: handleRequestRecovery(s),
+			Handler: outsideSetup(s, handleRequestRecovery(s)),
 			Public:  true,
 		},
 		{
 			ID:      "session.recovery.reset.post",
 			Method:  http.MethodPost,
 			Pattern: "/session/recovery/reset",
-			Handler: handleResetWithRecoveryCode(s),
+			Handler: outsideSetup(s, handleResetWithRecoveryCode(s)),
 			Public:  true,
+		},
+		{
+			ID:          "setup.get",
+			Method:      http.MethodGet,
+			Pattern:     "/setup",
+			Handler:     setupRoute(s, handleGetSetup(s)),
+			DuringSetup: true,
+		},
+		{
+			ID:          "setup.progress.put",
+			Method:      http.MethodPut,
+			Pattern:     "/setup/progress",
+			Handler:     setupRoute(s, handleSetSetupStep(s)),
+			DuringSetup: true,
+		},
+		{
+			ID:          "setup.encryption.put",
+			Method:      http.MethodPut,
+			Pattern:     "/setup/encryption",
+			Handler:     setupRoute(s, handleDeclineEncryption(s)),
+			DuringSetup: true,
+		},
+		{
+			ID:          "setup.complete.post",
+			Method:      http.MethodPost,
+			Pattern:     "/setup/complete",
+			Handler:     setupRoute(s, handleCompleteSetup(s)),
+			DuringSetup: true,
 		},
 		{
 			ID:      "access.get",
@@ -110,6 +138,146 @@ func Routes(s *Service) []httpx.Route {
 			Pattern: "/access/tokens/{kind}/regenerate",
 			Handler: handleRegenerateToken(s),
 		},
+	}
+}
+
+// outsideSetup refuses requests until first-run setup completes.
+func outsideSetup(s *Service, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.Mode() == ModeSetup {
+			writeErr(w, setupRequiredError{host: r.Host})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// setupRoute checks completion before a handler reads or validates its body.
+// The service operations recheck under their lock before any mutation.
+func setupRoute(s *Service, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := s.requireSetup(); err != nil {
+			writeErr(w, err)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// setupDTO is the wire shape of SetupState.
+type setupDTO struct {
+	Step                 SetupStep  `json:"step"`
+	EncryptionDeclinedAt *time.Time `json:"encryptionDeclinedAt"`
+}
+
+// setupProgressRequest is the body of PUT /setup/progress.
+type setupProgressRequest struct {
+	Step *SetupStep `json:"step"`
+}
+
+// setupEncryptionRequest is the body of PUT /setup/encryption.
+type setupEncryptionRequest struct {
+	Encryption   *string `json:"encryption"`
+	Acknowledged *bool   `json:"acknowledged"`
+}
+
+// setupCompleteRequest is the body of POST /setup/complete.
+type setupCompleteRequest struct {
+	Access       Mode    `json:"access"`
+	Password     *string `json:"password"`
+	Acknowledged *bool   `json:"acknowledged"`
+}
+
+// handleGetSetup handles GET /app/api/v1/setup.
+func handleGetSetup(s *Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		state, err := s.SetupState(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if state.EncryptionDeclinedAt != nil {
+			at := state.EncryptionDeclinedAt.UTC()
+			state.EncryptionDeclinedAt = &at
+		}
+		httpx.WriteJSON(w, http.StatusOK, setupDTO(state))
+	}
+}
+
+// handleSetSetupStep handles PUT /app/api/v1/setup/progress.
+func handleSetSetupStep(s *Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req setupProgressRequest
+		if !httpx.DecodeBody(w, r, &req) || !requireMember(w, req.Step, "step") {
+			return
+		}
+		if err := s.SetSetupStep(r.Context(), *req.Step); err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleDeclineEncryption handles PUT /app/api/v1/setup/encryption.
+func handleDeclineEncryption(s *Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req setupEncryptionRequest
+		if !httpx.DecodeBody(w, r, &req) ||
+			!requireMember(w, req.Encryption, "encryption") ||
+			!requireMember(w, req.Acknowledged, "acknowledged") {
+			return
+		}
+		if *req.Encryption != "none" {
+			httpx.WriteValidationProblem(w, "encryption must be none", "/encryption", "enum")
+			return
+		}
+		if err := s.DeclineEncryption(r.Context(), *req.Acknowledged); err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleCompleteSetup handles POST /app/api/v1/setup/complete.
+func handleCompleteSetup(s *Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req setupCompleteRequest
+		if !httpx.DecodeBody(w, r, &req) {
+			return
+		}
+		var password string
+		var acknowledged bool
+		switch req.Access {
+		case ModeOpen:
+			if !refuseMember(w, req.Password, "password", ModeOpen) ||
+				!requireMember(w, req.Acknowledged, "acknowledged") {
+				return
+			}
+			acknowledged = *req.Acknowledged
+		case ModeToken:
+			if !refuseMember(w, req.Acknowledged, "acknowledged", ModeToken) ||
+				!requireMember(w, req.Password, "password") {
+				return
+			}
+			password = *req.Password
+		case "":
+			httpx.WriteValidationProblem(w, "access is required", "/access", "required")
+			return
+		default:
+			httpx.WriteValidationProblem(w, "access must be open or token", "/access", "enum")
+			return
+		}
+		id, err := s.CompleteSetup(r.Context(), req.Access, password, acknowledged)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if req.Access == ModeToken {
+			setSessionCookie(w, id)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

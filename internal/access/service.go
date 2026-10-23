@@ -116,11 +116,10 @@ func (e RetryAfterError) Unwrap() error { return e.Err }
 type Status struct {
 	// Mode is the access mode.
 	Mode Mode
-	// SetupComplete reports whether first-run setup is done. Officer has no
-	// setup state yet, so it is always true.
+	// SetupComplete is false exactly in setup mode.
 	SetupComplete bool
 	// Authenticated reports whether the request's session cookie names a
-	// live session. It is always false in open mode.
+	// live session. It is always false in setup and open modes.
 	Authenticated bool
 }
 
@@ -141,16 +140,18 @@ type AccessInfo struct {
 // One mutex serialises every operation that changes access state: sign-in,
 // which verifies the password and creates the session under it, sign-out,
 // the mode switches, the password change, the recovery code and its reset,
-// and token regeneration. Without it a sign-in could verify the old password,
-// lose the race to a password change that deletes every session, and then
-// create a session for the old password. The credential checks of ordinary
-// requests, CheckToken and CheckSession, take no lock.
+// token regeneration, SetSetupStep, DeclineEncryption and CompleteSetup.
+// Without it a sign-in could verify the old password, lose the race to a
+// password change that deletes every session, and then create a session for
+// the old password. The credential checks of ordinary requests, CheckToken
+// and CheckSession, take no lock.
 //
 // An operation reached through an authenticated panel route audits as the
 // caller stamped in its context, and fails as an internal error when there
-// is none. Password recovery runs on the public panel routes before any
-// session exists and audits as the operator on the panel; sign-in, the other
-// public operation, writes no audit row. An audit row is appended after the
+// is none. CompleteSetup also audits as the caller stamped by the resolver
+// on its credential-less setup route. Password recovery runs on the public
+// panel routes before any session exists and audits as the operator on the
+// panel; sign-in writes no audit row. An audit row is appended after the
 // change commits; when appending fails, the operation returns that error and
 // the change stays applied.
 //
@@ -160,6 +161,7 @@ type Service struct {
 	store       Store
 	auditor     Auditor
 	recoveryOut io.Writer
+	decisions   SetupDecisions
 	now         func() time.Time
 
 	mu sync.Mutex
@@ -190,9 +192,11 @@ func (r recoveryCode) live(now time.Time) bool {
 // New returns the Service over accessStore. auditor records the access
 // changes; recoveryOut receives the recovery code line, and the composition
 // passes the process's standard error, which bypasses the log buffer the
-// service log route serves. A nil dependency is an error.
+// service log route serves. decisions reads the setup choices owned by other
+// components. A nil dependency is an error.
 func New(
 	accessStore Store, auditor Auditor, recoveryOut io.Writer,
+	decisions SetupDecisions,
 ) (*Service, error) {
 	switch {
 	case accessStore == nil:
@@ -201,11 +205,14 @@ func New(
 		return nil, errors.New("access: auditor is nil")
 	case recoveryOut == nil:
 		return nil, errors.New("access: recovery output is nil")
+	case decisions == nil:
+		return nil, errors.New("access: setup decisions are nil")
 	}
 	return &Service{
 		store:       accessStore,
 		auditor:     auditor,
 		recoveryOut: recoveryOut,
+		decisions:   decisions,
 		now:         time.Now,
 	}, nil
 }
@@ -221,14 +228,21 @@ func (s *Service) Mode() Mode {
 // the other kind's token; and an error wrapping domain.ErrUnauthorized for
 // anything else, an empty token included. It compares the presented token
 // with both tokens in constant time. Open mode issues no token, so there
-// every token is refused as unauthorized.
+// every token is refused as unauthorized. Setup returns the bare
+// domain.ErrSetupRequired.
 func (s *Service) CheckToken(kind TokenKind, presented string) error {
 	snapshot := s.store.Snapshot()
-	if snapshot.Mode != ModeToken {
+	switch snapshot.Mode {
+	case ModeSetup:
+		return domain.ErrSetupRequired
+	case ModeToken:
+	case ModeOpen:
 		return fmt.Errorf(
 			"the access mode is %s, which issues no token: %w",
 			snapshot.Mode, domain.ErrUnauthorized,
 		)
+	default:
+		return fmt.Errorf("access: unknown access mode %q", snapshot.Mode)
 	}
 	var (
 		other TokenKind
@@ -271,13 +285,19 @@ func (s *Service) CheckToken(kind TokenKind, presented string) error {
 // unknown session and for an ended one, whose row it deletes. A session is
 // live until 30 days after its sign-in and until 7 days pass without a
 // request. Open mode issues no session, so there every value is refused as
-// unauthorized.
+// unauthorized. Setup returns the bare domain.ErrSetupRequired.
 func (s *Service) CheckSession(ctx context.Context, cookie string) error {
-	if mode := s.store.Snapshot().Mode; mode != ModeToken {
+	switch mode := s.Mode(); mode {
+	case ModeSetup:
+		return domain.ErrSetupRequired
+	case ModeToken:
+	case ModeOpen:
 		return fmt.Errorf(
 			"the access mode is %s, which issues no session: %w",
 			mode, domain.ErrUnauthorized,
 		)
+	default:
+		return fmt.Errorf("access: unknown access mode %q", mode)
 	}
 	idHash, ok := sessionIDHash(cookie)
 	if !ok {
@@ -316,9 +336,17 @@ func (s *Service) CheckSession(ctx context.Context, cookie string) error {
 // Status returns the access state for a request whose session cookie carries
 // cookie, empty when it carries none.
 func (s *Service) Status(ctx context.Context, cookie string) (Status, error) {
-	status := Status{Mode: s.store.Snapshot().Mode, SetupComplete: true}
-	if status.Mode != ModeToken {
+	status := Status{Mode: s.Mode()}
+	switch status.Mode {
+	case ModeSetup:
 		return status, nil
+	case ModeOpen:
+		status.SetupComplete = true
+		return status, nil
+	case ModeToken:
+		status.SetupComplete = true
+	default:
+		return Status{}, fmt.Errorf("access: unknown access mode %q", status.Mode)
 	}
 	err := s.CheckSession(ctx, cookie)
 	switch {
@@ -340,7 +368,7 @@ func (s *Service) Status(ctx context.Context, cookie string) (Status, error) {
 // domain.ErrTooManyAttempts with the time left; a wrong password returns a
 // RetryAfterError wrapping domain.ErrInvalidPassword with the new delay. A
 // success clears the delay. Open mode holds no password, so there the error
-// wraps domain.ErrConflict.
+// wraps domain.ErrConflict. Setup returns the bare domain.ErrSetupRequired.
 func (s *Service) SignIn(ctx context.Context, password string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -414,7 +442,8 @@ func (s *Service) SignOutEverywhere(ctx context.Context) error {
 // reading. A new code is issued at most once a minute, even after the
 // previous one was used or burnt; a request sooner returns a RetryAfterError
 // wrapping domain.ErrTooManyAttempts with the time left. Open mode holds no
-// password to recover, so there the error wraps domain.ErrConflict.
+// password to recover, so there the error wraps domain.ErrConflict. Setup
+// returns the bare domain.ErrSetupRequired.
 func (s *Service) RequestRecovery(
 	ctx context.Context,
 ) (issued bool, expiresAt time.Time, err error) {
@@ -464,7 +493,8 @@ func (s *Service) RequestRecovery(
 // person may type, and regardless of case. Without a live code, or with a
 // wrong one, the error wraps domain.ErrInvalidRecoveryCode, and the fifth
 // wrong code burns the live one. Open mode holds no password, so there the
-// error wraps domain.ErrConflict.
+// error wraps domain.ErrConflict. Setup returns the bare
+// domain.ErrSetupRequired.
 func (s *Service) ResetWithRecoveryCode(
 	ctx context.Context, code, password string,
 ) (string, error) {
@@ -523,12 +553,18 @@ func (s *Service) AccessInfo(ctx context.Context) (AccessInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	info := AccessInfo{Mode: s.store.Snapshot().Mode}
-	if info.Mode == ModeToken {
+	switch info.Mode {
+	case ModeSetup:
+		return AccessInfo{}, domain.ErrSetupRequired
+	case ModeOpen:
+	case ModeToken:
 		password, err := s.storedPassword(ctx)
 		if err != nil {
 			return AccessInfo{}, err
 		}
 		info.PasswordSetAt = &password.SetAt
+	default:
+		return AccessInfo{}, fmt.Errorf("access: unknown access mode %q", info.Mode)
 	}
 	now := s.now()
 	sessions, err := s.store.CountSessions(
@@ -545,7 +581,8 @@ func (s *Service) AccessInfo(ctx context.Context) (AccessInfo, error) {
 // It issues both tokens and a session for this browser, which would
 // otherwise be sent to sign in on its next request, stores them in one
 // transaction, and returns the session's raw id for the session cookie. In
-// token mode the error wraps domain.ErrConflict.
+// token mode the error wraps domain.ErrConflict. Setup returns the bare
+// domain.ErrSetupRequired.
 func (s *Service) SwitchToToken(
 	ctx context.Context, password string,
 ) (string, error) {
@@ -561,6 +598,15 @@ func (s *Service) SwitchToToken(
 	if err := validatePassword(password); err != nil {
 		return "", err
 	}
+	return s.enableTokenMode(ctx, caller, password, s.store.EnableTokenMode)
+}
+
+// enableTokenMode runs with s.mu held after the caller checked its mode and
+// validated the password with validatePassword.
+func (s *Service) enableTokenMode(
+	ctx context.Context, caller domain.Caller, password string,
+	commit func(context.Context, Credentials, Session) error,
+) (string, error) {
 	hash, err := hashPassword(password)
 	if err != nil {
 		return "", err
@@ -578,7 +624,7 @@ func (s *Service) SwitchToToken(
 	if err != nil {
 		return "", err
 	}
-	if err := s.store.EnableTokenMode(ctx, Credentials{
+	if err := commit(ctx, Credentials{
 		Password:   Password{Hash: hash, SetAt: now},
 		APIToken:   apiToken,
 		AgentToken: agentToken,
@@ -586,8 +632,8 @@ func (s *Service) SwitchToToken(
 		return "", fmt.Errorf("access: enable token mode: %w", err)
 	}
 	// A recovery code belongs to the password it was issued for. The
-	// database can also return to open mode without this service, when it
-	// is recreated, so the new password's token mode forgets the code here
+	// database can also return to setup without this service, when it is
+	// reset or recreated, so the new password's token mode forgets the code here
 	// rather than on the way out.
 	s.recovery = recoveryCode{}
 	if err := s.audit(ctx, caller,
@@ -613,7 +659,7 @@ func (s *Service) SwitchToToken(
 // password, a wrong one returning an error wrapping
 // domain.ErrCurrentPasswordInvalid. The panel password, both tokens and every
 // session are deleted in one transaction. In open mode the error wraps
-// domain.ErrConflict.
+// domain.ErrConflict. Setup returns the bare domain.ErrSetupRequired.
 func (s *Service) SwitchToOpen(
 	ctx context.Context, currentPassword string, acknowledged bool,
 ) error {
@@ -648,7 +694,8 @@ func (s *Service) SwitchToOpen(
 // code was issued for the replaced password, so it is burnt; the minute
 // between codes still runs from its issue. A wrong current password returns
 // an error wrapping domain.ErrCurrentPasswordInvalid. Open mode holds no
-// password, so there the error wraps domain.ErrConflict.
+// password, so there the error wraps domain.ErrConflict. Setup returns the
+// bare domain.ErrSetupRequired.
 func (s *Service) ChangePassword(
 	ctx context.Context, cookie, currentPassword, password string,
 ) error {
@@ -688,7 +735,8 @@ func (s *Service) ChangePassword(
 }
 
 // Token returns the value of the token of kind, for the panel to show. Open
-// mode issues no token, so there the error wraps domain.ErrConflict.
+// mode issues no token, so there the error wraps domain.ErrConflict. Setup
+// returns the bare domain.ErrSetupRequired.
 func (s *Service) Token(kind TokenKind) (string, error) {
 	snapshot := s.store.Snapshot()
 	if err := requireMode(snapshot.Mode, ModeToken); err != nil {
@@ -699,7 +747,8 @@ func (s *Service) Token(kind TokenKind) (string, error) {
 
 // RegenerateToken replaces the token of kind with a new value and returns it;
 // the old value stops working at once. Open mode issues no token, so there
-// the error wraps domain.ErrConflict.
+// the error wraps domain.ErrConflict. Setup returns the bare
+// domain.ErrSetupRequired.
 func (s *Service) RegenerateToken(
 	ctx context.Context, kind TokenKind,
 ) (string, error) {
@@ -729,6 +778,13 @@ func (s *Service) RegenerateToken(
 
 // requireMode refuses an operation the current mode does not allow.
 func requireMode(current, want Mode) error {
+	switch current {
+	case ModeSetup:
+		return domain.ErrSetupRequired
+	case ModeOpen, ModeToken:
+	default:
+		return fmt.Errorf("access: unknown access mode %q", current)
+	}
 	if current != want {
 		return fmt.Errorf(
 			"the access mode is %s, not %s: %w", current, want, domain.ErrConflict,

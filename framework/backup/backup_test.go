@@ -52,6 +52,9 @@ func TestFixtureArchiveDecodes(t *testing.T) {
 	if archive.Manifest.Realm.Code != "default" {
 		t.Fatalf("realm code = %q, want default", archive.Manifest.Realm.Code)
 	}
+	if archive.Manifest.FormatVersion != FormatVersion {
+		t.Fatalf("fixture formatVersion = %d, want %d", archive.Manifest.FormatVersion, FormatVersion)
+	}
 	data := archive.Data
 	if len(data.Assets) != 2 {
 		t.Fatalf("assets = %d, want 2", len(data.Assets))
@@ -327,10 +330,10 @@ func TestTouchesRuntime(t *testing.T) {
 	if !TouchesRuntime(Scope{Sections: []Section{SectionPositions}}) {
 		t.Fatal("positions must touch runtime")
 	}
-	// Settings-only and user-settings-only and audit-only do not rebuild the
+	// Settings-only and audit-only do not rebuild the
 	// engine.
 	for _, s := range []Section{
-		SectionGeneralSettings, SectionUserSettings, SectionTrading, SectionAuditLog,
+		SectionGeneralSettings, SectionTrading, SectionAuditLog,
 	} {
 		if TouchesRuntime(Scope{Sections: []Section{s}}) {
 			t.Fatalf("section %q must not touch runtime", s)

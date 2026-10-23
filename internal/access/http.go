@@ -18,6 +18,7 @@
 package access
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -60,8 +61,11 @@ var operator = domain.Caller{Principal: domain.PrincipalOperator}
 // without one, or with a surface other than the REST API, MCP and the panel
 // API, is an internal error.
 //
-// Open mode admits every surface without credentials. Token mode admits each
-// surface only with its own credential:
+// Setup mode admits the panel without credentials only when the route's
+// DuringSetup flag is stamped in the context. It refuses other panel routes,
+// API and MCP with an addressed ErrSetupRequired. Open mode admits every
+// surface without credentials. Token mode admits each surface only with its
+// own credential:
 //
 //   - the REST API (domain.SourceAPI) the API token and MCP (domain.SourceMCP)
 //     the agent token, each as "Authorization: Bearer <token>" with the scheme
@@ -95,6 +99,11 @@ func (s *Service) ResolveCaller(r *http.Request) (domain.Caller, error) {
 		)
 	}
 	switch mode := s.Mode(); mode {
+	case ModeSetup:
+		if surface == domain.SourcePanel && httpx.DuringSetupFromContext(r.Context()) {
+			return operator, nil
+		}
+		return domain.Caller{}, setupRequiredError{host: r.Host}
 	case ModeOpen:
 		return operator, nil
 	case ModeToken:
@@ -105,6 +114,40 @@ func (s *Service) ResolveCaller(r *http.Request) (domain.Caller, error) {
 		return s.resolveSession(r)
 	}
 	return s.resolveBearer(r, kind)
+}
+
+type setupRequiredError struct{ host string }
+
+func (e setupRequiredError) Error() string {
+	// Replace the sentinel's panel reference with this request's address.
+	return strings.Replace(domain.ErrSetupRequired.Error(), "the panel", "http://"+e.host, 1)
+}
+
+func (setupRequiredError) Unwrap() error { return domain.ErrSetupRequired }
+
+// Authorize closes API and non-setup panel routes until setup completes.
+// MCP passes here because stdio tool calls also use this authorizer.
+func (s *Service) Authorize(ctx context.Context, caller domain.Caller, _ string) error {
+	switch mode := s.Mode(); mode {
+	case ModeOpen, ModeToken:
+		return nil
+	case ModeSetup:
+		switch caller.Source {
+		case domain.SourceMCP:
+			return nil
+		case domain.SourcePanel:
+			if httpx.DuringSetupFromContext(ctx) {
+				return nil
+			}
+			return domain.ErrSetupRequired
+		case domain.SourceAPI:
+			return domain.ErrSetupRequired
+		default:
+			return fmt.Errorf("access: unknown caller source %q", caller.Source)
+		}
+	default:
+		return fmt.Errorf("access: unknown access mode %q", mode)
+	}
 }
 
 // resolveBearer admits a request on the bearer surface that accepts the token

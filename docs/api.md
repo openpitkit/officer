@@ -16,6 +16,9 @@ at `/healthz`, the OpenAPI document at `/api/openapi.yaml`, its docs page at
 answers `GET` and `HEAD` on every other path; any other standard method there
 answers `404` `not_found`.
 
+In `setup`, `/api/v1` and `/mcp` answer `503` `setup_required`; the panel's API
+admits only its routes marked `duringSetup` (see Panel access). Liveness, the
+OpenAPI document, the docs page and its files, and the dashboard still answer.
 In the `open` access mode no mount takes credentials. In `token` each takes one
 (see Authorization in the [configuration reference](configuration.md)):
 
@@ -45,14 +48,15 @@ route - the REST routes on `/api/v1` and `/app/api/v1`, the panel access routes,
 MCP over HTTP, liveness, the document, the docs page and its files, and the
 dashboard - with its full path and the access it requires in `token` mode
 (`public`, `api`, `agent`, or `panel`), and the service's `accessMode`, the
-mode in force at the request: `open` or `token`. An entry under `/app/api/v1`
-carries `duringSetup: true` when its route answers before first-run setup
-completes; this build has no setup state, so nothing acts on it. The REST
+mode in force at the request: `setup`, `open` or `token`. An entry under
+`/app/api/v1` carries `duringSetup: true` when its route answers before first-run
+setup completes, without credentials; Officer refuses the other routes in `setup`.
+The flag does not open the corresponding `/api/v1` route. The REST
 entries and the panel access routes that are not public are filtered for the
 caller; the others are listed for every caller. The manifest itself requires
-`api` access, so in `token` mode a request without the API token answers `401`
-`unauthorized`; the public `GET /app/api/v1/session` answers the mode without
-credentials.
+`api` access: in `setup` it answers `503` `setup_required`, and in `token` a
+request without the API token answers `401` `unauthorized`. The public
+`GET /app/api/v1/session` answers the mode without credentials.
 
 ## Media types
 
@@ -76,7 +80,7 @@ Two shapes, decided by what failed:
 - Every other error answers `application/json` with
   `{"error": {"code": "...", "message": "..."}}`.
 
-Three browser checks refuse a request in either access mode, before its
+Three browser checks refuse a request in every access mode, before its
 credentials are read and before it reaches a handler, in the second shape:
 
 - `403` `host_not_allowed` - the `Host` header names a host Officer does not
@@ -89,6 +93,15 @@ credentials are read and before it reaches a handler, in the second shape:
   `Origin` passes.
 - `415` `unsupported_media_type` - a request other than `GET`, `HEAD`, or
   `OPTIONS` carries a body not declared as JSON (see Media types).
+
+After those checks, until first-run setup completes, every `/api/v1` route
+and `/mcp` answer `503` `setup_required`, in the second shape. The panel
+mirror does too outside its routes marked `duringSetup`. MCP over HTTP
+answers this HTTP error before any JSON-RPC. The message uses the request's
+Host in place of `<host>`:
+
+> Pit Officer is not set up yet. Open `http://<host>` in a browser on this
+> computer and finish the first-run setup.
 
 In `token` mode the credential check refuses a request next, in the second
 shape. MCP over HTTP answers it as this HTTP error, before any JSON-RPC.
@@ -113,7 +126,8 @@ The panel access routes (see Panel access) add their own, in the second shape:
   `open` or a password change; the session stays signed in;
 - `409` `conflict` - a route `open` mode does not serve (sign-in, both recovery
   routes, the token routes, and the password change), or a switch to the mode
-  already in force.
+  already in force;
+- `409` `setup_complete` - a setup route after first-run setup completes.
 
 `Retry-After` is the number of seconds until the next attempt is accepted.
 
@@ -125,8 +139,8 @@ in the OpenAPI document. Paths below are relative to that prefix.
 rest take the panel session in `token` mode.
 
 - `GET /session` - `{accessMode, setupComplete, authenticated}`;
-  `setupComplete` is `true`, and `authenticated` is whether the request carries
-  a live session, always `false` in `open`.
+  `setupComplete` is `false` exactly in `setup`, and `authenticated` is whether
+  the request carries a live session, always `false` in `setup` and `open`.
 - `POST /session` - sign in with `{password}`; sets the session cookie.
 - `DELETE /session` - sign out; clears the cookie.
 - `DELETE /sessions` - end every session; clears the cookie.
@@ -149,9 +163,48 @@ rest take the panel session in `token` mode.
 - `POST /access/tokens/{kind}/regenerate` - `{token}`, a new value; the old one
   stops working at once.
 
-A new password - `password` in `PUT /access/mode` to `token`, in
-`PUT /access/password`, and in `POST /session/recovery/reset` - is 15 to 256
-characters, and one outside that range answers `422` `validation`; a sign-in
+The four setup routes take no credentials in `setup`:
+
+- `GET /setup` - `200` `{step, encryptionDeclinedAt}`; `step` starts at
+  `welcome` and is one of `welcome`, `accounts`, `encryption`, `signing` or
+  `access`. `encryptionDeclinedAt` is the first refusal's time in RFC 3339 UTC,
+  or `null` before one. Account mode, sealing and signing are read through
+  their own routes.
+- `PUT /setup/progress` - `{step}`, one of those five values; `204`. It saves
+  a position, including the same one again, without checking step order or
+  earlier decisions. Another value answers `422` `validation`.
+- `PUT /setup/encryption` - `{"encryption": "none", "acknowledged": true}`;
+  `204`. A repeat keeps the first refusal's time. Another encryption value or
+  a false acknowledgement answers `422` `validation`; a sealed database
+  answers `409` `conflict`. The master key is configured at process startup;
+  a sealed database takes precedence over a stored refusal.
+- `POST /setup/complete` - `{"access": "open", "acknowledged": true}` or
+  `{"access": "token", "password": "..."}`; `204`. Completion requires an
+  account mode choice and either a sealed database or a recorded refusal of
+  encryption; missing decisions answer `409` `conflict` with a message naming
+  them. `token` sets the panel password, issues both tokens and sets the session
+  cookie. The response carries no token values; the session can read them
+  through `GET /access/tokens/{kind}`. Another access value, a false
+  acknowledgement in `open`, or a password outside 15 to 256 characters in
+  `token` answers `422` `validation`. A non-null `password` in `open` or
+  `acknowledged` in `token` answers `422` `validation`; `null` counts as absent.
+
+After completion all four answer `409` `setup_complete`, subject to the panel
+session check in `token` mode. They are panel-only, outside OpenAPI, as are the
+session and access routes above.
+
+In `setup`, `GET /session` and these four routes answer without credentials.
+The other panel access routes answer `503` `setup_required`, including the
+public sign-in and both recovery routes. The panel mirror also admits the
+routes marked `duringSetup`: account-mode reads and choices, service restart,
+credential-storage status, the account list, signing-key generation, import,
+list and public-key reads, and signing-config reads and changes. Every other
+route on the mirror answers `503` `setup_required`.
+
+A new password - `password` in `POST /setup/complete` to `token`, in
+`PUT /access/mode` to `token`, in `PUT /access/password`, and in
+`POST /session/recovery/reset` - is 15 to 256 characters, and one outside that
+range answers `422` `validation`; a sign-in
 password and `currentPassword` are only compared with the stored one. The
 session cookie is `pit_officer_session`, set with
 `Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000`. A session ends 30 days

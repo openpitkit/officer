@@ -2043,6 +2043,8 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrNotImplemented":          domain.ErrNotImplemented,
 		"ErrOriginNotAllowed":        domain.ErrOriginNotAllowed,
 		"ErrReservedGroup":           domain.ErrReservedGroup,
+		"ErrSetupComplete":           domain.ErrSetupComplete,
+		"ErrSetupRequired":           domain.ErrSetupRequired,
 		"ErrTerminalOrder":           domain.ErrTerminalOrder,
 		"ErrTooLarge":                domain.ErrTooLarge,
 		"ErrTooManyAttempts":         domain.ErrTooManyAttempts,

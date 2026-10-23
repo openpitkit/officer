@@ -15,14 +15,16 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Package access is Pit Officer's access policy. In open mode every surface
-// admits a request without credentials. In token mode each authenticated
+// Package access is Pit Officer's access policy. In setup mode first-run
+// setup has not completed and only setup routes are available. Completing
+// setup enters open or token mode. In open mode every surface admits a
+// request without credentials. In token mode each authenticated
 // surface admits only its own credential: the API token on the REST API, the
 // agent token on MCP, and a session issued for the panel password on the
 // panel API. The package signs the panel in and out, recovers a forgotten
 // panel password with a one-time code printed to the process's standard
 // error, shows and reissues the two tokens, and switches between the modes at
-// runtime.
+// runtime. Only recreating the database returns it to setup mode.
 //
 // Token mode holds exactly one panel password and two tokens, as three named
 // fields. A token has no id, no name and no permissions, and nothing here
@@ -43,12 +45,56 @@ import (
 type Mode string
 
 const (
-	// ModeOpen admits every request without credentials.
+	// ModeSetup requires first-run setup, which completes into open or token
+	// mode. Only recreating the database returns to setup.
+	ModeSetup Mode = "setup"
+	// ModeOpen admits every request without credentials, after completing
+	// setup or switching from token mode. It can switch to token mode.
 	ModeOpen Mode = "open"
 	// ModeToken admits, on each authenticated surface, only that surface's
-	// own credential.
+	// own credential, after completing setup or switching from open mode.
+	// It can switch to open mode.
 	ModeToken Mode = "token"
 )
+
+// SetupStep is the wizard's saved position, not a completed decision.
+type SetupStep string
+
+const (
+	// SetupStepWelcome introduces Officer and its uses.
+	SetupStepWelcome SetupStep = "welcome"
+	// SetupStepAccounts shows the account mode choice.
+	SetupStepAccounts SetupStep = "accounts"
+	// SetupStepEncryption shows the master-key guide or encryption refusal.
+	SetupStepEncryption SetupStep = "encryption"
+	// SetupStepSigning shows signing keys and electronic signature settings.
+	SetupStepSigning SetupStep = "signing"
+	// SetupStepAccess shows token and password access or open access.
+	SetupStepAccess SetupStep = "access"
+)
+
+// ParseSetupStep accepts only the five steps saved before setup completes.
+// Any other value returns an error wrapping domain.ErrInvalid.
+func ParseSetupStep(value string) (SetupStep, error) {
+	switch step := SetupStep(value); step {
+	case SetupStepWelcome, SetupStepAccounts, SetupStepEncryption,
+		SetupStepSigning, SetupStepAccess:
+		return step, nil
+	default:
+		return "", fmt.Errorf(
+			"setup step must be %q, %q, %q, %q or %q: %w",
+			SetupStepWelcome, SetupStepAccounts, SetupStepEncryption,
+			SetupStepSigning, SetupStepAccess, domain.ErrInvalid,
+		)
+	}
+}
+
+// SetupState is the saved progress of first-run setup.
+type SetupState struct {
+	Step SetupStep
+	// EncryptionDeclinedAt is nil until the operator declines encryption.
+	EncryptionDeclinedAt *time.Time
+}
 
 // TokenKind names one of the two access tokens.
 type TokenKind string
@@ -82,8 +128,8 @@ func ParseTokenKind(value string) (TokenKind, error) {
 }
 
 // Snapshot is the access state the store last committed: the mode and the
-// two token values. Both tokens are set in token mode and empty in open
-// mode.
+// two token values. Both tokens are set in token mode and empty in setup
+// and open modes.
 type Snapshot struct {
 	Mode       Mode
 	APIToken   string
@@ -143,8 +189,8 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
-// Store persists the access state: the mode, the credentials of token mode
-// and the panel sessions. It is safe for concurrent use.
+// Store persists the access state: setup progress, the mode, the credentials
+// of token mode and the panel sessions. It is safe for concurrent use.
 //
 // Each method that writes is one database transaction: it commits all of its
 // effect or none. The store holds the mode and the two token values in
@@ -155,14 +201,39 @@ type Session struct {
 //
 // A write that requires a mode reads the stored mode inside its own
 // transaction; when it differs, the write changes nothing and returns an
-// error wrapping domain.ErrConflict. A missing session or a missing password
-// is an error wrapping domain.ErrNotFound. No error a method returns carries
-// a token value, a password hash or any other stored credential value: it
-// names the kind of value and wraps the cause.
+// error wrapping domain.ErrConflict. A method requiring setup mode instead
+// wraps domain.ErrSetupComplete: the database leaves setup only by completing
+// it. SetupState also reads and checks the mode in its own transaction.
+// A missing session or password wraps domain.ErrNotFound.
+// No error a method returns carries a token value, a password hash or any
+// other stored credential value: it names the kind and wraps the cause.
 type Store interface {
 	// Snapshot returns the published mode and token values. It reads memory
-	// only: no I/O and no error. Its Mode is ModeOpen or ModeToken.
+	// only: no I/O and no error. Its Mode is ModeSetup, ModeOpen or ModeToken.
 	Snapshot() Snapshot
+
+	// SetupState returns the saved step and first encryption decline time.
+	// It requires setup mode.
+	SetupState(ctx context.Context) (SetupState, error)
+
+	// SetSetupStep saves the wizard's position without enforcing step order.
+	// Repeating the current step succeeds. It requires setup mode.
+	SetSetupStep(ctx context.Context, step SetupStep) error
+
+	// DeclineEncryption records at on the first decline. Repeating it keeps
+	// the first time and succeeds. It requires setup mode.
+	DeclineEncryption(ctx context.Context, at time.Time) error
+
+	// CompleteSetupOpen enters open mode and records when setup completed.
+	// It requires setup mode.
+	CompleteSetupOpen(ctx context.Context, completedAt time.Time) error
+
+	// CompleteSetupToken stores the credentials and session, enters token
+	// mode and records when setup completed. It requires setup mode.
+	CompleteSetupToken(
+		ctx context.Context, credentials Credentials, session Session,
+		completedAt time.Time,
+	) error
 
 	// PanelPassword returns the panel password's hash and when it was set.
 	PanelPassword(ctx context.Context) (Password, error)

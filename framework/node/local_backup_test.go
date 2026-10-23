@@ -1200,7 +1200,7 @@ func TestLocalNode_RestoreBackupRollbackPreservesExactSelectors(t *testing.T) {
 	})
 	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
 	scope := backup.Scope{
-		Sections: []backup.Section{backup.SectionUserSettings},
+		Sections: []backup.Section{backup.SectionGeneralSettings},
 		Accounts: backup.EntitySelector{
 			Accounts: []string{"selected-account"},
 			Groups:   []string{"selected-group"},
@@ -1209,8 +1209,8 @@ func TestLocalNode_RestoreBackupRollbackPreservesExactSelectors(t *testing.T) {
 			Accounts: []string{"selected-position-account"},
 		},
 	}
-	archive := testArchive(scope, backup.Data{UserSettings: []domain.UserSetting{{
-		UserID: "user", Key: "layout", Value: "restored",
+	archive := testArchive(scope, backup.Data{Settings: []backup.SettingEntry{{
+		Key: "no_esign", Value: "0",
 	}}})
 
 	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{

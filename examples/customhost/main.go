@@ -44,12 +44,16 @@ func main() {
 }
 
 func newCustomHostComposition(cfg officer.Config) (customHostComposition, error) {
-	authorizer := newDenyOneAuthorizer(hiddenBaseRouteID, hiddenToolID)
-
 	builder := frameworkapp.NewBuilder()
 	if err := officer.Register(builder, cfg); err != nil {
 		return customHostComposition{}, err
 	}
+	installedAuthorizer := builder.Authorizer()
+	if installedAuthorizer == nil {
+		return customHostComposition{},
+			errors.New("officer.Register installed no authorizer")
+	}
+	authorizer := newDenyOneAuthorizer(hiddenBaseRouteID, hiddenToolID, installedAuthorizer)
 	builder.SetAuthorizer(authorizer)
 	if err := builder.RegisterMarketDataProvider(hostProvider()); err != nil {
 		return customHostComposition{},

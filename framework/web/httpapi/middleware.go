@@ -28,6 +28,7 @@ import (
 // Authorizer decides whether caller may use a stable surface identifier.
 // Caller.Source identifies the identifier namespace: SourceMCP uses MCP tool
 // names, while SourcePanel and SourceAPI use REST route IDs.
+// Route.DuringSetup reaches an Authorizer through DuringSetupFromContext.
 type Authorizer interface {
 	Authorize(ctx context.Context, caller domain.Caller, identifier string) error
 }
@@ -104,6 +105,41 @@ func withSurface(surface domain.Source) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, r.WithContext(ContextWithSurface(r.Context(), surface)))
+		})
+	}
+}
+
+// duringSetupContextKey is the unexported context key the route's setup flag
+// is carried under.
+type duringSetupContextKey struct{}
+
+// contextWithDuringSetup returns a copy of ctx carrying duringSetup. It stays
+// unexported so only the router stamps the flag, from the route table; no code
+// outside this package can mark a route as available during setup.
+func contextWithDuringSetup(ctx context.Context, duringSetup bool) context.Context {
+	return context.WithValue(ctx, duringSetupContextKey{}, duringSetup)
+}
+
+// DuringSetupFromContext returns the route's Route.DuringSetup flag, stamped
+// on non-public routes of both v1 mounts before the caller resolver, so both
+// the resolver and an Authorizer see it. It marks a panel mirror available
+// before first-run setup completes; an Authorizer combines it with
+// caller.Source, so the flag alone never opens the REST API. An absent stamp
+// returns false for public routes, MCP tool calls and the route manifest's
+// per-entry checks.
+func DuringSetupFromContext(ctx context.Context) bool {
+	duringSetup, _ := ctx.Value(duringSetupContextKey{}).(bool)
+	return duringSetup
+}
+
+// withDuringSetup stamps Route.DuringSetup before the caller resolver and
+// authorization on non-public routes on both REST mounts. The resolver and
+// Authorizer enforce setup access; this middleware only carries the flag.
+// MCP and the route manifest do not stamp it.
+func withDuringSetup(duringSetup bool) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(contextWithDuringSetup(r.Context(), duringSetup)))
 		})
 	}
 }

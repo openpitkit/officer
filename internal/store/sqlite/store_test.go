@@ -737,6 +737,9 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 			s, rs := newTestStore(t)
 			accessStore := s.(*sqliteStore)
 			session := testSession("reset-cleanup-session", accessTestStart)
+			if err := accessStore.CompleteSetupOpen(ctx, accessTestStart); err != nil {
+				t.Fatalf("CompleteSetupOpen: %s", redactAccess(t, err))
+			}
 			enableTokenModeForTest(t, accessStore, session)
 			if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 				t.Fatalf("CreateAsset: %v", err)
@@ -805,8 +808,8 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 				t.Fatalf("asset after Reset: exists=%t error=%v, want exists=%t", exists, err, !committed)
 			}
 			if committed {
-				assertSnapshot(t, accessStore.Snapshot(), access.Snapshot{Mode: access.ModeOpen})
-				assertStoredMode(t, accessStore, access.ModeOpen)
+				assertSnapshot(t, accessStore.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
+				assertStoredMode(t, accessStore, access.ModeSetup)
 				if _, err := accessStore.Session(context.Background(), session.IDHash); !errors.Is(err, domain.ErrNotFound) {
 					t.Fatalf("Session after committed Reset = %s, want ErrNotFound", redactAccess(t, err))
 				}

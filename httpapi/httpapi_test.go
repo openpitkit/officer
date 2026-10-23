@@ -150,8 +150,6 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"GET /audit/actions",
 		"GET /mcp-access",
 		"PUT /mcp-access/{command}",
-		"GET /user-settings",
-		"PUT /user-settings",
 		"POST /signing/keys/generate",
 		"POST /signing/keys/import",
 		"GET /signing/keys",

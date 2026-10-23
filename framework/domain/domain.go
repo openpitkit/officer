@@ -40,14 +40,6 @@ import (
 // and clusters, user ids are globally unique and never collide between users.
 const DefaultUserID = "00000000-0000-4000-8000-000000000001"
 
-// User-setting keys. Values are opaque strings interpreted by the surface that
-// owns the setting.
-const (
-	// UserSettingWelcomeSeen records that the operator dismissed the first-run
-	// welcome dialog with "don't show again". Value "1" means seen.
-	UserSettingWelcomeSeen = "welcome_seen"
-)
-
 // UserSetting is one persisted per-user key-value preference.
 type UserSetting struct {
 	UserID string
@@ -139,6 +131,14 @@ var (
 	// ErrTooManyAttempts marks a credential check refused because too many
 	// recent attempts failed.
 	ErrTooManyAttempts = registerSentinel(errors.New("too many attempts"))
+	// ErrSetupRequired marks a request refused because first-run setup has not
+	// been completed.
+	ErrSetupRequired = registerSentinel(errors.New( //nolint:staticcheck // ST1005: client-facing text from the first-run contract.
+		"Pit Officer is not set up yet. Open the panel in a browser on this computer and finish the first-run setup.",
+	))
+	// ErrSetupComplete marks a first-run setup operation refused because setup
+	// has already completed.
+	ErrSetupComplete = registerSentinel(errors.New("first-run setup is already complete"))
 	// ErrTooLarge marks an input that exceeds a hard server-side size limit.
 	// HTTP surfaces map it to 413 so callers can split bulk payloads instead of
 	// retrying the same request.

@@ -170,6 +170,13 @@ func (b *Builder) SetAuthorizer(authorizer httpx.Authorizer) {
 	b.authorizer = authorizer
 }
 
+// Authorizer returns the app-wide authorizer currently set, nil when none is.
+// A host wraps it to compose its policy with the installed authorizer and sets
+// the wrapper with SetAuthorizer.
+func (b *Builder) Authorizer() httpx.Authorizer {
+	return b.authorizer
+}
+
 // SetCallerResolver sets the app-wide request identity resolver.
 func (b *Builder) SetCallerResolver(resolver auth.CallerResolver) {
 	b.callerResolver = resolver

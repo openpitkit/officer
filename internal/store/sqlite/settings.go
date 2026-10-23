@@ -180,8 +180,7 @@ func (r *realmStore) SetUserSetting(
 }
 
 // ListUserSettings returns every persisted user setting, ordered by
-// (user_id, setting_key) for stable backups. An empty table returns a non-nil
-// empty slice.
+// (user_id, setting_key). An empty table returns a non-nil empty slice.
 func (r *realmStore) ListUserSettings(
 	ctx context.Context,
 ) ([]domain.UserSetting, error) {

@@ -121,7 +121,6 @@ type fakeService struct {
 	mdCreateResult        domain.MarketDataInstance
 	status                backend.Status
 	statusErr             error
-	welcomeSeen           bool
 	settings              map[string]string
 	createAssetErr        error
 	updateAssetErr        error
@@ -587,13 +586,6 @@ func (f *fakeService) SetSetting(_ context.Context, key, value string) error {
 		f.settings = make(map[string]string)
 	}
 	f.settings[key] = value
-	return nil
-}
-func (f *fakeService) WelcomeSeen(_ context.Context) (bool, error) {
-	return f.welcomeSeen, nil
-}
-func (f *fakeService) SetWelcomeSeen(_ context.Context, seen bool) error {
-	f.welcomeSeen = seen
 	return nil
 }
 func (f *fakeService) ListMarketData(_ context.Context) (backend.MarketDataStatus, error) {

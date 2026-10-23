@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -62,12 +63,12 @@ var accessSecrets = []string{
 // accessTestStart is the time the tests issue sessions and passwords from.
 var accessTestStart = time.Date(2026, time.October, 16, 12, 0, 0, 0, time.UTC)
 
-func TestAccessCleanDatabaseStartsOpen(t *testing.T) {
+func TestAccessCleanDatabaseStartsSetup(t *testing.T) {
 	ctx := context.Background()
 	store := newAccessStore(t)
 
-	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeOpen})
-	assertStoredMode(t, store, access.ModeOpen)
+	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
+	assertStoredMode(t, store, access.ModeSetup)
 	assertRowCount(t, store, "access_credential", 0)
 	assertRowCount(t, store, "panel_session", 0)
 	if _, err := store.PanelPassword(ctx); !errors.Is(err, domain.ErrNotFound) {
@@ -101,7 +102,7 @@ func TestAccessMigrateRefusesDatabaseWithoutAccessState(t *testing.T) {
 
 func TestAccessWritesRefuseInOpenModeAndChangeNothing(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	session := testSession("open-mode-session", accessTestStart)
 	password := access.Password{Hash: otherPasswordHash, SetAt: accessTestStart}
 
@@ -130,7 +131,7 @@ func TestAccessWritesRefuseInOpenModeAndChangeNothing(t *testing.T) {
 
 func TestAccessEnableTokenModeRefusesInTokenModeAndChangesNothing(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	enableTokenModeForTest(t, store, testSession("first-session", accessTestStart))
 
 	second := testSession("second-session", accessTestStart.Add(time.Hour))
@@ -162,6 +163,9 @@ func TestAccessEnableTokenModeCommitsAllOrNothing(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 	session := testSession("enable-session", accessTestStart)
+	if err := store.CompleteSetupOpen(ctx, accessTestStart); err != nil {
+		t.Fatalf("CompleteSetupOpen: %s", redactAccess(t, err))
+	}
 
 	unblock := blockAccessModeChange(t, store)
 	if err := store.EnableTokenMode(ctx, testCredentials(), session); err == nil {
@@ -198,7 +202,7 @@ func TestAccessEnableTokenModeCommitsAllOrNothing(t *testing.T) {
 
 func TestAccessDisableTokenModeClearsCredentialsAndSessions(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	enableTokenModeForTest(t, store, testSession("enable-session", accessTestStart))
 	createSessionForTest(t, store, testSession("second-session", accessTestStart))
 
@@ -226,7 +230,7 @@ func TestAccessDisableTokenModeClearsCredentialsAndSessions(t *testing.T) {
 
 func TestAccessReplaceToken(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	enableTokenModeForTest(t, store, testSession("enable-session", accessTestStart))
 
 	if err := store.ReplaceToken(ctx, access.TokenAPI, otherAPIToken); err != nil {
@@ -264,7 +268,7 @@ func TestAccessReplaceToken(t *testing.T) {
 
 func TestAccessReplacePasswordKeepsOnlyTheNamedSession(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	first := testSession("first-session", accessTestStart)
 	second := testSession("second-session", accessTestStart)
 	third := testSession("third-session", accessTestStart)
@@ -292,7 +296,7 @@ func TestAccessReplacePasswordKeepsOnlyTheNamedSession(t *testing.T) {
 
 func TestAccessResetPasswordReplacesHashAndEverySession(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	first := testSession("first-session", accessTestStart)
 	second := testSession("second-session", accessTestStart)
 	enableTokenModeForTest(t, store, first)
@@ -321,7 +325,7 @@ func TestAccessResetPasswordReplacesHashAndEverySession(t *testing.T) {
 
 func TestAccessSessionsReadTouchAndDelete(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	session := testSession("browser-session", accessTestStart)
 	other := testSession("other-session", accessTestStart)
 	enableTokenModeForTest(t, store, session)
@@ -367,7 +371,7 @@ func TestAccessSessionsReadTouchAndDelete(t *testing.T) {
 
 func TestAccessCountSessionsFiltersByExpiryAndLastSeen(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	session := func(name string, expiresIn, seenIn time.Duration) access.Session {
 		return access.Session{
 			IDHash:     sha256.Sum256([]byte(name)),
@@ -401,7 +405,7 @@ func TestAccessCountSessionsFiltersByExpiryAndLastSeen(t *testing.T) {
 
 func TestAccessCreateSessionDeletesExpiredSessions(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	session := func(name string, createdIn, expiresIn time.Duration) access.Session {
 		createdAt := accessTestStart.Add(createdIn)
 		return access.Session{
@@ -452,6 +456,9 @@ func TestAccessCredentialsSealedOnlyWithMasterKey(t *testing.T) {
 			if err := store.Migrate(ctx); err != nil {
 				t.Fatalf("Migrate: %v", err)
 			}
+			if err := store.CompleteSetupOpen(ctx, accessTestStart); err != nil {
+				t.Fatalf("CompleteSetupOpen: %s", redactAccess(t, err))
+			}
 			enableTokenModeForTest(t, store, testSession("enable-session", accessTestStart))
 
 			for kind, plaintext := range fixtureCredentials() {
@@ -484,6 +491,9 @@ func TestAccessSealingExistingDatabaseSealsAndCountsAccessCredentials(t *testing
 	plaintextStore := openSQLiteStoreForTest(t, path)
 	if err := plaintextStore.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate plaintext store: %v", err)
+	}
+	if err := plaintextStore.CompleteSetupOpen(ctx, accessTestStart); err != nil {
+		t.Fatalf("CompleteSetupOpen: %s", redactAccess(t, err))
 	}
 	enableTokenModeForTest(t, plaintextStore, testSession("enable-session", accessTestStart))
 	realm, err := plaintextStore.ForRealm(ctx, domain.DefaultRealm)
@@ -594,17 +604,17 @@ func TestSealReportAbsentUntilSealed(t *testing.T) {
 	assertSealedAtMatchesSecretState(t, sealedStore, report)
 }
 
-func TestAccessResetReturnsToOpenMode(t *testing.T) {
+func TestAccessResetReturnsToSetupMode(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	enableTokenModeForTest(t, store, testSession("enable-session", accessTestStart))
 	createSessionForTest(t, store, testSession("second-session", accessTestStart))
 
 	if err := store.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %s", redactAccess(t, err))
 	}
-	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeOpen})
-	assertStoredMode(t, store, access.ModeOpen)
+	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
+	assertStoredMode(t, store, access.ModeSetup)
 	assertRowCount(t, store, "access_credential", 0)
 	assertRowCount(t, store, "panel_session", 0)
 	if _, err := store.PanelPassword(ctx); !errors.Is(err, domain.ErrNotFound) {
@@ -614,7 +624,7 @@ func TestAccessResetReturnsToOpenMode(t *testing.T) {
 
 func TestAccessFailedResetKeepsSnapshotAndData(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
+	store := newOpenAccessStore(t)
 	session := testSession("enable-session", accessTestStart)
 	enableTokenModeForTest(t, store, session)
 
@@ -642,74 +652,101 @@ func TestAccessFailedResetKeepsSnapshotAndData(t *testing.T) {
 // the swap leaves a snapshot the database does not hold.
 func TestAccessSnapshotMatchesDatabaseAfterConcurrentWritesAndReset(t *testing.T) {
 	ctx := context.Background()
-	store := newAccessStore(t)
 	const rounds = 20
 	const writers = 3
-	for round := range rounds {
-		resetDone := make(chan struct{})
-		writeErrs := make(chan error, writers)
-		var wg sync.WaitGroup
-		for writer := range writers {
-			wg.Go(func() {
-				for i := 0; ; i++ {
-					select {
-					case <-resetDone:
-						return
-					default:
+	for _, operation := range []string{"mode switches", "complete open", "complete token"} {
+		t.Run(operation, func(t *testing.T) {
+			var store *sqliteStore
+			if operation == "mode switches" {
+				store = newAccessStore(t)
+			}
+			for round := range rounds {
+				wantErr := domain.ErrConflict
+				if operation == "mode switches" {
+					if err := store.CompleteSetupOpen(ctx, accessTestStart); err != nil {
+						t.Fatalf("round %d: CompleteSetupOpen: %s", round, redactAccess(t, err))
 					}
-					// Every write stores tokens of its own, so a snapshot
-					// published out of order differs from the stored one.
-					name := fmt.Sprintf("race-%d-%d-%d", round, writer, i)
-					var err error
-					switch (writer + i) % 4 {
-					case 0:
-						err = store.EnableTokenMode(ctx, access.Credentials{
-							Password:   access.Password{Hash: testPasswordHash, SetAt: accessTestStart},
-							APIToken:   "pit_api_" + name,
-							AgentToken: "pit_mcp_" + name,
-						}, testSession(name, accessTestStart))
-					case 1:
-						err = store.ReplaceToken(ctx, access.TokenAPI, "pit_api_"+name)
-					case 2:
-						err = store.ReplaceToken(ctx, access.TokenAgent, "pit_mcp_"+name)
-					case 3:
-						err = store.DisableTokenMode(ctx)
-					}
-					// A write whose mode precondition no longer holds is refused
-					// and changes nothing. Any other error fails the round: it is
-					// how a write that ran outside accessMu against the replaced
-					// database shows.
-					if err != nil && !errors.Is(err, domain.ErrConflict) {
-						writeErrs <- err
-						return
-					}
+				} else {
+					store = newAccessStore(t)
+					wantErr = domain.ErrSetupComplete
 				}
-			})
-		}
-		resetErr := store.Reset(ctx)
-		close(resetDone)
-		wg.Wait()
-		close(writeErrs)
-		if resetErr != nil {
-			t.Fatalf("round %d: Reset: %s", round, redactAccess(t, resetErr))
-		}
-		for err := range writeErrs {
-			t.Fatalf("round %d: access write beside Reset: %s", round, redactAccess(t, err))
-		}
-		stored, err := store.loadAccessSnapshot(ctx, store.currentDB())
-		if err != nil {
-			t.Fatalf("round %d: read the stored access state: %s", round, redactAccess(t, err))
-		}
-		assertSnapshot(t, store.Snapshot(), stored)
-		if t.Failed() {
-			t.Fatalf("round %d: the published access snapshot is not the stored one", round)
-		}
+				resetDone := make(chan struct{})
+				writeErrs := make(chan error, writers)
+				var wg sync.WaitGroup
+				for writer := range writers {
+					wg.Go(func() {
+						for i := 0; ; i++ {
+							select {
+							case <-resetDone:
+								return
+							default:
+							}
+							// Every write stores tokens of its own, so a snapshot
+							// published out of order differs from the stored one.
+							name := fmt.Sprintf("race-%d-%d-%d", round, writer, i)
+							var err error
+							switch operation {
+							case "complete open":
+								err = store.CompleteSetupOpen(ctx, accessTestStart)
+							case "complete token":
+								err = store.CompleteSetupToken(ctx, access.Credentials{
+									Password:   access.Password{Hash: testPasswordHash, SetAt: accessTestStart},
+									APIToken:   "pit_api_" + name,
+									AgentToken: "pit_mcp_" + name,
+								}, testSession(name, accessTestStart), accessTestStart)
+							case "mode switches":
+								switch (writer + i) % 4 {
+								case 0:
+									err = store.EnableTokenMode(ctx, access.Credentials{
+										Password:   access.Password{Hash: testPasswordHash, SetAt: accessTestStart},
+										APIToken:   "pit_api_" + name,
+										AgentToken: "pit_mcp_" + name,
+									}, testSession(name, accessTestStart))
+								case 1:
+									err = store.ReplaceToken(ctx, access.TokenAPI, "pit_api_"+name)
+								case 2:
+									err = store.ReplaceToken(ctx, access.TokenAgent, "pit_mcp_"+name)
+								case 3:
+									err = store.DisableTokenMode(ctx)
+								}
+							}
+							// A write whose mode precondition no longer holds is refused
+							// and changes nothing. Any other error fails the round: it is
+							// how a write that ran outside accessMu against the replaced
+							// database shows.
+							if err != nil && !errors.Is(err, wantErr) {
+								writeErrs <- err
+								return
+							}
+						}
+					})
+				}
+				resetErr := store.Reset(ctx)
+				close(resetDone)
+				wg.Wait()
+				close(writeErrs)
+				if resetErr != nil {
+					t.Fatalf("round %d: Reset: %s", round, redactAccess(t, resetErr))
+				}
+				for err := range writeErrs {
+					t.Fatalf("round %d: access write beside Reset: %s", round, redactAccess(t, err))
+				}
+				stored, err := store.loadAccessSnapshot(ctx, store.currentDB())
+				if err != nil {
+					t.Fatalf("round %d: read the stored access state: %s", round, redactAccess(t, err))
+				}
+				assertSnapshot(t, store.Snapshot(), stored)
+				if t.Failed() {
+					t.Fatalf("round %d: the published access snapshot is not the stored one", round)
+				}
+			}
+		})
 	}
 }
 
 func TestAccessStateStaysOutOfBackups(t *testing.T) {
 	ctx := context.Background()
-	source := newAccessStore(t)
+	source := newOpenAccessStore(t)
 	sourceRealm, err := source.ForRealm(ctx, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("ForRealm(source): %v", err)
@@ -740,6 +777,9 @@ func TestAccessStateStaysOutOfBackups(t *testing.T) {
 	target := openSQLiteStoreForTest(t, path, WithMasterKey(key))
 	if err := target.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate target: %v", err)
+	}
+	if err := target.CompleteSetupOpen(ctx, accessTestStart); err != nil {
+		t.Fatalf("CompleteSetupOpen(target): %s", redactAccess(t, err))
 	}
 	targetSession := testSession("target-session", accessTestStart)
 	if err := target.EnableTokenMode(ctx, access.Credentials{
@@ -797,12 +837,291 @@ func TestAccessStateStaysOutOfBackups(t *testing.T) {
 	assertSnapshot(t, reopened.Snapshot(), targetState)
 }
 
-// newAccessStore opens a fresh migrated store in a temp file.
-func newAccessStore(t *testing.T) *sqliteStore {
+func TestAccessSetupStateStartsAtWelcome(t *testing.T) {
+	store := newAccessStore(t)
+	state, err := store.SetupState(context.Background())
+	assertNoAccessSecret(t, err)
+	if err != nil {
+		t.Fatalf("SetupState: %s", redactAccess(t, err))
+	}
+	if state.Step != access.SetupStepWelcome || state.EncryptionDeclinedAt != nil {
+		t.Fatalf("initial setup state = %+v, want welcome without a decline", state)
+	}
+	assertStoredSetupState(t, store, state, nil)
+}
+
+func TestAccessSetSetupStepRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	store := newAccessStore(t)
+	for _, step := range []access.SetupStep{
+		access.SetupStepWelcome, access.SetupStepAccounts,
+		access.SetupStepEncryption, access.SetupStepSigning, access.SetupStepAccess,
+	} {
+		t.Run(string(step), func(t *testing.T) {
+			for range 2 {
+				err := store.SetSetupStep(ctx, step)
+				assertNoAccessSecret(t, err)
+				if err != nil {
+					t.Fatalf("SetSetupStep(%s): %s", step, redactAccess(t, err))
+				}
+				state, err := store.SetupState(ctx)
+				assertNoAccessSecret(t, err)
+				if err != nil {
+					t.Fatalf("SetupState: %s", redactAccess(t, err))
+				}
+				if state.Step != step || state.EncryptionDeclinedAt != nil {
+					t.Fatalf("setup state = %+v, want %s without a decline", state, step)
+				}
+				assertStoredSetupState(t, store, state, nil)
+			}
+		})
+	}
+	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
+}
+
+func TestAccessSetSetupStepRefusesUnknownStep(t *testing.T) {
+	store := newAccessStore(t)
+	err := store.SetSetupStep(context.Background(), access.SetupStep(testAPIToken))
+	assertNoAccessSecret(t, err)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetSetupStep(unknown) = %s, want ErrInvalid", redactAccess(t, err))
+	}
+	assertStoredSetupState(t, store, access.SetupState{Step: access.SetupStepWelcome}, nil)
+}
+
+func TestAccessDeclineEncryptionKeepsFirstTime(t *testing.T) {
+	ctx := context.Background()
+	store := newAccessStore(t)
+	first := accessTestStart.Add(123456789 * time.Nanosecond).
+		In(time.FixedZone("operator", 2*60*60))
+	for _, at := range []time.Time{first, first.Add(time.Hour)} {
+		err := store.DeclineEncryption(ctx, at)
+		assertNoAccessSecret(t, err)
+		if err != nil {
+			t.Fatalf("DeclineEncryption: %s", redactAccess(t, err))
+		}
+		state, err := store.SetupState(ctx)
+		assertNoAccessSecret(t, err)
+		if err != nil {
+			t.Fatalf("SetupState: %s", redactAccess(t, err))
+		}
+		if state.EncryptionDeclinedAt == nil || !state.EncryptionDeclinedAt.Equal(first) {
+			t.Fatalf("encryption decline = %v, want first time %v", state.EncryptionDeclinedAt, first)
+		}
+		assertStoredSetupState(t, store, access.SetupState{
+			Step: access.SetupStepWelcome, EncryptionDeclinedAt: &first,
+		}, nil)
+	}
+}
+
+func TestAccessCompleteSetupOpen(t *testing.T) {
+	store := newAccessStore(t)
+	completedAt := accessTestStart.Add(time.Hour + 123456789*time.Nanosecond)
+	err := store.CompleteSetupOpen(context.Background(), completedAt)
+	assertNoAccessSecret(t, err)
+	if err != nil {
+		t.Fatalf("CompleteSetupOpen: %s", redactAccess(t, err))
+	}
+	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeOpen})
+	assertSetupMethodsRefuseAndChangeNothing(t, store, &completedAt)
+}
+
+func TestAccessCompleteSetupTokenStoresCredentialsAndSession(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		opts   []Option
+		sealed bool
+	}{
+		{name: "plaintext"},
+		{
+			name:   "sealed",
+			opts:   []Option{WithMasterKey(mustStoreMasterKey(t, 0x81))},
+			sealed: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newAccessStore(t, test.opts...)
+			session := testSession("setup-session", accessTestStart)
+			completedAt := accessTestStart.Add(time.Hour)
+			err := store.CompleteSetupToken(context.Background(), testCredentials(), session, completedAt)
+			assertNoAccessSecret(t, err)
+			if err != nil {
+				t.Fatalf("CompleteSetupToken: %s", redactAccess(t, err))
+			}
+			assertSnapshot(t, store.Snapshot(), fixtureTokenSnapshot())
+			for kind, plaintext := range fixtureCredentials() {
+				stored := rawCredential(t, store, kind)
+				if test.sealed && bytes.Contains(stored, []byte(plaintext)) {
+					t.Errorf("sealed %s holds its plaintext", kind)
+				}
+				if !test.sealed && !bytes.Equal(stored, []byte(plaintext)) {
+					t.Errorf("unsealed %s is not stored as its plaintext", kind)
+				}
+			}
+			assertSetupMethodsRefuseAndChangeNothing(t, store, &completedAt)
+		})
+	}
+}
+
+func TestAccessSetupMethodsRefuseInOpenAndTokenModesAndChangeNothing(t *testing.T) {
+	for _, mode := range []access.Mode{access.ModeOpen, access.ModeToken} {
+		t.Run(string(mode), func(t *testing.T) {
+			store := newOpenAccessStore(t)
+			if mode == access.ModeToken {
+				enableTokenModeForTest(t, store, testSession("setup-session", accessTestStart))
+			}
+			assertSetupMethodsRefuseAndChangeNothing(t, store, &accessTestStart)
+		})
+	}
+}
+
+func TestAccessEnableTokenModeRefusesInSetupAndChangesNothing(t *testing.T) {
+	store := newAccessStore(t)
+	err := store.EnableTokenMode(context.Background(), testCredentials(),
+		testSession("setup-session", accessTestStart))
+	assertNoAccessSecret(t, err)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("EnableTokenMode in setup = %s, want ErrConflict", redactAccess(t, err))
+	}
+	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
+	assertStoredMode(t, store, access.ModeSetup)
+	assertStoredSetupState(t, store, access.SetupState{Step: access.SetupStepWelcome}, nil)
+	assertRowCount(t, store, "access_credential", 0)
+	assertRowCount(t, store, "panel_session", 0)
+}
+
+func TestAccessCompleteSetupTokenCommitsAllOrNothing(t *testing.T) {
+	ctx := context.Background()
+	store := newAccessStore(t)
+	session := testSession("setup-session", accessTestStart)
+	completedAt := accessTestStart.Add(time.Hour)
+	unblock := blockAccessModeChange(t, store)
+	err := store.CompleteSetupToken(ctx, testCredentials(), session, completedAt)
+	assertNoAccessSecret(t, err)
+	if err == nil {
+		t.Fatal("CompleteSetupToken with the mode change blocked returned nil")
+	}
+	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
+	assertStoredMode(t, store, access.ModeSetup)
+	assertStoredSetupState(t, store, access.SetupState{Step: access.SetupStepWelcome}, nil)
+	assertRowCount(t, store, "access_credential", 0)
+	assertRowCount(t, store, "panel_session", 0)
+	unblock()
+
+	err = store.CompleteSetupToken(ctx, testCredentials(), session, completedAt)
+	assertNoAccessSecret(t, err)
+	if err != nil {
+		t.Fatalf("CompleteSetupToken after unblocking: %s", redactAccess(t, err))
+	}
+	assertSnapshot(t, store.Snapshot(), fixtureTokenSnapshot())
+	assertSetupMethodsRefuseAndChangeNothing(t, store, &completedAt)
+}
+
+func assertStoredSetupState(
+	t *testing.T, store *sqliteStore, want access.SetupState, completedAt *time.Time,
+) {
 	t.Helper()
-	store := openSQLiteStoreForTest(t, filepath.Join(t.TempDir(), "officer.db"))
+	var step string
+	var declined, completed sql.NullString
+	err := store.currentDB().QueryRowContext(context.Background(),
+		`SELECT setup_step, encryption_declined_at, completed_at
+		 FROM access_state WHERE singleton = 1`,
+	).Scan(&step, &declined, &completed)
+	if err != nil {
+		t.Fatalf("read stored setup state: %s", redactAccess(t, err))
+	}
+	if step != string(want.Step) {
+		t.Errorf("stored setup step = %q, want %q", step, want.Step)
+	}
+	for name, value := range map[string]struct {
+		got  sql.NullString
+		want *time.Time
+	}{
+		"encryption_declined_at": {declined, want.EncryptionDeclinedAt},
+		"completed_at":           {completed, completedAt},
+	} {
+		if value.want == nil {
+			if value.got.Valid {
+				t.Errorf("stored %s = %q, want NULL", name, value.got.String)
+			}
+		} else if !value.got.Valid || value.got.String != timeStr(*value.want) {
+			t.Errorf("stored %s = %q, want %q", name, value.got.String, timeStr(*value.want))
+		}
+	}
+}
+
+func assertSetupMethodsRefuseAndChangeNothing(
+	t *testing.T, store *sqliteStore, completedAt *time.Time,
+) {
+	t.Helper()
+	ctx := context.Background()
+	want := store.Snapshot()
+	session := testSession("setup-session", accessTestStart)
+	for name, call := range map[string]func() error{
+		"SetupState": func() error {
+			state, err := store.SetupState(ctx)
+			if state.Step != "" || state.EncryptionDeclinedAt != nil {
+				t.Error("refused SetupState returned progress")
+			}
+			return err
+		},
+		"SetSetupStep": func() error {
+			return store.SetSetupStep(ctx, access.SetupStepSigning)
+		},
+		"DeclineEncryption": func() error {
+			return store.DeclineEncryption(ctx, accessTestStart.Add(24*time.Hour))
+		},
+		"CompleteSetupOpen": func() error {
+			return store.CompleteSetupOpen(ctx, accessTestStart.Add(24*time.Hour))
+		},
+		"CompleteSetupToken": func() error {
+			return store.CompleteSetupToken(ctx, access.Credentials{
+				Password: access.Password{Hash: otherPasswordHash, SetAt: session.CreatedAt},
+				APIToken: otherAPIToken, AgentToken: otherAgentToken,
+			}, testSession("refused-session", session.CreatedAt), session.CreatedAt)
+		},
+	} {
+		err := call()
+		assertNoAccessSecret(t, err)
+		if !errors.Is(err, domain.ErrSetupComplete) {
+			t.Errorf("%s in %s mode = %s, want ErrSetupComplete", name, want.Mode, redactAccess(t, err))
+		}
+		assertSnapshot(t, store.Snapshot(), want)
+		assertStoredMode(t, store, want.Mode)
+		assertStoredSetupState(t, store, access.SetupState{Step: access.SetupStepWelcome}, completedAt)
+		if want.Mode == access.ModeToken {
+			assertRowCount(t, store, "access_credential", 3)
+			assertStoredPassword(t, store, testPasswordHash, accessTestStart)
+			assertStoredCredential(t, store, apiTokenKind, testAPIToken)
+			assertStoredCredential(t, store, agentTokenKind, testAgentToken)
+			assertRowCount(t, store, "panel_session", 1)
+			got, err := store.Session(ctx, session.IDHash)
+			if err != nil {
+				t.Fatalf("Session after refused setup call: %s", redactAccess(t, err))
+			}
+			assertSessionEqual(t, got, session)
+		} else {
+			assertRowCount(t, store, "access_credential", 0)
+			assertRowCount(t, store, "panel_session", 0)
+		}
+	}
+}
+
+// newAccessStore opens a fresh migrated store in a temp file.
+func newAccessStore(t *testing.T, opts ...Option) *sqliteStore {
+	t.Helper()
+	store := openSQLiteStoreForTest(t, filepath.Join(t.TempDir(), "officer.db"), opts...)
 	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatalf("Migrate: %v", err)
+	}
+	return store
+}
+
+func newOpenAccessStore(t *testing.T) *sqliteStore {
+	t.Helper()
+	store := newAccessStore(t)
+	if err := store.CompleteSetupOpen(context.Background(), accessTestStart); err != nil {
+		t.Fatalf("CompleteSetupOpen: %s", redactAccess(t, err))
 	}
 	return store
 }

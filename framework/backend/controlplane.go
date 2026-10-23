@@ -132,8 +132,6 @@ type ControlPlane interface {
 	// (SetNoESign) and is refused here.
 	SetSetting(ctx context.Context, key, value string) error
 	CommandEnabled(ctx context.Context, command string) (bool, error)
-	WelcomeSeen(ctx context.Context) (bool, error)
-	SetWelcomeSeen(ctx context.Context, seen bool) error
 	ListMarketData(ctx context.Context) (MarketDataStatus, error)
 	RestartMarketData(ctx context.Context) error
 	VerifyMarketDataSymbol(

@@ -783,6 +783,79 @@ func TestResolveCallerStampsSurface(t *testing.T) {
 	}
 }
 
+// TestRouterStampsDuringSetup checks each route's flag on both v1 mounts.
+func TestRouterStampsDuringSetup(t *testing.T) {
+	if DuringSetupFromContext(context.Background()) {
+		t.Fatal("DuringSetupFromContext without a stamp = true, want false")
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	var registry, panel RouteRegistry
+	registry.Register(Route{
+		ID: "setup", Method: http.MethodGet, Pattern: "/setup", Handler: handler,
+		DuringSetup: true,
+	})
+	registry.Register(Route{
+		ID: "plain", Method: http.MethodGet, Pattern: "/plain", Handler: handler,
+	})
+	panel.Register(Route{
+		ID: "panel.setup", Method: http.MethodGet, Pattern: "/panel-setup", Handler: handler,
+		DuringSetup: true,
+	})
+	panel.Register(Route{
+		ID: "panel.plain", Method: http.MethodGet, Pattern: "/panel-plain", Handler: handler,
+	})
+	authorizer := &recordingAuthorizer{}
+	cfg := guardedRouterConfig(&registry, testGuards(t))
+	cfg.PanelRoutes = &panel
+	cfg.Authorizer = authorizer
+	var resolvedFlags []bool
+	cfg.CallerResolver = func(r *http.Request) (domain.Caller, error) {
+		resolvedFlags = append(resolvedFlags, DuringSetupFromContext(r.Context()))
+		return testCallerResolver(r)
+	}
+	router, err := NewRouter(cfg)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+
+	for _, tc := range []struct {
+		path        string
+		identifier  string
+		duringSetup bool
+	}{
+		{"/api/v1/setup", "setup", true},
+		{"/api/v1/plain", "plain", false},
+		{"/app/api/v1/setup", "setup", true},
+		{"/app/api/v1/plain", "plain", false},
+		{"/app/api/v1/panel-setup", "panel.setup", true},
+		{"/app/api/v1/panel-plain", "panel.plain", false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			authorizer.calls = nil
+			resolvedFlags = nil
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("%s = %d %s, want 204", tc.path, rec.Code, rec.Body)
+			}
+			if !slices.Equal(resolvedFlags, []bool{tc.duringSetup}) {
+				t.Fatalf("resolver DuringSetup for %s = %v, want [%t]",
+					tc.path, resolvedFlags, tc.duringSetup)
+			}
+			if len(authorizer.calls) != 1 {
+				t.Fatalf("authorization calls = %+v, want one call", authorizer.calls)
+			}
+			call := authorizer.calls[0]
+			if call.identifier != tc.identifier || call.duringSetup != tc.duringSetup {
+				t.Fatalf("authorization for %s = route %q, DuringSetup %t; want route %q, DuringSetup %t",
+					tc.path, call.identifier, call.duringSetup, tc.identifier, tc.duringSetup)
+			}
+		})
+	}
+}
+
 // TestRouterStampsRequestSurface checks that the caller resolver and the
 // handler of every v1 route, the panel-only and public panel routes included,
 // and of the MCP mount see the surface of their mount: the API on /api/v1, its
@@ -1099,10 +1172,11 @@ func (a allowIdentifiers) Authorize(
 var _ Authorizer = allowIdentifiers(nil)
 
 type authorizationCall struct {
-	source     domain.Source
-	principal  string
-	role       string
-	identifier string
+	source      domain.Source
+	principal   string
+	role        string
+	identifier  string
+	duringSetup bool
 }
 
 type recordingAuthorizer struct {
@@ -1110,15 +1184,16 @@ type recordingAuthorizer struct {
 }
 
 func (a *recordingAuthorizer) Authorize(
-	_ context.Context,
+	ctx context.Context,
 	caller domain.Caller,
 	identifier string,
 ) error {
 	a.calls = append(a.calls, authorizationCall{
-		source:     caller.Source,
-		principal:  caller.Principal,
-		role:       caller.Role,
-		identifier: identifier,
+		source:      caller.Source,
+		principal:   caller.Principal,
+		role:        caller.Role,
+		identifier:  identifier,
+		duringSetup: DuringSetupFromContext(ctx),
 	})
 	return nil
 }

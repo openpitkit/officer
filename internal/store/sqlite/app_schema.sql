@@ -23,14 +23,21 @@
 -- these tables enters a backup, and a restore leaves them untouched: the
 -- access state belongs to the installation, not to the data it holds.
 
--- Single-row access mode. A clean database starts open; a database without
--- the row is refused at startup rather than given a mode.
+-- Single-row access mode and first-run progress. setup_step is the wizard's
+-- saved position. encryption_declined_at keeps the first decline time;
+-- completed_at is NULL until setup completes. A clean database starts in
+-- setup; a database without the row is refused rather than given a mode.
 CREATE TABLE access_state (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    mode      TEXT NOT NULL CHECK (mode IN ('token', 'open'))
+    singleton              INTEGER PRIMARY KEY CHECK (singleton = 1),
+    mode                   TEXT NOT NULL CHECK (mode IN ('setup', 'token', 'open')),
+    setup_step             TEXT NOT NULL DEFAULT 'welcome'
+                           CHECK (setup_step IN
+                                  ('welcome', 'accounts', 'encryption', 'signing', 'access')),
+    encryption_declined_at TEXT,
+    completed_at           TEXT
 );
 
-INSERT INTO access_state (singleton, mode) VALUES (1, 'open');
+INSERT INTO access_state (singleton, mode) VALUES (1, 'setup');
 
 -- The secrets of token mode, one row per kind: the panel password's argon2id
 -- hash in PHC form and the values of the two tokens. value is sealed with the

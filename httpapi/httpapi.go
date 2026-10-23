@@ -157,9 +157,6 @@ func RegisterRoutes(
 	register(registry, "mcp-access.list.get", http.MethodGet, "/mcp-access", handleListMcpAccess(svc))
 	register(registry, "mcp-access.set.put", http.MethodPut, "/mcp-access/{command}", handleSetMcpAccess(svc))
 
-	register(registry, "user-settings.get", http.MethodGet, "/user-settings", handleGetUserSettings(svc))
-	register(registry, "user-settings.put", http.MethodPut, "/user-settings", handleSetUserSettings(svc))
-
 	registerDuringSetup(registry, "signing.keys.generate.post", http.MethodPost, "/signing/keys/generate", handleGenerateSigningKey(svc))
 	registerDuringSetup(registry, "signing.keys.import.post", http.MethodPost, "/signing/keys/import", handleImportSigningKey(svc))
 	registerDuringSetup(registry, "signing.keys.list.get", http.MethodGet, "/signing/keys", handleListSigningKeys(svc))

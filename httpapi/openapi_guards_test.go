@@ -28,6 +28,7 @@ const (
 	unauthorizedResponse    = "        \"401\":\n          $ref: \"#/components/responses/UnauthorizedError\"\n"
 	foreignHostResponse     = "        \"403\":\n          $ref: \"#/components/responses/ForeignHostError\"\n"
 	mediaTypeResponse       = "        \"415\":\n          $ref: \"" + unsupportedMediaTypeRef + "\"\n"
+	setupRequiredResponse   = "        \"503\":\n          $ref: \"#/components/responses/SetupRequiredError\"\n"
 	// bearerSecurity is the global requirement of the API token.
 	bearerSecurity = "\nsecurity:\n  - bearerAuth: []\n"
 	// bearerScheme opens the security scheme of the API token.
@@ -36,7 +37,8 @@ const (
 
 // TestOpenAPIBrowserGuardsContract holds the refusals every operation
 // documents before its handler runs: the access resolver's 401 and its 403
-// wrong_token, which answer every operation in token mode; the Host guard,
+// wrong_token, which answer every operation in token mode; 503 setup_required
+// until first-run setup completes; the Host guard,
 // which answers every operation; and the Origin and JSON-body guards, which
 // answer the unsafe ones only. The API token's security scheme is required
 // globally.
@@ -55,6 +57,7 @@ func TestOpenAPIBrowserGuardsContractBites(t *testing.T) {
 	spec := string(openapiSpec)
 	const (
 		getStatus  = "\n  /status:\n    get:\n"
+		getHealth  = "\n  /health:\n    get:\n"
 		postExport = "\n  /backup/export:\n    post:\n"
 	)
 	for _, tc := range []struct {
@@ -81,6 +84,16 @@ func TestOpenAPIBrowserGuardsContractBites(t *testing.T) {
 			"no components/securitySchemes/bearerAuth bearer scheme"},
 		{"GET without 403", editOperation(t, spec, getStatus, foreignHostResponse, ""),
 			"GET /status: no 403 response"},
+		{"GET without 503", editOperation(t, spec, getHealth, setupRequiredResponse, ""),
+			"GET /health: no 503 response"},
+		{"503 to a missing component", editOperation(t, spec, getHealth, "SetupRequiredError", "SetupRequiredErrors"),
+			"GET /health: 503 references missing components/responses/SetupRequiredErrors"},
+		{"503 component without setup_required", strings.Replace(spec,
+			"Officer is not set up yet (`setup_required`); every operation",
+			"Officer is not set up yet; every operation", 1),
+			"GET /health: 503 does not name setup_required"},
+		{"inline 503 without setup_required", editOperation(t, spec, getStatus, "`setup_required`", "setup unfinished"),
+			"GET /status: 503 does not name setup_required"},
 		{"POST without 415", editOperation(t, spec, postExport, mediaTypeResponse, ""),
 			"POST /backup/export: no 415 response"},
 		{"GET with 415", editOperation(t, spec, getStatus, foreignHostResponse, foreignHostResponse+mediaTypeResponse),
@@ -179,7 +192,7 @@ func browserGuardProblems(spec string) (safe, unsafe int, problems []string) {
 	return safe, unsafe, problems
 }
 
-// operationGuardProblems checks the 401, 403 and 415 responses of one
+// operationGuardProblems checks the 401, 403, 415 and 503 responses of one
 // operation, given the lines nested under its method key.
 func operationGuardProblems(name string, safe bool, operation []string, components map[string]string) []string {
 	var responses map[string]string
@@ -198,6 +211,16 @@ func operationGuardProblems(name string, safe bool, operation []string, componen
 		problems = append(problems, name+": 401 references missing components/responses/"+missing)
 	case !strings.Contains(unauthorized, "`unauthorized`"):
 		problems = append(problems, name+": 401 does not name unauthorized")
+	}
+	setupRequired, hasSetupRequired := responses["503"]
+	setupRequired, missing = resolveResponse(setupRequired, components)
+	switch {
+	case !hasSetupRequired:
+		problems = append(problems, name+": no 503 response")
+	case missing != "":
+		problems = append(problems, name+": 503 references missing components/responses/"+missing)
+	case !strings.Contains(setupRequired, "`setup_required`"):
+		problems = append(problems, name+": 503 does not name setup_required")
 	}
 	forbidden, hasForbidden := responses["403"]
 	forbidden, missing = resolveResponse(forbidden, components)

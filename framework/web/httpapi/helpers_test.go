@@ -150,8 +150,8 @@ func TestWriteErrBrowserGuardCodes(t *testing.T) {
 
 // TestDescribeErrAccessSentinels checks the status and code of each access
 // refusal, matched before the generic forbidden and conflict cases it may also
-// wrap, and its message: the full text for a wrong token, whose wrapper names
-// the surface the token belongs to, and the sentinel text for the rest.
+// wrap, and its message: the full text for a wrong token or required setup,
+// whose wrapper names the surface or address, and the sentinel text for the rest.
 func TestDescribeErrAccessSentinels(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -166,9 +166,15 @@ func TestDescribeErrAccessSentinels(t *testing.T) {
 		{domain.ErrCurrentPasswordInvalid, http.StatusForbidden, "current_password_invalid", false},
 		{domain.ErrWrongToken, http.StatusForbidden, "wrong_token", true},
 		{domain.ErrTooManyAttempts, http.StatusTooManyRequests, "too_many_attempts", false},
+		{domain.ErrSetupRequired, http.StatusServiceUnavailable, "setup_required", true},
+		{domain.ErrSetupComplete, http.StatusConflict, "setup_complete", false},
 	} {
 		t.Run(tc.code, func(t *testing.T) {
 			t.Parallel()
+			want := PublicError{tc.status, tc.code, tc.err.Error()}
+			if got := DescribeErr(tc.err); got != want {
+				t.Fatalf("DescribeErr(%q) = %+v, want %+v", tc.err, got, want)
+			}
 			err := fmt.Errorf(
 				"the agent token on the REST API: %w: %w: %w",
 				domain.ErrForbidden, domain.ErrConflict, tc.err,
@@ -177,7 +183,7 @@ func TestDescribeErrAccessSentinels(t *testing.T) {
 			if tc.fullText {
 				message = err.Error()
 			}
-			want := PublicError{tc.status, tc.code, message}
+			want = PublicError{tc.status, tc.code, message}
 			if got := DescribeErr(err); got != want {
 				t.Fatalf("DescribeErr(%q) = %+v, want %+v", err, got, want)
 			}

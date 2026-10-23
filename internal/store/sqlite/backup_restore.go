@@ -1461,34 +1461,6 @@ func validateRestoredSigningKey(key backup.SigningKey) error {
 	return nil
 }
 
-func (rt *restoreTx) restoreUserSettings(ctx context.Context, settings []domain.UserSetting) error {
-	for _, s := range settings {
-		exists, err := rowExists(
-			ctx, rt.tx,
-			`SELECT 1 FROM user_setting WHERE user_id = ? AND setting_key = ?`,
-			s.UserID, s.Key,
-		)
-		if err != nil {
-			return err
-		}
-		if rt.skip(backup.SectionUserSettings, exists) {
-			continue
-		}
-		if _, err := rt.tx.ExecContext(
-			ctx,
-			`INSERT INTO user_setting (user_id, setting_key, setting_value)
-			 VALUES (?, ?, ?)
-			 ON CONFLICT(user_id, setting_key) DO UPDATE SET
-			   setting_value = excluded.setting_value`,
-			s.UserID, s.Key, s.Value,
-		); err != nil {
-			return fmt.Errorf("store: restore user setting %q/%q: %w", s.UserID, s.Key, err)
-		}
-		rt.summary.AddApplied(backup.SectionUserSettings, 1)
-	}
-	return nil
-}
-
 // --- Restore: activity history ----------------------------------------------
 
 // restoreActivity restores adjustments, orders (with approvals), order events,
