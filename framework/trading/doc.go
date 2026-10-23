@@ -24,34 +24,25 @@
 // with any venue link keeps its worker for tracking and late fee intake, even
 // when all its orders have finished.
 //
+// A venue plugs in as a Provider: a factory that builds a Connector for one
+// connection and declares what the venue offers - venue accounts, symbol
+// verification and search, and fees posted apart from executions. A Connector
+// sends orders, looks them up and streams their events; optional interfaces
+// add a pre-check, an account check, symbol search and verification, and fee
+// reading. Venue connectors live outside this package.
+//
 // A destination is a connection, a venue account (empty where the venue has
 // none), and connector-read route JSON. A connector resolves any commission
 // currency to an Officer asset code and reports it as domain.Commission.
 // PreCheck runs before Officer pre-trade so a venue-invalid draft never takes
-// a reservation. The shared interface accommodates these planned venues;
-// Alpaca is the only implementation, in its own package.
+// a reservation.
 //
-// Alpaca: one API key pair identifies one account; VenueAccount is empty. Paper
-// mode selects the paper host and live mode the live host. Route JSON is
-// {"timeInForce": ...}; symbols are names such as AAPL, verified through
-// GET /v2/assets/{symbol}. Account check reads GET /v2/account for the account
-// id (identity) and status. Symbol search requests GET /v2/assets twice, with
-// status=active and asset_class=us_equity or asset_class=crypto, then searches
-// their union by exact symbol, symbol prefix and name substring,
-// case-insensitively, with each group sorted by symbol and at most 50 matches.
-// Pre-check requires an active, tradable asset, fractionable assets and day TIF
-// for fractional quantities, and valid limit price increments. Fills carry no
-// commission and are identified by cumulative filled quantity. Reconciliation
-// reads GET /v2/account/activities/FILL?order_id=. Crypto is allowed
-// with gtc or ioc TIF, canonical BASE/QUOTE symbols and the venue's size and
-// price increments.
-// Alpaca posts FEE (USD equity regulatory fees) and CFEE (crypto fees, charged
-// in the received asset) as
-// separate account activities, typically at end of day. FeeReader takes them
-// through AdjustmentSink with a deterministic activity id when the fee asset
-// maps unambiguously. The adjustment is typed venue_fee, and its external id,
-// trading:<connection>:fee:<fee id>, is the venue reference. A connection's
-// fee account receives every unlinked fee
+// A venue whose fees come with executions books them on the fill to the
+// order's Officer account. A venue that posts fees apart from executions
+// declares UnlinkedFees, and its FeeReader reports them; each goes through
+// AdjustmentSink when the fee asset maps unambiguously. The adjustment is typed
+// venue_fee, and its external id, trading:<connection>:fee:<fee id>, is the
+// venue reference. A connection's fee account receives every unlinked fee
 // whole, as posted, and may be any Officer account. Without a fee account, the
 // single Officer account that can send through the connection, directly or
 // through a granted group, receives fees. A group grant always needs the fee
@@ -69,35 +60,9 @@
 // connection's first venue-order link, in pages within a read time budget.
 // An in-memory cursor consumes final outcomes and retries temporary failures;
 // restart replays from the first link using deterministic adjustment ids.
-// Fees are never estimated or attached to execution reports. Until a CFEE is
-// posted and applied, the crypto position
-// includes the not-yet-charged fee. Corrections, cancellations and unresolved
-// account or asset mappings require operator attention and are never guessed.
-// Venues whose fees come with executions (IB, Binance) book them on the fill to
-// the order's Officer account, so the fee-account rule does not apply to them.
-//
-// Binance: one API key identifies one account or sub-account; VenueAccount is
-// empty. Paper mode selects spot testnet. Route JSON is {"timeInForce": ...}.
-// Exchange info verifies symbols; pre-check applies LOT_SIZE, PRICE_FILTER and
-// NOTIONAL filters. Each trade has commission in commissionAsset (base, quote
-// or BNB). BNB needs an asset-level mapping, not designed further here.
-// Reconciliation reads myTrades by orderId; execution reports carry cumulative
-// quantity. Account check would read signed GET /api/v3/account, using its uid
-// as identity.
-//
-// Interactive Brokers: one TWS / IB Gateway login may contain multiple
-// accounts, so the destination selects VenueAccount. Paper mode uses a paper
-// login. Route JSON is {"exchange": ..., "tif": ...}. Instruments are contracts
-// (conId), verified through contract details. Commission reports give
-// per-execution commission in a currency; reconciliation reads executions by
-// filter. Account check and a single connection identity are not designed
-// further here.
-//
-// eToro: one API key identifies a user; paper mode selects the virtual (demo)
-// portfolio and live mode the real one, with no VenueAccount. Instruments use
-// instrument ids. Spread-based pricing has no separate commission;
-// reconciliation reads trade history. Account check and its identity are not
-// designed further here.
+// Unlinked fees are never estimated or attached to execution reports.
+// Corrections, cancellations and unresolved account or asset mappings require
+// operator attention and are never guessed.
 //
 // Routing (design): an Officer account may have several destinations, including
 // several connections of one provider with distinct venue identities. A send
@@ -109,7 +74,7 @@
 // grant binds no venue account. This own-before-group precedence is the grant
 // access rule; it is separate from the venue-account override model below.
 //
-// Venues with venue accounts, such as IB, need an explicit policy on the
+// Venues with venue accounts need an explicit policy on the
 // connection: no default venue account, or a default with one of three override
 // modes: everyone may override; the Officer account may not override; the order
 // may override (which implies the Officer account may too). An "only one" flag
@@ -122,5 +87,4 @@
 // the account binding before the connection default. With neither configured,
 // it sends without a venue account. Where override is forbidden, naming the
 // configured venue account is accepted; naming a different one is refused.
-// Alpaca has no venue accounts, so this policy does not apply to it yet.
 package trading

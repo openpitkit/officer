@@ -29,6 +29,27 @@ func FirstPartyProviders() []fwtrading.Provider {
 }
 
 // AlpacaProvider trades one account per key pair and verifies venue symbols.
+//
+// One API key pair identifies one account; VenueAccount is empty. Paper mode
+// selects the paper host and live mode the live host. Route JSON is
+// {"timeInForce": ...}; symbols are names such as AAPL, verified through
+// GET /v2/assets/{symbol}. Account check reads GET /v2/account for the account
+// id (identity) and status. Symbol search requests GET /v2/assets twice, with
+// status=active and asset_class=us_equity or asset_class=crypto, then searches
+// their union by exact symbol, symbol prefix and name substring,
+// case-insensitively, with each group sorted by symbol and at most 50 matches.
+// Pre-check requires an active, tradable asset, fractionable assets and day TIF
+// for fractional quantities, and valid limit price increments. Fills carry no
+// commission and are identified by cumulative filled quantity. Reconciliation
+// reads GET /v2/account/activities/FILL?order_id=. Crypto is allowed with gtc
+// or ioc TIF, canonical BASE/QUOTE symbols and the venue's size and price
+// increments.
+//
+// Alpaca posts FEE (USD equity regulatory fees) and CFEE (crypto fees, charged
+// in the received asset) as separate account activities, typically at end of
+// day, so the provider declares UnlinkedFees and the connector reads them with
+// a deterministic activity id. Until a CFEE is posted and applied, the crypto
+// position includes the not-yet-charged fee.
 func AlpacaProvider() fwtrading.Provider {
 	return fwtrading.Provider{
 		Type: domain.TradingProviderAlpaca, Title: "Alpaca",
