@@ -30,7 +30,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
 import { setAccountScope } from "@/lib/accountScope";
-import { setPanelSession } from "@/lib/panelSession";
+import { checkSession, setPanelSession } from "@/lib/panelSession";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -48,6 +48,15 @@ import {
   ServiceCard,
   ServiceLifecycleCard,
 } from "@/pages/Service";
+
+// The startup gate that answers a session check is tested on its own.
+vi.mock("@/lib/panelSession", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/panelSession")>(
+      "@/lib/panelSession",
+    );
+  return { ...actual, checkSession: vi.fn() };
+});
 
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
@@ -523,7 +532,7 @@ describe("Service", () => {
       within(panel)
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
-    ).toEqual(["Access", "Storage, signing and accounts"]);
+    ).toEqual(["Access", "Storage, signing and accounts", "Guide"]);
     expect(
       await within(
         within(panel).getByRole("group", { name: "Encryption" }),
@@ -995,7 +1004,6 @@ describe("BackupCard", () => {
       "Risk limits",
       "Market-data settings",
       "General settings",
-      "User settings",
       "Audit log",
     ]) {
       await user.click(screen.getByRole("checkbox", { name }));
@@ -1105,7 +1113,6 @@ describe("BackupCard", () => {
         "risk_limits",
         "market_data_settings",
         "general_settings",
-        "user_settings",
         "activity_history",
         "trading",
         "audit_log",
@@ -1167,7 +1174,6 @@ describe("BackupCard", () => {
           "risk_limits",
           "market_data_settings",
           "general_settings",
-          "user_settings",
           "activity_history",
           "trading",
           "audit_log",
@@ -1578,7 +1584,6 @@ describe("BackupCard with accounts hidden", () => {
         "risk_limits",
         "market_data_settings",
         "general_settings",
-        "user_settings",
         "activity_history",
         "trading",
         "audit_log",
@@ -1598,6 +1603,7 @@ describe("DatabaseCard", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(resetDatabaseMock).not.toHaveBeenCalled();
     expect(onReset).not.toHaveBeenCalled();
+    expect(checkSession).not.toHaveBeenCalled();
   });
 
   it("resets the database and reloads service info after confirmation", async () => {
@@ -1612,6 +1618,8 @@ describe("DatabaseCard", () => {
       expect(resetDatabaseMock).toHaveBeenCalledTimes(1);
     });
     expect(onReset).toHaveBeenCalledTimes(1);
+    // A reset returns Officer to setup, which the gate finds on this check.
+    expect(checkSession).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Database reset.")).toBeInTheDocument();
   });
 });

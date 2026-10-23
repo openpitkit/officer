@@ -112,6 +112,22 @@ export function errorResponse(
   return res;
 }
 
+/** A client answering every request with `response`, and its fetch mock. */
+export function clientAnswering(response: Response) {
+  const fetchMock = vi.fn().mockResolvedValue(response);
+  const client = createApiClient({
+    baseUrl: "/app/api/v1",
+    fetch: fetchMock as unknown as typeof fetch,
+  });
+  return { client, fetchMock };
+}
+
+/** The URL and init of the first request sent through `fetchMock`. */
+export function sentRequest(fetchMock: ReturnType<typeof vi.fn>) {
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  return { url, init };
+}
+
 /** Answers GET /account-mode with `state` until a PUT stores `stored`, and
  *  with the stored state from then on, as the server does. */
 export function answeringAccountMode(

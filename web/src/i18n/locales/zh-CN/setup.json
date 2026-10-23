@@ -1,0 +1,85 @@
+{
+  "continue": "继续",
+  "stepOf": "第 {{n}} 步，共 {{total}} 步",
+  "changeLater": "稍后修改：{{where}}",
+  "place": "{{section}} › {{tab}}",
+  "firstStart": "首次启动",
+  "rail": {
+    "closed": "完成设置前，REST 与 MCP 保持关闭。",
+    "finished": "设置已完成。REST 与 MCP 按您选择的访问方式响应。",
+    "steps": {
+      "welcome": "欢迎",
+      "accounts": "账户",
+      "encryption": "加密",
+      "signing": "签名",
+      "access": "访问",
+      "agent": "您的智能体",
+      "done": "完成"
+    }
+  },
+  "welcome": {
+    "title": "设置 Pit Officer",
+    "lead": "简短的步骤，每步一项决定。每一步都会说明它改变什么，以及之后在哪里可以找到。",
+    "closedTitle": "设置完成前，Officer 保持关闭",
+    "closedBody": "其 REST API 与 MCP 暂不响应任何程序或智能体。在您完成设置之前，不会进行任何交易，也不会建立任何连接。",
+    "start": "开始设置"
+  },
+  "accounts": {
+    "title": "您将使用多少个账户？",
+    "lead": "使用单个账户时，Officer 仅作用于该账户，控制面板不显示账户字段。之后可在“服务”页面更改该模式。",
+    "saveFirst": "保存模式后才能继续。Officer 将重启以应用该模式。"
+  },
+  "encryption": {
+    "title": "用主密钥密封存储的密钥？",
+    "lead": "Officer 将您的交易连接和数据提供商的密钥，以及其自身的访问令牌保存在数据库文件中。主密钥会将其密封：没有主密钥，复制的数据库或备份毫无用处。",
+    "key": {
+      "title": "使用主密钥",
+      "description": "存储的密钥被密封，并可启用决定签名。密钥只需创建一次，并需保留副本。"
+    },
+    "none": {
+      "title": "不加密",
+      "description": "现在无需任何操作。存储的密钥以明文保存在文件中。"
+    },
+    "waiting": "正在等待 Officer 携密钥重新上线…",
+    "on": "加密已开启。Officer 已密封其数据库。",
+    "noneTitle": "不加密时，谁拿到数据库文件，谁就拿到您的密钥",
+    "noneWho": "可能拿到文件的人：任何复制该文件或备份的人 - 来自本机磁盘、同步文件夹、磁盘镜像或丢失的笔记本电脑。",
+    "noneWhat": "他们能做什么：通过您的交易连接进行交易，使用您的数据订阅，使用 Officer 自身的令牌。",
+    "noneSign": "决定签名将保持关闭：它需要主密钥。",
+    "noneBanner": "只要交易连接或数据提供商的密钥以未加密方式存储，每个页面都会显示红色提示。",
+    "noneAck": "我已了解：我的密钥以未加密方式存储。"
+  },
+  "signing": {
+    "title": "对 Officer 的决定签名？",
+    "lead": "Officer 可以对其就订单作出的每项决定签名。执行订单的程序会校验签名，从而确认该决定来自此 Officer 且未被篡改。不签名时，决定照样发出，只是未签名。",
+    "backToEncryption": "设置主密钥",
+    "on": "已开启"
+  },
+  "access": {
+    "title": "谁可以使用 Officer？",
+    "lead": "Officer 只在本机监听。这能挡住其他计算机，却挡不住本机上的其他软件。",
+    "finish": "完成设置"
+  },
+  "agent": {
+    "title": "连接您的 AI 智能体",
+    "lead": "智能体通过 MCP 与 Officer 通信。默认情况下，它只能读取数据和检查订单，不能修改任何内容；可在 MCP 访问 中允许更多命令。",
+    "warning": "只把此令牌交给智能体 - 切勿提供 API 令牌或面板密码：有了它们，智能体会绕过其在 MCP 中的限制。",
+    "later": "稍后连接"
+  },
+  "done": {
+    "title": "Officer 已设置完成",
+    "lead": "您的选择，以及各项现在所在的位置。",
+    "columns": {
+      "decision": "决定",
+      "choice": "选择",
+      "where": "所在位置"
+    },
+    "values": {
+      "signNA": "已关闭 · 需要主密钥",
+      "agent": "已签发智能体令牌",
+      "agentOpen": "无需令牌"
+    },
+    "reopen": "可随时重新打开本向导：关于 › 首次运行指南。",
+    "open": "打开面板"
+  }
+}

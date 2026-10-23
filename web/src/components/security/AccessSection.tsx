@@ -21,11 +21,9 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -57,6 +55,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, useApiClient } from "@/framework";
 import { formatDate } from "@/i18n/format";
 import { checkSession, panelSession } from "@/lib/panelSession";
+import { usePasswordAttempt } from "@/lib/usePasswordAttempt";
 
 /**
  * Reloads the page onto this tab after a switch of the access mode: the
@@ -76,15 +75,17 @@ function reloadOnSecurityTab() {
 function OpenAccess() {
   const { t } = useTranslation("service");
   const client = useApiClient();
-  const passwordField = useRef<HTMLInputElement>(null);
+  const {
+    attempt,
+    password,
+    setPassword,
+    passwordError,
+    passwordRef,
+    clearPasswordError,
+    refuse,
+  } = usePasswordAttempt();
   const [mode, setMode] = useState<AccessMode>("open");
-  const [password, setPassword] = useState<string | null>(null);
-  // Bumped by a failed attempt: the panel mounts anew, without the password.
-  const [attempt, setAttempt] = useState(0);
   const [switching, setSwitching] = useState(false);
-  const [passwordError, setPasswordError] = useState<string | undefined>(
-    undefined,
-  );
   const [error, setError] = useState<string | null>(null);
 
   const turnOn = async () => {
@@ -92,27 +93,20 @@ function OpenAccess() {
       return;
     }
     setSwitching(true);
-    setPasswordError(undefined);
+    clearPasswordError();
     setError(null);
     try {
       await putAccessMode(client, { mode: "token", password });
     } catch (err) {
-      const code = err instanceof ApiError ? err.code : null;
-      // Committed at once, the fields mounted anew and enabled, before the
-      // focus moves to the refused one, so its description reads it out.
-      flushSync(() => {
-        setPassword(null);
-        setAttempt((n) => n + 1);
+      const passwordRefused =
+        err instanceof ApiError && err.code === "precondition";
+      refuse(err, passwordRefused, () => {
         setSwitching(false);
-        if (code === "precondition") {
-          setPasswordError(errMessage(err));
-        } else if (!isAccessModeConflict(err)) {
+        if (!passwordRefused && !isAccessModeConflict(err)) {
           setError(errMessage(err));
         }
       });
-      if (code === "precondition") {
-        passwordField.current?.focus();
-      } else if (isAccessModeConflict(err)) {
+      if (!passwordRefused && isAccessModeConflict(err)) {
         checkSession();
       }
       return;
@@ -131,7 +125,7 @@ function OpenAccess() {
           onModeChange={setMode}
           onPasswordChange={setPassword}
           passwordError={passwordError}
-          passwordRef={passwordField}
+          passwordRef={passwordRef}
           disabled={switching}
         />
         {mode === "token" && (
@@ -172,6 +166,8 @@ interface AccessTokens {
   allowed: boolean;
   /** Reports that GET /access has confirmed `token` access. */
   allow: () => void;
+  /** Retries loading both token values after a failed load. */
+  reload: () => void;
   /**
    * Issues a new value of `kind` and keeps it in `tokens`; rejects with the
    * request's error.
@@ -186,13 +182,22 @@ const AccessTokensContext = createContext<AccessTokens | null>(null);
  * on Service › Security that regenerates one, so a new value shows wherever
  * the token does. Both values are fetched once, after GET /access has
  * confirmed `token` access, so Copy writes the value inside the operator's
- * click, and live only in this state.
+ * click, and live only in this state. `allowed` says the caller already
+ * knows access is `token`, so both values load at once without `allow()`;
+ * absent, they wait for `allow()`.
  */
-export function AccessTokensProvider({ children }: { children: ReactNode }) {
+export function AccessTokensProvider({
+  allowed: initiallyAllowed = false,
+  children,
+}: {
+  allowed?: boolean;
+  children: ReactNode;
+}) {
   const client = useApiClient();
-  const [allowed, setAllowed] = useState(false);
+  const [allowed, setAllowed] = useState(initiallyAllowed);
   const [tokens, setTokens] =
     useState<LoadState<Record<AccessTokenKind, string>>>(LOADING);
+  const [tokenLoads, setTokenLoads] = useState(0);
 
   useEffect(() => {
     if (!allowed) {
@@ -220,9 +225,13 @@ export function AccessTokensProvider({ children }: { children: ReactNode }) {
       },
     );
     return () => controller.abort();
-  }, [client, allowed]);
+  }, [client, allowed, tokenLoads]);
 
   const allow = useCallback(() => setAllowed(true), []);
+  const reload = useCallback(() => {
+    setTokens(LOADING);
+    setTokenLoads((n) => n + 1);
+  }, []);
 
   const regenerate = async (kind: AccessTokenKind) => {
     let token: string;
@@ -244,7 +253,7 @@ export function AccessTokensProvider({ children }: { children: ReactNode }) {
 
   return (
     <AccessTokensContext.Provider
-      value={{ tokens, allowed, allow, regenerate }}
+      value={{ tokens, allowed, allow, reload, regenerate }}
     >
       {children}
     </AccessTokensContext.Provider>

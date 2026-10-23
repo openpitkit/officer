@@ -64,6 +64,21 @@ export function LoadingStatus() {
   );
 }
 
+/** The whole viewport while a full-screen step loads. */
+export function FullScreenLoading() {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label={t("states.loading")}
+      className="flex h-dvh w-full items-center justify-center bg-bg"
+    >
+      <Loader2 className="h-5 w-5 animate-spin text-muted-lt" />
+    </div>
+  );
+}
+
 /** Full-card error state with a retry action. */
 export function ErrorState({
   message,
@@ -91,6 +106,28 @@ export function ErrorState({
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The whole viewport when a full-screen step could not load, with a retry.
+ * Without `title` it reads as `ErrorState` does.
+ */
+export function FullScreenError({
+  title,
+  message,
+  onRetry,
+}: {
+  title?: string;
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="flex h-dvh w-full items-center justify-center bg-bg p-6 text-text">
+      <div className="w-full max-w-lg">
+        <ErrorState title={title} message={message} onRetry={onRetry} />
+      </div>
+    </div>
   );
 }
 

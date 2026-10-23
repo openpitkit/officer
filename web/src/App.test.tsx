@@ -15,18 +15,22 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { useState } from "react";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
+import { fetchSession, type AccessMode } from "@/api/access";
 import type { AccountMode } from "@/api/accountMode";
 import App from "@/App";
+import { useStartupAdmit } from "@/components/StartupGate";
+import { panelSession } from "@/lib/panelSession";
 import { jsonResponse, renderWithApi } from "@/test/apiClient";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
 // The shell's navigation and pages are tested on their own; this test covers
-// the dialogs the app opens over them.
+// the routes to the wizard and the shell.
 vi.mock("@/framework", async () => {
   const actual =
     await vi.importActual<typeof import("@/framework")>("@/framework");
@@ -34,7 +38,8 @@ vi.mock("@/framework", async () => {
 });
 
 // The startup gate asks GET /session before the account mode; it is tested on
-// its own, and these cases run in open access mode.
+// its own, and these cases run in open access mode unless one answers the
+// setup state.
 vi.mock("@/api/access", async () => {
   const actual =
     await vi.importActual<typeof import("@/api/access")>("@/api/access");
@@ -46,10 +51,64 @@ vi.mock("@/api/access", async () => {
   };
 });
 
-const MODE_TITLE = "How many accounts will you use?";
-const WELCOME_TITLE = "Welcome to Pit Officer";
+// The wizard is tested on its own. Its stub admits the browser in token access
+// mode and moves on within /setup, as the wizard's last steps do; the review's
+// stub names the access mode it was given.
+vi.mock("@/pages/Setup", () => ({
+  SetupReview: function SetupReviewStub({
+    accessMode,
+  }: {
+    accessMode: AccessMode;
+  }) {
+    return <p>The review stub in {accessMode}</p>;
+  },
+  Setup: function SetupStub() {
+    const admit = useStartupAdmit();
+    const navigate = useNavigate();
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          admit("token");
+          void navigate("/setup?x=1");
+        }}
+      >
+        Finish the setup stub
+      </button>
+    );
+  },
+}));
 
-function renderApp(mode: AccountMode | null, welcomeSeen: boolean) {
+const SETUP_STUB = "Finish the setup stub";
+
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <output aria-label="Current location">
+      {location.pathname + location.search}
+    </output>
+  );
+}
+
+function currentLocation() {
+  return screen.getByLabelText("Current location").textContent;
+}
+
+// Renders the app again on a click, as any update above it does; a navigation
+// alone does not render a route element again.
+function RerenderingApp() {
+  const [, setRenders] = useState(0);
+  return (
+    <>
+      <App />
+      <button type="button" onClick={() => setRenders((n) => n + 1)}>
+        Render the app again
+      </button>
+    </>
+  );
+}
+
+function renderApp(mode: AccountMode | null, path = "/") {
   const fetchMock = vi.fn(async () =>
     jsonResponse({
       mode,
@@ -58,22 +117,24 @@ function renderApp(mode: AccountMode | null, welcomeSeen: boolean) {
       restartRequired: false,
     }),
   );
-  const fetchWelcomeSeen = vi.fn().mockResolvedValue(welcomeSeen);
   renderWithApi(
     <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
-      <MemoryRouter>
-        <App />
+      <MemoryRouter initialEntries={[path]}>
+        <RerenderingApp />
+        <LocationProbe />
       </MemoryRouter>
     </ThemeProvider>,
-    { fetch: fetchMock as unknown as typeof fetch, api: { fetchWelcomeSeen } },
+    { fetch: fetchMock as unknown as typeof fetch },
   );
-  return { fetchMock, fetchWelcomeSeen };
+  return { fetchMock };
 }
 
-// By the title text: a modal dialog hides the dialogs under it, and with them
-// their accessible names.
-function queryDialog(title: string) {
-  return screen.queryByText(title);
+// The next GET /session finds Officer in the first-run setup.
+function answerSetupState() {
+  vi.mocked(fetchSession).mockResolvedValueOnce({
+    accessMode: "setup",
+    authenticated: false,
+  });
 }
 
 // Lets pending answers and the renders they cause settle.
@@ -84,82 +145,70 @@ async function settle() {
 }
 
 describe("App", () => {
-  it("asks for the account mode first and opens the welcome after it", async () => {
-    const user = userEvent.setup();
-    const { fetchWelcomeSeen } = renderApp(null, false);
+  it.each([null, "multi"] as const)(
+    "opens no dialog over the shell with the account mode %s",
+    async (mode) => {
+      const { fetchMock } = renderApp(mode);
 
-    const modeDialog = await screen.findByRole("dialog", { name: MODE_TITLE });
-    await settle();
-    expect(fetchWelcomeSeen).toHaveBeenCalledTimes(1);
-    expect(queryDialog(WELCOME_TITLE)).not.toBeInTheDocument();
+      // The scope load and its first poll; no read of its own at startup.
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await settle();
 
-    await user.click(within(modeDialog).getByRole("button", { name: "Close" }));
+      expect(currentLocation()).toBe("/");
+      expect(screen.queryAllByRole("dialog", { hidden: true })).toHaveLength(0);
+    },
+  );
+});
 
-    expect(
-      await screen.findByRole("dialog", { name: WELCOME_TITLE }),
-    ).toBeInTheDocument();
-    expect(queryDialog(MODE_TITLE)).not.toBeInTheDocument();
-  });
+describe("App routes", () => {
+  it.each(["/", "/accounts", "/setup"])(
+    "renders the wizard at /setup for %s in the setup state",
+    async (path) => {
+      answerSetupState();
+      renderApp(null, path);
 
-  it("opens the welcome directly once a mode is stored, reading it once", async () => {
-    const { fetchMock } = renderApp("multi", false);
+      expect(
+        await screen.findByRole("button", { name: SETUP_STUB }),
+      ).toBeInTheDocument();
+      expect(currentLocation()).toBe("/setup");
+    },
+  );
 
-    expect(
-      await screen.findByRole("dialog", { name: WELCOME_TITLE }),
-    ).toBeInTheDocument();
-    await settle();
-    expect(queryDialog(MODE_TITLE)).not.toBeInTheDocument();
-    // The scope load and its first poll; no read of its own at startup.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("opens neither dialog once a mode is stored and the welcome is seen", async () => {
-    const { fetchMock, fetchWelcomeSeen } = renderApp("multi", true);
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await settle();
-
-    expect(fetchWelcomeSeen).toHaveBeenCalledTimes(1);
-    expect(screen.queryAllByRole("dialog", { hidden: true })).toHaveLength(0);
-  });
-
-  it("reads the welcome state only after the account mode answered", async () => {
-    let answer!: () => void;
-    const answered = new Promise<void>((resolve) => {
-      answer = resolve;
-    });
-    const fetchMock = vi.fn(async () => {
-      await answered;
-      return jsonResponse({
-        mode: "multi",
-        account: "",
-        features: { accounts: true, account: "" },
-        restartRequired: false,
+  it.each(["open", "token"] as const)(
+    "renders the review at /setup once setup is complete, in %s access",
+    async (accessMode) => {
+      vi.mocked(fetchSession).mockResolvedValueOnce({
+        accessMode,
+        authenticated: true,
       });
-    });
-    const fetchWelcomeSeen = vi.fn().mockResolvedValue(true);
-    renderWithApi(
-      <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
-        <MemoryRouter>
-          <App />
-        </MemoryRouter>
-      </ThemeProvider>,
-      {
-        fetch: fetchMock as unknown as typeof fetch,
-        api: { fetchWelcomeSeen },
-      },
+      renderApp("multi", "/setup");
+
+      expect(
+        await screen.findByText(`The review stub in ${accessMode}`),
+      ).toBeInTheDocument();
+      expect(currentLocation()).toBe("/setup");
+      await settle();
+      expect(
+        screen.queryByRole("button", { name: SETUP_STUB }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps the wizard after it admits the browser and moves on within /setup", async () => {
+    const user = userEvent.setup();
+    answerSetupState();
+    renderApp(null, "/setup");
+
+    await user.click(await screen.findByRole("button", { name: SETUP_STUB }));
+    await user.click(
+      screen.getByRole("button", { name: "Render the app again" }),
     );
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await settle();
-    expect(fetchWelcomeSeen).not.toHaveBeenCalled();
 
-    await act(async () => {
-      answer();
-    });
-
-    await waitFor(() => expect(fetchWelcomeSeen).toHaveBeenCalledTimes(1));
-    await settle();
-    expect(fetchWelcomeSeen).toHaveBeenCalledTimes(1);
+    expect(panelSession().accessMode).toBe("token");
+    expect(currentLocation()).toBe("/setup?x=1");
+    expect(
+      screen.getByRole("button", { name: SETUP_STUB }),
+    ).toBeInTheDocument();
   });
 });

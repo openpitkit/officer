@@ -51,6 +51,7 @@
     "sectionTitle": "Electronic Signature",
     "label": "Require signature on approval and attestation envelopes",
     "description": "When enabled, every approval and attestation envelope is signed with the active Ed25519 key. Connectors verify the signature before executing. When disabled, envelopes carry the full payload and binding but no cryptographic signature; the binding is still checked.",
+    "unsigned": "Envelopes go out unsigned: anyone who can write to the same channel can forge a decision. Turn the signature on before a program of yours executes orders on Officer's decisions.",
     "missingKeyError": "Electronic signatures need an active signing key. Set one up under Generate or Import above.",
     "busy": "Saving…"
   }

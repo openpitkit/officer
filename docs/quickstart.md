@@ -103,13 +103,18 @@ the command shows no line for `pit-officer`, go to
 Open <http://127.0.0.1:8787> in your browser and bookmark it.
 
 The address 127.0.0.1 means your own computer, so other computers cannot reach
-the panel. But the panel has no login, and this Officer has no access token yet -
-a secret that software must show to get in. So while Officer runs, other
-software on this computer can reach the panel, including other containers on
-Docker's default network and web pages you open in a browser on this computer.
-A coming Officer update adds an access-token mode that closes this. Until then,
-stop Officer with `docker stop pit-officer` while you are not using it, and do
-not run software you do not trust on this computer while Officer runs.
+the panel.
+
+The first time, the panel opens the first-run setup at
+<http://127.0.0.1:8787/setup>. It has seven steps: welcome, accounts,
+encryption, approval signing, access, connecting your AI agent, and done.
+
+The access step decides how software on this computer gets in. With an access
+token - a secret that software must show - the REST API and MCP, described
+below, let a program in only with the token, and the panel asks for a
+password. Software that can run commands as you, or control Docker, still gets
+past both. Without a token, the panel has no login. REST and MCP stay closed
+until you finish the setup.
 
 The same address also serves the REST API for programs under `/api/v1`, with
 its reference at `/docs`, and MCP for AI agents at `/mcp`.
@@ -271,8 +276,8 @@ If you choose port 8788, the command is:
 docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8788:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer
 ```
 
-Never remove `127.0.0.1:` from the command. The panel has no login. Without
-that prefix, other computers can reach the panel.
+Never remove `127.0.0.1:` from the command. Without that prefix, other
+computers can reach the panel.
 
 ### The name is already in use
 
@@ -341,7 +346,8 @@ In the panel, set up an account, an instrument, its market data, and the
 policies. Starting Officer does not do that for you. Nothing trades until you
 add a trading connection.
 
-Approval signing is off on a fresh Officer. To turn it on:
+Approval signing is off on a fresh Officer. The first-run setup offers to turn
+it on. To turn it on later:
 
 1. Set a master key first. It seals the secrets Officer stores, signing keys
    included. The [Master key](configuration.md#master-key) section of the

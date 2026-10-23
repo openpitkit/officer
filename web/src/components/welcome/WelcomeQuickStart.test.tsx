@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
@@ -27,7 +27,7 @@ import type {
   MarketDataInstance,
   MarketDataStatus,
 } from "@/api/types";
-import { WelcomeDialog } from "@/components/WelcomeDialog";
+import { WelcomeQuickStart } from "@/components/welcome/WelcomeQuickStart";
 import { ApiClientProvider, type OfficerApi } from "@/framework";
 import i18n from "@/i18n";
 import { setAccountScope } from "@/lib/accountScope";
@@ -51,7 +51,6 @@ const setMarketDataInstanceEnabledMock = vi.fn();
 const upsertMarketDataInstrumentMock = vi.fn();
 const updateAssetMock = vi.fn();
 const updateAssetClassMock = vi.fn();
-const setWelcomeSeenMock = vi.fn();
 const fetchPoliciesPageMock = vi.fn();
 
 const PRE_TRADE_ACCOUNTS =
@@ -125,7 +124,7 @@ function assetClass(overrides: Partial<AssetClass> = {}): AssetClass {
   };
 }
 
-function renderWelcome(onOpenChange = vi.fn()) {
+function renderQuickStart() {
   const api = {
     createAsset: createAssetMock,
     createAssetClass: createAssetClassMock,
@@ -142,7 +141,6 @@ function renderWelcome(onOpenChange = vi.fn()) {
     setAccountCurrency: setAccountCurrencyMock,
     setAccountNotes: setAccountNotesMock,
     setMarketDataInstanceEnabled: setMarketDataInstanceEnabledMock,
-    setWelcomeSeen: setWelcomeSeenMock,
     updateAsset: updateAssetMock,
     updateAssetClass: updateAssetClassMock,
     upsertMarketDataInstrument: upsertMarketDataInstrumentMock,
@@ -152,13 +150,12 @@ function renderWelcome(onOpenChange = vi.fn()) {
       <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
         <MemoryRouter>
           <ApiClientProvider config={{ baseUrl: "/app/api/v1" }} api={api}>
-            <WelcomeDialog open onOpenChange={onOpenChange} />
+            <WelcomeQuickStart />
           </ApiClientProvider>
         </MemoryRouter>
       </ThemeProvider>
     </I18nextProvider>,
   );
-  return onOpenChange;
 }
 
 beforeEach(() => {
@@ -195,40 +192,32 @@ beforeEach(() => {
     marketDataStatus({ instances: [byoInstance()] }),
   );
   setAccountCurrencyMock.mockResolvedValue({});
-  setWelcomeSeenMock.mockResolvedValue(true);
 });
 
-describe("WelcomeDialog", () => {
+describe("WelcomeQuickStart", () => {
   it("renders first-run actions", () => {
-    renderWelcome();
-    const dialog = screen.getByRole("dialog");
+    renderQuickStart();
 
-    expect(within(dialog).getByText("Welcome to Pit Officer")).toBeDefined();
     expect(
-      within(dialog).getByRole("button", {
+      screen.getByRole("button", {
         name: /Create demo account and positions/i,
       }),
     ).toBeDefined();
     expect(
-      within(dialog).getByRole("button", {
+      screen.getByRole("button", {
         name: /Install FX and crypto static prices/i,
       }),
     ).toBeDefined();
     expect(
-      within(dialog).getByRole("button", {
+      screen.getByRole("button", {
         name: /Get FX and crypto rates from Binance/i,
-      }),
-    ).toBeDefined();
-    expect(
-      within(dialog).getByRole("button", {
-        name: /Start working in Pit Officer/i,
       }),
     ).toBeDefined();
   });
 
   it("applies the policy preset with missingAccount=create so an unknown demo account is registered", async () => {
     const user = userEvent.setup();
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", { name: /Add starter policy barriers/i }),
@@ -260,9 +249,9 @@ describe("WelcomeDialog", () => {
     );
   });
 
-  it("applies static market-data preset without closing", async () => {
+  it("applies static market-data preset", async () => {
     const user = userEvent.setup();
-    const onOpenChange = renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", {
@@ -363,8 +352,6 @@ describe("WelcomeDialog", () => {
         }),
       );
     });
-    expect(onOpenChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog")).toBeDefined();
   });
 
   it("reports how far a preset got before a partial failure", async () => {
@@ -372,7 +359,7 @@ describe("WelcomeDialog", () => {
     upsertMarketDataInstrumentMock
       .mockResolvedValueOnce(marketDataStatus({ instances: [byoInstance()] }))
       .mockRejectedValueOnce(new Error("provider refused"));
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", {
@@ -428,7 +415,7 @@ describe("WelcomeDialog", () => {
       asset({ code: "META", title: "", assetClass: "auto-created" }),
       asset({ code: "KO", title: "", assetClass: "auto-created" }),
     ]);
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", {
@@ -462,7 +449,7 @@ describe("WelcomeDialog", () => {
 
   it("seeds demo account assets with explicit classes before positions", async () => {
     const user = userEvent.setup();
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", {
@@ -591,7 +578,7 @@ describe("WelcomeDialog", () => {
 
   it("applies Binance preset with provider-native FX symbols", async () => {
     const user = userEvent.setup();
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", {
@@ -678,36 +665,9 @@ describe("WelcomeDialog", () => {
     });
   });
 
-  it("persists the opt-out only when 'don't show again' is checked", async () => {
-    const user = userEvent.setup();
-    const onOpenChange = renderWelcome();
-
-    await user.click(
-      screen.getByRole("checkbox", { name: /don't show this again/i }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: /Start working in Pit Officer/i }),
-    );
-
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(setWelcomeSeenMock).toHaveBeenCalledWith(true);
-  });
-
-  it("does not persist when closed without checking the box", async () => {
-    const user = userEvent.setup();
-    const onOpenChange = renderWelcome();
-
-    await user.click(
-      screen.getByRole("button", { name: /Start working in Pit Officer/i }),
-    );
-
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(setWelcomeSeenMock).not.toHaveBeenCalled();
-  });
-
   it("describes the demo account it creates", async () => {
     const user = userEvent.setup();
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", {
@@ -724,7 +684,7 @@ describe("WelcomeDialog", () => {
   });
 
   it("links the accounts page under its several-accounts label", () => {
-    renderWelcome();
+    renderQuickStart();
 
     expect(screen.getByRole("link", { name: "Open accounts" })).toHaveAttribute(
       "href",
@@ -736,7 +696,7 @@ describe("WelcomeDialog", () => {
 
   it("checks neither positions nor barriers before writing its own account", async () => {
     const user = userEvent.setup();
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", {
@@ -754,7 +714,7 @@ describe("WelcomeDialog", () => {
   });
 });
 
-describe("WelcomeDialog while accounts are hidden", () => {
+describe("WelcomeQuickStart while accounts are hidden", () => {
   beforeEach(() => {
     setAccountScope({ accounts: false, account: "main" });
     fetchAccountsMock.mockResolvedValue([
@@ -763,27 +723,25 @@ describe("WelcomeDialog while accounts are hidden", () => {
   });
 
   it("labels the actions for the one account", () => {
-    renderWelcome();
-    const dialog = screen.getByRole("dialog");
+    renderQuickStart();
 
     expect(
-      within(dialog).getByRole("button", { name: "Add demo positions" }),
+      screen.getByRole("button", { name: "Add demo positions" }),
     ).toBeInTheDocument();
     expect(
-      within(dialog).queryByRole("button", { name: /demo account/i }),
+      screen.queryByRole("button", { name: /demo account/i }),
     ).not.toBeInTheDocument();
-    expect(
-      within(dialog).getByRole("link", { name: "Open account" }),
-    ).toHaveAttribute("href", "/accounts");
-    expect(within(dialog).getByText(PRE_TRADE_ACCOUNT)).toBeInTheDocument();
-    expect(
-      within(dialog).queryByText(PRE_TRADE_ACCOUNTS),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open account" })).toHaveAttribute(
+      "href",
+      "/accounts",
+    );
+    expect(screen.getByText(PRE_TRADE_ACCOUNT)).toBeInTheDocument();
+    expect(screen.queryByText(PRE_TRADE_ACCOUNTS)).not.toBeInTheDocument();
   });
 
   it("funds the default account without creating or describing one", async () => {
     const user = userEvent.setup();
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", { name: "Add demo positions" }),
@@ -811,7 +769,7 @@ describe("WelcomeDialog while accounts are hidden", () => {
 
   it("writes the starter barriers for the default account", async () => {
     const user = userEvent.setup();
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", { name: /Add starter policy barriers/i }),
@@ -834,7 +792,7 @@ describe("WelcomeDialog while accounts are hidden", () => {
     fetchAccountsMock.mockResolvedValue([
       accountRow("main", { positionCount: 2 }),
     ]);
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", { name: "Add demo positions" }),
@@ -873,7 +831,7 @@ describe("WelcomeDialog while accounts are hidden", () => {
       ],
       total: 1,
     });
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", { name: /Add starter policy barriers/i }),
@@ -899,7 +857,7 @@ describe("WelcomeDialog while accounts are hidden", () => {
       })),
       total: 1001,
     });
-    renderWelcome();
+    renderQuickStart();
 
     await user.click(
       screen.getByRole("button", { name: /Add starter policy barriers/i }),

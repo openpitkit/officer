@@ -16,9 +16,15 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
-import { LoadingStatus, TableSkeleton } from "@/components/PageStates";
+import {
+  FullScreenError,
+  FullScreenLoading,
+  LoadingStatus,
+  TableSkeleton,
+} from "@/components/PageStates";
 import i18n from "@/i18n";
 
 describe("TableSkeleton", () => {
@@ -38,5 +44,42 @@ describe("LoadingStatus", () => {
     expect(
       screen.getByRole("status", { name: i18n.t("states.loading") }),
     ).toHaveAttribute("aria-busy", "true");
+  });
+});
+
+describe("FullScreenLoading", () => {
+  it("announces a busy loading status", () => {
+    render(<FullScreenLoading />);
+
+    expect(
+      screen.getByRole("status", { name: i18n.t("states.loading") }),
+    ).toHaveAttribute("aria-busy", "true");
+  });
+});
+
+describe("FullScreenError", () => {
+  it("shows the title and the message and retries", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    render(
+      <FullScreenError
+        title="Could not check the session"
+        message="connection refused"
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText("Could not check the session")).toBeInTheDocument();
+    expect(screen.getByText("connection refused")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: i18n.t("actions.retry") }),
+    );
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads as the error state without a title", () => {
+    render(<FullScreenError message="connection refused" onRetry={vi.fn()} />);
+
+    expect(screen.getByText(i18n.t("states.loadError"))).toBeInTheDocument();
   });
 });

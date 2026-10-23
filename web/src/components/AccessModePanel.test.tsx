@@ -25,6 +25,7 @@ import {
   AccessModePanel,
   OpenAccessWarning,
 } from "@/components/AccessModePanel";
+import type { AcknowledgementState } from "@/components/Acknowledgement";
 
 const PASSWORD = "correct-horse-battery-staple";
 const WARNING_TITLE =
@@ -39,10 +40,12 @@ function renderPanel({
   mode = "token",
   passwordError,
   disabled = false,
+  acknowledgement,
 }: {
   mode?: AccessMode;
   passwordError?: string;
   disabled?: boolean;
+  acknowledgement?: Omit<AcknowledgementState, "disabled">;
 } = {}) {
   const onModeChange = vi.fn();
   const onPasswordChange = vi.fn();
@@ -58,6 +61,7 @@ function renderPanel({
         onPasswordChange={onPasswordChange}
         passwordError={passwordError}
         disabled={disabled}
+        acknowledgement={acknowledgement}
       />
     );
   }
@@ -178,6 +182,25 @@ describe("AccessModePanel", () => {
     expect(
       screen.queryByLabelText("New panel password"),
     ).not.toBeInTheDocument();
+  });
+
+  it("asks for the acknowledgement it is given when no token is chosen", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderPanel({
+      mode: "token",
+      acknowledgement: { acknowledged: false, onChange },
+    });
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "No token" }));
+
+    expect(screen.getByText(WARNING_TITLE)).toBeInTheDocument();
+    const checkbox = screen.getByRole("checkbox", { name: ACKNOWLEDGEMENT });
+    expect(checkbox).not.toBeChecked();
+
+    await user.click(checkbox);
+    expect(onChange).toHaveBeenLastCalledWith(true);
   });
 
   it("reports the choice and drops the password when the choice changes", async () => {
@@ -347,6 +370,18 @@ describe("AccessModePanel", () => {
     ]) {
       expect(control).toBeDisabled();
     }
+  });
+
+  it("disables the acknowledgement it is given while disabled", () => {
+    renderPanel({
+      mode: "open",
+      disabled: true,
+      acknowledgement: { acknowledged: false, onChange: vi.fn() },
+    });
+
+    expect(
+      screen.getByRole("checkbox", { name: ACKNOWLEDGEMENT }),
+    ).toBeDisabled();
   });
 });
 

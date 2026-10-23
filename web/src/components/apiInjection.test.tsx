@@ -22,9 +22,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { BusinessCsvExportDialog } from "@/components/BusinessCsvDialogs";
 import { PendingRestartBanner } from "@/components/PendingRestartBanner";
-import { WelcomeDialog } from "@/components/WelcomeDialog";
+import { WelcomeQuickStart } from "@/components/welcome/WelcomeQuickStart";
 import { jsonResponse, renderWithApi } from "@/test/apiClient";
-import { ThemeProvider } from "@/theme/ThemeProvider";
 
 const injectedBaseUrl = "https://host.example/officer/api";
 
@@ -65,27 +64,26 @@ function expectInjectedRequest(call: unknown[], path: string) {
 }
 
 describe("API provider injection", () => {
-  it("routes welcome dismissal through the injected API client", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ welcomeSeen: true }));
+  it("routes the quick-start barrier preset through the injected API client", async () => {
+    // The first barrier stays pending, so the preset sends exactly one request.
+    const fetchMock = vi.fn().mockReturnValue(new Promise<Response>(() => {}));
 
     renderWithInjectedApi(
       <MemoryRouter>
-        <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
-          <WelcomeDialog open onOpenChange={vi.fn()} />
-        </ThemeProvider>
+        <WelcomeQuickStart />
       </MemoryRouter>,
       fetchMock as unknown as typeof fetch,
     );
 
-    await userEvent.click(screen.getByRole("checkbox"));
     await userEvent.click(
-      screen.getByRole("button", { name: /start working in pit officer/i }),
+      screen.getByRole("button", { name: /add starter policy barriers/i }),
     );
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expectInjectedRequest(fetchMock.mock.calls[0], "/user-settings");
+    expectInjectedRequest(
+      fetchMock.mock.calls[0],
+      "/limits/rate?missingAccount=create",
+    );
     expect((fetchMock.mock.calls[0] as [string, RequestInit])[1].method).toBe(
       "PUT",
     );

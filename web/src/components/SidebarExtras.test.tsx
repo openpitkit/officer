@@ -17,12 +17,13 @@
 
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useMarketData } from "@/api/useMarketData";
 import { useService } from "@/api/useService";
 import {
+  AboutNavEntry,
   LogoutNavEntry,
   NonReleaseNavEntry,
   RestartRequiredNavEntry,
@@ -116,6 +117,32 @@ describe("SidebarExtras page request ownership", () => {
 
     expect(useServiceMock).toHaveBeenCalledOnce();
     expect(screen.getByRole("link")).toHaveAttribute("href", "/service");
+  });
+});
+
+describe("AboutNavEntry", () => {
+  function LocationProbe() {
+    const location = useLocation();
+    return <output aria-label="Current location">{location.pathname}</output>;
+  }
+
+  it("leads to the first-run guide at /setup", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/accounts"]}>
+        <AboutNavEntry />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "About" }));
+    await user.click(
+      await screen.findByRole("link", { name: "Open first-run guide" }),
+    );
+
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(
+      "/setup",
+    );
   });
 });
 

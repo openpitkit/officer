@@ -15,65 +15,49 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 
-import { AccountModeDialog } from "@/components/AccountModeDialog";
 import { SidebarProvider } from "@/components/SidebarContext";
-import { StartupGate, useStartupAccountMode } from "@/components/StartupGate";
-import { WelcomeDialog } from "@/components/WelcomeDialog";
-import { AppRoutes, Sidebar, useOfficerApi } from "@/framework";
+import { StartupGate } from "@/components/StartupGate";
+import { AppRoutes, Sidebar } from "@/framework";
+import { panelSession } from "@/lib/panelSession";
+import { Setup, SetupReview } from "@/pages/Setup";
 
 export default function App() {
   return (
     <StartupGate>
-      <SidebarProvider>
-        <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
-          <Sidebar />
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <AppRoutes />
-          </div>
-        </div>
-        <StartupDialogs />
-      </SidebarProvider>
+      <Routes>
+        <Route path="/setup" element={<SetupRoute />} />
+        <Route path="*" element={<ShellRoute />} />
+      </Routes>
     </StartupGate>
   );
 }
 
-/**
- * The account-mode question while no mode is stored, then the welcome dialog,
- * which never opens over the question.
- */
-function StartupDialogs() {
-  const { mode } = useStartupAccountMode();
-  const { fetchWelcomeSeen } = useOfficerApi();
-  const [asking, setAsking] = useState(mode === null);
-  // The welcome dialog shows on every load until the operator dismisses it with
-  // "don't show again", which the backend persists in user settings.
-  const [welcomeOpen, setWelcomeOpen] = useState(false);
+/** The first-run wizard while setup is not complete, else its review. */
+function SetupRoute() {
+  // Decided once, on mount: "Finish setup" admits `token` or `open`, and the
+  // wizard goes on to its last steps on this page, which a later render must
+  // not turn into the review; a browser that mounts the routes again after it,
+  // as on the startup gate's Retry, lands in the review.
+  const [mode] = useState(() => panelSession().accessMode);
+  return mode === "setup" ? <Setup /> : <SetupReview accessMode={mode} />;
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchWelcomeSeen()
-      .then((seen) => {
-        if (!cancelled && !seen) {
-          setWelcomeOpen(true);
-        }
-      })
-      .catch(() => {
-        // On a transient failure, leave the dialog closed rather than nag.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchWelcomeSeen]);
-
+/** The panel shell, or the first-run wizard while setup is not complete. */
+function ShellRoute() {
+  if (panelSession().accessMode === "setup") {
+    return <Navigate to="/setup" replace />;
+  }
   return (
-    <>
-      {asking && <AccountModeDialog onDone={() => setAsking(false)} />}
-      <WelcomeDialog
-        open={!asking && welcomeOpen}
-        onOpenChange={setWelcomeOpen}
-      />
-    </>
+    <SidebarProvider>
+      <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
+        <Sidebar />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <AppRoutes />
+        </div>
+      </div>
+    </SidebarProvider>
   );
 }

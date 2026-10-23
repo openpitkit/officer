@@ -25,7 +25,6 @@ import { useMarketData } from "@/api/useMarketData";
 import { useService } from "@/api/useService";
 import { errMessage } from "@/components/AccountDialogs";
 import { CompactStaleState, ErrorBanner } from "@/components/PageStates";
-import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { useSidebar } from "@/components/sidebar-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -142,7 +141,6 @@ export function LogoutNavEntry() {
 
 export function AboutNavEntry() {
   const { t } = useTranslation();
-  const [welcomeOpen, setWelcomeOpen] = useState(false);
   const aboutLinks = [
     {
       label: t("about.links.website"),
@@ -163,64 +161,56 @@ export function AboutNavEntry() {
   ];
 
   return (
-    <>
-      <Dialog>
-        <DialogTrigger asChild>
-          <button
-            type="button"
-            className="mt-1 flex w-full items-center gap-[var(--dens-nav-gap)] rounded-[3px] px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-left text-[length:var(--dens-footer-fz)] text-muted transition-colors hover:bg-surface-hover hover:text-muted-lt"
-          >
-            <Info className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
-            <span className="flex-1">{t("about.title")}</span>
-          </button>
-        </DialogTrigger>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>{t("about.title")}</DialogTitle>
-            <DialogDescription>{t("about.description")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 text-sm">
-            <div className="rounded-card border border-border bg-surface-2 p-3">
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
-                {t("about.product")}
-              </div>
-              <div className="mt-1 text-text">{t("brand.name")}</div>
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          className="mt-1 flex w-full items-center gap-[var(--dens-nav-gap)] rounded-[3px] px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-left text-[length:var(--dens-footer-fz)] text-muted transition-colors hover:bg-surface-hover hover:text-muted-lt"
+        >
+          <Info className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
+          <span className="flex-1">{t("about.title")}</span>
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{t("about.title")}</DialogTitle>
+          <DialogDescription>{t("about.description")}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 text-sm">
+          <div className="rounded-card border border-border bg-surface-2 p-3">
+            <div className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
+              {t("about.product")}
             </div>
-            <div className="rounded-card border border-border bg-surface-2 p-3">
-              <div className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
-                {t("about.copyrightLabel")}
-              </div>
-              <div className="mt-1 text-text">{t("about.copyright")}</div>
+            <div className="mt-1 text-text">{t("brand.name")}</div>
+          </div>
+          <div className="rounded-card border border-border bg-surface-2 p-3">
+            <div className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
+              {t("about.copyrightLabel")}
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {aboutLinks.map((link) => (
-                <a
-                  key={link.href}
-                  href={link.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-between gap-3 rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-muted-lt transition-colors hover:border-border-hover hover:bg-card-hover-bg hover:text-accent"
-                >
-                  <span>{link.label}</span>
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                </a>
-              ))}
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full"
-              onClick={() => {
-                setWelcomeOpen(true);
-              }}
-            >
+            <div className="mt-1 text-text">{t("about.copyright")}</div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {aboutLinks.map((link) => (
+              <a
+                key={link.href}
+                href={link.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-between gap-3 rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-muted-lt transition-colors hover:border-border-hover hover:bg-card-hover-bg hover:text-accent"
+              >
+                <span>{link.label}</span>
+                <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+              </a>
+            ))}
+          </div>
+          <Button asChild variant="outline" className="w-full">
+            <Link to="/setup">
               <Info />
               {t("about.openWelcome")}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-      <WelcomeDialog open={welcomeOpen} onOpenChange={setWelcomeOpen} />
-    </>
+            </Link>
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

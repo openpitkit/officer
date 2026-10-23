@@ -15,7 +15,6 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { Loader2 } from "lucide-react";
 import {
   createContext,
   useCallback,
@@ -27,7 +26,12 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { fetchSession, type AccessMode, type SessionState } from "@/api/access";
+import {
+  fetchSession,
+  type AccessMode,
+  type SessionMode,
+  type SessionState,
+} from "@/api/access";
 import {
   fetchAccountMode,
   type AccountFeatures,
@@ -35,7 +39,11 @@ import {
 } from "@/api/accountMode";
 import { usePolling, type LoadState } from "@/api/usePolling";
 import { errMessage } from "@/components/AccountDialogs";
-import { ErrorState, StaleState } from "@/components/PageStates";
+import {
+  FullScreenError,
+  FullScreenLoading,
+  StaleState,
+} from "@/components/PageStates";
 import { useApiClient } from "@/framework";
 import { setAccountScope } from "@/lib/accountScope";
 import { onCheckSession, setPanelSession } from "@/lib/panelSession";
@@ -48,21 +56,25 @@ const LOADING: LoadState<AccountModeState> = {
   error: null,
 };
 
-const StartupAccountModeContext = createContext<AccountModeState | null>(null);
+const StartupAdmitContext = createContext<
+  ((accessMode: AccessMode) => void) | null
+>(null);
 
 /**
- * The account mode as the gate loaded it before the shell rendered; later
- * polls do not change it.
+ * Admits this browser under an access mode: stores the mode it is now admitted
+ * under and makes the answers of earlier session checks stale. For a screen
+ * that switched the access mode itself and holds the session for the new one,
+ * so a later check does not reload the page.
  *
  * @throws Error when used outside StartupGate.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- Gate hook.
-export function useStartupAccountMode(): AccountModeState {
-  const state = useContext(StartupAccountModeContext);
-  if (state === null) {
-    throw new Error("useStartupAccountMode is used outside StartupGate");
+export function useStartupAdmit(): (accessMode: AccessMode) => void {
+  const admit = useContext(StartupAdmitContext);
+  if (admit === null) {
+    throw new Error("useStartupAdmit is used outside StartupGate");
   }
-  return state;
+  return admit;
 }
 
 /** Where the session step of the gate stands. */
@@ -82,9 +94,10 @@ const ADMITTED: SessionStep = { state: "admitted" };
  * Holds what must be settled before the shell renders: the session, then the
  * account mode. In `token` access mode without a session it shows the login
  * or the password recovery screen in place of `children` and keeps the URL.
- * `checkSession()` asks `GET /session` again and shows the login screen once
- * the session is gone, or reloads the page when the access mode switched since
- * the browser was admitted. One check runs at a time: an ask during it makes
+ * In `setup`, before the first-run wizard is complete, it admits the browser
+ * without a login, as in `open`. `checkSession()` asks `GET /session` again
+ * and shows the login screen once the session is gone, or reloads the page
+ * when the access mode switched since the browser was admitted. One check runs at a time: an ask during it makes
  * its answer stale and starts one more check after it settles, and an
  * admission makes the answers of earlier checks stale. Once admitted it renders
  * `children` only after the account scope of the running process is loaded,
@@ -104,9 +117,9 @@ export function StartupGate({ children }: { children: ReactNode }) {
   // once that one settles.
   const followUp = useRef(false);
   // The access mode the browser was admitted under, once it was.
-  const admittedMode = useRef<AccessMode | null>(null);
+  const admittedMode = useRef<SessionMode | null>(null);
 
-  const admit = useCallback((accessMode: AccessMode) => {
+  const admit = useCallback((accessMode: SessionMode) => {
     generation.current += 1;
     admittedMode.current = accessMode;
     // Set before the state update, so the session is in place before the
@@ -214,7 +227,11 @@ export function StartupGate({ children }: { children: ReactNode }) {
       />
     );
   }
-  return <AccountModeStep>{children}</AccountModeStep>;
+  return (
+    <StartupAdmitContext.Provider value={admit}>
+      <AccountModeStep>{children}</AccountModeStep>
+    </StartupAdmitContext.Provider>
+  );
 }
 
 /**
@@ -268,44 +285,10 @@ function AccountModeStep({ children }: { children: ReactNode }) {
     );
   }
   return (
-    <StartupAccountModeContext.Provider value={load.data}>
+    <>
       {children}
       <AccountScopeWatch loaded={load.data.features} />
-    </StartupAccountModeContext.Provider>
-  );
-}
-
-/** The whole viewport while a startup step loads. */
-function FullScreenLoading() {
-  const { t } = useTranslation();
-  return (
-    <div
-      role="status"
-      aria-busy="true"
-      aria-label={t("states.loading")}
-      className="flex h-dvh w-full items-center justify-center bg-bg"
-    >
-      <Loader2 className="h-5 w-5 animate-spin text-muted-lt" />
-    </div>
-  );
-}
-
-/** The whole viewport when a startup step could not load, with a retry. */
-function FullScreenError({
-  title,
-  message,
-  onRetry,
-}: {
-  title: string;
-  message: string;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="flex h-dvh w-full items-center justify-center bg-bg p-6 text-text">
-      <div className="w-full max-w-lg">
-        <ErrorState title={title} message={message} onRetry={onRetry} />
-      </div>
-    </div>
+    </>
   );
 }
 

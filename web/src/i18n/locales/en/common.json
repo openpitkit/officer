@@ -391,9 +391,6 @@
     }
   },
   "welcome": {
-    "badgeLocal": "local service",
-    "title": "Welcome to Pit Officer",
-    "description": "Set up the control plane deliberately. Nothing is traded or connected until you choose a source and a workflow.",
     "sections": {
       "product": "What this app is",
       "uses": "How it can be used",
@@ -442,8 +439,7 @@
       "openAccounts": "Open accounts",
       "openAccount": "Open account",
       "openPolicies": "Open policies",
-      "openMarketData": "Open market data",
-      "start": "Start working in Pit Officer"
+      "openMarketData": "Open market data"
     },
     "presets": {
       "accountNote": "Created from the first-run guide. Replace with the real account identifier before production use."
@@ -458,13 +454,7 @@
       "accountHoldsPositions": "The account {{account}} already holds positions. The demo writes only into an account without positions.",
       "barriersExist": "The account {{account}} already has a starter barrier. The demo writes only into an account without them.",
       "barriersUnread": "Not every barrier of the account {{account}} could be read, so the demo writes nothing."
-    },
-    "returnHint": "You can return to this dialog from the About dialog.",
-    "dontShowAgain": "Don't show this again"
-  },
-  "accountModeDialog": {
-    "title": "How many accounts will you use?",
-    "description": "With one account, Officer acts on it only and the panel shows no account fields. The mode can be changed later on the Service page."
+    }
   },
   "display": {
     "density": {

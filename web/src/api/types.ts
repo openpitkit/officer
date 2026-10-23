@@ -1062,7 +1062,6 @@ export type BackupSection =
   | "risk_limits"
   | "market_data_settings"
   | "general_settings"
-  | "user_settings"
   | "activity_history"
   | "trading"
   | "audit_log";
@@ -1118,7 +1117,6 @@ export interface BackupData {
   signingKeys?: Record<string, unknown>[];
   settings?: Record<string, unknown>[];
   mcpAccess?: Record<string, boolean>;
-  userSettings?: Record<string, unknown>[];
 }
 
 export type BackupCredentialForm = "plaintext" | "sealed";

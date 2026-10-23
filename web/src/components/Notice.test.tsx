@@ -78,7 +78,30 @@ describe("Notice", () => {
     expect(alert).toHaveTextContent("Set a master key.");
   });
 
+  it("renders no detail block for a title-only notice", () => {
+    const { container } = render(
+      <Notice tone="ok" icon={Info} title="Encryption is on" />,
+    );
+    const title = screen.getByText("Encryption is on");
+    expect(title.nextElementSibling).toBeNull();
+    expect(container.querySelectorAll("p")).toHaveLength(1);
+  });
+
   it.each([
+    {
+      tone: "info",
+      box: ["border-border", "bg-surface"],
+      icon: "text-muted-lt",
+      title: "text-text",
+      detail: "text-muted-lt",
+    },
+    {
+      tone: "ok",
+      box: ["border-[var(--ok)]", "bg-[var(--ok-dim)]"],
+      icon: "text-[var(--ok)]",
+      title: "text-text",
+      detail: "text-muted-lt",
+    },
     {
       tone: "warn",
       box: ["border-[var(--warn)]", "bg-[var(--warn-dim)]"],

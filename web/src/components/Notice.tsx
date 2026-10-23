@@ -21,6 +21,18 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 const TONES = {
+  info: {
+    box: "border-border bg-surface",
+    icon: "text-muted-lt",
+    title: "text-text",
+    detail: "text-muted-lt",
+  },
+  ok: {
+    box: "border-[var(--ok)] bg-[var(--ok-dim)]",
+    icon: "text-[var(--ok)]",
+    title: "text-text",
+    detail: "text-muted-lt",
+  },
   warn: {
     box: "border-[var(--warn)] bg-[var(--warn-dim)]",
     icon: "text-[var(--warn)]",
@@ -36,12 +48,19 @@ const TONES = {
 } as const;
 
 export type NoticeProps = {
-  /** Colours of the border, background, icon, title and detail. */
+  /**
+   * Colours of the border, background, icon, title and detail: `info` for a
+   * neutral fact, `ok` for a condition that is met, `warn` and `danger` for
+   * one that needs attention.
+   */
   tone: keyof typeof TONES;
   icon: LucideIcon;
   title: ReactNode;
-  /** Detail under the title: paragraphs, links, a stale-state badge. */
-  children: ReactNode;
+  /**
+   * Detail under the title: paragraphs, links, a stale-state badge. Without
+   * it the notice is its title alone.
+   */
+  children?: ReactNode;
   /** Control on the right, e.g. the button that resolves the notice. */
   action?: ReactNode;
   /** "alert" for a warning that must be announced when it appears. */
@@ -49,7 +68,7 @@ export type NoticeProps = {
 };
 
 /** Card that tells the operator about a condition: a tone-coloured icon, a
- *  title, its detail and an optional action. */
+ *  title, its optional detail and an optional action. */
 export function Notice({
   tone,
   icon: Icon,
@@ -72,9 +91,11 @@ export function Notice({
       />
       <div className="min-w-0 flex-1">
         <p className={cn("font-semibold", TONES[tone].title)}>{title}</p>
-        <div className={cn("space-y-1 text-xs", TONES[tone].detail)}>
-          {children}
-        </div>
+        {children !== undefined && children !== null && (
+          <div className={cn("space-y-1 text-xs", TONES[tone].detail)}>
+            {children}
+          </div>
+        )}
       </div>
       {action && <div className="self-center">{action}</div>}
     </div>

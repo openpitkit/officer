@@ -34,6 +34,8 @@ import { useSigningKeys } from "@/api/useSigningKeys";
 import { SidebarProvider } from "@/components/SidebarContext";
 import i18n from "@/i18n";
 import { SigningKeys } from "@/pages/SigningKeys";
+import { storage } from "@/test/credentialStorage";
+import { mockReady } from "@/test/signingKeys";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
@@ -88,32 +90,11 @@ function makeStatus(
   };
 }
 
-function mockReady(status: SigningKeysStatus) {
-  useSigningKeysMock.mockReturnValue({
-    load: { state: "ready", data: status, error: null },
-    reload: vi.fn(),
-  } as ReturnType<typeof useSigningKeys>);
-}
-
 function mockLoading() {
   useSigningKeysMock.mockReturnValue({
     load: { state: "loading", data: null, error: null },
     reload: vi.fn(),
   } as ReturnType<typeof useSigningKeys>);
-}
-
-function storage(credentialsSealed: boolean): LoadState<CredentialStorage> {
-  return {
-    state: "ready",
-    data: {
-      credentialsSealed,
-      plaintextTradingKeys: false,
-      plaintextMarketDataKeys: false,
-      sealedAt: null,
-      resealedSecrets: 0,
-    },
-    error: null,
-  };
 }
 
 function mockStorage(load: LoadState<CredentialStorage>) {
@@ -266,6 +247,16 @@ describe("SigningKeys page - master key", () => {
     expect(screen.getByRole("button", { name: /^Import$/i })).toBeDisabled();
   });
 
+  it("ends the notice in the link to the master key guide on Service", () => {
+    mockReady(makeStatus());
+    mockStorage(storage(false));
+    renderPage();
+    const notice = screen.getByText(noticeTitle).parentElement as HTMLElement;
+    expect(
+      within(notice).getByRole("link", { name: "How to set a master key" }),
+    ).toHaveAttribute("href", "/service#security");
+  });
+
   it("leaves key entry open with a master key", async () => {
     mockReady(makeStatus());
     mockStorage(storage(true));
@@ -382,6 +373,21 @@ describe("SigningKeys page - export", () => {
 });
 
 describe("SigningKeys page - eSign toggle", () => {
+  const unsigned =
+    "Envelopes go out unsigned: anyone who can write to the same channel can forge a decision. Turn the signature on before a program of yours executes orders on Officer's decisions.";
+
+  it("warns that envelopes go out unsigned while the signature is off", () => {
+    mockReady(makeStatus({ eSignEnabled: false }));
+    renderPage();
+    expect(screen.getByText(unsigned)).toBeInTheDocument();
+  });
+
+  it("drops the unsigned warning while the signature is on", () => {
+    mockReady(makeStatus({ eSignEnabled: true }));
+    renderPage();
+    expect(screen.queryByText(unsigned)).not.toBeInTheDocument();
+  });
+
   it("calls setESignEnabled(false) when toggled off", async () => {
     mockReady(makeStatus({ eSignEnabled: true }));
     renderPage();

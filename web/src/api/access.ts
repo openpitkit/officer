@@ -25,13 +25,19 @@ import { isRfc3339Time } from "@/framework/api/rfc3339";
  */
 export type AccessMode = "open" | "token";
 
+/**
+ * The access mode `GET /session` reports: an access mode, or `setup` before
+ * the first-run wizard is complete.
+ */
+export type SessionMode = AccessMode | "setup";
+
 /** The answer of `GET /session`. */
 export interface SessionState {
-  /** The access mode the running process enforces. */
-  accessMode: AccessMode;
+  /** The access mode the running process enforces, or `setup`. */
+  accessMode: SessionMode;
   /**
    * Whether the request carried a live session cookie; always false in
-   * `open`, so the access mode decides first.
+   * `open` and `setup`, so the access mode decides first.
    */
   authenticated: boolean;
 }
@@ -62,13 +68,27 @@ function decodeSession(value: unknown): SessionState {
     throw invalid("session", "body", "must be an object");
   }
   const { accessMode, setupComplete, authenticated } = value;
-  // The first-run setup state is not handled by the panel yet: a process that
-  // reports it is a load error, not a guessed mode.
-  if (accessMode !== "open" && accessMode !== "token") {
-    throw invalid("session", "accessMode", 'must be "open" or "token"');
+  if (
+    accessMode !== "setup" &&
+    accessMode !== "open" &&
+    accessMode !== "token"
+  ) {
+    throw invalid(
+      "session",
+      "accessMode",
+      'must be "setup", "open" or "token"',
+    );
   }
-  if (setupComplete !== true) {
-    throw invalid("session", "setupComplete", "must be true");
+  if (accessMode === "setup") {
+    if (setupComplete !== false) {
+      throw invalid("session", "setupComplete", "must be false in setup");
+    }
+  } else if (setupComplete !== true) {
+    throw invalid(
+      "session",
+      "setupComplete",
+      `must be true in ${accessMode} access`,
+    );
   }
   if (typeof authenticated !== "boolean") {
     throw invalid("session", "authenticated", "must be a boolean");

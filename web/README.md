@@ -85,21 +85,26 @@ catalogs under stable ids. A host application can replace an entry by
 registering the same id or remove it with the matching unregister API.
 
 `src/App.tsx` wraps the framework `Sidebar` and `AppRoutes` in the app's
-startup flow. `StartupGate` asks `GET /session` first: in `token` access mode
-it shows the login or password recovery screen until the browser has a
-session, and a `401 unauthorized` from any request returns it there. It then
-reads `GET /account-mode` before the shell renders and keeps polling it; a
-restart into another account mode reloads the page. While no account mode is stored, the app asks for one before the welcome
-dialog opens. App code asks `accountScope()` (`src/lib/accountScope.ts`)
-whether accounts are shown and which account a request carries, never whether
-the mode is single; `src/register.ts` switches the Accounts navigation entry
-and page through `when` predicates.
+startup flow. `StartupGate` asks `GET /session` first. In the `setup` state,
+while the first-run setup is not finished, it admits the browser without a
+login, and every path goes to the full-screen wizard at `/setup`
+(`src/pages/Setup.tsx`), outside the shell. In `token` access mode it shows the
+login or password recovery screen until the browser has a session, and a
+`401 unauthorized` from any request returns it there. It then reads
+`GET /account-mode` before rendering and keeps polling it; a restart into
+another account mode reloads the page. A reset of the database returns the
+panel to the wizard. After setup, `/setup` opens the same wizard in review
+mode, from About > First-run guide and Service > Security. App code asks
+`accountScope()` (`src/lib/accountScope.ts`) whether accounts are shown and
+which account a request carries, never whether the mode is single;
+`src/register.ts` switches the Accounts navigation entry and page through
+`when` predicates.
 
 Service > Security shows and changes the access mode, the panel password,
 browser sessions and both tokens; its storage section shows encryption with
-the master key guide, decision signing and the account mode. Connect your
-agent carries the agent token in every connect command and configuration in
-`token` access mode.
+the master key guide, decision signing and the account mode; its guide section
+reopens the first-run setup. Connect your agent carries the agent token in every
+connect command and configuration in `token` access mode.
 
 ## Consuming the web library
 

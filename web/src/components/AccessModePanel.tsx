@@ -35,12 +35,15 @@ import {
   passwordLengthAllowed,
   type AccessMode,
 } from "@/api/access";
+import {
+  Acknowledgement,
+  type AcknowledgementState,
+} from "@/components/Acknowledgement";
 import { ChoiceCards } from "@/components/ChoiceCards";
 import { Notice } from "@/components/Notice";
 import { PasswordPairFields } from "@/components/PasswordPairFields";
 import { RevealButton } from "@/components/RevealButton";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
 /** Crockford's base32 alphabet: no I, L, O or U to misread. */
 const PASSWORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -218,11 +221,7 @@ const FACTS = [
 export function OpenAccessWarning({
   acknowledgement,
 }: {
-  acknowledgement?: {
-    acknowledged: boolean;
-    onChange: (acknowledged: boolean) => void;
-    disabled: boolean;
-  };
+  acknowledgement?: AcknowledgementState;
 }) {
   const { t } = useTranslation("service");
   return (
@@ -241,16 +240,9 @@ export function OpenAccessWarning({
       <p className="text-muted-lt">{t("access.warning.pages")}</p>
       <p>{t("access.warning.close")}</p>
       {acknowledgement !== undefined && (
-        <label className="flex items-center gap-2 pt-1 text-sm font-medium text-text">
-          <Input
-            type="checkbox"
-            className="h-4 w-4"
-            checked={acknowledgement.acknowledged}
-            disabled={acknowledgement.disabled}
-            onChange={(event) => acknowledgement.onChange(event.target.checked)}
-          />
+        <Acknowledgement {...acknowledgement}>
           {t("access.warning.acknowledge")}
-        </label>
+        </Acknowledgement>
       )}
     </Notice>
   );
@@ -270,6 +262,7 @@ export function AccessModePanel({
   passwordError,
   passwordRef,
   disabled,
+  acknowledgement,
 }: {
   /** The selected choice. */
   mode: AccessMode;
@@ -284,6 +277,12 @@ export function AccessModePanel({
   /** The new password input, for a caller that moves the focus to it. */
   passwordRef?: Ref<HTMLInputElement>;
   disabled: boolean;
+  /**
+   * The confirmation the warning of `open` ends in. The first-run wizard asks
+   * for it at the moment `open` is chosen; the Security tab of Service shows
+   * the running mode and asks for none. The checkbox follows `disabled`.
+   */
+  acknowledgement?: Omit<AcknowledgementState, "disabled">;
 }) {
   const { t } = useTranslation("service");
   return (
@@ -337,7 +336,9 @@ export function AccessModePanel({
           </ul>
         </div>
       ) : (
-        <OpenAccessWarning />
+        <OpenAccessWarning
+          acknowledgement={acknowledgement && { ...acknowledgement, disabled }}
+        />
       )}
     </div>
   );

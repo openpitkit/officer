@@ -311,6 +311,10 @@ describe("StorageSection", () => {
 
     expect(await screen.findByText(EXPOSED_TITLE)).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toHaveTextContent("internal");
+    expect(screen.getAllByText("internal")).toHaveLength(1);
+    expect(
+      screen.queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
     expect(within(notice()).getByText(TOKENS_SENTENCE)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Regenerate" }),

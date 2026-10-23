@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   endAllSessions,
@@ -33,24 +33,15 @@ import {
   requestRecoveryCode,
   resetPassword,
 } from "@/api/access";
-import { ApiError, createApiClient } from "@/framework";
-import { errorResponse, jsonResponse } from "@/test/apiClient";
+import { ApiError } from "@/framework";
+import {
+  clientAnswering,
+  errorResponse,
+  jsonResponse,
+  sentRequest,
+} from "@/test/apiClient";
 
 const BASE_URL = "/app/api/v1";
-
-function clientAnswering(response: Response) {
-  const fetchMock = vi.fn().mockResolvedValue(response);
-  const client = createApiClient({
-    baseUrl: BASE_URL,
-    fetch: fetchMock as unknown as typeof fetch,
-  });
-  return { client, fetchMock };
-}
-
-function sentRequest(fetchMock: ReturnType<typeof vi.fn>) {
-  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-  return { url, init };
-}
 
 const tokenSession = {
   accessMode: "token",
@@ -69,6 +60,10 @@ describe("fetchSession", () => {
       "token access without a session",
       { ...tokenSession, authenticated: false },
     ],
+    [
+      "the setup state",
+      { accessMode: "setup", setupComplete: false, authenticated: false },
+    ],
   ])("decodes %s from GET /session", async (_case, body) => {
     const { client, fetchMock } = clientAnswering(jsonResponse(body));
 
@@ -84,7 +79,11 @@ describe("fetchSession", () => {
 
   it.each([
     ["body", "a non-object body", ["token"]],
-    ["accessMode", "the setup state", { ...tokenSession, accessMode: "setup" }],
+    [
+      "accessMode",
+      "an unknown access mode",
+      { ...tokenSession, accessMode: "closed" },
+    ],
     [
       "accessMode",
       "a missing access mode",
@@ -92,8 +91,18 @@ describe("fetchSession", () => {
     ],
     [
       "setupComplete",
-      "an incomplete setup",
+      "the setup state with a complete setup",
+      { accessMode: "setup", setupComplete: true, authenticated: false },
+    ],
+    [
+      "setupComplete",
+      "token access with an incomplete setup",
       { ...tokenSession, setupComplete: false },
+    ],
+    [
+      "setupComplete",
+      "open access with an incomplete setup",
+      { accessMode: "open", setupComplete: false, authenticated: false },
     ],
     [
       "setupComplete",

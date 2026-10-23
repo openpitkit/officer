@@ -15,14 +15,20 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccountFeatures, AccountMode } from "@/api/accountMode";
 import { LogoutNavEntry } from "@/components/SidebarExtras";
-import { StartupGate, useStartupAccountMode } from "@/components/StartupGate";
+import { StartupGate, useStartupAdmit } from "@/components/StartupGate";
 import { ApiClientProvider } from "@/framework";
 import { accountScope } from "@/lib/accountScope";
 import {
@@ -52,10 +58,6 @@ function ScopeProbe() {
   return <p>{`scope:${accountScope().account}`}</p>;
 }
 
-function StartupModeProbe() {
-  return <p>{`startup mode:${useStartupAccountMode().mode}`}</p>;
-}
-
 // The gate asks GET /session before the account mode. The account-mode cases
 // run in open access mode, so `fetchMock` sees only the account-mode requests.
 function answeringOpenSession(
@@ -75,7 +77,6 @@ function renderGate(fetchMock: ReturnType<typeof vi.fn>) {
   return renderWithApi(
     <StartupGate>
       <ScopeProbe />
-      <StartupModeProbe />
     </StartupGate>,
     { fetch: answeringOpenSession(fetchMock) },
   );
@@ -192,7 +193,7 @@ describe("StartupGate", () => {
       },
     );
 
-    it("keeps the first loaded mode for its children when later polls store another", async () => {
+    it("keeps its children when later polls store another mode with the same features", async () => {
       const fetchMock = vi
         .fn()
         .mockImplementationOnce(async () => accountModeResponse(HIDDEN))
@@ -202,7 +203,7 @@ describe("StartupGate", () => {
       await act(() => vi.advanceTimersByTimeAsync(5000));
 
       expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(screen.getByText("startup mode:single")).toBeInTheDocument();
+      expect(screen.getByText("scope:main")).toBeInTheDocument();
       expect(reload).not.toHaveBeenCalled();
     });
 
@@ -285,6 +286,14 @@ describe("StartupGate session step", () => {
       jsonResponse({ accessMode, setupComplete: true, authenticated });
   }
 
+  // The first-run wizard is not complete.
+  const setupState = () =>
+    jsonResponse({
+      accessMode: "setup",
+      setupComplete: false,
+      authenticated: false,
+    });
+
   // An answer the case releases when it chooses.
   function held() {
     let release: (response: Response) => void = () => {};
@@ -305,6 +314,17 @@ describe("StartupGate session step", () => {
       mounts();
     }, []);
     return <p>{`scope:${accountScope().account}`}</p>;
+  }
+
+  // Admits the browser in token access mode on a click, as a screen that
+  // switched the access mode itself does.
+  function AdmitInTokenAccess() {
+    const admit = useStartupAdmit();
+    return (
+      <button type="button" onClick={() => admit("token")}>
+        Admit in token access
+      </button>
+    );
   }
 
   function renderSessionGate(fetchMock: ReturnType<typeof answering>) {
@@ -401,30 +421,20 @@ describe("StartupGate session step", () => {
     expect(await screen.findByText("scope:main")).toBeInTheDocument();
   });
 
-  it("refuses a process that reports the first-run setup state", async () => {
+  it("admits the first-run setup state without the login screen", async () => {
     const fetchMock = answering({
-      "GET /session": [
-        () =>
-          jsonResponse({
-            accessMode: "setup",
-            setupComplete: false,
-            authenticated: false,
-          }),
-      ],
+      "GET /session": [setupState],
+      "GET /account-mode": [hiddenAccounts],
     });
 
     renderSessionGate(fetchMock);
 
-    expect(await screen.findByText(SESSION_ERROR)).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'session response: accessMode must be "open" or "token"',
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("scope:main")).toBeInTheDocument();
+    expect(panelSession().accessMode).toBe("setup");
     expect(
       screen.queryByRole("heading", { name: LOGIN_TITLE }),
     ).not.toBeInTheDocument();
-    expect(requestsTo(fetchMock, "GET /account-mode")).toBe(0);
+    expect(requestsTo(fetchMock, "GET /account-mode")).toBeGreaterThan(0);
   });
 
   it("returns to the login screen when a request answers 401 unauthorized", async () => {
@@ -819,6 +829,9 @@ describe("StartupGate session step", () => {
     it.each([
       ["from token to open", session("token", true), session("open", false)],
       ["from open to token", session("open", false), session("token", true)],
+      ["from setup to token", setupState, session("token", false)],
+      ["from open to setup", session("open", false), setupState],
+      ["from token to setup", session("token", true), setupState],
     ])(
       "reloads the page on a check that finds it %s",
       async (_case, admitted, later) => {
@@ -833,6 +846,47 @@ describe("StartupGate session step", () => {
         act(() => checkSession());
 
         await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+      },
+    );
+
+    it.each([
+      ["open access", session("open", false), "open"],
+      ["the setup state", setupState, "setup"],
+    ])(
+      "keeps the page on a check after a screen admits the browser from %s in token access mode",
+      async (_case, admitted, accessMode) => {
+        const user = userEvent.setup();
+        const fetchMock = answering({
+          "GET /session": [admitted, session("token", true)],
+          "GET /account-mode": [hiddenAccounts],
+        });
+        renderWithApi(
+          <StartupGate>
+            <ShellProbe />
+            <AdmitInTokenAccess />
+          </StartupGate>,
+          {
+            fetch: fetchMock as unknown as typeof fetch,
+            config: { onUnauthorized: checkSession },
+          },
+        );
+        expect(await screen.findByText("scope:main")).toBeInTheDocument();
+        expect(panelSession().accessMode).toBe(accessMode);
+
+        await user.click(
+          screen.getByRole("button", { name: "Admit in token access" }),
+        );
+        expect(panelSession().accessMode).toBe("token");
+
+        act(() => checkSession());
+
+        await waitFor(() =>
+          expect(requestsTo(fetchMock, "GET /session")).toBe(2),
+        );
+        await settle();
+        expect(reload).not.toHaveBeenCalled();
+        expect(screen.getByText("scope:main")).toBeInTheDocument();
+        expect(mounts).toHaveBeenCalledTimes(1);
       },
     );
 
@@ -855,5 +909,13 @@ describe("StartupGate session step", () => {
       expect(panelSession().accessMode).toBe("open");
       expect(reload).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("useStartupAdmit", () => {
+  it("throws outside StartupGate", () => {
+    expect(() => renderHook(() => useStartupAdmit())).toThrow(
+      "useStartupAdmit is used outside StartupGate",
+    );
   });
 });

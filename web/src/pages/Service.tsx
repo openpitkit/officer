@@ -69,6 +69,7 @@ import {
   AccessSection,
   AccessTokensProvider,
 } from "@/components/security/AccessSection";
+import { GuideSection } from "@/components/security/GuideSection";
 import { StorageSection } from "@/components/security/StorageSection";
 import { StatRow } from "@/components/StatRow";
 import { StatusDot } from "@/components/StatusDot";
@@ -92,6 +93,7 @@ import {
   useOfficerApi,
 } from "@/framework";
 import { accountScope } from "@/lib/accountScope";
+import { checkSession } from "@/lib/panelSession";
 
 // This page is the canonical i18n pattern: user-facing text
 // goes through useTranslation with a per-area "service" namespace; shared
@@ -142,7 +144,6 @@ const backupSections: BackupSection[] = [
   "risk_limits",
   "market_data_settings",
   "general_settings",
-  "user_settings",
   "activity_history",
   "trading",
   "audit_log",
@@ -839,6 +840,8 @@ export function DatabaseCard({
       await resetDatabase();
       setResetDone(true);
       onReset();
+      // A reset returns Officer to setup: the gate reloads into the wizard.
+      checkSession();
     } catch (err) {
       setResetError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1402,6 +1405,7 @@ export function ServiceCard({
           <AccessSection />
           <StorageSection />
         </AccessTokensProvider>
+        <GuideSection />
       </TabsContent>
     </Tabs>
   );

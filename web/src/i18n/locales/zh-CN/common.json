@@ -391,9 +391,6 @@
     }
   },
   "welcome": {
-    "badgeLocal": "本地服务",
-    "title": "欢迎使用 Pit Officer",
-    "description": "请有意识地设置控制平面。除非您选择数据源和工作流，否则应用不会交易或连接外部系统。",
     "sections": {
       "product": "这个应用是什么",
       "uses": "可用方式",
@@ -442,8 +439,7 @@
       "openAccounts": "打开账户",
       "openAccount": "打开账户",
       "openPolicies": "打开策略",
-      "openMarketData": "打开行情数据",
-      "start": "开始使用 Pit Officer"
+      "openMarketData": "打开行情数据"
     },
     "presets": {
       "accountNote": "由首次运行指南创建。生产使用前请替换为真实账户标识。"
@@ -458,13 +454,7 @@
       "accountHoldsPositions": "账户 {{account}} 已有持仓。演示数据只写入没有持仓的账户。",
       "barriersExist": "账户 {{account}} 已有入门屏障。演示数据只写入没有这些屏障的账户。",
       "barriersUnread": "无法读取账户 {{account}} 的全部屏障，因此演示不写入任何数据。"
-    },
-    "returnHint": "您可以从“关于”对话框回到此对话框。",
-    "dontShowAgain": "不再显示"
-  },
-  "accountModeDialog": {
-    "title": "您将使用多少个账户？",
-    "description": "使用单个账户时，Officer 仅作用于该账户，控制面板不显示账户字段。之后可在“服务”页面更改该模式。"
+    }
   },
   "display": {
     "density": {

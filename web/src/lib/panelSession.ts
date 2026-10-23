@@ -15,19 +15,22 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import type { AccessMode } from "@/api/access";
+import type { SessionMode } from "@/api/access";
 
 /** The access mode the panel runs under. */
 export interface PanelSession {
-  /** `open` admits everyone; `token` runs on a password session. */
-  readonly accessMode: AccessMode;
+  /**
+   * `open` admits everyone; `token` runs on a password session; `setup`
+   * admits the browser to the first-run wizard only.
+   */
+  readonly accessMode: SessionMode;
 }
 
 let current: PanelSession | null = null;
 const sessionChecks = new Set<() => void>();
 
 /** Store the access mode the startup gate admitted this browser under. */
-export function setPanelSession(accessMode: AccessMode): void {
+export function setPanelSession(accessMode: SessionMode): void {
   current = Object.freeze({ accessMode });
 }
 

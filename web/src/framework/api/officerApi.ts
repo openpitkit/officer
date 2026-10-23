@@ -4415,31 +4415,6 @@ async function setMcpCommand(
   return normalizeMcpCommand(pick(o, "command", "Command"));
 }
 
-// --- User settings ---
-
-/** GET /user-settings - the current operator's UI preferences. */
-async function fetchWelcomeSeen(
-  client: ApiClient,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  const v = await client.request(`${client.baseUrl}/user-settings`, { signal });
-  const o = isObject(v) ? v : {};
-  return asBool(pick(o, "welcomeSeen", "WelcomeSeen", "welcome_seen"));
-}
-
-/** PUT /user-settings - persist the "don't show the welcome again" choice. */
-async function setWelcomeSeen(
-  client: ApiClient,
-  seen: boolean,
-): Promise<boolean> {
-  const v = await client.request(`${client.baseUrl}/user-settings`, {
-    method: "PUT",
-    body: { welcomeSeen: seen },
-  });
-  const o = isObject(v) ? v : {};
-  return asBool(pick(o, "welcomeSeen", "WelcomeSeen", "welcome_seen"));
-}
-
 // --- Audit ---
 
 function auditListQuery(filter: AuditFilter = {}): string {
@@ -4725,8 +4700,6 @@ export function createOfficerApi(client: ApiClient) {
     deleteLimit: bind(deleteLimit),
     getMcpCommands: bind(getMcpCommands),
     setMcpCommand: bind(setMcpCommand),
-    fetchWelcomeSeen: bind(fetchWelcomeSeen),
-    setWelcomeSeen: bind(setWelcomeSeen),
     fetchAuditPage: bind(fetchAuditPage),
     fetchAudit: bind(fetchAudit),
     fetchAuditActions: bind(fetchAuditActions),

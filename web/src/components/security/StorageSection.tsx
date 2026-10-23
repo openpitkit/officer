@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { AlertTriangle, KeyRound, Lock, LockOpen, Users } from "lucide-react";
+import { KeyRound, Lock, LockOpen, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
@@ -24,70 +24,22 @@ import { useCredentialStorage } from "@/api/useCredentialStorage";
 import type { LoadState } from "@/api/usePolling";
 import { useSigningKeys } from "@/api/useSigningKeys";
 import { MasterKeyGuide } from "@/components/MasterKeyGuide";
-import { Notice } from "@/components/Notice";
 import {
   CompactStaleState,
   ErrorBanner,
   LoadingStatus,
 } from "@/components/PageStates";
-import { useAccessTokens } from "@/components/security/AccessSection";
-import { RegenerateTokenButton } from "@/components/security/RegenerateTokenButton";
+import { ExposedSecretsNotice } from "@/components/security/ExposedSecretsNotice";
 import { SecurityRow } from "@/components/security/SecurityRow";
+import {
+  accountModeValue,
+  encryptionValue,
+  signingValue,
+} from "@/components/security/storageValues";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatDateTime } from "@/i18n/format";
 import { accountScope } from "@/lib/accountScope";
-import { panelSession } from "@/lib/panelSession";
-
-/**
- * Values that sealing re-encrypted from plain text must be considered
- * exposed: new keys go to the connection pages, and in `token` access both
- * tokens are to be regenerated, each here with the Access section's action
- * once the tokens have loaded.
- */
-function ExposedSecretsNotice({ count }: { count: number }) {
-  const { t } = useTranslation("service");
-  const { t: tc } = useTranslation();
-  const { accessMode } = panelSession();
-  const { tokens, regenerate } = useAccessTokens();
-  return (
-    <Notice
-      tone="danger"
-      icon={AlertTriangle}
-      title={t("security.exposed.title")}
-    >
-      <p>{t("security.exposed.detail", { count })}</p>
-      <p>{t("security.exposed.keys")}</p>
-      <div className="flex flex-wrap gap-1.5 py-1">
-        <Button asChild variant="outline" size="sm">
-          <Link to="/trading-connections">{tc("nav.tradingConnections")}</Link>
-        </Button>
-        <Button asChild variant="outline" size="sm">
-          <Link to="/market-data">{tc("nav.marketData")}</Link>
-        </Button>
-      </div>
-      {accessMode === "token" && (
-        <>
-          <p>{t("security.exposed.tokens")}</p>
-          {tokens.state === "ready" && (
-            <div className="flex flex-wrap gap-x-4 gap-y-1.5 py-1">
-              {(["agent", "api"] as const).map((kind) => (
-                <div key={kind} className="flex items-center gap-2">
-                  <span>{t(`security.tokens.${kind}.label`)}</span>
-                  <RegenerateTokenButton
-                    kind={kind}
-                    onRegenerate={() => regenerate(kind)}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </Notice>
-  );
-}
 
 /**
  * Whether stored credentials are sealed under a master key, and since when;
@@ -106,13 +58,7 @@ function EncryptionRow({ storage }: { storage: LoadState<CredentialStorage> }) {
               <Lock aria-hidden="true" className="h-3 w-3" />
               {t("security.storage.masterKey")}
             </Badge>
-            <span>
-              {storage.data.sealedAt === null
-                ? t("security.storage.encryptionOn")
-                : t("security.storage.sealed", {
-                    date: formatDateTime(storage.data.sealedAt),
-                  })}
-            </span>
+            <span>{encryptionValue(t, storage.data)}</span>
             <CompactStaleState load={storage} />
           </div>
         ) : (
@@ -122,7 +68,7 @@ function EncryptionRow({ storage }: { storage: LoadState<CredentialStorage> }) {
                 <LockOpen aria-hidden="true" className="h-3 w-3" />
                 {t("security.storage.noMasterKey")}
               </Badge>
-              <span>{t("security.storage.plainText")}</span>
+              <span>{encryptionValue(t, storage.data)}</span>
               <CompactStaleState load={storage} />
             </div>
             <MasterKeyGuide />
@@ -139,17 +85,14 @@ function EncryptionRow({ storage }: { storage: LoadState<CredentialStorage> }) {
 function SigningRow({ signing }: { signing: LoadState<SigningKeysStatus> }) {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
-  let value: string | null = null;
-  if (signing.state === "ready") {
-    const active = signing.data.keys.find((key) => key.active);
-    if (!signing.data.eSignEnabled) {
-      value = t("security.storage.signingOff");
-    } else if (active === undefined) {
-      value = t("security.storage.signingWithoutKey");
-    } else {
-      value = t("security.storage.signingOn", { key: active.fingerprint });
-    }
-  }
+  const value =
+    signing.state === "ready"
+      ? signingValue(
+          t,
+          signing.data.eSignEnabled,
+          signing.data.keys.find((key) => key.active) ?? null,
+        )
+      : null;
   return (
     <SecurityRow
       label={t("security.storage.signing")}
@@ -190,11 +133,7 @@ function AccountModeRow() {
         </Button>
       }
     >
-      <p>
-        {showsAccounts
-          ? t("accountMode.modes.multi")
-          : t("security.storage.oneAccount", { account })}
-      </p>
+      <p>{accountModeValue(t, showsAccounts, account)}</p>
     </SecurityRow>
   );
 }

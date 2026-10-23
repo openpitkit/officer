@@ -19,32 +19,18 @@ import {
   BookOpen,
   ChartCandlestick,
   CheckCircle2,
-  ExternalLink,
   Landmark,
   ListChecks,
   RadioTower,
-  ShieldCheck,
-  TerminalSquare,
   WalletCards,
-  X,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import type { Asset, AssetClass, Limit, MarketDataInstance } from "@/api/types";
-import { LanguageSwitch } from "@/components/LanguageSwitch";
-import { ThemeSwitch } from "@/components/ThemeSwitch";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Section } from "@/components/welcome/Section";
 import { ApiError, MAX_LIST_LIMIT, useOfficerApi } from "@/framework";
 import { accountScope } from "@/lib/accountScope";
 import { cn } from "@/lib/utils";
@@ -60,11 +46,6 @@ const MANUAL_PROVIDER = "byo";
 const AUTO_CREATED_ASSET_CLASS = "auto-created";
 
 type ActionId = "account" | "policies" | "marketData" | "binance";
-
-interface WelcomeDialogProps {
-  onOpenChange: (open: boolean) => void;
-  open: boolean;
-}
 
 interface PresetInstrument {
   baseAsset: string;
@@ -324,26 +305,6 @@ function shouldUpdatePresetAsset(asset: Asset, preset: PresetAsset): boolean {
   return asset.title !== preset.title || asset.assetClass !== preset.assetClass;
 }
 
-function Section({
-  children,
-  icon: Icon,
-  label,
-}: {
-  children: ReactNode;
-  icon: typeof ShieldCheck;
-  label: string;
-}) {
-  return (
-    <section className="border-t border-border pt-4">
-      <div className="mb-2 flex items-center gap-2">
-        <Icon className="h-4 w-4 text-accent" />
-        <h3 className="text-sm font-bold text-text">{label}</h3>
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function ActionButton({
   action,
   busy,
@@ -373,7 +334,14 @@ function ActionButton({
   );
 }
 
-export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
+/**
+ * The one-click starting points: demo positions, or a demo account when
+ * accounts are shown, a barrier preset, and the Binance or static market-data
+ * preset, each beside a link to the page that owns it, then the outcome of the
+ * last action with how far a failed one got. While accounts are hidden, the
+ * demo and the barriers go onto the operator's only account.
+ */
+export function WelcomeQuickStart() {
   const { t } = useTranslation();
   const {
     createAsset,
@@ -391,7 +359,6 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     setAccountCurrency,
     setAccountNotes,
     setMarketDataInstanceEnabled,
-    setWelcomeSeen,
     updateAsset,
     updateAssetClass,
     upsertMarketDataInstrument,
@@ -402,39 +369,6 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     : t("welcome.actions.demoPositions");
   const [busy, setBusy] = useState<ActionId | null>(null);
   const [status, setStatus] = useState<StatusMessage | null>(null);
-  // The first-run dialog reappears on every load until the operator opts out;
-  // a first-time reader rarely takes in everything, so dismissal is explicit.
-  const [dontShowAgain, setDontShowAgain] = useState(false);
-
-  const links = useMemo(
-    () => [
-      {
-        label: t("about.links.website"),
-        href: "https://officer.openpit.dev?officer",
-      },
-      {
-        label: t("about.links.issues"),
-        href: "https://github.com/openpitkit/officer/issues?officer",
-      },
-      {
-        label: t("about.links.discussions"),
-        href: "https://github.com/openpitkit/officer/discussions?officer",
-      },
-      {
-        label: t("about.links.openpit"),
-        href: "https://openpit.dev?officer",
-      },
-    ],
-    [t],
-  );
-
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen && dontShowAgain) {
-      // Persist the opt-out; a transient failure just means it shows again.
-      void setWelcomeSeen(true).catch(() => {});
-    }
-    onOpenChange(nextOpen);
-  };
 
   const runAction = async (
     action: ActionId,
@@ -706,203 +640,110 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent hideClose className="max-w-3xl gap-0 overflow-y-auto p-0">
-        <div className="sticky top-0 z-10 border-b border-border bg-surface px-6 pb-4 pt-5">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="accent">{t("brand.controlPlane")}</Badge>
-              <Badge variant="neutral">{t("welcome.badgeLocal")}</Badge>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <LanguageSwitch />
-              <ThemeSwitch />
-              <DialogClose asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={t("actions.close")}
-                >
-                  <X />
-                </Button>
-              </DialogClose>
-            </div>
-          </div>
-          <DialogHeader>
-            <DialogTitle className="text-lg">{t("welcome.title")}</DialogTitle>
-            <DialogDescription>{t("welcome.description")}</DialogDescription>
-          </DialogHeader>
-        </div>
-
-        <div className="space-y-4 px-6 pb-6 pt-5 text-sm text-muted-lt">
-          <Section icon={ShieldCheck} label={t("welcome.sections.product")}>
-            <p>{t("welcome.product.copy")}</p>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              {links.map((link) => (
-                <a
-                  key={link.href}
-                  href={link.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-between gap-3 rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-muted-lt transition-colors hover:border-border-hover hover:bg-card-hover-bg hover:text-accent"
-                >
-                  <span>{link.label}</span>
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                </a>
-              ))}
-            </div>
-          </Section>
-
-          <Section icon={TerminalSquare} label={t("welcome.sections.uses")}>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {["dropCopy", "preTrade", "surfaces", "operations"].map(
-                (item) => (
-                  <div
-                    key={item}
-                    className="rounded-card border border-border bg-surface-2 p-3"
-                  >
-                    <div className="text-xs font-bold text-text">
-                      {t(`welcome.useCases.${item}.title`)}
-                    </div>
-                    <p className="mt-1 text-xs">
-                      {t(`welcome.useCases.${item}.copy`)}
-                    </p>
-                  </div>
-                ),
-              )}
-            </div>
-          </Section>
-
-          <Section icon={WalletCards} label={t("welcome.sections.preTrade")}>
-            <p>
-              {showsAccounts
-                ? t("welcome.preTrade.copy")
-                : t("welcome.preTrade.copyUnnamed")}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <ActionButton
-                action="account"
-                busy={busy}
-                onClick={() => {
-                  void runAction("account", demoActionLabel, ensureDemoAccount);
-                }}
-              >
-                {demoActionLabel}
-              </ActionButton>
-              <ActionButton
-                action="policies"
-                busy={busy}
-                onClick={() => {
-                  void runAction(
-                    "policies",
-                    t("welcome.actions.policyPreset"),
-                    applyPolicyPreset,
-                  );
-                }}
-              >
-                {t("welcome.actions.policyPreset")}
-              </ActionButton>
-              <Button asChild variant="ghost">
-                <Link to="/accounts">
-                  <Landmark />
-                  {showsAccounts
-                    ? t("welcome.actions.openAccounts")
-                    : t("welcome.actions.openAccount")}
-                </Link>
-              </Button>
-              <Button asChild variant="ghost">
-                <Link to="/policies">
-                  <ListChecks />
-                  {t("welcome.actions.openPolicies")}
-                </Link>
-              </Button>
-            </div>
-          </Section>
-
-          <Section
-            icon={ChartCandlestick}
-            label={t("welcome.sections.marketData")}
+    <>
+      <Section icon={WalletCards} label={t("welcome.sections.preTrade")}>
+        <p>
+          {showsAccounts
+            ? t("welcome.preTrade.copy")
+            : t("welcome.preTrade.copyUnnamed")}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <ActionButton
+            action="account"
+            busy={busy}
+            onClick={() => {
+              void runAction("account", demoActionLabel, ensureDemoAccount);
+            }}
           >
-            <p>{t("welcome.marketData.copy")}</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <ActionButton
-                action="binance"
-                busy={busy}
-                onClick={() => {
-                  void runAction(
-                    "binance",
-                    t("welcome.actions.binancePreset"),
-                    applyBinancePreset,
-                  );
-                }}
-              >
-                {t("welcome.actions.binancePreset")}
-              </ActionButton>
-              <span className="flex h-[var(--dens-button-h)] items-center px-1 text-xs font-bold uppercase tracking-[0.07em] text-muted">
-                {t("welcome.actions.or")}
-              </span>
-              <ActionButton
-                action="marketData"
-                busy={busy}
-                onClick={() => {
-                  void runAction(
-                    "marketData",
-                    t("welcome.actions.marketDataPreset"),
-                    applyMarketDataPreset,
-                  );
-                }}
-              >
-                {t("welcome.actions.marketDataPreset")}
-              </ActionButton>
-              <Button asChild variant="ghost">
-                <Link to="/market-data">
-                  <RadioTower />
-                  {t("welcome.actions.openMarketData")}
-                </Link>
-              </Button>
-            </div>
-          </Section>
-
-          <Section icon={BookOpen} label={t("welcome.sections.optional")}>
-            <p>{t("welcome.optional.copy")}</p>
-          </Section>
-
-          {status && (
-            <div
-              className={cn(
-                "rounded-card border px-3 py-2 text-xs",
-                status.tone === "ok"
-                  ? "border-[var(--ok)] bg-[var(--ok-dim)] text-[var(--ok)]"
-                  : "border-[var(--warn)] bg-[var(--warn-dim)] text-[var(--warn)]",
-              )}
-            >
-              {status.text}
-            </div>
-          )}
-
-          <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 text-xs text-text">
-                <input
-                  type="checkbox"
-                  checked={dontShowAgain}
-                  onChange={(event) => setDontShowAgain(event.target.checked)}
-                  className="accent-[var(--accent)]"
-                />
-                {t("welcome.dontShowAgain")}
-              </label>
-              <p className="text-xs text-muted-lt">{t("welcome.returnHint")}</p>
-            </div>
-            <DialogClose asChild>
-              <Button type="button">
-                <CheckCircle2 />
-                {t("welcome.actions.start")}
-              </Button>
-            </DialogClose>
-          </div>
+            {demoActionLabel}
+          </ActionButton>
+          <ActionButton
+            action="policies"
+            busy={busy}
+            onClick={() => {
+              void runAction(
+                "policies",
+                t("welcome.actions.policyPreset"),
+                applyPolicyPreset,
+              );
+            }}
+          >
+            {t("welcome.actions.policyPreset")}
+          </ActionButton>
+          <Button asChild variant="ghost">
+            <Link to="/accounts">
+              <Landmark />
+              {showsAccounts
+                ? t("welcome.actions.openAccounts")
+                : t("welcome.actions.openAccount")}
+            </Link>
+          </Button>
+          <Button asChild variant="ghost">
+            <Link to="/policies">
+              <ListChecks />
+              {t("welcome.actions.openPolicies")}
+            </Link>
+          </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </Section>
+
+      <Section icon={ChartCandlestick} label={t("welcome.sections.marketData")}>
+        <p>{t("welcome.marketData.copy")}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <ActionButton
+            action="binance"
+            busy={busy}
+            onClick={() => {
+              void runAction(
+                "binance",
+                t("welcome.actions.binancePreset"),
+                applyBinancePreset,
+              );
+            }}
+          >
+            {t("welcome.actions.binancePreset")}
+          </ActionButton>
+          <span className="flex h-[var(--dens-button-h)] items-center px-1 text-xs font-bold uppercase tracking-[0.07em] text-muted">
+            {t("welcome.actions.or")}
+          </span>
+          <ActionButton
+            action="marketData"
+            busy={busy}
+            onClick={() => {
+              void runAction(
+                "marketData",
+                t("welcome.actions.marketDataPreset"),
+                applyMarketDataPreset,
+              );
+            }}
+          >
+            {t("welcome.actions.marketDataPreset")}
+          </ActionButton>
+          <Button asChild variant="ghost">
+            <Link to="/market-data">
+              <RadioTower />
+              {t("welcome.actions.openMarketData")}
+            </Link>
+          </Button>
+        </div>
+      </Section>
+
+      <Section icon={BookOpen} label={t("welcome.sections.optional")}>
+        <p>{t("welcome.optional.copy")}</p>
+      </Section>
+
+      {status && (
+        <div
+          className={cn(
+            "rounded-card border px-3 py-2 text-xs",
+            status.tone === "ok"
+              ? "border-[var(--ok)] bg-[var(--ok-dim)] text-[var(--ok)]"
+              : "border-[var(--warn)] bg-[var(--warn-dim)] text-[var(--warn)]",
+          )}
+        >
+          {status.text}
+        </div>
+      )}
+    </>
   );
 }
