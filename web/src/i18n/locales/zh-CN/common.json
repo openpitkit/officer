@@ -414,8 +414,8 @@
         "copy": "订单离开系统前先应用账户余额和策略屏障，然后允许或拒绝。"
       },
       "surfaces": {
-        "title": "REST、MCP 和 FIX",
-        "copy": "可通过面板、REST 客户端、MCP 智能体以及启用后的面向 FIX 的流程操作。"
+        "title": "REST 和 MCP",
+        "copy": "可通过面板、REST 客户端和 MCP 智能体操作。"
       },
       "operations": {
         "title": "操作员台账",

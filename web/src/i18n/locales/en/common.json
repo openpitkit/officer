@@ -414,8 +414,8 @@
         "copy": "Approve or reject orders before they leave the system, with account balances and policy barriers applied first."
       },
       "surfaces": {
-        "title": "REST, MCP, and FIX",
-        "copy": "Operate from the panel, REST clients, MCP agents, and FIX-oriented flows as they are enabled."
+        "title": "REST and MCP",
+        "copy": "Operate from the panel, REST clients, and MCP agents."
       },
       "operations": {
         "title": "Operator ledger",
