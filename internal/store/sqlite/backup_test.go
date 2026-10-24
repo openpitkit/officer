@@ -399,8 +399,7 @@ func TestBackupExportPreservesCredentialFormAndExcludesSigningPrivateKey(t *test
 					t.Fatalf("UpsertSigningKey: %v", err)
 				}
 			} else {
-				// UpsertSigningKey refuses private material without a master key;
-				// a clear row seeded directly must still stay out of the archive.
+				// A clear row seeded directly must still stay out of the archive.
 				seedClearSigningKey(t, ctx, rs, signingKey)
 			}
 			credentials := []byte(`{"token":"archive-secret"}`)
@@ -876,8 +875,7 @@ func TestBackupRestoreSigningKeyWithoutMasterKeyStaysVerifyOnly(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	// A verify-only key holds no secret, so its database still opens without a
-	// master key.
+	// The restored database opens again without a master key.
 	reopened := openSQLiteStoreForTest(t, path)
 	if err := reopened.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate over a verify-only signing key without a master key: %v", err)

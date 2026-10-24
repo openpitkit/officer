@@ -36,8 +36,7 @@ import (
 // newLocalNode builds a local node that runs the OpenPit engine on a fresh
 // SQLite store of the default realm, and returns it with the store bound to
 // that realm, where the application keeps its signing keys. The store is sealed
-// with a master key, which signing keys need. The node is closed when the test
-// ends.
+// with a master key. The node is closed when the test ends.
 func newLocalNode(t *testing.T) (node.Node, store.RealmStore) {
 	t.Helper()
 	return newLocalNodeBuiltBy(t, engine.NewOpenPitEngineBuildFunc())

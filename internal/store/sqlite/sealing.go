@@ -41,19 +41,11 @@ const (
 )
 
 // sealValue seals plaintext for its table, column and row with the installed
-// master key. Without one it returns plaintext as is, except a signing private
-// key: Officer never holds one in the clear, so it refuses with
-// domain.ErrMasterKeyRequired. Empty signing private material, which a restored
-// verify-only key carries, holds no secret and is returned as is.
+// master key. Without one it returns plaintext as is, a signing private key
+// included.
 func (s *sqliteStore) sealValue(table, column, rowID string, plaintext []byte) ([]byte, error) {
 	key := s.sealer.Load()
 	if key == nil {
-		if table == signingKeyTable && column == signingPrivateKeyColumn && len(plaintext) > 0 {
-			return nil, fmt.Errorf(
-				"store: refuse to store %s.%s row %q unsealed: %w",
-				table, column, rowID, domain.ErrMasterKeyRequired,
-			)
-		}
 		return append([]byte{}, plaintext...), nil
 	}
 	return s.sealValueWithKey(*key, table, column, rowID, plaintext)
@@ -104,10 +96,9 @@ func (s *sqliteStore) setSealer(key *secret.MasterKey) {
 	s.sealer.Store(&keyCopy)
 }
 
-// configureSealing decides five startup states: unsealed without a key stays
-// plaintext; unsealed without a key but holding a signing private key in the
-// clear refuses with domain.ErrMasterKeyRequired; unsealed with a key seals;
-// sealed without a key refuses; and sealed with a key verifies it and refuses a
+// configureSealing decides four startup states: unsealed without a key stays
+// plaintext, a signing private key included; unsealed with a key seals; sealed
+// without a key refuses; and sealed with a key verifies it and refuses a
 // mismatch. Sealing always records a seal report, so a sealed database without
 // one is refused with an error wrapping domain.ErrInvalid, whether or not its
 // scrub finished. It must run in migrateDB so Reset seals its fresh file.
@@ -125,21 +116,6 @@ func (s *sqliteStore) configureSealing(ctx context.Context, db *sql.DB) error {
 	).Scan(&storedVerifier, &vacuumedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		if s.configuredMasterKey == nil {
-			// A verify-only key stores empty private material, which holds no secret.
-			var clearSigningKey bool
-			if err := db.QueryRowContext(
-				ctx, `SELECT EXISTS(SELECT 1 FROM signing_key WHERE length(private_key) > 0)`,
-			).Scan(&clearSigningKey); err != nil {
-				return fmt.Errorf("store: inspect signing keys for private material: %w", err)
-			}
-			if clearSigningKey {
-				return fmt.Errorf(
-					"store: database holds an approval signing private key in the clear; "+
-						"%w to seal the stored key in place, after which it must be "+
-						"considered exposed and reissued; or start from a new database",
-					domain.ErrMasterKeyRequired,
-				)
-			}
 			return nil
 		}
 		resealed, err := s.sealRealm(ctx, db, *s.configuredMasterKey)

@@ -34,7 +34,7 @@
     "lead": "Officer keeps the keys of your trading connections and data providers, and its own access tokens, in its database file. A master key seals them: a copied database or backup is useless without it.",
     "key": {
       "title": "With a master key",
-      "description": "Stored keys are sealed, and decision signing becomes available. You create the key once and keep a copy."
+      "description": "Stored keys are sealed. You create the key once and keep a copy."
     },
     "none": {
       "title": "Without encryption",
@@ -44,15 +44,13 @@
     "on": "Encryption is on. Officer sealed its database.",
     "noneTitle": "Without encryption, whoever gets the database file gets your keys",
     "noneWho": "Who gets it: anyone who copies the file or a backup - from this disk, a synced folder, a disk image, a lost laptop.",
-    "noneWhat": "What they can do: trade through your trading connections, use your data subscriptions, use Officer's own tokens.",
-    "noneSign": "Decision signing stays off: it needs a master key.",
+    "noneWhat": "What they can do: trade through your trading connections, use your data subscriptions, use Officer's own tokens, sign decisions in Officer's name.",
     "noneBanner": "While keys of trading connections or data providers are stored unencrypted, a red notice stays on every page.",
     "noneAck": "I understand: my keys are stored unencrypted."
   },
   "signing": {
     "title": "Sign Officer's decisions?",
     "lead": "Officer can sign every decision it issues on an order. A program that executes the order checks the signature and knows the decision came from this Officer, unchanged. Without a signature the decision still goes out, unsigned.",
-    "backToEncryption": "Set a master key",
     "on": "On"
   },
   "access": {
@@ -75,7 +73,6 @@
       "where": "Where it lives"
     },
     "values": {
-      "signNA": "Off · needs a master key",
       "agent": "Agent token issued",
       "agentOpen": "No token needed"
     },

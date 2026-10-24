@@ -304,6 +304,7 @@
       "detail_one": "Sealing re-encrypted {{count}} stored secret that had lain in the database file as plain text: anyone who copied the file or a backup before then can read it.",
       "detail_other": "Sealing re-encrypted {{count}} stored secrets that had lain in the database file as plain text: anyone who copied the file or a backup before then can read them.",
       "keys": "Issue new keys with your providers and enter them on the connection pages.",
+      "signing": "If a signing key was stored, generate a new one: whoever holds a copy of the old key can sign decisions in Officer's name.",
       "tokens": "Regenerate both tokens: each old value stops working at once."
     },
     "guide": {

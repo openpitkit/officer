@@ -349,9 +349,9 @@ add a trading connection.
 Approval signing is off on a fresh Officer. The first-run setup offers to turn
 it on. To turn it on later:
 
-1. Set a master key first. It seals the secrets Officer stores, signing keys
-   included. The [Master key](configuration.md#master-key) section of the
-   configuration reference covers it. Setting the key means creating the
-   container again, as in [Your data](#your-data), with the key passed in.
-2. In the panel, open Signing Keys, and generate or import a key.
-3. Switch on "Require signature on approval and attestation envelopes".
+1. In the panel, open Signing Keys, and generate or import a key.
+2. Switch on "Require signature on approval and attestation envelopes".
+
+Without a master key the signing key is stored in the clear, as the other
+secrets Officer stores are. The [Master key](configuration.md#master-key)
+section of the configuration reference covers sealing them.

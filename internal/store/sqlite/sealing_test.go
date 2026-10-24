@@ -138,19 +138,15 @@ func TestSecretColumnsPlaintextRoundTripWithoutSealer(t *testing.T) {
 	_, rs := newTestStore(t)
 
 	seed := []byte("plaintext-signing-seed-32-bytes!")
-	err := rs.UpsertSigningKey(ctx, domain.SigningKey{
+	if err := rs.UpsertSigningKey(ctx, domain.SigningKey{
 		CreatedAt:  time.Now().UTC(),
 		KeyID:      "plaintext-key",
 		Alg:        "ed25519",
 		PrivateKey: seed,
 		PublicKey:  ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey),
 		Active:     true,
-	})
-	if !errors.Is(err, domain.ErrMasterKeyRequired) {
-		t.Fatalf("UpsertSigningKey without a sealer = %v, want ErrMasterKeyRequired", err)
-	}
-	if strings.Contains(err.Error(), string(seed)) {
-		t.Fatal("UpsertSigningKey refusal contains the private key")
+	}); err != nil {
+		t.Fatalf("UpsertSigningKey without a sealer: %v", err)
 	}
 	credentials := `{"token":"plaintext-credentials"}`
 	instance, err := rs.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
@@ -161,14 +157,18 @@ func TestSecretColumnsPlaintextRoundTripWithoutSealer(t *testing.T) {
 	}
 
 	db := rs.(*realmStore).rawDB()
-	var signingKeys int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM signing_key`).Scan(
-		&signingKeys,
-	); err != nil {
-		t.Fatalf("count signing keys: %v", err)
+	var storedPrivateKey []byte
+	if err := db.QueryRowContext(
+		ctx, `SELECT private_key FROM signing_key WHERE key_id = ?`, "plaintext-key",
+	).Scan(&storedPrivateKey); err != nil {
+		t.Fatalf("read stored private_key: %v", err)
 	}
-	if signingKeys != 0 {
-		t.Fatalf("signing keys after the refused upsert = %d, want 0", signingKeys)
+	if !bytes.Equal(storedPrivateKey, seed) {
+		t.Fatal("stored private_key changed without a sealer")
+	}
+	gotKey, err := rs.GetSigningKey(ctx, "plaintext-key")
+	if err != nil || !bytes.Equal(gotKey.PrivateKey, seed) {
+		t.Fatalf("GetSigningKey without sealer: err=%v", err)
 	}
 	var storedCredentials []byte
 	if err := db.QueryRowContext(
@@ -462,7 +462,7 @@ func TestMigrateWithoutVerifierOrMasterKeyLeavesStorePlaintext(t *testing.T) {
 	}
 }
 
-func TestMigrateWithoutMasterKeyRefusesClearSigningKey(t *testing.T) {
+func TestMigrateWithoutMasterKeyServesClearSigningKey(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	plaintextStore := openSQLiteStoreForTest(t, path)
@@ -486,46 +486,16 @@ func TestMigrateWithoutMasterKeyRefusesClearSigningKey(t *testing.T) {
 	}
 
 	withoutKey := openSQLiteStoreForTest(t, path)
-	err = withoutKey.Migrate(ctx)
-	if !errors.Is(err, domain.ErrMasterKeyRequired) {
-		t.Fatalf("Migrate without a master key over a clear signing key = %v, want ErrMasterKeyRequired", err)
+	if err := withoutKey.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate without a master key over a clear signing key: %v", err)
 	}
-	if strings.Contains(err.Error(), string(seed)) {
-		t.Fatal("Migrate refusal contains the private key")
-	}
-	if err := withoutKey.Close(); err != nil {
-		t.Fatalf("close store without key: %v", err)
-	}
-
-	logOutput := captureSlogForTest(t)
-	sealedStore := openSQLiteStoreForTest(
-		t, path, WithMasterKey(mustStoreMasterKey(t, 0x5e)),
-	)
-	if err := sealedStore.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate with a master key: %v", err)
-	}
-	if !strings.Contains(logOutput.String(), sealingExposureWarning) {
-		t.Fatal("sealing the clear signing key did not log the exposure warning")
-	}
-	var stored []byte
-	if err := sealedStore.currentDB().QueryRowContext(
-		ctx, `SELECT private_key FROM signing_key WHERE key_id = ?`, "clear-signing-key",
-	).Scan(&stored); err != nil {
-		t.Fatalf("read sealed signing key: %v", err)
-	}
-	if bytes.Equal(stored, seed) {
-		t.Fatal("signing key remained the clear seed after sealing")
-	}
-	sealedRealm, err := sealedStore.ForRealm(ctx, domain.DefaultRealm)
+	realm, err := withoutKey.ForRealm(ctx, domain.DefaultRealm)
 	if err != nil {
-		t.Fatalf("ForRealm sealed store: %v", err)
+		t.Fatalf("ForRealm store without key: %v", err)
 	}
-	got, err := sealedRealm.GetSigningKey(ctx, "clear-signing-key")
-	if err != nil {
-		t.Fatalf("GetSigningKey: %v", err)
-	}
-	if !bytes.Equal(got.PrivateKey, seed) {
-		t.Fatal("sealed signing key did not open back to the seed")
+	got, err := realm.GetSigningKey(ctx, "clear-signing-key")
+	if err != nil || !bytes.Equal(got.PrivateKey, seed) {
+		t.Fatalf("GetSigningKey after Migrate without a master key: err=%v", err)
 	}
 }
 
@@ -553,8 +523,8 @@ func TestMigrateWithMasterKeySealsAllExistingSecrets(t *testing.T) {
 			PrivateKey: []byte("migration-private-secret-two"), PublicKey: []byte("public-two"),
 		},
 	}
-	// UpsertSigningKey refuses private material without a master key, so the
-	// clear rows of an unsealed database are seeded directly.
+	// The clear rows of an unsealed database are seeded directly, past the
+	// store.
 	for _, signingKey := range signingKeys {
 		seedClearSigningKey(t, ctx, rawRealm, signingKey)
 	}
@@ -1061,8 +1031,8 @@ func TestMigrateSealingFailureRollsBackEverySecretAndVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForRealm plaintext store: %v", err)
 	}
-	// UpsertSigningKey refuses private material without a master key, so the
-	// clear rows of an unsealed database are seeded directly.
+	// The clear rows of an unsealed database are seeded directly, past the
+	// store.
 	privateKey := []byte("rollback-private-secret")
 	seedClearSigningKey(t, ctx, rawRealm, domain.SigningKey{
 		CreatedAt: time.Now().UTC(),

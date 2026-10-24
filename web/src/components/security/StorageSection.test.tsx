@@ -291,6 +291,15 @@ describe("StorageSection", () => {
       "href",
       "/market-data",
     );
+    // A signing key stored in the clear before sealing is exposed as well.
+    expect(
+      within(notice()).getByText(
+        "If a signing key was stored, generate a new one: whoever holds a copy of the old key can sign decisions in Officer's name.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(notice()).getByRole("link", { name: "Signing Keys" }),
+    ).toHaveAttribute("href", "/signing-keys");
     // Open access holds no tokens to regenerate.
     expect(
       within(notice()).queryByText(TOKENS_SENTENCE),

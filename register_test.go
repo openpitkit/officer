@@ -307,11 +307,11 @@ func TestRegisterPassesMasterKeyToSQLite(t *testing.T) {
 	}
 }
 
-// TestRegisterSigningKeyRequiresMasterKey drives, over REST, the real
-// composition: without a master key, generating and importing a signing key are
-// refused with master_key_required and no private key reaches the database;
-// with one, both succeed and every stored private key is sealed.
-func TestRegisterSigningKeyRequiresMasterKey(t *testing.T) {
+// TestRegisterSigningKeyStorage drives, over REST, the real composition:
+// generating and importing a signing key succeed with a master key and
+// without one. Without one every private key is stored in the clear, as the
+// other stored secrets are; with one every stored private key is sealed.
+func TestRegisterSigningKeyStorage(t *testing.T) {
 	seed := bytes.Repeat([]byte{0x6b}, ed25519.SeedSize)
 	importBody := fmt.Sprintf(
 		`{"key":%q,"format":"raw-base64"}`, base64.StdEncoding.EncodeToString(seed),
@@ -320,21 +320,19 @@ func TestRegisterSigningKeyRequiresMasterKey(t *testing.T) {
 	clearPath := filepath.Join(t.TempDir(), "officer.db")
 	app, handler := serveSeededApp(t, Config{SQLitePath: clearPath}, nil)
 	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
-	for _, route := range []struct{ path, body string }{
-		{"/signing/keys/generate", ""},
-		{"/signing/keys/import", importBody},
-	} {
-		refused := restCall(t, handler, http.MethodPost, route.path, route.body, http.StatusConflict)
-		if errObj, _ := refused["error"].(map[string]any); errObj["code"] != "master_key_required" ||
-			errObj["message"] != domain.ErrMasterKeyRequired.Error() {
-			t.Fatalf("POST %s without a master key = %v, want master_key_required", route.path, refused)
-		}
-	}
+	restCall(t, handler, http.MethodPost, "/signing/keys/generate", "", http.StatusCreated)
+	restCall(t, handler, http.MethodPost, "/signing/keys/import", importBody, http.StatusCreated)
 	if err := app.Close(); err != nil {
 		t.Fatalf("Close without a master key: %v", err)
 	}
-	if stored := storedSigningPrivateKeys(t, clearPath); len(stored) != 0 {
-		t.Fatalf("signing private keys stored without a master key = %d, want 0", len(stored))
+	clear := storedSigningPrivateKeys(t, clearPath)
+	if len(clear) != 2 {
+		t.Fatalf("signing private keys stored without a master key = %d, want 2", len(clear))
+	}
+	if !slices.ContainsFunc(clear, func(privateKey []byte) bool {
+		return bytes.Equal(privateKey, seed)
+	}) {
+		t.Fatal("the imported signing private key is not stored as is without a master key")
 	}
 
 	key := testMasterKey(t)
@@ -622,7 +620,7 @@ func TestRecordServiceLifecycleRecordsExplicitSystemCaller(t *testing.T) {
 // default account alone, the account set cannot change, and a stored switch
 // back to multi-account mode waits for a restart.
 func TestRegisterSingleAccountMode(t *testing.T) {
-	// The composition generates a signing key, which needs a master key.
+	// The composition generates a signing key, sealed under this master key.
 	key := testMasterKey(t)
 	_, handler := serveSeededApp(t, Config{
 		SQLitePath: filepath.Join(t.TempDir(), "officer.db"), MasterKey: &key,

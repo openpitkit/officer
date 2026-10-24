@@ -207,24 +207,17 @@ If both sources are configured they must carry the same key, and a configured
 source that cannot be read or parsed is a startup error. Officer refuses to
 start rather than silently running unencrypted.
 
-Approval signing needs the master key. Officer stores an approval signing
-private key only sealed under it, so without a key generating or importing a
-signing key is refused with `master_key_required` (HTTP 409), and the panel's
-Signing Keys screen says why. Approval signing is off on a fresh Officer. To
-turn it on, configure the key and restart Officer, generate or import a signing
-key on the Signing Keys screen, and switch on "Require signature on approval and
-attestation envelopes".
+An approval signing private key is a stored secret like the others: sealed
+under the master key when one is configured, and in the clear without one.
+Approval signing is off on a fresh Officer. To turn it on, generate or import a
+signing key on the Signing Keys screen and switch on "Require signature on
+approval and attestation envelopes".
 
-Startup resolves to one of seven states:
+Startup resolves to one of six states:
 
-- **Unsealed database, no key** - trading and market-data credentials and the
-  access tokens are stored as plaintext; an approval signing private key is
-  never stored. This is the default.
-- **Unsealed database holding an approval signing private key in the clear, no
-  key** - Officer refuses to start. Only an earlier build could have written
-  that key. Start Officer with the master key, which seals the key in place -
-  it must then be considered exposed and reissued - or start from a new
-  database.
+- **Unsealed database, no key** - trading and market-data credentials, the
+  access tokens and an approval signing private key are stored as plaintext.
+  This is the default.
 - **Unsealed database, key supplied** - the database is sealed, then vacuumed.
   When sealing re-sealed at least one stored secret value, an empty credential
   not counted, Officer logs that previously stored secrets must be considered

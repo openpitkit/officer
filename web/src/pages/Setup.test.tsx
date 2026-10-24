@@ -361,9 +361,9 @@ describe("Setup", () => {
     renderSetup({ step: "signing" });
 
     await heading(TITLES.signing);
-    const masterKey = screen.getByRole("button", { name: "Set a master key" });
-    await user.click(masterKey);
-    await user.click(masterKey);
+    const back = screen.getByRole("button", { name: "Back" });
+    await user.click(back);
+    await user.click(back);
 
     expect(putSetupProgress).toHaveBeenCalledTimes(1);
     await write.resolve();
@@ -813,19 +813,15 @@ describe("Setup", () => {
     });
   });
 
-  it("returns to the encryption step from the signing master-key action", async () => {
+  it("offers key entry on the signing step without a master key", async () => {
     const user = userEvent.setup();
     mockStorage(false);
     renderSetup({ step: "signing" });
 
     await heading(TITLES.signing);
-    await user.click(screen.getByRole("button", { name: "Set a master key" }));
-
-    await heading(TITLES.encryption);
-    expect(putSetupProgress).toHaveBeenCalledWith(
-      expect.anything(),
-      "encryption",
-    );
+    expect(screen.getByRole("button", { name: "Generate" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Import your key" }));
+    expect(screen.getByRole("button", { name: "Import" })).toBeEnabled();
   });
 
   describe("access", () => {

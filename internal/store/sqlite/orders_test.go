@@ -144,8 +144,7 @@ func seedSigningKey(t *testing.T, ctx context.Context, rs fwstore.RealmStore, ke
 }
 
 // seedClearSigningKey inserts key with its private material stored as given,
-// bypassing UpsertSigningKey, which refuses unsealed private material without a
-// master key.
+// bypassing UpsertSigningKey and the sealing it applies.
 func seedClearSigningKey(
 	t *testing.T, ctx context.Context, rs fwstore.RealmStore, key domain.SigningKey,
 ) {

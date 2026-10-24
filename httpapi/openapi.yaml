@@ -3601,9 +3601,8 @@ paths:
       description: >
         Generates a fresh Ed25519 keypair, makes it the sole active signing key,
         and returns it without private material. Officer stores the private key
-        only sealed under the master key, so without one the request is refused
-        with 409 master_key_required. GET /credential-storage reports
-        `credentialsSealed`.
+        sealed under the master key when one is configured, and in the clear
+        without one. GET /credential-storage reports `credentialsSealed`.
       tags: [signing]
       responses:
         "201":
@@ -3622,8 +3621,6 @@ paths:
           $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
-        "409":
-          $ref: "#/components/responses/MasterKeyRequiredError"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -3636,9 +3633,8 @@ paths:
       description: >
         Imports an Ed25519 private key, makes it the active signing key, and
         returns it without private material. Officer stores the private key
-        only sealed under the master key, so without one the request is refused
-        with 409 master_key_required. GET /credential-storage reports
-        `credentialsSealed`.
+        sealed under the master key when one is configured, and in the clear
+        without one. GET /credential-storage reports `credentialsSealed`.
       tags: [signing]
       requestBody:
         required: true
@@ -3675,8 +3671,6 @@ paths:
           $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
-        "409":
-          $ref: "#/components/responses/MasterKeyRequiredError"
         "422":
           $ref: "#/components/responses/ValidationError"
         "500":
@@ -5886,16 +5880,6 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
-    MasterKeyRequiredError:
-      description: >
-        Approval signing is refused while Officer runs without a master key
-        (master_key_required): a signing private key is stored only sealed
-        under it. Configure a master key and restart Officer.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-
     TradingConflictError:
       description: >
         A connection or account dependency conflicts with the request. A
@@ -6098,8 +6082,8 @@ components:
                 `live_trading_unavailable`, `trading_mode_mismatch`,
                 `fee_account_required`, `venue_order_managed`, `no_destination`,
                 `destination_ambiguous`, `accounts_not_managed`,
-                `setup_required`, `engine_restarting`, `signing`, `master_key_required`,
-                `upstream`, `not_implemented`, or `internal`.
+                `setup_required`, `engine_restarting`, `signing`, `upstream`,
+                `not_implemented`, or `internal`.
               example: not_found
             message:
               type: string

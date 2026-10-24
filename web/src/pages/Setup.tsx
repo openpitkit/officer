@@ -38,6 +38,7 @@ import {
   type SetupState,
   type SetupStep,
 } from "@/api/setup";
+import { useCredentialStorage } from "@/api/useCredentialStorage";
 import type { LoadState } from "@/api/usePolling";
 import { AccessModePanel } from "@/components/AccessModePanel";
 import { AccountModePanel } from "@/components/AccountModeChoice";
@@ -74,7 +75,6 @@ import {
   type WizardStep,
 } from "@/components/setup/steps";
 import { Button } from "@/components/ui/button";
-import { LinkButton } from "@/components/venues";
 import { WelcomeIntro } from "@/components/welcome/WelcomeIntro";
 import { WelcomeQuickStart } from "@/components/welcome/WelcomeQuickStart";
 import { ApiError, useApiClient, useOfficerApi } from "@/framework";
@@ -196,9 +196,9 @@ type StepView = {
 
 /**
  * The seven steps, over the stored setup state in the first run and over the
- * settings in force in the review. It holds the account mode poll and one
- * signing keys controller for the whole wizard: the steps embed them, and the
- * rail and the summary read them.
+ * settings in force in the review. It holds the account mode and credential
+ * storage polls and one signing keys controller for the whole wizard: the
+ * steps embed them, and the rail and the summary read them.
  */
 function Wizard({ pass }: { pass: WizardPass }) {
   const { t } = useTranslation("setup");
@@ -209,6 +209,9 @@ function Wizard({ pass }: { pass: WizardPass }) {
   const admit = useStartupAdmit();
   const navigate = useNavigate();
   const accountPoll = useAccountMode();
+  const { load: storage } = useCredentialStorage();
+  // Whether a master key seals the stored secrets, once the storage answers.
+  const sealed = storage.state === "ready" && storage.data.credentialsSealed;
   const signing = useSigningKeysPanel();
   const {
     attempt,
@@ -247,7 +250,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
 
   // A completed setup leaves the database unsealed only by a decline, which
   // the review knows once the storage answers.
-  const declined = review ? signing.storage.state === "ready" : declinedHere;
+  const declined = review ? storage.state === "ready" : declinedHere;
   const accounts =
     accountPoll.load.state === "ready" ? accountPoll.load.data : null;
   const accountsStored =
@@ -255,15 +258,15 @@ function Wizard({ pass }: { pass: WizardPass }) {
   // A sealed database wins over a pick and over a recorded decline. The
   // review shows no choice until the storage answers.
   const encryption: EncryptionChoice | null =
-    review && signing.storage.state !== "ready"
+    review && storage.state !== "ready"
       ? null
-      : signing.sealed
+      : sealed
         ? "key"
         : (encryptionPick ?? (declined ? "none" : "key"));
   // Nothing is decided before the storage answers whether it is sealed.
   const encryptionDecided =
-    signing.storage.state === "ready" &&
-    (encryption === "key" ? signing.sealed : encryptionAck);
+    storage.state === "ready" &&
+    (encryption === "key" ? sealed : encryptionAck);
   const accessDecided = accessMode === "token" ? password !== null : accessAck;
   const current = WIZARD_STEPS.indexOf(step);
 
@@ -403,7 +406,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
         if (ahead(index)) {
           return null;
         }
-        if (signing.sealed) {
+        if (sealed) {
           return ts("security.storage.masterKey");
         }
         return declined ? ts("security.storage.noMasterKey") : null;
@@ -478,8 +481,8 @@ function Wizard({ pass }: { pass: WizardPass }) {
             <EncryptionStep
               choice={encryption}
               onChoose={setEncryptionPick}
-              storage={signing.storage}
-              sealed={signing.sealed}
+              storage={storage}
+              sealed={sealed}
               acknowledgement={
                 review
                   ? undefined
@@ -509,16 +512,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
         return {
           title: t("signing.title"),
           lead: t("signing.lead"),
-          body: (
-            <SigningKeysPanel
-              controller={signing}
-              masterKeyAction={
-                <LinkButton onClick={() => void go("encryption")}>
-                  {t("signing.backToEncryption")}
-                </LinkButton>
-              }
-            />
-          ),
+          body: <SigningKeysPanel controller={signing} />,
           footer: {
             where: places.signing,
             back: () => void go("encryption"),
@@ -607,6 +601,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
             <>
               <DoneSummary
                 accounts={accountPoll.load}
+                storage={storage}
                 signing={signing}
                 accessMode={accessMode}
                 places={places}

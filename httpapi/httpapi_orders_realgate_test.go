@@ -410,7 +410,7 @@ func newRealServiceRouterWithEngine(t *testing.T) (
 ) {
 	t.Helper()
 	ctx := context.Background()
-	// The store holds the signing key generated below, which needs a master key.
+	// The store seals the signing key generated below under this master key.
 	masterKey, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	if err != nil {
 		t.Fatalf("ParseMasterKey: %v", err)

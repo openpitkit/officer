@@ -9,7 +9,6 @@
     "status": "Status",
     "statusActive": "active",
     "empty": "No signing key configured. Generate or import one below.",
-    "emptyNoMasterKey": "No signing key configured.",
     "export": {
       "label": "Export public key",
       "formatLabel": "Format",
@@ -31,10 +30,6 @@
     "importKeyLabel": "Private key",
     "importKeyPlaceholder": "Paste your private key here…",
     "importBusy": "Importing…",
-    "masterKeyRequired": {
-      "title": "Approval signing requires a master key",
-      "description": "Officer stores a signing key only sealed under a master key. This instance runs without one, so it cannot generate or import a key. Configure a master key and restart Officer to enable signing."
-    },
     "generateDialog": {
       "title": "Generate new signing key",
       "description": "This will create a fresh Ed25519 key pair. The current active key will be deactivated. Connectors can still resolve the old public key to verify envelopes signed under it.",

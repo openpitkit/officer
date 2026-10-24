@@ -28,9 +28,9 @@ import { panelSession } from "@/lib/panelSession";
 
 /**
  * Values that sealing re-encrypted from plain text must be considered
- * exposed: new keys go to the connection pages, and in `token` access both
- * tokens are to be regenerated, each here with the Access section's action
- * once the tokens have loaded.
+ * exposed: new keys go to the connection pages, a new signing key to Signing
+ * Keys, and in `token` access both tokens are to be regenerated, each here
+ * with the Access section's action once the tokens have loaded.
  */
 export function ExposedSecretsNotice({
   count,
@@ -58,6 +58,12 @@ export function ExposedSecretsNotice({
         </Button>
         <Button asChild variant="outline" size="sm">
           <Link to="/market-data">{tc("nav.marketData")}</Link>
+        </Button>
+      </div>
+      <p>{t("security.exposed.signing")}</p>
+      <div className="flex flex-wrap gap-1.5 py-1">
+        <Button asChild variant="outline" size="sm">
+          <Link to="/signing-keys">{tc("nav.signingKeys")}</Link>
         </Button>
       </div>
       {accessMode === "token" && (

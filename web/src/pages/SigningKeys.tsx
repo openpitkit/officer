@@ -17,7 +17,6 @@
 
 import { useTranslation } from "react-i18next";
 
-import { MasterKeyLink } from "@/components/MasterKeyLink";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import {
@@ -39,10 +38,7 @@ export function SigningKeys() {
         />
       }
     >
-      <SigningKeysPanel
-        controller={controller}
-        masterKeyAction={<MasterKeyLink />}
-      />
+      <SigningKeysPanel controller={controller} />
     </Page>
   );
 }

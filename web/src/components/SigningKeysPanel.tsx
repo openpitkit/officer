@@ -15,20 +15,13 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { AlertTriangle, Info } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { AlertTriangle } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type {
-  CredentialStorage,
-  SigningKey,
-  SigningKeyFormat,
-} from "@/api/types";
-import { useCredentialStorage } from "@/api/useCredentialStorage";
-import type { LoadState } from "@/api/usePolling";
+import type { SigningKey, SigningKeyFormat } from "@/api/types";
 import { useSigningKeys } from "@/api/useSigningKeys";
 import { CopyableSnippet } from "@/components/CopyableSnippet";
-import { CredentialStorageCheck } from "@/components/CredentialStorageCheck";
 import { Notice } from "@/components/Notice";
 import {
   ErrorBanner,
@@ -77,13 +70,7 @@ function errMessage(err: unknown): string {
 // Card A - Active key
 // ---------------------------------------------------------------------------
 
-function ActiveKeyCard({
-  activeKey,
-  sealed,
-}: {
-  activeKey: SigningKey | null;
-  sealed: boolean;
-}) {
+function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
   const { t } = useTranslation("approvalKeys");
   const { exportPublicKey } = useOfficerApi();
 
@@ -119,9 +106,7 @@ function ActiveKeyCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {activeKey === null ? (
-          <p className="text-xs text-muted-lt">
-            {sealed ? t("currentKey.empty") : t("currentKey.emptyNoMasterKey")}
-          </p>
+          <p className="text-xs text-muted-lt">{t("currentKey.empty")}</p>
         ) : (
           <>
             <StatRow
@@ -202,17 +187,7 @@ function ActiveKeyCard({
 // Card B - Generate / Import
 // ---------------------------------------------------------------------------
 
-function ManageKeyCard({
-  storage,
-  sealed,
-  onDone,
-  masterKeyAction,
-}: {
-  storage: LoadState<CredentialStorage>;
-  sealed: boolean;
-  onDone: () => void;
-  masterKeyAction: ReactNode;
-}) {
+function ManageKeyCard({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation("approvalKeys");
   const { t: tc } = useTranslation();
   const { generateSigningKey, importSigningKey } = useOfficerApi();
@@ -266,18 +241,6 @@ function ManageKeyCard({
         <CardTitle>{t("manageKey.sectionTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Officer stores a signing key only sealed under a master key. */}
-        <CredentialStorageCheck storage={storage}>
-          <Notice
-            tone="warn"
-            icon={Info}
-            title={t("manageKey.masterKeyRequired.title")}
-          >
-            <p>{t("manageKey.masterKeyRequired.description")}</p>
-            <p>{masterKeyAction}</p>
-          </Notice>
-        </CredentialStorageCheck>
-
         {/* Mode toggle */}
         <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
           {(["generate", "import"] as const).map((m) => (
@@ -311,7 +274,7 @@ function ManageKeyCard({
             <Button
               size="sm"
               onClick={() => setGenerateDialogOpen(true)}
-              disabled={generateBusy || !sealed}
+              disabled={generateBusy}
             >
               {t("manageKey.generateButton")}
             </Button>
@@ -330,7 +293,7 @@ function ManageKeyCard({
               <Select
                 value={importFormat}
                 onValueChange={(v) => setImportFormat(v as SigningKeyFormat)}
-                disabled={importBusy || !sealed}
+                disabled={importBusy}
               >
                 <SelectTrigger className="h-8 w-56 text-xs">
                   <SelectValue />
@@ -354,7 +317,7 @@ function ManageKeyCard({
                 value={importKey}
                 onChange={(e) => setImportKey(e.target.value)}
                 placeholder={t("manageKey.importKeyPlaceholder")}
-                disabled={importBusy || !sealed}
+                disabled={importBusy}
                 rows={5}
                 className="resize-none font-mono text-xs"
                 autoComplete="off"
@@ -368,7 +331,7 @@ function ManageKeyCard({
             <Button
               size="sm"
               onClick={() => void handleImport()}
-              disabled={importBusy || !sealed}
+              disabled={importBusy}
             >
               {importBusy
                 ? t("manageKey.importBusy")
@@ -406,7 +369,7 @@ function ManageKeyCard({
                   e.preventDefault();
                   void handleGenerate();
                 }}
-                disabled={generateBusy || !sealed}
+                disabled={generateBusy}
               >
                 {t("manageKey.generateDialog.confirm")}
               </AlertDialogAction>
@@ -468,19 +431,16 @@ function ESignCard({
 // ---------------------------------------------------------------------------
 
 /**
- * The signing keys state and its actions: the polled keys, the credential
- * storage, the eSign toggle and one refresh. The signing keys page and the
- * first-run wizard both hold one controller and pass it to the panel, so the
- * page header and the panel show the same state.
+ * The signing keys state and its actions: the polled keys, the eSign toggle
+ * and one refresh. The signing keys page and the first-run wizard both hold
+ * one controller and pass it to the panel, so the page header and the panel
+ * show the same state.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- Panel controller hook.
 export function useSigningKeysPanel() {
   const { t } = useTranslation("approvalKeys");
   const { setESignEnabled } = useOfficerApi();
   const { load, reload } = useSigningKeys();
-  const { load: storage } = useCredentialStorage();
-  // Key entry stays closed until the storage load proves a master key seals it.
-  const sealed = storage.state === "ready" && storage.data.credentialsSealed;
 
   const [eSignBusy, setESignBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -520,8 +480,6 @@ export function useSigningKeysPanel() {
   return {
     load,
     reload,
-    storage,
-    sealed,
     activeKey,
     eSignEnabled,
     eSignBusy,
@@ -541,22 +499,13 @@ export function useSigningKeysPanel() {
  */
 export function SigningKeysPanel({
   controller,
-  masterKeyAction,
 }: {
   /** The state and actions from useSigningKeysPanel. */
   controller: ReturnType<typeof useSigningKeysPanel>;
-  /**
-   * The way to a master key, ending the notice shown while the credential
-   * storage is not sealed: the signing keys page links to its guide, the
-   * first-run wizard leads back to its encryption step.
-   */
-  masterKeyAction: ReactNode;
 }) {
   const {
     load,
     reload,
-    storage,
-    sealed,
     activeKey,
     eSignEnabled,
     eSignBusy,
@@ -581,14 +530,9 @@ export function SigningKeysPanel({
 
       {load.state === "ready" && (
         <div className="space-y-4">
-          <ActiveKeyCard activeKey={activeKey} sealed={sealed} />
+          <ActiveKeyCard activeKey={activeKey} />
 
-          <ManageKeyCard
-            storage={storage}
-            sealed={sealed}
-            onDone={refresh}
-            masterKeyAction={masterKeyAction}
-          />
+          <ManageKeyCard onDone={refresh} />
 
           <ESignCard
             enabled={eSignEnabled}

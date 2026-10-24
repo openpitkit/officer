@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 
 import type { AccessMode } from "@/api/access";
 import type { AccountModeState } from "@/api/accountMode";
+import type { CredentialStorage } from "@/api/types";
 import type { LoadState } from "@/api/usePolling";
 import {
   CompactStaleState,
@@ -49,12 +50,15 @@ import { cn } from "@/lib/utils";
  */
 export function DoneSummary({
   accounts,
+  storage,
   signing,
   accessMode,
   places,
 }: {
   /** The polled account mode. */
   accounts: LoadState<AccountModeState>;
+  /** The polled credential storage. */
+  storage: LoadState<CredentialStorage>;
   signing: ReturnType<typeof useSigningKeysPanel>;
   accessMode: AccessMode;
   /** Where each decision lives in the panel. */
@@ -64,7 +68,7 @@ export function DoneSummary({
   const { t: ts } = useTranslation("service");
   // The polls retry by themselves, so a failed one shows its error until
   // the next answer.
-  for (const load of [accounts, signing.load, signing.storage]) {
+  for (const load of [accounts, signing.load, storage]) {
     if (load.state === "error") {
       return <ErrorBanner message={load.error} />;
     }
@@ -72,13 +76,14 @@ export function DoneSummary({
   if (
     accounts.state !== "ready" ||
     signing.load.state !== "ready" ||
-    signing.storage.state !== "ready"
+    storage.state !== "ready"
   ) {
     return <LoadingStatus />;
   }
 
   const { mode, account } = accounts.data;
-  const { sealed, eSignEnabled, activeKey } = signing;
+  const sealed = storage.data.credentialsSealed;
+  const { eSignEnabled, activeKey } = signing;
   const rows: {
     id: DecisionStep;
     choice: string;
@@ -97,18 +102,15 @@ export function DoneSummary({
     },
     {
       id: "encryption",
-      choice: encryptionValue(ts, signing.storage.data),
-      load: signing.storage,
+      choice: encryptionValue(ts, storage.data),
+      load: storage,
       flagged: !sealed,
     },
     {
       id: "signing",
-      // Signing needs the master key, so it waits for the database's seal.
-      choice: sealed
-        ? signingValue(ts, eSignEnabled, activeKey)
-        : t("done.values.signNA"),
+      choice: signingValue(ts, eSignEnabled, activeKey),
       load: signing.load,
-      flagged: !sealed || !eSignEnabled || activeKey === null,
+      flagged: !eSignEnabled || activeKey === null,
     },
     {
       id: "access",

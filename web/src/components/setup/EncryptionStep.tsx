@@ -155,7 +155,6 @@ export function EncryptionStep({
         >
           <p>{t("encryption.noneWho")}</p>
           <p>{t("encryption.noneWhat")}</p>
-          <p>{t("encryption.noneSign")}</p>
           <p>{t("encryption.noneBanner")}</p>
           {acknowledgement !== undefined && (
             <Acknowledgement {...acknowledgement} disabled={disabled}>

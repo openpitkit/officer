@@ -78,7 +78,6 @@ func TestWriteErrSentinelCodes(t *testing.T) {
 		{"live_trading_unavailable", domain.ErrLiveTradingUnavailable, 403},
 		{"trading_mode_mismatch", domain.ErrTradingModeMismatch, 409},
 		{"fee_account_required", domain.ErrFeeAccountRequired, 409},
-		{"master_key_required", domain.ErrMasterKeyRequired, 409},
 		{"venue_order_managed", domain.ErrVenueOrderManaged, 409},
 		{"no_destination", domain.ErrNoDestination, 409},
 		{"destination_ambiguous", domain.ErrDestinationAmbiguous, 409},

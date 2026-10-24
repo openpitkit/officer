@@ -15,10 +15,9 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
-import { useState } from "react";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -220,48 +219,22 @@ describe("SigningKeys page - import", () => {
   });
 });
 
-describe("SigningKeys page - master key", () => {
-  const noticeTitle = "Approval signing requires a master key";
-
-  it("explains and refuses key entry without a master key", async () => {
+describe("SigningKeys page - key entry and the master key", () => {
+  it.each<[string, LoadState<CredentialStorage>]>([
+    ["with a master key", storage(true)],
+    ["without a master key", storage(false)],
+    [
+      "while the storage check runs",
+      { state: "loading", data: null, error: null },
+    ],
+    [
+      "after a failed storage check",
+      { state: "error", data: null, error: "credential storage unavailable" },
+    ],
+  ])("leaves key entry open %s", async (_case, load) => {
     mockReady(makeStatus());
-    mockStorage(storage(false));
+    mockStorage(load);
     renderPage();
-    expect(screen.getByText(noticeTitle)).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Officer stores a signing key only sealed under a master key. This instance runs without one, so it cannot generate or import a key. Configure a master key and restart Officer to enable signing.",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "How to set a master key" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Generate$/i })).toBeDisabled();
-
-    await userEvent.click(
-      screen.getByRole("button", { name: /Import your key/i }),
-    );
-    expect(
-      screen.getByPlaceholderText(/Paste your private key here/i),
-    ).toBeDisabled();
-    expect(screen.getByRole("button", { name: /^Import$/i })).toBeDisabled();
-  });
-
-  it("ends the notice in the link to the master key guide on Service", () => {
-    mockReady(makeStatus());
-    mockStorage(storage(false));
-    renderPage();
-    const notice = screen.getByText(noticeTitle).parentElement as HTMLElement;
-    expect(
-      within(notice).getByRole("link", { name: "How to set a master key" }),
-    ).toHaveAttribute("href", "/service#security");
-  });
-
-  it("leaves key entry open with a master key", async () => {
-    mockReady(makeStatus());
-    mockStorage(storage(true));
-    renderPage();
-    expect(screen.queryByText(noticeTitle)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Generate$/i })).toBeEnabled();
 
     await userEvent.click(
@@ -273,80 +246,15 @@ describe("SigningKeys page - master key", () => {
     expect(screen.getByRole("button", { name: /^Import$/i })).toBeEnabled();
   });
 
-  it("refuses key entry while the master-key check runs", () => {
-    mockReady(makeStatus());
-    mockStorage({ state: "loading", data: null, error: null });
-    renderPage();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Checking whether stored keys are encrypted…",
-    );
-    expect(screen.getByRole("button", { name: /^Generate$/i })).toBeDisabled();
-  });
-
-  it("reports a failed master-key check and refuses key entry", async () => {
-    mockReady(makeStatus());
-    mockStorage({
-      state: "error",
-      data: null,
-      error: "credential storage unavailable",
-    });
-    renderPage();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Could not check whether stored keys are encrypted: credential storage unavailable",
-    );
-    expect(screen.queryByText(noticeTitle)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Generate$/i })).toBeDisabled();
-
-    await userEvent.click(
-      screen.getByRole("button", { name: /Import your key/i }),
-    );
-    expect(screen.getByRole("button", { name: /^Import$/i })).toBeDisabled();
-  });
-
-  it("drops the generate or import hint from the empty key without a master key", () => {
+  it("offers the first key without a master key", () => {
     mockReady({ keys: [], eSignEnabled: false });
     mockStorage(storage(false));
-    renderPage();
-    expect(screen.getByText("No signing key configured.")).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Generate or import one below/i),
-    ).not.toBeInTheDocument();
-  });
-
-  it("keeps the generate or import hint on the empty key with a master key", () => {
-    mockReady({ keys: [], eSignEnabled: false });
-    mockStorage(storage(true));
     renderPage();
     expect(
       screen.getByText(
         "No signing key configured. Generate or import one below.",
       ),
     ).toBeInTheDocument();
-  });
-
-  it("disables the open generate confirmation once the master key is gone", async () => {
-    mockReady(makeStatus());
-    // The storage as polled by every reader: a later poll may unseal it.
-    const readers = new Set<(next: LoadState<CredentialStorage>) => void>();
-    useCredentialStorageMock.mockImplementation(
-      function useLiveCredentialStorage() {
-        const [load, setLoad] = useState(() => storage(true));
-        readers.add(setLoad);
-        return { load, reload: vi.fn() };
-      },
-    );
-    renderPage();
-    await userEvent.click(screen.getByRole("button", { name: /^Generate$/i }));
-    const confirmBtn = within(screen.getByRole("alertdialog")).getByRole(
-      "button",
-      { name: /Generate$/i },
-    );
-    expect(confirmBtn).toBeEnabled();
-
-    act(() => {
-      for (const read of readers) read(storage(false));
-    });
-    expect(confirmBtn).toBeDisabled();
   });
 });
 
