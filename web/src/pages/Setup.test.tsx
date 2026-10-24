@@ -235,10 +235,26 @@ async function finishWithToken(user: UserEvent) {
   await heading(TITLES.agent);
 }
 
-/** Saves several accounts on the accounts step and confirms the save. */
+/**
+ * Saves several accounts on the accounts step. The process runs them already,
+ * so the save asks for no confirmation.
+ */
 async function saveSeveralAccounts(user: UserEvent) {
   await heading(TITLES.accounts);
   await user.click(screen.getByRole("button", { name: "Several accounts" }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
+}
+
+/**
+ * Saves one account on the accounts step and confirms the restart it needs:
+ * the process runs several accounts.
+ */
+async function saveOneAccount(user: UserEvent) {
+  await heading(TITLES.accounts);
+  await user.click(screen.getByRole("button", { name: "One account" }));
+  await screen.findByText(
+    "No account exists yet: Officer creates the account default and acts on it only.",
+  );
   await user.click(screen.getByRole("button", { name: "Save" }));
   await user.click(
     within(await screen.findByRole("alertdialog")).getByRole("button", {
@@ -378,6 +394,22 @@ describe("Setup", () => {
 
       await heading(TITLES.welcome);
       expect(
+        screen.getByText("This wizard sets Officer up for work."),
+      ).toBeInTheDocument();
+      // The language and theme switches stand in the top bar, as in the panel.
+      const topBar = screen.getByRole("banner");
+      expect(
+        within(topBar).getByRole("button", { name: "Change language" }),
+      ).toBeInTheDocument();
+      expect(
+        within(topBar).getByRole("button", { name: /^Theme: / }),
+      ).toBeInTheDocument();
+      expect(
+        within(screen.getByRole("complementary")).queryByRole("button", {
+          name: "Change language",
+        }),
+      ).not.toBeInTheDocument();
+      expect(
         screen.getByText("Officer is closed until setup is finished"),
       ).toBeInTheDocument();
       await user.click(next("Start setup"));
@@ -423,9 +455,7 @@ describe("Setup", () => {
       await heading(TITLES.accounts);
       expect(next()).toBeDisabled();
       expect(
-        screen.getByText(
-          "Save the mode to continue. Officer restarts to apply it.",
-        ),
+        screen.getByText("Save the mode to continue."),
       ).toBeInTheDocument();
     });
 
@@ -479,7 +509,7 @@ describe("Setup", () => {
         },
       );
 
-      await saveSeveralAccounts(user);
+      await saveOneAccount(user);
       await waitFor(() => expect(restartService).toHaveBeenCalledTimes(1));
       await waitFor(() =>
         expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
@@ -512,7 +542,7 @@ describe("Setup", () => {
         new ApiError("restart is refused", "internal", 500),
       );
 
-      await saveSeveralAccounts(user);
+      await saveOneAccount(user);
 
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "restart is refused",
@@ -543,7 +573,7 @@ describe("Setup", () => {
         },
       );
 
-      await saveSeveralAccounts(user);
+      await saveOneAccount(user);
 
       await waitFor(() =>
         expect(putSetupProgress).toHaveBeenCalledWith(
@@ -571,7 +601,7 @@ describe("Setup", () => {
         },
       );
 
-      await saveSeveralAccounts(user);
+      await saveOneAccount(user);
       await waitFor(() => expect(putSetupProgress).toHaveBeenCalledTimes(1));
       await write.reject(new ApiError("database is locked", "internal", 500));
 
@@ -811,6 +841,19 @@ describe("Setup", () => {
         screen.getByRole("status", { name: "Stale data: connection refused" }),
       ).toBeInTheDocument();
     });
+
+    it("says the master key can be set later, and where", async () => {
+      mockStorage(false);
+      renderSetup({ step: "encryption" });
+
+      await heading(TITLES.encryption);
+      expect(
+        screen.getByText(/The key can also be set later, at any time\.$/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Change later: Service › Security"),
+      ).toBeInTheDocument();
+    });
   });
 
   it("offers key entry on the signing step without a master key", async () => {
@@ -1018,7 +1061,7 @@ describe("Setup", () => {
           new ApiError("setup complete", "setup_complete", 409),
         );
       },
-      trigger: saveSeveralAccounts,
+      trigger: saveOneAccount,
     },
     {
       call: "the decline",
@@ -1542,7 +1585,7 @@ describe("SetupReview", () => {
 
   it("restarts Officer for a saved account mode and holds the moves", async () => {
     const user = userEvent.setup();
-    mockAccountMode(accountMode({ mode: "single" }));
+    mockAccountMode(accountMode());
     const { restartService } = renderReview("open", {
       [`PUT ${API}/account-mode`]: () =>
         jsonResponse(accountMode({ restartRequired: true })),
@@ -1550,7 +1593,7 @@ describe("SetupReview", () => {
 
     await heading(TITLES.welcome);
     await user.click(railStep("Accounts", GUIDE));
-    await saveSeveralAccounts(user);
+    await saveOneAccount(user);
     await waitFor(() => expect(restartService).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),

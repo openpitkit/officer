@@ -135,7 +135,7 @@ async function confirmSave(user: UserEvent) {
   await user.click(saveButton());
   const dialog = await screen.findByRole("alertdialog");
   expect(
-    within(dialog).getByText(/If the running mode changes, Officer restarts/),
+    within(dialog).getByText(/Officer restarts to apply the mode/),
   ).toBeInTheDocument();
   await user.click(within(dialog).getByRole("button", { name: "Save" }));
 }
@@ -204,11 +204,15 @@ describe("AccountModeChoice", () => {
     });
 
     await choose(user, "One account");
+    const note = await screen.findByText(
+      "No account exists yet: Officer creates the account default and acts on it only.",
+    );
+    // The note goes under the save, so the save stays where the other mode
+    // has it.
     expect(
-      await screen.findByText(
-        "No account exists yet: Officer creates the account default and acts on it only.",
-      ),
-    ).toBeInTheDocument();
+      saveButton().compareDocumentPosition(note) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(fetchAccounts).toHaveBeenCalledWith(
       { limit: 2 },
       expect.any(AbortSignal),
@@ -325,17 +329,41 @@ describe("AccountModeChoice", () => {
     expect(
       screen.getByText("Officer acts on the account main only."),
     ).toBeInTheDocument();
-    await confirmSave(user);
+    // The running process already enforces this mode: nothing to confirm.
+    await user.click(saveButton());
 
     expect(
       await screen.findByText(
         "The account mode is saved. No restart is needed.",
       ),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(putBodies(fetchMock)).toEqual([{ mode: "single", account: "main" }]);
     expect(onSaved).toHaveBeenCalledExactlyOnceWith(saved);
     expect(restart).not.toHaveBeenCalled();
     expect(fetchAccounts).not.toHaveBeenCalled();
+  });
+
+  it("saves several accounts on a fresh install without a restart warning", async () => {
+    const user = userEvent.setup();
+    const saved: AccountModeState = { ...storedMulti };
+    const { fetchMock, restart, onSaved } = renderChoice(
+      { ...storedMulti, mode: null },
+      { answer: jsonResponse(saved) },
+    );
+
+    await choose(user, "Several accounts");
+    await user.click(saveButton());
+
+    expect(
+      await screen.findByText(
+        "The account mode is saved. No restart is needed.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(putBodies(fetchMock)).toEqual([{ mode: "multi" }]);
+    expect(onSaved).toHaveBeenCalledExactlyOnceWith(saved);
+    expect(restart).not.toHaveBeenCalled();
   });
 
   it("shows a refused save and does not restart", async () => {

@@ -19,18 +19,15 @@ import { Check, Lock, ShieldCheck } from "lucide-react";
 import { useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import { BrandLockup } from "@/components/BrandLockup";
-import { LanguageSwitch } from "@/components/LanguageSwitch";
-import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { WIZARD_STEPS, type WizardStep } from "@/components/setup/steps";
 import { cn } from "@/lib/utils";
 
 /**
- * The rail of the setup wizard: the brand, the steps with their chosen
- * values, whether Officer answers yet, and the language and theme switches.
- * In the first run, before completion a step up to the current one can be
- * opened, and after it none can. In the review of a completed setup, under
- * the name of the guide, every step can be opened at any time.
+ * The rail of the setup wizard: the steps with their chosen values and
+ * whether Officer answers yet. In the first run, before completion a step up
+ * to the current one can be opened, and after it none can. In the review of a
+ * completed setup, under the name of the guide, every step can be opened at
+ * any time.
  */
 export function SetupRail({
   review,
@@ -55,9 +52,6 @@ export function SetupRail({
   const titleId = useId();
   return (
     <aside className="flex shrink-0 flex-col gap-5 border-b border-border bg-surface px-3 py-4 md:w-64 md:overflow-y-auto md:border-b-0 md:border-r">
-      <div className="flex items-center gap-[var(--dens-nav-gap)] px-2">
-        <BrandLockup />
-      </div>
       <nav aria-labelledby={titleId} className="space-y-2">
         <p
           id={titleId}
@@ -112,26 +106,20 @@ export function SetupRail({
           })}
         </ol>
       </nav>
-      <div className="mt-auto space-y-3">
-        <p className="flex items-start gap-2 border-t border-border px-2 pt-3 text-xs text-muted-lt">
-          {finished ? (
-            <ShieldCheck
-              aria-hidden="true"
-              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ok)]"
-            />
-          ) : (
-            <Lock
-              aria-hidden="true"
-              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--warn)]"
-            />
-          )}
-          <span>{t(finished ? "rail.finished" : "rail.closed")}</span>
-        </p>
-        <div className="flex items-center gap-2 px-2">
-          <LanguageSwitch />
-          <ThemeSwitch />
-        </div>
-      </div>
+      <p className="mt-auto flex items-start gap-2 border-t border-border px-2 pt-3 text-xs text-muted-lt">
+        {finished ? (
+          <ShieldCheck
+            aria-hidden="true"
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ok)]"
+          />
+        ) : (
+          <Lock
+            aria-hidden="true"
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--warn)]"
+          />
+        )}
+        <span>{t(finished ? "rail.finished" : "rail.closed")}</span>
+      </p>
     </aside>
   );
 }

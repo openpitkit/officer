@@ -662,8 +662,8 @@ describe("Service", () => {
     expect(screen.getByText(noticeTitle)).toBeInTheDocument();
     expect(screen.getByText("Running mode")).toBeInTheDocument();
 
+    // The running process already enforces this mode: nothing to confirm.
     await user.click(screen.getByRole("button", { name: "Save" }));
-    await confirmDialog(user, "Save");
 
     // The poll ticks every 5 s, beyond waitFor's 1 s: only the reload the
     // save triggers can clear these in time.

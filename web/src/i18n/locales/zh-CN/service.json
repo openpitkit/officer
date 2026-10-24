@@ -54,7 +54,7 @@
     },
     "confirm": {
       "title": "保存账户模式？",
-      "description": "如果运行中的模式发生变化，Officer 将重启以应用该模式：控制面板会断开连接，并在 Officer 恢复后重新加载。"
+      "description": "Officer 将重启以应用该模式：控制面板会断开连接，并在 Officer 恢复后重新加载。"
     },
     "saved": "账户模式已保存，无需重启。",
     "restarting": "Officer 正在重启；恢复后控制面板将重新加载。",

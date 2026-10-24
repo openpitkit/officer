@@ -19,7 +19,7 @@
   },
   "welcome": {
     "title": "Set up Pit Officer",
-    "lead": "Short steps, one decision each. Each step says what it changes and where that lives afterwards.",
+    "lead": "This wizard sets Officer up for work.",
     "closedTitle": "Officer is closed until setup is finished",
     "closedBody": "Its REST API and MCP answer no program and no agent yet. Nothing is traded and nothing is connected until you set it up.",
     "start": "Start setup"
@@ -27,18 +27,18 @@
   "accounts": {
     "title": "How many accounts will you use?",
     "lead": "With one account, Officer acts on it only and the panel shows no account fields. The mode can be changed later on the Service page.",
-    "saveFirst": "Save the mode to continue. Officer restarts to apply it."
+    "saveFirst": "Save the mode to continue."
   },
   "encryption": {
     "title": "Seal stored keys with a master key?",
-    "lead": "Officer keeps the keys of your trading connections and data providers, and its own access tokens, in its database file. A master key seals them: a copied database or backup is useless without it.",
+    "lead": "Officer keeps the keys of your trading connections and data providers, and its own access tokens, in its database file. A master key seals them: a copied database or backup is useless without it. The key can also be set later, at any time.",
     "key": {
       "title": "With a master key",
       "description": "Stored keys are sealed. You create the key once and keep a copy."
     },
     "none": {
       "title": "Without encryption",
-      "description": "Nothing to do now. Stored keys lie in the file as plain text."
+      "description": "Nothing to do now. Stored keys lie in the file as plain text until a master key is set."
     },
     "waiting": "Waiting for Officer to come back with the key…",
     "on": "Encryption is on. Officer sealed its database.",

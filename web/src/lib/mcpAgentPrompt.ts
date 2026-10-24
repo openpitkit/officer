@@ -15,8 +15,6 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import i18n from "@/i18n";
-
 /**
  * Build a plain-text orientation block for an AI agent connecting to the Pit
  * Officer MCP server. The text is intentionally evergreen: it does not
@@ -24,14 +22,30 @@ import i18n from "@/i18n";
  * the available command surface via the MCP tool list (`tools/list`), so the
  * prompt never drifts from the operator's current access toggles.
  *
- * The agent-facing copy stays English in every locale.
+ * The prompt is agent-facing copy, so it stays English in every UI locale, as
+ * the artifacts in `agentArtifacts.ts` do.
  */
 export function buildMcpAgentPrompt(): string {
-  return [
-    i18n.t("mcp:prompt.intro"),
-    "",
-    i18n.t("mcp:prompt.discover"),
-    "",
-    i18n.t("mcp:prompt.footer"),
-  ].join("\n");
+  return `You have access to the Pit Officer MCP server - a pre-trade risk and
+compliance control plane for trading operations.
+
+Transport: streamable HTTP at the /mcp endpoint of this service.
+Alternatively available as \`pit-officer mcp\` over stdio.
+
+Principles:
+- Least-privilege surface. The server carries no secrets or credentials.
+- Most tools are read-only. Treat any mutating tool with extra care.
+- Any trading action or mutation must go through pre-trade checks and
+  approval. Never bypass the pre-trade step.
+
+Discover the available commands at runtime: call the MCP tool list
+(\`tools/list\`) after connecting and rely on each tool's self-described
+input schema. Do not assume a fixed set of commands - the surface is
+self-describing and can change as the operator adjusts access.
+
+The operator controls which commands are enabled, and this can change at
+any time without notice. If a tool call returns a notice that the command
+is disabled in the panel, do NOT retry it - ask your orchestrator to
+extend or change your prompt/instructions accordingly (or to have the
+operator enable the command in Pit Officer).`;
 }

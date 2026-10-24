@@ -43,7 +43,9 @@ import type { LoadState } from "@/api/usePolling";
 import { AccessModePanel } from "@/components/AccessModePanel";
 import { AccountModePanel } from "@/components/AccountModeChoice";
 import { errMessage } from "@/components/AccountDialogs";
+import { BrandLockup } from "@/components/BrandLockup";
 import { ConnectAgent } from "@/components/ConnectAgent";
+import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { Notice } from "@/components/Notice";
 import {
   ErrorBanner,
@@ -55,6 +57,7 @@ import {
   useSigningKeysPanel,
 } from "@/components/SigningKeysPanel";
 import { useStartupAdmit } from "@/components/StartupGate";
+import { ThemeSwitch } from "@/components/ThemeSwitch";
 import {
   AccessSection,
   AccessTokensProvider,
@@ -493,6 +496,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
             />
           ),
           footer: {
+            where: places.encryption,
             back: () => void go("accounts"),
             // The review takes no decision here.
             next: () =>
@@ -634,39 +638,53 @@ function Wizard({ pass }: { pass: WizardPass }) {
       footer.extra
     );
   return (
-    <div className="flex h-dvh w-full flex-col overflow-y-auto bg-bg text-text md:flex-row md:overflow-hidden">
-      <SetupRail
-        review={review}
-        current={current}
-        finished={finished}
-        values={WIZARD_STEPS.map(railValue)}
-        busy={moving}
-        onJump={(target) => {
-          if (target !== step) {
-            void go(target);
-          }
-        }}
-      />
-      <main className="flex min-w-0 flex-1 flex-col md:overflow-hidden">
-        <div className="flex-1 md:overflow-y-auto">
-          <div className="mx-auto w-full max-w-3xl space-y-5 px-4 py-6 md:px-10 md:py-8">
-            <div className="ledger-masthead space-y-1 pb-3">
-              <p className="text-[0.6875rem] font-medium uppercase tracking-[0.07em] text-muted">
-                {step === "welcome" && !review
-                  ? t("firstStart")
-                  : t("stepOf", { n: current + 1, total: WIZARD_STEPS.length })}
-              </p>
-              <h1 className="ledger-title text-2xl">{title}</h1>
-              <p className="text-sm text-muted-lt">{lead}</p>
-            </div>
-            {body}
-            {error !== null && (
-              <ErrorBanner message={error} onDismiss={() => setError(null)} />
-            )}
-          </div>
+    <div className="flex h-dvh w-full flex-col bg-bg text-text">
+      {/* The brand and the language and theme switches stand where the
+          panel has them: across the top, the switches in the right corner. */}
+      <header className="ledger-masthead flex h-[var(--topbar-height)] shrink-0 items-center gap-2 px-[var(--dens-shell-x)]">
+        <BrandLockup />
+        <div className="ml-auto flex items-center gap-2">
+          <LanguageSwitch />
+          <ThemeSwitch />
         </div>
-        <StepFooter {...footer} extra={extra} busy={moving} />
-      </main>
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
+        <SetupRail
+          review={review}
+          current={current}
+          finished={finished}
+          values={WIZARD_STEPS.map(railValue)}
+          busy={moving}
+          onJump={(target) => {
+            if (target !== step) {
+              void go(target);
+            }
+          }}
+        />
+        <main className="flex min-w-0 flex-1 flex-col md:overflow-hidden">
+          <div className="flex-1 md:overflow-y-auto">
+            <div className="mx-auto w-full max-w-3xl space-y-5 px-4 py-6 md:px-10 md:py-8">
+              <div className="ledger-masthead space-y-1 pb-3">
+                <p className="text-[0.6875rem] font-medium uppercase tracking-[0.07em] text-muted">
+                  {step === "welcome" && !review
+                    ? t("firstStart")
+                    : t("stepOf", {
+                        n: current + 1,
+                        total: WIZARD_STEPS.length,
+                      })}
+                </p>
+                <h1 className="ledger-title text-2xl">{title}</h1>
+                <p className="text-sm text-muted-lt">{lead}</p>
+              </div>
+              {body}
+              {error !== null && (
+                <ErrorBanner message={error} onDismiss={() => setError(null)} />
+              )}
+            </div>
+          </div>
+          <StepFooter {...footer} extra={extra} busy={moving} />
+        </main>
+      </div>
     </div>
   );
 }

@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccessMode } from "@/api/access";
 import { ConnectAgent } from "@/components/ConnectAgent";
+import i18n from "@/i18n";
 import { maskAccessToken } from "@/lib/accessTokenMask";
 import {
   claudeDesktopConfig,
@@ -293,5 +294,22 @@ describe("ConnectAgent", () => {
 
     await user.click(screen.getByRole("button", { name: "Claude" }));
     expect(snippet(CLI)).toHaveValue(claudeMcpAddCommand(mcpUrl(), null));
+  });
+
+  it("keeps the agent prompt English under another panel language", async () => {
+    const user = userEvent.setup();
+    await i18n.changeLanguage("ru");
+    try {
+      renderBlock("open");
+
+      await user.click(screen.getByRole("button", { name: "Промпт" }));
+      const prompt = snippet("Вставьте в промпт вашего агента");
+      expect(prompt).toHaveValue(buildMcpAgentPrompt());
+      expect((prompt as HTMLTextAreaElement).value).toMatch(
+        /^You have access to the Pit Officer MCP server/,
+      );
+    } finally {
+      await i18n.changeLanguage("en");
+    }
   });
 });

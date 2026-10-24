@@ -108,8 +108,19 @@ function isStored(request: AccountModeRequest, state: AccountModeState) {
 }
 
 /**
+ * Whether storing `request` restarts Officer: it enforces other account
+ * features than the running process does, as the server decides it.
+ */
+function restarts(request: AccountModeRequest, features: AccountFeatures) {
+  return request.mode === "multi"
+    ? !features.accounts
+    : features.accounts || request.account !== features.account;
+}
+
+/**
  * Shows the stored account mode and lets the operator choose the next one,
  * then stores it and restarts Officer when the running mode has to change.
+ * Only a save that restarts asks for confirmation first.
  */
 export function AccountModeChoice({
   load,
@@ -216,6 +227,17 @@ export function AccountModeChoice({
     }
   };
 
+  const requestSave = () => {
+    if (request === null) {
+      return;
+    }
+    if (restarts(request, features)) {
+      setConfirming(true);
+    } else {
+      void save(request);
+    }
+  };
+
   const modeLabel = (mode: AccountMode | null, account: string) => {
     if (mode === null) {
       return t("accountMode.notChosen");
@@ -263,6 +285,20 @@ export function AccountModeChoice({
             onChange={choose}
             disabled={blocked}
           />
+          {/* Right under the choice, so the mode details never move it. */}
+          <Button
+            type="button"
+            size="sm"
+            onClick={requestSave}
+            disabled={!canSave}
+          >
+            {tc("actions.save")}
+          </Button>
+          {outcome === "saved" && (
+            <p role="status" className="text-xs font-medium text-[var(--ok)]">
+              {t("accountMode.saved")}
+            </p>
+          )}
           {choice === "single" && !features.accounts && (
             <p className="text-xs text-muted-lt">
               {t("accountMode.onlyAccount", { account: features.account })}
@@ -323,19 +359,6 @@ export function AccountModeChoice({
                 <p>{t("accountMode.otherAccounts.detail")}</p>
               </Notice>
             </>
-          )}
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => setConfirming(true)}
-            disabled={!canSave}
-          >
-            {tc("actions.save")}
-          </Button>
-          {outcome === "saved" && (
-            <p role="status" className="text-xs font-medium text-[var(--ok)]">
-              {t("accountMode.saved")}
-            </p>
           )}
         </div>
       )}

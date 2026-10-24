@@ -54,7 +54,7 @@
     },
     "confirm": {
       "title": "Save the account mode?",
-      "description": "If the running mode changes, Officer restarts to apply it: the panel disconnects and reloads when Officer is back."
+      "description": "Officer restarts to apply the mode: the panel disconnects and reloads when Officer is back."
     },
     "saved": "The account mode is saved. No restart is needed.",
     "restarting": "Officer is restarting; the panel reloads when it is back.",
