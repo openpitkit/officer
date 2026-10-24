@@ -241,6 +241,65 @@ func TestBackupExportRejectsUnknownSection(t *testing.T) {
 	}
 }
 
+// TestBackupScopeRejectsUnknownSectionInMixedSet sends export and restore a
+// scope naming a removed section beside a known one: both refuse it by name
+// instead of narrowing the set to the known section.
+func TestBackupScopeRejectsUnknownSectionInMixedSet(t *testing.T) {
+	svc := &fakeService{backupSummary: backup.NewSummary()}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := backup.Scope{Sections: []backup.Section{
+		"user_settings", backup.SectionAccountsGroups,
+	}}
+	restore, err := json.Marshal(map[string]any{
+		"archive": backup.NewArchive(
+			time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+			"test",
+			backup.RealmLabel{Code: "test"},
+			backup.Scope{All: true},
+			backup.Data{},
+			backup.CredentialFormPlaintext,
+		),
+		"scope": scope,
+		"mode":  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	export, err := json.Marshal(map[string]any{"scope": scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string][]byte{
+		"/api/v1/backup/export":  export,
+		"/api/v1/backup/restore": restore,
+	} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(
+			http.MethodPost, path, bytes.NewReader(body),
+		))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s = %d %s, want 422", path, rec.Code, rec.Body)
+		}
+		m := bodyMap(t, rec.Result())
+		errObj, _ := m["error"].(map[string]any)
+		if errObj["code"] != "validation" ||
+			errObj["message"] != `unknown backup section "user_settings"` {
+			t.Fatalf("%s error = %v", path, errObj)
+		}
+		errors, _ := m["errors"].([]any)
+		problem, _ := errors[0].(map[string]any)
+		if problem["pointer"] != "/scope/sections/0" {
+			t.Fatalf("%s pointer = %v, want /scope/sections/0", path, problem["pointer"])
+		}
+	}
+	if svc.restoreOptions.Mode != "" {
+		t.Fatalf("RestoreBackup was called with options %+v", svc.restoreOptions)
+	}
+}
+
 func TestBackupExportRejectsUnknownNestedScopeField(t *testing.T) {
 	svc := &fakeService{}
 	r, err := newRouter(svc)

@@ -737,12 +737,30 @@ var accountAddressedSections = []Section{
 	SectionAuditLog,
 }
 
+// Validate rejects a scope that names a section outside AllSections, All or not,
+// with a validation error naming that section. Normalize keeps only known
+// sections, so a caller validates first: a mixed set must fail, not narrow.
+// A blank entry names no section and is left to Normalize.
+func (s Scope) Validate() error {
+	for i, section := range s.Sections {
+		name := Section(strings.TrimSpace(string(section)))
+		if name != "" && !slices.Contains(AllSections, name) {
+			return domain.NewValidationError(
+				fmt.Sprintf("/sections/%d", i), "enum",
+				fmt.Sprintf("unknown backup section %q", name),
+			)
+		}
+	}
+	return nil
+}
+
 // Normalize trims and deduplicates the scope's section list and selectors, then
 // force-includes the parent dictionary sections a scoped archive's rows resolve
 // against: any account-addressed section pulls in accounts+groups, while
 // activity history and trading pull in each other. Trading remains
 // all-or-nothing and ignores account selectors. All already carries every
-// section, but its selectors are still normalized and applied.
+// section, but its selectors are still normalized and applied. A section
+// outside AllSections is dropped; Validate rejects it first.
 func (s Scope) Normalize() Scope {
 	s.Sections = normalizeSections(s.Sections)
 	s.Accounts = s.Accounts.Normalize()

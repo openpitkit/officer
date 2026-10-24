@@ -27,7 +27,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"go.openpit.dev/officer/framework/backend"
@@ -46,13 +45,8 @@ func handleExportBackup(svc backend.ControlPlane) http.HandlerFunc {
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if !validBackupScope(req.Scope) {
-			httpx.WriteValidationProblem(
-				w,
-				"backup scope must include all or at least one section",
-				"/scope",
-				"required",
-			)
+		if err := validateBackupScope(req.Scope, "backup"); err != nil {
+			httpx.WriteErr(w, err)
 			return
 		}
 		archive, filename, err := svc.ExportBackup(r.Context(), req.Scope)
@@ -155,17 +149,8 @@ func handleRestoreBackup(svc backend.ControlPlane) http.HandlerFunc {
 			)
 			return
 		}
-		if !validBackupScope(req.Scope) {
-			message := "restore scope contains an unknown section"
-			constraint := "enum"
-			normalized := req.Scope.Normalize()
-			if !normalized.All && len(normalized.Sections) == 0 {
-				message = "restore scope must include all or at least one section"
-				constraint = "required"
-			}
-			httpx.WriteValidationProblem(
-				w, message, "/scope", constraint,
-			)
+		if err := validateBackupScope(req.Scope, "restore"); err != nil {
+			httpx.WriteErr(w, err)
 			return
 		}
 		if req.ArchiveFile == "" && len(req.Archive.Manifest.Sections) == 0 {
@@ -354,20 +339,20 @@ func readBackupJSONFromZip(raw []byte) ([]byte, error) {
 	return body, nil
 }
 
-func validBackupScope(scope backup.Scope) bool {
-	scope = scope.Normalize()
-	if scope.All {
-		return true
+// validateBackupScope refuses a scope naming an unknown section before
+// Normalize could narrow it, then a scope selecting no section; operation names
+// the request in the latter message.
+func validateBackupScope(scope backup.Scope, operation string) error {
+	if err := scope.Validate(); err != nil {
+		return domain.WithValidationPointer("/scope"+domain.ValidationPointer(err), err)
 	}
-	if len(scope.Sections) == 0 {
-		return false
+	if normalized := scope.Normalize(); !normalized.All && len(normalized.Sections) == 0 {
+		return domain.NewValidationError(
+			"/scope", "required",
+			operation+" scope must include all or at least one section",
+		)
 	}
-	for _, section := range scope.Sections {
-		if !slices.Contains(backup.AllSections, section) {
-			return false
-		}
-	}
-	return true
+	return nil
 }
 
 func validRestoreMode(mode backup.RestoreMode) bool {
