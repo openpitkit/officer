@@ -23,6 +23,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -41,7 +42,9 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/migration"
 	fwstore "go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/store/schema"
 	"go.openpit.dev/officer/internal/access"
 )
 
@@ -299,41 +302,152 @@ func TestMigrateRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
 	}
 }
 
-// TestMigrateRejectsDatabaseThatPredatesSchema proves a database created by an
-// earlier build, whose event_attestation still keeps the signed envelope under
-// its earlier column name, is refused at Migrate with an error naming the
-// database and the remedy, while the same file migrated fresh opens cleanly.
-func TestMigrateRejectsDatabaseThatPredatesSchema(t *testing.T) {
+func TestMigrateRefusesIncompleteBookkeeping(t *testing.T) {
+	for _, recorded := range []string{"shared", "app"} {
+		for _, emptyOther := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/empty_other=%t", recorded, emptyOther), func(t *testing.T) {
+				ctx := context.Background()
+				path := filepath.Join(t.TempDir(), "officer.db")
+				setup := openSQLiteStoreForTest(t, path)
+				var source migration.MigrationSource = schema.NewEmbeddedMigrationSource(setup.dialect)
+				cfg := migration.Config{}
+				otherCfg := migration.Config{Table: appMigrationTable}
+				if recorded == "app" {
+					source = migrationList{{Version: 1, Name: "app_schema.sql", SQL: appSchemaSQL}}
+					cfg, otherCfg = otherCfg, cfg
+				}
+				if err := migration.Apply(ctx, setup.currentDB(), source, cfg, setup.dialect); err != nil {
+					t.Fatalf("record %s schema: %v", recorded, err)
+				}
+				if recorded == "shared" {
+					if _, err := seedEnumDictionaries(ctx, setup.currentDB()); err != nil {
+						t.Fatalf("seed shared dictionaries: %v", err)
+					}
+				}
+				if emptyOther {
+					if err := migration.Apply(ctx, setup.currentDB(), migrationList{}, otherCfg, setup.dialect); err != nil {
+						t.Fatalf("create empty bookkeeping table: %v", err)
+					}
+				}
+				if err := setup.Close(); err != nil {
+					t.Fatalf("close setup: %v", err)
+				}
+				before, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read database before Migrate: %v", err)
+				}
+
+				reopened := openSQLiteStoreForTest(t, path)
+				err = reopened.Migrate(ctx)
+				if !errors.Is(err, domain.ErrInvalid) {
+					t.Errorf("Migrate with only %s recorded = %v, want ErrInvalid", recorded, err)
+				} else {
+					for _, want := range []string{strconv.Quote(path), "shared and application migration records that disagree", "created before the application tables existed", "first start interrupted", "must be recreated"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("Migrate error %q does not mention %q", err, want)
+						}
+					}
+				}
+				if reopened.accessSnapshot.Load() != nil {
+					t.Error("a refused Migrate published an access snapshot")
+				}
+				if recorded == "shared" {
+					var appTables int
+					if err := reopened.currentDB().QueryRowContext(ctx,
+						`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table'
+						 AND name IN ('access_state', 'access_credential', 'panel_session', 'seal_report')`,
+					).Scan(&appTables); err != nil {
+						t.Fatalf("read app tables: %v", err)
+					}
+					if appTables != 0 {
+						t.Errorf("a refused Migrate created %d app tables, want 0", appTables)
+					}
+				}
+				if err := reopened.Close(); err != nil {
+					t.Fatalf("close refused store: %v", err)
+				}
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read database after Migrate: %v", err)
+				}
+				if !bytes.Equal(before, after) {
+					t.Error("a refused Migrate changed the database bytes")
+				}
+			})
+		}
+	}
+}
+
+func TestMigrateFreshBookkeeping(t *testing.T) {
+	for _, emptyShared := range []bool{false, true} {
+		for _, emptyApp := range []bool{false, true} {
+			t.Run(fmt.Sprintf("empty_shared=%t/empty_app=%t", emptyShared, emptyApp), func(t *testing.T) {
+				ctx := context.Background()
+				store := openSQLiteStoreForTest(t, filepath.Join(t.TempDir(), "officer.db"))
+				for _, cfg := range []struct {
+					empty bool
+					table string
+				}{{emptyShared, ""}, {emptyApp, appMigrationTable}} {
+					if cfg.empty {
+						if err := migration.Apply(ctx, store.currentDB(), migrationList{}, migration.Config{Table: cfg.table}, store.dialect); err != nil {
+							t.Fatalf("create empty bookkeeping table: %v", err)
+						}
+					}
+				}
+				if err := store.Migrate(ctx); err != nil {
+					t.Fatalf("Migrate fresh database: %v", err)
+				}
+				assertMigrationBookkeeping(t, store)
+				assertStoredMode(t, store, access.ModeSetup)
+				assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
+				var realms int
+				if err := store.currentDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM realm`).Scan(&realms); err != nil {
+					t.Fatalf("read realm count: %v", err)
+				}
+				if realms != 1 {
+					t.Fatalf("realm rows = %d, want 1", realms)
+				}
+				if _, err := loadEnumDictionaries(ctx, store.currentDB()); err != nil {
+					t.Fatalf("load dictionaries: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestMigrateCurrentDatabaseRestarts(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
-	fresh, err := New(path, domain.DefaultRealm)
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	store := openSQLiteStoreForTest(t, path)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate fresh database: %v", err)
 	}
-	if err := fresh.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate on a fresh database: %v", err)
+	if err := store.CompleteSetupOpen(ctx, accessTestStart); err != nil {
+		t.Fatalf("CompleteSetupOpen: %v", err)
 	}
-	if _, err := fresh.(*sqliteStore).currentDB().ExecContext(
-		ctx, `ALTER TABLE event_attestation RENAME COLUMN signed_envelope TO token`,
-	); err != nil {
-		t.Fatalf("give event_attestation its earlier shape: %v", err)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close current database: %v", err)
 	}
-	if err := fresh.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	reopened := openSQLiteStoreForTest(t, path)
+	if err := reopened.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate current database: %v", err)
 	}
+	assertMigrationBookkeeping(t, reopened)
+	assertStoredMode(t, reopened, access.ModeOpen)
+	assertSnapshot(t, reopened.Snapshot(), access.Snapshot{Mode: access.ModeOpen})
+}
 
-	earlier, err := New(path, domain.DefaultRealm)
-	if err != nil {
-		t.Fatalf("New on the earlier database: %v", err)
-	}
-	defer func() { _ = earlier.Close() }()
-	err = earlier.Migrate(ctx)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("Migrate on the earlier database = %v, want ErrInvalid", err)
-	}
-	for _, want := range []string{strconv.Quote(path), "predates the current schema", "recreate the database"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("Migrate on the earlier database error = %q, want it to contain %q", err, want)
+func assertMigrationBookkeeping(t *testing.T, store *sqliteStore) {
+	t.Helper()
+	for _, table := range []string{"schema_migration", appMigrationTable} {
+		var rows int
+		if err := store.currentDB().QueryRowContext(context.Background(),
+			`SELECT COUNT(*) FROM `+table,
+		).Scan(&rows); err != nil {
+			t.Fatalf("read %s: %v", table, err)
+		}
+		if rows != 1 {
+			t.Fatalf("%s rows = %d, want 1", table, rows)
 		}
 	}
 }

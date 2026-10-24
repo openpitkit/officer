@@ -613,6 +613,7 @@ func TestAccessResetReturnsToSetupMode(t *testing.T) {
 	if err := store.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %s", redactAccess(t, err))
 	}
+	assertMigrationBookkeeping(t, store)
 	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
 	assertStoredMode(t, store, access.ModeSetup)
 	assertRowCount(t, store, "access_credential", 0)

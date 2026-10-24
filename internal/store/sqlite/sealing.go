@@ -96,12 +96,11 @@ func (s *sqliteStore) setSealer(key *secret.MasterKey) {
 	s.sealer.Store(&keyCopy)
 }
 
-// configureSealing decides four startup states: unsealed without a key stays
-// plaintext, a signing private key included; unsealed with a key seals; sealed
-// without a key refuses; and sealed with a key verifies it and refuses a
-// mismatch. Sealing always records a seal report, so a sealed database without
-// one is refused with an error wrapping domain.ErrInvalid, whether or not its
-// scrub finished. It must run in migrateDB so Reset seals its fresh file.
+// configureSealing leaves an unsealed database plaintext without a key and
+// seals it with a supplied key. A sealed database requires a matching key.
+// Sealing records its report with the verifier in one transaction; a missing
+// report is an integrity error wrapping domain.ErrInvalid. It must run in
+// migrateDB so Reset seals its fresh file.
 // Sealing commits an owed scrub before VACUUM, which cannot run in a transaction,
 // and records completion only after VACUUM succeeds. A matching-key restart must
 // finish any owed scrub before installing the sealer. The exposure warning is
@@ -158,8 +157,8 @@ func (s *sqliteStore) configureSealing(ctx context.Context, db *sql.DB) error {
 	}
 	if !sealed {
 		return fmt.Errorf(
-			"store: database at %q is sealed but holds no seal report; "+
-				"recreate the database: %w",
+			"store: database at %q has inconsistent sealing data: "+
+				"the key verifier holds no seal report; the database must be recreated: %w",
 			s.path, domain.ErrInvalid,
 		)
 	}

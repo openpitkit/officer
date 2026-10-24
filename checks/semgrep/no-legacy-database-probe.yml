@@ -1,0 +1,35 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+rules:
+  - id: no-legacy-database-probe
+    message: >-
+      Classify database versions from migration bookkeeping at startup.
+      Do not add per-column shape probes or earlier-build handling.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern: '"$STRING"'
+      - metavariable-regex:
+          metavariable: $STRING
+          regex: '(?is).*(pragma[_\s]+table_x?info|earlier (officer )?build).*'
+    paths:
+      include:
+        - "/internal/store/**"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

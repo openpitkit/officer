@@ -213,7 +213,12 @@ Approval signing is off on a fresh Officer. To turn it on, generate or import a
 signing key on the Signing Keys screen and switch on "Require signature on
 approval and attestation envelopes".
 
-Startup resolves to one of six states:
+Officer does not migrate databases between versions. Startup refuses a database
+whose shared and application migration records disagree, either because it was
+created before the application tables existed or because its first start was
+interrupted. That database must be recreated.
+
+Startup resolves to one of five states:
 
 - **Unsealed database, no key** - trading and market-data credentials, the
   access tokens and an approval signing private key are stored as plaintext.
@@ -227,10 +232,6 @@ Startup resolves to one of six states:
   sealed. If an earlier sealing never recorded its vacuum, the database is
   vacuumed first, and Officer logs the same warning when that sealing
   re-sealed at least one stored secret value.
-- **Sealed database without a seal report, matching key** - Officer refuses to
-  start and asks for the database to be recreated. Sealing records when it ran
-  and how many values it re-sealed; only an earlier build could have sealed a
-  database without that record.
 - **Sealed database, no key** - Officer refuses to start.
 - **Sealed database, wrong key** - Officer refuses to start.
 

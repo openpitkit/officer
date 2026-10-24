@@ -258,6 +258,33 @@ func (l migrationList) Migrations() ([]migration.Migration, error) {
 func (s *sqliteStore) migrateDB(
 	ctx context.Context, db *sql.DB,
 ) (access.Snapshot, error) {
+	// Refuse mismatched bookkeeping before migrations or seed data can write.
+	var recorded [2]bool
+	for i, table := range [...]string{"schema_migration", appMigrationTable} {
+		var exists bool
+		if err := db.QueryRowContext(
+			ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)`,
+			table,
+		).Scan(&exists); err != nil {
+			return access.Snapshot{}, fmt.Errorf("store: inspect migration table %s: %w", table, err)
+		}
+		if !exists {
+			continue
+		}
+		if err := db.QueryRowContext(
+			ctx, `SELECT EXISTS(SELECT 1 FROM `+table+`)`,
+		).Scan(&recorded[i]); err != nil {
+			return access.Snapshot{}, fmt.Errorf("store: read migration table %s: %w", table, err)
+		}
+	}
+	if recorded[0] != recorded[1] {
+		return access.Snapshot{}, fmt.Errorf(
+			"store: database at %q has shared and application migration records that disagree "+
+				"(created before the application tables existed or first start interrupted) "+
+				"and must be recreated: %w",
+			s.path, domain.ErrInvalid,
+		)
+	}
 	if err := migration.Apply(
 		ctx,
 		db,
@@ -267,9 +294,6 @@ func (s *sqliteStore) migrateDB(
 	); err != nil {
 		return access.Snapshot{}, err
 	}
-	if err := s.requireSignedEnvelopeColumnDB(ctx, db); err != nil {
-		return access.Snapshot{}, err
-	}
 	if err := s.ensureRealmRowDB(ctx, db); err != nil {
 		return access.Snapshot{}, err
 	}
@@ -277,9 +301,7 @@ func (s *sqliteStore) migrateDB(
 	if err != nil {
 		return access.Snapshot{}, err
 	}
-	// Sealing covers the access credentials, so their table exists first. It
-	// comes after the checks above, so a foreign or outdated database is
-	// refused before the application's tables are added to it.
+	// Sealing covers the access credentials, so their table exists first.
 	if err := migration.Apply(
 		ctx,
 		db,
@@ -299,34 +321,6 @@ func (s *sqliteStore) migrateDB(
 	}
 	s.enumCodes.Store(dictionaries)
 	return snapshot, nil
-}
-
-// requireSignedEnvelopeColumnDB refuses a database created before
-// event_attestation had its signed_envelope column. The canonical schema
-// changes in place, so such a database records the same migration version as a
-// current one and only its shape tells them apart. It is rejected with an error
-// wrapping domain.ErrInvalid that names the path, before Migrate writes
-// anything else, rather than read with a column it does not have; the remedy is
-// to recreate the database. The probe covers that one column: a database that
-// predates a later in-place schema change is not caught here.
-func (s *sqliteStore) requireSignedEnvelopeColumnDB(ctx context.Context, db *sql.DB) error {
-	var columns int
-	if err := db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM pragma_table_info('event_attestation')
-		 WHERE name = 'signed_envelope'`,
-	).Scan(&columns); err != nil {
-		return fmt.Errorf("store: read event_attestation columns: %w", err)
-	}
-	if columns == 0 {
-		return fmt.Errorf(
-			"store: database at %q was created by an earlier Officer build and "+
-				"predates the current schema (event_attestation has no "+
-				"signed_envelope column); recreate the database: %w",
-			s.path, domain.ErrInvalid,
-		)
-	}
-	return nil
 }
 
 // SchemaVersion returns the highest applied schema version, or zero.

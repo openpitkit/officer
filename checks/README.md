@@ -132,6 +132,18 @@ copied response-and-headers factory, calendar round-trip comparisons,
 new-password fields, and translated Show/Hide labels. Their positive and
 negative fixtures run as part of `check-semgrep`.
 
+### `no-legacy-database-probe`
+
+`checks/semgrep/no-legacy-database-probe.yml` forbids string literals containing
+`pragma_table_info`, `pragma table_info`, `pragma_table_xinfo`, `pragma table_xinfo`
+or an `earlier (Officer )?build` phrase, all case-insensitive, in non-test Go under
+`internal/store/`. Before writing, startup refuses a database whose shared and
+application migration records disagree, either because it was created before the
+application tables existed or because its first start was interrupted. That
+database must be recreated. Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker.
+
 ### Approval marker
 
 `unapproved-entity-autocreate` is not an absolute prohibition. The construct
