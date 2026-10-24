@@ -1973,19 +1973,6 @@ type RealmStore interface {
 	// SetMcpAccess upserts the enabled state for one command.
 	SetMcpAccess(ctx context.Context, command string, enabled bool) error
 
-	// --- User settings ---
-
-	// GetUserSetting returns the stored value for (userID, key). The bool is false
-	// when absent; callers then apply their default.
-	GetUserSetting(ctx context.Context, userID, key string) (string, bool, error)
-
-	// SetUserSetting upserts one per-user key-value setting.
-	SetUserSetting(ctx context.Context, userID, key, value string) error
-
-	// ListUserSettings returns every persisted user setting, ordered by
-	// (user_id, setting_key). An empty store returns a non-nil empty slice.
-	ListUserSettings(ctx context.Context) ([]domain.UserSetting, error)
-
 	// --- Backup / restore (realm-portable) ---
 
 	// ExportBackup reads the bound realm and emits a portable archive holding

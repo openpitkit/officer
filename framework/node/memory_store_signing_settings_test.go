@@ -92,29 +92,3 @@ func (r *memoryRealm) SetMcpAccess(
 	r.mcpAccess[command] = enabled
 	return nil
 }
-
-func (r *memoryRealm) GetUserSetting(
-	_ context.Context, userID, key string,
-) (string, bool, error) {
-	setting, ok := r.userSettings[settingKey(userID, key)]
-	return setting.Value, ok, nil
-}
-
-func (r *memoryRealm) SetUserSetting(
-	_ context.Context, userID, key, value string,
-) error {
-	r.userSettings[settingKey(userID, key)] = domain.UserSetting{
-		UserID: userID,
-		Key:    key,
-		Value:  value,
-	}
-	return nil
-}
-
-func (r *memoryRealm) ListUserSettings(context.Context) ([]domain.UserSetting, error) {
-	out := make([]domain.UserSetting, 0, len(r.userSettings))
-	for _, setting := range r.userSettings {
-		out = append(out, setting)
-	}
-	return out, nil
-}

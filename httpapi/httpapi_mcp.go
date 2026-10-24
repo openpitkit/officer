@@ -82,5 +82,3 @@ func handleSetMcpAccess(svc backend.ControlPlane) http.HandlerFunc {
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
 	}
 }
-
-// --- user settings ----------------------------------------------------------

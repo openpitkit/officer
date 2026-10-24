@@ -15,19 +15,15 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Settings-group tests: MCP access map get/set/list round-trips keyed by command,
-// per-user settings get/set/list round-trips keyed by the
-// (user_id, setting_key) composite, and the realm setting key/value round-trip.
-// The MCP access and per-user settings surface non-nil empty results on an
-// empty table.
+// Settings-group tests: MCP access map round-trips keyed by command and the
+// realm setting key/value round-trip. MCP access returns a non-nil empty map
+// for an empty table.
 
 package sqlite
 
 import (
 	"context"
 	"testing"
-
-	"go.openpit.dev/officer/framework/domain"
 )
 
 func TestMcpAccessRoundTrip(t *testing.T) {
@@ -68,70 +64,6 @@ func TestMcpAccessRoundTrip(t *testing.T) {
 	access, _ = rs.ListMcpAccess(ctx)
 	if len(access) != 2 || access["submit_order"] != true {
 		t.Fatalf("ListMcpAccess after flip = %+v", access)
-	}
-}
-
-func TestUserSettingsRoundTrip(t *testing.T) {
-	const testKey = "layout"
-	ctx := context.Background()
-	_, rs := newTestStore(t)
-
-	// Empty table: list is non-nil empty, get is ok=false.
-	settings, err := rs.ListUserSettings(ctx)
-	if err != nil {
-		t.Fatalf("ListUserSettings: %v", err)
-	}
-	if settings == nil {
-		t.Fatal("ListUserSettings returned nil, want non-nil empty slice")
-	}
-	if len(settings) != 0 {
-		t.Fatalf("ListUserSettings len = %d, want 0", len(settings))
-	}
-	if _, ok, err := rs.GetUserSetting(ctx, domain.DefaultUserID, testKey); err != nil || ok {
-		t.Fatalf("GetUserSetting(absent): ok=%v err=%v, want ok=false", ok, err)
-	}
-
-	// Set under the default user, read back.
-	if err := rs.SetUserSetting(ctx, domain.DefaultUserID, testKey, "1"); err != nil {
-		t.Fatalf("SetUserSetting: %v", err)
-	}
-	v, ok, err := rs.GetUserSetting(ctx, domain.DefaultUserID, testKey)
-	if err != nil || !ok {
-		t.Fatalf("GetUserSetting: ok=%v err=%v", ok, err)
-	}
-	if v != "1" {
-		t.Fatalf("layout = %q, want 1", v)
-	}
-
-	// The composite key is (user_id, setting_key): a different user is a distinct
-	// row, not an overwrite.
-	if err := rs.SetUserSetting(ctx, "other-user", testKey, "0"); err != nil {
-		t.Fatalf("SetUserSetting(other): %v", err)
-	}
-	v, _, _ = rs.GetUserSetting(ctx, domain.DefaultUserID, testKey)
-	if v != "1" {
-		t.Fatalf("default user layout after other-user write = %q, want 1", v)
-	}
-
-	// Upsert on the same composite key replaces in place.
-	if err := rs.SetUserSetting(ctx, domain.DefaultUserID, testKey, "0"); err != nil {
-		t.Fatalf("SetUserSetting(replace): %v", err)
-	}
-	v, _, _ = rs.GetUserSetting(ctx, domain.DefaultUserID, testKey)
-	if v != "0" {
-		t.Fatalf("layout after replace = %q, want 0", v)
-	}
-
-	// List returns both rows, ordered by (user_id, setting_key).
-	settings, err = rs.ListUserSettings(ctx)
-	if err != nil {
-		t.Fatalf("ListUserSettings: %v", err)
-	}
-	if len(settings) != 2 {
-		t.Fatalf("ListUserSettings len = %d, want 2", len(settings))
-	}
-	if settings[0].UserID != domain.DefaultUserID || settings[1].UserID != "other-user" {
-		t.Fatalf("ListUserSettings order = %+v", settings)
 	}
 }
 

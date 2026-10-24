@@ -242,7 +242,7 @@ func TestBackupExportRejectsUnknownSection(t *testing.T) {
 }
 
 // TestBackupScopeRejectsUnknownSectionInMixedSet sends export and restore a
-// scope naming a removed section beside a known one: both refuse it by name
+// scope naming an unknown section beside a known one: both refuse it by name
 // instead of narrowing the set to the known section.
 func TestBackupScopeRejectsUnknownSectionInMixedSet(t *testing.T) {
 	svc := &fakeService{backupSummary: backup.NewSummary()}
@@ -251,7 +251,7 @@ func TestBackupScopeRejectsUnknownSectionInMixedSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := backup.Scope{Sections: []backup.Section{
-		"user_settings", backup.SectionAccountsGroups,
+		"unknown_section", backup.SectionAccountsGroups,
 	}}
 	restore, err := json.Marshal(map[string]any{
 		"archive": backup.NewArchive(
@@ -286,7 +286,7 @@ func TestBackupScopeRejectsUnknownSectionInMixedSet(t *testing.T) {
 		m := bodyMap(t, rec.Result())
 		errObj, _ := m["error"].(map[string]any)
 		if errObj["code"] != "validation" ||
-			errObj["message"] != `unknown backup section "user_settings"` {
+			errObj["message"] != `unknown backup section "unknown_section"` {
 			t.Fatalf("%s error = %v", path, errObj)
 		}
 		errors, _ := m["errors"].([]any)

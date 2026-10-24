@@ -846,7 +846,6 @@ var expectedSchemaTableNames = []string{
 	"trading_access",
 	"trading_connection",
 	"trading_instrument",
-	"user_setting",
 	"venue_order",
 }
 
@@ -1210,13 +1209,6 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 		backup: map[string]string{
 			"command": "map key",
 			"enabled": "map value",
-		},
-	},
-	"user_setting": {
-		backup: map[string]string{
-			"user_id":       "UserID",
-			"setting_key":   "Key",
-			"setting_value": "Value",
 		},
 	},
 }

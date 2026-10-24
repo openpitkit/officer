@@ -612,15 +612,6 @@ type Node interface {
 	// domain.ErrInvalid and nothing is written or audited.
 	SetSetting(ctx context.Context, key, value string, caller domain.Caller) error
 
-	// GetUserSetting returns the stored value for (userID, key); ok is false when
-	// no such setting exists. User settings are a store passthrough with no engine
-	// side-effect.
-	GetUserSetting(ctx context.Context, userID, key string) (value string, ok bool, err error)
-
-	// SetUserSetting upserts one per-user key-value setting. Like MCP access it has
-	// no engine side-effect; unlike it, personal UI preferences are not audited.
-	SetUserSetting(ctx context.Context, userID, key, value string) error
-
 	// ListMarketDataInstances returns all configured market-data source instances.
 	ListMarketDataInstances(ctx context.Context) ([]domain.MarketDataInstance, error)
 

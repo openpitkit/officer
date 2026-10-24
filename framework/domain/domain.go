@@ -34,19 +34,6 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// DefaultUserID is the implicit user used until real users exist; every user
-// setting is currently stored under it. It is a fixed, well-known UUID rather
-// than a plain label so that once settings are shared across nodes, databases,
-// and clusters, user ids are globally unique and never collide between users.
-const DefaultUserID = "00000000-0000-4000-8000-000000000001"
-
-// UserSetting is one persisted per-user key-value preference.
-type UserSetting struct {
-	UserID string
-	Key    string
-	Value  string
-}
-
 // Realm-setting keys. Each key is a code constant owned by exactly one
 // consumer, never client input.
 const (

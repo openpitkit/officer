@@ -3515,7 +3515,6 @@ var backupExcludedTables = map[string]bool{
 	"access_state":             true, // installation access mode, which a restore must never switch
 	"access_credential":        true, // installation access secrets, never carried in an archive
 	"panel_session":            true, // installation panel sessions, never carried in an archive
-	"user_setting":             true, // per-user settings, absent since format 5; restore leaves them unchanged
 	"source_kind":              true, // immutable enum dictionary, seeded by Migrate
 	"order_event_type":         true, // immutable enum dictionary, seeded by Migrate
 	"order_side":               true, // immutable enum dictionary, seeded by Migrate

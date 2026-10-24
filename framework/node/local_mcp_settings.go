@@ -99,31 +99,3 @@ func (n *localNode) SetSetting(
 	}
 	return nil
 }
-
-// GetUserSetting returns the stored value for (userID, key). User settings are
-// a plain store read with no engine side-effect.
-func (n *localNode) GetUserSetting(
-	ctx context.Context, userID, key string,
-) (string, bool, error) {
-	value, ok, err := n.realm.GetUserSetting(ctx, userID, key)
-	if err != nil {
-		return "", false, fmt.Errorf("get user setting: %w", err)
-	}
-	return value, ok, nil
-}
-
-// SetUserSetting upserts one per-user setting. There is no engine side-effect
-// and personal UI preferences are not audited, so this is a guarded store write.
-func (n *localNode) SetUserSetting(
-	ctx context.Context, userID, key, value string,
-) error {
-	if err := n.beginMutation(); err != nil {
-		return err
-	}
-	defer n.endMutation()
-
-	if err := n.realm.SetUserSetting(ctx, userID, key, value); err != nil {
-		return fmt.Errorf("set user setting: %w", err)
-	}
-	return nil
-}

@@ -610,10 +610,3 @@ CREATE TABLE mcp_access (
     enabled {{BOOL}} NOT NULL
 );
 
--- Per-user UI settings as a key-value store; setting_key is a hardcoded enum.
-CREATE TABLE user_setting (
-    user_id       TEXT NOT NULL,
-    setting_key   TEXT NOT NULL,
-    setting_value TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (user_id, setting_key)
-);

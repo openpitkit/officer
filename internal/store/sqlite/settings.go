@@ -15,10 +15,9 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Settings group of the SQLite store: the realm-wide settings, the per-command
-// MCP access overrides and the per-user UI settings. All are plain key/value
-// tables: setting is keyed by the setting key, mcp_access by the command name,
-// user_setting by the (user_id, setting_key) composite. The keys are hardcoded
+// Settings group of the SQLite store: realm-wide settings and per-command
+// MCP access overrides. Both are plain key/value tables: setting is keyed by
+// the setting key, mcp_access by the command name. The keys are hardcoded
 // enums stored as TEXT (validated by the surfaces that own them), never
 // dictionaries, so there is no surrogate id and no code resolution in this
 // group.
@@ -30,8 +29,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-
-	"go.openpit.dev/officer/framework/domain"
 )
 
 // --- Realm settings ---------------------------------------------------------
@@ -127,87 +124,4 @@ func (r *realmStore) SetMcpAccess(
 		return fmt.Errorf("store: set mcp access: %w", err)
 	}
 	return nil
-}
-
-// --- User settings ----------------------------------------------------------
-
-// GetUserSetting returns the stored value for (userID, key). The bool is false
-// when the row is absent; callers then apply their own default. The key is a
-// hardcoded enum stored as TEXT, not a dictionary code.
-func (r *realmStore) GetUserSetting(
-	ctx context.Context, userID, key string,
-) (string, bool, error) {
-	var value string
-	db, err := r.db()
-	if err != nil {
-		return "", false, err
-	}
-	err = db.QueryRowContext(
-		ctx,
-		`SELECT setting_value FROM user_setting
-		 WHERE user_id = ? AND setting_key = ?`,
-		userID, key,
-	).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("store: get user setting: %w", err)
-	}
-	return value, true, nil
-}
-
-// SetUserSetting upserts one per-user key-value setting keyed by the
-// (user_id, setting_key) composite primary key.
-func (r *realmStore) SetUserSetting(
-	ctx context.Context, userID, key, value string,
-) error {
-	db, err := r.db()
-	if err != nil {
-		return err
-	}
-	if _, err := db.ExecContext(
-		ctx,
-		`INSERT INTO user_setting (user_id, setting_key, setting_value)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(user_id, setting_key) DO UPDATE SET
-		   setting_value = excluded.setting_value`,
-		userID, key, value,
-	); err != nil {
-		return fmt.Errorf("store: set user setting: %w", err)
-	}
-	return nil
-}
-
-// ListUserSettings returns every persisted user setting, ordered by
-// (user_id, setting_key). An empty table returns a non-nil empty slice.
-func (r *realmStore) ListUserSettings(
-	ctx context.Context,
-) ([]domain.UserSetting, error) {
-	db, err := r.db()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := db.QueryContext(
-		ctx,
-		`SELECT user_id, setting_key, setting_value FROM user_setting
-		 ORDER BY user_id, setting_key`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("store: list user settings: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	settings := make([]domain.UserSetting, 0)
-	for rows.Next() {
-		var s domain.UserSetting
-		if err := rows.Scan(&s.UserID, &s.Key, &s.Value); err != nil {
-			return nil, fmt.Errorf("store: scan user setting: %w", err)
-		}
-		settings = append(settings, s)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate user settings: %w", err)
-	}
-	return settings, nil
 }

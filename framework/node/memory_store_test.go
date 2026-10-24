@@ -80,7 +80,6 @@ type memoryRealm struct {
 	signingKeys   map[string]domain.SigningKey
 	settings      map[string]string
 	mcpAccess     map[string]bool
-	userSettings  map[string]domain.UserSetting
 	nextAccountID domain.EngineAccountID
 	nextAssetID   domain.EngineAssetID
 	nextGroupID   int
@@ -114,7 +113,6 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		signingKeys:              map[string]domain.SigningKey{},
 		settings:                 map[string]string{},
 		mcpAccess:                map[string]bool{},
-		userSettings:             map[string]domain.UserSetting{},
 	}
 }
 
@@ -176,8 +174,6 @@ func spotFundsPnlBoundsLimitKey(
 func instrumentKey(instance domain.ExternalID, externalSymbol string) string {
 	return instance.String() + "\x00" + externalSymbol
 }
-
-func settingKey(userID, key string) string { return userID + "\x00" + key }
 
 func policyRowKey(row store.PolicyListRow) string {
 	return string(row.Kind) + "\x00" + string(row.Scope) + "\x00" +

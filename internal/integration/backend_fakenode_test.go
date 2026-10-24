@@ -81,7 +81,6 @@ type fakeNode struct {
 
 	mcpAccess        map[string]bool
 	setMcpAccessCall []setMcpAccessCall
-	userSettings     map[string]string
 	settings         map[string]string
 	setSettingCalls  []setSettingCall
 	mdInstances      []domain.MarketDataInstance
@@ -1472,26 +1471,6 @@ func (n *fakeNode) SetSetting(
 		n.settings = make(map[string]string)
 	}
 	n.settings[key] = value
-	return nil
-}
-
-func (n *fakeNode) GetUserSetting(
-	_ context.Context, _, key string,
-) (string, bool, error) {
-	if n.userSettings == nil {
-		return "", false, nil
-	}
-	value, ok := n.userSettings[key]
-	return value, ok, nil
-}
-
-func (n *fakeNode) SetUserSetting(
-	_ context.Context, _, key, value string,
-) error {
-	if n.userSettings == nil {
-		n.userSettings = make(map[string]string)
-	}
-	n.userSettings[key] = value
 	return nil
 }
 
