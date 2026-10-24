@@ -198,6 +198,11 @@ func mountV1(
 	manifest http.Handler,
 ) {
 	router.Route(prefix, func(v1 chi.Router) {
+		// An unknown path under an API prefix names no panel route: it answers
+		// the typed 404 rather than the SPA shell the root falls back to.
+		v1.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+			WriteErr(w, domain.ErrNotFound)
+		})
 		limit := LimitBody(bodyLimit)
 		base := Chain{limit, ResolveCaller(callerResolver, source)}
 		// A public route carries no credentials: nothing resolves a caller for

@@ -150,10 +150,8 @@ func TestServiceLogsDownload_Empty(t *testing.T) {
 }
 
 // TestServiceLogsRoutesAbsentWhenNil confirms the log routes are not registered
-// when Options.Logs is nil: an unmatched path under the v1 mount falls through
-// to the SPA shell (200 text/html), exactly like any other unknown deep link,
-// rather than returning the JSON log body. Both the /api/v1 and /app/api/v1
-// mounts share mountV1, so checking one proves the gating.
+// when Options.Logs is nil: an unmatched path under either v1 mount answers the
+// typed 404, exactly like any other unknown API path, rather than the log body.
 func TestServiceLogsRoutesAbsentWhenNil(t *testing.T) {
 	r, err := newRouter(&fakeService{}) // no Logs option
 	if err != nil {
@@ -167,15 +165,12 @@ func TestServiceLogsRoutesAbsentWhenNil(t *testing.T) {
 	} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s: want 200 (SPA fallback), got %d", path, rec.Code)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: want 404, got %d %s", path, rec.Code, rec.Body)
 		}
-		ct := rec.Result().Header.Get("Content-Type")
-		if !strings.HasPrefix(ct, "text/html") {
-			t.Fatalf("%s: want text/html (SPA fallback), got %q", path, ct)
-		}
-		if rec.Body.String() != spaIndexBody {
-			t.Fatalf("%s: want SPA shell, got %q", path, rec.Body.String())
+		errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+		if errObj["code"] != "not_found" {
+			t.Fatalf("%s: want not_found, got %v", path, errObj)
 		}
 	}
 }

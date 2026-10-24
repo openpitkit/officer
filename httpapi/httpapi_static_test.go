@@ -292,27 +292,28 @@ func TestSPAFallback_ExistingAssetReachesFileServer(t *testing.T) {
 	}
 }
 
-// TestSPAFallback_UnknownAPIPath documents that an unknown path under the
-// /api/v1 mount is NOT a JSON 404: chi inherits the router's NotFound handler
-// into inline subrouters, so an unmatched /api/v1/* path falls through to the
-// SPA shell (200 text/html), exactly like any other deep link. The explicit
-// v1 routes still match first; only genuinely unknown paths reach the fallback.
-func TestSPAFallback_UnknownAPIPath(t *testing.T) {
+// TestUnknownAPIPathAnswersNotFound documents that an unknown path under the
+// /api/v1 and /app/api/v1 mounts is a JSON 404, not the SPA shell: no panel
+// route lives under an API prefix, so an unmatched path there answers the
+// typed not_found. The explicit v1 routes still match first.
+func TestUnknownAPIPathAnswersNotFound(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/does-not-exist", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 (SPA fallback), got %d", rec.Code)
-	}
-	ct := rec.Result().Header.Get("Content-Type")
-	if !strings.HasPrefix(ct, "text/html") {
-		t.Fatalf("want text/html content type, got %q", ct)
-	}
-	if rec.Body.String() != spaIndexBody {
-		t.Fatalf("want SPA shell %q, got %q", spaIndexBody, rec.Body.String())
+	for _, path := range []string{
+		"/api/v1/does-not-exist",
+		"/app/api/v1/does-not-exist",
+	} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: want 404, got %d %s", path, rec.Code, rec.Body)
+		}
+		errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+		if errObj["code"] != "not_found" {
+			t.Fatalf("%s: want not_found, got %v", path, errObj)
+		}
 	}
 }
 

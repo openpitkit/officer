@@ -115,8 +115,56 @@ func TestRouteRegistryReplaceAndUnregister(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/second", nil))
-	if rec.Code != http.StatusOK || rec.Body.String() != "<html></html>" {
-		t.Fatalf("/second fallback = %d %q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound || errorCode(t, rec) != "not_found" {
+		t.Fatalf("/second unregistered = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestNewRouterAnswersUnknownAPIPathWithTypedNotFound sends unknown paths under
+// both v1 prefixes and outside them: under a prefix any method gets the typed
+// 404 in the common error body, while outside a read still gets the SPA shell.
+func TestNewRouterAnswersUnknownAPIPathWithTypedNotFound(t *testing.T) {
+	t.Parallel()
+
+	router, err := NewRouter(guardedRouterConfig(&RouteRegistry{}, testGuards(t)))
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	for _, prefix := range []string{apiPrefix, panelPrefix} {
+		for _, tc := range []struct{ method, path string }{
+			{http.MethodGet, prefix},
+			{http.MethodGet, prefix + "/no-such-route"},
+			{http.MethodGet, prefix + "/user-settings"},
+			{http.MethodGet, prefix + "/no/such/nested/route"},
+			{http.MethodHead, prefix + "/no-such-route"},
+			{http.MethodPost, prefix + "/no-such-route"},
+		} {
+			t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+				t.Parallel()
+				req := httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}"))
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, req)
+				if rec.Code != http.StatusNotFound ||
+					!strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
+					t.Fatalf("answer = %d %q %q, want typed 404",
+						rec.Code, rec.Header().Get("Content-Type"), rec.Body)
+				}
+				if tc.method != http.MethodHead && errorCode(t, rec) != "not_found" {
+					t.Fatalf("answer = %s, want not_found", rec.Body)
+				}
+			})
+		}
+	}
+	for _, path := range []string{"/", "/accounts", "/api", "/api/v2/accounts", "/app/settings"} {
+		t.Run("GET "+path, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK || rec.Body.String() != "<html></html>" {
+				t.Fatalf("answer = %d %q, want the SPA shell", rec.Code, rec.Body)
+			}
+		})
 	}
 }
 
@@ -233,8 +281,8 @@ func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodGet, "/app/api/v1/route-manifest.json", nil,
 	))
-	if rec.Body.String() != "<html></html>" {
-		t.Fatalf("panel manifest = %d %q, want the SPA shell", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound || errorCode(t, rec) != "not_found" {
+		t.Fatalf("panel manifest = %d %q, want not_found", rec.Code, rec.Body.String())
 	}
 }
 
@@ -337,8 +385,8 @@ func TestPanelRoutesServeOnlyThePanelMirror(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/panel-only", nil))
-	if served != 1 || rec.Body.String() != "<html></html>" {
-		t.Fatalf("/api/v1/panel-only = %d %q, want the SPA shell", rec.Code, rec.Body.String())
+	if served != 1 || rec.Code != http.StatusNotFound || errorCode(t, rec) != "not_found" {
+		t.Fatalf("/api/v1/panel-only = %d %q, want not_found", rec.Code, rec.Body.String())
 	}
 }
 
