@@ -40,7 +40,7 @@ const (
 	sessionIDBytes = 32
 
 	// The bounds of a panel password, in Unicode code points.
-	minPasswordRunes = 15
+	minPasswordRunes = 8
 	maxPasswordRunes = 256
 
 	// The argon2id cost of a password hash, after OWASP: 19 MiB of memory, two
@@ -135,7 +135,7 @@ func sessionIDHash(cookie string) ([sha256.Size]byte, bool) {
 	return sha256.Sum256(id), true
 }
 
-// validatePassword refuses a new panel password shorter than 15 or longer
+// validatePassword refuses a new panel password shorter than 8 or longer
 // than 256 characters, counted as Unicode code points. Any characters are
 // allowed and nothing about their mix is required.
 func validatePassword(password string) error {

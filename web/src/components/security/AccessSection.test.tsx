@@ -45,7 +45,7 @@ const DOTS = "•".repeat(14);
 // that reached the URL would show there as written.
 const CURRENT = "the-panel-password-in-force";
 const NEW_PASSWORD = "a-new-panel-password";
-const REFUSAL = "password must be at least 15 characters";
+const REFUSAL = "password must be at least 8 characters";
 
 function tokenRoutes(routes: Record<string, Route> = {}) {
   return {

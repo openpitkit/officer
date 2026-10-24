@@ -148,7 +148,7 @@ describe("AccessModePanel", () => {
     expect(repeatField()).toHaveAttribute("autocomplete", "new-password");
     expect(
       screen.getByText(
-        "At least 15 characters. Keep it in your password manager.",
+        "At least 8 characters. Keep it in your password manager.",
       ),
     ).toBeInTheDocument();
     for (const fact of [
@@ -229,7 +229,7 @@ describe("AccessModePanel", () => {
 
     await user.type(passwordField(), "short");
     expect(passwordField()).toHaveAccessibleDescription(
-      "Too short: 5 of 15 characters.",
+      "Too short: 5 of 8 characters.",
     );
     expect(passwordField()).toHaveAttribute("aria-invalid", "true");
 
@@ -344,16 +344,16 @@ describe("AccessModePanel", () => {
 
   it("shows the server's refusal on the empty password until it is typed in", async () => {
     const user = userEvent.setup();
-    renderPanel({ passwordError: "password must be at least 15 characters" });
+    renderPanel({ passwordError: "password must be at least 8 characters" });
 
     expect(passwordField()).toHaveAccessibleDescription(
-      "password must be at least 15 characters",
+      "password must be at least 8 characters",
     );
 
     await user.type(passwordField(), "a");
 
     expect(passwordField()).toHaveAccessibleDescription(
-      "Too short: 1 of 15 characters.",
+      "Too short: 1 of 8 characters.",
     );
   });
 

@@ -69,7 +69,7 @@ recovery routes refuse with `503` `setup_required`. The stdio `mcp` subcommand
 works in `setup` as in the other modes and asks for no credentials.
 
 Completing setup in `token` or switching to it sets the panel password,
-15 to 256 characters, and issues both tokens.
+8 to 256 characters, and issues both tokens.
 `GET /app/api/v1/access/tokens/{kind}` answers a token and
 `POST /app/api/v1/access/tokens/{kind}/regenerate` reissues it; a reissued token
 replaces the old one at once. Switching to `open` deletes the password, both

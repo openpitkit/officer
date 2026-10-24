@@ -185,7 +185,7 @@ The four setup routes take no credentials in `setup`:
   them. `token` sets the panel password, issues both tokens and sets the session
   cookie. The response carries no token values; the session can read them
   through `GET /access/tokens/{kind}`. Another access value, a false
-  acknowledgement in `open`, or a password outside 15 to 256 characters in
+  acknowledgement in `open`, or a password outside 8 to 256 characters in
   `token` answers `422` `validation`. A non-null `password` in `open` or
   `acknowledged` in `token` answers `422` `validation`; `null` counts as absent.
 
@@ -203,7 +203,7 @@ route on the mirror answers `503` `setup_required`.
 
 A new password - `password` in `POST /setup/complete` to `token`, in
 `PUT /access/mode` to `token`, in `PUT /access/password`, and in
-`POST /session/recovery/reset` - is 15 to 256 characters, and one outside that
+`POST /session/recovery/reset` - is 8 to 256 characters, and one outside that
 range answers `422` `validation`; a sign-in
 password and `currentPassword` are only compared with the stored one. The
 session cookie is `pit_officer_session`, set with

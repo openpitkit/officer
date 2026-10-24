@@ -306,12 +306,12 @@ func TestPasswordLengthIsCountedInCodePoints(t *testing.T) {
 		password   string
 		constraint string
 	}{
-		"14 characters":           {strings.Repeat("a", 14), "min_length"},
-		"15 characters":           {strings.Repeat("a", 15), ""},
+		"7 characters":            {strings.Repeat("a", 7), "min_length"},
+		"8 characters":            {strings.Repeat("a", 8), ""},
 		"256 characters":          {strings.Repeat("a", 256), ""},
 		"257 characters":          {strings.Repeat("a", 257), "max_length"},
-		"14 two-byte characters":  {strings.Repeat(twoByte, 14), "min_length"},
-		"15 two-byte characters":  {strings.Repeat(twoByte, 15), ""},
+		"7 two-byte characters":   {strings.Repeat(twoByte, 7), "min_length"},
+		"8 two-byte characters":   {strings.Repeat(twoByte, 8), ""},
 		"256 two-byte characters": {strings.Repeat(twoByte, 256), ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -781,7 +781,7 @@ func TestRefusedRecoveryPasswordKeepsTheCode(t *testing.T) {
 	code := h.requestCode()
 	for _, attempt := range []string{"AAAA-AAAA-AAAA", code} {
 		for range recoveryMaxFailures {
-			_, err := h.service.ResetWithRecoveryCode(ctx, attempt, "too short")
+			_, err := h.service.ResetWithRecoveryCode(ctx, attempt, "short")
 			assertValidation(t, err, "/password", "min_length")
 		}
 	}
@@ -890,7 +890,7 @@ func TestChangePasswordKeepsOnlyTheCurrentSession(t *testing.T) {
 	h.addSession()
 	ctx := panelCtx()
 
-	err := h.service.ChangePassword(ctx, current, firstPassword, "too short")
+	err := h.service.ChangePassword(ctx, current, firstPassword, "short")
 	assertValidation(t, err, "/password", "min_length")
 	err = h.service.ChangePassword(ctx, current, wrongPassword, secondPassword)
 	if !errors.Is(err, domain.ErrCurrentPasswordInvalid) {

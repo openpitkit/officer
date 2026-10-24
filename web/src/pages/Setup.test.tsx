@@ -77,7 +77,7 @@ vi.mock("@/api/useCredentialStorage");
 const API = "/app/api/v1";
 const AGENT_TOKEN = "pit_agent_0123456789abcdef";
 const PASSWORD = "a-new-panel-password";
-const REFUSAL = "password must be at least 15 characters";
+const REFUSAL = "password must be at least 8 characters";
 const FINGERPRINT = "ab:cd:ef:01";
 const ACKNOWLEDGE_NONE = "I understand: my keys are stored unencrypted.";
 const ENCRYPTION_ON = "Encryption is on. Officer sealed its database.";

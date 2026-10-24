@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 import { usePasswordAttempt } from "@/lib/usePasswordAttempt";
 
 const PASSWORD = "a-new-panel-password";
-const REFUSAL = "password must be at least 15 characters";
+const REFUSAL = "password must be at least 8 characters";
 const FIELD = "New panel password";
 
 type Caller = ReturnType<typeof usePasswordAttempt> & {

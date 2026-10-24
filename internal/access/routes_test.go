@@ -124,7 +124,7 @@ func TestPanelAccessRoutesFollowContract(t *testing.T) {
 				http.StatusUnprocessableEntity, "validation", "/mode"},
 			{map[string]any{"mode": "token"},
 				http.StatusUnprocessableEntity, "validation", "/password"},
-			{map[string]any{"mode": "token", "password": "too short"},
+			{map[string]any{"mode": "token", "password": "short"},
 				http.StatusUnprocessableEntity, "validation", "/password"},
 			{map[string]any{"mode": "open", "acknowledged": true},
 				http.StatusUnprocessableEntity, "validation", "/currentPassword"},

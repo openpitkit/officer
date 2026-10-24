@@ -284,7 +284,7 @@ func TestSetupRoutesValidation(t *testing.T) {
 		{"invalid access", "/setup/complete", `{"access":"setup"}`, "/access"},
 		{"missing password", "/setup/complete", `{"access":"token"}`, "/password"},
 		{"null password", "/setup/complete", `{"access":"token","password":null}`, "/password"},
-		{"short password", "/setup/complete", jsonBody(t, map[string]any{"access": "token", "password": strings.Repeat("a", 14)}), "/password"},
+		{"short password", "/setup/complete", jsonBody(t, map[string]any{"access": "token", "password": strings.Repeat("a", 7)}), "/password"},
 		{"long password", "/setup/complete", jsonBody(t, map[string]any{"access": "token", "password": strings.Repeat("a", 257)}), "/password"},
 		{"token takes no ack", "/setup/complete", jsonBody(t, map[string]any{"access": "token", "password": firstPassword, "acknowledged": true}), "/acknowledged"},
 		{"open takes no password", "/setup/complete", jsonBody(t, map[string]any{"access": "open", "password": firstPassword, "acknowledged": true}), "/password"},

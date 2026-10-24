@@ -193,7 +193,7 @@ export async function resetPassword(
 }
 
 /** The fewest characters a panel password may have. */
-export const PASSWORD_MIN_LENGTH = 15;
+export const PASSWORD_MIN_LENGTH = 8;
 /** The most characters a panel password may have. */
 export const PASSWORD_MAX_LENGTH = 256;
 

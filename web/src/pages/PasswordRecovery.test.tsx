@@ -203,9 +203,9 @@ describe("PasswordRecovery", () => {
     });
 
     it.each([
-      ["15 characters", "x".repeat(15)],
+      ["8 characters", "x".repeat(8)],
       ["256 characters", "x".repeat(256)],
-      ["15 characters outside the basic plane", "\u{1F511}".repeat(15)],
+      ["8 characters outside the basic plane", "\u{1F511}".repeat(8)],
     ])("sends a password of %s", async (_case, password) => {
       const user = userEvent.setup();
       const { fetchMock, onPasswordReset } = renderRecovery(
@@ -225,9 +225,9 @@ describe("PasswordRecovery", () => {
     });
 
     it.each([
-      ["14 characters", "x".repeat(14)],
+      ["7 characters", "x".repeat(7)],
       ["257 characters", "x".repeat(257)],
-      ["8 characters outside the basic plane", "\u{1F511}".repeat(8)],
+      ["7 characters outside the basic plane", "\u{1F511}".repeat(7)],
     ])(
       "refuses a password of %s before sending it",
       async (_case, password) => {
@@ -239,7 +239,7 @@ describe("PasswordRecovery", () => {
         await fillReset(user, password);
 
         expect(passwordField()).toHaveAccessibleDescription(
-          "The password needs 15 to 256 characters.",
+          "The password needs 8 to 256 characters.",
         );
         expect(passwordField()).toHaveAttribute("aria-invalid", "true");
         expect(passwordField()).toHaveFocus();
@@ -316,7 +316,7 @@ describe("PasswordRecovery", () => {
               type: "about:blank",
               title: "Unprocessable Entity",
               status: 422,
-              detail: "password must have 15 to 256 characters",
+              detail: "password must have 8 to 256 characters",
               errors: [{ pointer: "/password", detail: "too short" }],
             }),
             {
@@ -329,10 +329,10 @@ describe("PasswordRecovery", () => {
       await fillReset(user, PASSWORD);
 
       expect(
-        await screen.findByText("password must have 15 to 256 characters"),
+        await screen.findByText("password must have 8 to 256 characters"),
       ).toBeInTheDocument();
       expect(passwordField()).toHaveAccessibleDescription(
-        "password must have 15 to 256 characters",
+        "password must have 8 to 256 characters",
       );
       expect(passwordField()).toHaveFocus();
       expect(passwordField()).toHaveValue("");

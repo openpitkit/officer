@@ -271,11 +271,11 @@ describe("isAccessModeConflict", () => {
 
 describe("passwordLength", () => {
   it.each([
-    ["ASCII characters", "a".repeat(15), 15],
+    ["ASCII characters", "a".repeat(8), 8],
     [
       "characters outside the Basic Multilingual Plane",
-      "\u{1D538}".repeat(15),
-      15,
+      "\u{1D538}".repeat(8),
+      8,
     ],
     ["an empty password", "", 0],
   ])("counts %s as code points", (_case, password, length) => {
@@ -285,8 +285,8 @@ describe("passwordLength", () => {
 
 describe("passwordLengthAllowed", () => {
   it.each([
-    [14, false],
-    [15, true],
+    [7, false],
+    [8, true],
     [256, true],
     [257, false],
   ])("answers %i characters with %s", (length, allowed) => {
@@ -294,8 +294,8 @@ describe("passwordLengthAllowed", () => {
   });
 
   it("counts characters outside the Basic Multilingual Plane once", () => {
-    // 14 of them take 28 UTF-16 code units, 129 of them take 258.
-    expect(passwordLengthAllowed("\u{1D538}".repeat(14))).toBe(false);
+    // 7 of them take 14 UTF-16 code units, 129 of them take 258.
+    expect(passwordLengthAllowed("\u{1D538}".repeat(7))).toBe(false);
     expect(passwordLengthAllowed("\u{1D538}".repeat(129))).toBe(true);
   });
 });
@@ -440,7 +440,7 @@ describe("putAccessPassword", () => {
           type: "about:blank",
           title: "Unprocessable Entity",
           status: 422,
-          detail: "password must be at least 15 characters",
+          detail: "password must be at least 8 characters",
           errors: [{ pointer: "/password", detail: "too short" }],
         }),
         {
@@ -458,7 +458,7 @@ describe("putAccessPassword", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect(err).toMatchObject({
       code: "precondition",
-      message: "password must be at least 15 characters",
+      message: "password must be at least 8 characters",
     });
   });
 });
