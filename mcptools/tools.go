@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/jsonschema"
+	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -496,12 +496,12 @@ func registerTool[In, Out any](
 			Description:  d.Description,
 			OutputSchema: outputSchema,
 		}
-		// A composition that offers clients accounts leaves the input schema
-		// to the SDK, which infers it from In.
+		// A composition that offers clients accounts uses the schema inferred
+		// from In by the framework registration helper.
 		if !deps.Source.AccountFeatures().Accounts() {
 			tool.InputSchema = oneAccountInputSchema[In]()
 		}
-		sdkmcp.AddTool(server, tool, frameworkmcp.Guard(d, deps, handler(deps.Source)))
+		frameworkmcp.AddTool[In, Out](server, tool, frameworkmcp.Guard(d, deps, handler(deps.Source)))
 	}
 	reg.Register(d)
 }
@@ -523,7 +523,7 @@ const (
 // of the properties it relaxes say so in place of the default text. A tool
 // without these fields keeps the inferred schema unchanged.
 func oneAccountInputSchema[In any]() *jsonschema.Schema {
-	schema, err := jsonschema.For[In]()
+	schema, err := jsonschema.For[In](nil)
 	if err != nil {
 		// sdkmcp.AddTool panics on the same inference failure.
 		panic(err)
@@ -551,95 +551,16 @@ func oneAccountInputSchema[In any]() *jsonschema.Schema {
 		}
 		property.Description = oneAccountMissingAccountPrefix + values
 	}
-	if account || missing {
-		// The SDK validates the decoded In value, where a field no longer
-		// required is still present, empty when omitted, and it checks such an
-		// empty optional field as an additional property. Decoding In already
-		// refuses every undeclared field, so the schema stops refusing
-		// additional properties instead.
-		schema.AdditionalProperties = nil
-	}
 	return schema
 }
 
-// outputSchemaFor returns the output schema the SDK infers for Out
-// (jsonschema.For, as sdkmcp.AddTool would), with every time.Time advertised
-// as the RFC 3339 string it marshals to. The inference sees only time.Time's
-// unexported fields and would advertise an object with no properties, which
-// no marshalled time matches, so a client that validates structured content
-// against the schema would reject every result carrying a time.
+// outputSchemaFor advertises times as RFC 3339 strings throughout nested outputs.
 func outputSchemaFor[Out any]() (*jsonschema.Schema, error) {
-	schema, err := jsonschema.For[Out]()
-	if err != nil {
-		return nil, err
-	}
-	if err := timesAsStrings(reflect.TypeFor[Out](), schema); err != nil {
-		return nil, fmt.Errorf("output schema of %v: %w", reflect.TypeFor[Out](), err)
-	}
-	return schema, nil
-}
-
-// timesAsStrings walks t alongside s, the schema jsonschema.For inferred for
-// t, the way the inference built it - through pointers, struct fields by
-// their JSON names, slice and array items and map values - and rewrites the
-// subschema of every time.Time into a date-time string, keeping its
-// description and the null a pointer allows.
-func timesAsStrings(t reflect.Type, s *jsonschema.Schema) error {
-	if s == nil {
-		return fmt.Errorf("no schema for %v", t)
-	}
-	nullable := false
-	for t.Kind() == reflect.Pointer {
-		nullable = true
-		t = t.Elem()
-	}
-	switch {
-	case t == reflect.TypeFor[time.Time]():
-		*s = jsonschema.Schema{Description: s.Description, Format: "date-time"}
-		if nullable {
-			s.Types = []string{"null", "string"}
-		} else {
-			s.Type = "string"
-		}
-	case t.Kind() == reflect.Struct:
-		for i := range t.NumField() {
-			field := t.Field(i)
-			name, ok := schemaFieldName(field)
-			if !ok {
-				continue
-			}
-			if err := timesAsStrings(field.Type, s.Properties[name]); err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-		}
-	case t.Kind() == reflect.Slice, t.Kind() == reflect.Array:
-		return timesAsStrings(t.Elem(), s.Items)
-	case t.Kind() == reflect.Map:
-		return timesAsStrings(t.Elem(), s.AdditionalProperties)
-	}
-	return nil
-}
-
-// schemaFieldName returns the property name jsonschema.For gives a struct
-// field, which is the name encoding/json gives it: the first element of the
-// json tag, or the Go name when that is empty. ok is false for a field the
-// inference leaves out - an unexported one or one tagged "-".
-func schemaFieldName(f reflect.StructField) (string, bool) {
-	if !f.IsExported() {
-		return "", false
-	}
-	tag, ok := f.Tag.Lookup("json")
-	if !ok {
-		return f.Name, true
-	}
-	name, _, found := strings.Cut(tag, ",")
-	if name == "-" && !found {
-		return "", false
-	}
-	if name == "" {
-		return f.Name, true
-	}
-	return name, true
+	return jsonschema.For[Out](&jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			reflect.TypeFor[time.Time](): {Type: "string", Format: "date-time"},
+		},
+	})
 }
 
 type healthInput struct{}

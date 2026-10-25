@@ -186,13 +186,9 @@ func TestListToolsSessionContract(t *testing.T) {
 
 	t.Run("limit-as-string", func(t *testing.T) {
 		// A limit sent as the JSON string "10" never reaches the tool, so it
-		// does not pass through toolError: the go-sdk (v0.2.0) decodes the
-		// arguments into the typed tool input before the input schema is
-		// even applied, the decode fails, and the call fails as a JSON-RPC
-		// protocol error - CallTool returns a non-nil error such as
-		// `calling "tools/call": unmarshaling: json: cannot unmarshal string
-		// into Go struct field listOrdersInput.limit of type int` - not as a
-		// tool result with IsError.
+		// does not pass through toolError: the framework guard decodes typed
+		// arguments before calling the tool body. A decoding failure is a
+		// JSON-RPC protocol error, not a tool result with IsError.
 		res, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
 			Name:      "list_orders",
 			Arguments: map[string]any{"limit": "10"},
@@ -200,7 +196,7 @@ func TestListToolsSessionContract(t *testing.T) {
 		if err == nil {
 			t.Fatalf("string limit was accepted: %+v", res)
 		}
-		if !strings.Contains(err.Error(), "cannot unmarshal string") || !strings.Contains(err.Error(), "limit") {
+		if !strings.Contains(err.Error(), "cannot unmarshal") || !strings.Contains(err.Error(), "limit") {
 			t.Fatalf("string limit error = %v, want the SDK's argument decoding error", err)
 		}
 		if src.reads != 0 {

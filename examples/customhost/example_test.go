@@ -433,8 +433,7 @@ func assertRouteAndToolHidden(
 	)
 	res, err := hidden(
 		context.Background(),
-		nil,
-		&sdkmcp.CallToolParamsFor[struct{}]{},
+		&sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{}},
 	)
 	if err != nil {
 		t.Fatalf("hidden tool transport error: %v", err)

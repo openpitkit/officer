@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/jsonschema"
+	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -506,7 +506,7 @@ func TestServerToolSnapshot(t *testing.T) {
 	})
 	t.Run("output-schemas-have-no-opaque-objects", func(t *testing.T) {
 		for _, tool := range list.Tools {
-			if paths := opaqueObjects(t, "", tool.OutputSchema); len(paths) > 0 {
+			if paths := opaqueObjects(t, "", decodeSchema(t, tool.OutputSchema)); len(paths) > 0 {
 				t.Errorf("%s: output schema has opaque objects at %v", tool.Name, paths)
 			}
 		}
@@ -516,7 +516,7 @@ func TestServerToolSnapshot(t *testing.T) {
 		if !ok {
 			t.Fatal("list_orders not advertised")
 		}
-		orders := tool.OutputSchema.Properties["orders"]
+		orders := decodeSchema(t, tool.OutputSchema).Properties["orders"]
 		if orders == nil || orders.Items == nil {
 			t.Fatalf("%s output schema has no orders items", tool.Name)
 		}
@@ -660,6 +660,19 @@ func isFalseSchema(t *testing.T, s *jsonschema.Schema) bool {
 		t.Fatalf("marshal schema: %v", err)
 	}
 	return string(raw) == `{"not":{}}`
+}
+
+func decodeSchema(t *testing.T, value any) *jsonschema.Schema {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("decode schema: %v", err)
+	}
+	return &schema
 }
 
 // listToolDescription spells out a list tool description: the tool's own
