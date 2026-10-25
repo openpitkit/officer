@@ -231,7 +231,7 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
           onKeyDown={handleKeyDown}
           className={cn(
             "flex h-9 w-full rounded-card border border-border bg-surface-2 px-3 py-1 text-sm text-text",
-            "placeholder:text-muted focus-visible:border-border-hover focus-visible:outline-none",
+            "placeholder:text-muted focus-visible:border-border-hover focus-visible:outline-hidden",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
             "disabled:cursor-not-allowed disabled:opacity-50",
             clearable && "pr-9",

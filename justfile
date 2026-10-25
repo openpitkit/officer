@@ -187,6 +187,7 @@ check-semgrep: install-semgrep
     {{ semgrep }} --test --config checks/semgrep/file-header-site-link.yml --metrics=off --disable-version-check checks/semgrep/testdata/file-header-site-link.txt
     {{ semgrep }} --test --config checks/semgrep/panel-access-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-access-reuse.tsx
     {{ semgrep }} --test --config checks/semgrep/no-legacy-database-probe.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-legacy-database-probe.go
+    {{ semgrep }} --test --config checks/semgrep/tailwind-v4-utilities.yml --metrics=off --disable-version-check checks/semgrep/testdata/tailwind-v4-utilities.tsx
 
 # Lint all.
 [parallel]

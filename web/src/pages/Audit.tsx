@@ -208,7 +208,7 @@ function AuditTable({
             tabIndex={entry.id === exactExternalId ? 0 : -1}
             className={
               entry.id === exactExternalId
-                ? "hover:bg-transparent ring-1 ring-inset ring-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                ? "hover:bg-transparent ring-1 ring-inset ring-ring focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 : "hover:bg-transparent"
             }
           >

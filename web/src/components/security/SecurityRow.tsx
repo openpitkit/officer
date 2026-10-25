@@ -49,7 +49,9 @@ export function SecurityRow({
       <p id={labelId} className="text-sm font-medium text-text">
         {label}
       </p>
-      <div className="min-w-0 space-y-1 text-xs text-muted-lt">{children}</div>
+      <div className="min-w-0 flex flex-col gap-y-1 text-xs text-muted-lt">
+        {children}
+      </div>
       {actions !== undefined && (
         <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
           {actions}

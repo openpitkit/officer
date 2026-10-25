@@ -920,7 +920,7 @@ function IBContractFields({
   const currencyErrorID = `${idPrefix}-currency-error`;
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         <Label>{t("settings.secType")}</Label>
         <Select
           value={contract.secType ?? "STK"}
@@ -941,7 +941,7 @@ function IBContractFields({
           </SelectContent>
         </Select>
       </div>
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         <Label htmlFor={`${idPrefix}-currency`}>{t("settings.currency")}</Label>
         <Input
           id={`${idPrefix}-currency`}
@@ -960,7 +960,7 @@ function IBContractFields({
         )}
       </div>
       {fields.exchange && (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor={`${idPrefix}-exchange`}>
             {t("settings.exchange")}
           </Label>
@@ -973,7 +973,7 @@ function IBContractFields({
         </div>
       )}
       {fields.primaryExchange && (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor={`${idPrefix}-primary-exchange`}>
             {t("settings.primaryExchange")}
           </Label>
@@ -986,7 +986,7 @@ function IBContractFields({
         </div>
       )}
       {fields.lastTradeDate && (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor={`${idPrefix}-last-trade-date`}>
             {t("settings.lastTradeDate")}
           </Label>
@@ -1002,7 +1002,7 @@ function IBContractFields({
         </div>
       )}
       {fields.strike && (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor={`${idPrefix}-strike`}>{t("settings.strike")}</Label>
           <Input
             id={`${idPrefix}-strike`}
@@ -1018,7 +1018,7 @@ function IBContractFields({
         </div>
       )}
       {fields.right && (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label>{t("settings.right")}</Label>
           <Select
             value={contract.right ?? ""}
@@ -1057,7 +1057,7 @@ function IBContractIdentityFields({
   };
   return (
     <div className="grid gap-3 md:grid-cols-3">
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         <Label htmlFor={`${idPrefix}-symbol`}>
           {t("settings.contractSymbol")}
         </Label>
@@ -1068,7 +1068,7 @@ function IBContractIdentityFields({
           disabled={busy}
         />
       </div>
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         <Label htmlFor={`${idPrefix}-con-id`}>{t("settings.conId")}</Label>
         <Input
           id={`${idPrefix}-con-id`}
@@ -1079,7 +1079,7 @@ function IBContractIdentityFields({
           disabled={busy}
         />
       </div>
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         <Label htmlFor={`${idPrefix}-local-symbol`}>
           {t("settings.localSymbol")}
         </Label>
@@ -1090,7 +1090,7 @@ function IBContractIdentityFields({
           disabled={busy}
         />
       </div>
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         <Label htmlFor={`${idPrefix}-trading-class`}>
           {t("settings.tradingClass")}
         </Label>
@@ -1101,7 +1101,7 @@ function IBContractIdentityFields({
           disabled={busy}
         />
       </div>
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         <Label htmlFor={`${idPrefix}-multiplier`}>
           {t("settings.multiplier")}
         </Label>
@@ -1138,7 +1138,7 @@ function IBContractEditor({
   onChange: (patch: Partial<IBContract>) => void;
 }) {
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-y-3">
       <IBContractFields
         contract={contract}
         busy={busy}
@@ -1176,9 +1176,9 @@ function ProviderSettingsFields({
     hasSecret(instance, key) ? t("venues:settings.keepStoredSecret") : "";
   if (providerType === IB_PROVIDER) {
     return (
-      <div className="space-y-4">
+      <div className="flex flex-col gap-y-4">
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="md-settings-host">{t("settings.host")}</Label>
             <Input
               id="md-settings-host"
@@ -1187,7 +1187,7 @@ function ProviderSettingsFields({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="md-settings-port">{t("settings.port")}</Label>
             <Input
               id="md-settings-port"
@@ -1200,7 +1200,7 @@ function ProviderSettingsFields({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="md-settings-client-id">
               {t("settings.clientId")}
             </Label>
@@ -1214,7 +1214,7 @@ function ProviderSettingsFields({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label>{t("settings.marketDataType")}</Label>
             <Select
               value={draft.marketDataType ?? "live"}
@@ -1246,7 +1246,7 @@ function ProviderSettingsFields({
   }
   if (providerType === ALPACA_PROVIDER) {
     return (
-      <div className="space-y-3">
+      <div className="flex flex-col gap-y-3">
         <UnsealedKeysWarning storage={credentialStorage} />
         <Button asChild variant="outline" size="sm" className="w-fit">
           <a
@@ -1281,7 +1281,7 @@ function ProviderSettingsFields({
   }
   if (providerType === BYBIT_PROVIDER) {
     return (
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         <Label>{t("settings.category")}</Label>
         <Select
           value={draft.category ?? "spot"}
@@ -1311,7 +1311,7 @@ function ProviderSettingsFields({
   }
   if (providerType === OANDA_PROVIDER) {
     return (
-      <div className="space-y-3">
+      <div className="flex flex-col gap-y-3">
         <UnsealedKeysWarning storage={credentialStorage} />
         <Button asChild variant="outline" size="sm" className="w-fit">
           <a href={OANDA_TOKEN_URL} target="_blank" rel="noopener noreferrer">
@@ -1328,7 +1328,7 @@ function ProviderSettingsFields({
             disabled={busy}
             onChange={(value) => set("token", value)}
           />
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="md-settings-account-id">
               {t("settings.accountID")}
             </Label>
@@ -1339,7 +1339,7 @@ function ProviderSettingsFields({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label>{t("settings.environment")}</Label>
             <Select
               value={draft.environment ?? "practice"}
@@ -1365,7 +1365,7 @@ function ProviderSettingsFields({
   }
   if (providerType === FINNHUB_PROVIDER) {
     return (
-      <div className="space-y-3">
+      <div className="flex flex-col gap-y-3">
         <UnsealedKeysWarning storage={credentialStorage} />
         <Button asChild variant="outline" size="sm" className="w-fit">
           <a
@@ -1404,7 +1404,7 @@ function StateToggleField({
 }) {
   const { t } = useTranslation("marketData");
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-y-2">
       <Label htmlFor={id}>{t("venues:table.state")}</Label>
       <Button
         id={id}
@@ -1515,8 +1515,8 @@ export function CreateInstanceDialog({
               : t("create.defaultHint")}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="md-create-label">
               {t("venues:settings.label")}
             </Label>
@@ -1544,7 +1544,7 @@ export function CreateInstanceDialog({
             }
           />
           {provider && providerHasSettings(provider.type) && (
-            <div className="space-y-3">
+            <div className="flex flex-col gap-y-3">
               <p className="text-xs font-medium uppercase tracking-wide text-muted">
                 {t("settings.title")}
               </p>
@@ -1704,8 +1704,8 @@ export function InstanceSettingsDialog({
           <DialogDescription>{t("settings.editDescription")}</DialogDescription>
         </DialogHeader>
         {instance && (
-          <div className="space-y-4">
-            <div className="space-y-2">
+          <div className="flex flex-col gap-y-4">
+            <div className="flex flex-col gap-y-2">
               <Label htmlFor="md-edit-label">
                 {t("venues:settings.label")}
               </Label>
@@ -1725,7 +1725,7 @@ export function InstanceSettingsDialog({
               )}
             </div>
             {providerHasSettings(instance.provider) && (
-              <div className="space-y-3">
+              <div className="flex flex-col gap-y-3">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted">
                   {t("settings.title")}
                 </p>
@@ -2067,7 +2067,7 @@ export function InstanceCard({
           </>
         }
       />
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-col gap-y-4">
         {!usesInstrumentDialog && canSearch && (
           <SymbolSearchPanel
             id={`md-resolve-${instance.id}`}
@@ -2165,7 +2165,7 @@ export function InstanceCard({
                   {t("instrumentDialog.ibDescription")}
                 </DialogDescription>
               </DialogHeader>
-              <div className="space-y-4">
+              <div className="flex flex-col gap-y-4">
                 {canSearch && (
                   <SymbolSearchPanel
                     id={`md-resolve-dialog-${instance.id}`}
@@ -2192,7 +2192,7 @@ export function InstanceCard({
                   />
                 )}
                 <div className="grid items-end gap-3 md:grid-cols-[1fr_0.7fr_0.7fr_0.5fr]">
-                  <div className="space-y-2">
+                  <div className="flex flex-col gap-y-2">
                     <Label htmlFor={`md-add-${instance.id}-external`}>
                       {t("venues:instrument.externalSymbol")}
                     </Label>
@@ -2207,7 +2207,7 @@ export function InstanceCard({
                       disabled={busy}
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="flex flex-col gap-y-2">
                     <Label htmlFor={`md-add-${instance.id}-base`}>
                       {t("venues:instrument.baseAsset")}
                     </Label>
@@ -2220,7 +2220,7 @@ export function InstanceCard({
                       disabled={busy}
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="flex flex-col gap-y-2">
                     <div className="flex items-center gap-2">
                       <Label htmlFor={`md-add-${instance.id}-quote`}>
                         {t("venues:instrument.quoteAsset")}
@@ -2245,7 +2245,7 @@ export function InstanceCard({
                     }
                   />
                 </div>
-                <div className="space-y-3 rounded-card border border-border bg-bg/50 p-3">
+                <div className="flex flex-col gap-y-3 rounded-card border border-border bg-bg/50 p-3">
                   <p className="text-xs font-medium uppercase tracking-wide text-muted">
                     {t("instrumentDialog.contract")}
                   </p>
@@ -2781,7 +2781,7 @@ export function MarketData() {
         <ErrorState message={load.error} onRetry={reload} />
       )}
       {load.state === "ready" && (
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           {load.data.instances.length === 0 && (
             <Card>
               <CardContent className="py-8 text-center text-sm text-muted">

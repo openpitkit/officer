@@ -130,7 +130,7 @@ export function BlockAccountDialog({
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">{t("blockAccount.description")}</p>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor="block-account-reason">
             {t("blockAccount.reasonLabel")}
           </Label>
@@ -285,7 +285,7 @@ export function AccountCurrencyDialog({
             {t("editCurrency.description", { account: account.code })}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           <div className="rounded-card border border-border bg-surface-2 p-3 text-xs">
             <p className="font-medium text-text">
               {t("editCurrency.cascadeTitle")}
@@ -312,7 +312,7 @@ export function AccountCurrencyDialog({
               {t("editCurrency.blockedHint")}
             </p>
           )}
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="account-currency">
               {t("editCurrency.currencyLabel")}
             </Label>

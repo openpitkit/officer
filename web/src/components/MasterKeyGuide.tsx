@@ -165,7 +165,7 @@ function GuideStep({
       >
         {number}
       </span>
-      <div className="min-w-0 space-y-1.5">
+      <div className="min-w-0 flex flex-col gap-y-1.5">
         <p className="text-sm font-medium text-text">{title}</p>
         <p
           className={cn(
@@ -208,7 +208,7 @@ export function MasterKeyGuide() {
     const shell: Shell = system === "windows" ? "powershell" : "posix";
     const commands = COMMANDS[deployment][shell];
     steps = (
-      <ol className="space-y-3">
+      <ol className="flex flex-col gap-y-3">
         <GuideStep
           number={1}
           title={t("masterKeyGuide.create.title")}
@@ -270,7 +270,7 @@ export function MasterKeyGuide() {
   }
 
   return (
-    <div className="space-y-3 rounded-card border border-border p-3">
+    <div className="flex flex-col gap-y-3 rounded-card border border-border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-[0.6875rem] font-medium uppercase tracking-[0.07em] text-muted">
           {t("masterKeyGuide.where")}

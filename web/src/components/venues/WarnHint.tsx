@@ -24,7 +24,7 @@ export type WarnHintProps = { reason: string } & LinkButtonProps;
 /** States a warning, then offers the one way to act on it. */
 export function WarnHint({ reason, ...action }: WarnHintProps) {
   return (
-    <div className="space-y-2 text-xs text-[var(--warn)]">
+    <div className="flex flex-col gap-y-2 text-xs text-[var(--warn)]">
       <p>{reason}</p>
       <LinkButton {...action} />
     </div>

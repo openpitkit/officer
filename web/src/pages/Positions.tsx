@@ -1032,7 +1032,7 @@ function AveragePriceIntentRow({
           <DenominatedAmount value={current} currency={currency} />
         </p>
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
           {t("panel.columns.intent")}
         </p>
@@ -1043,7 +1043,7 @@ function AveragePriceIntentRow({
           {t("dialog.mode.absolute")}
         </div>
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <Label htmlFor="adjust-average-entry-price" className="md:hidden">
           {t("panel.columns.amount")}
         </Label>
@@ -1122,7 +1122,7 @@ function RealizedPnlIntentRow({
           <DenominatedAmount value={current} currency={currency} />
         </p>
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
           {t("panel.columns.intent")}
         </p>
@@ -1133,7 +1133,7 @@ function RealizedPnlIntentRow({
           {t("dialog.mode.absolute")}
         </div>
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <Label htmlFor="adjust-realized-pnl" className="md:hidden">
           {t("panel.columns.amount")}
         </Label>
@@ -1210,7 +1210,7 @@ function AmountIntentRow({
         </p>
         <p className="nums mt-1 text-sm text-text">{dash(current)}</p>
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <Label htmlFor={`adjust-${id}-mode`} className="md:hidden">
           {t("panel.columns.intent")}
         </Label>
@@ -1236,7 +1236,7 @@ function AmountIntentRow({
           </SelectContent>
         </Select>
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <Label htmlFor={`adjust-${id}-value`} className="md:hidden">
           {t("panel.columns.amount")}
         </Label>
@@ -1309,7 +1309,7 @@ function BoundsIntentRow({
           {label}
         </p>
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <Label htmlFor={`adjust-${id}-lower`}>{t("dialog.bounds.lower")}</Label>
         <NumberStepper
           id={`adjust-${id}-lower`}
@@ -1329,7 +1329,7 @@ function BoundsIntentRow({
           }}
         />
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <Label htmlFor={`adjust-${id}-upper`}>{t("dialog.bounds.upper")}</Label>
         <NumberStepper
           id={`adjust-${id}-upper`}
@@ -1621,7 +1621,7 @@ function AdjustmentPanel({
         tabIndex={-1}
         role="region"
         aria-label={t("panel.title")}
-        className="space-y-4 border-l-2 border-l-accent bg-surface-2 px-4 py-4"
+        className="flex flex-col gap-y-4 border-l-2 border-l-accent bg-surface-2 px-4 py-4"
         onFocusCapture={() => {
           focusInsideRef.current = true;
         }}
@@ -1668,7 +1668,7 @@ function AdjustmentPanel({
 
         <div className={cn("grid gap-3", showsAccounts && "md:grid-cols-2")}>
           {showsAccounts && (
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-y-1.5">
               <Label htmlFor="adjust-panel-account">
                 {t("dialog.fields.account")}
               </Label>
@@ -1685,7 +1685,7 @@ function AdjustmentPanel({
               />
             </div>
           )}
-          <div className="space-y-1.5">
+          <div className="flex flex-col gap-y-1.5">
             <Label htmlFor="adjust-panel-asset">
               {t("dialog.fields.asset")}
             </Label>
@@ -2421,7 +2421,7 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
           {t("dialog.outcome.acceptedTitle")}
         </p>
         {rows.length > 0 && (
-          <div className="mt-2 space-y-1">
+          <div className="mt-2 flex flex-col gap-y-1">
             {rows.map((r) => (
               <div key={r.label} className="flex gap-2">
                 <span className="w-28 text-muted">{r.label}</span>
@@ -2470,7 +2470,7 @@ function AmountField({
 }) {
   const { t } = useTranslation("positions");
   return (
-    <div className="space-y-1.5">
+    <div className="flex flex-col gap-y-1.5">
       <div className="flex items-center gap-2">
         <input
           type="checkbox"
@@ -2541,7 +2541,7 @@ function BoundsField({
 }) {
   const { t } = useTranslation("positions");
   return (
-    <div className="space-y-1.5">
+    <div className="flex flex-col gap-y-1.5">
       <div className="flex items-center gap-2">
         <input
           type="checkbox"
@@ -2556,7 +2556,7 @@ function BoundsField({
       </div>
       {field.enabled && (
         <div className="ml-5 grid grid-cols-2 gap-2">
-          <div className="space-y-1">
+          <div className="flex flex-col gap-y-1">
             <Label className="text-[0.6875rem] text-muted">
               {t("dialog.bounds.lower")}
             </Label>
@@ -2571,7 +2571,7 @@ function BoundsField({
               clearLabel={t("common:filters.clearField")}
             />
           </div>
-          <div className="space-y-1">
+          <div className="flex flex-col gap-y-1">
             <Label className="text-[0.6875rem] text-muted">
               {t("dialog.bounds.upper")}
             </Label>
@@ -2918,11 +2918,11 @@ function AdjustDialog({
             <DialogDescription>{t("dialog.description")}</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="flex flex-col gap-y-4">
             {/* Account + asset */}
             <div className={cn("grid gap-3", showsAccounts && "grid-cols-2")}>
               {showsAccounts && (
-                <div className="space-y-1.5">
+                <div className="flex flex-col gap-y-1.5">
                   <Label htmlFor="adj-account">
                     {t("dialog.fields.account")}
                   </Label>
@@ -2939,7 +2939,7 @@ function AdjustDialog({
                   />
                 </div>
               )}
-              <div className="space-y-1.5">
+              <div className="flex flex-col gap-y-1.5">
                 <Label htmlFor="adj-asset">{t("dialog.fields.asset")}</Label>
                 <Autocomplete
                   id="adj-asset"
@@ -2965,7 +2965,7 @@ function AdjustDialog({
               disabled={busy}
             />
 
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-y-1.5">
               <Label htmlFor="adj-realized-pnl">
                 {t("dialog.fields.realizedPnl")}
               </Label>
@@ -2984,7 +2984,7 @@ function AdjustDialog({
             </div>
 
             {/* Average entry price */}
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-y-1.5">
               <Label htmlFor="adj-aep">
                 {t("dialog.fields.avgEntryPrice")}
               </Label>
@@ -3005,7 +3005,7 @@ function AdjustDialog({
             </div>
 
             {/* Amount fields */}
-            <div className="space-y-3 rounded-card border border-border p-3">
+            <div className="flex flex-col gap-y-3 rounded-card border border-border p-3">
               <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
                 {t("dialog.amounts.sectionLabel")}
               </p>
@@ -3030,7 +3030,7 @@ function AdjustDialog({
             </div>
 
             {/* Bounds fields */}
-            <div className="space-y-3 rounded-card border border-border p-3">
+            <div className="flex flex-col gap-y-3 rounded-card border border-border p-3">
               <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
                 {t("dialog.bounds.sectionLabel")}
               </p>

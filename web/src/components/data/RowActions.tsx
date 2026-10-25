@@ -113,7 +113,7 @@ export function ActionButton({
       aria-label={title}
       disabled={disabled}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-badge bg-transparent text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "inline-flex shrink-0 items-center justify-center rounded-badge bg-transparent text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
         active && "bg-accent-dim text-accent",
         danger && "hover:bg-[var(--danger-dim)] hover:text-[var(--danger)]",
         disabled &&

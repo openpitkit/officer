@@ -235,13 +235,13 @@ function AddTradingConnectionDialog({
           </DialogTitle>
         </DialogHeader>
         <form
-          className="space-y-4"
+          className="flex flex-col gap-y-4"
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
           }}
         >
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor={`${id}-label`}>{tv("settings.label")}</Label>
             <Input
               id={`${id}-label`}
@@ -252,7 +252,7 @@ function AddTradingConnectionDialog({
               onChange={(event) => setLabel(event.target.value)}
             />
           </div>
-          <fieldset className="space-y-2" disabled={busy}>
+          <fieldset className="flex flex-col gap-y-2" disabled={busy}>
             <Label asChild>
               <legend>{t("create.mode")}</legend>
             </Label>
@@ -266,14 +266,17 @@ function AddTradingConnectionDialog({
             <p className="text-xs text-muted">{t("create.liveNote")}</p>
           </fieldset>
           <UnsealedKeysWarning storage={credentialStorage} />
-          <div className="space-y-3">
+          <div className="flex flex-col gap-y-3">
             <h2 className="text-sm font-bold">
               {t("create.prepareAccount", { provider: provider.title })}
             </h2>
             {guide?.steps && (
-              <ol className="list-outside list-decimal space-y-4 pl-5 text-sm">
+              <ol className="list-outside list-decimal flex flex-col gap-y-4 pl-5 text-sm">
                 {guide.steps.map((instruction) => (
-                  <li key={instruction.textKey} className="space-y-2 pl-1">
+                  <li
+                    key={instruction.textKey}
+                    className="flex flex-col gap-y-2 pl-1"
+                  >
                     <p>{t(instruction.textKey)}</p>
                     {instruction.links.length > 0 && (
                       <div className="flex flex-wrap gap-3">
@@ -295,7 +298,7 @@ function AddTradingConnectionDialog({
               </ol>
             )}
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor={`${id}-api-key`}>{tv("settings.apiKey")}</Label>
             <Input
               id={`${id}-api-key`}
@@ -307,7 +310,7 @@ function AddTradingConnectionDialog({
               onChange={(event) => setApiKey(event.target.value)}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor={`${id}-api-secret`}>
               {tv("settings.apiSecret")}
             </Label>
@@ -403,7 +406,7 @@ function ConnectionSettingsDialog({
     >
       <DialogContent className="max-h-[90vh] overflow-y-auto">
         <form
-          className="space-y-4"
+          className="flex flex-col gap-y-4"
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
@@ -414,7 +417,7 @@ function ConnectionSettingsDialog({
             <DialogDescription>{t("settings.description")}</DialogDescription>
           </DialogHeader>
           {error && <ErrorBanner message={error} />}
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor={`${id}-label`}>{tv("settings.label")}</Label>
             <Input
               id={`${id}-label`}
@@ -425,7 +428,7 @@ function ConnectionSettingsDialog({
             />
           </div>
           <UnsealedKeysWarning storage={credentialStorage} />
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor={`${id}-api-key`}>{tv("settings.apiKey")}</Label>
             <Input
               id={`${id}-api-key`}
@@ -439,7 +442,7 @@ function ConnectionSettingsDialog({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor={`${id}-api-secret`}>
               {tv("settings.apiSecret")}
             </Label>
@@ -497,7 +500,7 @@ function ConnectionCheckSection({
       ref={checkSection}
       tabIndex={-1}
       aria-label={t("actions.check")}
-      className="space-y-2"
+      className="flex flex-col gap-y-2"
     >
       <Button
         type="button"
@@ -536,7 +539,7 @@ function VenueAccountField({
   const { t: tv } = useTranslation("venues");
   const { t: tc } = useTranslation();
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-y-2">
       <Label htmlFor={`${id}-venue-account`}>{tv("venueAccount")}</Label>
       <ClearableInput
         id={`${id}-venue-account`}
@@ -603,7 +606,7 @@ function ConnectionAccessSection({
       ref={accessSection}
       tabIndex={-1}
       aria-labelledby={`${id}-access`}
-      className="space-y-3 border-t border-border pt-4"
+      className="flex flex-col gap-y-3 border-t border-border pt-4"
     >
       <h4 id={`${id}-access`} className="text-sm font-medium">
         {t("access.title")}
@@ -616,14 +619,14 @@ function ConnectionAccessSection({
       />
       <form
         aria-label={tv("actions.grantAccess")}
-        className="space-y-3"
+        className="flex flex-col gap-y-3"
         onSubmit={(event) => {
           event.preventDefault();
           void grantAccess();
         }}
       >
         <h5 className="text-xs font-medium">{tv("actions.grantAccess")}</h5>
-        <fieldset className="space-y-2" disabled={busy}>
+        <fieldset className="flex flex-col gap-y-2" disabled={busy}>
           <Label asChild>
             <legend>{t("access.grantTo")}</legend>
           </Label>
@@ -636,7 +639,7 @@ function ConnectionAccessSection({
             onChange={(value) => setSubjectKind(value as AccessSubjectKind)}
           />
         </fieldset>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor={`${id}-subject`}>
             {tc(subjectKind === "account" ? "fields.account" : "fields.group")}
           </Label>
@@ -723,7 +726,7 @@ function DefaultAccountAccessSection({
       ref={accessSection}
       tabIndex={-1}
       aria-labelledby={`${id}-access`}
-      className="space-y-3 border-t border-border pt-4"
+      className="flex flex-col gap-y-3 border-t border-border pt-4"
     >
       <h4 id={`${id}-access`} className="text-sm font-medium">
         {t("access.title")}
@@ -763,7 +766,7 @@ function DefaultAccountAccessSection({
       {grant === undefined && (
         <form
           aria-label={tv("actions.grantAccess")}
-          className="space-y-3"
+          className="flex flex-col gap-y-3"
           onSubmit={(event) => {
             event.preventDefault();
             void grantAccess();
@@ -821,7 +824,7 @@ function ConnectionFeeAccountSection({
   return (
     <section
       aria-labelledby={`${id}-fee`}
-      className="space-y-3 border-t border-border pt-4"
+      className="flex flex-col gap-y-3 border-t border-border pt-4"
     >
       <h4 id={`${id}-fee`} className="text-sm font-medium">
         {t("fee.title")}
@@ -834,13 +837,13 @@ function ConnectionFeeAccountSection({
       </p>
       <form
         aria-label={t("fee.title")}
-        className="space-y-3"
+        className="flex flex-col gap-y-3"
         onSubmit={(event) => {
           event.preventDefault();
           void saveFeeAccount(false);
         }}
       >
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor={`${id}-fee-account`}>{t("fee.title")}</Label>
           <Autocomplete
             ref={feeInput}
@@ -1046,7 +1049,7 @@ function ConnectionInstrumentsSection({
       ref={instrumentSection}
       tabIndex={-1}
       aria-labelledby={`${id}-instruments`}
-      className="space-y-3 border-t border-border pt-4"
+      className="flex flex-col gap-y-3 border-t border-border pt-4"
     >
       <h4 id={`${id}-instruments`} className="text-sm font-medium">
         {t("instruments.title")}
@@ -1147,7 +1150,10 @@ function ConnectionInstrumentsSection({
       {missingAsset !== null &&
         (draft.baseAsset.trim() === missingAsset ||
           draft.quoteAsset.trim() === missingAsset) && (
-          <div role="alert" className="space-y-2 text-xs text-[var(--warn)]">
+          <div
+            role="alert"
+            className="flex flex-col gap-y-2 text-xs text-[var(--warn)]"
+          >
             <p>{t("instruments.assetMissing", { asset: missingAsset })}</p>
             <Button
               type="button"
@@ -1535,8 +1541,8 @@ function ConnectionCard({
           </>
         }
       />
-      <CardContent className="space-y-6">
-        <div className="space-y-1 text-xs">
+      <CardContent className="flex flex-col gap-y-6">
+        <div className="flex flex-col gap-y-1 text-xs">
           <dl className="flex flex-wrap gap-2">
             <dt className="text-muted">{tv("venueAccount")}</dt>
             <dd className="break-all">{connection.venueIdentity}</dd>
@@ -1557,11 +1563,11 @@ function ConnectionCard({
           </p>
         </div>
         {!connection.enabled && (
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <h4 className="text-sm font-medium">{t("setup.title")}</h4>
             <ol
               aria-label={t("setup.title")}
-              className="list-inside list-decimal space-y-1 text-xs"
+              className="list-inside list-decimal flex flex-col gap-y-1 text-xs"
             >
               {steps.map((step) => (
                 <li key={step.key}>
@@ -1588,7 +1594,7 @@ function ConnectionCard({
           </div>
         )}
         {error && deleteSymbol === null && revokeSubject === null && (
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <ErrorBanner message={error} />
             {feeRequired && showsFeeAccount && (
               <LinkButton onClick={focusFeeAccount}>
@@ -1735,7 +1741,7 @@ export function TradingConnections() {
         <ErrorState message={load.error} onRetry={reload} />
       )}
       {load.state === "ready" && (
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           <AddProviderButton
             label={t("actions.addConnection")}
             providerTypes={load.data.providers.map((provider) => provider.type)}

@@ -37,7 +37,7 @@ export function AdjustmentTypeField({
   const { t } = useTranslation("positions");
 
   return (
-    <fieldset className="space-y-1.5">
+    <fieldset className="flex flex-col gap-y-1.5">
       <Label asChild>
         <legend>{t("dialog.fields.type")}</legend>
       </Label>

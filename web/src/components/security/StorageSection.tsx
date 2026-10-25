@@ -62,7 +62,7 @@ function EncryptionRow({ storage }: { storage: LoadState<CredentialStorage> }) {
             <CompactStaleState load={storage} />
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="warn">
                 <LockOpen aria-hidden="true" className="h-3 w-3" />
@@ -153,7 +153,7 @@ export function StorageSection() {
       <CardHeader>
         <CardTitle>{t("security.storage.title")}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="flex flex-col gap-y-3">
         {storage.state === "ready" && storage.data.resealedSecrets > 0 && (
           <ExposedSecretsNotice count={storage.data.resealedSecrets} />
         )}

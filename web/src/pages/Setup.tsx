@@ -663,8 +663,8 @@ function Wizard({ pass }: { pass: WizardPass }) {
         />
         <main className="flex min-w-0 flex-1 flex-col md:overflow-hidden">
           <div className="flex-1 md:overflow-y-auto">
-            <div className="mx-auto w-full max-w-3xl space-y-5 px-4 py-6 md:px-10 md:py-8">
-              <div className="ledger-masthead space-y-1 pb-3">
+            <div className="mx-auto w-full max-w-3xl flex flex-col gap-y-5 px-4 py-6 md:px-10 md:py-8">
+              <div className="ledger-masthead flex flex-col gap-y-1 pb-3">
                 <p className="text-[0.6875rem] font-medium uppercase tracking-[0.07em] text-muted">
                   {step === "welcome" && !review
                     ? t("firstStart")

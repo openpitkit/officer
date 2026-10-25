@@ -92,7 +92,9 @@ export function Notice({
       <div className="min-w-0 flex-1">
         <p className={cn("font-semibold", TONES[tone].title)}>{title}</p>
         {children !== undefined && children !== null && (
-          <div className={cn("space-y-1 text-xs", TONES[tone].detail)}>
+          <div
+            className={cn("flex flex-col gap-y-1 text-xs", TONES[tone].detail)}
+          >
             {children}
           </div>
         )}

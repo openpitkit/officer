@@ -60,7 +60,7 @@ const DropdownMenuItem = forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-pointer select-none items-center gap-2 rounded-badge px-2 py-1.5 text-sm outline-none transition-colors duration-[180ms]",
+      "relative flex cursor-pointer select-none items-center gap-2 rounded-badge px-2 py-1.5 text-sm outline-hidden transition-colors duration-[180ms]",
       "focus:bg-accent-dim focus:text-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}
@@ -78,7 +78,7 @@ const DropdownMenuRadioItem = forwardRef<
   <DropdownMenuPrimitive.RadioItem
     ref={ref}
     className={cn(
-      "relative flex cursor-pointer select-none items-center gap-2 rounded-badge py-1.5 pl-7 pr-2 text-sm outline-none transition-colors duration-[180ms]",
+      "relative flex cursor-pointer select-none items-center gap-2 rounded-badge py-1.5 pl-7 pr-2 text-sm outline-hidden transition-colors duration-[180ms]",
       "focus:bg-accent-dim focus:text-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}
@@ -102,7 +102,7 @@ const DropdownMenuCheckboxItem = forwardRef<
     ref={ref}
     checked={checked}
     className={cn(
-      "relative flex cursor-pointer select-none items-center gap-2 rounded-badge py-1.5 pl-7 pr-2 text-sm outline-none transition-colors duration-[180ms]",
+      "relative flex cursor-pointer select-none items-center gap-2 rounded-badge py-1.5 pl-7 pr-2 text-sm outline-hidden transition-colors duration-[180ms]",
       "focus:bg-accent-dim focus:text-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}

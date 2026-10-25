@@ -101,7 +101,7 @@ export function InstrumentDraftRow({
           </Button>
         )}
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         {baseSuggestions ? (
           <Autocomplete
             value={draft.baseAsset}
@@ -127,7 +127,7 @@ export function InstrumentDraftRow({
           failed={baseSuggestionsFailed === true}
         />
       </div>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             {quoteSuggestions ? (

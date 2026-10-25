@@ -34,7 +34,7 @@ export function Page({
     <div className="flex h-full min-h-0 flex-col">
       <TopBar title={title} actions={actions} />
       <main className="min-h-0 flex-1 overflow-y-auto bg-bg px-[var(--dens-page-pad)] py-[calc(var(--dens-page-pad)*0.75)]">
-        <div className="mx-auto w-full max-w-[var(--content-max)] space-y-[var(--dens-row-gap)]">
+        <div className="mx-auto flex w-full max-w-[var(--content-max)] flex-col gap-y-[var(--dens-row-gap)]">
           <PendingRestartBanner />
           <SensitiveDataBanner />
           {children}

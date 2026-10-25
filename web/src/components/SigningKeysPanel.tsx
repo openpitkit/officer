@@ -104,7 +104,7 @@ function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
       <CardHeader>
         <CardTitle>{t("currentKey.sectionTitle")}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-col gap-y-4">
         {activeKey === null ? (
           <p className="text-xs text-muted-lt">{t("currentKey.empty")}</p>
         ) : (
@@ -135,7 +135,7 @@ function ActiveKeyCard({ activeKey }: { activeKey: SigningKey | null }) {
               mono={false}
             />
 
-            <div className="space-y-2 pt-1">
+            <div className="flex flex-col gap-y-2 pt-1">
               <Label className="text-xs text-muted">
                 {t("currentKey.export.label")}
               </Label>
@@ -240,7 +240,7 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
       <CardHeader>
         <CardTitle>{t("manageKey.sectionTitle")}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-col gap-y-4">
         {/* Mode toggle */}
         <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
           {(["generate", "import"] as const).map((m) => (
@@ -287,8 +287,8 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
         )}
 
         {mode === "import" && (
-          <div className="space-y-3">
-            <div className="space-y-1.5">
+          <div className="flex flex-col gap-y-3">
+            <div className="flex flex-col gap-y-1.5">
               <Label className="text-xs">{t("manageKey.importFormat")}</Label>
               <Select
                 value={importFormat}
@@ -311,7 +311,7 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-y-1.5">
               <Label className="text-xs">{t("manageKey.importKeyLabel")}</Label>
               <Textarea
                 value={importKey}
@@ -401,7 +401,7 @@ function ESignCard({
       <CardHeader>
         <CardTitle>{t("eSign.sectionTitle")}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="flex flex-col gap-y-3">
         <label className="flex cursor-pointer items-center gap-3 select-none">
           <input
             type="checkbox"
@@ -529,7 +529,7 @@ export function SigningKeysPanel({
       {load.state === "loading" && <TableSkeleton rows={3} cols={1} />}
 
       {load.state === "ready" && (
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           <ActiveKeyCard activeKey={activeKey} />
 
           <ManageKeyCard onDone={refresh} />

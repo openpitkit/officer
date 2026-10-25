@@ -50,6 +50,10 @@ named `testdata` so the Go tool ignores it, and it is in the justfile's
 Fix a finding by changing the code, or by narrowing the rule if the finding
 turns out to be a rule bug - never by loosening what the rule means.
 
+`tailwind-v4-utilities` keeps vertical form spacing on flex-column gaps and
+preserves forced-colors focus outlines with `outline-hidden`. It rejects the
+earlier utility names whose behavior changed in Tailwind 4.
+
 `unapproved-entity-autocreate` (`checks/semgrep/service-go.yml`) ships without
 its `ensure$ANY(...)` branch on purpose: officer's `ensureAccount` /
 `ensureLimitAccount` / `ensureAutoCreatedAsset` family in

@@ -366,7 +366,7 @@ function CheckPreview({ state }: { state: CheckState }) {
   return (
     <div
       className={[
-        "rounded-card border px-3 py-2 space-y-2 text-xs",
+        "rounded-card border px-3 py-2 flex flex-col gap-y-2 text-xs",
         result.passed
           ? "border-[var(--ok)] bg-[var(--ok-dim)]"
           : "border-[var(--danger)] bg-[var(--danger-dim)]",
@@ -384,7 +384,7 @@ function CheckPreview({ state }: { state: CheckState }) {
         </span>
       </div>
       {result.rejects.length > 0 && (
-        <ul className="space-y-1">
+        <ul className="flex flex-col gap-y-1">
           {result.rejects.map((r, i) => {
             const localizedReason = t(`check.rejectReasons.${r.code}`, {
               defaultValue: "",
@@ -1039,7 +1039,7 @@ function SubmitOrderDialog({
       : commonFieldsValid && amountKind !== "" && tab !== "";
 
   const fields = (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-y-4">
       {tab !== "venue" && (
         <div className="flex items-start justify-between gap-3">
           <p className="text-[0.6875rem] text-muted">
@@ -1060,7 +1060,7 @@ function SubmitOrderDialog({
           </a>
         </div>
       )}
-      <div className="space-y-1.5">
+      <div className="flex flex-col gap-y-1.5">
         <Label htmlFor="so-external-id">
           {t("addOrder.dialog.externalId")}
         </Label>
@@ -1079,7 +1079,7 @@ function SubmitOrderDialog({
         </p>
       </div>
       {showsAccounts && (
-        <div className="space-y-1.5">
+        <div className="flex flex-col gap-y-1.5">
           <Label htmlFor="so-account">{t("addOrder.dialog.account")}</Label>
           <Autocomplete
             ref={accountFieldRef}
@@ -1101,8 +1101,8 @@ function SubmitOrderDialog({
         </div>
       )}
       {tab === "venue" && (
-        <div className="space-y-4">
-          <div className="space-y-1.5">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-1.5">
             <Label className="block">{t("addOrder.dialog.venue.mode")}</Label>
             <Segmented
               options={[
@@ -1123,7 +1123,7 @@ function SubmitOrderDialog({
           {debouncedAccount !== "" &&
             debouncedAccount === account.trim() &&
             venueMode !== "" && (
-              <div className="space-y-2">
+              <div className="flex flex-col gap-y-2">
                 <Label htmlFor="so-target">
                   {t("addOrder.dialog.venue.target")}
                 </Label>
@@ -1208,7 +1208,7 @@ function SubmitOrderDialog({
                   !destinationsLoading &&
                   !destinationsError &&
                   selectableDestinations.length === 0 && (
-                    <div className="space-y-1 text-xs text-muted-lt">
+                    <div className="flex flex-col gap-y-1 text-xs text-muted-lt">
                       <p>
                         {t(
                           showsAccounts
@@ -1235,7 +1235,7 @@ function SubmitOrderDialog({
 
           {selectedDestinationIsSelectable &&
             selectedDestination.provider === "alpaca" && (
-              <div className="space-y-1.5">
+              <div className="flex flex-col gap-y-1.5">
                 <Label htmlFor="so-time-in-force">
                   {t("addOrder.dialog.venue.timeInForce")}
                 </Label>
@@ -1284,7 +1284,7 @@ function SubmitOrderDialog({
         </div>
       )}
       <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
+        <div className="flex flex-col gap-y-1.5">
           <Label htmlFor="so-base">{t("addOrder.dialog.baseAsset")}</Label>
           <Autocomplete
             ref={baseAssetFieldRef}
@@ -1298,7 +1298,7 @@ function SubmitOrderDialog({
             clearLabel={tc("filters.clearField")}
           />
         </div>
-        <div className="space-y-1.5">
+        <div className="flex flex-col gap-y-1.5">
           <Label htmlFor="so-quote">{t("addOrder.dialog.quoteAsset")}</Label>
           <Autocomplete
             id="so-quote"
@@ -1312,7 +1312,7 @@ function SubmitOrderDialog({
           />
         </div>
       </div>
-      <div className="space-y-1.5">
+      <div className="flex flex-col gap-y-1.5">
         <Label className="block">{t("addOrder.dialog.side")}</Label>
         <Segmented
           options={[
@@ -1325,7 +1325,7 @@ function SubmitOrderDialog({
           disabled={busy}
         />
       </div>
-      <div className="space-y-1.5">
+      <div className="flex flex-col gap-y-1.5">
         <Label htmlFor="so-amount">{t("addOrder.dialog.amount")}</Label>
         <div className="flex gap-2">
           <Segmented
@@ -1363,7 +1363,7 @@ function SubmitOrderDialog({
           </p>
         )}
       </div>
-      <div className="space-y-1.5">
+      <div className="flex flex-col gap-y-1.5">
         <Label htmlFor="so-price">
           {t(
             tab === "drop_copy"
@@ -1460,7 +1460,7 @@ function SubmitOrderDialog({
             </TabsContent>
           ))}
         </Tabs>
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           {error && (
             <ErrorBanner message={error} onDismiss={() => setError(null)} />
           )}
@@ -1958,7 +1958,7 @@ function ExecReportDialog({
         </DialogHeader>
 
         {done ? (
-          <div className="space-y-3">
+          <div className="flex flex-col gap-y-3">
             <p className="text-xs text-[var(--ok)]">
               {t("execReport.dialog.accepted")}
             </p>
@@ -1975,7 +1975,7 @@ function ExecReportDialog({
               </div>
             </div>
             {blocks.length > 0 && (
-              <div className="space-y-1 rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-xs">
+              <div className="flex flex-col gap-y-1 rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-xs">
                 {blocks.map((block, i) => (
                   <div key={i} className="text-[var(--danger)]">
                     <span className="font-medium">
@@ -1998,8 +1998,8 @@ function ExecReportDialog({
             </DialogFooter>
           </div>
         ) : (
-          <div className="space-y-4">
-            <div className="space-y-1.5">
+          <div className="flex flex-col gap-y-4">
+            <div className="flex flex-col gap-y-1.5">
               <Label htmlFor="er-status">{t("execReport.dialog.status")}</Label>
               <Select
                 value={status}
@@ -2031,7 +2031,7 @@ function ExecReportDialog({
             {showFillFields && (
               <>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
+                  <div className="flex flex-col gap-y-1.5">
                     <Label htmlFor="er-qty">
                       {t("execReport.dialog.fillQty")}
                     </Label>
@@ -2056,7 +2056,7 @@ function ExecReportDialog({
                       </p>
                     )}
                   </div>
-                  <div className="space-y-1.5">
+                  <div className="flex flex-col gap-y-1.5">
                     <Label htmlFor="er-price">
                       {t("execReport.dialog.fillPrice")}
                     </Label>
@@ -2082,7 +2082,7 @@ function ExecReportDialog({
                     )}
                   </div>
                 </div>
-                <div className="space-y-1.5">
+                <div className="flex flex-col gap-y-1.5">
                   <Label htmlFor="er-lock">
                     {t("execReport.dialog.lockPrice")}
                   </Label>
@@ -2110,8 +2110,8 @@ function ExecReportDialog({
               </>
             )}
 
-            <div className="space-y-3">
-              <section className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
+            <div className="flex flex-col gap-y-3">
+              <section className="flex flex-col gap-y-3 rounded-card border border-border bg-surface-2 p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <h3 className="text-xs font-semibold text-text">
@@ -2168,7 +2168,7 @@ function ExecReportDialog({
                 </div>
                 {commissionMode !== "none" && (
                   <div className="grid grid-cols-2 items-end gap-3">
-                    <div className="space-y-1.5">
+                    <div className="flex flex-col gap-y-1.5">
                       <Label htmlFor="er-commission-amount">
                         {t("execReport.dialog.commissionAmount")}
                       </Label>
@@ -2185,7 +2185,7 @@ function ExecReportDialog({
                         clearLabel={tc("filters.clearField")}
                       />
                     </div>
-                    <div className="space-y-1.5">
+                    <div className="flex flex-col gap-y-1.5">
                       <Label htmlFor="er-commission-currency">
                         {t("execReport.dialog.commissionCurrency")}
                       </Label>
@@ -2208,7 +2208,7 @@ function ExecReportDialog({
               </section>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-y-1.5">
               <Label htmlFor="er-leaves">
                 {t("execReport.dialog.leavesQty")}
               </Label>
@@ -2588,7 +2588,7 @@ function OrderDetailDialog({
           )}
 
           {state.phase === "loading" && (
-            <div className="space-y-2 py-4">
+            <div className="flex flex-col gap-y-2 py-4">
               {[1, 2, 3].map((i) => (
                 <div
                   key={i}
@@ -2610,7 +2610,7 @@ function OrderDetailDialog({
           )}
 
           {state.phase === "ready" && (
-            <div className="space-y-5">
+            <div className="flex flex-col gap-y-5">
               {/* Order header fields */}
               <div className="grid grid-cols-3 gap-2 rounded-card border border-border bg-surface-2 p-3 text-xs">
                 <div>
@@ -2691,7 +2691,7 @@ function OrderDetailDialog({
               </div>
 
               {venueOrder && (
-                <div className="space-y-3">
+                <div className="flex flex-col gap-y-3">
                   <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
                     {t("detail.dialog.venue.sectionTitle")}
                   </p>
@@ -2791,7 +2791,7 @@ function OrderDetailDialog({
                     {t("detail.dialog.timeline.empty")}
                   </p>
                 ) : (
-                  <ol className="space-y-2">
+                  <ol className="flex flex-col gap-y-2">
                     {state.events.map((ev) => {
                       const blockReason = accountBlockReason(ev);
                       return (
@@ -3128,7 +3128,7 @@ function OrderDetailDialog({
               </div>
 
               {canUseWorkflowShortcut && (
-                <div className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
+                <div className="flex flex-col gap-y-3 rounded-card border border-border bg-surface-2 p-3">
                   <div>
                     <h4 className="text-xs font-bold text-text">
                       {t("detail.dialog.workflow.title")}
@@ -3166,8 +3166,8 @@ function OrderDetailDialog({
                     )}
                   </div>
                   {cancelFormOpen && (
-                    <div className="space-y-2 border-t border-border pt-3">
-                      <div className="space-y-1.5">
+                    <div className="flex flex-col gap-y-2 border-t border-border pt-3">
+                      <div className="flex flex-col gap-y-1.5">
                         <Label htmlFor="workflow-cancel-leaves">
                           {t("execReport.dialog.leavesQty")}
                         </Label>
@@ -3470,7 +3470,7 @@ function OrdersTable({
             }}
             tabIndex={0}
             className={cn(
-              "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
               selectedIndex === index && "ring-1 ring-inset ring-ring",
             )}
             onClick={() => onRowClick(order)}
@@ -3813,7 +3813,7 @@ function TradesTable({
             }}
             tabIndex={0}
             className={cn(
-              "hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "hover:bg-transparent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
               selectedIndex === index && "ring-1 ring-inset ring-ring",
             )}
             onFocus={() => setSelectedIndex(index)}
@@ -5825,7 +5825,7 @@ export function Orders() {
       <Tabs
         value={tab}
         onValueChange={(value) => setTab(value as TabId)}
-        className="space-y-[var(--dens-row-gap)]"
+        className="flex flex-col gap-y-[var(--dens-row-gap)]"
       >
         <TabsList aria-label={t("title")}>
           {(["orders", "trades"] as TabId[]).map((tabId) => (
@@ -6514,7 +6514,10 @@ export function Orders() {
         </Dialog>
 
         {/* Orders view */}
-        <TabsContent value="orders" className="space-y-[var(--dens-row-gap)]">
+        <TabsContent
+          value="orders"
+          className="flex flex-col gap-y-[var(--dens-row-gap)]"
+        >
           {ordersResult.load.state === "loading" && (
             <TableSkeleton
               cols={(venueLabels ? 10 : 9) + (showsAccounts ? 1 : 0)}
@@ -6562,7 +6565,10 @@ export function Orders() {
         </TabsContent>
 
         {/* Trades view */}
-        <TabsContent value="trades" className="space-y-[var(--dens-row-gap)]">
+        <TabsContent
+          value="trades"
+          className="flex flex-col gap-y-[var(--dens-row-gap)]"
+        >
           {tradesResult.load.state === "loading" && (
             <TableSkeleton
               cols={(venueLabels ? 10 : 9) + (showsAccounts ? 1 : 0)}

@@ -190,7 +190,7 @@ function AccessCells({
       : "";
   return (
     <>
-      <TableCell className="space-y-1 align-top text-xs">
+      <TableCell className="flex flex-col gap-y-1 align-top text-xs">
         <p>{accessState(t, subject, group, row)}</p>
         {row.ownGrant !== null && row.ownGrant.venueAccount !== "" && (
           <>

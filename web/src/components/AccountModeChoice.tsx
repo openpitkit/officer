@@ -248,7 +248,7 @@ export function AccountModeChoice({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-y-4">
       <div>
         <StatRow
           label={t("accountMode.stored")}
@@ -274,7 +274,7 @@ export function AccountModeChoice({
           <CompactStaleState load={load} />
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-y-3">
           <Segmented
             ariaLabel={t("accountMode.title")}
             value={choice ?? undefined}
@@ -306,7 +306,7 @@ export function AccountModeChoice({
           )}
           {listNeeded && accounts.state === "loading" && <LoadingStatus />}
           {listNeeded && accounts.state === "error" && (
-            <div className="space-y-2">
+            <div className="flex flex-col gap-y-2">
               <ErrorBanner message={accounts.error} />
               <Button
                 type="button"
@@ -335,7 +335,7 @@ export function AccountModeChoice({
             )}
           {several && (
             <>
-              <div className="space-y-2">
+              <div className="flex flex-col gap-y-2">
                 <Label htmlFor={pickerId}>{tc("fields.account")}</Label>
                 <Autocomplete
                   id={pickerId}
@@ -434,7 +434,7 @@ export function AccountModePanel({
     );
   }
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-y-4">
       <StaleState load={load} reload={reload} />
       <AccountModeChoice
         load={load}

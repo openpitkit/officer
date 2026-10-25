@@ -1195,8 +1195,8 @@ export function CreateAccountDialog({
             {ta("createAccount.description")}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="account-code">
               {ta("createAccount.codeLabel")}
             </Label>
@@ -1224,7 +1224,7 @@ export function CreateAccountDialog({
               </p>
             )}
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="create-account-group">
               {ta("createAccount.groupLabel")}
             </Label>
@@ -1242,7 +1242,7 @@ export function CreateAccountDialog({
               {ta("createAccount.groupHint")}
             </p>
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="create-account-currency">
               {ta("createAccount.currencyLabel")}
             </Label>
@@ -1361,8 +1361,8 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
         <DialogHeader>
           <DialogTitle>{t("createGroup.title")}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="group-code">{t("createGroup.codeLabel")}</Label>
             <Input
               id="group-code"
@@ -1383,7 +1383,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
               </p>
             )}
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="group-title">{t("createGroup.titleLabel")}</Label>
             <Input
               id="group-title"
@@ -1398,7 +1398,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
               }}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="create-group-currency">
               {t("createGroup.currencyLabel")}
             </Label>
@@ -1421,7 +1421,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
               failed={assetSuggestionResult.failed}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="group-notes">{t("createGroup.notesLabel")}</Label>
             <Textarea
               id="group-notes"
@@ -1517,7 +1517,7 @@ function BlockGroupDialog({
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">{t("blockGroup.description")}</p>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor="block-group-reason">
             {t("blockGroup.reasonLabel")}
           </Label>
@@ -1802,7 +1802,7 @@ function DeleteAccountConfirm({
             <p className="font-medium text-[var(--danger)]">
               {t("deleteAccount.dependentsTitle")}
             </p>
-            <ul className="mt-2 space-y-1">
+            <ul className="mt-2 flex flex-col gap-y-1">
               {dependents.map((dep) => (
                 <li key={dep.kind} className="flex justify-between gap-4">
                   <span>
@@ -1917,8 +1917,8 @@ function EditAccountMetadataDialog({
           </DialogTitle>
           <DialogDescription>{t("editAccount.description")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="account-edit-code">
               {t("editAccount.codeLabel")}
             </Label>
@@ -1938,7 +1938,7 @@ function EditAccountMetadataDialog({
               </p>
             )}
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="account-edit-title">
               {t("editAccount.titleLabel")}
             </Label>
@@ -2046,8 +2046,8 @@ function EditGroupMetadataDialog({
           </DialogTitle>
           <DialogDescription>{t("editGroup.description")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="group-edit-code">{t("editGroup.codeLabel")}</Label>
             <ClearableInput
               id="group-edit-code"
@@ -2060,7 +2060,7 @@ function EditGroupMetadataDialog({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="group-edit-title">
               {t("editGroup.titleLabel")}
             </Label>
@@ -2163,7 +2163,7 @@ function EditGroupNotesDialog({
         <p className="text-xs text-muted-lt">
           {t("editGroupNotes.description")}
         </p>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor="group-notes-edit">
             {t("editGroupNotes.notesLabel")}
           </Label>
@@ -2286,7 +2286,7 @@ function AssignGroupDialog({
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">{t("assignGroup.description")}</p>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor="assign-group">{t("assignGroup.groupLabel")}</Label>
           <Autocomplete
             id="assign-group"
@@ -2371,13 +2371,13 @@ function GroupCurrencyDialog({
               : t("editGroupCurrency.description", { group: group.code })}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           {hasOpenPositions && (
             <p className="text-xs text-[var(--warning)]">
               {t("editGroupCurrency.blockedHint")}
             </p>
           )}
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="group-currency">
               {t("editGroupCurrency.currencyLabel")}
             </Label>
@@ -2482,7 +2482,7 @@ function EditAccountNotesDialog({
         <p className="text-xs text-muted-lt">
           {t("editAccountNotes.description")}
         </p>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <Label htmlFor="account-notes">
             {t("editAccountNotes.notesLabel")}
           </Label>
@@ -2678,12 +2678,12 @@ function BlockedDetailsDialog({
           <DialogDescription>{t("blockDetails.description")}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           {/* "none" means the backend named no tier - against a build that
               predates blockSource every value degrades to it - so the section
               is dropped rather than claiming a tier it does not know. */}
           {targetAccount !== null && targetAccount.blockSource !== "none" && (
-            <section className="space-y-2">
+            <section className="flex flex-col gap-y-2">
               <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
                 {t("blockDetails.source")}
               </p>
@@ -2705,7 +2705,7 @@ function BlockedDetailsDialog({
             </section>
           )}
 
-          <section className="space-y-2">
+          <section className="flex flex-col gap-y-2">
             <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
               {t("blockDetails.reason")}
             </p>
@@ -2716,7 +2716,7 @@ function BlockedDetailsDialog({
             </p>
           </section>
 
-          <section className="space-y-2">
+          <section className="flex flex-col gap-y-2">
             <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
               {t("blockDetails.audit")}
             </p>
@@ -2731,7 +2731,7 @@ function BlockedDetailsDialog({
                 {t("blockDetails.noAudit")}
               </p>
             ) : (
-              <div className="space-y-2">
+              <div className="flex flex-col gap-y-2">
                 {entries.map((entry) => (
                   <div
                     key={entry.id}
@@ -4433,7 +4433,7 @@ export function Accounts() {
 
       {/* Groups panel */}
       {tab === "groups" && (
-        <div className="space-y-1">
+        <div className="flex flex-col gap-y-1">
           <p className="text-xs font-medium text-muted">
             {t("groups.heading")}
           </p>
@@ -4514,7 +4514,7 @@ export function Accounts() {
 
       {/* Accounts panel */}
       {tab === "accounts" && (
-        <div className="space-y-1">
+        <div className="flex flex-col gap-y-1">
           <p className="text-xs font-medium text-muted">
             {t("accounts.heading")}
           </p>

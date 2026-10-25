@@ -118,7 +118,7 @@ function OpenAccess() {
 
   return (
     <SecurityRow label={t("security.access.mode")}>
-      <div className="space-y-4">
+      <div className="flex flex-col gap-y-4">
         <AccessModePanel
           key={attempt}
           mode={mode}

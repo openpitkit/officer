@@ -27,7 +27,7 @@ const Textarea = forwardRef<
     ref={ref}
     className={cn(
       "flex min-h-[var(--dens-textarea-min-h)] w-full rounded-card border border-border bg-surface-2 px-[var(--dens-field-px)] py-2 text-[length:var(--dens-field-fz)] text-text",
-      "placeholder:text-muted focus-visible:border-border-hover focus-visible:outline-none",
+      "placeholder:text-muted focus-visible:border-border-hover focus-visible:outline-hidden",
       "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
       "disabled:cursor-not-allowed disabled:opacity-50",
       className,

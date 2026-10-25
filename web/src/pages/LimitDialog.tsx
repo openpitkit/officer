@@ -183,7 +183,7 @@ function DurationPicker({
     : null;
 
   return (
-    <div className="space-y-1.5">
+    <div className="flex flex-col gap-y-1.5">
       <div className="flex gap-2">
         <NumberStepper
           id={id}
@@ -578,7 +578,7 @@ export function LimitDialog({
             )}
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="flex flex-col gap-y-4">
             {isSpotFundsPnl && (
               <p className="text-xs text-muted-lt">
                 {t("dialog.fxFailSafeNote")}
@@ -586,7 +586,7 @@ export function LimitDialog({
             )}
 
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
+              <div className="flex flex-col gap-y-1.5">
                 <Label>{t("dialog.policy")}</Label>
                 <Select
                   value={form.policy}
@@ -606,7 +606,7 @@ export function LimitDialog({
                 </Select>
               </div>
 
-              <div className="space-y-1.5">
+              <div className="flex flex-col gap-y-1.5">
                 <Label>{t("dialog.scope")}</Label>
                 <Select
                   value={form.scope}
@@ -632,7 +632,7 @@ export function LimitDialog({
               scopeHasAsset(form.scope)) && (
               <div className={cn("grid gap-3", showsAccounts && "grid-cols-2")}>
                 {showsAccountField && (
-                  <div className="space-y-1.5">
+                  <div className="flex flex-col gap-y-1.5">
                     <Label htmlFor="limit-account">{t("dialog.account")}</Label>
                     <Autocomplete
                       id="limit-account"
@@ -655,7 +655,7 @@ export function LimitDialog({
                   </div>
                 )}
                 {hasAccountGroupAxis && (
-                  <div className="space-y-1.5">
+                  <div className="flex flex-col gap-y-1.5">
                     <Label htmlFor="limit-account-group">
                       {t("dialog.accountGroup")}
                     </Label>
@@ -677,7 +677,7 @@ export function LimitDialog({
                   </div>
                 )}
                 {!isSpotFundsPnl && scopeHasAsset(form.scope) && (
-                  <div className="space-y-1.5">
+                  <div className="flex flex-col gap-y-1.5">
                     <Label htmlFor="limit-asset">{t("dialog.asset")}</Label>
                     <Autocomplete
                       id="limit-asset"
@@ -703,7 +703,7 @@ export function LimitDialog({
               </div>
             )}
 
-            <div className="space-y-3 rounded-card border border-border p-3">
+            <div className="flex flex-col gap-y-3 rounded-card border border-border p-3">
               <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
                 {t("dialog.values")}
               </p>
@@ -722,7 +722,7 @@ export function LimitDialog({
                   (validation?.key === "limit.pnlCurrencyRequired" ||
                     validation?.key.startsWith("asset."));
                 return (
-                  <div key={kind} className="space-y-1.5">
+                  <div key={kind} className="flex flex-col gap-y-1.5">
                     <Label htmlFor={`kind-${kind}`}>{fieldLabel}</Label>
                     {isDuration ? (
                       <DurationPicker

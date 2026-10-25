@@ -39,7 +39,7 @@ export function ClearInlineButton({
       title={label}
       aria-label={label}
       tabIndex={-1}
-      className="absolute right-1.5 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-badge text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="absolute right-1.5 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-badge text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
     >

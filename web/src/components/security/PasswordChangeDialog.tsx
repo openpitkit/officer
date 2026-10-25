@@ -125,7 +125,7 @@ export function PasswordChangeDialog({
           </DialogDescription>
         </DialogHeader>
         <form
-          className="space-y-4"
+          className="flex flex-col gap-y-4"
           onSubmit={(event) => {
             event.preventDefault();
             void change();

@@ -110,7 +110,7 @@ export function CountsRow({ counts }: DashboardReadyWidgetProps) {
           key={label}
           type="button"
           onClick={() => navigate(route)}
-          className="animate-fade-in rounded-card text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="animate-fade-in rounded-card text-left hover:bg-accent-dim focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Card className="h-full pointer-events-none">
             <CardContent className="flex flex-col items-center gap-1 py-4 text-center">
@@ -404,7 +404,7 @@ function ActivityColumn({ group }: { group: ActivityGroup }) {
         <Activity className="h-3.5 w-3.5 shrink-0 text-muted" />
         <CardTitle className="text-xs">{t(group.labelKey)}</CardTitle>
       </CardHeader>
-      <CardContent className="flex-1 space-y-0 pb-2">
+      <CardContent className="flex-1 flex flex-col gap-y-0 pb-2">
         {group.entries.map((e) => (
           <ActivityItem key={e.ref} entry={e} route={group.route} />
         ))}
@@ -496,7 +496,7 @@ export function AuditStrip() {
         <CardTitle>{t("audit.title")}</CardTitle>
         <CompactStaleState load={load} />
       </CardHeader>
-      <CardContent className="space-y-0 pb-2">
+      <CardContent className="flex flex-col gap-y-0 pb-2">
         {load.state === "loading" && (
           <div className="flex items-center justify-center py-6">
             <Loader2 className="h-4 w-4 animate-spin text-muted" />

@@ -197,8 +197,8 @@ function CreateAssetDialog({
           <DialogTitle>{t("createAsset.title")}</DialogTitle>
           <DialogDescription>{t("createAsset.description")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="asset-code">{t("createAsset.codeLabel")}</Label>
             <ClearableInput
               id="asset-code"
@@ -220,7 +220,7 @@ function CreateAssetDialog({
               {t("createAsset.codeHint")}
             </p>
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="asset-title">{t("createAsset.titleLabel")}</Label>
             <ClearableInput
               id="asset-title"
@@ -232,7 +232,7 @@ function CreateAssetDialog({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="asset-class">{t("createAsset.classLabel")}</Label>
             <Autocomplete
               id="asset-class"
@@ -331,8 +331,8 @@ function CreateClassDialog({ onCreated }: { onCreated: () => void }) {
           <DialogTitle>{t("createClass.title")}</DialogTitle>
           <DialogDescription>{t("createClass.description")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="class-code">{t("createClass.codeLabel")}</Label>
             <ClearableInput
               id="class-code"
@@ -351,7 +351,7 @@ function CreateClassDialog({ onCreated }: { onCreated: () => void }) {
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="class-title">{t("createClass.titleLabel")}</Label>
             <ClearableInput
               id="class-title"
@@ -364,7 +364,7 @@ function CreateClassDialog({ onCreated }: { onCreated: () => void }) {
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="class-notes">{t("createClass.notesLabel")}</Label>
             <Textarea
               id="class-notes"
@@ -480,8 +480,8 @@ function EditAssetDialog({
           </DialogTitle>
           <DialogDescription>{t("editAsset.description")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="asset-edit-code">{t("editAsset.codeLabel")}</Label>
             <ClearableInput
               id="asset-edit-code"
@@ -494,7 +494,7 @@ function EditAssetDialog({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="asset-edit-title">
               {t("editAsset.titleLabel")}
             </Label>
@@ -508,7 +508,7 @@ function EditAssetDialog({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="asset-edit-class">
               {t("editAsset.classLabel")}
             </Label>
@@ -625,8 +625,8 @@ function EditClassDialog({
           </DialogTitle>
           <DialogDescription>{t("editClass.description")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-y-4">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="class-edit-code">{t("editClass.codeLabel")}</Label>
             <ClearableInput
               id="class-edit-code"
@@ -639,7 +639,7 @@ function EditClassDialog({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="class-edit-title">
               {t("editClass.titleLabel")}
             </Label>
@@ -653,7 +653,7 @@ function EditClassDialog({
               disabled={busy}
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-y-2">
             <Label htmlFor="class-edit-notes">
               {t("editClass.notesLabel")}
             </Label>
@@ -1588,7 +1588,7 @@ export function Assets() {
 
       {/* Assets panel */}
       {tab === "assets" && (
-        <div className="space-y-1">
+        <div className="flex flex-col gap-y-1">
           <p className="text-xs font-medium text-muted">
             {t("assets.heading")}
           </p>
@@ -1719,7 +1719,7 @@ export function Assets() {
 
       {/* Classes panel */}
       {tab === "classes" && (
-        <div className="space-y-1">
+        <div className="flex flex-col gap-y-1">
           <p className="text-xs font-medium text-muted">
             {t("classes.heading")}
           </p>

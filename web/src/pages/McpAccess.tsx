@@ -86,7 +86,7 @@ function ProtectiveEnableDialog({
             {t("dialog.title")}
           </AlertDialogTitle>
           <AlertDialogDescription asChild>
-            <div className="space-y-2 text-xs text-muted-lt">
+            <div className="flex flex-col gap-y-2 text-xs text-muted-lt">
               <p>
                 {t("dialog.body1Pre")}{" "}
                 <span className="nums font-medium text-text">
@@ -177,7 +177,7 @@ function CommandsTable({
             </TableCell>
 
             <TableCell>
-              <div className="space-y-0.5">
+              <div className="flex flex-col gap-y-0.5">
                 <p
                   className={
                     cmd.protective
