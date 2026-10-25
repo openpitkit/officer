@@ -151,8 +151,7 @@ func sqliteDSN(path string) string {
 // ForRealm returns the data-access handle bound to realm. The single-realm
 // connector accepts only its bound realm id; any other id, the empty one
 // included, is rejected with an error wrapping domain.ErrInvalid. The bound
-// realm's identity row is ensured so backup labelling and future placement have
-// it.
+// realm's identity row is ensured so backup labelling has it.
 func (s *sqliteStore) ForRealm(
 	ctx context.Context, realm domain.RealmID,
 ) (fwstore.RealmStore, error) {

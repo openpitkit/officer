@@ -18,8 +18,7 @@
 // Package node defines the seam between the Pit Officer control plane and an
 // execution target. A node bundles one engine and its backing store and is
 // bound to exactly one realm at construction; the control plane serves a realm
-// through its one node. Scaling out means more realms, each with its own node,
-// and a remote node is just another Node implementation.
+// through its one node.
 //
 // Identity at this seam follows the store: accounts and groups are addressed by
 // their public code, machine records (orders, order events) by their opaque

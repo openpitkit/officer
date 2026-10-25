@@ -40,7 +40,7 @@ func (id RealmID) String() string { return string(id) }
 const DefaultRealm RealmID = "default"
 
 // Realm is the single-row identity of the dataset a store schema holds. It is
-// recorded once per schema for backup labelling and future placement; it is not
+// recorded once per schema for backup labelling; it is not
 // a foreign key on any business record. ExternalID is the opaque, non-guessable
 // handle; Code is the immutable operator-chosen name; Title is the mutable
 // display string.

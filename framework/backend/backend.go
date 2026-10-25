@@ -18,7 +18,7 @@
 // Package backend implements the Pit Officer control-plane service. The service
 // is the single entry point the MCP and HTTP surfaces call into. It depends
 // only on the node.Node seam of the realm it serves, never on a concrete engine
-// or store, so the same control-plane logic runs over a local or a remote node.
+// or store.
 package backend
 
 import (

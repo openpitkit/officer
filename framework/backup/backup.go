@@ -17,15 +17,14 @@
 
 // Package backup defines Pit Officer's realm-portable backup archive contract.
 //
-// An archive represents exactly one realm and can be restored into either an
-// isolated single-realm database or a shared multi-realm database, in both
-// directions, through the store's realm handle. Identity in the archive is
-// strictly portable: dictionaries are addressed by their immutable code (plus a
-// mutable title); machine records by their opaque external id; every cross-row
-// link is expressed by the referenced row's code or external id, never by a
-// surrogate key or an engine id. Engine ids are not serialized at all - they are
-// re-assigned, collision-free, when the archive is restored, while code and
-// external id values are preserved verbatim.
+// An archive represents exactly one realm and is restored through the store's
+// realm handle, independent of the database it came from. Identity in the
+// archive is strictly portable: dictionaries are addressed by their immutable
+// code (plus a mutable title); machine records by their opaque external id;
+// every cross-row link is expressed by the referenced row's code or external
+// id, never by a surrogate key or an engine id. Engine ids are not serialized
+// at all - they are re-assigned, collision-free, when the archive is restored,
+// while code and external id values are preserved verbatim.
 //
 // The archive format carries an explicit version. Restore rejects mismatches
 // instead of best-effort importing an older shape into the current schema.

@@ -19,15 +19,14 @@
 // RestoreBackup. An archive is one realm's portable form. Export reads the bound
 // realm and emits portable rows - dictionaries by code (plus title), machine
 // records by external id, every cross-row link by code or external id, never a
-// surrogate or engine id. Restore lands an archive into the bound realm (the same
-// path serves an isolated single-realm database and a shared multi-realm one,
-// because the connector binds the schema): it inserts dictionaries first so
-// foreign keys resolve, lets the connector ASSIGN fresh, collision-free surrogate
-// and engine ids in the target while PRESERVING the archive's code and external id
-// values, then inserts machine records whose cross-row links are resolved through
-// those preserved identities. The whole restore runs in one transaction so a
-// failure leaves the target realm untouched. Engine replacement is classified by
-// the node after commit, not by the store.
+// surrogate or engine id. Restore lands an archive into the bound realm: it
+// inserts dictionaries first so foreign keys resolve, lets the connector ASSIGN
+// fresh, collision-free surrogate and engine ids in the target while PRESERVING
+// the archive's code and external id values, then inserts machine records whose
+// cross-row links are resolved through those preserved identities. The whole
+// restore runs in one transaction so a failure leaves the target realm
+// untouched. Engine replacement is classified by the node after commit, not by
+// the store.
 
 package sqlite
 

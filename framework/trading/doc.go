@@ -64,27 +64,16 @@
 // Corrections, cancellations and unresolved account or asset mappings require
 // operator attention and are never guessed.
 //
-// Routing (design): an Officer account may have several destinations, including
-// several connections of one provider with distinct venue identities. A send
-// without a connection uses the account's only enabled destination in the send
-// method's mode; several produce a routing error listing the candidates, and
-// zero is also an error. A named connection must be granted to the Officer
-// account or to its account group. An account has at most one effective grant
-// per connection: its own grant, whole, before its group's, even when the own
-// grant binds no venue account. This own-before-group precedence is the grant
-// access rule; it is separate from the venue-account override model below.
+// Routing: an Officer account may have several destinations, including several
+// connections of one provider with distinct venue identities. A send without a
+// connection uses the account's only enabled destination in the send method's
+// mode; several produce a routing error listing the candidates, and zero is
+// also an error. A named connection must be granted to the Officer account or
+// to its account group. An account has at most one effective grant per
+// connection: its own grant, whole, before its group's, even when the own grant
+// binds no venue account.
 //
-// Venues with venue accounts need an explicit policy on the
-// connection: no default venue account, or a default with one of three override
-// modes: everyone may override; the Officer account may not override; the order
-// may override (which implies the Officer account may too). An "only one" flag
-// forbids overriding in both the order and the Officer account. The Officer
-// account's binding to a connection may set a bound venue account and whether
-// the order may override it. The exact permission matrix of these modes must
-// be settled before venue-account routing is built.
-//
-// An order without a venue account takes the most specific configured default:
-// the account binding before the connection default. With neither configured,
-// it sends without a venue account. Where override is forbidden, naming the
-// configured venue account is accepted; naming a different one is refused.
+// The venue account comes from the effective grant: an order sends with the
+// grant's bound venue account, or without one when the grant binds none. An
+// order may name only that venue account; naming a different one is refused.
 package trading

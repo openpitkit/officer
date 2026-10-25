@@ -1980,7 +1980,7 @@ type RealmStore interface {
 	// dictionaries carry their code (plus title), machine records their external
 	// id, and every cross-row link is expressed by code or external id. No
 	// surrogate key and no engine id is serialized; the realm round-trips between
-	// an isolated and a shared database with its public identity intact.
+	// databases with its public identity intact.
 	ExportBackup(ctx context.Context, scope backup.Scope) (backup.Archive, error)
 
 	// RestoreBackup imports a portable archive into the bound realm under opts.
