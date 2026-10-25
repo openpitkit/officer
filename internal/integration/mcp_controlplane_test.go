@@ -633,7 +633,6 @@ func TestApplyAdjustmentArithmeticOnControlPlane(t *testing.T) {
 // alone is not checked. Each result is the record the service lists, REST's
 // answer.
 func TestApplyAdjustmentBoundsOnControlPlane(t *testing.T) {
-	t.Parallel()
 	service, src := controlPlaneTools(t)
 	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk-1", Currency: "USD"}); err != nil {
 		t.Fatalf("create account desk-1: %v", err)
