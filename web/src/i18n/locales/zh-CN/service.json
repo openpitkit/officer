@@ -238,6 +238,7 @@
     "start": {
       "title": "使用密钥重新启动 Officer",
       "detailDocker": "此操作将替换容器。数据保留在卷 <volume/> 中。",
+      "customDocker": "如果您使用了其他容器名称、端口或镜像标签（例如 <edge/>），请在您原有的 <run/> 命令中添加以下两个选项。",
       "detailBinary": "按 <keys/> 停止正在运行的 <running/>，然后以之前的参数按如下方式启动。"
     }
   },

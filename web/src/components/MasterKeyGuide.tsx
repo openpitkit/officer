@@ -50,6 +50,13 @@ const POWERSHELL_CREATE = [
 const POWERSHELL_KEEP = 'Get-Content "$HOME\\.pit-officer\\master.key"';
 const POSIX_KEEP = "cat ~/.pit-officer/master.key";
 
+const DOCKER_KEY_OPTIONS: Record<Shell, string> = {
+  posix:
+    '-v "$HOME/.pit-officer/master.key:/run/secrets/pit-officer-master-key:ro" -e PIT_OFFICER_MASTER_KEY_FILE=/run/secrets/pit-officer-master-key',
+  powershell:
+    '-v "$HOME\\.pit-officer\\master.key:/run/secrets/pit-officer-master-key:ro" -e PIT_OFFICER_MASTER_KEY_FILE=/run/secrets/pit-officer-master-key',
+};
+
 const COMMANDS: Record<Deployment, Record<Shell, StepCommands>> = {
   docker: {
     posix: {
@@ -62,7 +69,7 @@ const COMMANDS: Record<Deployment, Record<Shell, StepCommands>> = {
       start: [
         "docker stop pit-officer",
         "docker rm pit-officer",
-        'docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data -v "$HOME/.pit-officer/master.key:/run/secrets/pit-officer-master-key:ro" -e PIT_OFFICER_MASTER_KEY_FILE=/run/secrets/pit-officer-master-key ghcr.io/openpitkit/officer',
+        `docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ${DOCKER_KEY_OPTIONS.posix} ghcr.io/openpitkit/officer`,
       ].join("\n"),
     },
     powershell: {
@@ -71,7 +78,7 @@ const COMMANDS: Record<Deployment, Record<Shell, StepCommands>> = {
       start: [
         "docker stop pit-officer",
         "docker rm pit-officer",
-        'docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data -v "$HOME\\.pit-officer\\master.key:/run/secrets/pit-officer-master-key:ro" -e PIT_OFFICER_MASTER_KEY_FILE=/run/secrets/pit-officer-master-key ghcr.io/openpitkit/officer',
+        `docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ${DOCKER_KEY_OPTIONS.powershell} ghcr.io/openpitkit/officer`,
       ].join("\n"),
     },
   },
@@ -140,6 +147,7 @@ function GuideStep({
   detail,
   warn = false,
   commands,
+  children,
 }: {
   number: number;
   title: string;
@@ -147,6 +155,7 @@ function GuideStep({
   /** Shows the detail as a warning. */
   warn?: boolean;
   commands: string;
+  children?: ReactNode;
 }) {
   return (
     <li className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 border-t border-border pt-3">
@@ -167,6 +176,7 @@ function GuideStep({
           {detail}
         </p>
         <CopyableSnippet text={commands} rows={commandRows(commands)} />
+        {children}
       </div>
     </li>
   );
@@ -238,7 +248,23 @@ export function MasterKeyGuide() {
             )
           }
           commands={commands.start}
-        />
+        >
+          {deployment === "docker" && (
+            <>
+              <p className="text-xs text-muted-lt">
+                <Trans
+                  t={t}
+                  i18nKey="masterKeyGuide.start.customDocker"
+                  components={{ run: code("docker run"), edge: code("edge") }}
+                />
+              </p>
+              <CopyableSnippet
+                text={DOCKER_KEY_OPTIONS[shell]}
+                rows={commandRows(DOCKER_KEY_OPTIONS[shell])}
+              />
+            </>
+          )}
+        </GuideStep>
       </ol>
     );
   }

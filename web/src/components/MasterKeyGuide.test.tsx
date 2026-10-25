@@ -71,7 +71,7 @@ function steps() {
 }
 
 function commandsOf(step: HTMLElement) {
-  return within(step).getByRole("textbox", { name: "Copyable snippet" });
+  return within(step).getAllByRole("textbox", { name: "Copyable snippet" })[0];
 }
 
 function choice(group: string, name: string) {
@@ -90,6 +90,49 @@ afterEach(() => {
 });
 
 describe("MasterKeyGuide", () => {
+  it.each([
+    [
+      "macOS",
+      '-v "$HOME/.pit-officer/master.key:/run/secrets/pit-officer-master-key:ro" -e PIT_OFFICER_MASTER_KEY_FILE=/run/secrets/pit-officer-master-key',
+    ],
+    [
+      "Linux",
+      '-v "$HOME/.pit-officer/master.key:/run/secrets/pit-officer-master-key:ro" -e PIT_OFFICER_MASTER_KEY_FILE=/run/secrets/pit-officer-master-key',
+    ],
+    [
+      "Windows PowerShell",
+      String.raw`-v "$HOME\.pit-officer\master.key:/run/secrets/pit-officer-master-key:ro" -e PIT_OFFICER_MASTER_KEY_FILE=/run/secrets/pit-officer-master-key`,
+    ],
+  ])(
+    "shows and copies only the two extra Docker options on %s",
+    async (system, options) => {
+      const user = userEvent.setup();
+      renderGuide(MAC_AGENT);
+      await user.click(choice("System", system));
+
+      const start = within(steps()[2]);
+      const snippets = start.getAllByRole("textbox", {
+        name: "Copyable snippet",
+      });
+      expect(snippets).toHaveLength(2);
+      expect(snippets[1]).toHaveValue(options);
+      expect(steps()[2]).toHaveTextContent(
+        "If you used a different container name, port or image tag (for example, edge), add these two options to your own docker run command instead.",
+      );
+      await user.click(start.getAllByRole("button", { name: "Copy" })[1]);
+      expect(await navigator.clipboard.readText()).toBe(options);
+
+      await user.click(choice("How Officer runs", "Without Docker"));
+      expect(
+        within(steps()[2]).getAllByRole("textbox", {
+          name: "Copyable snippet",
+        }),
+      ).toHaveLength(1);
+      expect(screen.queryByDisplayValue(options)).not.toBeInTheDocument();
+      expect(steps()[2]).not.toHaveTextContent("different container name");
+    },
+  );
+
   it.each([
     ["Docker", "macOS", POSIX_DOCKER_CREATE, POSIX_KEEP, POSIX_DOCKER_START],
     ["Docker", "Linux", POSIX_DOCKER_CREATE, POSIX_KEEP, POSIX_DOCKER_START],
@@ -140,7 +183,9 @@ describe("MasterKeyGuide", () => {
       expect(shown).toHaveLength(3);
       for (const [index, step] of shown.entries()) {
         expect(commandsOf(step)).toHaveValue(expected[index]);
-        await user.click(within(step).getByRole("button", { name: "Copy" }));
+        await user.click(
+          within(step).getAllByRole("button", { name: "Copy" })[0],
+        );
         expect(await navigator.clipboard.readText()).toBe(expected[index]);
       }
       // The key itself never rides in an environment variable.

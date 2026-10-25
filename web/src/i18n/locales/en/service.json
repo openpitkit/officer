@@ -238,6 +238,7 @@
     "start": {
       "title": "Start Officer again with the key",
       "detailDocker": "This replaces the container. Your data stays in the volume <volume/>.",
+      "customDocker": "If you used a different container name, port or image tag (for example, <edge/>), add these two options to your own <run/> command instead.",
       "detailBinary": "Stop the running <running/> with <keys/>, then start it like this, with the options you used before."
     }
   },
