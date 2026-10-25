@@ -28,6 +28,7 @@ import type {
   MarketDataStatus,
   MarketDataSymbolMatch,
 } from "@/api/types";
+import { fetchCredentialStorage } from "@/api/credentialStorage";
 import type { LoadState } from "@/api/usePolling";
 
 import { SidebarProvider } from "@/components/SidebarContext";
@@ -63,7 +64,8 @@ const updateSettingsMock = vi.fn();
 const deleteInstrumentMock = vi.fn();
 const deleteInstanceMock = vi.fn();
 const searchMock = vi.fn();
-const fetchCredentialStorageMock = vi.fn();
+vi.mock("@/api/credentialStorage");
+const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 const createInstanceMock = vi.fn();
 
 function storage(sealed: boolean): CredentialStorage {
@@ -105,7 +107,6 @@ function renderMarketDataPage() {
         deleteMarketDataInstance: deleteInstanceMock,
         deleteMarketDataInstrument: deleteInstrumentMock,
         fetchMarketData: fetchMarketDataMock,
-        fetchCredentialStorage: fetchCredentialStorageMock,
         searchMarketDataSymbols: searchMock,
         updateMarketDataInstanceSettings: updateSettingsMock,
         upsertMarketDataInstrument: upsertMock,

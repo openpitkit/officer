@@ -17,16 +17,17 @@
 
 import { useCallback } from "react";
 
+import { fetchCredentialStorage } from "@/api/credentialStorage";
 import type { CredentialStorage } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
-import { useOfficerApi } from "@/framework";
+import { useApiClient } from "@/framework";
 
 /** Poll GET /credential-storage. */
 export function useCredentialStorage(): PollingResult<CredentialStorage> {
-  const api = useOfficerApi();
+  const client = useApiClient();
   const fetcher = useCallback(
-    (signal: AbortSignal) => api.fetchCredentialStorage(signal),
-    [api],
+    (signal: AbortSignal) => fetchCredentialStorage(client, signal),
+    [client],
   );
   return usePolling(fetcher);
 }

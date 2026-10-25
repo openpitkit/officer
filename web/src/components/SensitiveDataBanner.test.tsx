@@ -20,12 +20,14 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { fetchCredentialStorage } from "@/api/credentialStorage";
 import type { CredentialStorage } from "@/api/types";
 import { SensitiveDataBanner } from "@/components/SensitiveDataBanner";
 import i18n from "@/i18n";
 import { renderWithApi } from "@/test/apiClient";
 
-const fetchCredentialStorage = vi.fn<() => Promise<CredentialStorage>>();
+vi.mock("@/api/credentialStorage");
+const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 const title = "Sensitive data is stored unencrypted";
 const unsealed: CredentialStorage = {
   credentialsSealed: false,
@@ -42,7 +44,6 @@ function renderBanner() {
         <SensitiveDataBanner />
       </MemoryRouter>
     </I18nextProvider>,
-    { api: { fetchCredentialStorage } },
   );
 }
 
@@ -54,20 +55,20 @@ beforeEach(async () => {
 describe("SensitiveDataBanner", () => {
   it("keeps warning from the last loaded storage on background refresh failure", async () => {
     vi.useFakeTimers();
-    fetchCredentialStorage.mockResolvedValue(unsealed);
+    fetchCredentialStorageMock.mockResolvedValue(unsealed);
     const { unmount } = renderBanner();
     try {
       await act(async () => {});
-      expect(fetchCredentialStorage).toHaveBeenCalledTimes(1);
+      expect(fetchCredentialStorageMock).toHaveBeenCalledTimes(1);
       expect(screen.getByText(title)).toBeInTheDocument();
 
-      fetchCredentialStorage.mockRejectedValue(
+      fetchCredentialStorageMock.mockRejectedValue(
         new Error("credential storage unavailable"),
       );
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5000);
       });
-      expect(fetchCredentialStorage).toHaveBeenCalledTimes(2);
+      expect(fetchCredentialStorageMock).toHaveBeenCalledTimes(2);
       expect(screen.getByText(title)).toBeInTheDocument();
     } finally {
       unmount();
@@ -83,7 +84,7 @@ describe("SensitiveDataBanner", () => {
       { plaintextTradingKeys: true, plaintextMarketDataKeys: true },
     ],
   ])("warns about plain-text %s", async (_, flags) => {
-    fetchCredentialStorage.mockResolvedValue({
+    fetchCredentialStorageMock.mockResolvedValue({
       credentialsSealed: false,
       plaintextTradingKeys: false,
       plaintextMarketDataKeys: false,
@@ -129,29 +130,29 @@ describe("SensitiveDataBanner", () => {
       },
     ],
   ])("hides when %s", async (_, data) => {
-    fetchCredentialStorage.mockResolvedValue(data);
+    fetchCredentialStorageMock.mockResolvedValue(data);
     await act(async () => {
       renderBanner();
     });
-    expect(fetchCredentialStorage).toHaveBeenCalledTimes(1);
+    expect(fetchCredentialStorageMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(title)).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("hides while loading", () => {
-    fetchCredentialStorage.mockReturnValue(new Promise(() => {}));
+    fetchCredentialStorageMock.mockReturnValue(new Promise(() => {}));
     const { container } = renderBanner();
     expect(container).toBeEmptyDOMElement();
   });
 
   it("hides when loading fails", async () => {
-    fetchCredentialStorage.mockRejectedValue(
+    fetchCredentialStorageMock.mockRejectedValue(
       new Error("credential storage unavailable"),
     );
     await act(async () => {
       renderBanner();
     });
-    expect(fetchCredentialStorage).toHaveBeenCalledTimes(1);
+    expect(fetchCredentialStorageMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(title)).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });

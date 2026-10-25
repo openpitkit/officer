@@ -806,13 +806,17 @@ export interface TradingSnapshot {
 
 /** How stored credentials sit at rest, decided by the core for the whole
  *  installation. Both plaintext flags are false while credentials are sealed. */
-export interface CredentialStorage {
+export interface FrameworkCredentialStorage {
   /** Credentials written now are sealed under the master key. */
   credentialsSealed: boolean;
   /** Not sealed, and at least one trading connection holds a key. */
   plaintextTradingKeys: boolean;
   /** Not sealed, and at least one market-data source holds a key. */
   plaintextMarketDataKeys: boolean;
+}
+
+/** Officer's credential storage, including its seal report. */
+export interface CredentialStorage extends FrameworkCredentialStorage {
   /**
    * When sealing re-encrypted the stored values, an RFC 3339 timestamp; null
    * when it never did.

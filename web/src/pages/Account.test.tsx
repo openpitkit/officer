@@ -21,6 +21,7 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { fetchCredentialStorage } from "@/api/credentialStorage";
 import type { Account as AccountRecord } from "@/api/types";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { ApiError } from "@/framework";
@@ -35,6 +36,8 @@ const fetchAccountsMock = vi.fn();
 const setAccountCurrencyMock = vi.fn();
 const blockAccountMock = vi.fn();
 const unblockAccountMock = vi.fn();
+vi.mock("@/api/credentialStorage");
+const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 
 const NOT_OWN_BLOCK =
   "The block does not come from the account itself. It can be lifted in the several-accounts mode.";
@@ -96,11 +99,6 @@ function renderAccount() {
           freshnessSeconds: 10,
           restartRequired: false,
         }),
-        fetchCredentialStorage: vi.fn().mockResolvedValue({
-          credentialsSealed: true,
-          plaintextTradingKeys: false,
-          plaintextMarketDataKeys: false,
-        }),
       },
     },
   );
@@ -108,6 +106,13 @@ function renderAccount() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  fetchCredentialStorageMock.mockResolvedValue({
+    credentialsSealed: true,
+    plaintextTradingKeys: false,
+    plaintextMarketDataKeys: false,
+    sealedAt: null,
+    resealedSecrets: 0,
+  });
   await i18n.changeLanguage("en");
   setAccountScope({ accounts: false, account: "main" });
 });

@@ -35,6 +35,7 @@ import { SidebarProvider } from "@/components/SidebarContext";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import type { AccountModeState } from "@/api/accountMode";
+import { fetchCredentialStorage } from "@/api/credentialStorage";
 import type {
   CredentialStorage,
   ServiceInfo,
@@ -69,7 +70,8 @@ const exportBackupMock = vi.fn();
 const resetDatabaseMock = vi.fn();
 const restoreBackupMock = vi.fn();
 const fetchTradingMock = vi.fn<() => Promise<TradingSnapshot>>();
-const fetchCredentialStorageMock = vi.fn<() => Promise<CredentialStorage>>();
+vi.mock("@/api/credentialStorage");
+const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 const serviceInfo: ServiceInfo = {
   name: "Pit Officer",
   engineVersion: "0.9.0",
@@ -137,7 +139,6 @@ function renderBackupCard() {
         exportBackup: exportBackupMock,
         restoreBackup: restoreBackupMock,
         fetchTrading: fetchTradingMock,
-        fetchCredentialStorage: fetchCredentialStorageMock,
       },
     },
   );
@@ -264,7 +265,6 @@ describe("ServiceCard", () => {
             .fn()
             .mockResolvedValue({ lines: ["Service log"] }),
           fetchTrading: fetchTradingMock,
-          fetchCredentialStorage: fetchCredentialStorageMock,
         },
         fetch: answeringAccountMode({
           ...waitingMulti,
@@ -330,7 +330,6 @@ describe("Service", () => {
         api: {
           fetchServiceInfo: vi.fn().mockResolvedValue(serviceInfo),
           fetchTrading: fetchTradingMock,
-          fetchCredentialStorage: fetchCredentialStorageMock,
           fetchSigningKeys: vi
             .fn()
             .mockResolvedValue({ keys: [], eSignEnabled: false }),

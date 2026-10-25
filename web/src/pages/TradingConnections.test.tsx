@@ -27,6 +27,7 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { fetchCredentialStorage } from "@/api/credentialStorage";
 import type {
   Account,
   CredentialStorage,
@@ -124,7 +125,6 @@ const provider: TradingProvider = {
 };
 const api = {
   fetchTrading: vi.fn(),
-  fetchCredentialStorage: vi.fn(),
   fetchAccounts: vi.fn(),
   fetchGroups: vi.fn(),
   fetchAccountState: vi.fn(),
@@ -145,6 +145,8 @@ const api = {
   createAccount: vi.fn(),
   createAsset: vi.fn(),
 };
+vi.mock("@/api/credentialStorage");
+const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 let snapshot: TradingSnapshot;
 let credentialStorage: CredentialStorage;
 let accounts: string[];
@@ -249,7 +251,7 @@ beforeEach(async () => {
   credentialStorage = storage(true);
   accounts = ["alpha", "beta", "fees"];
   api.fetchTrading.mockImplementation(async () => snapshot);
-  api.fetchCredentialStorage.mockImplementation(async () => credentialStorage);
+  fetchCredentialStorageMock.mockImplementation(async () => credentialStorage);
   api.fetchMarketData.mockResolvedValue({
     providers: [],
     instances: [],
@@ -3965,7 +3967,7 @@ describe("Add trading connection dialog", () => {
 
   it("shows a failed credential storage load and keeps key entry enabled", async () => {
     const user = userEvent.setup();
-    api.fetchCredentialStorage.mockRejectedValue(
+    fetchCredentialStorageMock.mockRejectedValue(
       new ApiError("Credential storage unavailable", "internal"),
     );
     renderTrading();

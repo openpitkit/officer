@@ -16,7 +16,6 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { ApiError, type ApiClient } from "./createApiClient";
-import { isRfc3339Time } from "./rfc3339";
 import type {
   Account,
   AccountBlockSource,
@@ -48,7 +47,7 @@ import type {
   CheckResult,
   CheckWouldBlock,
   Commission,
-  CredentialStorage,
+  FrameworkCredentialStorage,
   EngineHealth,
   ExecutionBlock,
   ExecutionOutcome,
@@ -1849,14 +1848,17 @@ function normalizeServiceInfo(v: unknown): ServiceInfo {
   return info;
 }
 
-function normalizeCredentialStorage(v: unknown): CredentialStorage {
+/** Decode the framework's credential storage flags. */
+export function normalizeCredentialStorage(
+  v: unknown,
+): FrameworkCredentialStorage {
   if (!isObject(v)) {
     throw new ApiError(
       "Credential storage is missing from the API response",
       "internal",
     );
   }
-  const invalid = (field: keyof CredentialStorage) =>
+  const invalid = (field: keyof FrameworkCredentialStorage) =>
     new ApiError(
       `Invalid or missing credential storage ${field} in the API response`,
       "internal",
@@ -1873,23 +1875,10 @@ function normalizeCredentialStorage(v: unknown): CredentialStorage {
     }
     return value;
   };
-  const { sealedAt, resealedSecrets } = v;
-  if (sealedAt !== null && !isRfc3339Time(sealedAt)) {
-    throw invalid("sealedAt");
-  }
-  if (
-    typeof resealedSecrets !== "number" ||
-    !Number.isSafeInteger(resealedSecrets) ||
-    resealedSecrets < 0
-  ) {
-    throw invalid("resealedSecrets");
-  }
   return {
     credentialsSealed: flag("credentialsSealed"),
     plaintextTradingKeys: flag("plaintextTradingKeys"),
     plaintextMarketDataKeys: flag("plaintextMarketDataKeys"),
-    sealedAt,
-    resealedSecrets,
   };
 }
 
@@ -2429,7 +2418,7 @@ async function fetchServiceInfo(
 async function fetchCredentialStorage(
   client: ApiClient,
   signal?: AbortSignal,
-): Promise<CredentialStorage> {
+): Promise<FrameworkCredentialStorage> {
   return normalizeCredentialStorage(
     await client.request(`${client.baseUrl}/credential-storage`, { signal }),
   );

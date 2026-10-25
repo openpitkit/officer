@@ -20,7 +20,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeSigningKeysStatus } from "@/api/client";
 import type {
   BackupArchive,
-  CredentialStorage,
+  FrameworkCredentialStorage,
   TradingAccessSubject,
   TradingSnapshot,
   VenueOrder,
@@ -1183,19 +1183,15 @@ describe("trading client", () => {
 });
 
 describe("credential storage client", () => {
-  const storage: CredentialStorage = {
+  const storage: FrameworkCredentialStorage = {
     credentialsSealed: false,
     plaintextTradingKeys: true,
     plaintextMarketDataKeys: false,
-    sealedAt: null,
-    resealedSecrets: 0,
   };
 
-  it("reads the installation's credential storage", async () => {
+  it("accepts the three framework fields without a seal report", async () => {
     const signal = new AbortController().signal;
-    vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ ...storage, extra: "ignored" }),
-    );
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(storage));
 
     expect(await api().fetchCredentialStorage(signal)).toEqual(storage);
     expect(fetch).toHaveBeenCalledWith(
@@ -1242,70 +1238,13 @@ describe("credential storage client", () => {
     },
   );
 
-  it.each([
-    ["2026-10-15T14:05:00Z", 3],
-    ["2026-10-15T14:05:00.123456789+03:00", 0],
-  ])(
-    "reads a sealing at %s that re-encrypted %i values",
-    async (sealedAt, resealedSecrets) => {
-      const sealed: CredentialStorage = {
-        credentialsSealed: true,
-        plaintextTradingKeys: false,
-        plaintextMarketDataKeys: false,
-        sealedAt,
-        resealedSecrets,
-      };
-      vi.mocked(fetch).mockResolvedValue(jsonResponse(sealed));
+  it("returns only framework fields when the server adds a seal report", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ ...storage, sealedAt: "invalid", resealedSecrets: -1 }),
+    );
 
-      expect(await api().fetchCredentialStorage()).toEqual(sealed);
-    },
-  );
-
-  it.each([
-    undefined,
-    "",
-    "2026-10-15",
-    "2026-10-15 14:05:00Z",
-    "2026-10-15T14:05:00",
-    "2026-02-30T14:05:00Z",
-    "2026-10-15T24:00:00Z",
-    1760537100,
-    false,
-  ])(
-    "rejects a sealedAt %s that is neither null nor an RFC 3339 time",
-    async (sealedAt) => {
-      vi.mocked(fetch).mockResolvedValue(
-        jsonResponse({ ...storage, sealedAt }),
-      );
-
-      const result = api().fetchCredentialStorage();
-
-      await expect(result).rejects.toBeInstanceOf(ApiError);
-      await expect(result).rejects.toMatchObject({
-        code: "internal",
-        message:
-          "Invalid or missing credential storage sealedAt in the API response",
-      });
-    },
-  );
-
-  it.each([undefined, null, -1, 1.5, "3", true])(
-    "rejects a resealedSecrets %s that is not a non-negative integer",
-    async (resealedSecrets) => {
-      vi.mocked(fetch).mockResolvedValue(
-        jsonResponse({ ...storage, resealedSecrets }),
-      );
-
-      const result = api().fetchCredentialStorage();
-
-      await expect(result).rejects.toBeInstanceOf(ApiError);
-      await expect(result).rejects.toMatchObject({
-        code: "internal",
-        message:
-          "Invalid or missing credential storage resealedSecrets in the API response",
-      });
-    },
-  );
+    expect(await api().fetchCredentialStorage()).toEqual(storage);
+  });
 });
 
 beforeEach(() => {

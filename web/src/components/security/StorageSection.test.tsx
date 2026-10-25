@@ -111,7 +111,10 @@ function renderStorage({
   if (access !== undefined) {
     setPanelSession(access);
   }
-  const fetchMock = serving(routes);
+  const fetchMock = serving({
+    [`GET ${API}/credential-storage`]: () => jsonResponse(storage),
+    ...routes,
+  });
   renderWithApi(
     <MemoryRouter>
       <AccessTokensProvider>
@@ -121,7 +124,6 @@ function renderStorage({
     </MemoryRouter>,
     {
       api: {
-        fetchCredentialStorage: vi.fn().mockResolvedValue(storage),
         fetchSigningKeys: vi.fn().mockResolvedValue(signing),
       },
       fetch: fetchMock as unknown as typeof fetch,
@@ -250,11 +252,17 @@ describe("StorageSection", () => {
       </MemoryRouter>,
       {
         api: {
-          fetchCredentialStorage: vi
-            .fn()
-            .mockRejectedValue(new Error("credential storage unavailable")),
           fetchSigningKeys: vi.fn().mockResolvedValue(signingOn),
         },
+        fetch: serving({
+          [`GET ${API}/credential-storage`]: () =>
+            errorResponse(
+              500,
+              "internal",
+              {},
+              "credential storage unavailable",
+            ),
+        }) as unknown as typeof fetch,
       },
     );
 
