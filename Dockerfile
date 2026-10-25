@@ -23,7 +23,7 @@ ARG GO_VERSION
 
 # Stage 1: build the dashboard SPA. Its output is platform-independent, so a
 # multi-platform build runs it once, natively, instead of under emulation.
-FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 
 WORKDIR /app/web
 
