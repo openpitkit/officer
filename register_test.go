@@ -724,7 +724,7 @@ func TestRegisterSingleAccountModeMCPSchemas(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
-	session, err := client.Connect(ctx, sdkmcp.NewStreamableClientTransport(server.URL+"/mcp", nil))
+	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {
 		t.Fatalf("connect MCP: %v", err)
 	}

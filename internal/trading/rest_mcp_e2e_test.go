@@ -395,7 +395,7 @@ func (f *tradingE2E) callMCP(name string, input any) (*sdkmcp.CallToolResult, er
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Run(ctx, serverTransport) }()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
-	session, err := client.Connect(ctx, clientTransport)
+	session, err := client.Connect(ctx, clientTransport, nil)
 	tradingE2EMust(f.t, err)
 	result, callErr := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: input})
 	_ = session.Close()

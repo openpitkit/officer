@@ -21,11 +21,30 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+func schemaFieldName(field reflect.StructField) (string, bool) {
+	if !field.IsExported() {
+		return "", false
+	}
+	tag, ok := field.Tag.Lookup("json")
+	if !ok {
+		return field.Name, true
+	}
+	name, _, options := strings.Cut(tag, ",")
+	if name == "-" && !options {
+		return "", false
+	}
+	if name == "" {
+		return field.Name, true
+	}
+	return name, true
+}
 
 // jsonFields maps the JSON name of each field of the struct type t that
 // encoding/json and the schema inference carry, as schemaFieldName names it,

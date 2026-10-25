@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/jsonschema"
+	"github.com/google/jsonschema-go/jsonschema"
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 )
@@ -229,7 +229,7 @@ func TestApplyAdjustmentInputDescriptions(t *testing.T) {
 			walk(path+name+".", property)
 		}
 	}
-	walk("", tool.InputSchema)
+	walk("", decodeSchema(t, tool.InputSchema))
 	if len(undescribed) != 0 {
 		t.Fatalf("input members without a description: %v", undescribed)
 	}

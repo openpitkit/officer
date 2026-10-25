@@ -20,12 +20,17 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sync"
 
+	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/segmentio/encoding/json"
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -549,22 +554,49 @@ type ToolBody[In, Out any] func(
 	In,
 ) (string, Out, error)
 
-// Guard wraps a typed MCP handler with caller stamping, authorization, and the
-// operator command-enable gate.
+// AddTool registers a guarded handler with schemas inferred from In and Out
+// when the tool does not already provide them. Arguments are decoded by Guard;
+// domain validation stays in the tool body so its refusals match the REST API.
+func AddTool[In, Out any](server *sdkmcp.Server, tool *sdkmcp.Tool, handler sdkmcp.ToolHandler) {
+	if tool.InputSchema == nil {
+		schema, err := jsonschema.For[In](nil)
+		if err != nil {
+			panic(fmt.Errorf("adding tool %q input schema: %w", tool.Name, err))
+		}
+		tool.InputSchema = schema
+	}
+	if tool.OutputSchema == nil && reflect.TypeFor[Out]() != reflect.TypeFor[any]() {
+		schema, err := jsonschema.For[Out](nil)
+		if err != nil {
+			panic(fmt.Errorf("adding tool %q output schema: %w", tool.Name, err))
+		}
+		tool.OutputSchema = schema
+	}
+	server.AddTool(tool, handler)
+}
+
+// Guard decodes a typed MCP input, rejecting undeclared fields, then stamps
+// the caller and enforces authorization and the operator command-enable gate.
+// Missing or null members retain JSON decoding semantics; the tool body owns
+// domain validation and produces the same refusal as the REST surface.
 func Guard[In, Out any](
 	d ToolDescriptor,
 	deps RegisterDeps,
 	inner ToolBody[In, Out],
-) func(
-	context.Context,
-	*sdkmcp.ServerSession,
-	*sdkmcp.CallToolParamsFor[In],
-) (*sdkmcp.CallToolResultFor[Out], error) {
-	return func(
-		ctx context.Context,
-		ss *sdkmcp.ServerSession,
-		p *sdkmcp.CallToolParamsFor[In],
-	) (*sdkmcp.CallToolResultFor[Out], error) {
+) sdkmcp.ToolHandler {
+	return func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		if req == nil || req.Params == nil {
+			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "missing tool parameters"}
+		}
+		var args In
+		if req.Params.Arguments != nil {
+			decoder := json.NewDecoder(bytes.NewReader(req.Params.Arguments))
+			decoder.DisallowUnknownFields()
+			decoder.DontMatchCaseInsensitiveStructFields()
+			if err := decoder.Decode(&args); err != nil {
+				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: fmt.Sprintf("unmarshaling: %v", err)}
+			}
+		}
 		ctx = auth.ContextWithCaller(ctx, deps.Caller)
 		if deps.Authorizer == nil {
 			return toolErr[Out]("permission denied"), nil
@@ -575,11 +607,7 @@ func Guard[In, Out any](
 		if ok, disabled := commandGate[Out](ctx, deps.Source, d); !ok {
 			return disabled, nil
 		}
-		var args In
-		if p != nil {
-			args = p.Arguments
-		}
-		text, out, err := inner(ctx, ss, args)
+		text, out, err := inner(ctx, req.Session, args)
 		if err != nil {
 			return toolErr[Out](err.Error()), nil
 		}
@@ -591,7 +619,7 @@ func commandGate[Out any](
 	ctx context.Context,
 	src Source,
 	d ToolDescriptor,
-) (bool, *sdkmcp.CallToolResultFor[Out]) {
+) (bool, *sdkmcp.CallToolResult) {
 	enabled, err := src.CommandEnabled(ctx, d.Name)
 	if err != nil {
 		if d.Mutating {
@@ -608,23 +636,26 @@ func commandGate[Out any](
 	return true, nil
 }
 
-func toolErr[Out any](msg string) *sdkmcp.CallToolResultFor[Out] {
-	return &sdkmcp.CallToolResultFor[Out]{
-		IsError: true,
+func toolErr[Out any](msg string) *sdkmcp.CallToolResult {
+	var out Out
+	return &sdkmcp.CallToolResult{
+		IsError:           true,
+		StructuredContent: out,
 		Content: []sdkmcp.Content{
 			&sdkmcp.TextContent{Text: msg},
 		},
 	}
 }
 
-func toolOK[Out any](text string, out Out) *sdkmcp.CallToolResultFor[Out] {
-	return &sdkmcp.CallToolResultFor[Out]{
+func toolOK[Out any](text string, out Out) *sdkmcp.CallToolResult {
+	return &sdkmcp.CallToolResult{
 		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
 		StructuredContent: out,
 	}
 }
 
-func toolDisabled[Out any](command string) *sdkmcp.CallToolResultFor[Out] {
+func toolDisabled[Out any](command string) *sdkmcp.CallToolResult {
+	var out Out
 	msg := fmt.Sprintf(
 		"Command %q is disabled in the Pit Officer panel by the operator. It is "+
 			"currently unavailable. Report this to your orchestrator: either adjust "+
@@ -632,8 +663,9 @@ func toolDisabled[Out any](command string) *sdkmcp.CallToolResultFor[Out] {
 			"panel.",
 		command,
 	)
-	return &sdkmcp.CallToolResultFor[Out]{
-		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: msg}},
+	return &sdkmcp.CallToolResult{
+		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: msg}},
+		StructuredContent: out,
 	}
 }
 
@@ -650,7 +682,7 @@ func RunStdio(
 	if err != nil {
 		return fmt.Errorf("mcp: build server: %w", err)
 	}
-	if err := server.Run(ctx, sdkmcp.NewStdioTransport()); err != nil {
+	if err := server.Run(ctx, &sdkmcp.StdioTransport{}); err != nil {
 		return fmt.Errorf("mcp: run stdio: %w", err)
 	}
 	return nil

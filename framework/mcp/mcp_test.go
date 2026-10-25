@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
@@ -99,7 +100,7 @@ func TestGuardAuthorizerAndPanelGates(t *testing.T) {
 			return "ran", "ok", nil
 		},
 	)
-	res, err := handler(ctx, nil, &sdkmcp.CallToolParamsFor[struct{}]{})
+	res, err := handler(ctx, &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{}})
 	if err != nil {
 		t.Fatalf("allow handler returned error: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestGuardAuthorizerAndPanelGates(t *testing.T) {
 			return "", "", nil
 		},
 	)
-	res, err = deny(ctx, nil, &sdkmcp.CallToolParamsFor[struct{}]{})
+	res, err = deny(ctx, &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{}})
 	if err != nil {
 		t.Fatalf("deny handler returned transport error: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestGuardAuthorizerAndPanelGates(t *testing.T) {
 			return "", "", nil
 		},
 	)
-	res, err = missing(ctx, nil, &sdkmcp.CallToolParamsFor[struct{}]{})
+	res, err = missing(ctx, &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{}})
 	if err != nil {
 		t.Fatalf("missing authorizer returned transport error: %v", err)
 	}
@@ -149,12 +150,46 @@ func TestGuardAuthorizerAndPanelGates(t *testing.T) {
 			return "", "", nil
 		},
 	)
-	res, err = disabled(ctx, nil, &sdkmcp.CallToolParamsFor[struct{}]{})
+	res, err = disabled(ctx, &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{}})
 	if err != nil {
 		t.Fatalf("disabled handler returned transport error: %v", err)
 	}
 	if res.IsError || !contentContains(res.Content, "disabled in the Pit Officer panel") {
 		t.Fatalf("disabled should return non-error panel notice: %+v", res)
+	}
+}
+
+func TestGuardRejectsCaseVariantArguments(t *testing.T) {
+	for _, args := range []string{
+		`{"Name":"alice"}`,
+		`{"config":{"Enabled":true}}`,
+	} {
+		t.Run(args, func(t *testing.T) {
+			ran := false
+			handler := Guard(
+				ToolDescriptor{Name: "read"},
+				RegisterDeps{Source: &guardSource{enabled: true}, Authorizer: allowAuthorizer{}},
+				func(context.Context, *sdkmcp.ServerSession, struct {
+					Name   string `json:"name"`
+					Config struct {
+						Enabled bool `json:"enabled"`
+					} `json:"config"`
+				}) (string, string, error) {
+					ran = true
+					return "", "", nil
+				},
+			)
+			_, err := handler(context.Background(), &sdkmcp.CallToolRequest{
+				Params: &sdkmcp.CallToolParamsRaw{Arguments: []byte(args)},
+			})
+			var wireErr *jsonrpc.Error
+			if !errors.As(err, &wireErr) || wireErr.Code != jsonrpc.CodeInvalidParams {
+				t.Fatalf("case-variant arguments error = %v, want invalid params", err)
+			}
+			if ran {
+				t.Fatal("case-variant argument reached the tool body")
+			}
+		})
 	}
 }
 
@@ -173,7 +208,7 @@ func TestGuardGatePolicy(t *testing.T) {
 			return "read", "ok", nil
 		},
 	)
-	res, err := read(ctx, nil, &sdkmcp.CallToolParamsFor[struct{}]{})
+	res, err := read(ctx, &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{}})
 	if err != nil {
 		t.Fatalf("read handler returned error: %v", err)
 	}
@@ -194,7 +229,7 @@ func TestGuardGatePolicy(t *testing.T) {
 			return "write", "ok", nil
 		},
 	)
-	res, err = mutating(ctx, nil, &sdkmcp.CallToolParamsFor[struct{}]{})
+	res, err = mutating(ctx, &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{}})
 	if err != nil {
 		t.Fatalf("mutating handler returned transport error: %v", err)
 	}
@@ -229,7 +264,7 @@ func TestBuildRunsToolAsItsCaller(t *testing.T) {
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Run(ctx, serverTransport) }()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
-	session, err := client.Connect(ctx, clientTransport)
+	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
 		cancel()
 		t.Fatalf("client connect: %v", err)
@@ -451,11 +486,11 @@ func callerRegistry() *ToolRegistry {
 	reg := NewToolRegistry()
 	d := ToolDescriptor{Name: "caller", DefaultEnabled: true}
 	d.Register = func(server *sdkmcp.Server, deps RegisterDeps) {
-		sdkmcp.AddTool(server, &sdkmcp.Tool{Name: d.Name}, Guard(
+		AddTool[struct{}, struct{}](server, &sdkmcp.Tool{Name: d.Name}, Guard(
 			d,
 			deps,
-			func(context.Context, *sdkmcp.ServerSession, struct{}) (string, string, error) {
-				return "ok", "ok", nil
+			func(context.Context, *sdkmcp.ServerSession, struct{}) (string, struct{}, error) {
+				return "ok", struct{}{}, nil
 			},
 		))
 	}
@@ -532,9 +567,11 @@ func connectHTTPClient(
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
 	session, err := client.Connect(
 		context.Background(),
-		sdkmcp.NewStreamableClientTransport(url, &sdkmcp.StreamableClientTransportOptions{
+		&sdkmcp.StreamableClientTransport{
+			Endpoint:   url,
 			HTTPClient: &http.Client{Transport: transport},
-		}),
+		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)

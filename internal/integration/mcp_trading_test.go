@@ -502,7 +502,7 @@ func TestUpdateTradingConnectionUnknownFields(t *testing.T) {
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.Run(ctx, serverTransport) }()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
-	session, err := client.Connect(ctx, clientTransport)
+	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

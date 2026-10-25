@@ -49,7 +49,7 @@ func registerCustomHostTools(reg *mcp.ToolRegistry, src mcp.Source) {
 func registerHostTool(reg *mcp.ToolRegistry, _ mcp.Source) {
 	descriptor := hostToolDescriptor()
 	descriptor.Register = func(server *sdkmcp.Server, deps mcp.RegisterDeps) {
-		sdkmcp.AddTool(server, &sdkmcp.Tool{
+		mcp.AddTool[hostToolInput, hostToolOutput](server, &sdkmcp.Tool{
 			Name:        descriptor.Name,
 			Description: descriptor.Description,
 		}, mcp.Guard(descriptor, deps, hostToolHandler))
@@ -78,7 +78,7 @@ func replacedToolDescriptor() mcp.ToolDescriptor {
 		DefaultEnabled:   true,
 	}
 	descriptor.Register = func(server *sdkmcp.Server, deps mcp.RegisterDeps) {
-		sdkmcp.AddTool(server, &sdkmcp.Tool{
+		mcp.AddTool[struct{}, map[string]string](server, &sdkmcp.Tool{
 			Name:        descriptor.Name,
 			Description: descriptor.Description,
 		}, mcp.Guard(descriptor, deps, replacedToolHandler))

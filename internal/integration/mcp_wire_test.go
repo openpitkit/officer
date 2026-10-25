@@ -311,7 +311,7 @@ func officerSession(
 		serverErr <- server.Run(serverCtx, serverTransport)
 	}()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
-	session, err = client.Connect(ctx, clientTransport)
+	session, err = client.Connect(ctx, clientTransport, nil)
 	if err != nil {
 		cancel()
 		t.Fatalf("client connect: %v", err)
