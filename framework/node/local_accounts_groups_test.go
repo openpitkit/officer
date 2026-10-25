@@ -262,7 +262,7 @@ func TestLocalNode_ListGroupRowsAccountRestriction(t *testing.T) {
 // TestLocalNode_SetAccountGroupAutoCreatesUnknownGroup proves the auto-create
 // contract against a strict resolver: moving an account into a group with no
 // account_groups record succeeds because the missing record and its stable
-// resolver identity are published before the membership chain is assembled.
+// resolver identity are published before the membership move runs.
 func TestLocalNode_SetAccountGroupAutoCreatesUnknownGroup(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -518,8 +518,8 @@ func TestFatalReconciliationReturnsIdempotentTerminalError(t *testing.T) {
 // TestLocalNode_SetAccountGroupAuditFailureFatals proves the account set-group
 // path joins the post-engine fail-stop with the same code-not-surrogate
 // diagnostic: the engine group move and the store link write committed inside
-// the lane, so a failing audit write routes to the fatal hook naming the account
-// code.
+// the exclusive section, so a failing audit write routes to the fatal hook
+// naming the account code.
 func TestLocalNode_SetAccountGroupAuditFailureFatals(t *testing.T) {
 	t.Parallel()
 	auditErr := errors.New("set group audit failed")
@@ -786,9 +786,10 @@ func TestLocalNode_SetAccountBlockedPostEngineStoreFailureFatals(t *testing.T) {
 	}
 }
 
-// TestLocalNode_SetAccountGroupStoreWriteInsideAccountChain proves membership
-// chains route through their first account rather than the synthetic group lane.
-func TestLocalNode_SetAccountGroupStoreWriteInsideAccountChain(t *testing.T) {
+// TestLocalNode_SetAccountGroupStoreWriteInsideExclusiveSection proves the
+// membership store write runs inside the exclusive section, after the engine
+// move: a task on the account's lane waits until the write completes.
+func TestLocalNode_SetAccountGroupStoreWriteInsideExclusiveSection(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, probe := newLaneProbeNode(t, eng)

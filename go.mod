@@ -11,7 +11,7 @@ require (
 	github.com/scmhub/ibapi v0.10.44
 	github.com/segmentio/encoding v0.5.4
 	github.com/shopspring/decimal v1.4.0
-	go.openpit.dev/openpit v0.9.0
+	go.openpit.dev/openpit v0.10.0
 	golang.org/x/crypto v0.55.0
 	modernc.org/sqlite v1.53.0
 )

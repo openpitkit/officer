@@ -86,7 +86,7 @@ func (n *localNode) CreateGroup(
 				reason:  created.BlockReason,
 			}
 		}
-		engineApplied, chainErr := n.runGroupRuntimeChain(
+		engineApplied, chainErr := n.applyGroupRuntime(
 			ctx,
 			eng,
 			created,

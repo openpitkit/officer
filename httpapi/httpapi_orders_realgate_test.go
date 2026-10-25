@@ -554,7 +554,9 @@ func (e *realGateEngine) ExecutionReportModel(
 	}
 	fill.SetIsFinal(domain.OrderStatusTerminal(in.OrderStatus))
 	if len(in.Lock) > 0 {
-		fill.SetLock(in.Lock)
+		if err := fill.SetLock(in.Lock); err != nil {
+			return model.ExecutionReport{}, err
+		}
 	}
 	engineLeaves := ""
 	if reportFill, ok := report.Fill().Get(); ok {

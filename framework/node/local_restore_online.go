@@ -419,7 +419,7 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if !existed && next.Currency == "" {
 			continue
 		}
-		if _, err := n.runGroupRuntimeChain(
+		if _, err := n.applyGroupRuntime(
 			ctx,
 			eng,
 			next,
@@ -613,7 +613,7 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if code == "" {
 			continue
 		}
-		if _, err := n.runGroupRuntimeChain(
+		if _, err := n.applyGroupRuntime(
 			ctx,
 			eng,
 			next,
@@ -640,7 +640,7 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		if code != "" && group.Blocked {
 			unblock = &groupRuntimeBlock{}
 		}
-		if _, err := n.runGroupRuntimeChain(
+		if _, err := n.applyGroupRuntime(
 			ctx,
 			eng,
 			group,

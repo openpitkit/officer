@@ -342,6 +342,9 @@ func buildOpenPitEngine(
 		return nil, service, err
 	}
 
+	// Group membership and group currency are exclusive operations. They are
+	// hydrated on the bare handle before the dispatcher exists, so no other call
+	// can be in flight beside them.
 	if err := hydrateGroups(eng, snap.Accounts, res); err != nil {
 		return releaseOnErr(err)
 	}
@@ -562,7 +565,7 @@ func (e *openPitEngine) ConfigurePolicy(
 		}
 		return fwengine.PolicyConfigurationResult{}, nil
 	case domain.PolicySpotFundsPnlBoundsKillSwitch:
-		return e.configureSpotFundsPnlBoundsLocked(limits.SpotFundsPnlBoundsLimits)
+		return e.configureSpotFundsPnlBoundsLocked(ctx, limits.SpotFundsPnlBoundsLimits)
 	default:
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf("engine: configure unknown policy %q", policy)
 	}
@@ -610,11 +613,30 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize)
 // set. Empty axes are passed as empty non-nil slices so they are cleared rather
 // than left unchanged. Runtime bounds updates never touch the live account P&L
 // accumulator; account P&L is set through the dedicated account operation.
-// Callers must hold e.mu.
+// The retune is an exclusive operation, so it runs in one exclusive section
+// through the dispatcher's driver. Callers must hold e.mu.
 func (e *openPitEngine) configureSpotFundsPnlBoundsLocked(
+	ctx context.Context,
 	limits []domain.LimitSpotFundsPnlBounds,
 ) (fwengine.PolicyConfigurationResult, error) {
-	return configureSpotFundsPnlBounds(e.configurator, e.res, limits)
+	var result fwengine.PolicyConfigurationResult
+	// Past ConfigurePolicy's cancellation check the retune proceeds, so a
+	// request cancelled while the lanes stop does not make the caller revert
+	// and rebuild an engine the retune never touched.
+	err := fwengine.RunExclusive(
+		context.WithoutCancel(ctx), e.async,
+		func(driver asyncengine.Driver) error {
+			var err error
+			result, err = configureSpotFundsPnlBounds(
+				driver.Configure(), e.res, limits,
+			)
+			return err
+		},
+	)
+	if err != nil {
+		return fwengine.PolicyConfigurationResult{}, err
+	}
+	return result, nil
 }
 
 func configureSpotFundsPnlBounds(

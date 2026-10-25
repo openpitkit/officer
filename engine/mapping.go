@@ -1753,7 +1753,11 @@ func executionReportFromAccount(
 	}
 	fill.SetIsFinal(isFinal)
 	if lockBytes != nil {
-		fill.SetLock(lockBytes)
+		if err := fill.SetLock(lockBytes); err != nil {
+			return model.ExecutionReport{}, fmt.Errorf(
+				"engine: execution report lock: %w: %w", err, domain.ErrInvalid,
+			)
+		}
 	}
 	return report, nil
 }

@@ -308,11 +308,6 @@ type accountBlockChainState struct {
 	reason   string
 }
 
-type accountGroupMembershipChainState struct {
-	administrativeChainState
-	previous domain.Account
-}
-
 // SetAccountBlocked blocks or unblocks an account through its SDK account lane.
 // First-time blocks and unblocks keep persistence and audit in one chain;
 // operator re-blocks use the lane's reason-replacement operation. missing
@@ -686,14 +681,15 @@ func (n *localNode) GetAccountState(
 
 // --- account group & notes --------------------------------------------------
 
-// SetAccountGroup sets or clears an account's group through SDK membership
-// chains, unregistering the old group before registering the new. The final
-// membership hook persists the store link and audit rows.
+// SetAccountGroup sets or clears an account's group. Group membership is an
+// exclusive operation, so the old group is unregistered and the new one
+// registered in one exclusive section: no engine call observes the account in
+// the default group between them. The store link and audit rows are persisted
+// in the same section, after the engine change.
 //
 // A brand-new target group is persisted and published into the live resolver
-// under the identity gate. Membership chains are sourced from the concrete
-// group but route through their first account. missing decides whether an
-// account Officer does not know yet is registered before the move or rejected.
+// under the identity gate. missing decides whether an account Officer does not
+// know yet is registered before the move or rejected.
 func (n *localNode) SetAccountGroup(
 	ctx context.Context, account domain.AccountID, groupCode string,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
@@ -736,7 +732,6 @@ func (n *localNode) SetAccountGroup(
 	if err := validateAccountAdministrativeSource(previous, routingAccount); err != nil {
 		return fmt.Errorf("read account for set group: %w", err)
 	}
-	accountIDs := []param.AccountID{routingAccount}
 
 	groupSources := make(map[string]param.AccountGroupID, 2)
 	for _, code := range accountGroupAuditCodes(previous.GroupCode, groupCode) {
@@ -753,285 +748,187 @@ func (n *localNode) SetAccountGroup(
 		}
 		groupSources[code] = groupSource
 	}
-
-	persist := func(state *accountGroupMembershipChainState) error {
-		state.engineApplied = true
-		mutationCtx := context.WithoutCancel(state.ctx)
-		state.failureOperation = "set account group"
-		if err := n.realm.SetAccountGroup(
-			mutationCtx, account, groupCode,
-		); err != nil {
-			state.err = fmt.Errorf("set account group: %w", err)
-			return state.err
-		}
-		state.persistenceCompleted = true
-		detail := setAccountGroupDetail(
-			account, state.previous.GroupCode, groupCode,
-		)
-		groupCodes := accountGroupAuditCodes(
-			state.previous.GroupCode, groupCode,
-		)
-		entries := make([]store.AuditEntry, 0, len(groupCodes))
-		for _, code := range groupCodes {
-			entries = append(entries, store.AuditEntry{
-				Action:       domain.AuditActionSetGroup,
-				Account:      account,
-				AccountTitle: state.previous.Title,
-				Group:        code,
-				Detail:       detail,
-			})
-		}
-		state.failureOperation = "audit set account group"
-		if err := n.auditBatch(mutationCtx, caller, entries); err != nil {
-			state.err = fmt.Errorf("audit set account group: %w", err)
-			return state.err
-		}
-		return nil
+	var from, to *param.AccountGroupID
+	if previous.GroupCode != "" {
+		source := groupSources[previous.GroupCode]
+		from = &source
 	}
-	runMembership := func(
-		sourceCode string,
-		register bool,
-		completeStore bool,
-	) (*accountGroupMembershipChainState, error) {
-		source := groupSources[sourceCode]
-		state := &accountGroupMembershipChainState{
-			administrativeChainState: administrativeChainState{ctx: ctx},
-		}
-		begin := func(context.Context) (*accountGroupMembershipChainState, error) {
-			if ctxErr := state.ctx.Err(); ctxErr != nil {
-				state.err = fmt.Errorf(
-					"engine: set account group cancelled: %w", ctxErr,
-				)
-				return nil, state.err
-			}
-			current, found, readErr := n.realm.GetAccount(
-				state.ctx, account,
+	if groupCode != "" {
+		source := groupSources[groupCode]
+		to = &source
+	}
+
+	engineEntered := false
+	restored := false
+	// persistFailure names the store step that failed after the engine moved
+	// the account; the fatal hook runs only once the section has ended.
+	persistFailure := ""
+	runErr := engine.RunExclusive(
+		ctx, eng.AsyncEngine(),
+		func(driver asyncengine.Driver) error {
+			current, err := n.validateAccountGroupMove(
+				ctx, account, previous.GroupCode, groupCode,
+				routingAccount, groupSources, caller,
 			)
-			if readErr != nil {
-				state.err = fmt.Errorf(
-					"read account for set group: %w", readErr,
-				)
-				return nil, state.err
+			if err != nil {
+				return err
 			}
-			if !found {
-				state.err = fmt.Errorf(
-					"account %q: %w", account, domain.ErrNotFound,
-				)
-				return nil, state.err
-			}
-			if current.GroupCode != previous.GroupCode {
-				state.err = fmt.Errorf(
-					"account %q group changed from %q to %q: %w",
-					account,
-					previous.GroupCode,
-					current.GroupCode,
-					domain.ErrInvalid,
-				)
-				return nil, state.err
-			}
-			if validateErr := validateAccountAdministrativeSource(
-				current, routingAccount,
-			); validateErr != nil {
-				state.err = fmt.Errorf(
-					"read account for set group: %w", validateErr,
-				)
-				return nil, state.err
-			}
-			group, found, readErr := n.realm.GetGroup(state.ctx, sourceCode)
-			if readErr != nil {
-				state.err = fmt.Errorf(
-					"read group for set account group: %w", readErr,
-				)
-				return nil, state.err
-			}
-			if !found {
-				state.err = fmt.Errorf(
-					"group %q: %w", sourceCode, domain.ErrNotFound,
-				)
-				return nil, state.err
-			}
-			if validateErr := validateGroupAdministrativeSource(
-				group, source,
-			); validateErr != nil {
-				state.err = fmt.Errorf(
-					"read group for set account group: %w", validateErr,
-				)
-				return nil, state.err
-			}
-			if current.Currency == "" {
-				nextGroupCurrency := ""
-				if groupCode != "" {
-					target, targetFound, targetErr := n.realm.GetGroup(
-						state.ctx, groupCode,
-					)
-					if targetErr != nil {
-						state.err = fmt.Errorf(
-							"read target group for currency: %w", targetErr,
-						)
-						return nil, state.err
-					}
-					if !targetFound {
-						state.err = fmt.Errorf(
-							"group %q: %w", groupCode, domain.ErrNotFound,
-						)
-						return nil, state.err
-					}
-					if validateErr := validateGroupAdministrativeSource(
-						target, groupSources[groupCode],
-					); validateErr != nil {
-						state.err = fmt.Errorf(
-							"read target group for currency: %w", validateErr,
-						)
-						return nil, state.err
-					}
-					nextGroupCurrency = target.Currency
-				}
-				nextEffective, _ := domain.ResolveCurrencyCascade(
-					"", nextGroupCurrency, current.DefaultCurrency,
-				)
-				if guardErr := n.guardEffectiveCurrencyChange(
-					state.ctx,
-					[]domain.AccountID{account},
-					current.EffectiveCurrency,
-					nextEffective,
-				); guardErr != nil {
-					if !errors.Is(guardErr, domain.ErrConflict) {
-						state.err = guardErr
-						return nil, state.err
-					}
-					state.err = n.auditCurrencyChangeRefusal(
-						state.ctx, caller, store.AuditEntry{
-							Action:  domain.AuditActionSetGroup,
-							Account: account, AccountTitle: current.Title,
-							Group: groupCode,
-							Detail: currencyDetail(
-								"set account group", account.String(),
-								current.EffectiveCurrency, nextEffective,
-							),
-						},
-						domain.NewCurrencyChangeBlockedError(
-							domain.ScopeAccount, account.String(), guardErr,
-						),
-					)
-					return nil, state.err
-				}
-			}
-			state.previous = current
-			state.failureOperation = "apply account group"
-			return state, nil
-		}
-		builder := asyncengine.Chain(source, begin)
-		if register {
-			builder.RegisterAccountGroup(
-				accountIDs,
-				asyncengine.RegisterAccountGroupHooks[*accountGroupMembershipChainState]{
-					OnRegistered: func(
-						_ context.Context,
-						state *accountGroupMembershipChainState,
-					) error {
-						state.engineApplied = true
-						if completeStore {
-							return persist(state)
-						}
-						return nil
-					},
-				},
+			engineEntered = true
+			restored, err = moveAccountGroup(
+				driver.Accounts(), []param.AccountID{routingAccount}, from, to,
 			)
-		} else {
-			builder.UnregisterAccountGroup(
-				accountIDs,
-				asyncengine.UnregisterAccountGroupHooks[*accountGroupMembershipChainState]{
-					OnUnregistered: func(
-						_ context.Context,
-						state *accountGroupMembershipChainState,
-					) error {
-						state.engineApplied = true
-						if completeStore {
-							return persist(state)
-						}
-						return nil
-					},
-				},
-			)
-		}
-		runner := builder.Finally(func(
-			_ context.Context,
-			state *accountGroupMembershipChainState,
-			outcome asyncengine.ChainOutcome,
-		) error {
-			state.err = n.administrativeChainTerminalError(
-				"set account group",
-				"account",
-				account.String(),
-				&state.administrativeChainState,
-				outcome,
-			)
+			if err != nil {
+				return fmt.Errorf("set account group: %w", err)
+			}
+			// The store follows the engine inside the section, so no lane task
+			// runs between the two.
+			mutationCtx := context.WithoutCancel(ctx)
+			persistFailure = "set account group"
+			if err := n.realm.SetAccountGroup(
+				mutationCtx, account, groupCode,
+			); err != nil {
+				return fmt.Errorf("set account group: %w", err)
+			}
+			detail := setAccountGroupDetail(account, current.GroupCode, groupCode)
+			groupCodes := accountGroupAuditCodes(current.GroupCode, groupCode)
+			entries := make([]store.AuditEntry, 0, len(groupCodes))
+			for _, code := range groupCodes {
+				entries = append(entries, store.AuditEntry{
+					Action:       domain.AuditActionSetGroup,
+					Account:      account,
+					AccountTitle: current.Title,
+					Group:        code,
+					Detail:       detail,
+				})
+			}
+			persistFailure = "audit set account group"
+			if err := n.auditBatch(mutationCtx, caller, entries); err != nil {
+				return fmt.Errorf("audit set account group: %w", err)
+			}
 			return nil
-		})
-		_, chainErr := runner.Run(
-			ctx, eng.AsyncEngine(),
-		).Await(context.Background())
-		return state, accountChainRunError(
-			"set account group", state.err, chainErr,
+		},
+	)
+	switch {
+	case runErr == nil:
+		return nil
+	case !engineEntered:
+		return runErr
+	case persistFailure != "":
+		return errors.Join(
+			n.fatalPostEngineAuditByCode(
+				persistFailure, "account", account.String(), runErr,
+			),
+			asyncengine.ErrChainRetryUnsafe,
+		)
+	case restored:
+		// The failed registration was reverted: the engine is as it was.
+		return runErr
+	default:
+		return internalPostCommitNodeMutationError(
+			n.reconcileEngineAfterFailure(
+				context.WithoutCancel(ctx),
+				"reconcile engine after account group failure",
+				runErr,
+			).err,
 		)
 	}
+}
 
-	mutationApplied := false
-	if previous.GroupCode != "" {
-		state, runErr := runMembership(
-			previous.GroupCode, false, groupCode == "",
+// validateAccountGroupMove re-reads the account and both groups of a move
+// inside its exclusive section and refuses the move when any of them changed
+// since SetAccountGroup read them, or when the move would change a guarded
+// effective currency. It returns the account as stored.
+func (n *localNode) validateAccountGroupMove(
+	ctx context.Context,
+	account domain.AccountID,
+	previousGroup string,
+	groupCode string,
+	routingAccount param.AccountID,
+	groupSources map[string]param.AccountGroupID,
+	caller domain.Caller,
+) (domain.Account, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Account{}, fmt.Errorf(
+			"engine: set account group cancelled: %w", err,
 		)
-		mutationApplied = state.engineApplied
-		if runErr != nil {
-			if isInternalPostCommitNodeMutation(runErr) {
-				return runErr
-			}
-			if !errors.Is(runErr, asyncengine.ErrChainRetryUnsafe) {
-				return runErr
-			}
-			return internalPostCommitNodeMutationError(
-				n.reconcileEngineAfterFailure(
-					context.WithoutCancel(ctx),
-					"reconcile engine after account group failure",
-					runErr,
-				).err,
+	}
+	current, found, err := n.realm.GetAccount(ctx, account)
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("read account for set group: %w", err)
+	}
+	if !found {
+		return domain.Account{}, fmt.Errorf(
+			"account %q: %w", account, domain.ErrNotFound,
+		)
+	}
+	if current.GroupCode != previousGroup {
+		return domain.Account{}, fmt.Errorf(
+			"account %q group changed from %q to %q: %w",
+			account, previousGroup, current.GroupCode, domain.ErrInvalid,
+		)
+	}
+	if err := validateAccountAdministrativeSource(
+		current, routingAccount,
+	); err != nil {
+		return domain.Account{}, fmt.Errorf("read account for set group: %w", err)
+	}
+	groups := make(map[string]domain.AccountGroup, len(groupSources))
+	for _, code := range accountGroupAuditCodes(previousGroup, groupCode) {
+		group, found, err := n.realm.GetGroup(ctx, code)
+		if err != nil {
+			return domain.Account{}, fmt.Errorf(
+				"read group for set account group: %w", err,
 			)
 		}
-	}
-	if groupCode == "" {
-		return nil
-	}
-	_, runErr := runMembership(groupCode, true, true)
-	if runErr == nil {
-		return nil
-	}
-	if isInternalPostCommitNodeMutation(runErr) {
-		return runErr
-	}
-	if !mutationApplied && !errors.Is(runErr, asyncengine.ErrChainRetryUnsafe) {
-		return runErr
-	}
-	if previous.GroupCode != "" {
-		_, compensationErr := runMembership(
-			previous.GroupCode, true, false,
-		)
-		if compensationErr == nil {
-			return runErr
+		if !found {
+			return domain.Account{}, fmt.Errorf(
+				"group %q: %w", code, domain.ErrNotFound,
+			)
 		}
-		runErr = errors.Join(
-			runErr,
-			fmt.Errorf(
-				"restore previous account group: %w",
-				compensationErr,
-			),
-		)
+		if err := validateGroupAdministrativeSource(
+			group, groupSources[code],
+		); err != nil {
+			return domain.Account{}, fmt.Errorf(
+				"read group for set account group: %w", err,
+			)
+		}
+		groups[code] = group
 	}
-	return internalPostCommitNodeMutationError(
-		n.reconcileEngineAfterFailure(
-			context.WithoutCancel(ctx),
-			"reconcile engine after account group failure",
-			runErr,
-		).err,
+	if current.Currency != "" {
+		return current, nil
+	}
+	nextGroupCurrency := ""
+	if groupCode != "" {
+		nextGroupCurrency = groups[groupCode].Currency
+	}
+	nextEffective, _ := domain.ResolveCurrencyCascade(
+		"", nextGroupCurrency, current.DefaultCurrency,
+	)
+	guardErr := n.guardEffectiveCurrencyChange(
+		ctx,
+		[]domain.AccountID{account},
+		current.EffectiveCurrency,
+		nextEffective,
+	)
+	if guardErr == nil {
+		return current, nil
+	}
+	if !errors.Is(guardErr, domain.ErrConflict) {
+		return domain.Account{}, guardErr
+	}
+	return domain.Account{}, n.auditCurrencyChangeRefusal(
+		ctx, caller, store.AuditEntry{
+			Action:  domain.AuditActionSetGroup,
+			Account: account, AccountTitle: current.Title,
+			Group: groupCode,
+			Detail: currencyDetail(
+				"set account group", account.String(),
+				current.EffectiveCurrency, nextEffective,
+			),
+		},
+		domain.NewCurrencyChangeBlockedError(
+			domain.ScopeAccount, account.String(), guardErr,
+		),
 	)
 }
 

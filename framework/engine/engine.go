@@ -32,6 +32,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
@@ -357,6 +359,47 @@ func SetSpotFundsAccountPnl(
 		return configure.PolicyConfigurationResult{}, state.err
 	}
 	return state.result, nil
+}
+
+// exclusiveWaitTimeout bounds how long RunExclusive waits for the lanes to stop.
+// Officer enters a section only while its own lane gate excludes Officer lane
+// work, so the wait covers SDK-internal work alone.
+const exclusiveWaitTimeout = 30 * time.Second
+
+// RunExclusive runs fn as one exclusive section of async: account-group
+// membership, group currency, and the SpotFunds retune are exclusive
+// operations, and under AccountSync the engine takes no lock for them. fn calls
+// the engine only through driver and must not call async or wait for its tasks.
+//
+// The wait before fn starts is bounded by exclusiveWaitTimeout whether or not
+// ctx is cancellable, so a caller may pass a context.WithoutCancel context. Once
+// fn starts, the section holds until fn returns. A nil async fails with
+// asyncengine.ErrChainEngineMissing, as a chain on it does. An error that ended
+// the section before fn ran is wrapped; fn's own error is returned unchanged.
+func RunExclusive(
+	ctx context.Context,
+	async *asyncengine.AsyncEngine,
+	fn func(driver asyncengine.Driver) error,
+) error {
+	if async == nil {
+		return fmt.Errorf(
+			"engine: start exclusive section: %w", asyncengine.ErrChainEngineMissing,
+		)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, exclusiveWaitTimeout)
+	defer cancel()
+	started := false
+	err := async.Exclusive(
+		waitCtx,
+		func(_ context.Context, driver asyncengine.Driver) error {
+			started = true
+			return fn(driver)
+		},
+	)
+	if err != nil && !started {
+		return fmt.Errorf("engine: start exclusive section: %w", err)
+	}
+	return err
 }
 
 // ExecutionReportPersistence is the Officer write set produced after the engine

@@ -20,11 +20,14 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/param"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -546,7 +549,7 @@ func TestLocalNode_AccountRenameKeepsDependentsOnStableEngineIdentity(t *testing
 	}
 }
 
-func TestLocalNode_SetAccountGroupRegisterFailureRestoresPreviousGroup(
+func TestLocalNode_SetAccountGroupSectionRereadFailureKeepsPreviousGroup(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -566,11 +569,13 @@ func TestLocalNode_SetAccountGroupRegisterFailureRestoresPreviousGroup(
 	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	cause := errors.New("register chain account reread failed")
+	// The third account read is the reread inside the exclusive section, before
+	// the engine is touched.
+	cause := errors.New("exclusive section account reread failed")
 	realm := n.realm
 	n.realm = &failSelectedAccountRereadsRealm{
 		RealmStore: realm,
-		failCalls:  map[int]error{4: cause},
+		failCalls:  map[int]error{3: cause},
 	}
 
 	err := n.SetAccountGroup(
@@ -583,8 +588,9 @@ func TestLocalNode_SetAccountGroupRegisterFailureRestoresPreviousGroup(
 	if !errors.Is(err, cause) {
 		t.Fatalf("SetAccountGroup error = %v, want reread cause", err)
 	}
-	if isInternalPostCommitNodeMutation(err) {
-		t.Fatalf("SetAccountGroup error = %v, want classified compensation", err)
+	if isInternalPostCommitNodeMutation(err) ||
+		errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("SetAccountGroup error = %v, want a refusal before the engine", err)
 	}
 	if probe.builds != 1 {
 		t.Fatalf("engine builds = %d, want no reconciliation", probe.builds)
@@ -601,9 +607,7 @@ func TestLocalNode_SetAccountGroupRegisterFailureRestoresPreviousGroup(
 	assertFakeAccountGroup(t, eng, "account", "desk-old")
 }
 
-func TestLocalNode_SetAccountGroupRegisterAndCompensationFailureRebuilds(
-	t *testing.T,
-) {
+func TestLocalNode_SetAccountGroupEngineFailureRebuilds(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, probe := newRebuildProbeNode(t, eng)
@@ -621,16 +625,9 @@ func TestLocalNode_SetAccountGroupRegisterAndCompensationFailureRebuilds(
 	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	registerCause := errors.New("register chain account reread failed")
-	compensationCause := errors.New("compensation account reread failed")
-	realm := n.realm
-	n.realm = &failSelectedAccountRereadsRealm{
-		RealmStore: realm,
-		failCalls: map[int]error{
-			4: registerCause,
-			5: compensationCause,
-		},
-	}
+	// Every engine call now fails, so the move fails once the engine is entered
+	// and leaves the membership unknown.
+	stopFakeAdministrativeDriver(t, eng)
 	next := newFakeEngine()
 	var rebuilt engine.Snapshot
 	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
@@ -646,11 +643,8 @@ func TestLocalNode_SetAccountGroupRegisterAndCompensationFailureRebuilds(
 		domain.MissingAccountReject,
 		testCaller,
 	)
-	if !errors.Is(err, registerCause) || !errors.Is(err, compensationCause) {
-		t.Fatalf(
-			"SetAccountGroup error = %v, want register and compensation causes",
-			err,
-		)
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("SetAccountGroup error = %v, want retry-unsafe engine failure", err)
 	}
 	if !isInternalPostCommitNodeMutation(err) {
 		t.Fatalf("SetAccountGroup error = %v, want terminal classification", err)
@@ -663,7 +657,7 @@ func TestLocalNode_SetAccountGroupRegisterAndCompensationFailureRebuilds(
 			next,
 		)
 	}
-	stored, ok, getErr := realm.GetAccount(ctx, "account")
+	stored, ok, getErr := n.realm.GetAccount(ctx, "account")
 	if getErr != nil || !ok || stored.GroupCode != "desk-old" {
 		t.Fatalf(
 			"stored account = %+v ok=%v err=%v, want desk-old",
@@ -673,6 +667,126 @@ func TestLocalNode_SetAccountGroupRegisterAndCompensationFailureRebuilds(
 		)
 	}
 	assertFakeAccountGroup(t, next, "account", "desk-old")
+}
+
+// recordingGroupMembership fails the calls whose position it names and records
+// every call.
+type recordingGroupMembership struct {
+	failCalls map[int]error
+	calls     []string
+}
+
+func (m *recordingGroupMembership) call(
+	kind string, group param.AccountGroupID,
+) error {
+	m.calls = append(m.calls, fmt.Sprintf("%s %d", kind, group.Handle()))
+	return m.failCalls[len(m.calls)]
+}
+
+func (m *recordingGroupMembership) RegisterGroup(
+	_ []param.AccountID, group param.AccountGroupID,
+) error {
+	return m.call("register", group)
+}
+
+func (m *recordingGroupMembership) UnregisterGroup(
+	_ []param.AccountID, group param.AccountGroupID,
+) error {
+	return m.call("unregister", group)
+}
+
+func TestMoveAccountGroup_RevertsAFailedRegistration(t *testing.T) {
+	t.Parallel()
+	from, err := param.NewAccountGroupIDFromUint32(1)
+	if err != nil {
+		t.Fatalf("group 1: %v", err)
+	}
+	to, err := param.NewAccountGroupIDFromUint32(2)
+	if err != nil {
+		t.Fatalf("group 2: %v", err)
+	}
+	accounts := []param.AccountID{param.NewAccountIDFromUint64(7)}
+	registerCause := errors.New("register failed")
+	revertCause := errors.New("revert failed")
+
+	for _, tc := range []struct {
+		name         string
+		from, to     *param.AccountGroupID
+		failCalls    map[int]error
+		wantCalls    []string
+		wantRestored bool
+		wantCauses   []error
+	}{
+		{
+			name:      "move",
+			from:      &from,
+			to:        &to,
+			wantCalls: []string{"unregister 1", "register 2"},
+		},
+		{
+			name:       "unregister failure stops the move",
+			from:       &from,
+			to:         &to,
+			failCalls:  map[int]error{1: registerCause},
+			wantCalls:  []string{"unregister 1"},
+			wantCauses: []error{registerCause},
+		},
+		{
+			name:         "failed registration is reverted",
+			from:         &from,
+			to:           &to,
+			failCalls:    map[int]error{2: registerCause},
+			wantCalls:    []string{"unregister 1", "register 2", "register 1"},
+			wantRestored: true,
+			wantCauses:   []error{registerCause},
+		},
+		{
+			name:       "failed revert keeps both causes",
+			from:       &from,
+			to:         &to,
+			failCalls:  map[int]error{2: registerCause, 3: revertCause},
+			wantCalls:  []string{"unregister 1", "register 2", "register 1"},
+			wantCauses: []error{registerCause, revertCause},
+		},
+		{
+			name:       "joining from the default group has nothing to revert",
+			to:         &to,
+			failCalls:  map[int]error{1: registerCause},
+			wantCalls:  []string{"register 2"},
+			wantCauses: []error{registerCause},
+		},
+		{
+			name:      "leaving to the default group",
+			from:      &from,
+			wantCalls: []string{"unregister 1"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			membership := &recordingGroupMembership{failCalls: tc.failCalls}
+			restored, err := moveAccountGroup(membership, accounts, tc.from, tc.to)
+			if !slices.Equal(membership.calls, tc.wantCalls) {
+				t.Fatalf("calls = %v, want %v", membership.calls, tc.wantCalls)
+			}
+			if restored != tc.wantRestored {
+				t.Fatalf("restored = %v, want %v", restored, tc.wantRestored)
+			}
+			if len(tc.wantCauses) == 0 {
+				if err != nil {
+					t.Fatalf("moveAccountGroup error = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+				t.Fatalf("moveAccountGroup error = %v, want retry-unsafe marker", err)
+			}
+			for _, cause := range tc.wantCauses {
+				if !errors.Is(err, cause) {
+					t.Fatalf("moveAccountGroup error = %v, want cause %v", err, cause)
+				}
+			}
+		})
+	}
 }
 
 func TestLocalNode_ClearAccountCurrencyRevealsCurrentGroupCurrency(t *testing.T) {
@@ -934,5 +1048,118 @@ func TestLocalNode_DeleteAccountStillRebuilds(t *testing.T) {
 	if n.currentEngine() != next || !next.running || eng.running {
 		t.Fatalf("delete engine swap: current=%p next running=%v old running=%v",
 			n.currentEngine(), next.running, eng.running)
+	}
+}
+
+// TestLocalNode_GroupOperationsWaitForLaneWork proves every group operation on
+// the live engine runs in an exclusive section: while a task submitted straight
+// to the dispatcher, past Officer's own lane gate, holds an account lane, the
+// operation does not finish, and it completes once the lane is free.
+func TestLocalNode_GroupOperationsWaitForLaneWork(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		prepare func(context.Context, *localNode) error
+		run     func(context.Context, *localNode) error
+	}{
+		{
+			name: "account group move",
+			prepare: func(ctx context.Context, n *localNode) error {
+				if _, err := n.CreateGroup(
+					ctx, domain.AccountGroup{Code: "desk"}, testCaller,
+				); err != nil {
+					return err
+				}
+				_, err := n.CreateAccount(ctx, testAccount("mover"), testCaller)
+				return err
+			},
+			run: func(ctx context.Context, n *localNode) error {
+				return n.SetAccountGroup(
+					ctx, "mover", "desk", domain.MissingAccountReject, testCaller,
+				)
+			},
+		},
+		{
+			name: "group currency",
+			prepare: func(ctx context.Context, n *localNode) error {
+				_, err := n.CreateGroup(
+					ctx, domain.AccountGroup{Code: "desk", Currency: "USD"}, testCaller,
+				)
+				return err
+			},
+			run: func(ctx context.Context, n *localNode) error {
+				return n.SetGroupCurrency(ctx, "desk", "EUR", testCaller)
+			},
+		},
+		{
+			name:    "created group runtime state",
+			prepare: func(context.Context, *localNode) error { return nil },
+			run: func(ctx context.Context, n *localNode) error {
+				_, err := n.CreateGroup(
+					ctx, domain.AccountGroup{Code: "desk", Currency: "USD"}, testCaller,
+				)
+				return err
+			},
+		},
+		{
+			name: "created account membership",
+			prepare: func(ctx context.Context, n *localNode) error {
+				_, err := n.CreateGroup(
+					ctx, domain.AccountGroup{Code: "desk"}, testCaller,
+				)
+				return err
+			},
+			run: func(ctx context.Context, n *localNode) error {
+				_, err := n.CreateAccount(ctx, domain.Account{
+					Code: "joiner", GroupCode: "desk",
+				}, testCaller)
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			eng := newFakeEngine()
+			n, _ := newTestNode(t, eng)
+			if _, err := n.CreateAccount(
+				ctx, testAccount("holder"), testCaller,
+			); err != nil {
+				t.Fatalf("CreateAccount(holder): %v", err)
+			}
+			if err := tc.prepare(ctx, n); err != nil {
+				t.Fatalf("prepare: %v", err)
+			}
+			source, err := eng.AccountID("holder")
+			if err != nil {
+				t.Fatalf("AccountID: %v", err)
+			}
+
+			started := make(chan struct{})
+			release := make(chan struct{})
+			held := eng.AsyncEngine().Submit(ctx, source, func() error {
+				close(started)
+				<-release
+				return nil
+			})
+			<-started
+			done := make(chan error, 1)
+			go func() { done <- tc.run(ctx, n) }()
+			select {
+			case err := <-done:
+				close(release)
+				t.Fatalf("operation finished while a lane was busy: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatalf("operation after the lane freed: %v", err)
+			}
+			waitCtx, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			if _, err := held.Await(waitCtx); err != nil {
+				t.Fatalf("lane task: %v", err)
+			}
+		})
 	}
 }

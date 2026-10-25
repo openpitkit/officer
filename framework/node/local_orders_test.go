@@ -1019,7 +1019,9 @@ func (e *fakeEngine) ExecutionReportModel(
 		if err != nil {
 			return model.ExecutionReport{}, err
 		}
-		fill.SetLock(lock.Bytes())
+		if err := fill.SetLock(lock.Bytes()); err != nil {
+			return model.ExecutionReport{}, err
+		}
 	}
 	return report, nil
 }
@@ -1445,7 +1447,9 @@ func (e *fakeEngine) fakeImmediateReportModel(
 	fill.SetRemainingReservedQuantity(leaves)
 	fill.SetIsFinal(true)
 	if len(in.Lock) > 0 {
-		fill.SetLock(in.Lock)
+		if err := fill.SetLock(in.Lock); err != nil {
+			return model.ExecutionReport{}, err
+		}
 	}
 	return report, nil
 }
