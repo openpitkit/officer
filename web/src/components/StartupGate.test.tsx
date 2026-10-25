@@ -60,9 +60,7 @@ function ScopeProbe() {
 
 // The gate asks GET /session before the account mode. The account-mode cases
 // run in open access mode, so `fetchMock` sees only the account-mode requests.
-function answeringOpenSession(
-  fetchMock: ReturnType<typeof vi.fn>,
-): typeof fetch {
+function answeringOpenSession(fetchMock: typeof fetch): typeof fetch {
   return (async (url: string, init: RequestInit) =>
     url === "/app/api/v1/session"
       ? jsonResponse({
@@ -73,7 +71,7 @@ function answeringOpenSession(
       : fetchMock(url, init)) as unknown as typeof fetch;
 }
 
-function renderGate(fetchMock: ReturnType<typeof vi.fn>) {
+function renderGate(fetchMock: typeof fetch) {
   return renderWithApi(
     <StartupGate>
       <ScopeProbe />
@@ -148,7 +146,7 @@ describe("StartupGate", () => {
     }
 
     // Renders the gate and settles its first load and the first poll after it.
-    async function renderLoaded(fetchMock: ReturnType<typeof vi.fn>) {
+    async function renderLoaded(fetchMock: typeof fetch) {
       await act(async () => {
         renderGate(fetchMock);
       });
