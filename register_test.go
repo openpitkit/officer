@@ -1029,11 +1029,17 @@ func TestRegisterAccessWithReplacedStoreFactory(t *testing.T) {
 		}{probe, st.(access.Store), st.(sealReportReader)}, nil
 	})
 	builder.SetNodeBuilder(fakeEngineNodeBuilder)
+	builder.SetSPAFactory(func() (fs.FS, error) {
+		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
+	})
 	app, err := builder.Build(context.Background(), slog.Default(), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("Build with a capable replacement store: %v", err)
 	}
 	defer func() { _ = app.Close() }()
+	if probe.realmCalls == 0 {
+		t.Fatal("Build did not use the replacement store")
+	}
 	handler, err := app.BuildServeHandler(nil, "/mcp")
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
