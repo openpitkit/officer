@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -926,7 +927,7 @@ func TestMigrateMatchingKeyRefusesSealedDatabaseWithoutSealReport(t *testing.T) 
 			if !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("Migrate without a seal report = %v, want ErrInvalid", err)
 			}
-			for _, want := range []string{path, "inconsistent sealing data", "holds no seal report", "must be recreated"} {
+			for _, want := range []string{strconv.Quote(path), "inconsistent sealing data", "holds no seal report", "must be recreated"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("Migrate error %q does not mention %q", err, want)
 				}
