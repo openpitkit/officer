@@ -334,8 +334,11 @@ func (f *fakeService) ListAccountRows(
 	return store.AccountListPage{Rows: out, Total: len(out)}, nil
 }
 func (f *fakeService) ExportBackup(
-	_ context.Context, _ backup.Scope,
+	_ context.Context, scope backup.Scope,
 ) (backup.Archive, string, error) {
+	if err := backup.ValidateScope(scope, "backup"); err != nil {
+		return backup.Archive{}, "", err
+	}
 	return f.backupArchive, f.backupFilename, f.backupErr
 }
 func (f *fakeService) RestoreBackup(

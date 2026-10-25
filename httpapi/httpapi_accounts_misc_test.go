@@ -226,6 +226,50 @@ func TestBackupExport_RequiresScope(t *testing.T) {
 	}
 }
 
+func TestBackupEmptyScopeAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scope backup.Scope
+	}{
+		{"empty", backup.Scope{}},
+		{"blank only", backup.Scope{Sections: []backup.Section{"", " \t "}}},
+	} {
+		for _, operation := range []string{"export", "restore"} {
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				r, err := newRouter(&fakeService{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := map[string]any{"scope": tc.scope}
+				label := "backup"
+				if operation == "restore" {
+					request["mode"] = backup.RestoreModeOverwrite
+					label = "restore"
+				}
+				body, err := json.Marshal(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+					"/api/v1/backup/"+operation, bytes.NewReader(body)))
+				if rec.Code != http.StatusUnprocessableEntity {
+					t.Fatalf("%s = %d %s, want 422", operation, rec.Code, rec.Body)
+				}
+				answer := bodyMap(t, rec.Result())
+				errObj, _ := answer["error"].(map[string]any)
+				problems, _ := answer["errors"].([]any)
+				problem, _ := problems[0].(map[string]any)
+				if errObj["code"] != "validation" ||
+					errObj["message"] != label+" scope must include all or at least one section" ||
+					problem["pointer"] != "/scope" || problem["constraint"] != "required" {
+					t.Fatalf("%s scope error = %v", operation, answer)
+				}
+			})
+		}
+	}
+}
+
 func TestBackupExportRejectsUnknownSection(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {

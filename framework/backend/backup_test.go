@@ -49,6 +49,7 @@ type backupRestoreTestNode struct {
 	// restoreCalls, restoredArchive and restoredOpts record what RestoreBackup
 	// actually received, so tests can assert the routed call rather than infer
 	// it.
+	exportCalls     int
 	restoreCalls    int
 	restoredArchive backup.Archive
 	restoredOpts    backup.RestoreOptions
@@ -56,6 +57,64 @@ type backupRestoreTestNode struct {
 	restoreSummary  backup.RestoreSummary
 	restoreErr      error
 	resetErr        error
+}
+
+func (n *backupRestoreTestNode) ExportBackup(
+	context.Context, backup.Scope, domain.Caller,
+) (backup.Archive, error) {
+	n.exportCalls++
+	return backup.Archive{}, nil
+}
+
+func TestBackupEntriesRejectInvalidScopeBeforeWork(t *testing.T) {
+	for _, tc := range []struct {
+		name, pointer, constraint, message string
+		scope                              backup.Scope
+	}{
+		{"unknown", "/scope/sections/0", "enum", `unknown backup section "unknown"`,
+			backup.Scope{Sections: []backup.Section{"unknown"}}},
+		{"mixed", "/scope/sections/1", "enum", `unknown backup section "unknown"`,
+			backup.Scope{Sections: []backup.Section{backup.SectionAccountsGroups, "unknown"}}},
+		{"all with unknown", "/scope/sections/0", "enum", `unknown backup section "unknown"`,
+			backup.Scope{All: true, Sections: []backup.Section{"unknown"}}},
+		{"empty", "/scope", "required", "scope must include all or at least one section", backup.Scope{}},
+		{"blank only", "/scope", "required", "scope must include all or at least one section",
+			backup.Scope{Sections: []backup.Section{"", " \t "}}},
+	} {
+		for _, operation := range []string{"backup", "restore"} {
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				svc, n, md := newBackupRestoreTestService(t, false)
+				var calls []string
+				n.operationCalls = &calls
+				svc.trading = &backupTradingRuntime{calls: &calls}
+				signer := &backupRestoreTestSigner{}
+				svc.signer = signer
+				var err error
+				if operation == "backup" {
+					_, _, err = svc.ExportBackup(context.Background(), tc.scope)
+				} else {
+					archive, opts := backupRestoreTestArchive("101")
+					archive.Manifest.Source = ""
+					opts.Scope = tc.scope
+					_, err = svc.RestoreBackup(systemCtx(), archive, opts)
+				}
+				if n.exportCalls != 0 || n.restoreCalls != 0 || len(calls) != 0 ||
+					md.stops != 0 || md.restarts != 0 || len(md.pushed) != 0 || signer.reloads != 0 {
+					t.Fatalf("refused %s did work: export=%d restore=%d calls=%v market-data=%+v reloads=%d",
+						operation, n.exportCalls, n.restoreCalls, calls, md, signer.reloads)
+				}
+				message := tc.message
+				if tc.constraint == "required" {
+					message = operation + " " + message
+				}
+				if !errors.Is(err, domain.ErrInvalid) || err.Error() != message ||
+					domain.ValidationPointer(err) != tc.pointer || domain.ValidationConstraint(err) != tc.constraint {
+					t.Fatalf("%s error = %v at %q (%s), want %q at %q (%s)", operation, err,
+						domain.ValidationPointer(err), domain.ValidationConstraint(err), message, tc.pointer, tc.constraint)
+				}
+			})
+		}
+	}
 }
 
 func (n *backupRestoreTestNode) ListMarketDataInstances(
@@ -363,7 +422,7 @@ func TestRestoreBackupInstallsTradingProviderFeeAccountLookup(t *testing.T) {
 		svc := newBackupTradingLifecycleService(n, runtime)
 		if _, err := svc.RestoreBackup(
 			systemCtx(), backupRestoreSourceArchive("fee lookup test"),
-			backup.RestoreOptions{Mode: backup.RestoreModeOverwrite},
+			backup.RestoreOptions{Scope: backup.Scope{Sections: []backup.Section{backup.SectionAuditLog}}, Mode: backup.RestoreModeOverwrite},
 		); err != nil {
 			t.Fatalf("RestoreBackup: %v", err)
 		}
@@ -722,7 +781,7 @@ func TestRestoreBackupRejectsUnmeaningfulManifestSource(t *testing.T) {
 			svc, n, _ := newBackupRestoreTestService(t, false)
 			archive := backupRestoreSourceArchive(tt.source)
 			_, err := svc.RestoreBackup(systemCtx(), archive,
-				backup.RestoreOptions{Mode: backup.RestoreModeOverwrite})
+				backup.RestoreOptions{Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite})
 			if !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("RestoreBackup error = %v, want ErrInvalid", err)
 			}
@@ -747,7 +806,7 @@ func TestRestoreBackupPassesManifestSourceThroughUnchanged(t *testing.T) {
 	svc, n, _ := newBackupRestoreTestService(t, false)
 	archive := backupRestoreSourceArchive(source)
 	if _, err := svc.RestoreBackup(systemCtx(), archive,
-		backup.RestoreOptions{Mode: backup.RestoreModeOverwrite}); err != nil {
+		backup.RestoreOptions{Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite}); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 	if n.restoreCalls != 1 {

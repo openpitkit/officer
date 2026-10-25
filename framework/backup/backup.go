@@ -754,6 +754,21 @@ func (s Scope) Validate() error {
 	return nil
 }
 
+// ValidateScope refuses unknown sections and an empty scope before an export
+// or restore. operation names the operation in an empty-scope error.
+func ValidateScope(scope Scope, operation string) error {
+	if err := scope.Validate(); err != nil {
+		return domain.WithValidationPointer("/scope"+domain.ValidationPointer(err), err)
+	}
+	if normalized := scope.Normalize(); !normalized.All && len(normalized.Sections) == 0 {
+		return domain.NewValidationError(
+			"/scope", "required",
+			operation+" scope must include all or at least one section",
+		)
+	}
+	return nil
+}
+
 // Normalize trims and deduplicates the scope's section list and selectors, then
 // force-includes the parent dictionary sections a scoped archive's rows resolve
 // against: any account-addressed section pulls in accounts+groups, while

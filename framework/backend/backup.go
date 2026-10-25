@@ -35,6 +35,9 @@ func (s *Service) ExportBackup(
 	ctx context.Context,
 	scope backup.Scope,
 ) (backup.Archive, string, error) {
+	if err := backup.ValidateScope(scope, "backup"); err != nil {
+		return backup.Archive{}, "", err
+	}
 	n := s.node
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
@@ -57,6 +60,9 @@ func (s *Service) RestoreBackup(
 	archive backup.Archive,
 	opts backup.RestoreOptions,
 ) (backup.RestoreSummary, error) {
+	if err := backup.ValidateScope(opts.Scope, "restore"); err != nil {
+		return backup.RestoreSummary{}, err
+	}
 	s.marketDataMu.Lock()
 	s.tradingMu.Lock()
 	defer func() {

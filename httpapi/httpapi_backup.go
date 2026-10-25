@@ -45,10 +45,6 @@ func handleExportBackup(svc backend.ControlPlane) http.HandlerFunc {
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if err := validateBackupScope(req.Scope, "backup"); err != nil {
-			httpx.WriteErr(w, err)
-			return
-		}
 		archive, filename, err := svc.ExportBackup(r.Context(), req.Scope)
 		if err != nil {
 			httpx.WriteErr(w, err)
@@ -149,7 +145,7 @@ func handleRestoreBackup(svc backend.ControlPlane) http.HandlerFunc {
 			)
 			return
 		}
-		if err := validateBackupScope(req.Scope, "restore"); err != nil {
+		if err := backup.ValidateScope(req.Scope, "restore"); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -337,22 +333,6 @@ func readBackupJSONFromZip(raw []byte) ([]byte, error) {
 		)
 	}
 	return body, nil
-}
-
-// validateBackupScope refuses a scope naming an unknown section before
-// Normalize could narrow it, then a scope selecting no section; operation names
-// the request in the latter message.
-func validateBackupScope(scope backup.Scope, operation string) error {
-	if err := scope.Validate(); err != nil {
-		return domain.WithValidationPointer("/scope"+domain.ValidationPointer(err), err)
-	}
-	if normalized := scope.Normalize(); !normalized.All && len(normalized.Sections) == 0 {
-		return domain.NewValidationError(
-			"/scope", "required",
-			operation+" scope must include all or at least one section",
-		)
-	}
-	return nil
 }
 
 func validRestoreMode(mode backup.RestoreMode) bool {
