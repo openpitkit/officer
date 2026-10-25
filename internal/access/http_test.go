@@ -66,6 +66,18 @@ type surfaceAnswer struct {
 	challenge bool
 }
 
+func TestSetupRequiredError(t *testing.T) {
+	err := setupRequiredError{host: "localhost:8787"}
+	const want = "Pit Officer is not set up yet. Open http://localhost:8787 " +
+		"in a browser on this computer and finish the first-run setup."
+	if err.Error() != want {
+		t.Fatalf("setup required message = %q, want %q", err.Error(), want)
+	}
+	if !errors.Is(err, domain.ErrSetupRequired) {
+		t.Fatal("setup required error does not unwrap to domain.ErrSetupRequired")
+	}
+}
+
 // TestResolverAdmitsOnlyEachSurfaceCredential drives the access resolver
 // behind the framework router: open mode admits every surface without
 // credentials; token mode admits the REST API only with the API token, MCP

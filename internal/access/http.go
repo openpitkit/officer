@@ -119,8 +119,8 @@ func (s *Service) ResolveCaller(r *http.Request) (domain.Caller, error) {
 type setupRequiredError struct{ host string }
 
 func (e setupRequiredError) Error() string {
-	// Replace the sentinel's panel reference with this request's address.
-	return strings.Replace(domain.ErrSetupRequired.Error(), "the panel", "http://"+e.host, 1)
+	return fmt.Sprintf("Pit Officer is not set up yet. Open http://%s "+
+		"in a browser on this computer and finish the first-run setup.", e.host)
 }
 
 func (setupRequiredError) Unwrap() error { return domain.ErrSetupRequired }
