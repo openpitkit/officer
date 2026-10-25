@@ -250,6 +250,34 @@ func TestLoadRefusesCorruptSetting(t *testing.T) {
 	}
 }
 
+func TestChosenReadsWithoutCreatingAccounts(t *testing.T) {
+	for _, tc := range []struct {
+		name, value             string
+		stored, chosen, invalid bool
+	}{
+		{name: "absent"},
+		{name: "multi", value: ModeMulti, stored: true, chosen: true},
+		{name: "single missing account", value: "single:desk", stored: true, chosen: true},
+		{name: "empty", stored: true, invalid: true},
+		{name: "unknown", value: "solo", stored: true, invalid: true},
+		{name: "invalid account", value: "single: desk", stored: true, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := newTestNode(t)
+			if tc.stored {
+				storeSettings(t, n, [2]string{SettingKeyMode, tc.value})
+			}
+			chosen, err := Chosen(context.Background(), n)
+			if chosen != tc.chosen || (err != nil) != tc.invalid {
+				t.Fatalf("Chosen = %t, %v; want %t, invalid=%t", chosen, err, tc.chosen, tc.invalid)
+			}
+			if rows := auditRows(t, n, domain.AuditActionCreateAccount); len(rows) != 0 {
+				t.Fatalf("Chosen created accounts: %+v", rows)
+			}
+		})
+	}
+}
+
 func TestReadReportsStoredChoice(t *testing.T) {
 	ctx := clientContext()
 	n := newTestNode(t)

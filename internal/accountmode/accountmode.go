@@ -106,6 +106,13 @@ type settings interface {
 	Setting(ctx context.Context, key string) (string, bool, error)
 }
 
+// Chosen reports whether a valid account mode is stored, without creating
+// the default account a single-account mode may need.
+func Chosen(ctx context.Context, s settings) (bool, error) {
+	state, _, err := readStored(ctx, s)
+	return state.Mode != nil, err
+}
+
 // readStored reads the stored mode choice into a State's Mode and, under
 // ModeSingle, Account, and returns it with the account features a process
 // started with that choice enforces: every account when no mode is chosen or

@@ -95,7 +95,7 @@ caller resolver refuses REST, MCP over HTTP and non-`DuringSetup` panel routes
 in `setup` before any authorizer runs; it alone closes MCP over HTTP. Replacing
 the authorizer keeps this resolver guard. The installed authorizer repeats the
 refusal for REST and panel routes, including with a host resolver, and passes
-MCP for stdio. A host that keeps `Register`'s service factory and calls
+MCP for stdio. A host that calls
 `SetCallerResolver` must refuse REST and MCP over HTTP in `setup` itself and
 keep `builder.Authorizer()` in its authorizer chain; the refusals
 `builder.Authorizer()` returns in `setup` carry `domain.ErrSetupRequired`'s
@@ -131,24 +131,11 @@ A host extends the route surface `Register` installs by wrapping
 `SetRouteConfigBuilder`, as `examples/customhost/main.go` does, so the account
 mode and the access mode stay served.
 
-The account mode and the access state are part of `Register`'s factories and
-private to Officer. The access state lives in Officer's SQLite store, so
-`Build` fails when a host replaces the store factory and keeps the service
-factory. A host that replaces the service factory runs every account, gets no
-access service, and should not serve the account-mode routes `Register`'s route
-config adds. `Register`'s caller resolver and authorizer then return
-`errNoAccessService`: every authenticated REST, panel and MCP-over-HTTP request
-answers 500 and every stdio MCP tool is refused, even through a wrapper over
-`builder.Authorizer()`. The host must install its own resolver with
-`SetCallerResolver` and its own authorizer with `SetAuthorizer`, without
-delegating to `builder.Authorizer()`.
-`Register`'s route config builder, if the host keeps it, serves the panel access
-routes and the route manifest answering 500. A route config the host builds
-from `httpapi.RouteConfig(svc, logs, sealReports)` needs a seal-report source
-the host supplies, since nil panics and Officer's own is not reachable outside
-`Register`, and its own `AccessMode`, without which `BuildServeHandler` fails;
-its `PanelRoutes` are the host's own, since Officer's panel access routes live
-in an internal package.
+`Register` adds a node hook that builds the access service whatever factories
+a host replaces. A store without Officer's access state or seal-report reader
+fails `Build`; nothing serves without the access service. A host replacing the
+service factory gets a backend without Officer's account scope and should not
+serve the account-mode routes Register adds: a stored mode would never take effect.
 
 A host that calls the control plane itself, outside a request, puts a caller
 in the context first (`auth.ContextWithCaller`): every call that reads or

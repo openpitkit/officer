@@ -958,15 +958,8 @@ func TestRegisterAccessModeFollowsService(t *testing.T) {
 	}
 }
 
-// TestRegisterPanelAccessRoutesWithoutAccessService builds Register's
-// composition with a service factory a host replaced, which leaves it no
-// access Service: the public GET /app/api/v1/session and a non-public route
-// with a host resolver answer 500 internal instead of reaching a missing
-// Service or passing the installed authorizer.
-func TestRegisterPanelAccessRoutesWithoutAccessService(t *testing.T) {
-	app, _, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
-		return domain.Caller{Principal: domain.PrincipalOperator}, nil
-	}, func(
+func TestRegisterAccessWithReplacedFactories(t *testing.T) {
+	replacementService := func(
 		_ context.Context,
 		n node.Node,
 		md backend.MarketDataRuntime,
@@ -978,27 +971,218 @@ func TestRegisterPanelAccessRoutesWithoutAccessService(t *testing.T) {
 		return backend.New(n, md, signer, func([]byte, domain.Order) (string, error) {
 			return "", errUnexpectedOrderChain
 		}, backend.WithTradingRuntime(rt))
+	}
+	for _, tc := range []struct {
+		name    string
+		factory frameworkapp.ServiceFactory
+	}{
+		{"node builder", nil},
+		{"node builder and service factory", replacementService},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, _, opened := buildTestApp(t, nil, tc.factory)
+			handler, err := app.BuildServeHandler(nil, "/mcp")
+			if err != nil {
+				t.Fatalf("BuildServeHandler: %v", err)
+			}
+			request := func(token string, want int) {
+				t.Helper()
+				req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/accounts", nil)
+				if token != "" {
+					req.Header.Set("Authorization", "Bearer "+token)
+				}
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				apitest.ExpectStatus(t, "accounts with a replaced service factory", rec, want)
+			}
+			request("", http.StatusServiceUnavailable)
+			accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+			request("", http.StatusOK)
+			const token = "pit_api_replaced-service"
+			enableTokenMode(t, opened.(access.Store), token)
+			request("", http.StatusUnauthorized)
+			request(token, http.StatusOK)
+		})
+	}
+}
+
+func TestRegisterAccessWithReplacedStoreFactory(t *testing.T) {
+	builder := frameworkapp.NewBuilder()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	if err := Register(builder, Config{SQLitePath: path}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := sqlite.New(path, domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	probe := &nodeProbeStore{Store: st}
+	type sealReportReader interface {
+		SealReport(context.Context) (sqlite.SealReport, bool, error)
+	}
+	builder.SetStoreFactory(func() (store.Store, error) {
+		return struct {
+			*nodeProbeStore
+			access.Store
+			sealReportReader
+		}{probe, st.(access.Store), st.(sealReportReader)}, nil
 	})
+	builder.SetNodeBuilder(fakeEngineNodeBuilder)
+	app, err := builder.Build(context.Background(), slog.Default(), failOnFatal(t))
+	if err != nil {
+		t.Fatalf("Build with a capable replacement store: %v", err)
+	}
+	defer func() { _ = app.Close() }()
 	handler, err := app.BuildServeHandler(nil, "/mcp")
 	if err != nil {
 		t.Fatalf("BuildServeHandler: %v", err)
 	}
-	for _, path := range []string{"/app/api/v1/session", "/app/api/v1/mcp-access"} {
+	request := func(token string, want int) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/accounts", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(
-			http.MethodGet, "http://127.0.0.1"+path, nil,
-		))
-		var answer struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
+		handler.ServeHTTP(rec, req)
+		apitest.ExpectStatus(t, "accounts with a replaced store factory", rec, want)
+	}
+	request("", http.StatusServiceUnavailable)
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+	request("", http.StatusOK)
+	const token = "pit_api_replaced-store"
+	enableTokenMode(t, st.(access.Store), token)
+	request("", http.StatusUnauthorized)
+	request(token, http.StatusOK)
+}
+
+type nodeProbeStore struct {
+	store.Store
+	realmCalls, closeCalls int
+}
+
+func (s *nodeProbeStore) ForRealm(ctx context.Context, realm domain.RealmID) (store.RealmStore, error) {
+	s.realmCalls++
+	return s.Store.ForRealm(ctx, realm)
+}
+
+func (s *nodeProbeStore) Close() error {
+	s.closeCalls++
+	return s.Store.Close()
+}
+
+func TestRegisterNodeHooksRunInOrderBeforeServices(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	builder := frameworkapp.NewBuilder()
+	var calls []string
+	var opened store.Store
+	var builtNode node.Node
+	var builtEngine *fakeEngine
+	builder.AddNodeHook(func(gotCtx context.Context, st store.Store, n node.Node) error {
+		if gotCtx != ctx || st != opened || n != builtNode {
+			t.Fatal("node hook did not receive Build's context, store and node")
 		}
-		err = json.Unmarshal(rec.Body.Bytes(), &answer)
-		if rec.Code != http.StatusInternalServerError || err != nil ||
-			answer.Error.Code != "internal" {
-			t.Fatalf("GET %s = %d, error code %q, want 500 internal",
-				path, rec.Code, answer.Error.Code)
+		calls = append(calls, "first")
+		return nil
+	})
+	if err := Register(builder, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")}); err != nil {
+		t.Fatal(err)
+	}
+	builder.SetNodeBuilder(func(ctx context.Context, st store.Store,
+		hook frameworkapp.FatalShutdownHook) (node.Node, engine.Engine, error) {
+		n, eng, err := fakeEngineNodeBuilder(ctx, st, hook)
+		if err == nil {
+			opened, builtNode, builtEngine = st, n, eng.(*fakeEngine)
 		}
+		return n, eng, err
+	})
+	wantErr := errors.New("host node hook failed")
+	builder.AddNodeHook(func(context.Context, store.Store, node.Node) error {
+		calls = append(calls, "second")
+		if err := builder.Authorizer().Authorize(ctx, domain.Caller{Source: domain.SourceAPI}, "test"); !errors.Is(err, domain.ErrSetupRequired) {
+			t.Fatalf("access hook did not run between host hooks: %v", err)
+		}
+		return wantErr
+	})
+	builder.AddNodeHook(func(context.Context, store.Store, node.Node) error {
+		t.Fatal("node hook ran after a hook failed")
+		return nil
+	})
+	builder.SetSigningFactory(func(store.RealmStore) (fwsigning.Service, error) {
+		t.Fatal("signing service built before node hooks completed")
+		return nil, nil
+	})
+	app, err := builder.Build(ctx, slog.Default(), failOnFatal(t))
+	if app != nil {
+		_ = app.Close()
+		t.Fatal("Build returned an app after a node hook failed")
+	}
+	if err != wantErr {
+		t.Fatalf("Build error = %v, want unchanged hook error %v", err, wantErr)
+	}
+	if !slices.Equal(calls, []string{"first", "second"}) {
+		t.Fatalf("node hook order = %v, want [first second]", calls)
+	}
+	if builtEngine == nil || builtEngine.running ||
+		!slices.Equal(builtEngine.lifecycle, []string{"stop", "close market data"}) {
+		t.Fatalf("failed node hook left engine open: %+v", builtEngine)
+	}
+}
+
+func TestRegisterRejectsStoreAndClosesNode(t *testing.T) {
+	for _, withAccess := range []bool{false, true} {
+		t.Run(fmt.Sprintf("access=%t", withAccess), func(t *testing.T) {
+			builder := frameworkapp.NewBuilder()
+			path := filepath.Join(t.TempDir(), "officer.db")
+			if err := Register(builder, Config{SQLitePath: path}); err != nil {
+				t.Fatal(err)
+			}
+			st, err := sqlite.New(path, domain.DefaultRealm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			probe := &nodeProbeStore{Store: st}
+			builder.SetStoreFactory(func() (store.Store, error) {
+				if withAccess {
+					return struct {
+						*nodeProbeStore
+						access.Store
+					}{probe, st.(access.Store)}, nil
+				}
+				return probe, nil
+			})
+			var builtEngine *fakeEngine
+			var realmCallsAfterNode int
+			builder.SetNodeBuilder(func(ctx context.Context, st store.Store,
+				hook frameworkapp.FatalShutdownHook) (node.Node, engine.Engine, error) {
+				n, eng, err := fakeEngineNodeBuilder(ctx, st, hook)
+				if err == nil {
+					builtEngine = eng.(*fakeEngine)
+					realmCallsAfterNode = probe.realmCalls
+				}
+				return n, eng, err
+			})
+			app, err := builder.Build(context.Background(), slog.Default(), failOnFatal(t))
+			if err == nil {
+				_ = app.Close()
+				t.Fatal("Build accepted a store without Officer's access capabilities")
+			}
+			want := "does not implement access.Store"
+			if withAccess {
+				want = "does not implement SealReport"
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Build = %v, want %q", err, want)
+			}
+			if builtEngine == nil || builtEngine.running ||
+				!slices.Equal(builtEngine.lifecycle, []string{"stop", "close market data"}) ||
+				probe.realmCalls != realmCallsAfterNode || probe.closeCalls != 1 {
+				t.Fatalf("refused store: engine=%+v, realm calls=%d (after node=%d), close calls=%d",
+					builtEngine, probe.realmCalls, realmCallsAfterNode, probe.closeCalls)
+			}
+		})
 	}
 }
 
@@ -1035,9 +1219,6 @@ func (s fixedModeAccessStore) Snapshot() access.Snapshot {
 // empty access mode, which it refuses as an internal error, never open mode:
 // without an access Service and for a mode it does not know.
 func TestManifestAccessModeFailsClosed(t *testing.T) {
-	if mode := manifestAccessMode(nil); mode != "" {
-		t.Fatalf("manifestAccessMode(nil) = %q, want the empty mode", mode)
-	}
 	service, err := access.New(
 		fixedModeAccessStore{mode: "unknown"}, struct{ access.Auditor }{}, io.Discard,
 		struct{ access.SetupDecisions }{},
@@ -1363,8 +1544,9 @@ func buildTestApp(
 	t.Helper()
 	ctx := context.Background()
 	builder := frameworkapp.NewBuilder()
+	path := filepath.Join(t.TempDir(), "officer.db")
 	if err := Register(
-		builder, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+		builder, Config{SQLitePath: path},
 	); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -1653,8 +1835,7 @@ func TestRegisterSetupAccessAuthorizer(t *testing.T) {
 		}
 	}
 
-	decisions := setupDecisions{service: app.Service()}
-	chosen, err := decisions.AccountModeChosen(context.Background())
+	chosen, err := accountmode.Chosen(context.Background(), app.Service())
 	if err != nil || chosen {
 		t.Fatalf("unchosen account mode = %t, %v, want false", chosen, err)
 	}
@@ -1666,7 +1847,7 @@ func TestRegisterSetupAccessAuthorizer(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("choose account mode = %d %s", rec.Code, rec.Body)
 	}
-	chosen, err = decisions.AccountModeChosen(context.Background())
+	chosen, err = accountmode.Chosen(context.Background(), app.Service())
 	if err != nil || !chosen {
 		t.Fatalf("saved account mode = %t, %v, want true", chosen, err)
 	}

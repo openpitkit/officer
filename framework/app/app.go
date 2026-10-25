@@ -56,6 +56,9 @@ type NodeBuilder func(
 	context.Context, store.Store, FatalShutdownHook,
 ) (node.Node, engine.Engine, error)
 
+// NodeHook composes services over the opened store and built node.
+type NodeHook func(context.Context, store.Store, node.Node) error
+
 // SigningFactory builds the approval signing service.
 type SigningFactory func(store.RealmStore) (signing.Service, error)
 
@@ -100,6 +103,7 @@ type SPAFactory func() (fs.FS, error)
 type Builder struct {
 	storeFactory    StoreFactory
 	nodeBuilder     NodeBuilder
+	nodeHooks       []NodeHook
 	signingFactory  SigningFactory
 	serviceFactory  ServiceFactory
 	routeConfig     RouteConfigBuilder
@@ -128,6 +132,15 @@ func (b *Builder) SetStoreFactory(factory StoreFactory) {
 // SetNodeBuilder sets the node implementation hook.
 func (b *Builder) SetNodeBuilder(builder NodeBuilder) {
 	b.nodeBuilder = builder
+}
+
+// AddNodeHook appends a step Build runs after checking the node and engine,
+// before building services from them. Hooks run in registration order; an
+// error fails Build with that error after closing the node.
+func (b *Builder) AddNodeHook(hook NodeHook) {
+	if hook != nil {
+		b.nodeHooks = append(b.nodeHooks, hook)
+	}
 }
 
 // SetSigningFactory sets the approval signing implementation hook.
@@ -246,6 +259,12 @@ func (b *Builder) Build(
 	if eng == nil {
 		_ = localNode.Close()
 		return nil, errors.New("build node: node builder returned no engine")
+	}
+	for _, hook := range b.nodeHooks {
+		if err := hook(ctx, st, localNode); err != nil {
+			_ = localNode.Close()
+			return nil, err
+		}
 	}
 	logger.Info(
 		"engine built and seeded from store",
