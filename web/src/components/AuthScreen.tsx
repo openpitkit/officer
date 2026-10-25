@@ -44,7 +44,7 @@ export function AuthScreen({
     <div className="h-dvh w-full overflow-y-auto bg-bg text-text">
       <div className="flex min-h-full items-center justify-center p-6">
         <Card className={cn("w-full", wide ? "max-w-xl" : "max-w-md")}>
-          <CardContent className="space-y-5 pt-[var(--dens-card-pad)]">
+          <CardContent className="flex flex-col gap-y-5 pt-[var(--dens-card-pad)]">
             <div className="flex items-center gap-[var(--dens-nav-gap)]">
               <BrandLockup />
             </div>

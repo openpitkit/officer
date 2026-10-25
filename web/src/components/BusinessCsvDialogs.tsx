@@ -151,7 +151,7 @@ export function BusinessCsvExportDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-1 rounded-card border border-border bg-surface-2 p-3">
+        <div className="flex flex-col gap-y-1 rounded-card border border-border bg-surface-2 p-3">
           <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
             {t("businessCsv.format.heading")}
           </p>
@@ -163,7 +163,7 @@ export function BusinessCsvExportDialog({
           </code>
         </div>
 
-        <div className="space-y-1.5">
+        <div className="flex flex-col gap-y-1.5">
           <Label>{t("businessCsv.delimiterLabel")}</Label>
           <Select
             value={delimiter}

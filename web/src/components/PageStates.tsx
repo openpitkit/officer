@@ -41,7 +41,7 @@ export function TableSkeleton({
       aria-label={t("states.loading")}
       className="animate-pulse"
     >
-      <CardContent className="space-y-3 py-5">
+      <CardContent className="flex flex-col gap-y-3 py-5">
         {Array.from({ length: rows }).map((_, r) => (
           <div key={r} className="flex gap-4">
             {Array.from({ length: cols }).map((_, c) => (
@@ -94,7 +94,7 @@ export function ErrorState({
     <Card className="animate-fade-in">
       <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
         <AlertTriangle className="h-8 w-8 text-[var(--danger)]" />
-        <div className="space-y-1">
+        <div className="flex flex-col gap-y-1">
           <p className="text-sm font-bold text-text">
             {title ?? t("states.loadError")}
           </p>
@@ -145,7 +145,7 @@ export function EmptyState({
     <Card className="animate-fade-in">
       <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
         <Inbox className="h-8 w-8 text-muted" />
-        <div className="space-y-1">
+        <div className="flex flex-col gap-y-1">
           <p className="text-sm font-bold text-text">{title}</p>
           <p className="max-w-md text-xs text-muted-lt">{hint}</p>
         </div>

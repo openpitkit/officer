@@ -37,7 +37,7 @@ const SelectTrigger = forwardRef<
     className={cn(
       "flex h-[var(--dens-field-h)] w-full items-center justify-between gap-2 rounded-card border",
       "border-border bg-surface-2 px-[var(--dens-field-px)] py-1 text-[length:var(--dens-field-fz)] text-text",
-      "focus:border-border-hover focus:outline-none focus:ring-2 focus:ring-ring",
+      "focus:border-border-hover focus:outline-hidden focus:ring-2 focus:ring-ring",
       "focus:ring-offset-2 focus:ring-offset-bg disabled:cursor-not-allowed",
       "disabled:opacity-50 data-[placeholder]:text-muted",
       className,
@@ -85,7 +85,7 @@ const SelectItem = forwardRef<
     ref={ref}
     className={cn(
       "relative flex cursor-pointer select-none items-center rounded-badge py-1.5",
-      "pl-7 pr-2 text-sm outline-none focus:bg-accent-dim focus:text-accent",
+      "pl-7 pr-2 text-sm outline-hidden focus:bg-accent-dim focus:text-accent",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}

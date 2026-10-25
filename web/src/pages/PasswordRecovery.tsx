@@ -70,7 +70,7 @@ function RecoveryStep({
       >
         {number}
       </span>
-      <div className="min-w-0 flex-1 space-y-2">
+      <div className="min-w-0 flex-1 flex flex-col gap-y-2">
         <h2 className="text-sm font-bold text-text">{title}</h2>
         {children}
       </div>
@@ -153,7 +153,7 @@ function CodeRequestStep() {
         <p
           ref={refusalLine}
           tabIndex={-1}
-          className="text-xs text-[var(--danger)] focus:outline-none"
+          className="text-xs text-[var(--danger)] focus:outline-hidden"
         >
           {secondsLeft > 0
             ? t("tooManyAttemptsRetry", { seconds: secondsLeft })
@@ -252,7 +252,7 @@ function PasswordResetStep({
   return (
     <RecoveryStep number={3} title={t("recovery.reset.title")}>
       <form
-        className="space-y-3"
+        className="flex flex-col gap-y-3"
         onSubmit={(event) => {
           void reset(event);
         }}
@@ -333,7 +333,7 @@ export function PasswordRecovery({
       noteIcon={Info}
       wide
     >
-      <ol className="space-y-4">
+      <ol className="flex flex-col gap-y-4">
         <CodeRequestStep />
         <RecoveryStep number={2} title={t("recovery.read.title")}>
           <p className="text-xs text-muted-lt">

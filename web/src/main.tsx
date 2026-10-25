@@ -26,6 +26,9 @@ import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { checkSession } from "@/lib/panelSession";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "@fontsource/jetbrains-mono/700.css";
 import "@/index.css";
 import "@/register";
 

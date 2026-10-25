@@ -52,14 +52,14 @@ export function SetupRail({
   const titleId = useId();
   return (
     <aside className="flex shrink-0 flex-col gap-5 border-b border-border bg-surface px-3 py-4 md:w-64 md:overflow-y-auto md:border-b-0 md:border-r">
-      <nav aria-labelledby={titleId} className="space-y-2">
+      <nav aria-labelledby={titleId} className="flex flex-col gap-y-2">
         <p
           id={titleId}
           className="px-2 text-[0.6875rem] font-medium uppercase tracking-[0.07em] text-muted"
         >
           {review ? ts("security.guide.label") : t("firstStart")}
         </p>
-        <ol className="space-y-0.5">
+        <ol className="flex flex-col gap-y-0.5">
           {WIZARD_STEPS.map((id, index) => {
             const passed = index < current;
             const here = index === current;

@@ -59,7 +59,7 @@ const TabsTrigger = forwardRef<
       "inline-flex items-center gap-1.5 rounded-badge px-3 py-1 text-xs font-medium transition-colors duration-[180ms]",
       "text-muted-lt hover:bg-surface-hover hover:text-text",
       "data-[state=active]:bg-accent-dim data-[state=active]:text-accent",
-      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
       "focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
       "disabled:pointer-events-none disabled:opacity-50",
       className,
@@ -80,7 +80,7 @@ const TabsContent = forwardRef<
   <TabsPrimitive.Content
     ref={ref}
     className={cn(
-      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
       "focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
       className,
     )}

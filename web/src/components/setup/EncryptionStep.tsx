@@ -85,7 +85,7 @@ export function EncryptionStep({
   const { t } = useTranslation("setup");
   const { t: ts } = useTranslation("service");
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-y-4">
       {choice !== null && (
         <ChoiceCards
           label={t("encryption.title")}
@@ -110,7 +110,7 @@ export function EncryptionStep({
         />
       )}
       {choice === "key" && (
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           {/* Once sealed, its commands would overwrite the key in force. */}
           {storage.state === "ready" && !sealed && <MasterKeyGuide />}
           {/* One live region for both states, so sealing is announced. */}

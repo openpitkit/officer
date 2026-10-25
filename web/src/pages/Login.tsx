@@ -116,7 +116,7 @@ export function Login({
   return (
     <AuthScreen title={t("login.title")} note={t("login.note")} noteIcon={Bot}>
       <form
-        className="space-y-4"
+        className="flex flex-col gap-y-4"
         onSubmit={(event) => {
           void submit(event);
         }}

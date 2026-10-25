@@ -97,7 +97,7 @@ export function SortableHeader({
       aria-label={`Sort by ${label}`}
       aria-pressed={active}
       className={cn(
-        "sortable-header inline-flex min-w-0 max-w-full cursor-pointer select-none items-center gap-1 text-[0.6875rem] font-bold uppercase tracking-[0.07em] transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "sortable-header inline-flex min-w-0 max-w-full cursor-pointer select-none items-center gap-1 text-[0.6875rem] font-bold uppercase tracking-[0.07em] transition-colors hover:text-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
         align === "right" && "justify-end",
         active ? "text-accent" : "text-muted",
       )}

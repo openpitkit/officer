@@ -56,7 +56,7 @@ export function TextField({
 }) {
   const errorId = `${id}-error`;
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-y-2">
       <Label htmlFor={id}>{label}</Label>
       <Input
         ref={ref}

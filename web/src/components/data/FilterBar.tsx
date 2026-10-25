@@ -101,7 +101,7 @@ export function FilterBar({
               {onClearActive !== undefined && (
                 <button
                   type="button"
-                  className="-mr-1 ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-badge text-accent transition-colors hover:bg-accent-dim hover:text-accent-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="-mr-1 ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-badge text-accent transition-colors hover:bg-accent-dim hover:text-accent-2 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={onClearActive}
                   title={clearActiveLabel}
                   aria-label={clearActiveLabel}
@@ -164,7 +164,7 @@ function GlobalFilterToggle({
       aria-pressed={active}
       disabled={disabled}
       className={cn(
-        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-card border text-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-card border text-muted transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
         active
           ? "border-accent bg-accent-dim text-accent"
           : "border-border bg-transparent hover:border-border-hover hover:bg-card-hover-bg hover:text-accent",
@@ -430,7 +430,7 @@ export function FilterChip({
       {onRemove !== undefined && (
         <button
           type="button"
-          className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-badge text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-badge text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
           onClick={onRemove}
           title={removeLabel}
           aria-label={removeLabel}

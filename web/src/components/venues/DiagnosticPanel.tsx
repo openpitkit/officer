@@ -100,7 +100,7 @@ function DiagnosticGroup({
       <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
         {title}
       </p>
-      <div className="space-y-2">
+      <div className="flex flex-col gap-y-2">
         {items.map((d) => (
           <div
             key={[
@@ -287,7 +287,7 @@ function DiagnosticPanelBody({
     (d) => d.kind === "environment" || d.kind === "provider",
   );
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={summaryVariant}>{items.length}</Badge>
         <span className="text-sm font-medium text-text">
@@ -310,7 +310,7 @@ function DiagnosticPanelBody({
         aria-label={t("diagnostics.title")}
         className={DIAGNOSTICS_PANEL_CLASS}
       >
-        <div className="space-y-4">
+        <div className="flex flex-col gap-y-4">
           <DiagnosticGroup
             title={t("diagnostics.groupActionNeeded")}
             items={configGroup}

@@ -145,7 +145,11 @@ function RowField({
   actions: ReactNode;
 }) {
   return (
-    <div role="group" aria-label={label} className="min-w-0 space-y-1.5">
+    <div
+      role="group"
+      aria-label={label}
+      className="min-w-0 flex flex-col gap-y-1.5"
+    >
       <p className="text-xs text-muted">{label}</p>
       <div className="flex items-center gap-2">
         <p className="min-w-0 flex-1 break-all rounded-card border border-border bg-surface-2 px-2 py-1.5 font-mono text-[0.6875rem] text-text">
@@ -202,7 +206,7 @@ export function ConnectAgent() {
       : maskAccessToken("agent", token.data);
     snippetToken = { shown: shownToken, copied: token.data };
     access = (
-      <div className="space-y-1.5">
+      <div className="flex flex-col gap-y-1.5">
         <div className="grid gap-3 sm:grid-cols-2">
           <RowField
             label={t("connect.address")}
@@ -243,8 +247,8 @@ export function ConnectAgent() {
   };
 
   return (
-    <Card className="space-y-3 p-4">
-      <div className="space-y-1">
+    <Card className="flex flex-col gap-y-3 p-4">
+      <div className="flex flex-col gap-y-1">
         <p className="text-sm font-medium text-text">{t("connect.title")}</p>
         <p className="text-xs text-muted-lt">{t("connect.subtitle")}</p>
       </div>
@@ -273,7 +277,7 @@ export function ConnectAgent() {
       {/* While the token loads or after it failed, the token-carrying
           snippets stay hidden: the status above says which. */}
       {tab === "claude" && (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-y-3">
           {snippetToken !== null && (
             <>
               {tokenSnippet(
@@ -281,7 +285,7 @@ export function ConnectAgent() {
                 claudeMcpAddCommand,
                 snippetToken,
               )}
-              <div className="space-y-1.5">
+              <div className="flex flex-col gap-y-1.5">
                 {tokenSnippet(
                   t("connect.claude.desktopLabel"),
                   claudeDesktopConfig,
@@ -335,13 +339,13 @@ export function ConnectAgent() {
         )}
 
       {tab === "chatgpt" && (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-y-3">
           <CopyableSnippet
             label={t("connect.chatgpt.urlLabel")}
             text={url}
             rows={2}
           />
-          <ol className="list-decimal space-y-1 pl-5 text-xs text-muted-lt">
+          <ol className="list-decimal flex flex-col gap-y-1 pl-5 text-xs text-muted-lt">
             <li>{t("connect.chatgpt.step1")}</li>
             <li>{t("connect.chatgpt.step2")}</li>
             <li>{t("connect.chatgpt.step3")}</li>

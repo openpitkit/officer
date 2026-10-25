@@ -121,7 +121,7 @@ export function VenueAccessList({
   );
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted">
           {t("access.accountCount", { count: grants.length - groupCount })}

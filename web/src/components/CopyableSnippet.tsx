@@ -58,7 +58,7 @@ export function CopyableSnippet({
         };
 
   return (
-    <div className={cn("space-y-1.5", className)}>
+    <div className={cn("flex flex-col gap-y-1.5", className)}>
       {label ? (
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs text-muted">{label}</p>
@@ -73,7 +73,7 @@ export function CopyableSnippet({
         value={text}
         onCopy={onCopy}
         spellCheck={false}
-        className="w-full resize-none select-all rounded-card border border-border bg-surface-2 p-2 font-mono text-[0.6875rem] text-muted-lt focus:outline-none focus:ring-1 focus:ring-ring"
+        className="w-full resize-none select-all rounded-card border border-border bg-surface-2 p-2 font-mono text-[0.6875rem] text-muted-lt focus:outline-hidden focus:ring-1 focus:ring-ring"
         aria-label={label ?? t("states.copyableSnippet")}
       />
     </div>

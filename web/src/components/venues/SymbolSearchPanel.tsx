@@ -83,7 +83,7 @@ export function SymbolSearchPanel<Match>({
         );
 
   return (
-    <div className="space-y-2 rounded-card border border-border bg-bg/50 p-3">
+    <div className="flex flex-col gap-y-2 rounded-card border border-border bg-bg/50 p-3">
       <Label htmlFor={id}>{label}</Label>
       <div className="flex gap-2">
         <div className="min-w-0 flex-1">
@@ -121,7 +121,7 @@ export function SymbolSearchPanel<Match>({
         <p className="text-xs text-muted">{noResultsText}</p>
       )}
       {results.length > 0 && (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-y-2">
           <ClearableInput
             value={filterQuery}
             onClear={() => onFilterChange("")}

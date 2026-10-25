@@ -17,15 +17,8 @@ limitations under the License.
 Please see https://officer.openpit.dev and the OWNERS file for details.
 */
 
-/* JetBrains Mono bundled locally (no external CDN). Font: OFL-1.1; tooling:
-   MIT. */
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/500.css";
-@import "@fontsource/jetbrains-mono/700.css";
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
 
 /* Palette bound to .dark / .light classes (toggled by ThemeProvider) rather
    than prefers-color-scheme, to support the tri-state switch. Dark default. */
@@ -391,6 +384,11 @@ Please see https://officer.openpit.dev and the OWNERS file for details.
     font: inherit;
   }
 
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
   .tracking-tight {
     letter-spacing: 0;
   }
@@ -644,23 +642,17 @@ Please see https://officer.openpit.dev and the OWNERS file for details.
     gap: var(--dens-row-gap);
   }
 
-  [data-density="terminal"] .space-y-1 > :not([hidden]) ~ :not([hidden]),
-  [data-density="terminal"] .space-y-1\.5 > :not([hidden]) ~ :not([hidden]) {
-    --tw-space-y-reverse: 0;
-    margin-bottom: calc(2px * var(--tw-space-y-reverse));
-    margin-top: calc(2px * calc(1 - var(--tw-space-y-reverse)));
+  [data-density="terminal"] .gap-y-1,
+  [data-density="terminal"] .gap-y-1\.5 {
+    row-gap: 2px;
   }
-  [data-density="terminal"] .space-y-2 > :not([hidden]) ~ :not([hidden]),
-  [data-density="terminal"] .space-y-3 > :not([hidden]) ~ :not([hidden]) {
-    --tw-space-y-reverse: 0;
-    margin-bottom: calc(4px * var(--tw-space-y-reverse));
-    margin-top: calc(4px * calc(1 - var(--tw-space-y-reverse)));
+  [data-density="terminal"] .gap-y-2,
+  [data-density="terminal"] .gap-y-3 {
+    row-gap: 4px;
   }
-  [data-density="terminal"] .space-y-4 > :not([hidden]) ~ :not([hidden]),
-  [data-density="terminal"] .space-y-5 > :not([hidden]) ~ :not([hidden]) {
-    --tw-space-y-reverse: 0;
-    margin-bottom: calc(var(--dens-row-gap) * var(--tw-space-y-reverse));
-    margin-top: calc(var(--dens-row-gap) * calc(1 - var(--tw-space-y-reverse)));
+  [data-density="terminal"] .gap-y-4,
+  [data-density="terminal"] .gap-y-5 {
+    row-gap: var(--dens-row-gap);
   }
 
   [data-density="terminal"] .text-sm {

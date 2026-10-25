@@ -96,8 +96,8 @@ function LedgerBlock({
   children: ReactNode;
 }): ReactElement {
   return (
-    <section className="space-y-2 border-t border-border pt-3">
-      <div className="space-y-0.5">
+    <section className="flex flex-col gap-y-2 border-t border-border pt-3">
+      <div className="flex flex-col gap-y-0.5">
         <h4 className="text-[0.625rem] font-medium uppercase tracking-[0.09em] text-muted">
           {label}
         </h4>
@@ -647,7 +647,7 @@ function ReproductionMode({
   // No attestation envelope: show the reason and a clean empty state.
   if (!attestation) {
     return (
-      <div className="space-y-3">
+      <div className="flex flex-col gap-y-3">
         <RequestTypeHeader requestType={requestType} />
         <EsignStatus
           alg={bundle.eSign.alg}
@@ -672,7 +672,7 @@ function ReproductionMode({
   const facet = presentResponseFacet(bundle.response);
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-y-3">
       <RequestTypeHeader requestType={requestType} />
       <EsignStatus
         alg={bundle.eSign.alg}
@@ -776,7 +776,7 @@ function ReproductionMode({
         </div>
 
         {!unsigned && bundle.canonicalApproval && rawKey ? (
-          <div className="mt-3 space-y-2">
+          <div className="mt-3 flex flex-col gap-y-2">
             <CopyableSnippet
               label={t("verify.jsSnippetLabel")}
               text={jsVerifySnippet(
@@ -889,7 +889,7 @@ function VerifyEnvelopeMode(): ReactElement {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-y-3">
       <LedgerBlock label={t("paste.label")} note={t("paste.note")}>
         <Textarea
           value={envelope}
@@ -1066,7 +1066,7 @@ export function OrderVerificationPanel({
         <Tabs
           value={mode}
           onValueChange={(value) => setMode(value as typeof mode)}
-          className="space-y-4"
+          className="flex flex-col gap-y-4"
         >
           <TabsList aria-label={t("panel.title")}>
             {hasEvent ? (

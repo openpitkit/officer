@@ -89,9 +89,9 @@ function AccessBoundary() {
           }}
         />
       </p>
-      <div className="space-y-1">
+      <div className="flex flex-col gap-y-1">
         <p className="font-semibold text-text">{t("access.isolation.title")}</p>
-        <ul className="list-disc space-y-0.5 pl-4">
+        <ul className="list-disc flex flex-col gap-y-0.5 pl-4">
           <li>{t("access.isolation.sandbox")}</li>
           <li>{t("access.isolation.user")}</li>
           <li>{t("access.isolation.computer")}</li>
@@ -155,7 +155,7 @@ export function NewPasswordFields({
       : undefined;
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-y-3">
       <PasswordPairFields
         password={{
           ref,
@@ -231,7 +231,7 @@ export function OpenAccessWarning({
       title={t("access.warning.title")}
     >
       <p>{t("access.warning.who")}</p>
-      <ul className="list-disc space-y-0.5 pl-5">
+      <ul className="list-disc flex flex-col gap-y-0.5 pl-5">
         <li>{t("access.warning.programs")}</li>
         <li>{t("access.warning.containers")}</li>
         <li>{t("access.warning.agents")}</li>
@@ -286,7 +286,7 @@ export function AccessModePanel({
 }) {
   const { t } = useTranslation("service");
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-y-4">
       <AccessBoundary />
       <ChoiceCards
         label={t("access.choice")}
@@ -313,7 +313,7 @@ export function AccessModePanel({
         disabled={disabled}
       />
       {mode === "token" ? (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-y-3">
           <NewPasswordFields
             ref={passwordRef}
             onPasswordChange={onPasswordChange}

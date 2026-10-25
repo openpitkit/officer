@@ -113,7 +113,7 @@ function AccountSettings({
             }
           />
           {account.blocked && (
-            <div className="space-y-1 py-2">
+            <div className="flex flex-col gap-y-1 py-2">
               <p className="text-xs text-muted">{t("blockDetails.reason")}</p>
               <p className="whitespace-pre-wrap break-words text-sm text-text">
                 {account.blockReason || t("blockDetails.noReason")}

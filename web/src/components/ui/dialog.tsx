@@ -97,7 +97,7 @@ const DialogContent = forwardRef<
             <DialogPrimitive.Close
               className={cn(
                 "absolute right-4 top-4 rounded-badge p-1 text-muted transition-colors",
-                "hover:bg-accent-dim hover:text-accent focus-visible:outline-none",
+                "hover:bg-accent-dim hover:text-accent focus-visible:outline-hidden",
                 "focus-visible:ring-2 focus-visible:ring-ring",
               )}
               aria-label={t("actions.close")}

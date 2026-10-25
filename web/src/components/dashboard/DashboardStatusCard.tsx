@@ -48,7 +48,7 @@ export function DashboardStatusCard<T>({
     <button
       type="button"
       onClick={() => navigate(to)}
-      className="animate-fade-in w-full cursor-pointer rounded-card text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="animate-fade-in w-full cursor-pointer rounded-card text-left hover:bg-accent-dim focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Card className="pointer-events-none">
         <CardContent className="flex flex-wrap items-center gap-2 py-3">

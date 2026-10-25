@@ -497,11 +497,11 @@ export function BackupCard() {
       <CardHeader>
         <CardTitle>{t("backup.title")}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-col gap-y-4">
         <Tabs
           value={workflow}
           onValueChange={(value) => setWorkflow(value as BackupWorkflow)}
-          className="space-y-4"
+          className="flex flex-col gap-y-4"
         >
           <TabsList aria-label={t("backup.tabs.ariaLabel")}>
             {backupWorkflowTabs.map(({ id, labelKey, icon: Icon }) => (
@@ -512,9 +512,9 @@ export function BackupCard() {
             ))}
           </TabsList>
 
-          <TabsContent value="export" className="space-y-4">
+          <TabsContent value="export" className="flex flex-col gap-y-4">
             {scopeControls}
-            <div className="space-y-2">
+            <div className="flex flex-col gap-y-2">
               <label className="flex w-fit items-center gap-2 text-xs text-muted">
                 <input
                   type="checkbox"
@@ -565,7 +565,7 @@ export function BackupCard() {
               )}
             </div>
           </TabsContent>
-          <TabsContent value="restore" className="space-y-4">
+          <TabsContent value="restore" className="flex flex-col gap-y-4">
             {scopeControls}
             <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-xs text-[var(--danger)]">
               <div className="flex items-start gap-2">
@@ -578,7 +578,7 @@ export function BackupCard() {
                 </p>
               </div>
             </div>
-            <div className="space-y-3">
+            <div className="flex flex-col gap-y-3">
               <div className="grid gap-2">
                 {restoreModes.map((mode) => (
                   <label key={mode} className="flex items-center gap-2 text-xs">
@@ -692,7 +692,7 @@ function BackupScopeControls(props: {
   const { showsAccounts } = accountScope();
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-y-4">
       <label className="inline-flex w-fit items-center gap-2 text-xs text-text">
         <input
           type="checkbox"
@@ -786,7 +786,7 @@ function SelectorBox(props: {
   groupsPlaceholder: string;
 }) {
   return (
-    <div className="space-y-2 rounded-card border border-border p-3">
+    <div className="flex flex-col gap-y-2 rounded-card border border-border p-3">
       <p className="text-xs font-medium text-muted">{props.title}</p>
       <label className="flex items-center gap-2 text-xs text-text">
         <input
@@ -929,7 +929,7 @@ export function ServiceLifecycleCard({
       <CardHeader>
         <CardTitle>{t("lifecycle.title")}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="flex flex-col gap-y-3">
         <div className="flex items-start gap-2 rounded-card border border-[var(--danger)]/35 bg-[var(--danger)]/10 p-3 text-xs text-text">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--danger)]" />
           <p>{t("lifecycle.warning")}</p>
@@ -1173,7 +1173,7 @@ export function ServiceCard({
     <Tabs
       value={activeTab}
       onValueChange={(value) => onTabChange(value as ServiceTab)}
-      className="space-y-4 animate-fade-in"
+      className="flex flex-col gap-y-4 animate-fade-in"
     >
       <AccountModeRestartNotice
         load={accountMode.load}
@@ -1195,7 +1195,7 @@ export function ServiceCard({
         ))}
       </TabsList>
 
-      <TabsContent value="application" className="space-y-4">
+      <TabsContent value="application" className="flex flex-col gap-y-4">
         <Card>
           <CardHeader>
             <CardTitle>{t("application.title")}</CardTitle>
@@ -1295,7 +1295,7 @@ export function ServiceCard({
         </Card>
       </TabsContent>
 
-      <TabsContent value="account-mode" className="space-y-4">
+      <TabsContent value="account-mode" className="flex flex-col gap-y-4">
         <AccountModeCard
           poll={accountMode}
           restart={onAccountModeRestart}
@@ -1303,7 +1303,7 @@ export function ServiceCard({
         />
       </TabsContent>
 
-      <TabsContent value="database" className="space-y-4">
+      <TabsContent value="database" className="flex flex-col gap-y-4">
         <DatabaseCard database={info.database} onReset={onDatabaseReset} />
         <BackupCard />
       </TabsContent>
@@ -1313,7 +1313,7 @@ export function ServiceCard({
           <CardHeader>
             <CardTitle>{t("api.title")}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="flex flex-col gap-y-4">
             <div>
               <p className="mb-1.5 text-xs font-medium text-muted">
                 {t("api.rest")}
@@ -1363,8 +1363,8 @@ export function ServiceCard({
                   {t("api.noCommands")}
                 </p>
               ) : (
-                <div className="space-y-3">
-                  <div className="space-y-1">
+                <div className="flex flex-col gap-y-3">
+                  <div className="flex flex-col gap-y-1">
                     {mcpCommands.map((cmd) => (
                       <div
                         key={cmd.name}
@@ -1400,7 +1400,7 @@ export function ServiceCard({
         <LogsCard />
       </TabsContent>
 
-      <TabsContent value="security" className="space-y-4">
+      <TabsContent value="security" className="flex flex-col gap-y-4">
         <AccessTokensProvider>
           <AccessSection />
           <StorageSection />
@@ -1532,14 +1532,14 @@ export function Service() {
           role="status"
           aria-busy="true"
           aria-label={tc("states.loading")}
-          className="space-y-4"
+          className="flex flex-col gap-y-4"
         >
           {[0, 1, 2].map((i) => (
             <Card key={i} className="animate-pulse">
               <CardHeader>
                 <div className="h-3 w-20 rounded bg-border" />
               </CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent className="flex flex-col gap-y-3">
                 <div className="h-3 w-full rounded bg-border" />
                 <div className="h-3 w-4/5 rounded bg-border" />
               </CardContent>

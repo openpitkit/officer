@@ -176,7 +176,7 @@ export function AboutNavEntry() {
           <DialogTitle>{t("about.title")}</DialogTitle>
           <DialogDescription>{t("about.description")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 text-sm">
+        <div className="flex flex-col gap-y-4 text-sm">
           <div className="rounded-card border border-border bg-surface-2 p-3">
             <div className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
               {t("about.product")}
