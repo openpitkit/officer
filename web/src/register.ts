@@ -39,7 +39,6 @@ import { registerAppRowActions, registerAppVocabulary } from "@/appDefaults";
 import {
   AboutNavEntry,
   LogoutNavEntry,
-  NonReleaseNavEntry,
   RestartRequiredNavEntry,
 } from "@/components/SidebarExtras";
 import {
@@ -301,15 +300,7 @@ export function registerOfficerDefaults(): void {
     section: "footer",
     order: 50,
   });
-  registerNav({
-    id: "non-release",
-    to: "/service",
-    labelKey: "brand.nonRelease",
-    icon: Settings,
-    section: "footer",
-    order: 60,
-    render: () => createElement(NonReleaseNavEntry),
-  });
+  // Capture build (OFS-43): no NON-RELEASE sidebar badge in video frames.
   registerNav({
     id: "logout",
     to: "#logout",
