@@ -1490,6 +1490,59 @@ func TestManagerRetriesFailedStartupManualClear(t *testing.T) {
 	})
 }
 
+func TestManagerFailedStartupManualClearDoesNotBlockRetry(t *testing.T) {
+	sink := &fakeSink{}
+	manager, store, instanceID, instrument := startManualReconciliationTestManager(
+		t, sink, 0,
+	)
+	instrument.ManualPrice = ""
+	store.setEnabledInstruments(
+		instanceID, []domain.MarketDataInstrument{instrument},
+	)
+	sink.mu.Lock()
+	sink.clearErr = errors.New("clear unavailable")
+	sink.mu.Unlock()
+	if err := manager.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return sink.clearCount() > 0 })
+	if err := manager.acquireGate(context.Background(), manager.manualPublisherGate); err != nil {
+		t.Fatalf("wait for startup clear: %v", err)
+	}
+	manager.releaseGate(manager.manualPublisherGate)
+	identity := manualQuoteIdentity{
+		instanceID: instanceID.String(),
+		pair: quoteInstrumentKey{
+			base: instrument.BaseAssetID, quote: instrument.QuoteAssetID,
+		},
+	}
+	manager.mu.Lock()
+	pending, ok := manager.pendingManualClears[identity]
+	manager.mu.Unlock()
+	if !ok {
+		t.Fatal("failed startup clear is not pending")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), manager.stopGrace/2)
+	defer cancel()
+	manager.refreshManualMarksOnce(ctx)
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("retry blocked behind pending startup clear: %v", err)
+	}
+	manager.mu.Lock()
+	retried, ok := manager.pendingManualClears[identity]
+	manager.mu.Unlock()
+	if !ok || retried.token != pending.token {
+		t.Fatalf("pending clear changed after failed retry: %+v/%v, want %+v", retried, ok, pending)
+	}
+	sink.mu.Lock()
+	sink.clearErr = nil
+	sink.mu.Unlock()
+	manager.refreshManualMarksOnce(context.Background())
+	waitFor(t, time.Second, func() bool {
+		return len(sink.clearedSnapshot()) == 2
+	})
+}
+
 func TestManagerRetriesFailedSyntheticTopologyClear(t *testing.T) {
 	sink := &fakeSink{}
 	manager, store, instanceID, instrument := startManualReconciliationTestManager(
