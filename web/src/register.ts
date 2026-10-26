@@ -300,7 +300,7 @@ export function registerOfficerDefaults(): void {
     section: "footer",
     order: 50,
   });
-  // Capture build (OFS-43): no NON-RELEASE sidebar badge in video frames.
+  // The sidebar carries no NON-RELEASE badge.
   registerNav({
     id: "logout",
     to: "#logout",
