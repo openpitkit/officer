@@ -536,6 +536,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
@@ -7425,10 +7427,10 @@ components:
             Human-readable pre-trade settlement price the order would lock -
             an exact decimal string, never the opaque lock blob.
         wouldBlock:
-          nullable: true
-          allOf:
-            - $ref: "#/components/schemas/ExecutionBlock"
           description: Account block the engine would record; null when none.
+          oneOf:
+            - $ref: "#/components/schemas/ExecutionBlock"
+            - type: "null"
 
     # Execution report result
 
