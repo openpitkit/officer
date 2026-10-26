@@ -1,0 +1,409 @@
+{
+  "page": {
+    "title": "Cuentas",
+    "description": "Cuentas de operador guardadas en el plano de control y aplicadas al motor. Bloquee una cuenta o un grupo para detener las órdenes mediante el interruptor de emergencia."
+  },
+  "account": {
+    "title": "Cuenta",
+    "settingsTitle": "Configuración",
+    "switchToSeveral": "Cambiar a varias cuentas",
+    "notOwnBlock": "El bloqueo no procede de la propia cuenta. Puede levantarse en el modo de varias cuentas.",
+    "missing": {
+      "title": "La cuenta no está en la base de datos",
+      "detail": "Ahora no se puede mostrar ni cambiar su configuración. El próximo inicio de Officer seguirá el modo de cuentas guardado."
+    }
+  },
+  "tabs": {
+    "accounts": "Cuentas",
+    "groups": "Grupos"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Tamaño de página",
+      "rowCount": "{{count}} filas por página"
+    }
+  },
+  "filters": {
+    "find": "Buscar",
+    "clearField": "Borrar campo",
+    "maskHelp": "Use * como comodín. Por ejemplo, desk-* coincide con desk-alpha y desk-risk; elija empieza por, termina en o exacto para una coincidencia más estricta.",
+    "match": {
+      "codeAriaLabel": "Modo de coincidencia del código",
+      "notesAriaLabel": "Modo de coincidencia de las notas",
+      "blockReasonAriaLabel": "Modo de coincidencia del motivo de bloqueo",
+      "contains": "Contiene",
+      "startsWith": "Empieza por",
+      "endsWith": "Termina en",
+      "exact": "Exacto"
+    },
+    "status": {
+      "ariaLabel": "Filtro de estado",
+      "all": "Todos los estados",
+      "active": "Activas",
+      "blocked": "Bloqueadas"
+    },
+    "positionCount": {
+      "ariaLabel": "Filtro de número de posiciones",
+      "all": "Todas las posiciones",
+      "greaterThan": "Más de",
+      "lessThan": "Menos de",
+      "between": "Desde-hasta"
+    },
+    "accountCount": {
+      "ariaLabel": "Filtro de número de cuentas",
+      "all": "Todas las cuentas",
+      "hasAccounts": "Con cuentas",
+      "noAccounts": "Sin cuentas"
+    },
+    "advanced": {
+      "trigger": "Más filtros",
+      "title": "Buscar por campos",
+      "applied": "Aplicados:",
+      "positionLabel": "Número de posiciones",
+      "accountLabel": "Número de cuentas",
+      "positionFrom": "Desde",
+      "positionTo": "Hasta",
+      "positionValue": "Valor",
+      "notesLabel": "Notas",
+      "blockReasonLabel": "Motivo de bloqueo",
+      "notesShort": "Notas",
+      "blockReasonShort": "Motivo de bloqueo",
+      "cancel": "Cancelar",
+      "summary": {
+        "positionGreater": "pos. > {{value}}",
+        "positionLess": "pos. < {{value}}",
+        "positionBetween": "pos. {{min}}-{{max}}",
+        "accountGreater": "cuentas > {{value}}",
+        "accountLess": "cuentas < {{value}}",
+        "accountBetween": "cuentas {{min}}-{{max}}",
+        "text": "{{field}}: {{match}} {{value}}"
+      }
+    }
+  },
+  "groups": {
+    "heading": "Grupos",
+    "clearFilter": "(borrar filtro)",
+    "defaultGroup": "Grupo predeterminado",
+    "defaultGroupNote": "Todas las cuentas sin un grupo asignado.",
+    "columns": {
+      "group": "Grupo",
+      "accounts": "Cuentas",
+      "positions": "Pos.",
+      "venueAccess": "Plataformas",
+      "currency": "Moneda",
+      "status": "Estado",
+      "notes": "Notas",
+      "actions": "Acciones"
+    },
+    "columnDescriptions": {
+      "group": "Esta columna muestra el código del grupo de cuentas y su título visible.",
+      "accounts": "Esta columna muestra cuántas cuentas pertenecen al grupo.",
+      "positions": "Esta columna muestra cuántas filas de posiciones abiertas pertenecen al grupo.",
+      "venueAccess": "Esta columna muestra si el propio grupo tiene acceso al menos a una conexión de negociación; sus cuentas obtienen ese acceso a través del grupo.",
+      "currency": "Moneda predeterminada de las cuentas del grupo.",
+      "status": "Esta columna muestra si el grupo está activo o bloqueado.",
+      "notes": "Esta columna muestra las notas del operador guardadas en el grupo.",
+      "actions": "Esta columna contiene las acciones de fila para filtrar, compartir, gestionar el acceso a conexiones de negociación y eliminar el grupo."
+    },
+    "status": {
+      "blocked": "bloqueado",
+      "active": "activo"
+    },
+    "filters": {
+      "codeLabel": "Búsqueda de grupos",
+      "codePlaceholder": "Buscar por código o título del grupo",
+      "notesLabel": "Búsqueda en las notas del grupo",
+      "notesPlaceholder": "Buscar en las notas del grupo",
+      "blockReasonPlaceholder": "Buscar por motivo de bloqueo del grupo",
+      "advancedDescription": "Busque grupos por más campos. Estos filtros se aplican junto con el código, el estado y el número de cuentas."
+    },
+    "actions": {
+      "notes": "Notas",
+      "editTitle": "Editar grupo",
+      "editCurrencyTitle": "Editar la moneda del grupo",
+      "editNotesTitle": "Editar notas",
+      "positionsTitle": "Abrir las posiciones filtradas por este grupo",
+      "viewBlockDetails": "Ver detalles del bloqueo",
+      "block": "Bloquear",
+      "unblock": "Desbloquear",
+      "delete": "Eliminar",
+      "deleteTitle": "Eliminar grupo"
+    },
+    "currencyCell": {
+      "title": "Moneda predeterminada de las cuentas del grupo."
+    }
+  },
+  "accounts": {
+    "heading": "Cuentas",
+    "clearFilter": "(borrar filtro)",
+    "pnlHalt": {
+      "missingFx": "Cálculo de PnL detenido: no está disponible una cotización FX necesaria.",
+      "missingAccountCurrency": "Cálculo de PnL detenido: la moneda de la cuenta no está disponible.",
+      "missingInitialPnl": "Cálculo de PnL detenido: no está disponible un valor de PnL inicial fidedigno.",
+      "missingCostBasis": "Cálculo de PnL detenido: la base de costo de la posición no está disponible.",
+      "arithmeticOverflow": "Cálculo de PnL detenido: la aritmética exacta superó el rango numérico admitido.",
+      "unknown": "El motor detuvo el cálculo de PnL."
+    },
+    "filteredTo": "- filtrado por",
+    "filteredToDefault": "grupo predeterminado",
+    "columns": {
+      "account": "Cuenta",
+      "group": "Grupo",
+      "currency": "Moneda",
+      "pnl": "PnL",
+      "positions": "Pos.",
+      "venueAccess": "Plataformas",
+      "status": "Estado",
+      "notes": "Notas",
+      "actions": "Acciones"
+    },
+    "columnDescriptions": {
+      "account": "Esta columna muestra el código de la cuenta y su título visible.",
+      "group": "Esta columna muestra el grupo asignado a la cuenta.",
+      "currency": "Moneda de la cuenta.",
+      "pnl": "Esta columna muestra el PnL exacto de la cuenta que informa Spot Funds.",
+      "positions": "Esta columna muestra cuántas filas de posiciones se guardan para la cuenta.",
+      "venueAccess": "Esta columna muestra si la cuenta tiene acceso al menos a una conexión de negociación, propio o a través de su grupo.",
+      "status": "Esta columna muestra si la cuenta está activa o bloqueada.",
+      "notes": "Esta columna muestra las notas del operador guardadas en la cuenta.",
+      "actions": "Esta columna contiene las acciones de fila para posiciones, negociación, políticas, auditoría, acceso a conexiones de negociación y eliminación."
+    },
+    "status": {
+      "blocked": "bloqueada",
+      "active": "activa"
+    },
+    "filters": {
+      "codeLabel": "Búsqueda de cuentas",
+      "codePlaceholder": "Buscar por código o título de la cuenta",
+      "groupLabel": "Búsqueda de grupos",
+      "groupPlaceholder": "Buscar por código o título del grupo",
+      "notesLabel": "Búsqueda en las notas de la cuenta",
+      "notesPlaceholder": "Buscar en las notas de la cuenta",
+      "blockReasonPlaceholder": "Buscar por motivo de bloqueo de la cuenta",
+      "advancedDescription": "Busque cuentas por más campos. Estos filtros se aplican junto con el código, el estado y el grupo seleccionado."
+    },
+    "groupCell": {
+      "editTitle": "Editar la asignación de grupo",
+      "filterTitle": "Filtrar cuentas por este grupo",
+      "noGroup": "ninguno"
+    },
+    "links": {
+      "positions": "Posiciones - límites de contado de esta cuenta",
+      "trading": "Negociación - órdenes y operaciones",
+      "policies": "Políticas - barreras de riesgo",
+      "audit": "Auditoría - registro de esta cuenta"
+    },
+    "actions": {
+      "notes": "Notas",
+      "editTitle": "Editar cuenta",
+      "editCurrencyTitle": "Editar la moneda de la cuenta",
+      "editNotesTitle": "Editar notas de referencia",
+      "positionsTitle": "Abrir las posiciones filtradas por esta cuenta",
+      "viewBlockDetails": "Ver detalles del bloqueo",
+      "block": "Bloquear",
+      "unblock": "Desbloquear",
+      "deleteTitle": "Eliminar cuenta"
+    },
+    "empty": {
+      "title": "No hay cuentas",
+      "hintFiltered": "No hay cuentas asignadas a este grupo.",
+      "hintEmpty": "Cree la primera cuenta para empezar a aplicarle límites de riesgo."
+    },
+    "currencyCell": {
+      "title": "Moneda de la cuenta",
+      "none": "sin nivel",
+      "origins": {
+        "account": "La moneda de la cuenta se define en la propia cuenta",
+        "groupNamed": "La moneda de la cuenta se hereda de {{group}}",
+        "default": "La moneda de la cuenta usa el nivel predeterminado"
+      }
+    }
+  },
+  "createAccount": {
+    "trigger": "Nueva cuenta",
+    "title": "Crear cuenta",
+    "description": "Cree una cuenta en el plano de control y, si lo desea, asígnela a un grupo.",
+    "codeLabel": "Código de cuenta",
+    "codeHint": "Hasta 64 caracteres imprimibles, sin espacios al principio ni al final.",
+    "groupLabel": "Grupo (opcional)",
+    "groupHint": "Elija un grupo existente o escriba un código nuevo. Déjelo vacío para crear una cuenta sin grupo.",
+    "currencyLabel": "Moneda (opcional)",
+    "currencyHint": "Sin moneda, no se calcula el P&L realizado de esta cuenta.",
+    "cancel": "Cancelar",
+    "submit": "Crear"
+  },
+  "createGroup": {
+    "trigger": "Nuevo grupo",
+    "title": "Crear grupo",
+    "codeLabel": "Código del grupo",
+    "titleLabel": "Título visible (opcional)",
+    "titlePlaceholder": "Mesas de renta variable de EE. UU.",
+    "currencyLabel": "Moneda (opcional)",
+    "currencyHint": "Sin moneda, no se calcula el P&L realizado de las cuentas de este grupo, salvo que se defina una moneda de cuenta.",
+    "notesLabel": "Notas (opcional)",
+    "notesPlaceholder": "Cuentas de las mesas de negociación de renta variable de EE. UU.",
+    "notesHint": "Notas de referencia: se guardan solo en el plano de control y no se envían al motor.",
+    "cancel": "Cancelar",
+    "submit": "Crear"
+  },
+  "editCurrency": {
+    "title": "Editar la moneda de la cuenta",
+    "description": "Defina la moneda de la cuenta {{account}}.",
+    "cascadeTitle": "Cascada de monedas",
+    "accountTier": "Cuenta",
+    "groupTier": "Grupo",
+    "defaultTier": "Predeterminada",
+    "effective": "Efectiva",
+    "origins": {
+      "account": "cuenta",
+      "group": "grupo",
+      "default": "predeterminada"
+    },
+    "blockedHint": "Esta cuenta tiene posiciones o P&L distintos de cero. El servidor rechazará un cambio que altere su moneda efectiva.",
+    "currencyLabel": "Moneda de la cuenta",
+    "currencyHint": "Borre el campo para heredar de los niveles de grupo y predeterminado. Sin una moneda de cuenta efectiva, no se calcula el P&L realizado de esta cuenta.",
+    "cancel": "Cancelar",
+    "submit": "Guardar"
+  },
+  "editGroupCurrency": {
+    "title": "Editar la moneda del grupo",
+    "description": "Defina la moneda del grupo {{group}}.",
+    "defaultDescription": "Defina la moneda del grupo predeterminado reservado.",
+    "blockedHint": "El servidor rechaza los cambios que alterarían la moneda efectiva de las cuentas miembro con posiciones o P&L distintos de cero.",
+    "currencyLabel": "Moneda del grupo",
+    "cancel": "Cancelar",
+    "submit": "Guardar"
+  },
+  "businessCsv": {
+    "exportGroupsCsv": "Exportar grupos en CSV",
+    "exportAccountsCsv": "Exportar cuentas en CSV"
+  },
+  "blockAccount": {
+    "applied": "Bloqueo aplicado a la cuenta {{account}}.",
+    "titlePrefix": "Bloquear la cuenta",
+    "description": "El bloqueo detiene las órdenes nuevas de esta cuenta. El motivo es obligatorio y queda registrado en el registro de auditoría.",
+    "reasonLabel": "Motivo",
+    "reasonPlaceholder": "Interruptor de emergencia: infracción del límite de riesgo durante el incidente #42",
+    "cancel": "Cancelar",
+    "submit": "Bloquear"
+  },
+  "unblockAccount": {
+    "title": "¿Desbloquear la cuenta?",
+    "descriptionPrefix": "La cuenta",
+    "descriptionSuffix": "volverá a aceptar órdenes nuevas. Queda constancia en el registro de auditoría.",
+    "groupStillBlocked": "El grupo {{group}} está bloqueado. Esta cuenta seguirá bloqueada hasta que se desbloquee el grupo.",
+    "cancel": "Cancelar",
+    "submit": "Desbloquear"
+  },
+  "blockGroup": {
+    "titlePrefix": "Bloquear el grupo",
+    "description": "El bloqueo detiene las órdenes nuevas de todas las cuentas de este grupo. El motivo es obligatorio y queda registrado en el registro de auditoría.",
+    "reasonLabel": "Motivo",
+    "reasonPlaceholder": "Interruptor de emergencia: infracción del límite de riesgo durante el incidente #42",
+    "cancel": "Cancelar",
+    "submit": "Bloquear"
+  },
+  "unblockGroup": {
+    "title": "¿Desbloquear el grupo?",
+    "descriptionPrefix": "Las cuentas del grupo",
+    "descriptionSuffix": "volverán a aceptar órdenes nuevas. Queda constancia en el registro de auditoría. Las cuentas bloqueadas individualmente siguen bloqueadas.",
+    "cancel": "Cancelar",
+    "submit": "Desbloquear"
+  },
+  "blockDetails": {
+    "accountTitle": "Cuenta bloqueada",
+    "groupTitle": "Grupo bloqueado",
+    "description": "Motivo completo del bloqueo y el registro de auditoría más próximo de este bloqueo.",
+    "source": "Origen del bloqueo",
+    "sourceAccount": "Bloqueada en la propia cuenta.",
+    "sourceGroup": "Bloqueada a través del grupo {{group}}, no en la propia cuenta.",
+    "alsoGroupBlocked": "El grupo {{group}} también está bloqueado. Desbloquear la cuenta deja vigente el bloqueo del grupo.",
+    "unblockGroupBlocked": "El bloqueo procede del grupo {{group}}. Desbloquee el grupo para que esta cuenta pueda negociar.",
+    "reason": "Motivo",
+    "noReason": "No se registró ningún motivo.",
+    "audit": "Auditoría",
+    "auditLoading": "Cargando registros de auditoría…",
+    "noAudit": "No se encontraron registros de auditoría.",
+    "noAuditDetail": "No se registró ningún detalle.",
+    "actor": "Actor:",
+    "close": "Cerrar",
+    "openAudit": "Abrir auditoría",
+    "unblock": "Desbloquear"
+  },
+  "deleteGroup": {
+    "title": "¿Eliminar el grupo?",
+    "descriptionPrefix": "El grupo",
+    "descriptionSuffix": "se eliminará de forma permanente. Las cuentas asignadas actualmente a este grupo perderán su asignación de grupo.",
+    "tradingWarning_one": "Este grupo tiene acceso a {{count}} conexión de negociación. Al eliminar el grupo se revoca ese acceso; las cuentas del grupo conservan el acceso solo si se les concedió directamente.",
+    "tradingWarning_many": "Este grupo tiene acceso a {{count}} conexiones de negociación. Al eliminar el grupo se revoca ese acceso; las cuentas del grupo conservan el acceso solo si se les concedió directamente.",
+    "tradingWarning_other": "Este grupo tiene acceso a {{count}} conexiones de negociación. Al eliminar el grupo se revoca ese acceso; las cuentas del grupo conservan el acceso solo si se les concedió directamente.",
+    "cancel": "Cancelar",
+    "submit": "Eliminar"
+  },
+  "deleteAccount": {
+    "tradingWarning": "Existen conexiones de negociación. Al eliminar esta cuenta se eliminan en cascada todos sus datos, incluidas las comisiones registradas desde las conexiones de negociación. Tras reiniciarse Officer, esas comisiones de la plataforma pueden volver a registrarse en la cuenta de comisiones actual de la conexión.",
+    "title": "¿Eliminar la cuenta?",
+    "descriptionPrefix": "La cuenta",
+    "descriptionSuffix": "se eliminará de forma permanente. Los registros de negociación dependientes solo se eliminan tras una confirmación explícita de eliminación forzada.",
+    "dependentsTitle": "Hay filas dependientes que impiden la eliminación",
+    "dependentKinds": {
+      "trading_access": "Acceso a conexiones de negociación",
+      "balances": "Saldos",
+      "orders": "Órdenes",
+      "order_events": "Eventos de órdenes",
+      "trades": "Operaciones",
+      "order_approvals": "Aprobaciones de órdenes",
+      "adjustments": "Ajustes",
+      "limit_rate": "Límites de frecuencia",
+      "limit_order_size": "Límites de tamaño de orden"
+    },
+    "cancel": "Cancelar",
+    "submit": "Eliminar",
+    "forceSubmit": "Forzar eliminación"
+  },
+  "editGroup": {
+    "titlePrefix": "Editar grupo",
+    "description": "Actualice el ID del grupo y el título visible.",
+    "codeLabel": "ID del grupo",
+    "titleLabel": "Título visible (opcional)",
+    "cancel": "Cancelar",
+    "submit": "Guardar"
+  },
+  "editAccount": {
+    "titlePrefix": "Editar cuenta",
+    "description": "Actualice el ID de la cuenta y el título visible.",
+    "codeLabel": "ID de la cuenta",
+    "titleLabel": "Título visible (opcional)",
+    "cancel": "Cancelar",
+    "submit": "Guardar"
+  },
+  "editGroupNotes": {
+    "titlePrefix": "Notas - grupo",
+    "description": "Notas de referencia guardadas en el plano de control. No se envían al motor y no afectan a la evaluación de riesgos.",
+    "notesLabel": "Notas",
+    "cancel": "Cancelar",
+    "submit": "Guardar"
+  },
+  "editAccountNotes": {
+    "titlePrefix": "Notas -",
+    "description": "Notas de referencia guardadas en el plano de control. No se envían al motor y no afectan a la evaluación de riesgos.",
+    "notesLabel": "Notas",
+    "cancel": "Cancelar",
+    "submit": "Guardar"
+  },
+  "assignGroup": {
+    "titlePrefix": "Asignar grupo -",
+    "description": "Elija un grupo existente o escriba un ID nuevo. Déjelo vacío para quitar la asignación de grupo.",
+    "groupLabel": "Grupo",
+    "cancel": "Cancelar",
+    "assign": "Asignar",
+    "clear": "Quitar"
+  },
+  "reservedGroupCode": "El código «-» está reservado para referirse al grupo predeterminado. Elija un código distinto.",
+  "venueAccessTitle": "Acceso a conexiones de negociación",
+  "venueAccessGroupCheckFailed": "No se pudo comprobar el grupo de esta cuenta: {{error}}",
+  "tradingCheck": {
+    "checking": "Todavía se están comprobando las conexiones de negociación.",
+    "failed": "No se pudieron comprobar las conexiones de negociación: {{error}}"
+  }
+}

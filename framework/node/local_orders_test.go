@@ -2003,9 +2003,9 @@ func TestLocalNode_CancelBlockOnlyResultAuditsPreReportLeaves(t *testing.T) {
 		t.Fatalf("ListAuditFiltered(execution report): %v", err)
 	}
 	if len(rows) != 1 ||
-		!strings.Contains(rows[0].Detail, "leavesQty=0") ||
-		!strings.Contains(rows[0].Detail, "reservationRemainder=2") ||
-		strings.Contains(rows[0].Detail, "releaseApplied=") {
+		!strings.Contains(rows[0].Detail.Text, "remaining 0,") ||
+		!strings.Contains(rows[0].Detail.Text, "reservationRemainder=2") ||
+		strings.Contains(rows[0].Detail.Text, "releaseApplied=") {
 		t.Fatalf(
 			"blocked cancellation audit = %+v, want no local release marker",
 			rows,
@@ -2110,8 +2110,8 @@ func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
 	// The immediate report settles its own fill, so the audited leaves are the
 	// zero in the adapter-built report request.
 	if len(audit) != 1 || audit[0].Account != "acc-1" ||
-		!strings.Contains(audit[0].Detail, "qty=2 leavesQty=0 filled") ||
-		!strings.Contains(audit[0].Detail, "reservationRemainder=0") {
+		!strings.Contains(audit[0].Detail.Text, "qty 2, remaining 0, filled") ||
+		!strings.Contains(audit[0].Detail.Text, "reservationRemainder=0") {
 		t.Fatalf("immediate execution-report audit = %+v", audit)
 	}
 }
@@ -3047,7 +3047,7 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAsset(t *testing.T) {
 	}
 	if len(rows) != 1 ||
 		rows[0].Asset != "GOLD" ||
-		!strings.Contains(rows[0].Detail, "auto-created asset GOLD by submit order") {
+		!strings.Contains(rows[0].Detail.Text, "Asset GOLD created automatically by submit order") {
 		t.Fatalf("create-asset audit rows = %+v, want submit-order auto-create", rows)
 	}
 }
@@ -3206,7 +3206,7 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered(create account): %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "auto-created account fresh by submit order") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "Account fresh created automatically by submit order") {
 		t.Fatalf("create-account audit rows = %+v, want submit-order auto-create", rows)
 	}
 }

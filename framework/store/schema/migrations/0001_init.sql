@@ -428,7 +428,11 @@ CREATE INDEX idx_trades_lock_price ON trade (lock_price COLLATE DECIMAL, id DESC
 -- rows link to accounts only through the immutable account_code snapshot.
 -- group_code is the structured handle of a group action. Group actions target
 -- no account, so without it a group's rows could only be selected by matching
--- the free-form detail text, which a crafted group code can spoof.
+-- the free-form detail text, which a crafted group code can spoof. detail is
+-- the English text as written; detail_code names its template, and
+-- detail_params (a JSON object) and detail_fields (a JSON array of name/value
+-- pairs) are the values it was rendered with, so a reader renders the same
+-- line in another language.
 CREATE TABLE audit (
     id            {{PK}},
     external_id   {{XID}} UNIQUE,
@@ -442,6 +446,9 @@ CREATE TABLE audit (
     action_id     INTEGER NOT NULL REFERENCES audit_action(id),
     source_id     INTEGER NOT NULL REFERENCES source_kind(id),
     detail        TEXT NOT NULL DEFAULT '',
+    detail_code   TEXT NOT NULL DEFAULT '',
+    detail_params TEXT NOT NULL DEFAULT '{}',
+    detail_fields TEXT NOT NULL DEFAULT '[]',
     order_id      TEXT NOT NULL DEFAULT '',
     verdict       TEXT NOT NULL DEFAULT '',
     reject_code   TEXT NOT NULL DEFAULT ''

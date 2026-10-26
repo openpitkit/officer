@@ -184,8 +184,10 @@ check-semgrep: install-semgrep
     {{ semgrep }} --config checks/semgrep/ --error --metrics=off --disable-version-check .
     {{ semgrep }} --test --config checks/semgrep/default-domain-status.yml --metrics=off --disable-version-check checks/semgrep/testdata/default-domain-status.go
     {{ semgrep }} --test --config checks/semgrep/locale-latin-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-latin-words.txt
+    {{ semgrep }} --test --config checks/semgrep/locale-english-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-english-words.txt
     {{ semgrep }} --test --config checks/semgrep/file-header-site-link.yml --metrics=off --disable-version-check checks/semgrep/testdata/file-header-site-link.txt
     {{ semgrep }} --test --config checks/semgrep/panel-access-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-access-reuse.tsx
+    {{ semgrep }} --test --config checks/semgrep/panel-code-label.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-code-label.tsx
     {{ semgrep }} --test --config checks/semgrep/no-legacy-database-probe.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-legacy-database-probe.go
     {{ semgrep }} --test --config checks/semgrep/tailwind-v4-utilities.yml --metrics=off --disable-version-check checks/semgrep/testdata/tailwind-v4-utilities.tsx
 

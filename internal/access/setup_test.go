@@ -162,7 +162,9 @@ func TestCompleteSetupOpen(t *testing.T) {
 				t.Fatalf("CompleteSetup(open) mode = %s, error = %v", h.service.Mode(), err)
 			}
 			assertAudit(t, h.auditor.Records(), panelUser,
-				store.AuditEntry{Action: domain.AuditActionSetAccessMode, Detail: "open"},
+				store.AuditEntry{Action: domain.AuditActionSetAccessMode, Detail: domain.AuditDetail{
+					Code: domain.AuditDetailSetAccessModeOpen, Text: "No token",
+				}},
 			)
 		})
 	}
@@ -202,10 +204,16 @@ func TestCompleteSetupTokenIssuesCredentialsAndClearsRecovery(t *testing.T) {
 		t.Fatal("completion kept an earlier recovery code")
 	}
 	assertAudit(t, h.auditor.Records(), panelUser,
-		store.AuditEntry{Action: domain.AuditActionSetAccessMode, Detail: "token"},
+		store.AuditEntry{Action: domain.AuditActionSetAccessMode, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailSetAccessModeToken, Text: "Token and password",
+		}},
 		store.AuditEntry{Action: domain.AuditActionSetPanelPassword},
-		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: "api"},
-		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: "agent"},
+		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailIssueAPIToken, Text: "API token",
+		}},
+		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailIssueAgentToken, Text: "Agent token",
+		}},
 	)
 	assertNoSecret(t, h.auditor.Records(), nil, firstPassword, password.Hash, snapshot.APIToken, snapshot.AgentToken, id)
 }

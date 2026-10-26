@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -104,9 +105,9 @@ func assertAudit(
 	for i, record := range records {
 		// The row's own detail is never printed: a wrong one may carry a
 		// secret.
-		if record.entry != want[i] {
+		if !reflect.DeepEqual(record.entry, want[i]) {
 			t.Errorf("audit row %d = %s with another detail or field, want %s %q",
-				i, record.entry.Action, want[i].Action, want[i].Detail)
+				i, record.entry.Action, want[i].Action, want[i].Detail.Text)
 		}
 		if record.caller != caller {
 			t.Errorf("audit row %d caller = %+v, want %+v", i, record.caller, caller)
@@ -214,10 +215,16 @@ func TestSwitchToTokenIssuesBothTokensAndASession(t *testing.T) {
 		t.Errorf("password set at %v, want %v", got, start)
 	}
 	assertAudit(t, h.auditor.Records(), panelUser,
-		store.AuditEntry{Action: domain.AuditActionSetAccessMode, Detail: "token"},
+		store.AuditEntry{Action: domain.AuditActionSetAccessMode, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailSetAccessModeToken, Text: "Token and password",
+		}},
 		store.AuditEntry{Action: domain.AuditActionSetPanelPassword},
-		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: "api"},
-		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: "agent"},
+		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailIssueAPIToken, Text: "API token",
+		}},
+		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailIssueAgentToken, Text: "Agent token",
+		}},
 	)
 	assertNoSecret(t, h.auditor.Records(), nil,
 		firstPassword, snapshot.APIToken, snapshot.AgentToken, id)
@@ -879,7 +886,9 @@ func TestSwitchToOpenNeedsAcknowledgementAndPassword(t *testing.T) {
 	}
 	records := h.auditor.Records()
 	assertAudit(t, records[switchRows:], panelUser,
-		store.AuditEntry{Action: domain.AuditActionSetAccessMode, Detail: "open"})
+		store.AuditEntry{Action: domain.AuditActionSetAccessMode, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailSetAccessModeOpen, Text: "No token",
+		}})
 	assertNoSecret(t, records, nil, firstPassword)
 }
 
@@ -989,8 +998,12 @@ func TestRegenerateTokenInvalidatesTheOldValue(t *testing.T) {
 	after := h.store.Snapshot()
 	records := h.auditor.Records()
 	assertAudit(t, records[switchRows:], panelUser,
-		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: "api"},
-		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: "agent"},
+		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailIssueAPIToken, Text: "API token",
+		}},
+		store.AuditEntry{Action: domain.AuditActionIssueAccessToken, Detail: domain.AuditDetail{
+			Code: domain.AuditDetailIssueAgentToken, Text: "Agent token",
+		}},
 	)
 	assertNoSecret(t, records, nil, before.APIToken, before.AgentToken,
 		after.APIToken, after.AgentToken)

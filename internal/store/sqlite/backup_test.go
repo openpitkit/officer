@@ -157,7 +157,10 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 	}
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action: domain.AuditActionCreateAccount, Account: "acc-1",
-		Actor: "operator", Source: domain.SourcePanel, Detail: "seed",
+		Actor: "operator", Source: domain.SourcePanel,
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "acc-1"},
+		),
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
@@ -3131,7 +3134,10 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 		}
 		if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 			Action: domain.AuditActionCreateAccount, Account: "extra-acc",
-			Actor: "operator", Source: domain.SourcePanel, Detail: "extra",
+			Actor: "operator", Source: domain.SourcePanel,
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "extra-acc"},
+			),
 		}); err != nil {
 			t.Fatalf("AppendAudit(extra): %v", err)
 		}

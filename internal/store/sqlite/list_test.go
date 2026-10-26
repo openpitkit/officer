@@ -562,18 +562,38 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 }
 
 // seedRestrictionAudit appends audit rows of accounts a and b and rows
-// recorded with no account, interleaved; each row's detail names it. Newest
-// first they read: none-2, a-3, b-2, a-2, none-1, b-1, a-1.
+// recorded with no account, interleaved; each row's detail tells it apart.
+// Newest first they read: update asset AAPL, block account a: a-3, unblock
+// account b, unblock account a, create asset AAPL, block account b: b-1, block
+// account a: a-1.
 func seedRestrictionAudit(t *testing.T, ctx context.Context, rs fwstore.RealmStore) {
 	t.Helper()
+	block := func(account, reason string) domain.AuditDetail {
+		return domain.NewAuditDetail(
+			domain.AuditDetailBlockAccountReason,
+			domain.AuditDetailParams{"account": account, "reason": reason},
+		)
+	}
+	unblock := func(account string) domain.AuditDetail {
+		return domain.NewAuditDetail(
+			domain.AuditDetailUnblockAccount, domain.AuditDetailParams{"account": account},
+		)
+	}
+	asset := domain.AuditDetailParams{"asset": "AAPL"}
 	for _, entry := range []fwstore.AuditEntry{
-		{Action: domain.AuditActionBlock, Account: "a", Detail: "a-1"},
-		{Action: domain.AuditActionBlock, Account: "b", Detail: "b-1"},
-		{Action: domain.AuditActionCreateAsset, Asset: "AAPL", Detail: "none-1"},
-		{Action: domain.AuditActionUnblock, Account: "a", Detail: "a-2"},
-		{Action: domain.AuditActionUnblock, Account: "b", Detail: "b-2"},
-		{Action: domain.AuditActionBlock, Account: "a", Detail: "a-3"},
-		{Action: domain.AuditActionUpdateAsset, Asset: "AAPL", Detail: "none-2"},
+		{Action: domain.AuditActionBlock, Account: "a", Detail: block("a", "a-1")},
+		{Action: domain.AuditActionBlock, Account: "b", Detail: block("b", "b-1")},
+		{
+			Action: domain.AuditActionCreateAsset, Asset: "AAPL",
+			Detail: domain.NewAuditDetail(domain.AuditDetailCreateAsset, asset),
+		},
+		{Action: domain.AuditActionUnblock, Account: "a", Detail: unblock("a")},
+		{Action: domain.AuditActionUnblock, Account: "b", Detail: unblock("b")},
+		{Action: domain.AuditActionBlock, Account: "a", Detail: block("a", "a-3")},
+		{
+			Action: domain.AuditActionUpdateAsset, Asset: "AAPL",
+			Detail: domain.NewAuditDetail(domain.AuditDetailUpdateAsset, asset),
+		},
 	} {
 		entry.Source = domain.SourcePanel
 		if err := rs.AppendAudit(ctx, entry); err != nil {
@@ -585,7 +605,7 @@ func seedRestrictionAudit(t *testing.T, ctx context.Context, rs fwstore.RealmSto
 func auditDetails(rows []domain.AuditRow) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, row.Detail)
+		out = append(out, row.Detail.Text)
 	}
 	return out
 }
@@ -602,13 +622,17 @@ func TestListAuditRowsAccountRestriction(t *testing.T) {
 		{
 			name:      "zero restriction lists every row",
 			wantTotal: 7,
-			want:      []string{"none-2", "a-3", "b-2", "a-2", "none-1", "b-1", "a-1"},
+			want: []string{
+				"Asset AAPL updated", "Account a blocked: a-3", "Account b unblocked",
+				"Account a unblocked", "Asset AAPL created", "Account b blocked: b-1",
+				"Account a blocked: a-1",
+			},
 		},
 		{
 			name:      "restricted to a",
 			filter:    fwstore.AuditListFilter{Restriction: restrictA},
 			wantTotal: 3,
-			want:      []string{"a-3", "a-2", "a-1"},
+			want:      []string{"Account a blocked: a-3", "Account a unblocked", "Account a blocked: a-1"},
 		},
 		{
 			name: "page inside the restricted set",
@@ -616,13 +640,16 @@ func TestListAuditRowsAccountRestriction(t *testing.T) {
 				Restriction: restrictA, Page: fwstore.PageSpec{Limit: 2, Offset: 1},
 			},
 			wantTotal: 3,
-			want:      []string{"a-2", "a-1"},
+			want:      []string{"Account a unblocked", "Account a blocked: a-1"},
 		},
 		{
 			name:      "include unowned adds the rows with no account",
 			filter:    fwstore.AuditListFilter{Restriction: restrictAUnowned},
 			wantTotal: 5,
-			want:      []string{"none-2", "a-3", "a-2", "none-1", "a-1"},
+			want: []string{
+				"Asset AAPL updated", "Account a blocked: a-3", "Account a unblocked",
+				"Asset AAPL created", "Account a blocked: a-1",
+			},
 		},
 		{
 			name: "page inside the set with unowned rows",
@@ -630,7 +657,7 @@ func TestListAuditRowsAccountRestriction(t *testing.T) {
 				Restriction: restrictAUnowned, Page: fwstore.PageSpec{Limit: 2, Offset: 1},
 			},
 			wantTotal: 5,
-			want:      []string{"a-3", "a-2"},
+			want:      []string{"Account a blocked: a-3", "Account a unblocked"},
 		},
 		{
 			name: "account filter narrows on top",
@@ -665,31 +692,38 @@ func TestListAuditFilteredAccountRestriction(t *testing.T) {
 		{
 			name: "zero restriction lists every row",
 			n:    10,
-			want: []string{"none-2", "a-3", "b-2", "a-2", "none-1", "b-1", "a-1"},
+			want: []string{
+				"Asset AAPL updated", "Account a blocked: a-3", "Account b unblocked",
+				"Account a unblocked", "Asset AAPL created", "Account b blocked: b-1",
+				"Account a blocked: a-1",
+			},
 		},
 		{
 			name:   "restricted to a",
 			filter: domain.AuditFilter{Restriction: restrictA},
 			n:      10,
-			want:   []string{"a-3", "a-2", "a-1"},
+			want:   []string{"Account a blocked: a-3", "Account a unblocked", "Account a blocked: a-1"},
 		},
 		{
 			name:   "count bounds the restricted set",
 			filter: domain.AuditFilter{Restriction: restrictA},
 			n:      2,
-			want:   []string{"a-3", "a-2"},
+			want:   []string{"Account a blocked: a-3", "Account a unblocked"},
 		},
 		{
 			name:   "include unowned adds the rows with no account",
 			filter: domain.AuditFilter{Restriction: restrictAUnowned},
 			n:      10,
-			want:   []string{"none-2", "a-3", "a-2", "none-1", "a-1"},
+			want: []string{
+				"Asset AAPL updated", "Account a blocked: a-3", "Account a unblocked",
+				"Asset AAPL created", "Account a blocked: a-1",
+			},
 		},
 		{
 			name:   "count bounds the set with unowned rows",
 			filter: domain.AuditFilter{Restriction: restrictAUnowned},
 			n:      3,
-			want:   []string{"none-2", "a-3", "a-2"},
+			want:   []string{"Asset AAPL updated", "Account a blocked: a-3", "Account a unblocked"},
 		},
 		{
 			name:   "account filter narrows on top",

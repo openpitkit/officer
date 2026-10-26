@@ -709,9 +709,9 @@ export function LimitDialog({
               </p>
               {visibleKinds.map(({ kind }) => {
                 // Human label/hint come from the policy catalog (domain ns), keyed
-                // by policy id + field key; the field-label helper falls back to
-                // the mnemonic key, and the hint falls back to the kind hint, so
-                // unknown fields still render.
+                // by policy id + field key; the field-label helper shows the
+                // mnemonic key and reports it, and the hint falls back to the
+                // kind hint, so unknown fields still render.
                 const fieldLabel = policyFieldLabel(t, form.policy, kind);
                 const catalogHint = policyFieldHint(t, form.policy, kind);
                 const fieldHint = catalogHint || kindHint(t, form.policy, kind);

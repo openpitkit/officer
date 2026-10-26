@@ -2350,7 +2350,14 @@ describe("append-only list clients", () => {
               action: "block",
               account: "desk-alpha",
               accountTitle: "Desk Alpha",
-              detail: "blocked",
+              detail:
+                "Limit set: rate_limit (account) account=desk-alpha max_orders=5",
+              detailCode: "set_limit",
+              detailParams: { policy: "rate_limit", scope: "account" },
+              detailFields: [
+                { name: "account", value: "desk-alpha" },
+                { name: "max_orders", value: "5" },
+              ],
               source: "panel",
             },
           ],
@@ -2429,7 +2436,20 @@ describe("append-only list clients", () => {
     });
     expect(audit).toMatchObject({
       total: 5,
-      items: [{ id: "aud-1" }],
+      items: [
+        {
+          id: "aud-1",
+          detail: {
+            text: "Limit set: rate_limit (account) account=desk-alpha max_orders=5",
+            code: "set_limit",
+            params: { policy: "rate_limit", scope: "account" },
+            fields: [
+              { name: "account", value: "desk-alpha" },
+              { name: "max_orders", value: "5" },
+            ],
+          },
+        },
+      ],
     });
 
     const adjustmentUrl = new URL(
@@ -4779,7 +4799,7 @@ describe("access error decode", () => {
   it.each(accessCodes)(
     "uses the catalog text for %i %s without a server message",
     async (status, code) => {
-      const catalogs = ["en", "ru", "zh-CN"].map(
+      const catalogs = ["en", "ru", "zh-CN", "es", "pt-BR"].map(
         (locale) =>
           (
             appLocaleResources[locale]?.errors as {

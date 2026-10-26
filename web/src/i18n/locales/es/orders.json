@@ -1,0 +1,586 @@
+{
+  "tradingLoadFailed": "No se pudieron cargar las conexiones de negociación: {{error}}",
+  "title": "Órdenes",
+  "subtitle": "Vista del plano de datos: las órdenes que pasan por Officer, sus eventos del ciclo de vida y las operaciones resultantes. Seleccione una fila de orden para ver su cronología de eventos y sus ejecuciones.",
+
+  "tab": {
+    "orders": "Órdenes",
+    "trades": "Operaciones"
+  },
+
+  "businessCsv": {
+    "exportOrdersCsv": "Exportar órdenes en CSV",
+    "exportTradesCsv": "Exportar operaciones en CSV"
+  },
+
+  "filter": {
+    "accountPlaceholder": "Filtrar por cuenta…",
+    "advancedDescription": "Defina filtros secundarios de órdenes y operaciones. La lista se actualiza desde el servidor con el conjunto de filtros activo.",
+    "amountLabel": "Importe",
+    "baseAssetLabel": "Activo base",
+    "baseAssetPlaceholder": "Base",
+    "match": {
+      "contains": "contiene",
+      "starts_with": "empieza por",
+      "ends_with": "termina en",
+      "exact": "exacto"
+    },
+    "priceLabel": "Precio",
+    "quoteAssetLabel": "Activo de cotización",
+    "quoteAssetPlaceholder": "Cotización",
+    "range": {
+      "all": "Todos",
+      "greater_than": "Mayor que",
+      "less_than": "Menor que",
+      "between": "Entre",
+      "min": "Mín.",
+      "max": "Máx."
+    },
+    "sideLabel": "Sentido",
+    "side": {
+      "all": "Todos los sentidos",
+      "buy": "Compra",
+      "sell": "Venta"
+    },
+    "sourceAll": "Todos los orígenes",
+    "sourceAriaLabel": "Origen",
+    "sizeAriaLabel": "Tamaño de página",
+    "sizeRows": "{{count}} filas",
+    "quickStatusLabel": "Órdenes",
+    "quickStatus": {
+      "all": "Todas",
+      "active": "Activas"
+    },
+    "statusLabel": "Estado",
+    "status": {
+      "groupActive": "Activas",
+      "groupTerminal": "Finales",
+      "groupFinalized": "Finalizadas",
+      "clearAll": "Desmarcar todo",
+      "selectAll": "Seleccionar todo",
+      "selectActive": "Todas las activas",
+      "selectTerminal": "Todas las finales",
+      "submitted": "Enviada",
+      "accepted": "Aceptada",
+      "rejected": "Rechazada",
+      "committed": "Confirmada",
+      "rolled_back": "Revertida",
+      "filled": "Ejecutada",
+      "partially_filled": "Ejecutada parcialmente",
+      "cancelled": "Cancelada"
+    },
+    "timeLabel": "Enviada"
+  },
+
+  "lookup": {
+    "label": "Buscar por ID",
+    "placeholder": "ID exacto",
+    "searching": "Buscando…",
+    "submit": "Abrir orden",
+    "notFound": {
+      "title": "Orden no encontrada",
+      "description": "No se encontró ninguna orden con ID {{externalId}}.",
+      "close": "Cerrar"
+    }
+  },
+
+  "table": {
+    "venue": "Plataforma",
+    "externalId": "ID",
+    "account": "Cuenta",
+    "instrument": "Instrumento",
+    "side": "Sentido",
+    "amount": "Importe",
+    "price": "Precio",
+    "status": "Estado",
+    "source": "Origen",
+    "time": "Hora",
+    "order": "Orden",
+    "qty": "Cant.",
+    "lockPrice": "Precio fijado de la orden",
+    "commission": "Comisión",
+    "displayPrice": "Precio fijado",
+    "signedIndicator": "Esta orden tiene al menos un evento firmado.",
+    "columnDescriptions": {
+      "venue": "Esta columna muestra la conexión de negociación a la que está vinculada la orden: plataforma, modo y nombre de la conexión.",
+      "externalId": "Esta columna muestra el identificador inmutable proporcionado por quien llama o generado por Officer.",
+      "account": "Esta columna muestra la cuenta que envió la orden o que recibió la operación.",
+      "instrument": "Esta columna muestra los activos base y de cotización negociados en la fila.",
+      "side": "Esta columna muestra si la fila es un flujo de compra o de venta.",
+      "amount": "Esta columna muestra el importe enviado de la orden y su tipo de importe.",
+      "price": "Esta columna muestra el precio límite de la orden o el precio de ejecución de la operación.",
+      "status": "Esta columna muestra el estado actual del ciclo de vida de la orden.",
+      "source": "Esta columna muestra si la fila provino del panel, de REST, de MCP o de otro origen.",
+      "time": "Esta columna muestra cuándo se registró la orden o la operación.",
+      "order": "Esta columna vincula una operación con su orden principal.",
+      "qty": "Esta columna muestra la cantidad ejecutada del activo base.",
+      "lockPrice": "Esta columna muestra el precio fijado de la orden que se usa para inmovilizar fondos cuando difiere del de ejecución.",
+      "commission": "Esta columna muestra los totales de comisión registrados por moneda.",
+      "displayPrice": "Esta columna muestra el precio único restaurado a partir de la inmovilización del motor de riesgo."
+    }
+  },
+
+  "amount": {
+    "qty": "{{value}} cant.",
+    "vol": "{{value}} vol."
+  },
+
+  "price": {
+    "market": "a mercado"
+  },
+
+  "empty": {
+    "orders": {
+      "title": "Todavía no hay órdenes",
+      "hint": "Aquí aparecerán las órdenes enviadas a través del panel, la API o MCP."
+    },
+    "trades": {
+      "title": "Todavía no hay operaciones",
+      "hint": "Las operaciones resultan de los informes de ejecución enviados sobre las órdenes."
+    }
+  },
+
+  "addOrder": {
+    "button": "Añadir orden",
+    "added": "Orden añadida",
+    "dialog": {
+      "title": "Añadir orden",
+      "description": "Añada una orden para evaluarla con el motor de riesgo. Es una emulación: no se envía nada a ningún mercado. Sin precio, se trata como una orden de mercado y puede rechazarse.",
+      "account": "Cuenta",
+      "accountPlaceholder": "p. ej., desk-alpha",
+      "baseAsset": "Activo base",
+      "baseAssetPlaceholder": "p. ej., AAPL",
+      "quoteAsset": "Activo de cotización",
+      "quoteAssetPlaceholder": "p. ej., USD",
+      "externalId": "ID (opcional)",
+      "externalIdPlaceholder": "lo genera el servidor si se deja vacío",
+      "externalIdHint": "Use su propio ID único cuando necesite un identificador estable de la orden.",
+      "side": "Sentido",
+      "sideOptions": {
+        "buy": "Compra",
+        "sell": "Venta"
+      },
+      "amountKind": "Tipo de importe",
+      "amountKindOptions": {
+        "quantity": "Cantidad (base)",
+        "volume": "Volumen (cotización)"
+      },
+      "amount": "Importe",
+      "amountPlaceholder": "p. ej., 100",
+      "limitPrice": "Precio límite (opcional)",
+      "limitPricePlaceholder": "vacío = a mercado",
+      "limitPriceDropCopy": "Precio límite (obligatorio para drop-copy)",
+      "limitPriceDropCopyPlaceholder": "obligatorio",
+      "limitPriceDropCopyHint": "Las órdenes de mercado no pueden enviarse como drop-copy.",
+      "limitPriceImmediate": "Precio límite (obligatorio para liquidar)",
+      "limitPriceImmediateHint": "Las órdenes de mercado no pueden liquidarse en el envío. Use «Enviar y esperar».",
+      "submitMode": "Modo de envío",
+      "submitModeImmediate": "Enviar y liquidar",
+      "submitModeImmediateHelp": "Ejecutar el control pre-negociación, reservar y liquidar ahora al precio de la orden.",
+      "submitModeDropCopy": "Drop-copy",
+      "submitModeDropCopyHelp": "Ejecutar todas las políticas sin aplicar rechazos ni bloqueos de cuenta o de grupo. Se requiere un precio límite positivo.",
+      "submitModeHold": "Enviar y esperar",
+      "submitModeHoldHelp": "Ejecutar el control pre-negociación, registrar la inmovilización y esperar los informes de ejecución.",
+      "submitModeRequired": "Seleccione un modo de envío.",
+      "amountKindRequired": "Seleccione un tipo de importe.",
+      "sideRequired": "Seleccione un sentido.",
+      "openApi": "OpenAPI",
+      "submitBusy": "Añadiendo…",
+      "submit": "Añadir orden",
+      "submitDropCopy": "Enviar drop-copy",
+      "dropCopyConfirmTitle": "¿Enviar sin aprobación pre-negociación obligatoria?",
+      "dropCopyConfirmDescription": "Todas las políticas se ejecutarán y actualizarán el estado, pero los rechazos de políticas y los bloqueos de cuenta o de grupo no detendrán esta orden. Si la cuenta es desconocida, se creará con la configuración predeterminada. Ni este envío ni los informes de ejecución posteriores se firman ni se atestan.",
+      "dropCopyPriceRequired": "Introduzca un precio límite positivo para drop-copy.",
+      "immediatePriceRequired": "Introduzca un precio límite positivo para liquidar la orden.",
+      "validationError": "La cuenta, el instrumento y el importe son obligatorios.",
+      "missingAccountConfirmTitle": "La cuenta no existe",
+      "missingAccountConfirmDescription": "La cuenta {{account}} todavía no existe. ¿Crearla con la configuración predeterminada (sin grupo, sin moneda) y continuar?",
+      "missingAccountConfirmAction": "Crear cuenta y continuar",
+      "venue": {
+        "description": "Evaluar la orden con el motor de riesgo y enviarla a la plataforma seleccionada si se aprueba.",
+        "sendToVenue": "Enviar a la plataforma",
+        "mode": "Modo",
+        "modeValues": {
+          "paper": "simulado",
+          "live": "real"
+        },
+        "target": "Destino",
+        "loadingTargets": "Cargando destinos…",
+        "disabled": "Desactivado",
+        "unavailable": "No disponible: {{error}}",
+        "degraded": "Degradado: {{error}}",
+        "noTargets": "No hay destinos en modo {{mode}} para la cuenta {{account}}.",
+        "noTargetsUnnamed": "No hay destinos en modo {{mode}}.",
+        "timeInForce": "Validez",
+        "chooseTimeInForce": "Elija la validez",
+        "timeInForceOptions": {
+          "day": "DAY - Día",
+          "gtc": "GTC - Válida hasta su cancelación",
+          "opg": "OPG - En la apertura",
+          "cls": "CLS - Al cierre",
+          "ioc": "IOC - Ejecutar y anular",
+          "fok": "FOK - Todo o nada"
+        },
+        "aboutTimeInForce": "Acerca de la validez",
+        "unsupportedProvider": "Este panel no admite el envío a {{provider}}.",
+        "quantityHint": "Las órdenes se envían a la plataforma por cantidad.",
+        "submitPaper": "Enviar orden SIMULADA",
+        "submitLive": "Enviar orden REAL",
+        "submit": "Enviar orden",
+        "chooseTarget": "Elija un destino",
+        "acknowledged": "Enviada a {{venue}} · {{mode}}. Orden de la plataforma {{venueOrderId}}.",
+        "refused": "La orden no se colocó en {{venue}}: {{error}}. Officer la registró como cancelada.",
+        "unknown": "La plataforma no confirmó la orden: {{error}}. Officer la está conciliando; el estado de la orden que figura abajo es el válido.",
+        "preTradeRejected": "Los controles pre-negociación rechazaron la orden. No se envió nada a la plataforma.",
+        "networkError": "La solicitud de envío no se completó: {{message}}. Revise Órdenes antes de volver a enviarla - es posible que la orden ya exista."
+      }
+    }
+  },
+
+  "dropCopy": {
+    "badge": "DROP-COPY"
+  },
+
+  "check": {
+    "checking": "Comprobando...",
+    "previewUnavailable": "Vista previa no disponible",
+    "wouldPass": "Vista previa: se aprobaría",
+    "wouldReject": "Vista previa: se rechazaría",
+    "displayPrice": "Precio fijado: {{price}}",
+    "wouldBlock": "Bloquearía la cuenta {{account}}",
+    "wouldBlockUnnamed": "Bloquearía la cuenta",
+    "wouldBlockReason": "Bloquearía la cuenta {{account}} - {{reason}}",
+    "wouldBlockReasonUnnamed": "Bloquearía la cuenta - {{reason}}",
+    "accountBlocked": "La cuenta {{account}} está bloqueada",
+    "accountBlockedUnnamed": "La cuenta está bloqueada",
+    "rejectReasons": {
+      "account_blocked": "La cuenta está bloqueada",
+      "missing_required_field": "Falta un campo obligatorio",
+      "invalid_field_format": "Formato de campo no válido",
+      "invalid_field_value": "Valor de campo no válido",
+      "unsupported_order_type": "Tipo de orden no admitido",
+      "unsupported_time_in_force": "Validez no admitida",
+      "unsupported_order_attribute": "Atributo de orden no admitido",
+      "duplicate_client_order_id": "Identificador de orden del cliente duplicado",
+      "too_late_to_enter": "Demasiado tarde para introducir la orden",
+      "exchange_closed": "Bolsa cerrada",
+      "unknown_instrument": "Instrumento desconocido",
+      "unknown_account": "Cuenta desconocida",
+      "unknown_venue": "Plataforma desconocida",
+      "unknown_clearing_account": "Cuenta de compensación desconocida",
+      "unknown_collateral_asset": "Activo de garantía desconocido",
+      "insufficient_funds": "Fondos insuficientes",
+      "insufficient_margin": "Margen insuficiente",
+      "insufficient_position": "Posición insuficiente",
+      "credit_limit_exceeded": "Límite de crédito superado",
+      "risk_limit_exceeded": "Límite de riesgo superado",
+      "order_exceeds_limit": "La orden supera el límite",
+      "order_qty_exceeds_limit": "La cantidad de la orden supera el límite",
+      "order_notional_exceeds_limit": "El nocional de la orden supera el límite",
+      "position_limit_exceeded": "Límite de posición superado",
+      "concentration_limit_exceeded": "Límite de concentración superado",
+      "leverage_limit_exceeded": "Límite de apalancamiento superado",
+      "rate_limit_exceeded": "Límite de frecuencia superado",
+      "pnl_kill_switch_triggered": "Interruptor de emergencia por PnL activado",
+      "account_not_authorized": "Cuenta no autorizada",
+      "compliance_restriction": "Restricción de cumplimiento normativo",
+      "instrument_restricted": "Instrumento restringido",
+      "jurisdiction_restriction": "Restricción jurisdiccional",
+      "wash_trade_prevention": "Prevención de operaciones ficticias",
+      "self_match_prevention": "Prevención de autoejecución",
+      "short_sale_restriction": "Restricción de venta en corto",
+      "risk_configuration_missing": "Falta la configuración de riesgo",
+      "reference_data_unavailable": "Datos de referencia no disponibles",
+      "order_value_calculation_failed": "Error al calcular el valor de la orden",
+      "system_unavailable": "Sistema no disponible",
+      "mark_price_unavailable": "Precio de valoración no disponible",
+      "account_adjustment_bounds_exceeded": "Se superaron los límites del ajuste de la cuenta",
+      "arithmetic_overflow": "Desbordamiento aritmético",
+      "custom": "Rechazo personalizado",
+      "other": "Otro rechazo"
+    }
+  },
+
+  "execReport": {
+    "dialog": {
+      "title": "Enviar informe de ejecución",
+      "description": "Orden {{orderExternalId}} - registre una transición del flujo, una ejecución, una comisión o un resultado final.",
+      "fillQty": "Cantidad ejecutada",
+      "fillQtyPlaceholder": "p. ej., 50",
+      "fillPrice": "Precio de ejecución",
+      "fillPricePlaceholder": "p. ej., 192.40",
+      "leavesQty": "Cantidad pendiente",
+      "leavesQtyPlaceholder": "p. ej., 0",
+      "calculateLeaves": "Calcular la cantidad pendiente",
+      "lockPrice": "Precio fijado (opcional)",
+      "lockPricePlaceholder": "opcional",
+      "commissionAmount": "Importe de la comisión",
+      "commissionAmountPlaceholder": "p. ej., 0.25",
+      "commissionCurrency": "Moneda de la comisión",
+      "commissionCurrencyPlaceholder": "p. ej., USD",
+      "economicsHelp": "La comisión alimenta el interruptor de emergencia calculado internamente y la visualización; el importe y la moneda deben indicarse juntos.",
+      "economics": {
+        "commission": {
+          "title": "Comisión",
+          "summary": "Elija si se registra un cargo o un reembolso.",
+          "mode": {
+            "none": "Ninguna",
+            "fee": "Cargo",
+            "rebate": "Reembolso"
+          },
+          "infoAriaLabel": "Detalles de la comisión",
+          "infoTitle": "Comisión",
+          "infoBody": "La comisión se introduce en su propia moneda y se resta del PnL realizado que calcula el motor en la moneda de la cuenta. Seleccione Cargo para un coste o Reembolso para un abono; Officer aplica el signo."
+        }
+      },
+      "status": "Estado objetivo",
+      "statusHelp": {
+        "submitted": "Registra la orden como enviada a la plataforma. Los campos de ejecución no están disponibles para este estado; el motor procesa igualmente la comisión indicada.",
+        "accepted": "Registra la aceptación de la orden por la plataforma. Los campos de ejecución no están disponibles para este estado; el motor procesa igualmente la comisión indicada.",
+        "rejected": "Cierra la orden como rechazada y libera su inmovilización pre-negociación. La inmovilización liberada es el remanente de la reserva registrada de la propia orden, no la cantidad pendiente informada. Los campos de ejecución no están disponibles para este estado; el motor procesa igualmente la comisión indicada.",
+        "committed": "Registra la orden como confirmada. Los campos de ejecución no están disponibles para este estado; el motor procesa igualmente la comisión indicada.",
+        "rolled_back": "Cierra la orden como revertida y libera su inmovilización pre-negociación. La inmovilización liberada es el remanente de la reserva registrada de la propia orden, no la cantidad pendiente informada. Los campos de ejecución no están disponibles para este estado; el motor procesa igualmente la comisión indicada.",
+        "filled": "Registra una ejecución y cierra la orden. La cantidad ejecutada y la cantidad pendiente son obligatorias.",
+        "partially_filled": "Registra una ejecución y deja la orden abierta. La cantidad ejecutada y la cantidad pendiente son obligatorias.",
+        "cancelled": "Cierra la orden y libera su inmovilización pre-negociación. La inmovilización liberada es el remanente de la reserva registrada de la propia orden, no la cantidad pendiente informada. Los campos de ejecución no están disponibles para este estado; el motor procesa igualmente la comisión indicada."
+      },
+      "finalFill": "Ejecución final (cierra la orden)",
+      "force": "Forzar: omitir la comprobación que impide informes sobre órdenes finalizadas",
+      "submitBusy": "Enviando…",
+      "submit": "Enviar",
+      "accepted": "Informe de ejecución aceptado.",
+      "reportId": "ID del informe",
+      "accountBlocked": "Cuenta {{account}} bloqueada:",
+      "accountBlockedUnnamed": "Cuenta bloqueada:",
+      "done": "Listo",
+      "leavesInvalid": "La cantidad pendiente debe ser un decimal no negativo simple, sin espacios alrededor."
+    }
+  },
+
+  "clone": {
+    "orderButton": "Clonar",
+    "orderAriaLabel": "Clonar la orden {{orderExternalId}}",
+    "execReportAriaLabel": "Clonar el informe de ejecución de la operación {{tradeId}}",
+    "execReportEventAriaLabel": "Clonar el informe de ejecución de la orden {{orderExternalId}}"
+  },
+
+  "detail": {
+    "dialog": {
+      "title": "Orden {{orderExternalId}}",
+      "loading": "Cargando los detalles de la orden…",
+      "accountBlocked": "Cuenta {{account}} bloqueada:",
+      "accountBlockedUnnamed": "Cuenta bloqueada:",
+      "fieldAccount": "Cuenta",
+      "fieldStatus": "Estado",
+      "fieldSource": "Origen",
+      "fieldSubmitted": "Enviada",
+      "fieldDisplayPrice": "Precio fijado",
+      "fieldCommission": "Comisión",
+      "workflow": {
+        "title": "Atajos del flujo",
+        "description": "Officer registró una aprobación pre-negociación al enviarse esta orden, por lo que los atajos pueden confirmarla o cancelarla solo mientras no tenga actividad de informes de ejecución. Después de cualquier informe, envíe en su lugar un informe de ejecución explícito.",
+        "confirm": "Confirmar",
+        "confirmBusy": "Confirmando…",
+        "cancel": "Cancelar orden",
+        "cancelBusy": "Cancelando…"
+      },
+      "timeline": {
+        "sectionTitle": "Cronología de eventos",
+        "empty": "No hay eventos registrados.",
+        "by": "por {{principal}}",
+        "fillQty": "cant. {{qty}}",
+        "fillAt": "@ {{price}}",
+        "fillLock": "(fijado {{price}})",
+        "commission": "comisión {{value}}",
+        "rejectCode": "código {{code}}",
+        "rejectScope": "ámbito {{scope}}",
+        "rejectPolicy": "política {{policy}}",
+        "type": {
+          "submitted": "Enviada",
+          "pre_trade_accepted": "Aceptada en pre-negociación",
+          "pre_trade_rejected": "Rechazada en pre-negociación",
+          "committed": "Confirmada",
+          "rolled_back": "Revertida",
+          "confirmed": "Confirmación",
+          "fill": "Ejecución",
+          "commission": "Comisión",
+          "cancelled": "Cancelada"
+        },
+        "scopes": {
+          "order": "orden",
+          "account": "cuenta"
+        },
+        "verifySigned": "Reproducir y verificar la firma de este evento",
+        "verifyUnsigned": "Reproducir la atestación sin firmar de este evento"
+      },
+      "trades": {
+        "sectionTitle": "Operaciones de esta orden",
+        "empty": "Todavía no hay ejecuciones registradas. Envíe un informe de ejecución para crear una operación.",
+        "emptyVenue": "Todavía no hay ejecuciones de la plataforma.",
+        "submitExecReport": "Enviar informe de ejecución"
+      },
+      "venue": {
+        "sectionTitle": "Plataforma",
+        "connection": "Conexión",
+        "venueAccount": "Cuenta en la plataforma",
+        "venueOrderId": "ID de la orden en la plataforma",
+        "notSentYet": "Todavía no enviada",
+        "notAcknowledged": "No confirmada por la plataforma",
+        "awaitingAcknowledgement": "Esperando la confirmación de la plataforma",
+        "venueStatus": "Estado en la plataforma",
+        "statusOpen": "Abierta",
+        "statusFilled": "Ejecutada",
+        "statusCancelled": "Cancelada, rechazada o vencida en la plataforma",
+        "timeInForce": "Validez",
+        "linkedAt": "Vinculada el",
+        "fees": "Las comisiones de {{venue}} no vinculadas a órdenes se registran más tarde como ajustes de la cuenta.",
+        "feesUnknownProvider": "Las comisiones de la plataforma no vinculadas a órdenes se registran más tarde como ajustes de la cuenta.",
+        "viewAdjustments": "Ver ajustes",
+        "managedByVenue": "Las ejecuciones y la cancelación de esta orden proceden de la plataforma."
+      }
+    }
+  },
+
+  "panel": {
+    "title": "Reproducir y verificar",
+    "description": "Los artefactos exactos que un robot o un agente recibió para esta solicitud, mostrados literalmente para que pueda copiarlos, verificar la firma o verificar cualquier sobre pegado.",
+    "verifyTokenButton": "Verificar sobre",
+    "tabReproduction": "Reproducción",
+    "tabVerify": "Verificar sobre"
+  },
+
+  "requestType": {
+    "submit": "Envío",
+    "executionReport": "Informe de ejecución",
+    "confirm": "Confirmación",
+    "cancel": "Cancelación"
+  },
+
+  "repro": {
+    "loading": "Cargando el paquete de reproducción…",
+    "loadError": "No se pudo cargar el paquete de reproducción. {{message}}",
+    "noAttestation": "Este evento no contiene ninguna atestación guardada, por lo que no hay nada que reproducir.",
+    "requestTypeLabel": "Tipo de solicitud",
+    "tokenLabel": "Sobre",
+    "tokenNote": "El sobre base64url exacto que recibió el robot. Copia principal.",
+    "requestLabel": "Solicitud firmada y resultado registrado",
+    "requestNote": "La solicitud vinculada en la atestación y el resultado que Officer registró para ella.",
+    "responseNote": "La respuesta exacta de la API, reconstruida por el mismo serializador del servidor.",
+    "responseTokenLabel": "Sobre de atestación (literal)",
+    "responseSubmit": "Respuesta del envío",
+    "responseExecutionReport": "Respuesta del informe de ejecución",
+    "responseConfirm": "Respuesta de la confirmación",
+    "responseCancel": "Respuesta de la cancelación",
+    "canonicalLabel": "Forma canónica (bytes firmados)",
+    "canonicalNote": "Byte a byte, para la verificación de la firma.",
+    "signatureLabel": "Firma y clave pública",
+    "signatureNote": "La firma del sobre y la clave pública resuelta por el ID de clave de esta atestación, que puede ser una clave rotada y no activa.",
+    "keyId": "ID de clave",
+    "signatureFieldLabel": "Firma (base64)",
+    "publicKeyFieldLabel": "Clave pública ({{format}})",
+    "eventBodyLabel": "Cuerpo del evento",
+    "eventBodyNote": "El cuerpo del evento, tal como lo devuelve GET /orders."
+  },
+
+  "verify": {
+    "label": "Verificar firma",
+    "note": "Ejecuta Ed25519 en su navegador sobre los bytes canónicos anteriores, con la clave pública del ID de clave de esta atestación.",
+    "button": "Verificar",
+    "verifying": "Verificando…",
+    "badgeValid": "VÁLIDA",
+    "badgeInvalid": "NO VÁLIDA",
+    "badgeUnverified": "SIN VERIFICAR",
+    "badgeUnsigned": "SIN FIRMA",
+    "badgeError": "ERROR",
+    "validNote": "Firma verificada con la clave pública del ID de clave de esta atestación.",
+    "invalidNote": "La firma no coincide. Es posible que el sobre se haya modificado.",
+    "unsignedNote": "Sin firma criptográfica - este evento se atestó con eSign desactivado.",
+    "errorNote": "No se pudo realizar la verificación. {{message}}",
+    "missingArtifacts": "Faltan en el paquete los bytes canónicos o la firma.",
+    "jsSnippetLabel": "Verificar con WebCrypto (JavaScript)",
+    "goSnippetLabel": "Verificar con crypto/ed25519 (Go)",
+    "snippetKeyNote": "La clave pública está en formato raw-base64, resuelta por el ID de clave de esta atestación.",
+    "pasteEmpty": "Pegue un sobre para verificarlo.",
+    "pasteMalformed": "El valor pegado no se pudo decodificar como sobre de atestación.",
+    "pasteNoKeyId": "El sobre no contiene ningún ID de clave, por lo que no se puede resolver su clave pública.",
+    "pasteUnknownKey": "No se conoce ninguna clave pública para el ID de clave {{keyId}}."
+  },
+
+  "paste": {
+    "label": "Sobre",
+    "note": "Pegue cualquier sobre base64url. Se decodifica en su navegador; su ID de clave resuelve la clave pública con la que se verifica.",
+    "placeholder": "Pegue un sobre base64url…"
+  },
+
+  "breakdown": {
+    "label": "Desglose legible",
+    "readOnlyNote": "Solo lectura: no sirve para copiar ni para verificar. Verifique siempre con los bytes canónicos, nunca con una copia reformateada.",
+    "version": "Versión",
+    "approvalId": "ID de aprobación",
+    "approvalRef": "Referencia de aprobación",
+    "requestType": "Tipo de solicitud",
+    "mode": "Modo",
+    "orderExternalId": "ID de orden",
+    "eventExternalId": "ID de evento",
+    "verdict": "Veredicto",
+    "venue": "Plataforma",
+    "side": "Sentido",
+    "quantity": "Cantidad",
+    "amountKind": "Tipo de importe",
+    "orderType": "Tipo de orden",
+    "limitPrice": "Precio límite",
+    "priceCurrency": "Moneda del precio",
+    "timeInForce": "Validez",
+    "estimatePrice": "Precio estimado",
+    "instrument": "Instrumento",
+    "account": "Cuenta",
+    "accountGroup": "Grupo de cuentas",
+    "policySummary": "Resumen de políticas",
+    "rejectCode": "Código de rechazo",
+    "rejectScope": "Ámbito del rechazo",
+    "rejectPolicy": "Política del rechazo",
+    "rejectReason": "Motivo del rechazo",
+    "principal": "Iniciador",
+    "executionReportRequest": "Solicitud de informe de ejecución",
+    "recordedResult": "Resultado registrado",
+    "baseAsset": "Activo base",
+    "quoteAsset": "Activo de cotización",
+    "outcome": "Resultado",
+    "fillQuantity": "Cantidad ejecutada",
+    "fillPrice": "Precio de ejecución",
+    "fillLockPrice": "Precio fijado de la ejecución",
+    "leavesQuantity": "Cantidad pendiente",
+    "lockPrice": "Precio fijado",
+    "commission": "Comisión",
+    "order": "Orden",
+    "orderStatus": "Estado de la orden",
+    "force": "Forzar",
+    "block": "Bloqueo {{index}}",
+    "nonce": "Valor único",
+    "keyId": "ID de clave",
+    "algorithm": "Algoritmo",
+    "issuedAt": "Emitido el",
+    "verdicts": {
+      "accept": "Aceptar",
+      "reject": "Rechazar"
+    },
+    "orderTypes": {
+      "market": "De mercado",
+      "limit": "Limitada"
+    },
+    "outcomes": {
+      "applied": "Aplicado",
+      "confirmed": "Confirmado",
+      "cancelled": "Cancelado"
+    }
+  },
+
+  "esign": {
+    "label": "Modo eSign",
+    "signed": "FIRMADO",
+    "unsigned": "SIN FIRMA",
+    "alg": "alg {{alg}}",
+    "noAlg": "sin sobre de atestación",
+    "offGlobal": "eSign está desactivado globalmente"
+  }
+}

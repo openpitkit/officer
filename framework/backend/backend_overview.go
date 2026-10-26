@@ -76,8 +76,9 @@ type Activity struct {
 	Kind ActivityKind
 	// Ref is the human-readable reference (account id, order id).
 	Ref string
-	// Summary is a short description of the action.
-	Summary string
+	// Summary is a short description of the action: the audit detail of an
+	// audit row, or one rendered for an order or an adjustment.
+	Summary domain.AuditDetail
 }
 
 // Overview is the operator dashboard summary: headline counts plus a recent
@@ -197,24 +198,32 @@ func mergeActivity(
 	}
 	for _, o := range orders {
 		out = append(out, Activity{
-			At:      o.At,
-			Source:  o.Source,
-			Kind:    ActivityKindOrder,
-			Ref:     o.ExternalID.String(),
-			Summary: fmt.Sprintf("%s %s %s/%s %s", o.Side, o.AmountValue, o.BaseAsset, o.QuoteAsset, o.Status),
+			At:     o.At,
+			Source: o.Source,
+			Kind:   ActivityKindOrder,
+			Ref:    o.ExternalID.String(),
+			Summary: domain.NewAuditDetail(domain.AuditDetailActivityOrder, domain.AuditDetailParams{
+				"side":   string(o.Side),
+				"amount": o.AmountValue,
+				"base":   o.BaseAsset,
+				"quote":  o.QuoteAsset,
+				"status": string(o.Status),
+			}),
 		})
 	}
 	for _, a := range adjustments {
-		status := domain.AdjustmentStatusAccepted
+		code := domain.AuditDetailActivityAdjustmentAccepted
 		if a.Rejected != nil {
-			status = domain.AdjustmentStatusRejected
+			code = domain.AuditDetailActivityAdjustmentRejected
 		}
 		out = append(out, Activity{
-			At:      a.At,
-			Source:  a.Source,
-			Kind:    ActivityKindAdjustment,
-			Ref:     string(a.Account),
-			Summary: fmt.Sprintf("adjustment %s %s", a.Request.Asset, status),
+			At:     a.At,
+			Source: a.Source,
+			Kind:   ActivityKindAdjustment,
+			Ref:    string(a.Account),
+			Summary: domain.NewAuditDetail(code, domain.AuditDetailParams{
+				"asset": a.Request.Asset,
+			}),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })

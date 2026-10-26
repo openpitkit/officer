@@ -1,0 +1,89 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# No English phrase inside a Latin-script panel string.
+#
+# An es or pt-BR catalog string is translated fully, as a ru or zh-CN one is.
+# Both languages are written in Latin script, so locale-latin-words cannot
+# tell an English word from their own. This rule reads the part of English
+# that is never a Spanish or Portuguese word: its lowercase function words.
+# Any English sentence or phrase left in a catalog carries one.
+#
+# The word list is the alternation after `\K`. A word joins it only when it is
+# neither a Spanish nor a Portuguese word: `a`, `as`, `do`, `e`, `for`, `has`,
+# `me`, `no`, `o`, `se`, `so` and `un` stay out. A word is matched in
+# lowercase only, and no term on the locale-latin-words keep list is a
+# lowercase function word, so a kept term such as `The Pit Project Owners`
+# passes and this rule needs no keep list of its own.
+#
+# What is not read: a `{{placeholder}}`, an inline `<tag>`, a backtick code
+# span, and a value that is a comma-separated list of lowercase identifiers
+# with no spaces, such as a CSV header: a machine format, not prose. A word is
+# matched whole: a letter, digit or underscore on either side, accented
+# letters included, makes it part of a longer word.
+#
+# It is a text rule over prettier-formatted JSON: a key and its string value
+# sit on one line, which the regex reads from the line start. Keys are never
+# read. One finding is reported per string.
+#
+# Deliberate limit: a lone untranslated word or a short label without a
+# function word ("Settings", "Add policy") passes. Review catches it.
+#
+# There is no approval marker: a function word that is also a Spanish or
+# Portuguese word is a rule bug, fixed by removing it from the list.
+
+rules:
+  - id: locale-english-words
+    message: >-
+      An English phrase inside an es or pt-BR catalog string. Translate the
+      string fully, with the words this locale already uses for the concept.
+    severity: ERROR
+    languages: [generic]
+    # Extended mode: whitespace is layout, `\ ` is a literal space.
+    pattern-regex: |-
+      (?mx)
+      # Where scanning starts: a string value on its own key line, unless it is
+      # a comma-separated identifier list.
+      ^[ \t]*"[^"\\\n]*"[ ]*:[ ]*"(?![a-z0-9_]+(?:,[a-z0-9_]+)+")
+      # Everything up to the word: markup, escapes and other characters. A
+      # backtick, `{{` and `<` are taken only as a whole code span, placeholder
+      # or tag; a quote ends the string.
+      (?:
+          \{\{[^}\n]*\}\}
+        | `[^`\n]*`
+        | </?[A-Za-z][A-Za-z0-9]*[ ]*/?>
+        | \\.
+        | \{(?!\{)
+        | <(?![A-Za-z/])
+        | [^"\\`{<\n]
+      )*?
+      \K
+      # The word: not inside another word. A word right after an escape such
+      # as `\n` starts there.
+      (?:(?<![\p{L}\p{N}_])|(?<=\\[nrt]))
+      (?:
+          the | and | of | with | without | your | you | this | that | these
+        | those | is | are | was | were | been | will | would | should | could
+        | must | cannot | from | to | into | by | on | at | in | it | its | an
+        | or | not | if | when | which | who | what | where | how | there
+        | their | they | have | had | does | we | our | please
+      )
+      (?![\p{L}\p{N}_])
+    paths:
+      include:
+        - "/web/src/i18n/locales/es/*.json"
+        - "/web/src/i18n/locales/pt-BR/*.json"

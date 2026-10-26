@@ -149,6 +149,8 @@ import { isNonNegativeIntegerRangeValid } from "@/lib/numberStep";
 import { knownPageCount } from "@/lib/tablePagination";
 import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
+import { auditDetailText } from "@/i18n/auditDetail";
+import { codeLabel, sourceLabel } from "@/i18n/codeLabel";
 import { formatDateTime } from "@/i18n/format";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
@@ -160,6 +162,7 @@ import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { cn } from "@/lib/utils";
 import { useVenueConnectionLabels } from "@/lib/useVenueConnectionLabels";
 import { VenueAccessDialogContainer } from "@/pages/VenueAccessDialogContainer";
+import { auditActionLabel } from "@/pages/dashboardActivity";
 
 type AccountsTab = "accounts" | "groups";
 
@@ -1806,9 +1809,10 @@ function DeleteAccountConfirm({
               {dependents.map((dep) => (
                 <li key={dep.kind} className="flex justify-between gap-4">
                   <span>
-                    {t(`deleteAccount.dependentKinds.${dep.kind}`, {
-                      defaultValue: dep.kind,
-                    })}
+                    {codeLabel(
+                      `accounts:deleteAccount.dependentKinds.${dep.kind}`,
+                      dep.kind,
+                    )}
                   </span>
                   <span className="nums">{dep.count}</span>
                 </li>
@@ -2741,13 +2745,18 @@ function BlockedDetailsDialog({
                       <span className="nums text-muted-lt">
                         {formatDateTime(entry.at)}
                       </span>
-                      <Badge variant="danger">{entry.action}</Badge>
+                      <Badge variant="danger">
+                        {auditActionLabel(entry.action)}
+                      </Badge>
                       {entry.source && (
-                        <Badge variant="neutral">{entry.source}</Badge>
+                        <Badge variant="neutral">
+                          {sourceLabel(entry.source)}
+                        </Badge>
                       )}
                     </div>
                     <p className="mt-2 text-text">
-                      {entry.detail || t("blockDetails.noAuditDetail")}
+                      {auditDetailText(entry.detail) ||
+                        t("blockDetails.noAuditDetail")}
                     </p>
                     {(entry.actorTitle || entry.actor) && (
                       <p className="mt-1 text-muted-lt">

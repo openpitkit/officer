@@ -7753,7 +7753,21 @@ components:
 
     AuditEntry:
       type: object
-      required: [id, at, actor, actorTitle, action, account, accountTitle, asset, group, detail, source]
+      required:
+        - id
+        - at
+        - actor
+        - actorTitle
+        - action
+        - account
+        - accountTitle
+        - asset
+        - group
+        - detail
+        - detailCode
+        - detailParams
+        - detailFields
+        - source
       properties:
         orderId:
           type: string
@@ -7797,11 +7811,42 @@ components:
             code be mistaken for another.
         detail:
           type: string
+          description: >-
+            English detail line, rendered from `detailCode`, `detailParams`
+            and `detailFields` when the row was written.
+        detailCode:
+          type: string
+          description: >-
+            Template code of the detail line, or empty for an action recorded
+            without a detail. A reader localizes the line from the code and
+            its values instead of parsing `detail`.
+        detailParams:
+          $ref: "#/components/schemas/AuditDetailParams"
+        detailFields:
+          type: array
+          description: The ` name=value` tail appended after the template, in order.
+          items:
+            $ref: "#/components/schemas/AuditDetailField"
         source:
           type: string
           description: >
             Originating surface: `panel`, `api`, `mcp`, or `system`.
           enum: [panel, api, mcp, system]
+
+    AuditDetailParams:
+      type: object
+      description: Values of the detail template placeholders, by placeholder name.
+      additionalProperties:
+        type: string
+
+    AuditDetailField:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+        value:
+          type: string
 
     AuditActionGroup:
       type: object
@@ -7853,7 +7898,7 @@ components:
 
     Activity:
       type: object
-      required: [at, source, kind, ref, summary]
+      required: [at, source, kind, ref, summary, summaryCode, summaryParams, summaryFields]
       properties:
         at:
           type: string
@@ -7867,6 +7912,18 @@ components:
           type: string
         summary:
           type: string
+          description: >-
+            English summary line: the audit detail of an audit row, or one
+            rendered for an order or an adjustment.
+        summaryCode:
+          type: string
+          description: Template code of `summary`; see `AuditEntry.detailCode`.
+        summaryParams:
+          $ref: "#/components/schemas/AuditDetailParams"
+        summaryFields:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditDetailField"
 
     Overview:
       type: object

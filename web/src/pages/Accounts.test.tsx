@@ -2482,6 +2482,55 @@ describe("Accounts business CSV", () => {
     ).toBeInTheDocument();
   });
 
+  it("labels the block record's action and source, never their codes", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "desk-alpha",
+          title: "Desk alpha",
+          blocked: true,
+          blockReason: "Desk halt",
+          blockSource: "group",
+          accountBlocked: false,
+          accountBlockReason: "",
+          groupBlocked: true,
+          groupBlockReason: "Desk halt",
+          group: "equity-desks",
+          notes: "",
+          pnlHaltReason: "",
+        },
+      ]),
+    );
+    fetchAuditMock.mockResolvedValue([
+      {
+        id: "audit-1",
+        at: "2026-06-29T00:00:00Z",
+        actor: "risk",
+        actorTitle: "Risk",
+        action: "block_group",
+        account: "",
+        accountTitle: "",
+        group: "equity-desks",
+        detail: "Desk halt",
+        source: "panel",
+      },
+    ]);
+
+    renderAccounts();
+    await user.click(
+      screen.getByRole("button", { name: /view block details/i }),
+    );
+    const details = await screen.findByRole("dialog", {
+      name: /blocked account/i,
+    });
+
+    expect(await within(details).findByText("Block group")).toBeInTheDocument();
+    expect(within(details).getByText("Panel")).toBeInTheDocument();
+    expect(within(details).queryByText("block_group")).not.toBeInTheDocument();
+    expect(within(details).queryByText("panel")).not.toBeInTheDocument();
+  });
+
   // Both tiers latched: the account-level unblock is real work, so it stays
   // enabled, but it cannot make the account tradable on its own.
   it("keeps unblock enabled for an account blocked on both tiers", async () => {

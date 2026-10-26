@@ -1,0 +1,138 @@
+{
+  "page": {
+    "title": "Ativos",
+    "description": "Ativos negociáveis e o dicionário de suas classes, registrados no plano de controle. O servidor aplica a filtragem sobre o conjunto completo."
+  },
+  "tabs": {
+    "assets": "Ativos",
+    "classes": "Classes"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Tamanho da página",
+      "rowCount": "{{count}} linhas"
+    }
+  },
+  "columns": {
+    "asset": "Ativo",
+    "class": "Classe",
+    "actions": "Ações"
+  },
+  "columnDescriptions": {
+    "asset": "Esta coluna mostra o código do ativo e o título de exibição.",
+    "class": "Esta coluna mostra a classe atribuída ao ativo.",
+    "actions": "Esta coluna contém as ações de linha para filtrar, navegar, compartilhar e excluir."
+  },
+  "filters": {
+    "searchLabel": "Busca de ativos",
+    "searchPlaceholder": "Buscar por código ou título…",
+    "classLabel": "Classe",
+    "classPlaceholder": "Filtrar por classe…",
+    "clearField": "Limpar campo"
+  },
+  "noClass": "-",
+  "actions": {
+    "editTitle": "Editar ativo"
+  },
+  "links": {
+    "positions": "Posições",
+    "orders": "Ordens",
+    "trades": "Negócios",
+    "audit": "Auditoria"
+  },
+  "assets": {
+    "heading": "Ativos"
+  },
+  "empty": {
+    "title": "Nenhum ativo",
+    "hintEmpty": "Registre um ativo para começar a acompanhar instrumentos.",
+    "hintFiltered": "Nenhum ativo corresponde aos filtros atuais."
+  },
+  "createAsset": {
+    "trigger": "Novo ativo",
+    "title": "Criar ativo",
+    "description": "Registre um ativo negociável. O código é o identificador e pode ser renomeado depois.",
+    "codeLabel": "Código do ativo",
+    "codeHint": "Um identificador estável, por exemplo BTC ou AAPL.",
+    "titleLabel": "Título",
+    "classLabel": "Classe",
+    "classHint": "Opcional. Classifique o ativo em uma classe existente ou nova.",
+    "cancel": "Cancelar",
+    "submit": "Criar"
+  },
+  "editAsset": {
+    "titlePrefix": "Editar ativo",
+    "description": "Renomeie o código do ativo ou atualize o título e a classe.",
+    "codeLabel": "Código do ativo",
+    "titleLabel": "Título",
+    "classLabel": "Classe",
+    "cancel": "Cancelar",
+    "submit": "Salvar"
+  },
+  "deleteAsset": {
+    "title": "Excluir ativo",
+    "descriptionPrefix": "Excluir o ativo",
+    "descriptionSuffix": "? Esta ação não pode ser desfeita.",
+    "cancel": "Cancelar",
+    "submit": "Excluir"
+  },
+  "classes": {
+    "heading": "Classes de ativos",
+    "columns": {
+      "class": "Classe",
+      "assets": "Ativos",
+      "notes": "Descrição",
+      "actions": "Ações"
+    },
+    "columnDescriptions": {
+      "class": "Esta coluna mostra o código da classe de ativos e o título de exibição.",
+      "assets": "Esta coluna mostra quantos ativos estão atribuídos à classe.",
+      "notes": "Esta coluna mostra a descrição salva na classe de ativos.",
+      "actions": "Esta coluna contém as ações de linha para filtrar, compartilhar e excluir."
+    },
+    "filters": {
+      "searchLabel": "Busca de classes",
+      "searchPlaceholder": "Buscar por código ou título…"
+    },
+    "actions": {
+      "editTitle": "Editar classe"
+    },
+    "empty": {
+      "title": "Nenhuma classe de ativos",
+      "hintEmpty": "Crie uma classe para catalogar os ativos por categoria.",
+      "hintFiltered": "Nenhuma classe corresponde à busca atual."
+    }
+  },
+  "createClass": {
+    "trigger": "Nova classe",
+    "title": "Criar classe de ativos",
+    "description": "Agrupe ativos em uma categoria, por exemplo criptomoedas ou ações.",
+    "codeLabel": "Código da classe",
+    "titleLabel": "Título",
+    "titlePlaceholder": "Criptomoedas",
+    "notesLabel": "Descrição",
+    "notesPlaceholder": "Uma nota opcional que descreve a classe.",
+    "notesHint": "Exibida junto à classe no dicionário.",
+    "cancel": "Cancelar",
+    "submit": "Criar"
+  },
+  "editClass": {
+    "titlePrefix": "Editar classe",
+    "description": "Renomeie o código da classe ou atualize o título e a descrição. Ao renomear, todos os ativos da classe são vinculados novamente.",
+    "codeLabel": "Código da classe",
+    "titleLabel": "Título",
+    "notesLabel": "Descrição",
+    "cancel": "Cancelar",
+    "submit": "Salvar"
+  },
+  "deleteClass": {
+    "title": "Excluir classe de ativos",
+    "descriptionPrefix": "Excluir a classe de ativos",
+    "descriptionSuffix": "? Esta ação não pode ser desfeita.",
+    "descriptionSuffixLinked_one": "? Ativos vinculados que serão desvinculados da classe: {{count}}. Esta ação não pode ser desfeita.",
+    "descriptionSuffixLinked_many": "? Os {{count}} ativos vinculados serão desvinculados da classe. Esta ação não pode ser desfeita.",
+    "descriptionSuffixLinked_other": "? Os {{count}} ativos vinculados serão desvinculados da classe. Esta ação não pode ser desfeita.",
+    "cancel": "Cancelar",
+    "submit": "Excluir"
+  }
+}

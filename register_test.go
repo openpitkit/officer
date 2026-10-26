@@ -547,7 +547,8 @@ func TestRecordServiceLifecycleUsesContextCaller(t *testing.T) {
 	caller := domain.Caller{Source: domain.SourcePanel, Principal: principal, Role: "admin"}
 	if err := app.RecordServiceLifecycle(
 		auth.ContextWithCaller(context.Background(), caller),
-		domain.AuditActionRestartService, "restart service requested",
+		domain.AuditActionRestartService,
+		domain.NewAuditDetail(domain.AuditDetailRestartService, nil),
 	); err != nil {
 		t.Fatalf("RecordServiceLifecycle: %v", err)
 	}
@@ -574,7 +575,8 @@ func TestRecordServiceLifecycleRejectsUnresolvedCaller(t *testing.T) {
 		t.Fatalf("ListAudit before: %v", err)
 	}
 	err = app.RecordServiceLifecycle(
-		ctx, domain.AuditActionRestartService, "restart service requested",
+		ctx, domain.AuditActionRestartService,
+		domain.NewAuditDetail(domain.AuditDetailRestartService, nil),
 	)
 	if err == nil || !strings.Contains(err.Error(), "no caller in context") {
 		t.Errorf("RecordServiceLifecycle without a caller = %v, want the missing caller named", err)
@@ -597,7 +599,8 @@ func TestRecordServiceLifecycleRecordsExplicitSystemCaller(t *testing.T) {
 		auth.ContextWithCaller(
 			context.Background(), domain.Caller{Source: domain.SourceSystem},
 		),
-		domain.AuditActionRestartService, "restart service requested",
+		domain.AuditActionRestartService,
+		domain.NewAuditDetail(domain.AuditDetailRestartService, nil),
 	); err != nil {
 		t.Fatalf("RecordServiceLifecycle: %v", err)
 	}

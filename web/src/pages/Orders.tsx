@@ -96,6 +96,14 @@ import {
   TERMINAL_ORDER_STATUSES,
   type OrderStatusValue,
 } from "@/lib/orderStatus";
+import {
+  eventTypeLabel,
+  rejectLabel,
+  rejectScopeLabel,
+  sideLabel,
+  sourceLabel,
+  statusLabel,
+} from "@/i18n/codeLabel";
 import { formatDateTime } from "@/i18n/format";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -386,22 +394,18 @@ function CheckPreview({ state }: { state: CheckState }) {
       {result.rejects.length > 0 && (
         <ul className="flex flex-col gap-y-1">
           {result.rejects.map((r, i) => {
-            const localizedReason = t(`check.rejectReasons.${r.code}`, {
-              defaultValue: "",
-            });
-            const reason = localizedReason || r.reason || r.details || r.code;
+            const label = rejectLabel(r.code);
             const details =
-              r.details && r.details !== r.reason && r.details !== reason
-                ? r.details
-                : "";
+              r.details && r.details !== r.reason ? r.details : "";
             return (
               <li
                 key={i}
                 className="flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--danger)]"
               >
-                <span className="font-medium">{reason}</span>
+                <span className="font-medium">{label}</span>
+                {r.reason && <span>{r.reason}</span>}
                 {details && <span>{details}</span>}
-                {r.code && r.code !== reason && (
+                {label !== r.code && (
                   <span className="text-muted-lt text-[11px]">{r.code}</span>
                 )}
               </li>
@@ -1986,7 +1990,8 @@ function ExecReportDialog({
                         { account: block.account },
                       )}
                     </span>{" "}
-                    {block.reason || block.code}
+                    {rejectLabel(block.code)}
+                    {block.reason && ` - ${block.reason}`}
                   </div>
                 ))}
               </div>
@@ -2326,7 +2331,11 @@ function accountBlockReason(ev: OrderEvent): string | null {
   if (ev.rejectScope !== "account") {
     return null;
   }
-  const reason = ev.rejectReason || ev.rejectCode;
+  const label = ev.rejectCode ? rejectLabel(ev.rejectCode) : "";
+  const reason =
+    label && ev.rejectReason
+      ? `${label} - ${ev.rejectReason}`
+      : label || ev.rejectReason;
   if (!reason) {
     return null;
   }
@@ -2499,7 +2508,7 @@ function OrderDetailDialog({
           ? t("detail.dialog.venue.statusFilled")
           : state.order.status === "cancelled"
             ? t("detail.dialog.venue.statusCancelled")
-            : t(`filter.status.${state.order.status}`)
+            : statusLabel(state.order.status)
       : "";
   const adjustmentsLinkAllowed =
     state.phase === "ready" &&
@@ -2564,7 +2573,7 @@ function OrderDetailDialog({
                 <>
                   {instrument(state.order.baseAsset, state.order.quoteAsset)}
                   {" · "}
-                  <span className="capitalize">{state.order.side}</span>
+                  {sideLabel(state.order.side)}
                   {" · "}
                   {amountLabel(state.order.amountKind, state.order.amountValue)}
                   {" · "}
@@ -2646,7 +2655,7 @@ function OrderDetailDialog({
                   </span>
                   <div className="mt-0.5">
                     <Badge variant={statusVariant(state.order.status)}>
-                      {state.order.status}
+                      {statusLabel(state.order.status)}
                     </Badge>
                   </div>
                 </div>
@@ -2656,7 +2665,7 @@ function OrderDetailDialog({
                   </span>
                   <div className="mt-0.5">
                     <Badge variant={sourceVariant(state.order.source)}>
-                      {state.order.source}
+                      {sourceLabel(state.order.source)}
                     </Badge>
                   </div>
                 </div>
@@ -2806,10 +2815,10 @@ function OrderDetailDialog({
                           </div>
                           <div className="flex flex-1 flex-wrap items-start gap-x-3 gap-y-1">
                             <Badge variant={eventTypeVariant(ev.type)}>
-                              {ev.type}
+                              {eventTypeLabel(ev.type)}
                             </Badge>
                             <Badge variant={sourceVariant(ev.source)}>
-                              {ev.source}
+                              {sourceLabel(ev.source)}
                             </Badge>
                             {ev.principal && (
                               <span className="text-muted-lt">
@@ -2852,17 +2861,22 @@ function OrderDetailDialog({
                             {/* Reject payload */}
                             {blockReason === null &&
                               ev.rejectCode !== undefined && (
-                                <span className="text-[var(--danger)]">
-                                  {t("detail.dialog.timeline.rejectCode", {
-                                    code: ev.rejectCode,
-                                  })}
-                                </span>
+                                <>
+                                  <span className="font-medium text-[var(--danger)]">
+                                    {rejectLabel(ev.rejectCode)}
+                                  </span>
+                                  <span className="text-muted-lt">
+                                    {t("detail.dialog.timeline.rejectCode", {
+                                      code: ev.rejectCode,
+                                    })}
+                                  </span>
+                                </>
                               )}
                             {blockReason === null &&
                               ev.rejectScope !== undefined && (
                                 <span className="text-muted-lt">
                                   {t("detail.dialog.timeline.rejectScope", {
-                                    scope: ev.rejectScope,
+                                    scope: rejectScopeLabel(ev.rejectScope),
                                   })}
                                 </span>
                               )}
@@ -3094,7 +3108,7 @@ function OrderDetailDialog({
                           </TableCell>
                           <TableCell>
                             <Badge variant={sourceVariant(trade.source)}>
-                              {trade.source}
+                              {sourceLabel(trade.source)}
                             </Badge>
                           </TableCell>
                           <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
@@ -3546,7 +3560,7 @@ function OrdersTable({
             </TableCell>
             <TableCell className="orders-side-cell">
               <Badge variant={order.side === "buy" ? "buy" : "sell"}>
-                {order.side}
+                {sideLabel(order.side)}
               </Badge>
             </TableCell>
             <TableCell className="nums text-xs">
@@ -3565,12 +3579,12 @@ function OrdersTable({
             </TableCell>
             <TableCell className="w-[var(--orders-status-column-width)]">
               <Badge variant={statusVariant(order.status)}>
-                {order.status}
+                {statusLabel(order.status)}
               </Badge>
             </TableCell>
             <TableCell>
               <Badge variant={sourceVariant(order.source)}>
-                {order.source}
+                {sourceLabel(order.source)}
               </Badge>
             </TableCell>
             {venueLabels && (
@@ -3895,7 +3909,7 @@ function TradesTable({
             </TableCell>
             <TableCell className="trades-side-cell">
               <Badge variant={trade.side === "buy" ? "buy" : "sell"}>
-                {trade.side}
+                {sideLabel(trade.side)}
               </Badge>
             </TableCell>
             <TableCell className="nums text-xs">{trade.quantity}</TableCell>
@@ -3908,7 +3922,7 @@ function TradesTable({
             </TableCell>
             <TableCell>
               <Badge variant={sourceVariant(trade.source)}>
-                {trade.source}
+                {sourceLabel(trade.source)}
               </Badge>
             </TableCell>
             {venueLabels && (
@@ -5378,10 +5392,14 @@ export function Orders() {
         });
       }
       if (normalizedOrderSource !== undefined) {
-        add("source", `${t("table.source")}: ${normalizedOrderSource}`, () => {
-          setOrderSource("");
-          setOrderPage(0);
-        });
+        add(
+          "source",
+          `${t("table.source")}: ${sourceLabel(normalizedOrderSource)}`,
+          () => {
+            setOrderSource("");
+            setOrderPage(0);
+          },
+        );
       }
       if (orderSide !== "all") {
         add(
@@ -5487,10 +5505,14 @@ export function Orders() {
       });
     }
     if (normalizedTradeSource !== undefined) {
-      add("source", `${t("table.source")}: ${normalizedTradeSource}`, () => {
-        setTradeSource("");
-        resetTradePage();
-      });
+      add(
+        "source",
+        `${t("table.source")}: ${sourceLabel(normalizedTradeSource)}`,
+        () => {
+          setTradeSource("");
+          resetTradePage();
+        },
+      );
     }
     if (tradeSide !== "all") {
       add(
@@ -6063,7 +6085,7 @@ export function Orders() {
                       </SelectItem>
                       {SOURCES.filter(Boolean).map((source) => (
                         <SelectItem key={source} value={source}>
-                          {source}
+                          {sourceLabel(source)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -6191,7 +6213,7 @@ export function Orders() {
                       </SelectItem>
                       {SOURCES.filter(Boolean).map((source) => (
                         <SelectItem key={source} value={source}>
-                          {source}
+                          {sourceLabel(source)}
                         </SelectItem>
                       ))}
                     </SelectContent>

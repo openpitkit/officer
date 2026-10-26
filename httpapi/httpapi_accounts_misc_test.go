@@ -1168,11 +1168,17 @@ func TestOverview(t *testing.T) {
 			},
 			Activity: []backend.Activity{
 				{
-					At:      at,
-					Source:  domain.SourceAPI,
-					Kind:    backend.ActivityKindOrder,
-					Ref:     "7",
-					Summary: "order acc-1 buy AAPL",
+					At:     at,
+					Source: domain.SourceAPI,
+					Kind:   backend.ActivityKindOrder,
+					Ref:    "7",
+					Summary: domain.NewAuditDetail(domain.AuditDetailActivityOrder, domain.AuditDetailParams{
+						"side":   string(domain.OrderSideBuy),
+						"amount": "1",
+						"base":   "AAPL",
+						"quote":  "USD",
+						"status": string(domain.OrderStatusCommitted),
+					}),
 				},
 			},
 		},

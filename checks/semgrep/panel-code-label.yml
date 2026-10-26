@@ -1,0 +1,78 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# The panel shows a wire code through its catalog label (web/src/i18n/codeLabel),
+# never as the raw code and never with a silent raw-code fallback.
+rules:
+  - id: panel-code-label-raw-field
+    message: >-
+      A wire code is shown raw. Show its catalog label through codeLabel or a
+      labeler in web/src/i18n/codeLabel.ts.
+    severity: ERROR
+    languages: [typescript]
+    patterns:
+      - pattern-either:
+          - pattern: <$EL ...>...{$OBJ.$FIELD}...</$EL>
+          - pattern: <$EL ... label={$OBJ.$FIELD} ... />
+          - pattern: <$EL ... title={$OBJ.$FIELD} ... />
+          - pattern: <BreakdownRow ... value={$OBJ.$FIELD} ... />
+      - metavariable-regex:
+          metavariable: $FIELD
+          regex: ^(source|status|side|kind|action|verdict|outcome|orderStatus|rejectCode|rejectScope|mode|amountKind|orderType|timeInForce|requestType|scope|policy|type)$
+    paths:
+      include: ["/web/src/**"]
+      exclude:
+        - "/web/src/**/*.test.ts"
+        - "/web/src/**/*.test.tsx"
+
+  # The same codes reach the screen as option labels, filter chips and
+  # "Heading: value" strings, where the code is a variable, not a field.
+  - id: panel-code-label-raw-text
+    message: >-
+      A wire code is shown raw. Show its catalog label through codeLabel or a
+      labeler in web/src/i18n/codeLabel.ts.
+    severity: ERROR
+    languages: [typescript]
+    patterns:
+      - pattern-either:
+          - pattern: '{..., label: $V, ...}'
+          - pattern: '{..., label: $T("..."), value: $V, ...}'
+          - pattern: '`${$HEAD}: ${$V}`'
+          - pattern: '`${$HEAD} (${$V}: ${$REST})`'
+      - metavariable-regex:
+          metavariable: $V
+          regex: (?i)^[\w.]*(source|status|side|kind|action|verdict|outcome|scope|type|mode)(filter)?$
+    paths:
+      include: ["/web/src/**"]
+      exclude:
+        - "/web/src/**/*.test.ts"
+        - "/web/src/**/*.test.tsx"
+
+  - id: panel-code-label-silent-fallback
+    message: >-
+      A missing code label falls back to the raw code silently. Use codeLabel,
+      which shows the code and reports it.
+    severity: ERROR
+    languages: [typescript]
+    pattern-either:
+      - pattern: '$T(`...${$CODE}...`, {..., defaultValue: $CODE, ...})'
+      - pattern: '$GUARD($CODE) ? $T(...) : $CODE'
+    paths:
+      include: ["/web/src/**"]
+      exclude:
+        - "/web/src/**/*.test.ts"
+        - "/web/src/**/*.test.tsx"

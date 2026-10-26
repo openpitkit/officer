@@ -134,7 +134,10 @@ func TestListAudit(t *testing.T) {
 				Action:     domain.AuditActionSetLimit,
 				Account:    "acc-1",
 				Asset:      "AAPL",
-				Detail:     "set limit rate_limit account=acc-1",
+				Detail: domain.NewAuditDetail(domain.AuditDetailSetLimit, domain.AuditDetailParams{
+					"policy": domain.PolicyRateLimit,
+					"scope":  string(domain.ScopeAccount),
+				}, domain.AuditDetailField{Name: "account", Value: "acc-1"}),
 			},
 		},
 	}
@@ -358,7 +361,14 @@ func TestAuditDTO_JSONShape(t *testing.T) {
 	row := domain.AuditRow{
 		ExternalID: extID("audit-1"), At: ts, Actor: "operator",
 		Action: domain.AuditActionSetLimit, Account: "acc-1",
-		Detail: "set limit rate_limit asset=AAPL max_orders=100 window=1s",
+		Detail: domain.NewAuditDetail(domain.AuditDetailSetLimit, domain.AuditDetailParams{
+			"policy": domain.PolicyRateLimit,
+			"scope":  string(domain.ScopeAsset),
+		},
+			domain.AuditDetailField{Name: "asset", Value: "AAPL"},
+			domain.AuditDetailField{Name: "max_orders", Value: "100"},
+			domain.AuditDetailField{Name: "window", Value: "1s"},
+		),
 	}
 	b, err := json.Marshal(toAuditDTO(row))
 	if err != nil {

@@ -1,0 +1,37 @@
+# Regression cases of the locale-english-words rule, in the shape of a
+# prettier-formatted catalog. A `ruleid` line marks the next line as a finding,
+# an `ok` line marks it clean. The annotations make this file text, not JSON.
+{
+  "nested": {
+    # ruleid: locale-english-words
+    "sentence": "The order was rejected by the policy.",
+    # ruleid: locale-english-words
+    "halfTranslated": "La orden se rechaza when the limit is reached.",
+    # ruleid: locale-english-words
+    "portuguese": "Selecione a conta and confirme.",
+    # ruleid: locale-english-words
+    "afterPlaceholder": "{{count}} of {{total}}",
+    # ruleid: locale-english-words
+    "afterTag": "<b>Límite</b> for the account",
+    # ruleid: locale-english-words
+    "afterCode": "Ejecute `pit-officer mcp` to connect.",
+    # ruleid: locale-english-words
+    "afterEscape": "Primera línea.\nthe second line",
+    # ok: locale-english-words
+    "spanish": "No se puede enviar la orden: el límite de la cuenta se alcanzó.",
+    # ok: locale-english-words
+    "portugueseOk": "Não é possível enviar a ordem se for necessário aprovar.",
+    # ok: locale-english-words
+    "markup": "Clave {{the}} en <tradingLink>Conexiones</tradingLink> y `the pit-officer mcp`.",
+    # ok: locale-english-words
+    "kept": "The Pit Project Owners, Pit Officer, API key, Paper Trading y streamable HTTP.",
+    # ok: locale-english-words
+    "insideWords": "Android, isolate, bonito, intone, tonto, ontem, fortes, max_orders.",
+    # ok: locale-english-words
+    "accented": "Válido até o anúncio; papéis inútiles.",
+    # ok: locale-english-words
+    "csv": "id,at,account_code,side,price",
+    # ruleid: locale-english-words
+    "notCsv": "id, at the account"
+  }
+}

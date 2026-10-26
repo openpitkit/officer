@@ -737,7 +737,14 @@ func TestGetAuditHappyPath(t *testing.T) {
 				Actor:      "operator",
 				Action:     domain.AuditActionSetLimit,
 				Account:    "acc-1",
-				Detail:     "set limit rate_limit account=acc-1 max_orders=100 window=1s",
+				Detail: domain.NewAuditDetail(domain.AuditDetailSetLimit, domain.AuditDetailParams{
+					"policy": domain.PolicyRateLimit,
+					"scope":  string(domain.ScopeAccount),
+				},
+					domain.AuditDetailField{Name: "account", Value: "acc-1"},
+					domain.AuditDetailField{Name: "max_orders", Value: "100"},
+					domain.AuditDetailField{Name: "window", Value: "1s"},
+				),
 			},
 		},
 	}
@@ -776,7 +783,9 @@ func TestGetAuditGroupHandle(t *testing.T) {
 				Actor:      "operator",
 				Action:     domain.AuditActionBlockGroup,
 				Group:      "desk",
-				Detail:     "block group desk",
+				Detail: domain.NewAuditDetail(
+					domain.AuditDetailBlockGroup, domain.AuditDetailParams{"group": "desk"},
+				),
 			},
 		},
 	}

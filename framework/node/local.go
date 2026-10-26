@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -337,44 +338,46 @@ func (n *localNode) reconcileEngineAfterFailure(
 
 // loadSnapshot reads the full engine seed from the bound realm: accounts (with
 // their blocked state and group membership), the complete typed barrier set,
-// groups, and balances. It returns the assembled snapshot and a human-readable
-// counts summary for the hydrate audit detail. It runs once at NewLocalNode and
-// again on every administrative engine rebuild.
-func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, error) {
+// groups, and balances. It returns the assembled snapshot and the counts summary
+// for the hydrate audit detail. It runs once at NewLocalNode and again on every
+// administrative engine rebuild.
+func (n *localNode) loadSnapshot(
+	ctx context.Context,
+) (engine.Snapshot, domain.AuditDetail, error) {
 	assets, err := n.realm.ListAssets(ctx)
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("load assets for build: %w", err)
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load assets for build: %w", err)
 	}
 	accounts, err := n.realm.ListAccounts(ctx)
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("load accounts for build: %w", err)
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load accounts for build: %w", err)
 	}
 	rateLimits, err := n.realm.ListRateLimits(ctx, "")
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("load rate limits for build: %w", err)
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load rate limits for build: %w", err)
 	}
 	orderSizeLimits, err := n.realm.ListOrderSizeLimits(ctx, "")
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("load order-size limits for build: %w", err)
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load order-size limits for build: %w", err)
 	}
 	spotFundsPnlBoundsLimits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf(
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf(
 			"load spot funds pnl-bounds limits for build: %w", err,
 		)
 	}
 	groups, err := n.realm.ListGroups(ctx)
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("load groups for build: %w", err)
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load groups for build: %w", err)
 	}
 	if defaultGroup, ok, err := n.realm.GetGroup(ctx, ""); err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("load default group for build: %w", err)
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load default group for build: %w", err)
 	} else if ok {
 		groups = append(groups, defaultGroup)
 	}
 	balances, err := n.realm.ListBalances(ctx, "", "")
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("load balances for build: %w", err)
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load balances for build: %w", err)
 	}
 
 	snap := engine.Snapshot{
@@ -387,10 +390,13 @@ func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, 
 		Balances:                 balances,
 	}
 	barriers := len(rateLimits) + len(orderSizeLimits) + len(spotFundsPnlBoundsLimits)
-	counts := fmt.Sprintf(
-		"hydrate %d assets %d accounts %d barriers %d groups %d balances",
-		len(assets), len(accounts), barriers, len(groups), len(balances),
-	)
+	counts := domain.NewAuditDetail(domain.AuditDetailHydrate, domain.AuditDetailParams{
+		"assets":   strconv.Itoa(len(assets)),
+		"accounts": strconv.Itoa(len(accounts)),
+		"barriers": strconv.Itoa(barriers),
+		"groups":   strconv.Itoa(len(groups)),
+		"balances": strconv.Itoa(len(balances)),
+	})
 	return snap, counts, nil
 }
 
@@ -471,11 +477,10 @@ func (n *localNode) ExportBackup(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionExportBackup,
-		Detail: fmt.Sprintf(
-			"export backup realm %s sections %d",
-			archive.Manifest.Realm.Code,
-			len(archive.Manifest.Sections),
-		),
+		Detail: domain.NewAuditDetail(domain.AuditDetailExportBackup, domain.AuditDetailParams{
+			"realm":    archive.Manifest.Realm.Code,
+			"sections": strconv.Itoa(len(archive.Manifest.Sections)),
+		}),
 	}); err != nil {
 		return backup.Archive{}, fmt.Errorf("audit export backup: %w", err)
 	}
@@ -661,11 +666,10 @@ func (n *localNode) RestoreBackup(
 
 	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action: domain.AuditActionRestoreBackup,
-		Detail: fmt.Sprintf(
-			"restore backup realm %s mode %s",
-			archive.Manifest.Realm.Code,
-			opts.Mode,
-		),
+		Detail: domain.NewAuditDetail(domain.AuditDetailRestoreBackup, domain.AuditDetailParams{
+			"realm":       archive.Manifest.Realm.Code,
+			"restoreMode": string(opts.Mode),
+		}),
 	}); err != nil {
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),
 			failAfterCommit(
@@ -727,7 +731,7 @@ func (n *localNode) ResetDatabase(
 	}
 	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action: domain.AuditActionResetDatabase,
-		Detail: "reset database from scratch",
+		Detail: domain.NewAuditDetail(domain.AuditDetailResetDatabase, nil),
 	}); err != nil {
 		return committedFailure(
 			"audit database reset",

@@ -1,0 +1,82 @@
+{
+  "continue": "Continuar",
+  "stepOf": "Paso {{n}} de {{total}}",
+  "changeLater": "Se puede cambiar más tarde: {{where}}",
+  "place": "{{section}} › {{tab}}",
+  "firstStart": "Primer inicio",
+  "rail": {
+    "closed": "REST y MCP permanecen cerrados hasta que termine la configuración.",
+    "finished": "Configuración terminada. REST y MCP responden según el acceso elegido.",
+    "steps": {
+      "welcome": "Bienvenida",
+      "accounts": "Cuentas",
+      "encryption": "Cifrado",
+      "signing": "Firma",
+      "access": "Acceso",
+      "agent": "Su agente",
+      "done": "Listo"
+    }
+  },
+  "welcome": {
+    "title": "Configurar Pit Officer",
+    "lead": "Este asistente prepara Officer para trabajar.",
+    "closedTitle": "Officer está cerrado hasta que termine la configuración",
+    "closedBody": "Su REST API y MCP todavía no responden a ningún programa ni a ningún agente. No se negocia nada ni se conecta nada hasta que lo configure.",
+    "start": "Iniciar la configuración"
+  },
+  "accounts": {
+    "title": "¿Cuántas cuentas va a usar?",
+    "lead": "Con una sola cuenta, Officer actúa solo sobre ella y el panel no muestra campos de cuenta. El modo puede cambiarse más tarde en la página Servicio.",
+    "saveFirst": "Guarde el modo para continuar."
+  },
+  "encryption": {
+    "title": "¿Cifrar las claves almacenadas con una clave maestra?",
+    "lead": "Officer guarda en su archivo de base de datos las claves de sus conexiones de negociación y de sus proveedores de datos, así como sus propios tokens de acceso. Una clave maestra los cifra: una base de datos o una copia de seguridad copiada no sirve sin ella. La clave también puede configurarse más tarde, en cualquier momento.",
+    "key": {
+      "title": "Con clave maestra",
+      "description": "Las claves almacenadas se cifran. Usted crea la clave una vez y guarda una copia."
+    },
+    "none": {
+      "title": "Sin cifrado",
+      "description": "No hay nada que hacer ahora. Las claves almacenadas permanecen en el archivo en texto plano hasta que se configure una clave maestra."
+    },
+    "waiting": "Esperando a que Officer vuelva con la clave…",
+    "on": "El cifrado está activado. Officer cifró su base de datos.",
+    "noneTitle": "Sin cifrado, quien obtenga el archivo de base de datos obtiene sus claves",
+    "noneWho": "Quién lo obtiene: cualquiera que copie el archivo o una copia de seguridad - desde este disco, una carpeta sincronizada, una imagen de disco o un portátil perdido.",
+    "noneWhat": "Qué puede hacer: negociar a través de sus conexiones de negociación, usar sus suscripciones de datos, usar los propios tokens de Officer y firmar decisiones en nombre de Officer.",
+    "noneBanner": "Mientras las claves de conexiones de negociación o de proveedores de datos se almacenen sin cifrar, se mostrará un aviso rojo en todas las páginas.",
+    "noneAck": "Entiendo: mis claves se almacenan sin cifrar."
+  },
+  "signing": {
+    "title": "¿Firmar las decisiones de Officer?",
+    "lead": "Officer puede firmar cada decisión que emite sobre una orden. Un programa que ejecuta la orden comprueba la firma y sabe que la decisión procede de este Officer, sin modificaciones. Sin firma, la decisión se envía igualmente, sin firmar.",
+    "on": "Activada"
+  },
+  "access": {
+    "title": "¿Quién puede usar Officer?",
+    "lead": "Officer solo escucha en este equipo. Eso deja fuera a otros equipos, pero no a otro software de este mismo equipo.",
+    "finish": "Terminar la configuración"
+  },
+  "agent": {
+    "title": "Conecte su agente de IA",
+    "lead": "Su agente se comunica con Officer mediante MCP. De forma predeterminada lee y comprueba órdenes y no cambia nada; puede permitir más en Acceso MCP.",
+    "warning": "Entregue al agente solo este token - nunca el token de API ni la contraseña del panel: con ellos eludiría sus límites de MCP.",
+    "later": "Conectar más tarde"
+  },
+  "done": {
+    "title": "Officer está configurado",
+    "lead": "Sus decisiones y dónde se encuentra ahora cada una.",
+    "columns": {
+      "decision": "Decisión",
+      "choice": "Elección",
+      "where": "Dónde se encuentra"
+    },
+    "values": {
+      "agent": "Token del agente emitido",
+      "agentOpen": "No se necesita token"
+    },
+    "reopen": "Puede volver a abrir esta guía en cualquier momento: Acerca de › Guía de inicio.",
+    "open": "Abrir el panel"
+  }
+}

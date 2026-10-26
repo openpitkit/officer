@@ -279,17 +279,17 @@ func TestLifecycleAuditMapsKnownActionsAndRejectsUnknown(t *testing.T) {
 		wantAction domain.AuditAction
 		wantDetail string
 	}{
-		{lifecycleRestart, domain.AuditActionRestartService, "restart service requested"},
-		{lifecycleStop, domain.AuditActionStopService, "stop service requested"},
+		{lifecycleRestart, domain.AuditActionRestartService, "Service restart requested"},
+		{lifecycleStop, domain.AuditActionStopService, "Service stop requested"},
 	}
 	for _, tt := range tests {
 		gotAction, gotDetail, err := lifecycleAudit(tt.action)
 		if err != nil {
 			t.Fatalf("lifecycleAudit(%q) error = %v", tt.action, err)
 		}
-		if gotAction != tt.wantAction || gotDetail != tt.wantDetail {
+		if gotAction != tt.wantAction || gotDetail.Text != tt.wantDetail {
 			t.Fatalf("lifecycleAudit(%q) = (%q, %q), want (%q, %q)",
-				tt.action, gotAction, gotDetail, tt.wantAction, tt.wantDetail)
+				tt.action, gotAction, gotDetail.Text, tt.wantAction, tt.wantDetail)
 		}
 	}
 

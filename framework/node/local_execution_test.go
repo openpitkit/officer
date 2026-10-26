@@ -805,10 +805,10 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if rows[0].Source != domain.SourceSystem || rows[0].Actor != "" {
 		t.Fatalf("block not attributed to system with empty actor: %+v", rows[0])
 	}
-	if !strings.Contains(rows[0].Detail, "account block triggered") ||
-		!strings.Contains(rows[0].Detail, "code="+domain.RejectCodePnlKillSwitchTriggered) ||
-		!strings.Contains(rows[0].Detail, order.ExternalID.String()) {
-		t.Fatalf("block detail missing reason, code or order: %q", rows[0].Detail)
+	if !strings.Contains(rows[0].Detail.Text, "account block triggered") ||
+		!strings.Contains(rows[0].Detail.Text, "("+domain.RejectCodePnlKillSwitchTriggered+")") ||
+		!strings.Contains(rows[0].Detail.Text, order.ExternalID.String()) {
+		t.Fatalf("block detail missing reason, code or order: %q", rows[0].Detail.Text)
 	}
 }
 
@@ -865,7 +865,7 @@ func TestLocalNode_ApplyExecutionReportForce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "forced=true") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "forced=true") {
 		t.Fatalf("audit rows = %+v, want forced=true execution report", rows)
 	}
 }
@@ -1122,15 +1122,15 @@ func TestLocalNode_TerminalOverFillPreservesRawLeavesAndSuppliesZeroRemainder(t 
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "leavesQty=6") ||
-		!strings.Contains(rows[0].Detail, "overfill=true") ||
-		!strings.Contains(rows[0].Detail, "preReportReserveQty=2") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "remaining 6,") ||
+		!strings.Contains(rows[0].Detail.Text, "overfill=true") ||
+		!strings.Contains(rows[0].Detail.Text, "preReportReserveQty=2") {
 		t.Fatalf(
 			"audit rows = %+v, want over-fill marker and compared reserve",
 			rows,
 		)
 	}
-	if strings.Contains(rows[0].Detail, "leavesQty=0") {
+	if strings.Contains(rows[0].Detail.Text, "remaining 0,") {
 		t.Fatalf("audit rows = %+v, want no derived leaves", rows)
 	}
 }
@@ -1184,8 +1184,8 @@ func TestLocalNode_PartialOverFillAuditsRecordedReservation(t *testing.T) {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
 	if len(rows) != 1 ||
-		!strings.Contains(rows[0].Detail, "overfill=true") ||
-		!strings.Contains(rows[0].Detail, "preReportReserveQty=2") {
+		!strings.Contains(rows[0].Detail.Text, "overfill=true") ||
+		!strings.Contains(rows[0].Detail.Text, "preReportReserveQty=2") {
 		t.Fatalf(
 			"audit rows = %+v, want partial over-fill marker and reserve 2",
 			rows,
@@ -1217,7 +1217,7 @@ func TestLocalNode_TerminalFillWithinRecordedReservationHasNoOverFillMarker(t *t
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || strings.Contains(rows[0].Detail, "overfill=") {
+	if len(rows) != 1 || strings.Contains(rows[0].Detail.Text, "overfill=") {
 		t.Fatalf("audit rows = %+v, want no over-fill marker", rows)
 	}
 }
@@ -1268,8 +1268,8 @@ func TestLocalNode_TerminalReportRecordsCallerLeavesAndForwardsReservation(t *te
 		t.Fatalf("ListAuditFiltered(execution report): %v", err)
 	}
 	if len(rows) != 1 ||
-		!strings.Contains(rows[0].Detail, "leavesQty=0.250") ||
-		!strings.Contains(rows[0].Detail, "reservationRemainder=1.5") {
+		!strings.Contains(rows[0].Detail.Text, "remaining 0.250,") ||
+		!strings.Contains(rows[0].Detail.Text, "reservationRemainder=1.5") {
 		t.Fatalf("terminal report audit = %+v", rows)
 	}
 }
@@ -1354,7 +1354,7 @@ func TestLocalNode_ApplyExecutionReportForceOnOpenOrderDoesNotAuditForced(t *tes
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || strings.Contains(rows[0].Detail, "forced=true") {
+	if len(rows) != 1 || strings.Contains(rows[0].Detail.Text, "forced=true") {
 		t.Fatalf("audit rows = %+v, want no forced=true", rows)
 	}
 }
@@ -1393,7 +1393,7 @@ func TestLocalNode_ApplyExecutionReportForceWorkflowAuditsBypass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "forced=true") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "forced=true") {
 		t.Fatalf("audit rows = %+v, want forced=true workflow report", rows)
 	}
 }
@@ -2087,8 +2087,8 @@ func TestLocalNode_ApplyExecutionReportWorkflowLeavesRecordsCallerValue(t *testi
 		t.Fatalf("ListAuditFiltered(execution report): %v", err)
 	}
 	if len(rows) != 1 ||
-		!strings.Contains(rows[0].Detail, "leavesQty=1.23000") ||
-		strings.Contains(rows[0].Detail, "reservationRemainder=") {
+		!strings.Contains(rows[0].Detail.Text, "remaining 1.23000,") ||
+		strings.Contains(rows[0].Detail.Text, "reservationRemainder=") {
 		t.Fatalf("workflow execution-report audit = %+v", rows)
 	}
 }
@@ -2431,8 +2431,8 @@ func TestLocalNode_TerminalFillReleasesOwnRemainderAndPreservesReportedLeaves(t 
 		t.Fatalf("ListAuditFiltered(execution report): %v", err)
 	}
 	if len(rows) != 1 ||
-		!strings.Contains(rows[0].Detail, "leavesQty=0") ||
-		!strings.Contains(rows[0].Detail, "reservationRemainder=1") {
+		!strings.Contains(rows[0].Detail.Text, "remaining 0,") ||
+		!strings.Contains(rows[0].Detail.Text, "reservationRemainder=1") {
 		t.Fatalf("terminal fill audit = %+v", rows)
 	}
 }

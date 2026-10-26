@@ -1,0 +1,155 @@
+{
+  "providers": {
+    "count_one": "{{count}} proveedor",
+    "count_many": "{{count}} proveedores",
+    "count_other": "{{count}} proveedores",
+    "site": "Sitio",
+    "docs": "Documentación",
+    "symbols": "Símbolos"
+  },
+  "references": {
+    "site": "Sitio del proveedor",
+    "docs": "Documentación del proveedor",
+    "symbols": "Símbolos válidos"
+  },
+  "instrument": {
+    "externalSymbol": "Símbolo externo",
+    "baseAsset": "Base",
+    "quoteAsset": "Cotización"
+  },
+  "settings": {
+    "label": "Etiqueta",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "keepStoredSecret": "Conservar el secreto guardado"
+  },
+  "actions": {
+    "addInstrument": "Añadir instrumento",
+    "enable": "Habilitar",
+    "disable": "Deshabilitar",
+    "deleteInstrument": "Eliminar instrumento",
+    "setFeeAccount": "Definir cuenta de comisiones",
+    "grantAccess": "Conceder acceso",
+    "revokeAccess": "Revocar acceso",
+    "revokeAccountAccessFor": "Revocar el acceso de la cuenta {{code}}",
+    "revokeGroupAccessFor": "Revocar el acceso del grupo {{code}}"
+  },
+  "state": {
+    "enabled": "Habilitado",
+    "disabled": "Deshabilitado"
+  },
+  "table": {
+    "external": "Externo",
+    "instrument": "Instrumento",
+    "state": "Estado",
+    "actions": "Acciones"
+  },
+  "verify": {
+    "action": "Verificar símbolo",
+    "exists": "El símbolo existe",
+    "notFound": "Símbolo no encontrado",
+    "didYouMean": "¿Quiso decir {{suggestion}}?",
+    "failed": "No se pudo verificar",
+    "notTradable": "El símbolo existe, pero no es negociable"
+  },
+  "resolve": {
+    "action": "Resolver",
+    "searching": "Resolviendo…",
+    "filterLabel": "Filtrar símbolos resueltos",
+    "filterPlaceholder": "Filtrar símbolos resueltos",
+    "noFilteredResults": "Ningún resultado coincide con el filtro"
+  },
+  "deleteInstrument": {
+    "title": "¿Eliminar el instrumento?"
+  },
+  "revokeAccess": {
+    "accountTitle": "¿Revocar el acceso de la cuenta?",
+    "groupTitle": "¿Revocar el acceso del grupo?",
+    "accountDescription": "¿Revocar el acceso de la cuenta {{account}} a {{label}}?",
+    "groupDescription": "¿Revocar el acceso del grupo {{group}} a {{label}}? Las cuentas del grupo conservan el acceso solo si se les concedió directamente."
+  },
+  "accessBlocked": {
+    "groupNeedsFeeAccount": "Defina primero una cuenta de comisiones. Un grupo puede contener varias cuentas, y {{provider}} cobra comisiones que no están vinculadas a órdenes; Officer necesita una cuenta en la que registrarlas.",
+    "secondAccountNeedsFeeAccount": "Defina primero una cuenta de comisiones. {{provider}} cobra comisiones que no están vinculadas a órdenes; con varias cuentas en una misma conexión, Officer necesita una cuenta en la que registrarlas."
+  },
+  "access": {
+    "tableLabel": "Accesos concedidos",
+    "accountCount_one": "{{count}} cuenta",
+    "accountCount_many": "{{count}} cuentas",
+    "accountCount_other": "{{count}} cuentas",
+    "groupCount_one": "{{count}} grupo",
+    "groupCount_many": "{{count}} grupos",
+    "groupCount_other": "{{count}} grupos",
+    "kindFilter": "Tipo",
+    "kind": {
+      "all": "Todos",
+      "accounts": "Cuentas",
+      "groups": "Grupos"
+    },
+    "codeFilter": "Código",
+    "codePlaceholder": "Código de cuenta o de grupo",
+    "columns": {
+      "subject": "Cuenta o grupo",
+      "group": "Grupo de cuentas"
+    },
+    "groupBadge": "Grupo",
+    "empty": "Ninguna cuenta ni grupo tiene acceso",
+    "noMatches": "Ningún acceso coincide con los filtros"
+  },
+  "accessDialog": {
+    "accountTitle": "Acceso a conexiones de negociación - {{code}}",
+    "groupTitle": "Acceso a conexiones de negociación - grupo {{code}}",
+    "accountDescription": "Conceder y revocar aquí solo cambia el acceso propio de esta cuenta. El acceso a través de su grupo se gestiona en el grupo.",
+    "groupDescription": "Las cuentas de este grupo pueden enviar órdenes a través de cualquier conexión concedida al grupo.",
+    "tableLabel": "Conexiones de negociación",
+    "columns": {
+      "connection": "Conexión de negociación",
+      "access": "Acceso"
+    },
+    "state": {
+      "own": "Acceso propio",
+      "group": "A través del grupo {{group}}",
+      "ownAndGroup": "Acceso propio y también a través del grupo {{group}}",
+      "granted": "Concedido",
+      "none": "Sin acceso",
+      "noOwn": "Sin acceso propio"
+    },
+    "venueAccount": "Cuenta en la plataforma: {{venueAccount}}",
+    "venueAccountBound": "Revocarlo aquí eliminaría la cuenta en la plataforma. Cambie este acceso en la página de conexiones de negociación.",
+    "groupVenueAccount": "Un acceso propio sustituiría la cuenta en la plataforma del grupo {{venueAccount}}. Concédalo en la página de conexiones de negociación.",
+    "openConnections": "Abrir conexiones de negociación",
+    "empty": {
+      "hint": "Configure primero una conexión de negociación y, después, conceda acceso a ella."
+    }
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Tamaño de página",
+      "rowCount": "{{count}} filas por página"
+    }
+  },
+  "emptyInstruments": "No hay instrumentos configurados",
+  "emptyConnections": "No hay conexiones de negociación",
+  "venueAccount": "Cuenta en la plataforma",
+  "unsealed": {
+    "title": "Las claves se almacenarán sin cifrar",
+    "description": "Officer funciona sin clave maestra, por lo que estas claves se escriben en su base de datos en texto plano. Cualquiera que pueda leer la base de datos o una copia de seguridad puede usarlas, incluso para negociar donde la clave lo permita. Configure una clave maestra para almacenarlas cifradas.",
+    "caution": "Si se pierde la clave maestra, la base de datos no se puede abrir - haga una copia de seguridad de la clave antes de configurarla."
+  },
+  "diagnostics": {
+    "title": "Problemas",
+    "summary": "{{count}} activos",
+    "collapsedSummary": "Problemas: {{count}}",
+    "collapse": "Contraer",
+    "expand": "Abrir",
+    "actions": "Acciones sobre problemas",
+    "levelError": "error",
+    "levelWarn": "aviso",
+    "levelInfo": "info",
+    "groupActionNeeded": "Acción necesaria",
+    "groupProvider": "Conexión / proveedor",
+    "howToFix": "Cómo solucionarlo:",
+    "actionRemoveTarget": "Quitar {{target}}",
+    "actionLogs": "Registros del servicio"
+  }
+}

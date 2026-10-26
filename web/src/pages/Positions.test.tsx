@@ -1851,6 +1851,19 @@ describe("Positions history adjustment type", () => {
     return within(screen.getByRole("group", { name: "Type" }));
   }
 
+  it("labels the history source options, never their codes", () => {
+    renderPositions("/positions?tab=history");
+
+    for (const label of ["Panel", "API", "MCP", "System"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    for (const code of ["panel", "api", "mcp", "system"]) {
+      expect(
+        screen.queryByRole("button", { name: code }),
+      ).not.toBeInTheDocument();
+    }
+  });
+
   it("narrows history by the chosen type and sends no type for All", async () => {
     const user = userEvent.setup();
     const deposit: Adjustment = {

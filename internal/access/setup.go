@@ -143,6 +143,7 @@ func (s *Service) CompleteSetup(
 		return "", fmt.Errorf("access: complete setup in open mode: %w", err)
 	}
 	return "", s.audit(ctx, caller, store.AuditEntry{
-		Action: domain.AuditActionSetAccessMode, Detail: string(ModeOpen),
+		Action: domain.AuditActionSetAccessMode,
+		Detail: domain.NewAuditDetail(domain.AuditDetailSetAccessModeOpen, nil),
 	})
 }

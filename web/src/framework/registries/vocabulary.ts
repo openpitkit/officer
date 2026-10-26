@@ -135,14 +135,6 @@ export function scopeHasAsset(scope: string): boolean {
   );
 }
 
-export function policyLabel(t: TFunction, id: string): string {
-  return isPolicy(id) ? t(`domain:policyLabel.${id}`) : id;
-}
-
-export function scopeLabel(t: TFunction, id: string): string {
-  return isScope(id) ? t(`domain:scope.${id}`) : id;
-}
-
 /** Every adjustment type, in the order the panel offers them. */
 export const ADJUSTMENT_TYPES = [
   "venue_fee",
@@ -171,16 +163,6 @@ export function policyCatalogLabel(t: TFunction, id: string): string {
 
 export function policyCatalogDescription(t: TFunction, id: string): string {
   return t(`domain:policy.${id}.description`);
-}
-
-export function policyFieldLabel(
-  t: TFunction,
-  policyId: string,
-  fieldKey: string,
-): string {
-  return t(`domain:policyField.${policyId}.${fieldKey}.label`, {
-    defaultValue: fieldKey,
-  });
 }
 
 export function policyFieldHint(

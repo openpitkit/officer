@@ -1,0 +1,53 @@
+{
+  "title": "Chaves de assinatura",
+
+  "currentKey": {
+    "sectionTitle": "Chave ativa",
+    "keyId": "ID da chave",
+    "fingerprint": "Impressão digital",
+    "createdAt": "Criada em",
+    "status": "Situação",
+    "statusActive": "ativa",
+    "empty": "Nenhuma chave de assinatura configurada. Gere ou importe uma abaixo.",
+    "export": {
+      "label": "Exportar chave pública",
+      "formatLabel": "Formato",
+      "formats": {
+        "pem-pkcs8": "PEM PKCS#8",
+        "openssh": "OpenSSH (authorized_keys)",
+        "raw-base64": "Semente base64 bruta"
+      }
+    }
+  },
+
+  "manageKey": {
+    "sectionTitle": "Gerar ou importar",
+    "modeGenerate": "Gerar nova chave",
+    "modeImport": "Importar sua chave",
+    "generateButton": "Gerar",
+    "importButton": "Importar",
+    "importFormat": "Formato da chave",
+    "importKeyLabel": "Chave privada",
+    "importKeyPlaceholder": "Cole sua chave privada aqui…",
+    "importBusy": "Importando…",
+    "generateDialog": {
+      "title": "Gerar nova chave de assinatura",
+      "description": "Isso criará um novo par de chaves Ed25519. A chave ativa atual será desativada. Os conectores ainda poderão obter a chave pública antiga para verificar os envelopes assinados com ela.",
+      "confirm": "Gerar"
+    },
+    "errors": {
+      "generateFailed": "Falha ao gerar a chave.",
+      "importEmpty": "Cole uma chave privada antes de importar.",
+      "importFailed": "Falha na importação."
+    }
+  },
+
+  "eSign": {
+    "sectionTitle": "Assinatura eletrônica",
+    "label": "Exigir assinatura nos envelopes de aprovação e de atestação",
+    "description": "Quando ativada, cada envelope de aprovação e de atestação é assinado com a chave Ed25519 ativa. Os conectores verificam a assinatura antes de executar. Quando desativada, os envelopes levam a carga útil completa e o vínculo, mas nenhuma assinatura criptográfica; o vínculo continua sendo verificado.",
+    "unsigned": "Os envelopes saem sem assinatura: qualquer pessoa que possa gravar no mesmo canal pode falsificar uma decisão. Ative a assinatura antes que um programa seu execute ordens com base nas decisões do Officer.",
+    "missingKeyError": "Assinaturas eletrônicas exigem uma chave de assinatura ativa. Configure uma em Gerar ou importar, acima.",
+    "busy": "Salvando…"
+  }
+}

@@ -135,10 +135,10 @@ func feeSkipRows(t *testing.T, f *fixture, want int) []domain.AuditRow {
 		t.Fatalf("venue_fee_skipped rows = %d, want %d: %+v", len(rows), want, rows)
 	}
 	for _, row := range rows {
-		if row.Source != domain.SourceSystem || row.Actor != "" || row.Account != "" || !strings.Contains(row.Detail, f.connection.ExternalID.String()) {
+		if row.Source != domain.SourceSystem || row.Actor != "" || row.Account != "" || !strings.Contains(row.Detail.Text, f.connection.ExternalID.String()) {
 			t.Fatalf("venue fee skip caller/connection = %+v", row)
 		}
-		if strings.Contains(row.Detail, "do-not-log-key") || strings.Contains(row.Detail, "do-not-log-secret") {
+		if strings.Contains(row.Detail.Text, "do-not-log-key") || strings.Contains(row.Detail.Text, "do-not-log-secret") {
 			t.Fatalf("venue fee skip contains credentials: %+v", row)
 		}
 	}
@@ -636,7 +636,7 @@ func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
 				t.Fatal("inapplicable or ambiguous fee reached the adjustment sink")
 			}
 			rows := feeSkipRows(t, f, 1)
-			if !strings.Contains(rows[0].Detail, fee.ID) || !strings.Contains(rows[0].Detail, wantLog) {
+			if !strings.Contains(rows[0].Detail.Text, fee.ID) || !strings.Contains(rows[0].Detail.Text, wantLog) {
 				t.Fatalf("fee skip lost id or reason: %+v", rows)
 			}
 			must(t, r.Restart())
@@ -877,7 +877,7 @@ func TestFeeCoreRejectionIsFinal(t *testing.T) {
 		time.Sleep(time.Hour)
 		synctest.Wait()
 		rows := feeSkipRows(t, f, 1)
-		if !strings.Contains(rows[0].Detail, "rejected") || !strings.Contains(rows[0].Detail, "rejected by the core") {
+		if !strings.Contains(rows[0].Detail.Text, "rejected") || !strings.Contains(rows[0].Detail.Text, "rejected by the core") {
 			t.Fatalf("core rejection skip audit = %+v", rows)
 		}
 		if rejects.Load() != 1 || strings.Count(f.logs.text(), "fee rejected not applied: rejected by the core: risk blocked") != 1 ||
@@ -930,7 +930,7 @@ func TestPersistedFeeCoreRejectionRetriesSkipReport(t *testing.T) {
 				time.Sleep(time.Hour)
 				synctest.Wait()
 				rows := feeSkipRows(t, f, 1)
-				if !strings.Contains(rows[0].Detail, "fee rejected: rejected by the core") {
+				if !strings.Contains(rows[0].Detail.Text, "fee rejected: rejected by the core") {
 					t.Fatalf("core rejection skip audit = %+v", rows)
 				}
 				if adjustments.Load() != 1 || reports.Load() != 2 {

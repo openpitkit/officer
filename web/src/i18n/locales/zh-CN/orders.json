@@ -254,7 +254,50 @@
     "accountBlocked": "账户 {{account}} 已被封锁",
     "accountBlockedUnnamed": "账户已被封锁",
     "rejectReasons": {
-      "account_blocked": "账户已被封锁"
+      "account_blocked": "账户已被封锁",
+      "missing_required_field": "缺少必填字段",
+      "invalid_field_format": "字段格式无效",
+      "invalid_field_value": "字段值无效",
+      "unsupported_order_type": "不支持的订单类型",
+      "unsupported_time_in_force": "不支持的有效期类型",
+      "unsupported_order_attribute": "不支持的订单属性",
+      "duplicate_client_order_id": "客户订单 ID 重复",
+      "too_late_to_enter": "已过下单时间",
+      "exchange_closed": "交易所已休市",
+      "unknown_instrument": "未知工具",
+      "unknown_account": "未知账户",
+      "unknown_venue": "未知交易场所",
+      "unknown_clearing_account": "未知清算账户",
+      "unknown_collateral_asset": "未知抵押资产",
+      "insufficient_funds": "资金不足",
+      "insufficient_margin": "保证金不足",
+      "insufficient_position": "持仓不足",
+      "credit_limit_exceeded": "超出信用额度",
+      "risk_limit_exceeded": "超出风险限额",
+      "order_exceeds_limit": "订单超出限额",
+      "order_qty_exceeds_limit": "订单数量超出限额",
+      "order_notional_exceeds_limit": "订单名义金额超出限额",
+      "position_limit_exceeded": "超出持仓限额",
+      "concentration_limit_exceeded": "超出集中度限额",
+      "leverage_limit_exceeded": "超出杠杆限额",
+      "rate_limit_exceeded": "超出频率限制",
+      "pnl_kill_switch_triggered": "PnL 熔断开关已触发",
+      "account_not_authorized": "账户未获授权",
+      "compliance_restriction": "合规限制",
+      "instrument_restricted": "工具受限",
+      "jurisdiction_restriction": "司法管辖区限制",
+      "wash_trade_prevention": "防止对敲交易",
+      "self_match_prevention": "防止自成交",
+      "short_sale_restriction": "卖空限制",
+      "risk_configuration_missing": "缺少风控配置",
+      "reference_data_unavailable": "参考数据不可用",
+      "order_value_calculation_failed": "订单价值计算失败",
+      "system_unavailable": "系统不可用",
+      "mark_price_unavailable": "标记价格不可用",
+      "account_adjustment_bounds_exceeded": "超出账户调整边界",
+      "arithmetic_overflow": "算术溢出",
+      "custom": "自定义拒绝",
+      "other": "其他拒绝"
     }
   },
 
@@ -352,6 +395,21 @@
         "rejectCode": "代码 {{code}}",
         "rejectScope": "范围 {{scope}}",
         "rejectPolicy": "策略 {{policy}}",
+        "type": {
+          "submitted": "已提交",
+          "pre_trade_accepted": "交易前已接受",
+          "pre_trade_rejected": "交易前已拒绝",
+          "committed": "已确认",
+          "rolled_back": "已回滚",
+          "confirmed": "已获确认",
+          "fill": "成交",
+          "commission": "佣金",
+          "cancelled": "已取消"
+        },
+        "scopes": {
+          "order": "订单",
+          "account": "账户"
+        },
         "verifySigned": "复现并验证此事件的签名",
         "verifyUnsigned": "复现此事件的未签名认证"
       },
@@ -501,7 +559,20 @@
     "nonce": "随机数",
     "keyId": "密钥 ID",
     "algorithm": "算法",
-    "issuedAt": "签发时间"
+    "issuedAt": "签发时间",
+    "verdicts": {
+      "accept": "接受",
+      "reject": "拒绝"
+    },
+    "orderTypes": {
+      "market": "市价",
+      "limit": "限价"
+    },
+    "outcomes": {
+      "applied": "已应用",
+      "confirmed": "已确认",
+      "cancelled": "已取消"
+    }
   },
 
   "esign": {

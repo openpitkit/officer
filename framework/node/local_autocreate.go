@@ -81,7 +81,10 @@ func (n *localNode) ensureAutoCreatedAccount(
 		Action:       domain.AuditActionCreateAccount,
 		Account:      account.Code,
 		AccountTitle: account.Title,
-		Detail:       fmt.Sprintf("auto-created account %s by %s", account.Code, operation),
+		Detail: domain.NewAuditDetail(domain.AuditDetailAutoCreateAccount, domain.AuditDetailParams{
+			"account":   account.Code.String(),
+			"operation": operation,
+		}),
 	}); err != nil {
 		return n.fatalPostEngineAuditByCode(
 			"audit auto-created account", "account", account.Code.String(),

@@ -274,6 +274,12 @@
     "timeInForce": "有效期类型",
     "actions": "操作"
   },
+  "source": {
+    "panel": "面板",
+    "api": "API",
+    "mcp": "MCP",
+    "system": "系统"
+  },
   "densityLabels": {
     "account": "账户",
     "accountShort": "账户",

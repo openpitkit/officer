@@ -94,48 +94,48 @@ func TestTradingMutationsAuditAndGate(t *testing.T) {
 			switch operation {
 			case "create":
 				mutate = func() error { _, err := n.CreateTradingConnection(ctx, connection, testCaller); return err }
-				detail = "create trading connection connection (alpaca, paper)"
+				detail = "Trading connection connection created (alpaca, paper)"
 			case "settings":
 				mutate = func() error {
 					return n.UpdateTradingConnectionSettings(ctx, connection.ExternalID, "renamed", credentials, testCaller)
 				}
-				detail = "update trading connection settings connection"
+				detail = "Trading connection connection settings updated"
 			case "enable":
 				mutate = func() error { return n.SetTradingConnectionEnabled(ctx, connection.ExternalID, true, testCaller) }
-				detail = "enable trading connection connection"
+				detail = "Trading connection connection enabled"
 			case "fee account":
 				mutate = func() error {
 					return n.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "account", testCaller)
 				}
-				detail = "set trading connection fee account connection"
+				detail = "Fee account set for trading connection connection"
 			case "clear fee account":
 				mutate = func() error { return n.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "", testCaller) }
-				detail = "clear trading connection fee account connection"
+				detail = "Fee account cleared for trading connection connection"
 			case "upsert":
 				mutate = func() error { return n.UpsertTradingInstrument(ctx, instrument, testCaller) }
-				detail = "upsert trading instrument connection/AAPL"
+				detail = "Instrument connection/AAPL saved"
 			case "delete":
 				mutate = func() error { return n.DeleteTradingInstrument(ctx, connection.ExternalID, "AAPL", testCaller) }
-				detail = "delete trading instrument connection/AAPL"
+				detail = "Instrument connection/AAPL deleted"
 			case "grant":
 				mutate = func() error { return n.PutTradingAccess(ctx, access, true, testCaller) }
-				detail = "put trading access connection/account/venue-subaccount"
+				detail = "Trading access granted: connection/account/venue-subaccount"
 			case "grant without venue account":
 				mutate = func() error { return n.PutTradingAccess(ctx, access, true, testCaller) }
-				detail = "put trading access connection/account"
+				detail = "Trading access granted: connection/account"
 			case "remove":
 				mutate = func() error {
 					return n.RemoveTradingAccess(ctx, access.Connection, access.Account, "", true, testCaller)
 				}
-				detail = "remove trading access connection/account"
+				detail = "Trading access revoked: connection/account"
 			case "grant group":
 				mutate = func() error { return n.PutTradingAccess(ctx, access, true, testCaller) }
-				detail = "put trading access connection/group:desk/venue-subaccount"
+				detail = "Trading access granted: connection/group:desk/venue-subaccount"
 			case "remove group":
 				mutate = func() error {
 					return n.RemoveTradingAccess(ctx, access.Connection, "", access.AccountGroup, true, testCaller)
 				}
-				detail = "remove trading access connection/group:desk"
+				detail = "Trading access revoked: connection/group:desk"
 			}
 			beforeConnections, err := realm.ListTradingConnections(ctx)
 			if err != nil {
@@ -189,10 +189,10 @@ func TestTradingMutationsAuditAndGate(t *testing.T) {
 			if groupOperation && (rows[0].Account != "" || rows[0].Group != "desk") {
 				t.Errorf("audit subject = %q/%q, want group desk", rows[0].Account, rows[0].Group)
 			}
-			if rows[0].Detail != detail {
-				t.Fatalf("detail = %q, want %q", rows[0].Detail, detail)
+			if rows[0].Detail.Text != detail {
+				t.Fatalf("detail = %q, want %q", rows[0].Detail.Text, detail)
 			}
-			if strings.Contains(rows[0].Detail, credentials) || strings.Contains(rows[0].Detail, "do-not-audit-trading-secret") {
+			if strings.Contains(rows[0].Detail.Text, credentials) || strings.Contains(rows[0].Detail.Text, "do-not-audit-trading-secret") {
 				t.Fatal("audit contains credentials")
 			}
 			rejected := &rejectTradingRealm{RealmStore: realm}
@@ -278,10 +278,10 @@ func TestTradingFeeAccountBindingRules(t *testing.T) {
 				t.Fatal(err)
 			}
 			access := domain.TradingAccess{Connection: connection.ExternalID, Account: "first", VenueAccount: "changed"}
-			wantDetail := "put trading access connection/first/changed"
+			wantDetail := "Trading access granted: connection/first/changed"
 			if tc.group != "" {
 				access.Account, access.AccountGroup = "", tc.group
-				wantDetail = "put trading access connection/group:team/changed"
+				wantDetail = "Trading access granted: connection/group:team/changed"
 			}
 			err := n.PutTradingAccess(ctx, access, tc.require, testCaller)
 			if tc.wantRefusal {
@@ -312,7 +312,7 @@ func TestTradingFeeAccountBindingRules(t *testing.T) {
 				if len(rows) != 0 {
 					t.Fatal("refused binding was audited as a mutation")
 				}
-			} else if len(rows) != 1 || rows[0].Account != access.Account || rows[0].Group != access.AccountGroup || rows[0].Detail != wantDetail || rows[0].Actor != testCaller.Principal || rows[0].Source != testCaller.Source {
+			} else if len(rows) != 1 || rows[0].Account != access.Account || rows[0].Group != access.AccountGroup || rows[0].Detail.Text != wantDetail || rows[0].Actor != testCaller.Principal || rows[0].Source != testCaller.Source {
 				t.Fatalf("binding audit = %+v", rows)
 			}
 		})
@@ -415,7 +415,7 @@ func TestTradingFeeAccountClearingRules(t *testing.T) {
 				t.Fatalf("set fee account with bindings: %v", err)
 			}
 			rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionSetTrading}}, 10)
-			if err != nil || len(rows) != 1 || rows[0].Account != "fees" || rows[0].Detail != "set trading connection fee account connection" || rows[0].Actor != testCaller.Principal || rows[0].Source != testCaller.Source {
+			if err != nil || len(rows) != 1 || rows[0].Account != "fees" || rows[0].Detail.Text != "Fee account set for trading connection connection" || rows[0].Actor != testCaller.Principal || rows[0].Source != testCaller.Source {
 				t.Fatalf("set fee account audit = %+v, err=%v", rows, err)
 			}
 			err = n.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "", testCaller)
@@ -441,7 +441,7 @@ func TestTradingFeeAccountClearingRules(t *testing.T) {
 			if err != nil || len(rows) != wantRows {
 				t.Fatalf("audit rows = %d, want %d, err=%v", len(rows), wantRows, err)
 			}
-			if !tc.wantRefusal && (rows[0].Account != "fees" || rows[0].Detail != "clear trading connection fee account connection") {
+			if !tc.wantRefusal && (rows[0].Account != "fees" || rows[0].Detail.Text != "Fee account cleared for trading connection connection") {
 				t.Fatalf("clear audit = %+v, want previous account and clear detail", rows[0])
 			}
 			if tc.wantRefusal {
@@ -497,10 +497,10 @@ func TestRecordVenueFeeSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, err = realm.ListAuditFiltered(context.Background(), domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
-	if err != nil || len(rows) != 1 || rows[0].Action.Category() != domain.AuditCategoryControl || rows[0].Account != "" || rows[0].Actor != "" || rows[0].Source != domain.SourceSystem || rows[0].Detail != "venue fee skipped connection connection fee fee-id: unmapped fee asset EUR" {
+	if err != nil || len(rows) != 1 || rows[0].Action.Category() != domain.AuditCategoryControl || rows[0].Account != "" || rows[0].Actor != "" || rows[0].Source != domain.SourceSystem || rows[0].Detail.Text != "Venue fee skipped: connection connection, fee fee-id: unmapped fee asset EUR" {
 		t.Fatalf("venue fee skip audit = %+v, err=%v", rows, err)
 	}
-	if strings.Contains(rows[0].Detail, "do-not-audit-trading-secret") {
+	if strings.Contains(rows[0].Detail.Text, "do-not-audit-trading-secret") {
 		t.Fatal("venue fee skip audit contains credentials")
 	}
 }

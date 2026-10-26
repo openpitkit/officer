@@ -78,7 +78,8 @@ import {
 // extension points. Stable ids let consumers replace entries by re-registering
 // the id or remove entries through the matching unregister API.
 export function registerOfficerDefaults(): void {
-  // Locale catalogs: en, ru, zh-CN, all namespaces from src/i18n/locales.
+  // Locale catalogs: en, ru, zh-CN, es, pt-BR, all namespaces from
+  // src/i18n/locales.
   registerLocaleResourceMap(appLocaleResources);
 
   // Vocabulary ids include the generic rate-limit scopes and the semantic

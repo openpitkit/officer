@@ -82,6 +82,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { codeLabel } from "@/i18n/codeLabel";
 import { formatCompactDuration, formatDateTime } from "@/i18n/format";
 import { useOfficerApi, type MarketDataSymbolSearchInput } from "@/framework";
 import {
@@ -1619,7 +1620,7 @@ function PairUsageWarning({ usages }: { usages: PairUsage[] }) {
   const feeds = usages
     .map(
       (usage) =>
-        `${usage.instanceLabel} (${usage.providerType}: ${usage.externalSymbol})`,
+        `${usage.instanceLabel} (${codeLabel(`marketData:providers.${usage.providerType}.title`, usage.providerType)}: ${usage.externalSymbol})`,
     )
     .join(", ");
   const title = t("instrument.pairAlreadyUsed", { feeds });

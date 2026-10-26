@@ -778,8 +778,9 @@ type AuditRow struct {
 	// none. It is a structured snapshot so a reader selects a group's rows by
 	// identity instead of matching the free-form detail text.
 	Group string
-	// Detail is a short human-readable description of the action.
-	Detail string
+	// Detail is the description of the action: its template code and values
+	// and the English text written with them.
+	Detail AuditDetail
 	// Source is the channel through which the action was initiated.
 	Source Source
 }

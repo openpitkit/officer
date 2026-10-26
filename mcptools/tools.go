@@ -745,9 +745,14 @@ type auditDTO struct {
 	// Group is the structured group handle of a group action, so an agent
 	// selects a group's rows by identity instead of matching the free-form
 	// detail text, where one group's code can appear inside another's.
-	Group      string `json:"group"`
-	Detail     string `json:"detail"`
-	ExternalID string `json:"id"`
+	Group string `json:"group"`
+	// Detail is the English line; DetailCode, DetailParams and DetailFields
+	// are what it was rendered from, for a reader that renders it itself.
+	Detail       string                   `json:"detail"`
+	DetailCode   string                   `json:"detailCode"`
+	DetailParams domain.AuditDetailParams `json:"detailParams"`
+	DetailFields domain.AuditDetailFields `json:"detailFields"`
+	ExternalID   string                   `json:"id"`
 }
 
 type orderDTO struct {
@@ -846,14 +851,17 @@ func limitsCount(l node.AccountLimits) int {
 
 func toAuditDTO(row domain.AuditRow) auditDTO {
 	return auditDTO{
-		ExternalID: row.ExternalID.String(),
-		At:         row.At,
-		Actor:      row.Actor,
-		Action:     string(row.Action),
-		Account:    string(row.Account),
-		Asset:      row.Asset,
-		Group:      row.Group,
-		Detail:     row.Detail,
+		ExternalID:   row.ExternalID.String(),
+		At:           row.At,
+		Actor:        row.Actor,
+		Action:       string(row.Action),
+		Account:      string(row.Account),
+		Asset:        row.Asset,
+		Group:        row.Group,
+		Detail:       row.Detail.Text,
+		DetailCode:   string(row.Detail.Code),
+		DetailParams: row.Detail.Params,
+		DetailFields: row.Detail.Fields,
 	}
 }
 

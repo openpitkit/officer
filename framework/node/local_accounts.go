@@ -138,7 +138,10 @@ func (n *localNode) CreateAccount(
 		Action:       domain.AuditActionCreateAccount,
 		Account:      created.Code,
 		AccountTitle: created.Title,
-		Detail:       fmt.Sprintf("create account %s", created.Code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateAccount,
+			domain.AuditDetailParams{"account": created.Code.String()},
+		),
 	}); err != nil {
 		return domain.Account{}, n.fatalPostEngineAuditByCode(
 			"audit create account", "account", created.Code.String(),
@@ -921,11 +924,12 @@ func (n *localNode) validateAccountGroupMove(
 			Action:  domain.AuditActionSetGroup,
 			Account: account, AccountTitle: current.Title,
 			Group: groupCode,
-			Detail: currencyDetail(
-				"set account group", account.String(),
-				current.EffectiveCurrency, nextEffective,
-			),
 		},
+		domain.AuditDetailSetAccountGroupCurrencyRefused,
+		currencyDetailParams(
+			domain.AuditDetailParams{"account": account.String()},
+			current.EffectiveCurrency, nextEffective,
+		),
 		domain.NewCurrencyChangeBlockedError(
 			domain.ScopeAccount, account.String(), guardErr,
 		),
@@ -965,7 +969,10 @@ func (n *localNode) SetAccountNotes(
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetNotes,
 		Account: account,
-		Detail:  fmt.Sprintf("set notes account %s", account),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailSetAccountNotes,
+			domain.AuditDetailParams{"account": account.String()},
+		),
 	}); err != nil {
 		return fmt.Errorf("audit set account notes: %w", err)
 	}
@@ -1025,20 +1032,31 @@ func (n *localNode) UpdateAccount(
 		}
 		return domain.Account{}, fmt.Errorf("publish account resolver rename: %w", err)
 	}
-	detail := updateAccountDetail(prev.Code, updated.Code)
+	// A renamed account is filed under both codes, and each record says which
+	// filing it is; a title-only update has no transition to state.
 	entries := []store.AuditEntry{{
 		Action:       domain.AuditActionUpdateAccount,
 		Account:      updated.Code,
 		AccountTitle: updated.Title,
-		Detail:       detail,
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailUpdateAccount,
+			domain.AuditDetailParams{"account": updated.Code.String()},
+		),
 	}}
 	if prev.Code != updated.Code {
-		entries[0].Detail += " (record under new code)"
+		rename := domain.AuditDetailParams{
+			"from": prev.Code.String(), "to": updated.Code.String(),
+		}
+		entries[0].Detail = domain.NewAuditDetail(
+			domain.AuditDetailRenameAccountNewRecord, rename,
+		)
 		entries = append([]store.AuditEntry{{
 			Action:       domain.AuditActionUpdateAccount,
 			Account:      prev.Code,
 			AccountTitle: prev.Title,
-			Detail:       detail + " (record under old code)",
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailRenameAccountOldRecord, rename,
+			),
 		}}, entries...)
 	}
 	if err := n.auditBatch(context.WithoutCancel(ctx), caller, entries); err != nil {
@@ -1114,7 +1132,10 @@ func (n *localNode) DeleteAccount(
 		Action:       domain.AuditActionDeleteAccount,
 		Account:      account.Code,
 		AccountTitle: account.Title,
-		Detail:       fmt.Sprintf("delete account %s", account.Code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailDeleteAccount,
+			domain.AuditDetailParams{"account": account.Code.String()},
+		),
 	}); err != nil {
 		return n.fatalPostEngineAuditByCode(
 			"audit delete account", "account", account.Code.String(),

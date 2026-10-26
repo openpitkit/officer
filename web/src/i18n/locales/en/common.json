@@ -274,6 +274,12 @@
     "timeInForce": "Time in force",
     "actions": "Actions"
   },
+  "source": {
+    "panel": "Panel",
+    "api": "API",
+    "mcp": "MCP",
+    "system": "System"
+  },
   "densityLabels": {
     "account": "Account",
     "accountShort": "Acct",

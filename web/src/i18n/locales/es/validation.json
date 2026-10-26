@@ -1,0 +1,53 @@
+{
+  "account": {
+    "required": "El código de cuenta es obligatorio",
+    "tooLong": "El código de cuenta debe tener como máximo {{max}} caracteres",
+    "whitespace": "El código de cuenta no debe empezar ni terminar con espacios",
+    "printable": "El código de cuenta solo debe contener caracteres imprimibles"
+  },
+  "asset": {
+    "required": "El activo es obligatorio para este ámbito",
+    "tooLong": "El activo debe tener como máximo {{max}} caracteres",
+    "whitespace": "El activo no debe contener espacios"
+  },
+  "accountGroup": {
+    "required": "El grupo de cuentas es obligatorio para este ámbito",
+    "tooLong": "El grupo de cuentas debe tener como máximo {{max}} caracteres",
+    "whitespace": "El grupo de cuentas no debe empezar ni terminar con espacios",
+    "printable": "El grupo de cuentas solo debe contener caracteres imprimibles"
+  },
+  "kind": {
+    "maxOrders": {
+      "integer": "max_orders debe ser un entero mayor que 0",
+      "cap": "max_orders debe ser como máximo 1e9"
+    },
+    "window": {
+      "duration": "window debe ser una duración de Go positiva (p. ej., 1s, 500ms)",
+      "cap": "window debe ser como máximo 24h"
+    },
+    "positiveDecimal": "{{kind}} debe ser un decimal positivo",
+    "decimal": "{{kind}} debe ser un decimal",
+    "unknown": "tipo desconocido {{kind}}"
+  },
+  "limit": {
+    "unknownPolicy": "política desconocida {{policy}}",
+    "unknownScope": "ámbito desconocido {{scope}}",
+    "scopeNotAllowed": "el ámbito {{scope}} no está permitido para {{policy}}",
+    "scopeNoAccount": "el ámbito {{scope}} no debe incluir una cuenta",
+    "scopeNoAsset": "el ámbito {{scope}} no debe incluir un activo",
+    "scopeNoAccountGroup": "el ámbito {{scope}} no debe incluir un grupo de cuentas",
+    "policyNoAccountGroup": "{{policy}} no debe incluir un grupo de cuentas",
+    "rateLimitRequires": "rate_limit requiere max_orders y window",
+    "orderSizeRequires": "order_size_limit requiere max_quantity o max_notional",
+    "orderSizeUnderlyingRequires": "un ámbito de activo subyacente requiere max_quantity",
+    "orderSizeUnderlyingNoNotional": "un ámbito de activo subyacente no debe incluir max_notional",
+    "orderSizeSettlementRequires": "un ámbito de activo de liquidación requiere max_notional",
+    "orderSizeSettlementNoQuantity": "un ámbito de activo de liquidación no debe incluir max_quantity",
+    "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch requiere una moneda",
+    "pnlRequires": "spot_funds_pnl_bounds_kill_switch requiere lower_bound o upper_bound",
+    "pnlBoundOrder": "lower_bound debe ser <= upper_bound"
+  },
+  "password": {
+    "mismatch": "Las contraseñas no coinciden."
+  }
+}

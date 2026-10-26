@@ -436,8 +436,8 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 	must(err)
 	if len(rows) != 1 || rows[0].Source != domain.SourceSystem || rows[0].Actor != "" || rows[0].Account != "" ||
-		!strings.Contains(rows[0].Detail, connection.ExternalID.String()) || !strings.Contains(rows[0].Detail, "rejected-fee") ||
-		!strings.Contains(rows[0].Detail, "rejected by the core") || strings.Contains(rows[0].Detail, "test-key-marker") || strings.Contains(rows[0].Detail, "test-secret-marker") {
+		!strings.Contains(rows[0].Detail.Text, connection.ExternalID.String()) || !strings.Contains(rows[0].Detail.Text, "rejected-fee") ||
+		!strings.Contains(rows[0].Detail.Text, "rejected by the core") || strings.Contains(rows[0].Detail.Text, "test-key-marker") || strings.Contains(rows[0].Detail.Text, "test-secret-marker") {
 		t.Fatalf("app skipped-fee audit = %+v", rows)
 	}
 	assertBalances("977.25", "12")

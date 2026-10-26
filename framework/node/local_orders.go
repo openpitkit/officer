@@ -1265,16 +1265,15 @@ func (n *localNode) cancelOrder(
 				err,
 			)
 		}
-		detailText := executionReportDetail(
-			state.in,
-			state.reservationRemainder,
-			domain.OrderStatusCancelled,
-			len(state.result.Blocks),
-		)
 		if err := n.audit(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionExecutionReport,
 			Account: state.in.Account,
-			Detail:  detailText,
+			Detail: executionReportDetail(
+				state.in,
+				state.reservationRemainder,
+				domain.OrderStatusCancelled,
+				len(state.result.Blocks),
+			),
 		}); err != nil {
 			return n.fatalPostEnginePersistence(
 				"audit cancellation execution report",
@@ -1473,7 +1472,10 @@ func (n *localNode) ensureAutoCreatedAsset(
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionCreateAsset,
 		Asset:  code,
-		Detail: fmt.Sprintf("auto-created asset %s by %s", code, operation),
+		Detail: domain.NewAuditDetail(domain.AuditDetailAutoCreateAsset, domain.AuditDetailParams{
+			"asset":     code,
+			"operation": operation,
+		}),
 	}); err != nil {
 		return false, n.fatalPostEngineAuditByCode(
 			"audit auto-created asset", "asset", asset.Code,

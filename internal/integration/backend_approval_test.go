@@ -1778,7 +1778,7 @@ func hasAuditDetail(
 	entries []store.AuditEntry, action domain.AuditAction, detail string,
 ) bool {
 	for _, entry := range entries {
-		if entry.Action == action && strings.Contains(entry.Detail, detail) {
+		if entry.Action == action && strings.Contains(entry.Detail.Text, detail) {
 			return true
 		}
 	}

@@ -19,8 +19,8 @@ package backend
 
 import (
 	"context"
-	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -179,7 +179,7 @@ func businessCSVFilterError(err error) error {
 }
 
 func (s *Service) auditBusinessCSV(
-	ctx context.Context, action domain.AuditAction, detail string,
+	ctx context.Context, action domain.AuditAction, detail domain.AuditDetail,
 ) error {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
@@ -191,13 +191,22 @@ func (s *Service) auditBusinessCSV(
 	}, caller)
 }
 
-func businessCSVExportDetail(req BusinessCSVExportRequest) string {
-	return fmt.Sprintf(
-		"export business CSV entity=%s delimiter=%s zip=%t filters=%s",
-		req.Entity, req.Delimiter, req.Zip, businessCSVFilterDetail(req.Filter),
-	)
+func businessCSVExportDetail(req BusinessCSVExportRequest) domain.AuditDetail {
+	params := domain.AuditDetailParams{
+		"entity":    string(req.Entity),
+		"delimiter": string(req.Delimiter),
+		"zip":       strconv.FormatBool(req.Zip),
+	}
+	filters := businessCSVFilterDetail(req.Filter)
+	if filters == "" {
+		return domain.NewAuditDetail(domain.AuditDetailExportBusinessCSVUnfiltered, params)
+	}
+	params["filters"] = filters
+	return domain.NewAuditDetail(domain.AuditDetailExportBusinessCSV, params)
 }
 
+// businessCSVFilterDetail renders the set filters as sorted key=value pairs, or
+// an empty string when no filter is set.
 func businessCSVFilterDetail(filter businesscsv.ExportFilter) string {
 	parts := make([]string, 0, 4)
 	if filter.GroupCodeSet {
@@ -217,9 +226,6 @@ func businessCSVFilterDetail(filter businesscsv.ExportFilter) string {
 		parts = append(parts, "source="+string(filter.Source))
 	}
 	sort.Strings(parts)
-	if len(parts) == 0 {
-		return "none"
-	}
 	return strings.Join(parts, ",")
 }
 

@@ -38,10 +38,10 @@ describe("i18n registration", () => {
   it("resets and unregisters runtime locale registrations", () => {
     resetLocales();
 
-    registerLocale({ code: "es", endonym: "Spanish" });
-    expect(getSupportedLocaleCodes()).toContain("es");
-    expect(unregisterLocale("es")).toBe(true);
-    expect(getSupportedLocaleCodes()).not.toContain("es");
+    registerLocale({ code: "fr", endonym: "Français" });
+    expect(getSupportedLocaleCodes()).toContain("fr");
+    expect(unregisterLocale("fr")).toBe(true);
+    expect(getSupportedLocaleCodes()).not.toContain("fr");
 
     registerLocale({ code: "en", endonym: "Custom English" });
     expect(unregisterLocale("en")).toBe(true);

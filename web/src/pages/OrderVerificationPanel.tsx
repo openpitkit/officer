@@ -26,6 +26,13 @@ import type {
   EventReproductionResponse,
   PublicKeyMaterial,
 } from "@/api/types";
+import {
+  codeLabel,
+  rejectLabel,
+  rejectScopeLabel,
+  sideLabel,
+  statusLabel,
+} from "@/i18n/codeLabel";
 import { formatDateTime } from "@/i18n/format";
 import { accountScope } from "@/lib/accountScope";
 import {
@@ -64,22 +71,42 @@ type VerifyState =
   | { phase: "unsigned" }
   | { phase: "error"; message: string };
 
-// The four request types Officer attests. An unknown value degrades to the
-// verbatim string so a new backend type never renders as blank.
+// The four request types Officer attests, by wire value.
 const REQUEST_TYPE_KEYS: Record<string, string> = {
-  submit: "requestType.submit",
-  execution_report: "requestType.executionReport",
-  confirm: "requestType.confirm",
-  cancel: "requestType.cancel",
+  submit: "orders:requestType.submit",
+  execution_report: "orders:requestType.executionReport",
+  confirm: "orders:requestType.confirm",
+  cancel: "orders:requestType.cancel",
 };
 
-function requestTypeLabel(
-  t: (key: string) => string,
-  requestType: string,
-): string {
-  const key = REQUEST_TYPE_KEYS[requestType];
-  return key ? t(key) : requestType;
+// The submit modes an attestation carries, by wire value.
+const SUBMIT_MODE_KEYS: Record<string, string> = {
+  hold: "orders:addOrder.dialog.submitModeHold",
+  immediate: "orders:addOrder.dialog.submitModeImmediate",
+};
+
+// A decoded boolean field, by its decoded text.
+const BOOLEAN_KEYS: Record<string, string> = {
+  true: "common:value.yes",
+  false: "common:value.no",
+};
+
+/** The display label of one decoded code field. An absent field stays empty,
+ *  so its breakdown row is hidden; a value with no label renders as itself
+ *  through codeLabel, never as a blank. */
+function present(code: string, label: (code: string) => string): string {
+  return code === "" ? "" : label(code);
 }
+
+function keyed(keys: Record<string, string>): (code: string) => string {
+  return (code) => codeLabel(keys[code] ?? null, code);
+}
+
+function prefixed(prefix: string): (code: string) => string {
+  return (code) => codeLabel(`${prefix}.${code}`, code);
+}
+
+const requestTypeLabel = keyed(REQUEST_TYPE_KEYS);
 
 // ---------------------------------------------------------------------------
 // Ledger primitives
@@ -281,9 +308,7 @@ function ApprovalBreakdown({
   const { t } = useTranslation("orders");
   const { showsAccounts } = accountScope();
   const issued = fields.issuedAt ? formatDateTime(fields.issuedAt) : "";
-  const requestType = fields.requestType
-    ? requestTypeLabel(t, fields.requestType)
-    : "";
+  const requestType = present(fields.requestType, requestTypeLabel);
   return (
     <LedgerBlock
       label={t("breakdown.label")}
@@ -300,7 +325,10 @@ function ApprovalBreakdown({
           value={fields.approvalRef}
         />
         <BreakdownRow label={t("breakdown.requestType")} value={requestType} />
-        <BreakdownRow label={t("breakdown.mode")} value={fields.mode} />
+        <BreakdownRow
+          label={t("breakdown.mode")}
+          value={present(fields.mode, keyed(SUBMIT_MODE_KEYS))}
+        />
         <BreakdownRow
           label={t("breakdown.orderExternalId")}
           value={fields.orderId}
@@ -309,21 +337,33 @@ function ApprovalBreakdown({
           label={t("breakdown.eventExternalId")}
           value={fields.eventId}
         />
-        <BreakdownRow label={t("breakdown.verdict")} value={fields.verdict} />
+        <BreakdownRow
+          label={t("breakdown.verdict")}
+          value={present(fields.verdict, prefixed("orders:breakdown.verdicts"))}
+        />
         <BreakdownRow
           label={t("breakdown.instrument")}
           value={fields.instrument}
         />
         <BreakdownRow label={t("breakdown.venue")} value={fields.venue} />
-        <BreakdownRow label={t("breakdown.side")} value={fields.side} />
+        <BreakdownRow
+          label={t("breakdown.side")}
+          value={present(fields.side, sideLabel)}
+        />
         <BreakdownRow label={t("breakdown.quantity")} value={fields.quantity} />
         <BreakdownRow
           label={t("breakdown.amountKind")}
-          value={fields.amountKind}
+          value={present(
+            fields.amountKind,
+            prefixed("orders:addOrder.dialog.amountKindOptions"),
+          )}
         />
         <BreakdownRow
           label={t("breakdown.orderType")}
-          value={fields.orderType}
+          value={present(
+            fields.orderType,
+            prefixed("orders:breakdown.orderTypes"),
+          )}
         />
         <BreakdownRow
           label={t("breakdown.limitPrice")}
@@ -335,7 +375,10 @@ function ApprovalBreakdown({
         />
         <BreakdownRow
           label={t("breakdown.timeInForce")}
-          value={fields.timeInForce}
+          value={present(
+            fields.timeInForce,
+            prefixed("orders:addOrder.dialog.venue.timeInForceOptions"),
+          )}
         />
         {showsAccounts && (
           <>
@@ -359,11 +402,11 @@ function ApprovalBreakdown({
         />
         <BreakdownRow
           label={t("breakdown.rejectCode")}
-          value={fields.rejectCode}
+          value={present(fields.rejectCode, rejectLabel)}
         />
         <BreakdownRow
           label={t("breakdown.rejectScope")}
-          value={fields.rejectScope}
+          value={present(fields.rejectScope, rejectScopeLabel)}
         />
         <BreakdownRow
           label={t("breakdown.rejectPolicy")}
@@ -420,15 +463,15 @@ function ApprovalBreakdown({
             )}
             <BreakdownRow
               label={t("breakdown.side")}
-              value={fields.executionReport.side}
+              value={present(fields.executionReport.side, sideLabel)}
             />
             <BreakdownRow
               label={t("breakdown.orderStatus")}
-              value={fields.executionReport.orderStatus}
+              value={present(fields.executionReport.orderStatus, statusLabel)}
             />
             <BreakdownRow
               label={t("breakdown.force")}
-              value={fields.executionReport.force}
+              value={present(fields.executionReport.force, keyed(BOOLEAN_KEYS))}
             />
           </>
         ) : null}
@@ -437,7 +480,10 @@ function ApprovalBreakdown({
             <BreakdownSection label={t("breakdown.recordedResult")} />
             <BreakdownRow
               label={t("breakdown.outcome")}
-              value={fields.result.outcome}
+              value={present(
+                fields.result.outcome,
+                prefixed("orders:breakdown.outcomes"),
+              )}
             />
             <BreakdownRow
               label={t("breakdown.fillQuantity")}
@@ -461,7 +507,7 @@ function ApprovalBreakdown({
             />
             <BreakdownRow
               label={t("breakdown.orderStatus")}
-              value={fields.result.orderStatus}
+              value={present(fields.result.orderStatus, statusLabel)}
             />
             {fields.result.blocks.map((block, index) => (
               <BreakdownRow
@@ -469,7 +515,7 @@ function ApprovalBreakdown({
                 label={t("breakdown.block", { index: index + 1 })}
                 value={[
                   showsAccounts ? block.account : "",
-                  block.code,
+                  present(block.code, rejectLabel),
                   block.reason,
                   block.details,
                 ]
@@ -642,7 +688,7 @@ function ReproductionMode({
     }
   }
 
-  const requestType = requestTypeLabel(t, bundle.requestType);
+  const requestType = present(bundle.requestType, requestTypeLabel);
 
   // No attestation envelope: show the reason and a clean empty state.
   if (!attestation) {

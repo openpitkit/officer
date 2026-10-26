@@ -96,7 +96,7 @@ func TestLocalNode_PutAssetRateLimitAutoCreatesUnknownAsset(t *testing.T) {
 	}
 	if len(rows) != 1 ||
 		rows[0].Asset != "GOLD" ||
-		!strings.Contains(rows[0].Detail, "auto-created asset GOLD by rate limit") {
+		!strings.Contains(rows[0].Detail.Text, "Asset GOLD created automatically by rate limit") {
 		t.Fatalf("create-asset audit rows = %+v, want limit auto-create", rows)
 	}
 }
@@ -544,7 +544,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) 
 		t.Fatalf("ListAudit: %v", err)
 	}
 	if len(rows) != 2 || rows[0].Action != domain.AuditActionSetLimit ||
-		!strings.Contains(rows[0].Detail, "currency=USD") {
+		!strings.Contains(rows[0].Detail.Text, "currency=USD") {
 		t.Fatalf(
 			"want newest set_limit with currency=USD over startup hydrate, got %+v",
 			rows,
@@ -818,10 +818,10 @@ func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
 	if rows[0].Source != domain.SourceSystem || rows[0].Actor != "" {
 		t.Fatalf("block audit attribution = %+v, want system without actor", rows[0])
 	}
-	if !strings.Contains(rows[0].Detail, "policy openpit.spot_funds") ||
-		!strings.Contains(rows[0].Detail, "code=missing_fx") ||
-		!strings.Contains(rows[0].Detail, "USD/EUR quote unavailable") {
-		t.Fatalf("block audit detail = %q, want policy, code and engine details", rows[0].Detail)
+	if !strings.Contains(rows[0].Detail.Text, "by policy openpit.spot_funds") ||
+		!strings.Contains(rows[0].Detail.Text, "(missing_fx)") ||
+		!strings.Contains(rows[0].Detail.Text, "USD/EUR quote unavailable") {
+		t.Fatalf("block audit detail = %q, want policy, code and engine details", rows[0].Detail.Text)
 	}
 }
 

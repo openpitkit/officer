@@ -31,9 +31,7 @@ import (
 func (r *memoryRealm) AppendAudit(
 	_ context.Context, entry store.AuditEntry,
 ) error {
-	if err := domain.ValidateAuditDecision(
-		entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
-	); err != nil {
+	if err := validateMemoryAudit(entry); err != nil {
 		return err
 	}
 	r.mu.Lock()
@@ -42,13 +40,22 @@ func (r *memoryRealm) AppendAudit(
 	return nil
 }
 
+// validateMemoryAudit runs the checks the SQLite store runs on every audit
+// write, so a node test cannot pass on a row the real store rejects.
+func validateMemoryAudit(entry store.AuditEntry) error {
+	if err := domain.ValidateAuditDecision(
+		entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
+	); err != nil {
+		return err
+	}
+	return entry.Detail.Validate()
+}
+
 func (r *memoryRealm) AppendAuditBatch(
 	_ context.Context, entries []store.AuditEntry,
 ) error {
 	for _, entry := range entries {
-		if err := domain.ValidateAuditDecision(
-			entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
-		); err != nil {
+		if err := validateMemoryAudit(entry); err != nil {
 			return err
 		}
 	}
@@ -152,12 +159,16 @@ func TestMemoryRealmValidatesAuditDecisionMetadata(t *testing.T) {
 		err := realm.AppendAuditBatch(context.Background(), []store.AuditEntry{
 			{
 				Action: domain.AuditActionCreateAccount,
-				Detail: "first row must roll back",
+				Detail: domain.NewAuditDetail(
+					domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "acc-1"},
+				),
 			},
 			{
 				Action:  domain.AuditActionCreateAccount,
 				OrderID: "decision-on-unrelated-action",
-				Detail:  "invalid decision metadata",
+				Detail: domain.NewAuditDetail(
+					domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "acc-2"},
+				),
 			},
 		})
 		if !errors.Is(err, domain.ErrInvalid) {

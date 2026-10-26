@@ -497,7 +497,12 @@ const auditEntry: AuditEntry = {
   account: "main",
   accountTitle: "Main desk",
   group: "",
-  detail: "set the order rate limit",
+  detail: {
+    text: "set the order rate limit",
+    code: "",
+    params: {},
+    fields: [],
+  },
   source: "panel",
 };
 

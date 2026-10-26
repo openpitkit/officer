@@ -29,6 +29,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -42,7 +43,8 @@ import (
 const auditSelect = `
 SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
        au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
-       au.source_id, au.detail, au.order_id, au.verdict, au.reject_code
+       au.source_id, au.detail, au.detail_code, au.detail_params,
+       au.detail_fields, au.order_id, au.verdict, au.reject_code
 FROM audit au`
 
 // auditRestrictionColumn and auditUnownedPredicate address the account
@@ -125,6 +127,13 @@ func appendAudit(
 	); err != nil {
 		return err
 	}
+	if err := entry.Detail.Validate(); err != nil {
+		return fmt.Errorf("store: append audit: %w", err)
+	}
+	detailParams, detailFields, err := encodeAuditDetail(entry.Detail)
+	if err != nil {
+		return err
+	}
 	xid, err := newExternalID()
 	if err != nil {
 		return err
@@ -150,11 +159,12 @@ func appendAudit(
 		`INSERT INTO audit
 		 (external_id, account_code, account_title, asset_code,
 		  group_code, actor_code, actor_title, at, action_id, source_id, detail,
-		  order_id, verdict, reject_code)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  detail_code, detail_params, detail_fields, order_id, verdict, reject_code)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), entry.Account.String(), accountTitle, entry.Asset,
 		entry.Group, entry.Actor, actorTitle, nowStr(), actionID, sourceID,
-		entry.Detail, entry.OrderID, entry.Verdict, entry.RejectCode,
+		entry.Detail.Text, string(entry.Detail.Code), detailParams, detailFields,
+		entry.OrderID, entry.Verdict, entry.RejectCode,
 	); err != nil {
 		return fmt.Errorf("store: append audit: %w", err)
 	}
@@ -316,7 +326,8 @@ func buildAuditListQuery(
 	query := `
 SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
        au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
-       au.source_id, au.detail, au.order_id, au.verdict, au.reject_code
+       au.source_id, au.detail, au.detail_code, au.detail_params,
+       au.detail_fields, au.order_id, au.verdict, au.reject_code
 FROM audit au` +
 		whereFromClauses(clauses) +
 		` ORDER BY au.at DESC, au.id DESC`
@@ -410,12 +421,13 @@ func scanAuditListRow(
 		account, accountTitle, asset, group, actor, actorTitle string
 		at                                                     string
 		actionID, sourceID                                     int64
-		detail                                                 string
+		detail                                                 scannedAuditDetail
 		orderID, verdict, rejectCode                           string
 	)
 	if err := rows.Scan(
 		&extID, &account, &accountTitle, &asset, &group, &actor,
-		&actorTitle, &at, &actionID, &sourceID, &detail, &orderID, &verdict, &rejectCode,
+		&actorTitle, &at, &actionID, &sourceID, &detail.text, &detail.code,
+		&detail.params, &detail.fields, &orderID, &verdict, &rejectCode,
 	); err != nil {
 		return domain.AuditRow{}, fmt.Errorf("store: scan audit row: %w", err)
 	}
@@ -437,12 +449,13 @@ func scanAuditRow(dictionaries *enumDictionaries, rows *sql.Rows) (domain.AuditR
 		account, accountTitle, asset, group, actor, actorTitle string
 		at                                                     string
 		actionID, sourceID                                     int64
-		detail                                                 string
+		detail                                                 scannedAuditDetail
 		orderID, verdict, rejectCode                           string
 	)
 	if err := rows.Scan(
 		&extID, &account, &accountTitle, &asset, &group, &actor, &actorTitle,
-		&at, &actionID, &sourceID, &detail, &orderID, &verdict, &rejectCode,
+		&at, &actionID, &sourceID, &detail.text, &detail.code, &detail.params,
+		&detail.fields, &orderID, &verdict, &rejectCode,
 	); err != nil {
 		return domain.AuditRow{}, fmt.Errorf("store: scan audit: %w", err)
 	}
@@ -464,7 +477,7 @@ func auditRowFromScanned(
 	at string,
 	actionID int64,
 	sourceID int64,
-	detail string,
+	detail scannedAuditDetail,
 	orderID, verdict, rejectCode string,
 ) (domain.AuditRow, error) {
 	xid, err := domain.ExternalIDFromBytes(extID)
@@ -483,6 +496,10 @@ func auditRowFromScanned(
 	if err != nil {
 		return domain.AuditRow{}, err
 	}
+	decoded, err := detail.decode()
+	if err != nil {
+		return domain.AuditRow{}, fmt.Errorf("store: decode audit %s detail: %w", xid, err)
+	}
 	return domain.AuditRow{
 		ExternalID:   xid,
 		Account:      domain.AccountID(account),
@@ -494,8 +511,53 @@ func auditRowFromScanned(
 		At:           parsedAt,
 		Action:       domain.AuditAction(action),
 		Source:       domain.Source(source),
-		Detail:       detail,
+		Detail:       decoded,
 		OrderID:      orderID, Verdict: verdict, RejectCode: rejectCode,
+	}, nil
+}
+
+// encodeAuditDetail encodes a detail's parameters and tail as the
+// detail_params object and the detail_fields array.
+func encodeAuditDetail(detail domain.AuditDetail) (string, string, error) {
+	paramsJSON, err := json.Marshal(detail.Params)
+	if err != nil {
+		return "", "", fmt.Errorf("store: encode audit detail params: %w", err)
+	}
+	fieldsJSON, err := json.Marshal(detail.Fields)
+	if err != nil {
+		return "", "", fmt.Errorf("store: encode audit detail fields: %w", err)
+	}
+	return string(paramsJSON), string(fieldsJSON), nil
+}
+
+// scannedAuditDetail holds the four detail columns of one audit row.
+type scannedAuditDetail struct {
+	text, code, params, fields string
+}
+
+// decode rebuilds the detail as written. An empty parameter object and an
+// empty tail decode to nil, the way NewAuditDetail leaves a detail without
+// them.
+func (s scannedAuditDetail) decode() (domain.AuditDetail, error) {
+	var params domain.AuditDetailParams
+	if err := json.Unmarshal([]byte(s.params), &params); err != nil {
+		return domain.AuditDetail{}, fmt.Errorf("params: %w", err)
+	}
+	if len(params) == 0 {
+		params = nil
+	}
+	var fields domain.AuditDetailFields
+	if err := json.Unmarshal([]byte(s.fields), &fields); err != nil {
+		return domain.AuditDetail{}, fmt.Errorf("fields: %w", err)
+	}
+	if len(fields) == 0 {
+		fields = nil
+	}
+	return domain.AuditDetail{
+		Code:   domain.AuditDetailCode(s.code),
+		Params: params,
+		Fields: fields,
+		Text:   s.text,
 	}, nil
 }
 

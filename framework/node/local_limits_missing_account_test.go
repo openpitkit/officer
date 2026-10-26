@@ -53,9 +53,9 @@ func assertAutoCreatedAccount(
 	if err != nil {
 		t.Fatalf("ListAuditFiltered(create account): %v", err)
 	}
-	want := "auto-created account " + code.String() + " by " + operation
+	want := "Account " + code.String() + " created automatically by " + operation
 	if len(rows) != 1 || rows[0].Account != code ||
-		!strings.Contains(rows[0].Detail, want) {
+		!strings.Contains(rows[0].Detail.Text, want) {
 		t.Fatalf("create-account audit rows = %+v, want %q", rows, want)
 	}
 }

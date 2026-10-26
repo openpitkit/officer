@@ -1124,7 +1124,7 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 				})
 				rows, err := f.realm.ListAuditFiltered(f.ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 				tradingE2EMust(t, err)
-				if rows[0].Source != domain.SourceSystem || rows[0].Actor != "" || !strings.Contains(rows[0].Detail, id) || !strings.Contains(rows[0].Detail, "regulatory-fee") {
+				if rows[0].Source != domain.SourceSystem || rows[0].Actor != "" || !strings.Contains(rows[0].Detail.Text, id) || !strings.Contains(rows[0].Detail.Text, "regulatory-fee") {
 					t.Fatalf("skipped fee audit = %+v", rows)
 				}
 			}

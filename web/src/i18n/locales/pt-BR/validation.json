@@ -1,0 +1,53 @@
+{
+  "account": {
+    "required": "O código da conta é obrigatório",
+    "tooLong": "O código da conta deve ter no máximo {{max}} caracteres",
+    "whitespace": "O código da conta não pode começar nem terminar com espaços",
+    "printable": "O código da conta deve conter apenas caracteres imprimíveis"
+  },
+  "asset": {
+    "required": "O ativo é obrigatório para este escopo",
+    "tooLong": "O ativo deve ter no máximo {{max}} caracteres",
+    "whitespace": "O ativo não pode conter espaços"
+  },
+  "accountGroup": {
+    "required": "O grupo de contas é obrigatório para este escopo",
+    "tooLong": "O grupo de contas deve ter no máximo {{max}} caracteres",
+    "whitespace": "O grupo de contas não pode começar nem terminar com espaços",
+    "printable": "O grupo de contas deve conter apenas caracteres imprimíveis"
+  },
+  "kind": {
+    "maxOrders": {
+      "integer": "max_orders deve ser um inteiro maior que 0",
+      "cap": "max_orders deve ser no máximo 1e9"
+    },
+    "window": {
+      "duration": "window deve ser uma duração Go positiva (por exemplo, 1s, 500ms)",
+      "cap": "window deve ser no máximo 24h"
+    },
+    "positiveDecimal": "{{kind}} deve ser um número decimal positivo",
+    "decimal": "{{kind}} deve ser um número decimal",
+    "unknown": "tipo desconhecido {{kind}}"
+  },
+  "limit": {
+    "unknownPolicy": "política desconhecida {{policy}}",
+    "unknownScope": "escopo desconhecido {{scope}}",
+    "scopeNotAllowed": "o escopo {{scope}} não é permitido para {{policy}}",
+    "scopeNoAccount": "o escopo {{scope}} não pode incluir uma conta",
+    "scopeNoAsset": "o escopo {{scope}} não pode incluir um ativo",
+    "scopeNoAccountGroup": "o escopo {{scope}} não pode incluir um grupo de contas",
+    "policyNoAccountGroup": "{{policy}} não pode incluir um grupo de contas",
+    "rateLimitRequires": "rate_limit exige max_orders e window",
+    "orderSizeRequires": "order_size_limit exige max_quantity ou max_notional",
+    "orderSizeUnderlyingRequires": "um escopo de ativo-objeto exige max_quantity",
+    "orderSizeUnderlyingNoNotional": "um escopo de ativo-objeto não pode incluir max_notional",
+    "orderSizeSettlementRequires": "um escopo de ativo de liquidação exige max_notional",
+    "orderSizeSettlementNoQuantity": "um escopo de ativo de liquidação não pode incluir max_quantity",
+    "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch exige uma moeda",
+    "pnlRequires": "spot_funds_pnl_bounds_kill_switch exige lower_bound ou upper_bound",
+    "pnlBoundOrder": "lower_bound deve ser <= upper_bound"
+  },
+  "password": {
+    "mismatch": "As senhas não coincidem."
+  }
+}

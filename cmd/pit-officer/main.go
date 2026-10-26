@@ -439,14 +439,18 @@ func (c *serviceLifecycleController) handler(action lifecycleAction) http.Handle
 	})
 }
 
-func lifecycleAudit(action lifecycleAction) (domain.AuditAction, string, error) {
+func lifecycleAudit(action lifecycleAction) (domain.AuditAction, domain.AuditDetail, error) {
 	switch action {
 	case lifecycleRestart:
-		return domain.AuditActionRestartService, "restart service requested", nil
+		return domain.AuditActionRestartService,
+			domain.NewAuditDetail(domain.AuditDetailRestartService, nil), nil
 	case lifecycleStop:
-		return domain.AuditActionStopService, "stop service requested", nil
+		return domain.AuditActionStopService,
+			domain.NewAuditDetail(domain.AuditDetailStopService, nil), nil
 	default:
-		return "", "", fmt.Errorf("unknown service lifecycle action %q", action)
+		return "", domain.AuditDetail{}, fmt.Errorf(
+			"unknown service lifecycle action %q", action,
+		)
 	}
 }
 

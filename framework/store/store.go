@@ -80,8 +80,9 @@ type AuditEntry struct {
 	// can select them by; without it a group's rows are only reachable through
 	// a substring match on Detail, which a crafted code can spoof.
 	Group string
-	// Detail is a short human-readable description of the action.
-	Detail string
+	// Detail is the description of the action, built with
+	// domain.NewAuditDetail; the store rejects one that does not render.
+	Detail domain.AuditDetail
 	// Source is the channel that initiated the action.
 	Source domain.Source
 }

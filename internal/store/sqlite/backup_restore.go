@@ -2124,16 +2124,21 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 				err,
 			)
 		}
+		detailParams, detailFields, err := encodeAuditDetail(row.Detail)
+		if err != nil {
+			return fmt.Errorf("store: restore audit %q: %w", row.ExternalID, err)
+		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
 			`INSERT OR REPLACE INTO audit
 			 (external_id, account_code, account_title, asset_code,
 			  group_code, actor_code, actor_title, at, action_id, source_id, detail,
-			  order_id, verdict, reject_code)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  detail_code, detail_params, detail_fields, order_id, verdict, reject_code)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			row.ExternalID.Bytes(), row.Account.String(),
 			row.AccountTitle, row.Asset, row.Group, row.Actor, row.ActorTitle,
-			timeStr(row.At), actionID, sourceID, row.Detail,
+			timeStr(row.At), actionID, sourceID, row.Detail.Text,
+			string(row.Detail.Code), detailParams, detailFields,
 			row.OrderID, row.Verdict, row.RejectCode,
 		); err != nil {
 			return fmt.Errorf("store: restore audit %q: %w", row.ExternalID, err)

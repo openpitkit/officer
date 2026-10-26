@@ -321,23 +321,28 @@ func (n *localNode) applyExecutionReport(
 			)
 		}
 
-		detailText := executionReportDetail(
-			state.in,
-			state.reservationRemainder,
-			status,
-			len(state.result.Blocks),
-		)
+		var extra []domain.AuditDetailField
 		if state.overFilled {
-			detailText += " overfill=true preReportReserveQty=" +
-				state.order.ReservedQuantity
+			extra = append(extra,
+				domain.AuditDetailField{Name: "overfill", Value: "true"},
+				domain.AuditDetailField{
+					Name: "preReportReserveQty", Value: state.order.ReservedQuantity,
+				},
+			)
 		}
 		if state.forcedTerminalBypass {
-			detailText += " forced=true"
+			extra = append(extra, forcedExecutionField)
 		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionExecutionReport,
 			Account: state.in.Account,
-			Detail:  detailText,
+			Detail: executionReportDetail(
+				state.in,
+				state.reservationRemainder,
+				status,
+				len(state.result.Blocks),
+				extra...,
+			),
 		}); err != nil {
 			return n.fatalPostEnginePersistence(
 				"audit execution report",
@@ -557,16 +562,16 @@ func (n *localNode) recordWorkflowExecutionReport(
 	}).Then(func(
 		_ context.Context, state *workflowExecutionReportChainState,
 	) error {
-		detailText := executionReportDetail(
-			state.in, "", state.in.OrderStatus, 0,
-		)
+		var extra []domain.AuditDetailField
 		if state.forcedTerminalBypass {
-			detailText += " forced=true"
+			extra = append(extra, forcedExecutionField)
 		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionExecutionReport,
 			Account: state.in.Account,
-			Detail:  detailText,
+			Detail: executionReportDetail(
+				state.in, "", state.in.OrderStatus, 0, extra...,
+			),
 		}); err != nil {
 			state.err = n.fatalPostCommitAudit(
 				"audit workflow execution report",

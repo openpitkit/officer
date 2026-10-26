@@ -204,7 +204,9 @@ func (s *Service) GenerateSigningKey(ctx context.Context) (domain.SigningKey, er
 		return domain.SigningKey{}, err
 	}
 	if err := s.auditSigning(ctx, domain.AuditActionGenerateSigningKey,
-		fmt.Sprintf("generate signing key %s", key.KeyID)); err != nil {
+		domain.NewAuditDetail(domain.AuditDetailGenerateSigningKey, domain.AuditDetailParams{
+			"key": key.KeyID,
+		})); err != nil {
 		return domain.SigningKey{}, err
 	}
 	return key, nil
@@ -225,7 +227,10 @@ func (s *Service) ImportSigningKey(
 		return domain.SigningKey{}, err
 	}
 	if err := s.auditSigning(ctx, domain.AuditActionImportSigningKey,
-		fmt.Sprintf("import signing key %s format=%s", key.KeyID, format)); err != nil {
+		domain.NewAuditDetail(domain.AuditDetailImportSigningKey, domain.AuditDetailParams{
+			"key":    key.KeyID,
+			"format": format,
+		})); err != nil {
 		return domain.SigningKey{}, err
 	}
 	return key, nil
@@ -285,12 +290,12 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 	if err := signer.SetNoESign(ctx, off); err != nil {
 		return err
 	}
-	state := "enable"
+	code := domain.AuditDetailEnableESign
 	if off {
-		state = "disable"
+		code = domain.AuditDetailDisableESign
 	}
 	return s.auditSigning(ctx, domain.AuditActionSetSigningConfig,
-		fmt.Sprintf("%s eSign", state))
+		domain.NewAuditDetail(code, nil))
 }
 
 // --- Submit / confirm / cancel ----------------------------------------------
@@ -447,7 +452,9 @@ func (s *Service) submitOrder(
 		if err != nil {
 			if auditErr := s.auditApproval(
 				ctx, n, o.Account, domain.AuditActionApprovalFailed,
-				fmt.Sprintf("submit attestation failed: %v", err),
+				domain.NewAuditDetail(domain.AuditDetailSubmitAttestationFailed, domain.AuditDetailParams{
+					"error": err.Error(),
+				}),
 			); auditErr != nil {
 				return SignedApproval{}, errors.Join(err, auditErr)
 			}
@@ -530,7 +537,9 @@ func (s *Service) submitOrder(
 		if err != nil {
 			if auditErr := s.auditApproval(
 				ctx, n, o.Account, domain.AuditActionApprovalFailed,
-				fmt.Sprintf("submit attestation failed: %v", err),
+				domain.NewAuditDetail(domain.AuditDetailSubmitAttestationFailed, domain.AuditDetailParams{
+					"error": err.Error(),
+				}),
 			); auditErr != nil {
 				return SignedApproval{}, errors.Join(err, auditErr)
 			}
@@ -551,9 +560,10 @@ func (s *Service) submitOrder(
 	}
 	if err := s.auditApproval(
 		ctx, n, o.Account, domain.AuditActionApprovalIssued,
-		fmt.Sprintf("issue attestation order %s event %s request=%s",
-			order.ExternalID.String(), issued.EventExternalID,
-			domain.AttestationRequestSubmit),
+		domain.NewAuditDetail(domain.AuditDetailIssueAttestation, domain.AuditDetailParams{
+			"order": order.ExternalID.String(),
+			"event": issued.EventExternalID,
+		}),
 	); err != nil {
 		slog.Error(
 			"write post-commit approval audit",
@@ -710,8 +720,10 @@ func (s *Service) ConfirmExecution(
 				domain.AttestationRequestConfirm)
 		}
 	}
-	detail := fmt.Sprintf(
-		"confirm approval %s order %s", payload.ApprovalID, orderID)
+	detail := domain.NewAuditDetail(domain.AuditDetailConfirmApproval, domain.AuditDetailParams{
+		"approval": payload.ApprovalID,
+		"order":    orderID,
+	})
 	if err := s.auditApproval(
 		ctx, n, confirmed.Account, domain.AuditActionApprovalConfirmed, detail,
 	); err != nil {
@@ -826,9 +838,11 @@ func (s *Service) CancelOrder(
 		return domain.Order{}, Attestation{}, missingAttestationError(
 			domain.AttestationRequestCancel)
 	}
-	detail := fmt.Sprintf(
-		"cancel approval %s order %s reason=%s",
-		payload.ApprovalID, orderID, reason)
+	detail := domain.NewAuditDetail(domain.AuditDetailCancelApproval, domain.AuditDetailParams{
+		"approval": payload.ApprovalID,
+		"order":    orderID,
+		"reason":   reason,
+	})
 	if err := s.auditApproval(
 		ctx, n, cancelled.Account, domain.AuditActionApprovalCancelled, detail,
 	); err != nil {
@@ -1286,7 +1300,9 @@ func rejectReasons(
 
 // auditSigning records a signing-key/config action via the group node, the same
 // AppendAudit path used by MCP-access writes.
-func (s *Service) auditSigning(ctx context.Context, action domain.AuditAction, detail string) error {
+func (s *Service) auditSigning(
+	ctx context.Context, action domain.AuditAction, detail domain.AuditDetail,
+) error {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
 		return err
@@ -1306,7 +1322,7 @@ func (s *Service) auditApproval(
 	n node.Node,
 	account domain.AccountID,
 	action domain.AuditAction,
-	detail string,
+	detail domain.AuditDetail,
 ) error {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {

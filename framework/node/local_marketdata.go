@@ -61,7 +61,10 @@ func (n *localNode) CreateMarketDataInstance(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
-		Detail: fmt.Sprintf("create market-data instance %s", created.ExternalID),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateMarketDataInstance,
+			domain.AuditDetailParams{"instance": created.ExternalID.String()},
+		),
 	}); err != nil {
 		return domain.MarketDataInstance{}, fmt.Errorf("audit create market-data instance: %w", err)
 	}
@@ -81,7 +84,7 @@ func (n *localNode) SetMarketDataInstanceEnabled(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
-		Detail: marketDataToggleDetail("instance", id.String(), enabled),
+		Detail: marketDataInstanceToggleDetail(id, enabled),
 	}); err != nil {
 		return fmt.Errorf("audit set market-data instance enabled: %w", err)
 	}
@@ -101,7 +104,10 @@ func (n *localNode) UpdateMarketDataInstanceSettings(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
-		Detail: fmt.Sprintf("update market-data instance settings %s", id),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailUpdateMarketDataSettings,
+			domain.AuditDetailParams{"instance": id.String()},
+		),
 	}); err != nil {
 		return fmt.Errorf("audit update market-data instance settings: %w", err)
 	}
@@ -121,7 +127,10 @@ func (n *localNode) DeleteMarketDataInstance(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
-		Detail: fmt.Sprintf("delete market-data instance %s", id),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailDeleteMarketDataInstance,
+			domain.AuditDetailParams{"instance": id.String()},
+		),
 	}); err != nil {
 		return fmt.Errorf("audit delete market-data instance: %w", err)
 	}
@@ -153,8 +162,10 @@ func (n *localNode) UpsertMarketDataInstrument(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
-		Detail: fmt.Sprintf("upsert market-data instrument %s/%s",
-			instrument.Instance, instrument.ExternalSymbol),
+		Detail: domain.NewAuditDetail(domain.AuditDetailUpsertMarketDataInstrument, domain.AuditDetailParams{
+			"instance": instrument.Instance.String(),
+			"symbol":   instrument.ExternalSymbol,
+		}),
 	}); err != nil {
 		return fmt.Errorf("audit upsert market-data instrument: %w", err)
 	}
@@ -220,7 +231,7 @@ func (n *localNode) SetMarketDataInstrumentEnabled(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
-		Detail: marketDataToggleDetail("instrument", instance.String()+"/"+externalSymbol, enabled),
+		Detail: marketDataInstrumentToggleDetail(instance, externalSymbol, enabled),
 	}); err != nil {
 		return fmt.Errorf("audit set market-data instrument enabled: %w", err)
 	}
@@ -240,7 +251,10 @@ func (n *localNode) DeleteMarketDataInstrument(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
-		Detail: fmt.Sprintf("delete market-data instrument %s/%s", instance, externalSymbol),
+		Detail: domain.NewAuditDetail(domain.AuditDetailDeleteMarketDataInstrument, domain.AuditDetailParams{
+			"instance": instance.String(),
+			"symbol":   externalSymbol,
+		}),
 	}); err != nil {
 		return fmt.Errorf("audit delete market-data instrument: %w", err)
 	}

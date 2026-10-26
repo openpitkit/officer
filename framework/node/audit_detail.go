@@ -18,111 +18,104 @@
 package node
 
 import (
-	"fmt"
-	"strings"
+	"strconv"
 
 	"go.openpit.dev/officer/framework/domain"
 )
 
 // setRateLimitDetail renders a rate-limit upsert as a short human-readable audit
-// detail, e.g. "set limit rate_limit account=acc-1 max_orders=100 window=1s".
-func setRateLimitDetail(limit domain.LimitRate) string {
-	var b strings.Builder
-	b.WriteString("set limit ")
-	b.WriteString(axesDetail(LimitTarget{
+// detail, e.g. "Limit set: rate_limit (account) account=acc-1 max_orders=100
+// window=1s".
+func setRateLimitDetail(limit domain.LimitRate) domain.AuditDetail {
+	target := LimitTarget{
 		Policy:  domain.PolicyRateLimit,
 		Scope:   limit.Scope,
 		Account: limit.Account,
 		Asset:   limit.Asset,
-	}))
-	fmt.Fprintf(&b, " max_orders=%d window=%s", limit.MaxOrders, limit.Window)
-	return b.String()
+	}
+	fields := append(axesFields(target),
+		domain.AuditDetailField{Name: "max_orders", Value: strconv.FormatUint(limit.MaxOrders, 10)},
+		domain.AuditDetailField{Name: "window", Value: limit.Window.String()},
+	)
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
 }
 
 // setOrderSizeLimitDetail renders an order-size upsert as a short audit detail.
-func setOrderSizeLimitDetail(limit domain.LimitOrderSize) string {
-	var b strings.Builder
-	b.WriteString("set limit ")
-	b.WriteString(axesDetail(LimitTarget{
+func setOrderSizeLimitDetail(limit domain.LimitOrderSize) domain.AuditDetail {
+	target := LimitTarget{
 		Policy:  domain.PolicyOrderSizeLimit,
 		Scope:   limit.Scope,
 		Account: limit.Account,
 		Asset:   limit.Asset,
-	}))
+	}
+	fields := axesFields(target)
 	if limit.MaxQuantity != "" {
-		b.WriteString(" max_quantity=")
-		b.WriteString(limit.MaxQuantity)
+		fields = append(fields, domain.AuditDetailField{Name: "max_quantity", Value: limit.MaxQuantity})
 	}
 	if limit.MaxNotional != "" {
-		b.WriteString(" max_notional=")
-		b.WriteString(limit.MaxNotional)
+		fields = append(fields, domain.AuditDetailField{Name: "max_notional", Value: limit.MaxNotional})
 	}
-	return b.String()
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
 }
 
 // setSpotFundsPnlBoundsLimitDetail renders a SpotFunds P&L-bounds upsert.
-func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) string {
-	var b strings.Builder
-	b.WriteString("set limit ")
-	b.WriteString(axesDetail(LimitTarget{
+func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) domain.AuditDetail {
+	target := LimitTarget{
 		Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
 		Scope:        limit.Scope,
 		Account:      limit.Account,
 		AccountGroup: limit.AccountGroup,
-	}))
-	b.WriteString(" currency=")
-	b.WriteString(limit.Currency)
+	}
+	fields := append(axesFields(target),
+		domain.AuditDetailField{Name: "currency", Value: limit.Currency},
+	)
 	if limit.LowerBound != "" {
-		b.WriteString(" lower_bound=")
-		b.WriteString(limit.LowerBound)
+		fields = append(fields, domain.AuditDetailField{Name: "lower_bound", Value: limit.LowerBound})
 	}
 	if limit.UpperBound != "" {
-		b.WriteString(" upper_bound=")
-		b.WriteString(limit.UpperBound)
+		fields = append(fields, domain.AuditDetailField{Name: "upper_bound", Value: limit.UpperBound})
 	}
-	return b.String()
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
 }
 
 // deleteLimitDetail renders a barrier deletion as a short audit detail.
-func deleteLimitDetail(target LimitTarget) string {
-	return "delete limit " + axesDetail(target)
+func deleteLimitDetail(target LimitTarget) domain.AuditDetail {
+	return domain.NewAuditDetail(
+		domain.AuditDetailDeleteLimit, axesParams(target), axesFields(target)...,
+	)
 }
 
 // setAccountGroupDetail renders an account group change. The move is filed under
 // each non-empty side, so the line names both: a reader who found the row under
 // the origin group and one who found it under the destination group must both
 // see where the account came from and where it went.
-func setAccountGroupDetail(id domain.AccountID, prevGroupCode, groupCode string) string {
-	return fmt.Sprintf(
-		"set group account %s from=%s to=%s",
-		id, groupSideDetail(prevGroupCode), groupSideDetail(groupCode),
-	)
-}
-
-// updateAccountDetail renders an account update. A renamed account is filed
-// under both codes, so callers mark which filing each detail belongs to; a
-// title-only update has no transition to state.
-func updateAccountDetail(prevCode, code domain.AccountID) string {
-	if prevCode == code {
-		return fmt.Sprintf("update account %s", code)
-	}
-	return fmt.Sprintf("update account %s -> %s", prevCode, code)
+func setAccountGroupDetail(id domain.AccountID, prevGroupCode, groupCode string) domain.AuditDetail {
+	return domain.NewAuditDetail(domain.AuditDetailSetAccountGroup, domain.AuditDetailParams{
+		"account": id.String(),
+		"from":    groupSideDetail(prevGroupCode),
+		"to":      groupSideDetail(groupCode),
+	})
 }
 
 // updateGroupDetail renders a group update. A renamed group is filed under both
 // codes, so the line names both; a title-only update has no transition to state.
-func updateGroupDetail(prevCode, code string) string {
+func updateGroupDetail(prevCode, code string) domain.AuditDetail {
 	if prevCode == code {
-		return fmt.Sprintf("update group %s", code)
+		return domain.NewAuditDetail(
+			domain.AuditDetailUpdateGroup, domain.AuditDetailParams{"group": code},
+		)
 	}
-	return fmt.Sprintf("update group %s -> %s", prevCode, code)
+	return domain.NewAuditDetail(
+		domain.AuditDetailRenameGroup,
+		domain.AuditDetailParams{"from": prevCode, "to": code},
+	)
 }
 
 // groupSideDetail renders one side of a group transition. The empty code is the
 // reserved default group, which has no operator-facing code to name.
 func groupSideDetail(code string) string {
 	if code == "" {
-		return "<none>"
+		return domain.AuditDetailNone
 	}
 	return code
 }
@@ -134,157 +127,226 @@ func groupSideDetail(code string) string {
 func adjustmentDetail(
 	id domain.AccountID, asset string, typ domain.AdjustmentType,
 	ref domain.ExternalID, accepted bool,
-) string {
-	disposition := "rejected"
+) domain.AuditDetail {
+	params := domain.AuditDetailParams{
+		"account":        id.String(),
+		"asset":          asset,
+		"adjustmentType": string(typ),
+	}
+	if ref.IsZero() {
+		code := domain.AuditDetailAdjustmentRejected
+		if accepted {
+			code = domain.AuditDetailAdjustmentAccepted
+		}
+		return domain.NewAuditDetail(code, params)
+	}
+	params["ref"] = ref.String()
+	code := domain.AuditDetailAdjustmentRefRejected
 	if accepted {
-		disposition = "accepted"
+		code = domain.AuditDetailAdjustmentRefAccepted
 	}
-	detail := fmt.Sprintf("adjustment account %s asset=%s type=%s", id, asset, typ)
-	if !ref.IsZero() {
-		detail += " id=" + ref.String()
-	}
-	return detail + " " + disposition
+	return domain.NewAuditDetail(code, params)
 }
 
 // setMcpAccessDetail renders one MCP command access toggle.
-func setMcpAccessDetail(command string, enabled bool) string {
-	state := "disable"
+func setMcpAccessDetail(command string, enabled bool) domain.AuditDetail {
+	code := domain.AuditDetailDisableMcpCommand
 	if enabled {
-		state = "enable"
+		code = domain.AuditDetailEnableMcpCommand
 	}
-	return fmt.Sprintf("%s mcp command %s", state, command)
+	return domain.NewAuditDetail(code, domain.AuditDetailParams{"command": command})
 }
 
 // setSettingDetail renders one realm-wide setting write.
-func setSettingDetail(key, value string) string {
-	return fmt.Sprintf("set setting %s=%s", key, value)
+func setSettingDetail(key, value string) domain.AuditDetail {
+	return domain.NewAuditDetail(
+		domain.AuditDetailSetSetting, domain.AuditDetailParams{"key": key, "value": value},
+	)
 }
 
-// marketDataToggleDetail renders one market-data enable/disable toggle.
-func marketDataToggleDetail(kind, id string, enabled bool) string {
-	state := "disable"
+// marketDataInstanceToggleDetail renders one market-data instance enable/disable
+// toggle.
+func marketDataInstanceToggleDetail(id domain.ExternalID, enabled bool) domain.AuditDetail {
+	code := domain.AuditDetailDisableMarketDataInstance
 	if enabled {
-		state = "enable"
+		code = domain.AuditDetailEnableMarketDataInstance
 	}
-	return fmt.Sprintf("%s market-data %s %s", state, kind, id)
+	return domain.NewAuditDetail(code, domain.AuditDetailParams{"instance": id.String()})
+}
+
+// marketDataInstrumentToggleDetail renders one market-data instrument
+// enable/disable toggle.
+func marketDataInstrumentToggleDetail(
+	instance domain.ExternalID, externalSymbol string, enabled bool,
+) domain.AuditDetail {
+	code := domain.AuditDetailDisableMarketDataInstrument
+	if enabled {
+		code = domain.AuditDetailEnableMarketDataInstrument
+	}
+	return domain.NewAuditDetail(code, domain.AuditDetailParams{
+		"instance": instance.String(),
+		"symbol":   externalSymbol,
+	})
 }
 
 // submitOrderDetail renders one order submission and its accept/reject
 // disposition. The order is named by its opaque external id.
-func submitOrderDetail(order domain.Order, accepted bool) string {
-	disposition := "rejected"
+func submitOrderDetail(order domain.Order, accepted bool) domain.AuditDetail {
+	code := domain.AuditDetailSubmitOrderRejected
 	if accepted {
-		disposition = "committed"
+		code = domain.AuditDetailSubmitOrderCommitted
 	}
-	return fmt.Sprintf("submit order %s account %s %s/%s %s %s",
-		order.ExternalID, order.Account, order.BaseAsset, order.QuoteAsset, order.Side, disposition)
+	return domain.NewAuditDetail(code, domain.AuditDetailParams{
+		"order":   order.ExternalID.String(),
+		"account": order.Account.String(),
+		"base":    order.BaseAsset,
+		"quote":   order.QuoteAsset,
+		"side":    string(order.Side),
+	})
 }
 
 // executionReportDetail renders one execution report and how many account
-// blocks it produced.
+// blocks it produced. extra is the tail a caller appends after the
+// reservation remainder: the overfill and forced-terminal markers.
 func executionReportDetail(
 	in domain.ExecutionReportInput,
 	reservationRemainder string,
 	status domain.OrderStatus,
 	blocks int,
-) string {
-	detail := fmt.Sprintf(
-		"execution report order %s account %s %s/%s qty=%s leavesQty=%s %s blocks=%d",
-		in.Order,
-		in.Account,
-		in.BaseAsset,
-		in.QuoteAsset,
-		in.FillQuantity,
-		in.LeavesQuantity,
-		status,
-		blocks,
-	)
+	extra ...domain.AuditDetailField,
+) domain.AuditDetail {
+	fields := make([]domain.AuditDetailField, 0, 1+len(extra))
 	if reservationRemainder != "" {
-		detail += fmt.Sprintf(" reservationRemainder=%s", reservationRemainder)
+		fields = append(fields, domain.AuditDetailField{
+			Name: "reservationRemainder", Value: reservationRemainder,
+		})
 	}
-	return detail
+	fields = append(fields, extra...)
+	return domain.NewAuditDetail(domain.AuditDetailExecutionReport, domain.AuditDetailParams{
+		"order":     in.Order.String(),
+		"account":   in.Account.String(),
+		"base":      in.BaseAsset,
+		"quote":     in.QuoteAsset,
+		"qty":       in.FillQuantity,
+		"leavesQty": in.LeavesQuantity,
+		"status":    string(status),
+		"blocks":    strconv.Itoa(blocks),
+	}, fields...)
 }
+
+// forcedExecutionField marks an execution report that bypassed a terminal
+// order state.
+var forcedExecutionField = domain.AuditDetailField{Name: "forced", Value: "true"}
 
 // blockDetail renders one operator-initiated account block. Re-blocking an
 // operator-authored cause replaces account.block_reason, while a typed cause
 // conflicts until unblocked, so the audit trail preserves every applied
 // operator reason that the mutable account row no longer carries.
-func blockDetail(id domain.AccountID, reason string) string {
-	return blockReasonDetail("block account", id.String(), reason)
+func blockDetail(id domain.AccountID, reason string) domain.AuditDetail {
+	return blockReasonDetail(
+		domain.AuditDetailBlockAccount, domain.AuditDetailBlockAccountReason,
+		"account", id.String(), reason,
+	)
 }
 
 // unblockDetail renders one operator-initiated account unblock. reason must be
 // empty: an unblock is never justified by the reason of the block it lifts, and
 // rendering that text would read as the operator's justification for unblocking.
-func unblockDetail(id domain.AccountID, reason string) string {
-	return blockReasonDetail("unblock account", id.String(), reason)
+func unblockDetail(id domain.AccountID, reason string) domain.AuditDetail {
+	return blockReasonDetail(
+		domain.AuditDetailUnblockAccount, domain.AuditDetailUnblockAccountReason,
+		"account", id.String(), reason,
+	)
 }
 
 // blockGroupDetail renders one operator-initiated group block.
-func blockGroupDetail(code, reason string) string {
-	return blockReasonDetail("block group", code, reason)
+func blockGroupDetail(code, reason string) domain.AuditDetail {
+	return blockReasonDetail(
+		domain.AuditDetailBlockGroup, domain.AuditDetailBlockGroupReason,
+		"group", code, reason,
+	)
 }
 
 // unblockGroupDetail renders one operator-initiated group unblock. reason
 // follows unblockDetail and must be empty.
-func unblockGroupDetail(code, reason string) string {
-	return blockReasonDetail("unblock group", code, reason)
+func unblockGroupDetail(code, reason string) domain.AuditDetail {
+	return blockReasonDetail(
+		domain.AuditDetailUnblockGroup, domain.AuditDetailUnblockGroupReason,
+		"group", code, reason,
+	)
 }
 
-// blockReasonDetail appends the operator's reason to a bare block detail line,
-// falling back to the bare form when no reason was given. The reason is
-// validated as printable upstream, so it cannot forge an extra audit line here.
-func blockReasonDetail(operation, code, reason string) string {
+// blockReasonDetail renders the bare block detail, or its reason variant when
+// the operator gave a reason. The reason is validated as printable upstream,
+// so it cannot forge an extra audit line here.
+func blockReasonDetail(
+	bare, withReason domain.AuditDetailCode, subject, code, reason string,
+) domain.AuditDetail {
 	if reason == "" {
-		return fmt.Sprintf("%s %s", operation, code)
+		return domain.NewAuditDetail(bare, domain.AuditDetailParams{subject: code})
 	}
-	return fmt.Sprintf("%s %s: %s", operation, code, reason)
+	return domain.NewAuditDetail(withReason, domain.AuditDetailParams{
+		subject:  code,
+		"reason": reason,
+	})
 }
 
 // engineBlockDetail renders one engine-initiated (kill-switch) account block,
 // naming the triggering order by its external id and the engine's stable reject
 // code and reason so an operator can see why the account was blocked.
-func engineBlockDetail(order domain.ExternalID, block domain.AccountBlock) string {
-	detail := fmt.Sprintf("engine blocked account %s order %s code=%s: %s",
-		block.Account, order, block.Code, block.Reason)
-	if block.Details != "" {
-		detail += " (" + block.Details + ")"
+func engineBlockDetail(order domain.ExternalID, block domain.AccountBlock) domain.AuditDetail {
+	params := domain.AuditDetailParams{
+		"account":    block.Account.String(),
+		"order":      order.String(),
+		"rejectCode": block.Code,
+		"reason":     block.Reason,
 	}
-	return detail
+	if block.Details == "" {
+		return domain.NewAuditDetail(domain.AuditDetailEngineBlockOrder, params)
+	}
+	params["details"] = block.Details
+	return domain.NewAuditDetail(domain.AuditDetailEngineBlockOrderDetails, params)
 }
 
 // policyConfigurationBlockDetail identifies an engine block that arose while
 // applying a live policy update, before any subsequent account work can run.
-func policyConfigurationBlockDetail(policy string, block domain.AccountBlock) string {
+func policyConfigurationBlockDetail(policy string, block domain.AccountBlock) domain.AuditDetail {
 	blockPolicy := block.Policy
 	if blockPolicy == "" {
 		blockPolicy = policy
 	}
-	detail := fmt.Sprintf("engine blocked account %s policy %s code=%s: %s",
-		block.Account, blockPolicy, block.Code, block.Reason)
-	if block.Details != "" {
-		detail += " (" + block.Details + ")"
+	params := domain.AuditDetailParams{
+		"account":      block.Account.String(),
+		"enginePolicy": blockPolicy,
+		"rejectCode":   block.Code,
+		"reason":       block.Reason,
 	}
-	return detail
+	if block.Details == "" {
+		return domain.NewAuditDetail(domain.AuditDetailEngineBlockPolicy, params)
+	}
+	params["details"] = block.Details
+	return domain.NewAuditDetail(domain.AuditDetailEngineBlockPolicyDetails, params)
 }
 
-// axesDetail renders the policy/scope axes of a typed barrier.
-func axesDetail(target LimitTarget) string {
-	var b strings.Builder
-	b.WriteString(target.Policy)
-	b.WriteByte(' ')
-	b.WriteString(string(target.Scope))
+// axesParams names the policy and scope of a typed barrier.
+func axesParams(target LimitTarget) domain.AuditDetailParams {
+	return domain.AuditDetailParams{
+		"policy": target.Policy,
+		"scope":  string(target.Scope),
+	}
+}
+
+// axesFields renders the account, group and asset axes of a typed barrier.
+func axesFields(target LimitTarget) []domain.AuditDetailField {
+	fields := make([]domain.AuditDetailField, 0, 3)
 	if target.Account != "" {
-		b.WriteString(" account=")
-		b.WriteString(target.Account.String())
+		fields = append(fields, domain.AuditDetailField{Name: "account", Value: target.Account.String()})
 	}
 	if target.AccountGroup != "" {
-		b.WriteString(" account_group=")
-		b.WriteString(target.AccountGroup)
+		fields = append(fields, domain.AuditDetailField{Name: "account_group", Value: target.AccountGroup})
 	}
 	if target.Asset != "" {
-		b.WriteString(" asset=")
-		b.WriteString(target.Asset)
+		fields = append(fields, domain.AuditDetailField{Name: "asset", Value: target.Asset})
 	}
-	return b.String()
+	return fields
 }

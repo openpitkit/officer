@@ -274,6 +274,12 @@
     "timeInForce": "Срок действия",
     "actions": "Действия"
   },
+  "source": {
+    "panel": "Панель",
+    "api": "API",
+    "mcp": "MCP",
+    "system": "Система"
+  },
   "densityLabels": {
     "account": "Счёт",
     "accountShort": "Сч.",

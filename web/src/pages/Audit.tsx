@@ -68,6 +68,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { operatorOptions } from "@/lib/dataControlLabels";
+import { auditDetailText } from "@/i18n/auditDetail";
+import { sourceLabel } from "@/i18n/codeLabel";
 import { formatDateTime } from "@/i18n/format";
 import { shareUrl } from "@/lib/shareLink";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
@@ -77,6 +79,7 @@ import {
 } from "@/lib/useDebounce";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { accountScope } from "@/lib/accountScope";
+import { auditActionLabel } from "@/pages/dashboardActivity";
 
 const SOURCES = ["panel", "api", "mcp", "system"] as const;
 const EMPTY_ACTION_GROUPS: AuditActionGroup[] = [];
@@ -233,7 +236,7 @@ function AuditTable({
             </TableCell>
             <TableCell>
               <Badge variant={actionVariant(entry.action)}>
-                {entry.action}
+                {auditActionLabel(entry.action)}
               </Badge>
             </TableCell>
             {showsAccounts && (
@@ -260,7 +263,7 @@ function AuditTable({
             <TableCell>
               {entry.source ? (
                 <Badge variant={sourceVariant(entry.source)}>
-                  {entry.source}
+                  {sourceLabel(entry.source)}
                 </Badge>
               ) : (
                 <span className="text-xs text-muted-lt">
@@ -269,7 +272,7 @@ function AuditTable({
               )}
             </TableCell>
             <TableCell className="text-xs text-text">
-              {entry.detail || tc("value.none")}
+              {auditDetailText(entry.detail) || tc("value.none")}
             </TableCell>
           </TableRow>
         ))}
@@ -378,7 +381,7 @@ function ActionTypeFilter({
                     toggle(action);
                   }}
                 >
-                  {action}
+                  {auditActionLabel(action)}
                 </DropdownMenuCheckboxItem>
               ))}
             </div>
@@ -829,7 +832,7 @@ export function Audit() {
                   <SelectItem value="_all">{t("filter.source.all")}</SelectItem>
                   {SOURCES.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {s}
+                      {sourceLabel(s)}
                     </SelectItem>
                   ))}
                 </SelectContent>

@@ -1,0 +1,183 @@
+{
+  "title": "Datos de mercado",
+  "instances": {
+    "title": "Fuentes"
+  },
+  "instrument": {
+    "manualPrice": "Precio manual",
+    "manualPriceFor": "Precio manual de {{symbol}}",
+    "pairAlreadyUsed": "Este par base/cotización ya lo usa {{feeds}}"
+  },
+  "instrumentDialog": {
+    "ibTitle": "Añadir instrumento de Interactive Brokers",
+    "ibDescription": "Elija un contrato resuelto o complete manualmente los campos del contrato antes de añadir el instrumento.",
+    "contract": "Contrato",
+    "currencyRequired": "La moneda del contrato IB es obligatoria."
+  },
+  "actions": {
+    "addInstance": "Añadir fuente",
+    "deleteInstance": "Eliminar fuente",
+    "sendPrice": "Enviar precio"
+  },
+  "create": {
+    "title": "Añadir fuente {{provider}}",
+    "defaultHint": "Cree una fuente y, a continuación, añádale instrumentos.",
+    "duplicateLabel": "Ya existe una fuente con este nombre.",
+    "binanceHint": "Cree una fuente Binance para precios de contado en tiempo real. Los flujos públicos de cotizaciones no requieren credenciales.",
+    "byoHint": "Cree una fuente manual. Tras crearla, añada instrumentos y envíe precios mantenidos por el operador.",
+    "mockHint": "Cree una fuente sintética para demostraciones y pruebas locales."
+  },
+  "providers": {
+    "guideTitle": "Guía de proveedores",
+    "addSource": "Añadir una fuente de datos de mercado",
+    "ib": {
+      "title": "Interactive Brokers",
+      "description": "Datos de mercado en tiempo real de Interactive Brokers TWS o IB Gateway. Use la configuración del contrato cuando un símbolo simple sea ambiguo.",
+      "createHint": "Cree una fuente Interactive Brokers conectada a TWS o IB Gateway. Configure Host, Port, Client ID y el modo de datos de mercado."
+    },
+    "binance": {
+      "title": "Binance",
+      "description": "Precios del mercado de contado transmitidos en tiempo real desde Binance. Los símbolos externos usan la notación de Binance, como BTCUSDT.",
+      "createHint": "Cree una fuente Binance para precios de contado en tiempo real. Los flujos públicos de cotizaciones no requieren credenciales."
+    },
+    "kraken": {
+      "title": "Kraken",
+      "description": "Precios del mercado de contado transmitidos en tiempo real desde Kraken WebSocket v2. Los símbolos externos usan la notación de pares de Kraken, como BTC/USD.",
+      "createHint": "Cree una fuente Kraken para precios de contado en tiempo real. Los flujos públicos de cotizaciones no requieren credenciales."
+    },
+    "coinbase": {
+      "title": "Coinbase",
+      "description": "Cotizaciones de productos en tiempo real de Coinbase Exchange. Los símbolos externos usan identificadores de producto, como BTC-USD.",
+      "createHint": "Cree una fuente Coinbase para cotizaciones de bolsa en tiempo real. El flujo público no requiere credenciales."
+    },
+    "alpaca": {
+      "title": "Alpaca",
+      "description": "Precios de acciones de EE. UU. en tiempo real de Alpaca IEX. Requiere credenciales de API; los símbolos externos usan símbolos bursátiles, como AAPL.",
+      "createHint": "Cree una fuente Alpaca para precios de acciones de IEX. Añada la clave y el secreto de API."
+    },
+    "okx": {
+      "title": "OKX",
+      "description": "Cotizaciones de contado en tiempo real de OKX. Los símbolos externos usan identificadores de instrumento de OKX, como BTC-USDT.",
+      "createHint": "Cree una fuente OKX para cotizaciones públicas de contado. El flujo público no requiere credenciales."
+    },
+    "bybit": {
+      "title": "Bybit",
+      "description": "Cotizaciones en tiempo real de Bybit v5. Los símbolos externos usan símbolos de Bybit; la categoría puede configurarse en las credenciales.",
+      "createHint": "Cree una fuente Bybit para cotizaciones públicas v5. Elija la categoría de mercado."
+    },
+    "oanda": {
+      "title": "OANDA",
+      "description": "Precios FX en tiempo real de OANDA v20. Requiere credenciales de cuenta; los símbolos externos usan instrumentos como EUR_USD.",
+      "createHint": "Cree una fuente OANDA para precios FX. Añada Token, Account ID y el entorno."
+    },
+    "finnhub": {
+      "title": "Finnhub",
+      "description": "Precios de operaciones en tiempo real de Finnhub WebSocket. Requiere un token de API; los símbolos externos deben ser compatibles con Finnhub.",
+      "createHint": "Cree una fuente Finnhub para precios de operaciones en tiempo real. Añada el token de API."
+    },
+    "byo": {
+      "title": "BYO",
+      "description": "Precios de valoración manuales mantenidos por el operador. Úsela para FX estático, precios de prueba o flujos que inyecta otro sistema.",
+      "createHint": "Cree una fuente manual. Tras crearla, añada instrumentos y envíe precios mantenidos por el operador."
+    },
+    "mock": {
+      "title": "Mock",
+      "description": "Datos de mercado sintéticos para demostraciones y pruebas locales. No se conecta a ninguna plataforma externa.",
+      "createHint": "Cree una fuente sintética para demostraciones y pruebas locales."
+    }
+  },
+  "restart": {
+    "requiredTitle": "Se necesita un reinicio para aplicar los cambios de datos de mercado",
+    "requiredDetail": "La configuración guardada de fuentes o instrumentos difiere de los flujos en ejecución. Reinicie los flujos para aplicarla.",
+    "button": "Reiniciar flujos"
+  },
+  "state": {
+    "feedDisabled": "Flujo desactivado",
+    "stale": "Con retraso",
+    "staleTooltip": "Cotización más antigua que la ventana de vigencia",
+    "live": "En vivo",
+    "notApplied": "Pendiente de reinicio",
+    "error": "Error"
+  },
+  "instanceError": "Error: {{message}}",
+  "settings": {
+    "title": "Configuración de la conexión",
+    "editTitle": "Editar la configuración de la fuente",
+    "editDescription": "Los campos secretos vacíos conservan el valor guardado. Reinicie los flujos para aplicar los cambios de conexión guardados.",
+    "host": "Host",
+    "port": "Port",
+    "clientId": "Client ID",
+    "autoClientId": "Automático",
+    "marketDataType": "Tipo de datos de mercado",
+    "secType": "Tipo de valor",
+    "exchange": "Bolsa",
+    "currency": "Moneda",
+    "contractSymbol": "Símbolo del contrato",
+    "conId": "Con ID",
+    "localSymbol": "Símbolo local",
+    "tradingClass": "Clase de negociación",
+    "multiplier": "Multiplicador",
+    "includeExpired": "Incluir vencidos",
+    "primaryExchange": "Bolsa principal",
+    "lastTradeDate": "Vencimiento (YYYYMMDD)",
+    "strike": "Precio de ejercicio",
+    "right": "Tipo de opción",
+    "getApiKeys": "Obtener claves de API",
+    "getApiToken": "Obtener token de API",
+    "token": "Token",
+    "accountID": "Account ID",
+    "environment": "Entorno",
+    "category": "Categoría",
+    "marketData": {
+      "live": "En tiempo real",
+      "frozen": "Congelados",
+      "delayed": "Diferidos",
+      "delayedFrozen": "Diferidos congelados"
+    },
+    "secTypes": {
+      "STK": "Acción (STK)",
+      "CASH": "Divisas (CASH)",
+      "CRYPTO": "Cripto (CRYPTO)",
+      "FUT": "Futuro (FUT)",
+      "IND": "Índice (IND)",
+      "OPT": "Opción (OPT)"
+    },
+    "rights": {
+      "C": "Opción de compra",
+      "P": "Opción de venta"
+    },
+    "environments": {
+      "practice": "Práctica",
+      "live": "Real"
+    },
+    "categories": {
+      "spot": "Contado",
+      "linear": "Lineal",
+      "inverse": "Inverso",
+      "option": "Opciones"
+    }
+  },
+  "table": {
+    "manualPrice": "Precio manual",
+    "price": "Precio",
+    "asOf": "A fecha de",
+    "updateIntervalTooltip": "Intervalo desde la actualización anterior"
+  },
+  "emptyInstances": "No hay fuentes de datos de mercado configuradas",
+  "verify": {
+    "unsupported": "Este proveedor no puede verificar símbolos",
+    "unavailable": "No hay un precio reciente para el símbolo"
+  },
+  "resolve": {
+    "label": "Resolver el símbolo en este flujo",
+    "placeholder": "Escriba EUR, EUR/USD, BTC o AAPL",
+    "noResults": "No hay símbolos coincidentes en este flujo"
+  },
+  "deleteInstance": {
+    "title": "¿Eliminar la fuente de datos de mercado?",
+    "description": "{{label}} se eliminará de forma permanente."
+  },
+  "deleteInstrument": {
+    "description": "{{symbol}} se eliminará de forma permanente de esta fuente."
+  }
+}

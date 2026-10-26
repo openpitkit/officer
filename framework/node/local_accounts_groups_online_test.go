@@ -906,12 +906,12 @@ func TestLocalNode_ForcedDeleteGroupAuditsDetachedAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
-	const wantDetail = "delete group desk; detachedAccounts=2 destroyedSpotFundsPnlBounds=1"
+	const wantDetail = "Group desk deleted; accounts detached: 2, P&L bounds removed: 1"
 	auditFound := false
 	accountAudits := map[domain.AccountID]bool{}
 	for _, row := range auditRows {
 		if row.Action == domain.AuditActionDeleteGroup && row.Group == "desk" &&
-			row.Detail == wantDetail {
+			row.Detail.Text == wantDetail {
 			auditFound = true
 		}
 		if row.Action == domain.AuditActionDeleteGroup && row.Group == "desk" &&

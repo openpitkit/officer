@@ -33,6 +33,7 @@ import type {
   AssetClassListFilters,
   AssetListFilters,
   AuditActionGroup,
+  AuditDetail,
   AuditEntry,
   Balance,
   BalanceListFilters,
@@ -1205,8 +1206,25 @@ function normalizeAudit(v: unknown): AuditEntry {
       pick(o, "accountTitle", "AccountTitle", "account_title"),
     ),
     group: asString(pick(o, "group", "Group")),
-    detail: asString(pick(o, "detail", "Detail")),
+    detail: normalizeAuditDetail(o, "detail"),
     source: asSource(pick(o, "source", "Source")),
+  };
+}
+
+/** Fold the wire `<prefix>`, `<prefix>Code`, `<prefix>Params` and
+ *  `<prefix>Fields` of an audit row or an activity entry into one detail. */
+function normalizeAuditDetail(o: Json, prefix: string): AuditDetail {
+  return {
+    text: asString(pick(o, prefix)),
+    code: asString(pick(o, `${prefix}Code`)),
+    params: normalizeValues(pick(o, `${prefix}Params`)),
+    fields: normalizeArray(pick(o, `${prefix}Fields`), (v) => {
+      const f = isObject(v) ? v : {};
+      return {
+        name: asString(pick(f, "name")),
+        value: asString(pick(f, "value")),
+      };
+    }),
   };
 }
 
@@ -1224,7 +1242,7 @@ function normalizeOverview(v: unknown): Overview {
           at: asString(pick(ao, "at", "At")),
           kind: asString(pick(ao, "kind", "Kind")),
           ref: asString(pick(ao, "ref", "Ref")),
-          summary: asString(pick(ao, "summary", "Summary")),
+          summary: normalizeAuditDetail(ao, "summary"),
         };
       })
     : [];

@@ -1,0 +1,508 @@
+{
+  "sensitiveData": {
+    "title": "Los datos confidenciales se almacenan sin cifrar",
+    "detail": "Officer funciona sin clave maestra: las claves de API y los tokens almacenados se guardan en texto plano en su base de datos y en las copias de seguridad. Configure una clave maestra para almacenarlos cifrados.",
+    "masterKeyLink": "Cómo configurar una clave maestra",
+    "unknown": "No se pudo comprobar si las claves almacenadas están cifradas: {{error}}",
+    "checking": "Comprobando si las claves almacenadas están cifradas…"
+  },
+  "language": {
+    "label": "Idioma",
+    "ariaLabel": "Cambiar idioma"
+  },
+  "actions": {
+    "refresh": "Actualizar",
+    "restartFeeds": "Reiniciar flujos",
+    "retry": "Reintentar",
+    "cancel": "Cancelar",
+    "clear": "Borrar",
+    "clearAll": "Borrar todo",
+    "open": "Abrir",
+    "apply": "Aplicar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "editSettings": "Editar configuración",
+    "save": "Guardar",
+    "create": "Crear",
+    "block": "Bloquear",
+    "unblock": "Desbloquear",
+    "clone": "Clonar",
+    "view": "Ver",
+    "filter": "Filtrar",
+    "history": "Historial",
+    "share": "Compartir",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "close": "Cerrar",
+    "dismissError": "Descartar error",
+    "increment": "Aumentar",
+    "decrement": "Disminuir",
+    "setUpTradingConnection": "Configurar una conexión de negociación",
+    "back": "Atrás",
+    "show": "Mostrar",
+    "hide": "Ocultar"
+  },
+  "filters": {
+    "venueLabel": "Plataforma",
+    "all": "Todos",
+    "venueAny": "Cualquier plataforma",
+    "venueNone": "Sin plataforma",
+    "label": "Filtros",
+    "onlineLabel": "{{field}} · en línea",
+    "onlineLoading": "Filtrando {{field}}…",
+    "exactLookupLabel": "ID exacto · búsqueda",
+    "more": "Más filtros",
+    "moreWithCount": "Más filtros ({{count}})",
+    "clearField": "Borrar campo",
+    "invalidNumber": "Introduzca un número válido.",
+    "invalidRange": "Introduzca un rango con el límite inferior menor o igual que el superior.",
+    "clearAll": "Borrar todos los filtros",
+    "globalAccount": {
+      "active": "Dejar de usar esta cuenta como filtro global de cuenta",
+      "inactive": "Usar esta cuenta como filtro global de cuenta en todas las pantallas",
+      "disabled": "Introduzca una cuenta para convertirla en el filtro global de cuenta"
+    },
+    "active": "Filtros activos",
+    "advancedActive": "Filtro avanzado aplicado",
+    "activeCount_one": "{{count}} filtro",
+    "activeCount_many": "{{count}} filtros",
+    "activeCount_other": "{{count}} filtros",
+    "noActive": "Sin filtros activos",
+    "openPanel": "Abrir panel de filtros",
+    "closePanel": "Cerrar panel de filtros",
+    "apply": "Aplicar filtros",
+    "applyAdvanced": "Aplicar filtro avanzado",
+    "reset": "Restablecer filtros",
+    "removeAdvanced": "Quitar filtro avanzado",
+    "remove": "Quitar filtro: {{label}}",
+    "operator": "Operador",
+    "value": "Valor",
+    "min": "Mín.",
+    "max": "Máx.",
+    "from": "Desde",
+    "to": "Hasta",
+    "custom": "Personalizado",
+    "searchField": "Buscar en {{field}}",
+    "exactField": "Valor exacto: {{field}}",
+    "placeholders": {
+      "search": "Buscar",
+      "searchField": "Buscar en {{field}}",
+      "exactId": "ID exacto de {{entity}}",
+      "value": "Valor",
+      "min": "Mín.",
+      "max": "Máx.",
+      "from": "Desde",
+      "to": "Hasta"
+    },
+    "chips": {
+      "label": "Chip de filtro",
+      "remove": "Quitar filtro: {{label}}",
+      "clearAll": "Borrar todo",
+      "fieldValue": "{{field}}: {{value}}",
+      "fieldOperatorValue": "{{field}} {{operator}} {{value}}",
+      "range": "{{field}} {{operator}} {{from}}-{{to}}",
+      "between": "{{field}} entre {{min}} y {{max}}",
+      "exactId": "ID de {{entity}} {{id}}",
+      "online": "{{field}} contiene {{value}}"
+    }
+  },
+  "operators": {
+    "text": {
+      "contains": "contiene",
+      "startsWith": "empieza por",
+      "starts_with": "empieza por",
+      "endsWith": "termina en",
+      "ends_with": "termina en",
+      "exact": "exacto",
+      "wildcard": "comodín"
+    },
+    "number": {
+      "eq": "Igual a",
+      "neq": "Distinto de",
+      "gt": "Mayor que",
+      "lt": "Menor que",
+      "gte": "Como mínimo",
+      "lte": "Como máximo",
+      "between": "Entre"
+    },
+    "time": {
+      "after": "después de",
+      "before": "antes de",
+      "between": "entre",
+      "today": "hoy",
+      "last24h": "24 h",
+      "last7d": "7 d",
+      "custom": "personalizado"
+    },
+    "ariaLabel": "Operador de {{field}}"
+  },
+  "exactLookup": {
+    "label": "ID exacto · búsqueda",
+    "placeholder": "ID exacto de {{entity}}",
+    "open": "Abrir",
+    "openEntity": "Abrir {{entity}}",
+    "searching": "Buscando…",
+    "notFoundTitle": "No encontrado: {{entity}}",
+    "notFoundDescription": "No se encontró {{entity}} con ID {{id}}.",
+    "empty": "Introduzca un ID para abrir una fila."
+  },
+  "value": {
+    "none": "-",
+    "yes": "sí",
+    "no": "no"
+  },
+  "table": {
+    "summary": {
+      "range": "Mostrando {{from}}-{{to}} de {{total}}",
+      "rangeUnknown": "Mostrando {{from}}-{{to}}",
+      "loaded_one": "{{count}} fila cargada",
+      "loaded_many": "{{count}} filas cargadas",
+      "loaded_other": "{{count}} filas cargadas",
+      "selected_one": "{{count}} seleccionado",
+      "selected_many": "{{count}} seleccionados",
+      "selected_other": "{{count}} seleccionados"
+    },
+    "pagination": {
+      "page": "Página {{page}}",
+      "pageOf": "Página {{page}} de {{pages}}",
+      "pageOfAtLeast": "Página {{page}} de {{pages}}+",
+      "pageOfUnknown": "Página {{page}}",
+      "first": "Primera página",
+      "firstShort": "Primera",
+      "previous": "Anterior",
+      "next": "Siguiente",
+      "last": "Última página",
+      "lastShort": "Última",
+      "goToPage": "Ir a la página {{page}}",
+      "goToPageInput": "Ir a la página",
+      "goToPagePlaceholder": "Página",
+      "keyset": {
+        "newer": "Más recientes",
+        "older": "Más antiguos",
+        "next": "Página siguiente",
+        "previous": "Página anterior",
+        "loadNewer": "Cargar más recientes",
+        "loadOlder": "Cargar más antiguos",
+        "newest": "Lo más reciente",
+        "oldest": "Lo más antiguo",
+        "range": "{{from}}-{{to}}",
+        "rangeWithMore": "{{from}}-{{to}}+",
+        "afterCursor": "Después de {{cursor}}",
+        "beforeCursor": "Antes de {{cursor}}"
+      }
+    }
+  },
+  "sorting": {
+    "label": "Ordenar",
+    "none": "Sin ordenación",
+    "ascending": "Ascendente",
+    "descending": "Descendente",
+    "sortBy": "Ordenar por {{field}}",
+    "clear": "Borrar ordenación",
+    "active": "Ordenación activa",
+    "inactive": "Sin ordenar",
+    "aria": {
+      "none": "{{field}} sin ordenar",
+      "ascending": "{{field}} en orden ascendente",
+      "descending": "{{field}} en orden descendente",
+      "activate": "Ordenar por {{field}}",
+      "clear": "Borrar ordenación de {{field}}"
+    }
+  },
+  "rowActions": {
+    "copyId": "Copiar ID",
+    "copyIdTitle": "Copiar ID ({{entity}})",
+    "copiedId": "ID copiado",
+    "share": "Compartir",
+    "shareTitle": "Copiar enlace ({{entity}})",
+    "shareFilters": "Copiar un enlace al conjunto de filtros actual",
+    "copiedLink": "Enlace copiado",
+    "openInNewTabHint": "Haga Cmd-clic en macOS o Ctrl-clic en Windows/Linux para abrir en una pestaña nueva.",
+    "openInNewTabHintMac": "Haga Cmd-clic para abrir en una pestaña nueva.",
+    "openInNewTabHintCtrl": "Haga Ctrl-clic para abrir en una pestaña nueva.",
+    "view": "Ver",
+    "viewTitle": "Ver {{entity}}",
+    "filterBy": "Filtrar por",
+    "filterByTitle": "Filtrar por {{field}}",
+    "clone": "Clonar",
+    "cloneTitle": "Clonar {{entity}}",
+    "edit": "Editar",
+    "editTitle": "Editar {{entity}}",
+    "block": "Bloquear",
+    "blockTitle": "Bloquear {{entity}}",
+    "unblock": "Desbloquear",
+    "unblockTitle": "Desbloquear {{entity}}",
+    "delete": "Eliminar",
+    "deleteTitle": "Eliminar {{entity}}",
+    "history": "Historial",
+    "historyTitle": "Ver historial de {{entity}}"
+  },
+  "entities": {
+    "account": "cuenta",
+    "group": "grupo",
+    "position": "posición",
+    "order": "orden",
+    "trade": "operación",
+    "policy": "política",
+    "auditEntry": "entrada de auditoría",
+    "adjustment": "ajuste",
+    "balance": "saldo"
+  },
+  "fields": {
+    "account": "Cuenta",
+    "group": "Grupo",
+    "instrument": "Instrumento",
+    "asset": "Activo",
+    "baseAsset": "Activo base",
+    "quoteAsset": "Activo de cotización",
+    "source": "Origen",
+    "status": "Estado",
+    "side": "Sentido",
+    "time": "Hora",
+    "submitted": "Enviado",
+    "updated": "Actualizado",
+    "externalId": "ID",
+    "orderId": "ID de orden",
+    "tradeId": "ID de operación",
+    "accountId": "ID de cuenta",
+    "groupId": "ID de grupo",
+    "policyId": "ID de política",
+    "price": "Precio",
+    "quantity": "Cantidad",
+    "notional": "Nocional",
+    "pnl": "PnL",
+    "unrealizedPnl": "PnL no realizado",
+    "realizedPnl": "PnL realizado",
+    "markToMarket": "Valoración a mercado",
+    "timeInForce": "Validez",
+    "actions": "Acciones"
+  },
+  "source": {
+    "panel": "Panel",
+    "api": "API",
+    "mcp": "MCP",
+    "system": "Sistema"
+  },
+  "densityLabels": {
+    "account": "Cuenta",
+    "accountShort": "Cta.",
+    "group": "Grupo",
+    "groupShort": "Gr.",
+    "instrument": "Instrumento",
+    "instrumentShort": "Instr.",
+    "status": "Estado",
+    "statusShort": "Est.",
+    "source": "Origen",
+    "sourceShort": "Orig.",
+    "price": "Precio",
+    "priceShort": "PX",
+    "quantity": "Cantidad",
+    "quantityShort": "QTY",
+    "notional": "Nocional",
+    "notionalShort": "NTL",
+    "pnl": "PnL",
+    "pnlShort": "PnL",
+    "unrealizedPnl": "PnL no realizado",
+    "unrealizedPnlShort": "uPnL",
+    "realizedPnl": "PnL realizado",
+    "realizedPnlShort": "rPnL",
+    "markToMarket": "Valoración a mercado",
+    "markToMarketShort": "MTM",
+    "timeInForce": "Validez",
+    "timeInForceShort": "TIF"
+  },
+  "businessCsv": {
+    "menu": {
+      "trigger": "Archivo",
+      "ariaLabel": "Exportar CSV"
+    },
+    "delimiterLabel": "Delimitador",
+    "format": {
+      "heading": "Formato CSV",
+      "account_groups": {
+        "description": "Un grupo de cuentas por fila.",
+        "columns": "code,title,currency,notes,blocked,block_reason"
+      },
+      "accounts": {
+        "description": "Una cuenta por fila.",
+        "columns": "code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason"
+      },
+      "positions": {
+        "description": "Una posición de fondos al contado por fila.",
+        "columns": "account_code,asset,available,held,incoming,realized_pnl,realized_pnl_halt_reason,average_entry_price"
+      },
+      "orders": {
+        "description": "Una orden por fila.",
+        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,lock_price,leaves,status,drop_copy"
+      },
+      "trades": {
+        "description": "Una operación por fila.",
+        "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
+      }
+    },
+    "entities": {
+      "account_groups": "Grupos de cuentas",
+      "accounts": "Cuentas",
+      "positions": "Posiciones",
+      "orders": "Órdenes",
+      "trades": "Operaciones"
+    },
+    "delimiters": {
+      "comma": "Coma",
+      "semicolon": "Punto y coma",
+      "tab": "Tabulación",
+      "pipe": "Barra vertical"
+    },
+    "export": {
+      "trigger": "Exportar CSV",
+      "title": "Exportar CSV de negocio",
+      "description": "Exportar {{entity}} según los filtros actuales.",
+      "zip": "Descargar como ZIP",
+      "submit": "Exportar",
+      "exporting": "Exportando…"
+    }
+  },
+  "nav": {
+    "dashboard": "Panel",
+    "accounts": "Cuentas",
+    "account": "Cuenta",
+    "assets": "Activos",
+    "positions": "Posiciones",
+    "orders": "Órdenes",
+    "policies": "Políticas",
+    "audit": "Auditoría",
+    "restartRequired": "Reinicio necesario",
+    "mcpAccess": "Acceso MCP",
+    "marketData": "Datos de mercado",
+    "tradingConnections": "Conexiones de negociación",
+    "service": "Servicio",
+    "signingKeys": "Claves de firma",
+    "logOut": "Cerrar sesión"
+  },
+  "brand": {
+    "name": "Pit Officer",
+    "logoAriaLabel": "Logotipo de Pit",
+    "controlPlane": "Plano de control",
+    "nonRelease": "no publicada"
+  },
+  "about": {
+    "title": "Acerca de",
+    "description": "Pit Officer es un plano de control local para el riesgo pre-negociación.",
+    "product": "Producto",
+    "copyrightLabel": "Derechos de autor",
+    "copyright": "© The Pit Project Owners. Todos los derechos reservados.",
+    "openWelcome": "Abrir la guía de inicio",
+    "links": {
+      "website": "Sitio web de Pit Officer",
+      "issues": "Gestor de incidencias",
+      "discussions": "Debates en GitHub",
+      "openpit": "Sitio web de OpenPit"
+    }
+  },
+  "welcome": {
+    "sections": {
+      "product": "Qué es esta aplicación",
+      "uses": "Cómo puede usarse",
+      "preTrade": "Configuración pre-negociación",
+      "marketData": "Datos de mercado",
+      "optional": "Cuándo los controles son opcionales"
+    },
+    "product": {
+      "copy": "Pit Officer es el panel de operador para el control de riesgos. Reúne en un servicio local cuentas, saldos, políticas, fuentes de datos de mercado, registros de auditoría, acceso REST, comandos MCP y claves de firma."
+    },
+    "useCases": {
+      "dropCopy": {
+        "title": "Registrador drop-copy",
+        "copy": "Registra órdenes, ejecuciones, estado de las cuentas y eventos de auditoría después de la ejecución, sin bloquear la plataforma de origen."
+      },
+      "preTrade": {
+        "title": "Filtro pre-negociación",
+        "copy": "Aprueba o rechaza órdenes antes de que salgan del sistema, aplicando primero los saldos de las cuentas y las barreras de las políticas."
+      },
+      "surfaces": {
+        "title": "REST y MCP",
+        "copy": "Funciona desde el panel, clientes REST y agentes MCP."
+      },
+      "operations": {
+        "title": "Libro del operador",
+        "copy": "Muestra posiciones, fondos retenidos, infracciones, cambios de políticas, aprobaciones, registros y estado del servicio."
+      }
+    },
+    "preTrade": {
+      "copy": "Para un control pre-negociación de permitir o denegar, cree cuentas, asígneles posiciones o saldos de efectivo y, a continuación, defina las barreras de las políticas. Si no se necesita control del poder de compra, las cuentas y los saldos pueden quedar vacíos.",
+      "copyUnnamed": "Para un control pre-negociación de permitir o denegar, asigne posiciones o saldos de efectivo a la cuenta y, a continuación, defina las barreras de las políticas. Si no se necesita control del poder de compra, la cuenta puede quedar vacía."
+    },
+    "marketData": {
+      "copy": "Las órdenes de mercado, los precios fijados, la exposición entre monedas y el PnL realizado requieren una fuente de datos de mercado. Puede conectar un proveedor en tiempo real más adelante o instalar ahora un conjunto predefinido estático BYO."
+    },
+    "optional": {
+      "copy": "Un escenario de solo registro o auditoría puede empezar sin cuentas, saldos ni flujos. Añada los controles solo cuando Pit deba permitir o bloquear el paso de las órdenes."
+    },
+    "actions": {
+      "demoAccount": "Crear cuenta y posiciones de demostración",
+      "demoPositions": "Añadir posiciones de demostración",
+      "policyPreset": "Añadir barreras de política iniciales",
+      "marketDataPreset": "Instalar precios estáticos de FX y criptomonedas",
+      "binancePreset": "Obtener tipos de FX y criptomonedas de Binance",
+      "or": "o",
+      "openAccounts": "Abrir cuentas",
+      "openAccount": "Abrir cuenta",
+      "openPolicies": "Abrir políticas",
+      "openMarketData": "Abrir datos de mercado"
+    },
+    "presets": {
+      "accountNote": "Creada desde la guía de inicio. Sustitúyala por el identificador real de la cuenta antes del uso en producción."
+    },
+    "status": {
+      "applied": "{{label}} aplicado; filas actualizadas: {{count}}.",
+      "failed": "Error en {{label}}: {{message}}",
+      "partialFailed": "{{label}} aplicado parcialmente; filas actualizadas antes del fallo: {{count}}. Error: {{message}}",
+      "marketDataInstanceMissing": "El servidor no devolvió la instancia estática de datos de mercado.",
+      "binanceInstanceMissing": "El servidor no devolvió la instancia de datos de mercado de Binance.",
+      "accountMissing": "No se encontró la cuenta {{account}}.",
+      "accountHoldsPositions": "La cuenta {{account}} ya tiene posiciones. La demostración solo escribe en una cuenta sin posiciones.",
+      "barriersExist": "La cuenta {{account}} ya tiene una barrera inicial. La demostración solo escribe en una cuenta sin barreras iniciales.",
+      "barriersUnread": "No se pudieron leer todas las barreras de la cuenta {{account}}, por lo que la demostración no escribe nada."
+    }
+  },
+  "display": {
+    "density": {
+      "label": "Densidad",
+      "ariaLabel": "Densidad",
+      "comfortable": "Amplia",
+      "compact": "Compacta",
+      "terminal": "Densa"
+    },
+    "tradeStyle": {
+      "label": "Estilo",
+      "ariaLabel": "Estilo de negociación",
+      "tape": "Tape",
+      "tapeTitle": "Tape: dialecto de mesas de efectivo, contado, FX y carteras",
+      "ladder": "Ladder",
+      "ladderTitle": "Ladder: dialecto de mesas de futuros, opciones, profundidad de mercado y escalera de precios"
+    }
+  },
+  "theme": {
+    "label": "Tema",
+    "ariaLabel": "Tema: {{mode}}",
+    "dark": "Oscuro",
+    "light": "Claro",
+    "system": "Sistema"
+  },
+  "states": {
+    "stale": "Datos desactualizados",
+    "staleDescription": "Error al actualizar. Se muestran los últimos datos recibidos.",
+    "loadError": "No se pudieron cargar los datos",
+    "accountModeLoadError": "No se pudo cargar el modo de cuenta",
+    "loading": "Cargando",
+    "copyableSnippet": "Fragmento copiable"
+  },
+  "suggestions": {
+    "assetLookupFailed": "No se pudieron cargar las sugerencias de activos.",
+    "accountLookupFailed": "No se pudieron cargar las sugerencias de cuentas.",
+    "groupLookupFailed": "No se pudieron cargar las sugerencias de grupos."
+  },
+  "topBar": {
+    "toggleNav": "Mostrar u ocultar la navegación"
+  }
+}

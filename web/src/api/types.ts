@@ -701,7 +701,9 @@ export interface ActivityEntry {
   at: string;
   kind: string;
   ref: string;
-  summary: string;
+  /** The audit detail of an audit row, or the summary of an order or an
+   *  adjustment (from the wire `summary*` fields). */
+  summary: AuditDetail;
 }
 
 /** Response from GET /overview. */
@@ -1371,7 +1373,24 @@ export interface EventReproduction {
 
 // --- Audit ---
 
-/** One audit-log entry (mirrors the auditDTO wire shape). */
+/** One ` name=value` pair of an audit detail's tail. */
+export interface AuditDetailField {
+  name: string;
+  value: string;
+}
+
+/** An audit detail line as the server wrote it: the English `text`, and the
+ *  template `code`, `params` and `fields` tail it was rendered from. An empty
+ *  `code` is an action recorded without a detail. */
+export interface AuditDetail {
+  text: string;
+  code: string;
+  params: Record<string, string>;
+  fields: AuditDetailField[];
+}
+
+/** One audit-log entry (mirrors the auditDTO wire shape; the wire `detail*`
+ *  fields are folded into `detail`). */
 export interface AuditEntry {
   id: string;
   at: string;
@@ -1386,7 +1405,7 @@ export interface AuditEntry {
    * text is not, since another entity's code can appear inside it.
    */
   group: string;
-  detail: string;
+  detail: AuditDetail;
   source: Source;
 }
 

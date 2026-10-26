@@ -101,7 +101,7 @@ const sampleEntry: AuditEntry = {
   account: "desk-alpha",
   accountTitle: "Desk Alpha",
   group: "",
-  detail: "blocked desk-alpha",
+  detail: { text: "blocked desk-alpha", code: "", params: {}, fields: [] },
   source: "panel",
 };
 
@@ -325,13 +325,18 @@ describe("Audit action tones", () => {
         {
           ...sampleEntry,
           action: "submit_drop_copy_order",
-          detail: "submitted unsigned drop-copy order",
+          detail: {
+            text: "submitted unsigned drop-copy order",
+            code: "",
+            params: {},
+            fields: [],
+          },
         },
       ]),
     );
     renderAudit();
 
-    const action = await screen.findByText("submit_drop_copy_order");
+    const action = await screen.findByText("Drop-copy order");
     expect(action).toHaveClass(
       ...badgeVariants({ variant: "danger" }).split(" "),
     );
@@ -404,7 +409,12 @@ describe("Audit with accounts hidden", () => {
           ...sampleEntry,
           account: "main",
           accountTitle: "Main desk",
-          detail: "blocked the default account",
+          detail: {
+            text: "blocked the default account",
+            code: "",
+            params: {},
+            fields: [],
+          },
         },
       ]),
     );

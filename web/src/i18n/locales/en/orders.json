@@ -254,7 +254,50 @@
     "accountBlocked": "Account {{account}} is blocked",
     "accountBlockedUnnamed": "The account is blocked",
     "rejectReasons": {
-      "account_blocked": "Account is blocked"
+      "account_blocked": "Account is blocked",
+      "missing_required_field": "Missing required field",
+      "invalid_field_format": "Invalid field format",
+      "invalid_field_value": "Invalid field value",
+      "unsupported_order_type": "Unsupported order type",
+      "unsupported_time_in_force": "Unsupported time in force",
+      "unsupported_order_attribute": "Unsupported order attribute",
+      "duplicate_client_order_id": "Duplicate client order ID",
+      "too_late_to_enter": "Too late to enter",
+      "exchange_closed": "Exchange closed",
+      "unknown_instrument": "Unknown instrument",
+      "unknown_account": "Unknown account",
+      "unknown_venue": "Unknown venue",
+      "unknown_clearing_account": "Unknown clearing account",
+      "unknown_collateral_asset": "Unknown collateral asset",
+      "insufficient_funds": "Insufficient funds",
+      "insufficient_margin": "Insufficient margin",
+      "insufficient_position": "Insufficient position",
+      "credit_limit_exceeded": "Credit limit exceeded",
+      "risk_limit_exceeded": "Risk limit exceeded",
+      "order_exceeds_limit": "Order exceeds limit",
+      "order_qty_exceeds_limit": "Order quantity exceeds limit",
+      "order_notional_exceeds_limit": "Order notional exceeds limit",
+      "position_limit_exceeded": "Position limit exceeded",
+      "concentration_limit_exceeded": "Concentration limit exceeded",
+      "leverage_limit_exceeded": "Leverage limit exceeded",
+      "rate_limit_exceeded": "Rate limit exceeded",
+      "pnl_kill_switch_triggered": "PnL kill switch triggered",
+      "account_not_authorized": "Account not authorized",
+      "compliance_restriction": "Compliance restriction",
+      "instrument_restricted": "Instrument restricted",
+      "jurisdiction_restriction": "Jurisdiction restriction",
+      "wash_trade_prevention": "Wash trade prevention",
+      "self_match_prevention": "Self-match prevention",
+      "short_sale_restriction": "Short sale restriction",
+      "risk_configuration_missing": "Risk configuration missing",
+      "reference_data_unavailable": "Reference data unavailable",
+      "order_value_calculation_failed": "Order value calculation failed",
+      "system_unavailable": "System unavailable",
+      "mark_price_unavailable": "Mark price unavailable",
+      "account_adjustment_bounds_exceeded": "Account adjustment bounds exceeded",
+      "arithmetic_overflow": "Arithmetic overflow",
+      "custom": "Custom reject",
+      "other": "Other reject"
     }
   },
 
@@ -352,6 +395,21 @@
         "rejectCode": "code {{code}}",
         "rejectScope": "scope {{scope}}",
         "rejectPolicy": "policy {{policy}}",
+        "type": {
+          "submitted": "Submitted",
+          "pre_trade_accepted": "Pre-trade accepted",
+          "pre_trade_rejected": "Pre-trade rejected",
+          "committed": "Committed",
+          "rolled_back": "Rolled back",
+          "confirmed": "Confirmed",
+          "fill": "Fill",
+          "commission": "Commission",
+          "cancelled": "Cancelled"
+        },
+        "scopes": {
+          "order": "order",
+          "account": "account"
+        },
         "verifySigned": "Reproduce and verify this event's signature",
         "verifyUnsigned": "Reproduce this event's unsigned attestation"
       },
@@ -501,7 +559,20 @@
     "nonce": "Nonce",
     "keyId": "Key ID",
     "algorithm": "Algorithm",
-    "issuedAt": "Issued at"
+    "issuedAt": "Issued at",
+    "verdicts": {
+      "accept": "Accept",
+      "reject": "Reject"
+    },
+    "orderTypes": {
+      "market": "Market",
+      "limit": "Limit"
+    },
+    "outcomes": {
+      "applied": "Applied",
+      "confirmed": "Confirmed",
+      "cancelled": "Cancelled"
+    }
   },
 
   "esign": {

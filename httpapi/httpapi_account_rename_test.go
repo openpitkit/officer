@@ -63,7 +63,10 @@ func TestUpdateAccountRenamesIdentityWithDependentsAndImmutableAudit(t *testing.
 		Action:  domain.AuditActionBlock,
 		Account: created.Code,
 		Source:  domain.SourcePanel,
-		Detail:  "unrelated pre-rename audit row",
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailBlockAccount,
+			domain.AuditDetailParams{"account": created.Code.String()},
+		),
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
@@ -171,9 +174,9 @@ func assertAccountRenameAudit(
 	title string,
 ) {
 	t.Helper()
-	detail := "update account account-old -> account-new (record under new code)"
+	detail := "Account account-old → account-new updated (record under the new code)"
 	if code == "account-old" {
-		detail = "update account account-old -> account-new (record under old code)"
+		detail = "Account account-old → account-new updated (record under the old code)"
 	}
 	page, err := realm.ListAuditRows(ctx, store.AuditListFilter{
 		Account: store.ExactTextMatcher(code.String()),
@@ -184,7 +187,7 @@ func assertAccountRenameAudit(
 	}
 	if len(page.Rows) != 1 || page.Rows[0].Account != code ||
 		page.Rows[0].AccountTitle != title ||
-		page.Rows[0].Detail != detail {
+		page.Rows[0].Detail.Text != detail {
 		t.Fatalf("rename audit under %q = %+v", code, page.Rows)
 	}
 }

@@ -1,0 +1,97 @@
+{
+  "title": "Políticas",
+  "intro": "Barreiras relacionais de políticas de risco, mantidas no plano de controle e aplicadas ao motor OpenPit por política. Cada linha é uma barreira para um alvo.",
+  "addPolicy": "Adicionar política",
+  "wikiDetails": "Detalhes",
+  "filter": {
+    "account": "Filtrar por conta",
+    "accountPlaceholder": "acc-1",
+    "asset": "Filtrar por ativo",
+    "assetPlaceholder": "AAPL",
+    "policy": "Filtrar por política",
+    "allPolicies": "Todas as políticas",
+    "advancedDescription": "Filtre por tipo de política e por valores numéricos das barreiras. Os filtros de conta e de ativo continuam na barra de filtros, com aplicação imediata."
+  },
+  "pagination": {
+    "summary": "Exibindo {{from}}-{{to}} de {{total}} registros",
+    "pageSize": {
+      "ariaLabel": "Tamanho da página",
+      "rowCount": "{{count}} registros por página"
+    }
+  },
+  "table": {
+    "policy": "Política",
+    "scope": "Escopo",
+    "account": "Conta / grupo",
+    "asset": "Ativo / moeda",
+    "values": "Valores",
+    "actions": "Ações",
+    "columnDescriptions": {
+      "policy": "Esta coluna mostra a política de risco aplicada pela barreira.",
+      "scope": "Esta coluna mostra se a barreira se aplica globalmente, a um grupo, a uma conta, a um ativo ou a um alvo combinado.",
+      "account": "Esta coluna mostra a conta ou o grupo de contas visado pela barreira, quando esse eixo está presente.",
+      "asset": "Esta coluna mostra o ativo ou a moeda da conta visado pela barreira, quando esse eixo está presente.",
+      "values": "Esta coluna mostra os valores numéricos ou de duração configurados para a barreira de política.",
+      "actions": "Esta coluna contém as ações de linha para compartilhar, editar e excluir a barreira."
+    },
+    "edit": "Editar",
+    "editAriaLabel": "Editar barreira de política",
+    "deleteAriaLabel": "Excluir barreira de política"
+  },
+  "empty": {
+    "noPolicies": "Ainda não há políticas",
+    "noPoliciesHint": "Adicione a primeira barreira para começar a restringir o fluxo de ordens.",
+    "noMatching": "Nenhuma política correspondente",
+    "noMatchingHint": "Nenhuma barreira corresponde ao filtro atual de conta ou de política.",
+    "noMatchingHintUnnamed": "Nenhuma barreira corresponde aos filtros atuais."
+  },
+  "delete": {
+    "title": "Excluir a barreira de política?",
+    "description": "Isso remove a barreira {{policy}} em {{scope}}{{account}}{{asset}}.",
+    "accountFragment": " conta {{account}}",
+    "accountGroupFragment": " grupo de contas {{accountGroup}}",
+    "assetFragment": " ativo {{asset}}"
+  },
+  "restartConfirm": {
+    "title": "Reconstruir o motor de risco?",
+    "description": "Esta alteração de política reconstrói o motor de risco a partir das contas, dos limites, das regras e dos saldos salvos. As solicitações de alteração recebidas são rejeitadas enquanto a reconstrução estiver em andamento.",
+    "confirm": "Reconstruir e aplicar"
+  },
+  "missingAccountConfirm": {
+    "title": "A conta não existe",
+    "description": "A conta {{account}} ainda não existe. Criá-la com as configurações padrão (sem grupo, sem moeda) e continuar?",
+    "confirm": "Criar conta e continuar"
+  },
+  "dialog": {
+    "editTitle": "Editar política",
+    "addTitle": "Adicionar política",
+    "policy": "Política",
+    "scope": "Escopo",
+    "account": "Conta",
+    "accountPlaceholder": "acc-1",
+    "accountGroup": "Grupo de contas",
+    "accountGroupPlaceholder": "desk-a",
+    "asset": "Ativo",
+    "assetPlaceholder": "AAPL",
+    "currencyPlaceholder": "USD",
+    "values": "Valores",
+    "rateLimitFootnote": "Tanto o máx. de ordens quanto a janela são obrigatórios.",
+    "atLeastOneFootnote": "É necessário pelo menos um valor.",
+    "pnlBoundsFootnote": "São necessários a moeda e pelo menos um piso ou teto de PnL.",
+    "fxFailSafeNote": "Proteção contra falha de FX: uma conta sob controle de PnL é bloqueada quando falta um dado obrigatório, por exemplo uma cotação FX necessária para avaliar o PnL realizado na moeda da conta. FX só é exigido quando necessário, não para ativos que já estão na moeda da conta nem para contas fora do controle de PnL.",
+    "save": "Salvar"
+  },
+  "duration": {
+    "amountPlaceholder": "ex.: 30",
+    "unit": {
+      "ms": "milissegundos",
+      "s": "segundos",
+      "m": "minutos",
+      "h": "horas"
+    },
+    "required": "Obrigatório.",
+    "invalid": "Duração inválida.",
+    "mustBePositive": "Deve ser maior que 0.",
+    "mustNotExceed24h": "Não pode exceder 24 horas."
+  }
+}

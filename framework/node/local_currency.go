@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 
 	"go.openpit.dev/openpit/asyncengine"
@@ -105,8 +106,10 @@ func (n *localNode) SetAccountCurrency(
 			state.err = n.auditCurrencyChangeRefusal(state.ctx, caller, store.AuditEntry{
 				Action:  domain.AuditActionSetAccountCurrency,
 				Account: account, AccountTitle: previous.Title,
-				Detail: currencyDetail("set account currency", account.String(), previous.Currency, currency),
-			}, domain.NewCurrencyChangeBlockedError(
+			}, domain.AuditDetailSetAccountCurrencyRefused, currencyDetailParams(
+				domain.AuditDetailParams{"account": account.String()},
+				previous.Currency, currency,
+			), domain.NewCurrencyChangeBlockedError(
 				domain.ScopeAccount, account.String(), guardErr,
 			))
 			return nil, state.err
@@ -135,11 +138,12 @@ func (n *localNode) SetAccountCurrency(
 			Action:       domain.AuditActionSetAccountCurrency,
 			Account:      account,
 			AccountTitle: state.previous.Title,
-			Detail: currencyDetail(
-				"set account currency",
-				account.String(),
-				state.previous.Currency,
-				currency,
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailSetAccountCurrency,
+				currencyDetailParams(
+					domain.AuditDetailParams{"account": account.String()},
+					state.previous.Currency, currency,
+				),
 			),
 		}); err != nil {
 			state.err = fmt.Errorf("audit account currency: %w", err)
@@ -261,8 +265,10 @@ func (n *localNode) ensureAccountCurrencyAssetRegisteredExclusive(
 		return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionSetAccountCurrency,
 			Account: account, AccountTitle: previous.Title,
-			Detail: currencyDetail("set account currency", account.String(), previous.Currency, currency),
-		}, domain.NewCurrencyChangeBlockedError(
+		}, domain.AuditDetailSetAccountCurrencyRefused, currencyDetailParams(
+			domain.AuditDetailParams{"account": account.String()},
+			previous.Currency, currency,
+		), domain.NewCurrencyChangeBlockedError(
 			domain.ScopeAccount, account.String(), err,
 		))
 	}
@@ -379,8 +385,9 @@ func (n *localNode) setGroupCurrency(
 			}
 			return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 				Action: domain.AuditActionSetGroupCurrency, Group: code,
-				Detail: currencyDetail("set group currency", code, prevCurrency, currency),
-			}, domain.NewCurrencyChangeBlockedError(
+			}, domain.AuditDetailSetGroupCurrencyRefused, currencyDetailParams(
+				domain.AuditDetailParams{"group": code}, prevCurrency, currency,
+			), domain.NewCurrencyChangeBlockedError(
 				domain.ScopeAccountGroup, code, err,
 			))
 		}
@@ -398,8 +405,9 @@ func (n *localNode) setGroupCurrency(
 			}
 			return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 				Action: domain.AuditActionSetGroupCurrency,
-				Detail: currencyDetail("set group currency", "default", prevCurrency, currency),
-			}, domain.NewCurrencyChangeBlockedError(
+			}, domain.AuditDetailSetDefaultGroupCurrencyRefused, currencyDetailParams(
+				nil, prevCurrency, currency,
+			), domain.NewCurrencyChangeBlockedError(
 				domain.ScopeAccountGroup, "-", err,
 			))
 		}
@@ -420,8 +428,12 @@ func (n *localNode) setGroupCurrency(
 		return fmt.Errorf("read group for currency: %w", err)
 	}
 	label := code
+	detailCode := domain.AuditDetailSetGroupCurrency
+	detailTarget := domain.AuditDetailParams{"group": code}
 	if defaultGroup {
 		label = "default"
+		detailCode = domain.AuditDetailSetDefaultGroupCurrency
+		detailTarget = nil
 	}
 	engineEntered := false
 	// persistFailure names the store step that failed after the engine changed
@@ -464,9 +476,9 @@ func (n *localNode) setGroupCurrency(
 			if err := n.audit(mutationCtx, caller, store.AuditEntry{
 				Action: domain.AuditActionSetGroupCurrency,
 				Group:  code,
-				Detail: currencyDetail(
-					"set group currency", label, current.Currency, currency,
-				),
+				Detail: domain.NewAuditDetail(detailCode, currencyDetailParams(
+					detailTarget, current.Currency, currency,
+				)),
 			}); err != nil {
 				return fmt.Errorf("audit group currency: %w", err)
 			}
@@ -531,8 +543,9 @@ func (n *localNode) validateGroupCurrencyChange(
 		}
 		return domain.AccountGroup{}, n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 			Action: domain.AuditActionSetGroupCurrency,
-			Detail: currencyDetail("set group currency", "default", current.Currency, currency),
-		}, domain.NewCurrencyChangeBlockedError(
+		}, domain.AuditDetailSetDefaultGroupCurrencyRefused, currencyDetailParams(
+			nil, current.Currency, currency,
+		), domain.NewCurrencyChangeBlockedError(
 			domain.ScopeAccountGroup, "-", guardErr,
 		))
 	}
@@ -545,8 +558,9 @@ func (n *localNode) validateGroupCurrencyChange(
 	}
 	return domain.AccountGroup{}, n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetGroupCurrency, Group: code,
-		Detail: currencyDetail("set group currency", code, current.Currency, currency),
-	}, domain.NewCurrencyChangeBlockedError(
+	}, domain.AuditDetailSetGroupCurrencyRefused, currencyDetailParams(
+		domain.AuditDetailParams{"group": code}, current.Currency, currency,
+	), domain.NewCurrencyChangeBlockedError(
 		domain.ScopeAccountGroup, code, guardErr,
 	))
 }
@@ -690,30 +704,35 @@ func (n *localNode) guardGroupDeleteCurrencyChange(
 }
 
 // auditCurrencyChangeRefusal records the attempted denomination change before
-// returning its business refusal. An audit failure is an operational error.
+// returning its business refusal. code is the refused variant of the change's
+// detail; params carry its values, and the refusal is added to them. An audit
+// failure is an operational error.
 func (n *localNode) auditCurrencyChangeRefusal(
-	ctx context.Context, caller domain.Caller, entry store.AuditEntry, refusal error,
+	ctx context.Context, caller domain.Caller, entry store.AuditEntry,
+	code domain.AuditDetailCode, params domain.AuditDetailParams, refusal error,
 ) error {
-	entry.Detail += fmt.Sprintf(" refused: %v", refusal)
+	params["refusal"] = refusal.Error()
+	entry.Detail = domain.NewAuditDetail(code, params)
 	if err := n.audit(context.WithoutCancel(ctx), caller, entry); err != nil {
 		return fmt.Errorf("audit refused currency change (%v): %w", refusal, err)
 	}
 	return refusal
 }
 
-func currencyDetail(prefix, target, before, after string) string {
-	return fmt.Sprintf(
-		"%s %s %s -> %s",
-		prefix,
-		target,
-		currencyValue(before),
-		currencyValue(after),
-	)
+// currencyDetailParams names both sides of a denomination change next to the
+// target values it applies to.
+func currencyDetailParams(target domain.AuditDetailParams, before, after string) domain.AuditDetailParams {
+	params := domain.AuditDetailParams{
+		"from": currencyValue(before),
+		"to":   currencyValue(after),
+	}
+	maps.Copy(params, target)
+	return params
 }
 
 func currencyValue(currency string) string {
 	if currency == "" {
-		return "<unset>"
+		return domain.AuditDetailUnset
 	}
 	return currency
 }

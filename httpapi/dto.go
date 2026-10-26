@@ -162,9 +162,14 @@ type auditDTO struct {
 	// Group is the structured group handle of a group action, so a reader
 	// selects a group's rows by identity instead of matching the free-form
 	// detail text, which a crafted group code can spoof.
-	Group  string `json:"group"`
-	Detail string `json:"detail"`
-	Source string `json:"source"`
+	Group string `json:"group"`
+	// Detail is the English line; DetailCode, DetailParams and DetailFields
+	// are what it was rendered from, for a reader that renders it itself.
+	Detail       string                   `json:"detail"`
+	DetailCode   string                   `json:"detailCode"`
+	DetailParams domain.AuditDetailParams `json:"detailParams"`
+	DetailFields domain.AuditDetailFields `json:"detailFields"`
+	Source       string                   `json:"source"`
 }
 
 // toStatusDTO maps a backend.Status onto the wire DTO.
@@ -249,7 +254,10 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 		AccountTitle: row.AccountTitle,
 		Asset:        row.Asset,
 		Group:        row.Group,
-		Detail:       row.Detail,
+		Detail:       row.Detail.Text,
+		DetailCode:   string(row.Detail.Code),
+		DetailParams: row.Detail.Params,
+		DetailFields: row.Detail.Fields,
 		Source:       string(row.Source),
 	}
 }
@@ -1150,11 +1158,14 @@ type countsDTO struct {
 
 // activityDTO is one recent-activity entry on the overview feed.
 type activityDTO struct {
-	At      time.Time `json:"at"`
-	Source  string    `json:"source"`
-	Kind    string    `json:"kind"`
-	Ref     string    `json:"ref"`
-	Summary string    `json:"summary"`
+	At            time.Time                `json:"at"`
+	Source        string                   `json:"source"`
+	Kind          string                   `json:"kind"`
+	Ref           string                   `json:"ref"`
+	Summary       string                   `json:"summary"`
+	SummaryCode   string                   `json:"summaryCode"`
+	SummaryParams domain.AuditDetailParams `json:"summaryParams"`
+	SummaryFields domain.AuditDetailFields `json:"summaryFields"`
 }
 
 // toOverviewDTO maps a backend.Overview onto the wire DTO.
@@ -1162,11 +1173,14 @@ func toOverviewDTO(o backend.Overview) overviewDTO {
 	activity := make([]activityDTO, 0, len(o.Activity))
 	for _, a := range o.Activity {
 		activity = append(activity, activityDTO{
-			At:      a.At,
-			Source:  string(a.Source),
-			Kind:    string(a.Kind),
-			Ref:     a.Ref,
-			Summary: a.Summary,
+			At:            a.At,
+			Source:        string(a.Source),
+			Kind:          string(a.Kind),
+			Ref:           a.Ref,
+			Summary:       a.Summary.Text,
+			SummaryCode:   string(a.Summary.Code),
+			SummaryParams: a.Summary.Params,
+			SummaryFields: a.Summary.Fields,
 		})
 	}
 	return overviewDTO{

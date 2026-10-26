@@ -25,6 +25,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,15 +48,54 @@ func seedAuditFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	return ctx, rs
 }
 
+func TestAuditDetailFieldsRoundTrip(t *testing.T) {
+	ctx, rs := seedAuditFixtures(t)
+
+	detail := domain.NewAuditDetail(domain.AuditDetailSetLimit,
+		domain.AuditDetailParams{"policy": domain.PolicyRateLimit, "scope": "account"},
+		domain.AuditDetailField{Name: "account", Value: "acc-1"},
+		domain.AuditDetailField{Name: "max_orders", Value: "100"},
+		domain.AuditDetailField{Name: "window", Value: "1s"},
+	)
+	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
+		Actor:   "operator",
+		Action:  domain.AuditActionSetLimit,
+		Account: "acc-1",
+		Detail:  detail,
+		Source:  domain.SourcePanel,
+	}); err != nil {
+		t.Fatalf("AppendAudit: %v", err)
+	}
+
+	rows, err := rs.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListAudit len = %d, want 1", len(rows))
+	}
+	// The tail reads back in the order it was written.
+	if !reflect.DeepEqual(rows[0].Detail, detail) {
+		t.Fatalf("detail = %+v, want %+v", rows[0].Detail, detail)
+	}
+}
+
 func TestAuditAppendListAndExternalID(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 
+	orderDetail := domain.NewAuditDetail(domain.AuditDetailSubmitOrderRejected, domain.AuditDetailParams{
+		"order":   "aW50ZWdyYXRpb24tYXVkaQ",
+		"account": "acc-1",
+		"base":    "AAPL",
+		"quote":   "USD",
+		"side":    string(domain.OrderSideBuy),
+	})
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Actor:   "operator",
 		Action:  domain.AuditActionSubmitOrder,
 		Account: "acc-1",
 		OrderID: "aW50ZWdyYXRpb24tYXVkaQ", Verdict: "reject", RejectCode: "order_qty_exceeds_limit",
-		Detail: "order rejected",
+		Detail: orderDetail,
 		Source: domain.SourcePanel,
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
@@ -63,7 +103,9 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 	// A system-initiated row with no account/actor.
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action: domain.AuditActionHydrate,
-		Detail: "boot",
+		Detail: domain.NewAuditDetail(domain.AuditDetailHydrate, domain.AuditDetailParams{
+			"assets": "0", "accounts": "0", "barriers": "0", "groups": "0", "balances": "0",
+		}),
 		Source: domain.SourceSystem,
 	}); err != nil {
 		t.Fatalf("AppendAudit(system): %v", err)
@@ -105,6 +147,10 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 	if control.Source != domain.SourcePanel {
 		t.Fatalf("control row source = %q, want panel", control.Source)
 	}
+	// The detail reads back with the code and values it was written with.
+	if !reflect.DeepEqual(control.Detail, orderDetail) {
+		t.Fatalf("control row detail = %+v, want %+v", control.Detail, orderDetail)
+	}
 	exact, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
 		ExternalID: control.ExternalID,
 		Page:       fwstore.PageSpec{Limit: 10},
@@ -113,7 +159,7 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 		t.Fatalf("ListAuditRows(external id): %v", err)
 	}
 	if len(exact.Rows) != 1 ||
-		exact.Rows[0] != control {
+		!reflect.DeepEqual(exact.Rows[0], control) {
 		t.Fatalf("external id page = %+v", exact.Rows)
 	}
 	system := rows[0]
@@ -272,12 +318,16 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 	err := rs.AppendAuditBatch(ctx, []fwstore.AuditEntry{
 		{
 			Action: domain.AuditActionCreateAccount,
-			Detail: "first row must roll back",
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "acc-1"},
+			),
 			Source: domain.SourcePanel,
 		},
 		{
 			Action: domain.AuditAction("unknown_action"),
-			Detail: "invalid second row",
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "acc-2"},
+			),
 			Source: domain.SourcePanel,
 		},
 	})
@@ -295,14 +345,18 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 	err = rs.AppendAuditBatch(ctx, []fwstore.AuditEntry{
 		{
 			Action: domain.AuditActionCreateAccount,
-			Detail: "first metadata row must roll back",
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "acc-1"},
+			),
 			Source: domain.SourcePanel,
 		},
 		{
 			Action:  domain.AuditActionCreateAccount,
 			OrderID: "decision-on-unrelated-action",
-			Detail:  "invalid decision metadata",
-			Source:  domain.SourcePanel,
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "acc-2"},
+			),
+			Source: domain.SourcePanel,
 		},
 	})
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -317,8 +371,12 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 	}
 
 	if err := rs.AppendAuditBatch(ctx, []fwstore.AuditEntry{
-		{Action: domain.AuditActionCreateAccount, Detail: "first", Source: domain.SourcePanel},
-		{Action: domain.AuditActionUpdateAccount, Detail: "second", Source: domain.SourcePanel},
+		{Action: domain.AuditActionCreateAccount, Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "acc-1"},
+		), Source: domain.SourcePanel},
+		{Action: domain.AuditActionUpdateAccount, Detail: domain.NewAuditDetail(
+			domain.AuditDetailUpdateAccount, domain.AuditDetailParams{"account": "acc-1"},
+		), Source: domain.SourcePanel},
 	}); err != nil {
 		t.Fatalf("AppendAuditBatch: %v", err)
 	}
@@ -511,29 +569,40 @@ func TestAuditAssetFilter(t *testing.T) {
 			t.Fatalf("AppendAudit(%s): %v", entry.Detail, err)
 		}
 	}
+	adjustmentDetail := func(asset string) domain.AuditDetail {
+		return domain.NewAuditDetail(domain.AuditDetailAdjustmentAccepted, domain.AuditDetailParams{
+			"account":        "acc-1",
+			"asset":          asset,
+			"adjustmentType": string(domain.AdjustmentTypeCorrection),
+		})
+	}
+	assetParams := domain.AuditDetailParams{"asset": "AAPL"}
 	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionAdjustment, Account: "acc-1", Asset: "AAPL",
-		Detail: "adjust AAPL",
+		Detail: adjustmentDetail("AAPL"),
 	})
 	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionCreateAsset, Asset: "AAPL",
-		Detail: "create asset AAPL",
+		Detail: domain.NewAuditDetail(domain.AuditDetailCreateAsset, assetParams),
 	})
 	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionUpdateAsset, Asset: "AAPL",
-		Detail: "update asset AAPL",
+		Detail: domain.NewAuditDetail(domain.AuditDetailUpdateAsset, assetParams),
 	})
 	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionDeleteAsset, Asset: "AAPL",
-		Detail: "delete asset AAPL",
+		Detail: domain.NewAuditDetail(domain.AuditDetailDeleteAsset, assetParams),
 	})
 	// Rows with no asset, or a different asset, must be excluded.
 	mustAppend(fwstore.AuditEntry{
-		Action: domain.AuditActionBlock, Account: "acc-1", Detail: "block acc-1",
+		Action: domain.AuditActionBlock, Account: "acc-1",
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailBlockAccount, domain.AuditDetailParams{"account": "acc-1"},
+		),
 	})
 	mustAppend(fwstore.AuditEntry{
 		Action: domain.AuditActionAdjustment, Account: "acc-1", Asset: "MSFT",
-		Detail: "adjust MSFT",
+		Detail: adjustmentDetail("MSFT"),
 	})
 
 	page, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
@@ -567,8 +636,10 @@ func TestAuditAccountFilterUsesImmutableCodeSnapshot(t *testing.T) {
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action:  domain.AuditActionBlock,
 		Account: "acc-1",
-		Detail:  "blocked before rename",
-		Source:  domain.SourcePanel,
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailBlockAccount, domain.AuditDetailParams{"account": "acc-1"},
+		),
+		Source: domain.SourcePanel,
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
@@ -620,30 +691,46 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 			t.Fatalf("AppendAudit(%s): %v", entry.Detail, err)
 		}
 	}
+	rowOld := domain.NewAuditDetail(
+		domain.AuditDetailBlockAccount, domain.AuditDetailParams{"account": "acc-2"},
+	)
+	rowMid := domain.NewAuditDetail(
+		domain.AuditDetailUnblockAccount, domain.AuditDetailParams{"account": "acc-1"},
+	)
+	rowNew := domain.NewAuditDetail(
+		domain.AuditDetailBlockAccount, domain.AuditDetailParams{"account": "acc-1"},
+	)
+	rowOther := domain.NewAuditDetail(domain.AuditDetailSubmitOrderCommitted, domain.AuditDetailParams{
+		"order":   "opaque-page-order",
+		"account": "acc-1",
+		"base":    "AAPL",
+		"quote":   "USD",
+		"side":    string(domain.OrderSideBuy),
+	})
 	mustAppend(fwstore.AuditEntry{
 		Actor: "operator", Action: domain.AuditActionBlock,
-		Account: "acc-2", Source: domain.SourcePanel, Detail: "row-old",
+		Account: "acc-2", Source: domain.SourcePanel, Detail: rowOld,
 	})
 	mustAppend(fwstore.AuditEntry{
 		Actor: "operator", Action: domain.AuditActionUnblock,
-		Account: "acc-1", Source: domain.SourcePanel, Detail: "row-mid",
+		Account: "acc-1", Source: domain.SourcePanel, Detail: rowMid,
 	})
 	mustAppend(fwstore.AuditEntry{
 		Actor: "operator", Action: domain.AuditActionBlock,
-		Account: "acc-1", Source: domain.SourcePanel, Detail: "row-new",
+		Account: "acc-1", Source: domain.SourcePanel, Detail: rowNew,
 	})
 	mustAppend(fwstore.AuditEntry{
 		Actor: "robot", Action: domain.AuditActionSubmitOrder,
-		Account: "acc-1", Source: domain.SourceMCP, Detail: "row-other",
+		Account: "acc-1", Source: domain.SourceMCP, Detail: rowOther,
 		OrderID: "opaque-page-order", Verdict: "accept",
 	})
 
 	r := rs.(*realmStore)
 	times := map[string]string{
-		"row-old":   "2026-01-01T00:00:00Z",
-		"row-mid":   "2026-01-02T00:00:00Z",
-		"row-new":   "2026-01-03T00:00:00Z",
-		"row-other": "2026-01-04T00:00:00Z",
+		rowOld.Text:   "2026-01-01T00:00:00Z",
+		rowMid.Text:   "2026-01-02T00:00:00Z",
+		rowNew.Text:   "2026-01-03T00:00:00Z",
+		rowOther.Text: "2026-01-04T00:00:00Z",
 	}
 	for detail, at := range times {
 		if _, err := r.rawDB().ExecContext(
@@ -669,8 +756,8 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 	if page.Total != 2 || len(page.Rows) != 1 {
 		t.Fatalf("page total/len = %d/%d, want 2/1", page.Total, len(page.Rows))
 	}
-	if page.Rows[0].Detail != "row-new" {
-		t.Fatalf("first row detail = %q, want row-new", page.Rows[0].Detail)
+	if page.Rows[0].Detail.Text != rowNew.Text {
+		t.Fatalf("first row detail = %q, want %q", page.Rows[0].Detail.Text, rowNew.Text)
 	}
 
 	second, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
@@ -689,7 +776,7 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 	if second.Total != 2 || len(second.Rows) != 1 {
 		t.Fatalf("second total/len = %d/%d, want 2/1", second.Total, len(second.Rows))
 	}
-	if second.Rows[0].Detail != "row-mid" {
+	if second.Rows[0].Detail.Text != rowMid.Text {
 		t.Fatalf("second page = %+v", second.Rows)
 	}
 }
@@ -714,10 +801,13 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 	// Populate a few thousand rows so the query planner's index choice is not an
 	// artifact of a near-empty table. One transaction keeps fixture preparation
 	// from performing thousands of separate durable commits on Windows.
+	bulk := domain.NewAuditDetail(
+		domain.AuditDetailBlockAccount, domain.AuditDetailParams{"account": "acc-1"},
+	)
 	for i := 0; i < 4000; i++ {
 		if err := appendAudit(ctx, tx, dictionaries, fwstore.AuditEntry{
 			Actor: "operator", Action: domain.AuditActionBlock,
-			Account: "acc-1", Source: domain.SourcePanel, Detail: "bulk",
+			Account: "acc-1", Source: domain.SourcePanel, Detail: bulk,
 		}); err != nil {
 			t.Fatalf("AppendAudit(%d): %v", i, err)
 		}
@@ -830,13 +920,17 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 
+	blocked := domain.NewAuditDetail(
+		domain.AuditDetailBlockAccountReason,
+		domain.AuditDetailParams{"account": "acc-1", "reason": "blocked then deleted"},
+	)
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Actor:        "operator",
 		ActorTitle:   "Snapshot Operator",
 		Action:       domain.AuditActionBlock,
 		Account:      "acc-1",
 		AccountTitle: "Snapshot Account",
-		Detail:       "blocked then deleted",
+		Detail:       blocked,
 		Source:       domain.SourcePanel,
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
@@ -871,7 +965,7 @@ func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
 	}
 	// The action and detail are untouched - the compliance content survives.
 	if after[0].Action != domain.AuditActionBlock ||
-		after[0].Detail != "blocked then deleted" ||
+		!reflect.DeepEqual(after[0].Detail, blocked) ||
 		after[0].Source != domain.SourcePanel {
 		t.Fatalf("audit content after delete = %+v", after[0])
 	}

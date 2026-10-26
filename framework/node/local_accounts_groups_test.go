@@ -935,11 +935,11 @@ func TestLocalNode_ReblockOperatorAccountReplacesReasonAndAudits(t *testing.T) {
 	}
 	details := make([]string, 0, len(rows))
 	for _, row := range rows {
-		details = append(details, row.Detail)
+		details = append(details, row.Detail.Text)
 	}
 	for _, want := range []string{
-		"block account acc-1: first operator reason",
-		"block account acc-1: replacement operator reason",
+		"Account acc-1 blocked: first operator reason",
+		"Account acc-1 blocked: replacement operator reason",
 	} {
 		if !slices.Contains(details, want) {
 			t.Fatalf("audit details = %v, want %q", details, want)
@@ -1043,15 +1043,15 @@ func TestLocalNode_BlockAccountAuditRecordsReason(t *testing.T) {
 	}
 	details := make([]string, 0, len(rows))
 	for _, row := range rows {
-		details = append(details, row.Detail)
+		details = append(details, row.Detail.Text)
 	}
-	if !slices.Contains(details, "block account acc-1: margin breach") {
+	if !slices.Contains(details, "Account acc-1 blocked: margin breach") {
 		t.Fatalf("first block reason lost from the trail: %v", details)
 	}
-	if !slices.Contains(details, "block account acc-1: suspected fraud") {
+	if !slices.Contains(details, "Account acc-1 blocked: suspected fraud") {
 		t.Fatalf("second block reason missing from the trail: %v", details)
 	}
-	if !slices.Contains(details, "unblock account acc-1") {
+	if !slices.Contains(details, "Account acc-1 unblocked") {
 		t.Fatalf("reasonless unblock must keep the bare form: %v", details)
 	}
 }
@@ -1085,16 +1085,16 @@ func TestLocalNode_BlockGroupAuditRecordsReasonAndGroup(t *testing.T) {
 		t.Fatalf("ListAuditRows: %v", err)
 	}
 	wantDetails := []string{
-		"unblock group desk-a",
-		"block group desk-a: desk over limit",
-		"create group desk-a",
+		"Group desk-a unblocked",
+		"Group desk-a blocked: desk over limit",
+		"Group desk-a created",
 	}
 	got := make([]string, 0, len(page.Rows))
 	for _, row := range page.Rows {
 		if row.Group != "desk-a" {
 			t.Fatalf("row %+v leaked into the desk-a filter", row)
 		}
-		got = append(got, row.Detail)
+		got = append(got, row.Detail.Text)
 	}
 	if !slices.Equal(got, wantDetails) {
 		t.Fatalf("desk-a audit rows = %v, want %v", got, wantDetails)
@@ -1108,7 +1108,7 @@ func TestLocalNode_BlockGroupAuditRecordsReasonAndGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditRows for group a: %v", err)
 	}
-	if len(page.Rows) != 1 || page.Rows[0].Detail != "create group a" {
+	if len(page.Rows) != 1 || page.Rows[0].Detail.Text != "Group a created" {
 		t.Fatalf("group a audit rows = %+v, want only its own create row", page.Rows)
 	}
 }
@@ -1168,10 +1168,10 @@ func TestLocalNode_UpdateGroupAuditFilesRenameUnderBothCodes(t *testing.T) {
 		t.Fatalf("UpdateGroup: %v", err)
 	}
 
-	const wantDetail = "update group desk-old -> desk-new"
+	const wantDetail = "Group desk-old → desk-new updated"
 	for _, code := range []string{"desk-old", "desk-new"} {
 		rows := auditGroupRows(t, ctx, st, code, domain.AuditActionUpdateGroup)
-		if len(rows) != 1 || rows[0].Detail != wantDetail {
+		if len(rows) != 1 || rows[0].Detail.Text != wantDetail {
 			t.Fatalf("update rows under %q = %+v, want one %q", code, rows, wantDetail)
 		}
 	}
@@ -1204,7 +1204,7 @@ func TestLocalNode_UpdateGroupTitleOnlyAuditsOnce(t *testing.T) {
 
 	rows := auditActionRows(t, ctx, st, domain.AuditActionUpdateGroup)
 	if len(rows) != 1 || rows[0].Group != "desk-a" ||
-		rows[0].Detail != "update group desk-a" {
+		rows[0].Detail.Text != "Group desk-a updated" {
 		t.Fatalf("update rows = %+v, want one row filed under desk-a", rows)
 	}
 }
@@ -1240,10 +1240,10 @@ func TestLocalNode_SetAccountGroupAuditFilesMoveUnderBothGroups(t *testing.T) {
 		t.Fatalf("SetAccountGroup: %v", err)
 	}
 
-	const wantDetail = "set group account acc-1 from=desk-a to=desk-b"
+	const wantDetail = "Account acc-1 group changed: desk-a → desk-b"
 	for _, code := range []string{"desk-a", "desk-b"} {
 		rows := auditGroupRows(t, ctx, st, code, domain.AuditActionSetGroup)
-		if len(rows) != 1 || rows[0].Detail != wantDetail {
+		if len(rows) != 1 || rows[0].Detail.Text != wantDetail {
 			t.Fatalf("set-group rows under %q = %+v, want one %q", code, rows, wantDetail)
 		}
 		if rows[0].Account != id || rows[0].AccountTitle != "desk account" {
@@ -1282,8 +1282,8 @@ func TestLocalNode_SetAccountGroupAuditFilesOpenEndedMoveOnce(t *testing.T) {
 		t.Fatalf("SetAccountGroup join: %v", err)
 	}
 	rows := auditActionRows(t, ctx, st, domain.AuditActionSetGroup)
-	wantJoin := "set group account acc-1 from=<none> to=desk-a"
-	if len(rows) != 1 || rows[0].Group != "desk-a" || rows[0].Detail != wantJoin {
+	wantJoin := "Account acc-1 group changed: <none> → desk-a"
+	if len(rows) != 1 || rows[0].Group != "desk-a" || rows[0].Detail.Text != wantJoin {
 		t.Fatalf("join rows = %+v, want one desk-a row %q", rows, wantJoin)
 	}
 
@@ -1293,9 +1293,9 @@ func TestLocalNode_SetAccountGroupAuditFilesOpenEndedMoveOnce(t *testing.T) {
 		t.Fatalf("SetAccountGroup leave: %v", err)
 	}
 	rows = auditActionRows(t, ctx, st, domain.AuditActionSetGroup)
-	wantLeave := "set group account acc-1 from=desk-a to=<none>"
+	wantLeave := "Account acc-1 group changed: desk-a → <none>"
 	// Newest first: the leave precedes the join in the listing.
-	if len(rows) != 2 || rows[0].Group != "desk-a" || rows[0].Detail != wantLeave {
+	if len(rows) != 2 || rows[0].Group != "desk-a" || rows[0].Detail.Text != wantLeave {
 		t.Fatalf("leave rows = %+v, want one more desk-a row %q", rows, wantLeave)
 	}
 	for _, row := range rows {

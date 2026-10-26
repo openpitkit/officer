@@ -229,11 +229,11 @@ func TestLocalNode_ApplyAdjustmentAuditCarriesTypeAndSuppliedID(t *testing.T) {
 	}
 	details := make([]string, 0, len(rows))
 	for _, row := range rows {
-		details = append(details, row.Detail)
+		details = append(details, row.Detail.Text)
 	}
 	for _, want := range []string{
-		"adjustment account acc-1 asset=USD type=venue_fee id=trading:conn-1:fee:F-1 accepted",
-		"adjustment account acc-1 asset=USD type=deposit accepted",
+		"Adjustment for account acc-1, asset USD, type venue_fee, ID trading:conn-1:fee:F-1: accepted",
+		"Adjustment for account acc-1, asset USD, type deposit: accepted",
 	} {
 		if !slices.Contains(details, want) {
 			t.Fatalf("audit details = %q, want %q", details, want)
@@ -523,7 +523,7 @@ func TestLocalNode_SetBalanceRealizedPnlPersistsAdjustmentRecord(t *testing.T) {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
 	if len(rows) != 1 ||
-		rows[0].Detail != "adjustment account acc-1 asset=USD type=correction accepted" {
+		rows[0].Detail.Text != "Adjustment for account acc-1, asset USD, type correction: accepted" {
 		t.Fatalf("audit rows = %+v, want engine adjustment detail", rows)
 	}
 }
@@ -1001,7 +1001,7 @@ func TestLocalNode_ApplyAdjustmentRejectedIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "rejected") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "rejected") {
 		t.Fatalf("audit rows = %+v, want one rejected adjustment", rows)
 	}
 
@@ -1110,7 +1110,7 @@ func TestLocalNode_ApplyAdjustmentAutoCreateThenReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "rejected") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "rejected") {
 		t.Fatalf("audit rows = %+v, want one rejected adjustment", rows)
 	}
 }
@@ -1184,7 +1184,7 @@ func TestLocalNode_ApplyAdjustmentAutoCreatesUnknownAsset(t *testing.T) {
 	}
 	if len(createRows) != 1 ||
 		createRows[0].Asset != "GOLD" ||
-		!strings.Contains(createRows[0].Detail, "auto-created asset GOLD by adjustment") {
+		!strings.Contains(createRows[0].Detail.Text, "Asset GOLD created automatically by adjustment") {
 		t.Fatalf("create-asset audit rows = %+v, want one for GOLD", createRows)
 	}
 }
@@ -1239,7 +1239,7 @@ func TestLocalNode_ApplyAdjustmentAutoCreateAssetThenReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "rejected") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "rejected") {
 		t.Fatalf("audit rows = %+v, want one rejected adjustment", rows)
 	}
 }

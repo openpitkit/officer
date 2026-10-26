@@ -1126,7 +1126,10 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"at":            "At",
 			"action_id":     "Action",
 			"source_id":     "Source",
-			"detail":        "Detail",
+			"detail":        "Detail.Text",
+			"detail_code":   "Detail.Code",
+			"detail_params": "Detail.Params",
+			"detail_fields": "Detail.Fields",
 		},
 	},
 	"market_data_instance": {
@@ -1820,8 +1823,14 @@ func seedClientDataDriftRealm(
 		AccountTitle: "Account Sentinel",
 		Asset:        "USD",
 		Group:        "grp-1",
-		Detail:       "audit detail sentinel",
-		Source:       domain.SourcePanel,
+		Detail: domain.NewAuditDetail(domain.AuditDetailSubmitOrderRejected, domain.AuditDetailParams{
+			"order":   order.ExternalID.String(),
+			"account": "acc-1",
+			"base":    "AAPL",
+			"quote":   "USD",
+			"side":    string(domain.OrderSideBuy),
+		}, domain.AuditDetailField{Name: "account_group", Value: "grp-1"}),
+		Source: domain.SourcePanel,
 	}))
 	inst, err := rs.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
 		ExternalID:  "md-instance-sentinel-1",

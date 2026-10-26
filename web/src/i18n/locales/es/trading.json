@@ -1,0 +1,86 @@
+{
+  "unknownVenue": "Plataforma desconocida {{provider}}",
+  "empty": {
+    "description": "Configure una conexión de negociación para enviar órdenes a una plataforma."
+  },
+  "missingProvider": "El proveedor {{provider}} no figura en la instantánea de negociación.",
+  "mode": {
+    "paper": "Simulado",
+    "live": "Real"
+  },
+  "state": {
+    "running": "En ejecución",
+    "degraded": "Degradado",
+    "unavailable": "No disponible",
+    "stopped": "Detenido"
+  },
+  "connection": {
+    "enabled": "Habilitada",
+    "disabled": "Deshabilitada",
+    "apiKeyStored": "API key: guardada",
+    "apiKeyNotSet": "API key: sin definir",
+    "apiSecretStored": "API secret: guardado",
+    "apiSecretNotSet": "API secret: sin definir"
+  },
+  "actions": {
+    "addConnection": "Añadir conexión de negociación",
+    "check": "Comprobar conexión"
+  },
+  "create": {
+    "title": "Añadir conexión {{provider}}",
+    "chooseVenue": "Elegir plataforma",
+    "prepareAccount": "Prepare su cuenta de {{provider}}",
+    "mode": "Modo",
+    "liveNote": "La negociación real todavía no está disponible: llegará junto con el token de conexión real.",
+    "alpaca": {
+      "createAccount": "Cree una cuenta de Alpaca.",
+      "signUp": "Registrarse en Alpaca",
+      "logIn": "Iniciar sesión",
+      "openPaperAccount": "Abra su cuenta de negociación simulada: en el panel de Alpaca, cambie el selector de cuenta de la parte superior a Paper Trading. Alpaca ofrece a cada cuenta una cuenta simulada con fondos ficticios.",
+      "openDashboard": "Abrir el panel de Alpaca",
+      "aboutPaperTrading": "Acerca de la negociación simulada",
+      "generateKeys": "Genere claves de API simuladas: con Paper Trading seleccionado, busque el panel API Keys en el panel de Alpaca y haga clic en Generate New Key. Copie la API key y el secreto - Alpaca muestra el secreto una sola vez. Las claves simuladas solo funcionan con la cuenta simulada.",
+      "keepDashboardOpen": "Mantenga abierto el panel de Alpaca - los campos de abajo piden ambos valores."
+    }
+  },
+  "setup": {
+    "title": "Lista de configuración",
+    "goToStep": "Ir al paso: {{step}}",
+    "done": "Hecho",
+    "notDone": "Pendiente"
+  },
+  "check": {
+    "result": "Cuenta en la plataforma {{id}} · estado {{status}}"
+  },
+  "settings": {
+    "description": "Deje los campos vacíos para conservar los valores guardados."
+  },
+  "instruments": {
+    "title": "Instrumentos",
+    "deleteDescription": "{{symbol}} se eliminará de {{label}}.",
+    "assetMissing": "El activo {{asset}} no existe en Officer. Officer no crea activos de forma implícita; créelo para guardar el instrumento.",
+    "createAssetAndSave": "Crear el activo {{asset}} y guardar",
+    "connectionDisabled": "Conexión deshabilitada"
+  },
+  "search": {
+    "label": "Resolver el símbolo en esta plataforma",
+    "empty": "No hay símbolos coincidentes en esta plataforma",
+    "unavailable": "Esta plataforma no puede resolver símbolos",
+    "notTradable": "No negociable",
+    "placeholder": "Escriba BTC, BTC/USD o AAPL"
+  },
+  "verify": {
+    "unavailable": "Verificación no disponible"
+  },
+  "access": {
+    "title": "Acceso de cuentas",
+    "grantTo": "Conceder a",
+    "inherited": "Heredado del grupo de la cuenta. El acceso del grupo se gestiona en el modo multicuenta."
+  },
+  "fee": {
+    "title": "Cuenta de comisiones",
+    "description": "Las comisiones de {{provider}} no están vinculadas a órdenes. En una conexión compartida por varias cuentas, todas se registran en esta cuenta.",
+    "notSet": "Sin definir",
+    "createAndUse": "Crear la cuenta {{code}} y usarla"
+  }
+}

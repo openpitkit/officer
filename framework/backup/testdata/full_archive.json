@@ -1,7 +1,7 @@
 {
   "credentialForm": "plaintext",
   "manifest": {
-    "formatVersion": 5,
+    "formatVersion": 6,
     "createdAt": "2026-06-22T10:00:00Z",
     "source": "fixture",
     "realm": {
@@ -161,7 +161,11 @@
         "Actor": "",
         "Action": "create_account",
         "Account": "acc-1",
-        "Detail": "",
+        "Detail": {
+          "Code": "create_account",
+          "Params": { "account": "acc-1" },
+          "Text": "Account acc-1 created"
+        },
         "Source": "panel"
       }
     ],

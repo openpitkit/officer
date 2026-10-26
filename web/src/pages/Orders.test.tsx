@@ -2138,7 +2138,7 @@ describe("Order detail account block placement", () => {
 
     expect(fillEvent).not.toBeNull();
     expect(
-      within(fillEvent as HTMLElement).getByText("fill"),
+      within(fillEvent as HTMLElement).getByText("Fill"),
     ).toBeInTheDocument();
 
     const orderFields = within(dialog).getByText("Account").closest(".grid");
@@ -2971,7 +2971,7 @@ describe("Execution report leaves contract", () => {
     const row = screen.getByText(order.id).closest("tr");
     expect(row).not.toBeNull();
     expect(
-      within(row as HTMLElement).getByText("partially_filled"),
+      within(row as HTMLElement).getByText("Partially filled"),
     ).toBeInTheDocument();
 
     await user.click(screen.getByText(order.id));
@@ -2987,18 +2987,18 @@ describe("Execution report leaves contract", () => {
     await waitFor(() => expect(swapToResolved).toHaveBeenCalled());
     await waitFor(() =>
       expect(
-        within(row as HTMLElement).getByText("committed"),
+        within(row as HTMLElement).getByText("Committed"),
       ).toBeInTheDocument(),
     );
     expect(
-      within(row as HTMLElement).queryByText("filled"),
+      within(row as HTMLElement).queryByText("Filled"),
     ).not.toBeInTheDocument();
     await waitFor(() => expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2));
     await user.click(screen.getByRole("button", { name: "Done" }));
     expect(
       within(
         screen.getByRole("dialog", { name: `Order ${order.id}` }),
-      ).getByText("committed"),
+      ).getByText("Committed"),
     ).toBeInTheDocument();
   });
 
@@ -4921,7 +4921,9 @@ describe("Order detail venue section", () => {
     expect(
       within(detail).queryByText(/Loading order details/),
     ).not.toBeInTheDocument();
-    expect(within(detail).getByText("Filled")).toBeInTheDocument();
+    expect(
+      within(detail).getByText("Venue status").parentElement,
+    ).toHaveTextContent("Filled");
     expect(verification).toBeInTheDocument();
     await waitFor(() => expect(clearIntervalSpy).toHaveBeenCalledWith(1));
 

@@ -56,7 +56,11 @@ func (n *localNode) CreateTradingConnection(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetTrading,
-		Detail: fmt.Sprintf("create trading connection %s (%s, %s)", created.ExternalID, created.Provider, created.Mode),
+		Detail: domain.NewAuditDetail(domain.AuditDetailCreateTradingConnection, domain.AuditDetailParams{
+			"connection":     created.ExternalID.String(),
+			"provider":       string(created.Provider),
+			"connectionMode": string(created.Mode),
+		}),
 	}); err != nil {
 		return domain.TradingConnection{}, fmt.Errorf("audit create trading connection: %w", err)
 	}
@@ -76,7 +80,10 @@ func (n *localNode) UpdateTradingConnectionSettings(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetTrading,
-		Detail: fmt.Sprintf("update trading connection settings %s", id),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailUpdateTradingConnectionSettings,
+			domain.AuditDetailParams{"connection": id.String()},
+		),
 	}); err != nil {
 		return fmt.Errorf("audit update trading connection settings: %w", err)
 	}
@@ -138,7 +145,10 @@ func (n *localNode) UpsertTradingInstrument(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetTrading,
-		Detail: fmt.Sprintf("upsert trading instrument %s/%s", instrument.Connection, instrument.ExternalSymbol),
+		Detail: domain.NewAuditDetail(domain.AuditDetailUpsertTradingInstrument, domain.AuditDetailParams{
+			"connection": instrument.Connection.String(),
+			"symbol":     instrument.ExternalSymbol,
+		}),
 	}); err != nil {
 		return fmt.Errorf("audit upsert trading instrument: %w", err)
 	}
@@ -168,7 +178,10 @@ func (n *localNode) DeleteTradingInstrument(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetTrading,
-		Detail: fmt.Sprintf("delete trading instrument %s/%s", connection, externalSymbol),
+		Detail: domain.NewAuditDetail(domain.AuditDetailDeleteTradingInstrument, domain.AuditDetailParams{
+			"connection": connection.String(),
+			"symbol":     externalSymbol,
+		}),
 	}); err != nil {
 		return fmt.Errorf("audit delete trading instrument: %w", err)
 	}
@@ -225,7 +238,7 @@ func (n *localNode) PutTradingAccess(
 	if err := n.realm.PutTradingAccess(ctx, access); err != nil {
 		return fmt.Errorf("put trading access: %w", err)
 	}
-	if err := n.audit(ctx, caller, tradingAccessAudit("put", access)); err != nil {
+	if err := n.audit(ctx, caller, tradingAccessAudit(true, access)); err != nil {
 		return fmt.Errorf("audit put trading access: %w", err)
 	}
 	return nil
@@ -252,14 +265,14 @@ func (n *localNode) SetTradingConnectionFeeAccount(
 	defer n.endMutation()
 
 	auditAccount := account
-	detail := fmt.Sprintf("set trading connection fee account %s", connection)
+	detailCode := domain.AuditDetailSetTradingFeeAccount
 	if account == "" {
 		previous, accounts, err := n.realm.GetTradingFeeAccounts(ctx, connection)
 		if err != nil {
 			return fmt.Errorf("read trading connection fee accounts: %w", err)
 		}
 		auditAccount = previous
-		detail = fmt.Sprintf("clear trading connection fee account %s", connection)
+		detailCode = domain.AuditDetailClearTradingFeeAccount
 		if len(accounts) > 1 {
 			return domain.ErrFeeAccountRequired
 		}
@@ -279,7 +292,9 @@ func (n *localNode) SetTradingConnectionFeeAccount(
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetTrading,
 		Account: auditAccount,
-		Detail:  detail,
+		Detail: domain.NewAuditDetail(
+			detailCode, domain.AuditDetailParams{"connection": connection.String()},
+		),
 	}); err != nil {
 		return fmt.Errorf("audit set trading connection fee account: %w", err)
 	}
@@ -297,7 +312,11 @@ func (n *localNode) RecordVenueFeeSkipped(
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionVenueFeeSkipped,
-		Detail: fmt.Sprintf("venue fee skipped connection %s fee %s: %s", connection, feeID, reason),
+		Detail: domain.NewAuditDetail(domain.AuditDetailVenueFeeSkipped, domain.AuditDetailParams{
+			"connection": connection.String(),
+			"fee":        feeID,
+			"reason":     reason,
+		}),
 	}); err != nil {
 		return fmt.Errorf("audit venue fee skipped: %w", err)
 	}
@@ -347,7 +366,7 @@ func (n *localNode) RemoveTradingAccess(
 	if err := n.realm.RemoveTradingAccess(ctx, connection, account, accountGroup); err != nil {
 		return fmt.Errorf("remove trading access: %w", err)
 	}
-	if err := n.audit(ctx, caller, tradingAccessAudit("remove", domain.TradingAccess{
+	if err := n.audit(ctx, caller, tradingAccessAudit(false, domain.TradingAccess{
 		Account: account, AccountGroup: accountGroup, Connection: connection,
 	})); err != nil {
 		return fmt.Errorf("audit remove trading access: %w", err)
@@ -387,18 +406,27 @@ func (n *localNode) otherGrantsReachAnAccount(
 // tradingAccessAudit describes a grant change. The entry's Account or Group is
 // the structured subject; the detail names it by its subject label, so a group
 // grant does not read as an account grant.
-func tradingAccessAudit(verb string, access domain.TradingAccess) store.AuditEntry {
-	detail := fmt.Sprintf(
-		"%s trading access %s/%s", verb, access.Connection, access.SubjectLabel(),
-	)
+func tradingAccessAudit(put bool, access domain.TradingAccess) store.AuditEntry {
+	params := domain.AuditDetailParams{
+		"connection": access.Connection.String(),
+		"subject":    access.SubjectLabel(),
+	}
+	code := domain.AuditDetailRemoveTradingAccess
+	if put {
+		code = domain.AuditDetailPutTradingAccess
+	}
 	if access.VenueAccount != "" {
-		detail += "/" + access.VenueAccount
+		params["venueAccount"] = access.VenueAccount
+		code = domain.AuditDetailRemoveTradingAccessVenueAccount
+		if put {
+			code = domain.AuditDetailPutTradingAccessVenueAccount
+		}
 	}
 	return store.AuditEntry{
 		Action:  domain.AuditActionSetTrading,
 		Account: access.Account,
 		Group:   access.AccountGroup,
-		Detail:  detail,
+		Detail:  domain.NewAuditDetail(code, params),
 	}
 }
 
@@ -472,10 +500,10 @@ func (n *localNode) EarliestVenueOrderTime(
 	return value, ok, nil
 }
 
-func tradingConnectionToggleDetail(id domain.ExternalID, enabled bool) string {
-	state := "disable"
+func tradingConnectionToggleDetail(id domain.ExternalID, enabled bool) domain.AuditDetail {
+	code := domain.AuditDetailDisableTradingConnection
 	if enabled {
-		state = "enable"
+		code = domain.AuditDetailEnableTradingConnection
 	}
-	return fmt.Sprintf("%s trading connection %s", state, id)
+	return domain.NewAuditDetail(code, domain.AuditDetailParams{"connection": id.String()})
 }

@@ -1,0 +1,90 @@
+{
+  "policyLabel": {
+    "rate_limit": "Limite de frequência",
+    "order_size_limit": "Limite de tamanho de ordem",
+    "spot_funds_pnl_bounds_kill_switch": "Interruptor de emergência por PnL"
+  },
+  "scope": {
+    "broker": "Corretora",
+    "global": "Global",
+    "asset": "Ativo",
+    "account": "Conta",
+    "account_group": "Grupo de contas",
+    "account_asset": "Conta + ativo",
+    "underlying_asset": "Ativo-objeto",
+    "settlement_asset": "Ativo de liquidação",
+    "account_underlying_asset": "Conta + ativo-objeto",
+    "account_settlement_asset": "Conta + ativo de liquidação"
+  },
+  "adjustmentType": {
+    "venue_fee": "Taxa da plataforma",
+    "deposit": "Depósito",
+    "withdrawal": "Retirada",
+    "correction": "Correção manual"
+  },
+  "kindHint": {
+    "rate_limit": {
+      "max_orders": "inteiro > 0, <= 1e9",
+      "window": "duração no formato Go, > 0, <= 24h (por exemplo, 1s, 500ms)"
+    },
+    "order_size_limit": {
+      "max_quantity": "número decimal positivo",
+      "max_notional": "número decimal positivo"
+    },
+    "spot_funds_pnl_bounds_kill_switch": {
+      "currency": "código do ativo",
+      "lower_bound": "número decimal",
+      "upper_bound": "número decimal"
+    }
+  },
+  "policy": {
+    "rate_limit": {
+      "label": "Limite de frequência",
+      "description": "Conta as tentativas de envio de ordens dentro de uma janela de tempo e rejeita rajadas acima do máximo. Tentativas rejeitadas também contam, portanto novas tentativas não podem contorná-lo."
+    },
+    "order_size_limit": {
+      "label": "Limite de tamanho de ordem",
+      "description": "Limita o tamanho de uma única ordem por quantidade e por valor nocional para evitar erros de digitação."
+    },
+    "spot_funds_pnl_bounds_kill_switch": {
+      "label": "Interruptor de emergência por PnL",
+      "description": "Usa o PnL realizado calculado pelo motor na moeda da conta, líquido da comissão opcional informada. Se faltar um dado obrigatório, por exemplo uma cotação FX necessária para avaliar o PnL realizado na moeda da conta, o motor bloqueia as contas sob controle de PnL porque não pode garantir o limite. FX só é exigido quando necessário: não para ativos que já estão na moeda da conta nem para contas fora do controle de PnL."
+    }
+  },
+  "policyField": {
+    "rate_limit": {
+      "max_orders": {
+        "label": "máx. de ordens",
+        "hint": "inteiro maior que 0"
+      },
+      "window": {
+        "label": "janela",
+        "hint": "duração de até 24h, por exemplo 1s, 500ms"
+      }
+    },
+    "order_size_limit": {
+      "max_quantity": {
+        "label": "quantidade máx.",
+        "hint": "número decimal positivo"
+      },
+      "max_notional": {
+        "label": "nocional máx.",
+        "hint": "número decimal positivo"
+      }
+    },
+    "spot_funds_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "moeda",
+        "hint": "código do ativo, por exemplo USD"
+      },
+      "lower_bound": {
+        "label": "piso",
+        "hint": "número decimal, por exemplo -1000"
+      },
+      "upper_bound": {
+        "label": "teto",
+        "hint": "número decimal, por exemplo 500"
+      }
+    }
+  }
+}

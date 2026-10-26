@@ -55,17 +55,17 @@ func TestLocalNode_UpdateAccountAuditFilesRenameUnderBothCodes(t *testing.T) {
 	}{
 		{
 			code: "account-old", title: "Before",
-			detail: "update account account-old -> account-new (record under old code)",
+			detail: "Account account-old → account-new updated (record under the old code)",
 		},
 		{
 			code: "account-new", title: "After",
-			detail: "update account account-old -> account-new (record under new code)",
+			detail: "Account account-old → account-new updated (record under the new code)",
 		},
 	}
 	for _, want := range wants {
 		rows := accountUpdateAuditRows(t, ctx, realm, want.code)
 		if len(rows) != 1 || rows[0].Account != want.code ||
-			rows[0].AccountTitle != want.title || rows[0].Detail != want.detail {
+			rows[0].AccountTitle != want.title || rows[0].Detail.Text != want.detail {
 			t.Fatalf("update rows under %q = %+v", want.code, rows)
 		}
 	}
@@ -75,7 +75,7 @@ func TestLocalNode_UpdateAccountAuditFilesRenameUnderBothCodes(t *testing.T) {
 	}
 	for _, want := range wants {
 		rows := accountUpdateAuditRows(t, ctx, realm, want.code)
-		if len(rows) != 1 || rows[0].Detail != want.detail {
+		if len(rows) != 1 || rows[0].Detail.Text != want.detail {
 			t.Fatalf("surviving update rows under %q = %+v", want.code, rows)
 		}
 	}
@@ -105,7 +105,7 @@ func TestLocalNode_UpdateAccountTitleOnlyAuditsOnce(t *testing.T) {
 
 	rows := accountUpdateAuditRows(t, ctx, realm, created.Code)
 	if len(rows) != 1 || rows[0].AccountTitle != "After" ||
-		rows[0].Detail != "update account account-a" {
+		rows[0].Detail.Text != "Account account-a updated" {
 		t.Fatalf("title-only update rows = %+v", rows)
 	}
 }

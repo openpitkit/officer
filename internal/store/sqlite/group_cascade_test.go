@@ -63,8 +63,10 @@ func TestDeleteGroupDetachesMembersAndPreservesHistory(t *testing.T) {
 		Account:      "member",
 		AccountTitle: "Member Snapshot",
 		Group:        "owned",
-		Detail:       "member audit survives group deletion",
-		Source:       domain.SourcePanel,
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "member"},
+		),
+		Source: domain.SourcePanel,
 	}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
@@ -73,8 +75,10 @@ func TestDeleteGroupDetachesMembersAndPreservesHistory(t *testing.T) {
 		Account:      "outside",
 		AccountTitle: "Outside Snapshot",
 		Group:        "retained",
-		Detail:       "outside audit survives group deletion",
-		Source:       domain.SourcePanel,
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateAccount, domain.AuditDetailParams{"account": "outside"},
+		),
+		Source: domain.SourcePanel,
 	}); err != nil {
 		t.Fatalf("AppendAudit(outside): %v", err)
 	}

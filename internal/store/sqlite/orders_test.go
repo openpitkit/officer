@@ -2178,7 +2178,11 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 				Account: "acc-1",
 				Asset:   "USD",
 				Source:  domain.SourcePanel,
-				Detail:  "set balance realized_pnl account acc-1 asset=USD realized_pnl=10",
+				Detail: domain.NewAuditDetail(domain.AuditDetailAdjustmentAccepted, domain.AuditDetailParams{
+					"account":        "acc-1",
+					"asset":          "USD",
+					"adjustmentType": string(domain.AdjustmentTypeCorrection),
+				}),
 			},
 		})
 		done <- err

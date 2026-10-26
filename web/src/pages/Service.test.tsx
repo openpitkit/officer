@@ -1226,6 +1226,8 @@ describe("BackupCard", () => {
     ["en", "Trading connections"],
     ["ru", "Торговые подключения"],
     ["zh-CN", "交易连接"],
+    ["es", "Conexiones de negociación"],
+    ["pt-BR", "Conexões de negociação"],
   ])(
     "renders restored connection labels as plain text in %s",
     async (locale, linkName) => {

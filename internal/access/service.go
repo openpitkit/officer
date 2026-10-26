@@ -638,14 +638,17 @@ func (s *Service) enableTokenMode(
 	s.recovery = recoveryCode{}
 	if err := s.audit(ctx, caller,
 		store.AuditEntry{
-			Action: domain.AuditActionSetAccessMode, Detail: string(ModeToken),
+			Action: domain.AuditActionSetAccessMode,
+			Detail: domain.NewAuditDetail(domain.AuditDetailSetAccessModeToken, nil),
 		},
 		store.AuditEntry{Action: domain.AuditActionSetPanelPassword},
 		store.AuditEntry{
-			Action: domain.AuditActionIssueAccessToken, Detail: string(TokenAPI),
+			Action: domain.AuditActionIssueAccessToken,
+			Detail: domain.NewAuditDetail(domain.AuditDetailIssueAPIToken, nil),
 		},
 		store.AuditEntry{
-			Action: domain.AuditActionIssueAccessToken, Detail: string(TokenAgent),
+			Action: domain.AuditActionIssueAccessToken,
+			Detail: domain.NewAuditDetail(domain.AuditDetailIssueAgentToken, nil),
 		},
 	); err != nil {
 		return "", err
@@ -685,7 +688,8 @@ func (s *Service) SwitchToOpen(
 		return fmt.Errorf("access: disable token mode: %w", err)
 	}
 	return s.audit(ctx, caller, store.AuditEntry{
-		Action: domain.AuditActionSetAccessMode, Detail: string(ModeOpen),
+		Action: domain.AuditActionSetAccessMode,
+		Detail: domain.NewAuditDetail(domain.AuditDetailSetAccessModeOpen, nil),
 	})
 }
 
@@ -761,6 +765,10 @@ func (s *Service) RegenerateToken(
 	if err := requireMode(s.store.Snapshot().Mode, ModeToken); err != nil {
 		return "", err
 	}
+	detail, err := issueTokenAuditDetail(kind)
+	if err != nil {
+		return "", err
+	}
 	token, err := newToken(kind)
 	if err != nil {
 		return "", err
@@ -769,11 +777,25 @@ func (s *Service) RegenerateToken(
 		return "", fmt.Errorf("access: replace %s token: %w", kind, err)
 	}
 	if err := s.audit(ctx, caller, store.AuditEntry{
-		Action: domain.AuditActionIssueAccessToken, Detail: string(kind),
+		Action: domain.AuditActionIssueAccessToken, Detail: detail,
 	}); err != nil {
 		return "", err
 	}
 	return token, nil
+}
+
+// issueTokenAuditDetail names the issued token kind in the audit detail.
+func issueTokenAuditDetail(kind TokenKind) (domain.AuditDetail, error) {
+	switch kind {
+	case TokenAPI:
+		return domain.NewAuditDetail(domain.AuditDetailIssueAPIToken, nil), nil
+	case TokenAgent:
+		return domain.NewAuditDetail(domain.AuditDetailIssueAgentToken, nil), nil
+	default:
+		return domain.AuditDetail{}, fmt.Errorf(
+			"access: unknown token kind %q: %w", kind, domain.ErrInvalid,
+		)
+	}
 }
 
 // requireMode refuses an operation the current mode does not allow.

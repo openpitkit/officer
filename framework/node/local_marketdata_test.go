@@ -123,7 +123,7 @@ func TestUpsertMarketDataInstrumentKeepsEngineAndSink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered(set market data): %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "BTCUSDT") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "BTCUSDT") {
 		t.Fatalf("set-market-data audit rows = %+v, want BTCUSDT upsert", rows)
 	}
 }
@@ -290,7 +290,7 @@ func assertMarketDataAssetAudits(
 		found := false
 		for _, row := range rows {
 			if row.Asset == code && strings.Contains(
-				row.Detail, "by market-data instrument upsert",
+				row.Detail.Text, "by market-data instrument upsert",
 			) {
 				found = true
 				break

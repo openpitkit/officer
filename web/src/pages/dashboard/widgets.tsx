@@ -42,9 +42,12 @@ import {
 import { CompactStaleState } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { auditDetailText } from "@/i18n/auditDetail";
+import { codeLabel, sourceLabel } from "@/i18n/codeLabel";
 import { formatDateTime } from "@/i18n/format";
 import { accountScope } from "@/lib/accountScope";
 import {
+  auditActionLabel,
   auditActionMeta,
   groupActivity,
   type ActivityGroup,
@@ -362,6 +365,13 @@ export function MarketDataCard() {
   );
 }
 
+// The activity kinds the overview feed carries, by wire value.
+const ACTIVITY_KIND_KEYS: Record<string, string> = {
+  audit: "common:entities.auditEntry",
+  order: "common:entities.order",
+  adjustment: "common:entities.adjustment",
+};
+
 function ActivityItem({
   entry,
   route,
@@ -382,11 +392,12 @@ function ActivityItem({
       className="flex w-full items-start gap-2 border-b border-border py-2 text-left last:border-0 hover:bg-accent-dim"
     >
       <span className="mt-0.5 shrink-0 rounded-badge border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wide text-muted">
-        {entry.source}
+        {sourceLabel(entry.source)}
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs text-text">
-          {entry.summary || entry.kind}
+          {auditDetailText(entry.summary) ||
+            codeLabel(ACTIVITY_KIND_KEYS[entry.kind] ?? null, entry.kind)}
         </span>
         <span className="nums block text-[0.6875rem] text-muted-lt">
           {formatDateTime(entry.at)}
@@ -441,9 +452,8 @@ export function ActivityColumns({ activity }: DashboardReadyWidgetProps) {
 }
 
 function AuditRow({ entry }: { entry: AuditEntry }) {
-  const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
-  const { Icon, variant, titleKey } = auditActionMeta(entry.action);
+  const { Icon, variant } = auditActionMeta(entry.action);
   const { showsAccounts } = accountScope();
 
   return (
@@ -456,9 +466,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
     >
       <Badge variant={variant} className="shrink-0 gap-1 px-1.5 py-0.5">
         <Icon className="h-3 w-3" />
-        <span className="sr-only">
-          {t(titleKey, { defaultValue: titleKey })}
-        </span>
+        <span className="sr-only">{auditActionLabel(entry.action)}</span>
       </Badge>
 
       {showsAccounts && (
@@ -470,11 +478,11 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
       )}
 
       <span className="min-w-0 flex-1 truncate text-xs text-muted">
-        {entry.detail || entry.actorTitle || entry.actor}
+        {auditDetailText(entry.detail) || entry.actorTitle || entry.actor}
       </span>
 
       <span className="shrink-0 rounded-badge border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wide text-muted">
-        {entry.source}
+        {sourceLabel(entry.source)}
       </span>
       <span className="nums w-36 shrink-0 text-right text-[0.6875rem] text-muted-lt">
         {formatDateTime(entry.at)}

@@ -1,0 +1,320 @@
+{
+  "title": "Servicio",
+  "refreshAriaLabel": "Actualizar la información del servicio",
+  "restartFeedsAriaLabel": "Reiniciar los flujos de datos de mercado",
+  "tabs": {
+    "ariaLabel": "Secciones del servicio",
+    "application": "Aplicación",
+    "accountMode": "Modo de cuentas",
+    "api": "API",
+    "database": "Base de datos",
+    "logs": "Registros",
+    "security": "Seguridad"
+  },
+  "application": {
+    "title": "Aplicación",
+    "name": "Nombre",
+    "defaultName": "Pit Officer",
+    "build": "Compilación",
+    "nonRelease": "no publicada"
+  },
+  "lifecycle": {
+    "title": "Ciclo de vida del servicio",
+    "warning": "Reiniciar o detener el servicio puede ser irreversible sin la intervención de un administrador. El panel puede desconectarse inmediatamente después de la confirmación.",
+    "restart": "Reiniciar el servicio",
+    "stop": "Detener el servicio",
+    "confirm": {
+      "restart": {
+        "title": "¿Reiniciar el servicio?",
+        "description": "El servicio registrará la solicitud en la auditoría, cerrará las conexiones actuales y se iniciará de nuevo con los mismos argumentos.",
+        "confirm": "Reiniciar el servicio"
+      },
+      "stop": {
+        "title": "¿Detener el servicio?",
+        "description": "El servicio se cerrará y puede permanecer fuera de línea hasta que un administrador lo inicie de nuevo.",
+        "confirm": "Detener el servicio"
+      }
+    }
+  },
+  "accountMode": {
+    "title": "Modo de cuentas",
+    "stored": "Modo guardado",
+    "running": "Modo en ejecución",
+    "notChosen": "Todavía sin elegir",
+    "modes": {
+      "single": "Una cuenta",
+      "multi": "Varias cuentas"
+    },
+    "singleAccount": "Una cuenta: {{account}}",
+    "onlyAccount": "Officer actúa solo sobre la cuenta {{account}}.",
+    "createsAccount": "Todavía no existe ninguna cuenta: Officer crea la cuenta {{account}} y actúa solo sobre ella.",
+    "otherAccounts": {
+      "title": "Las demás cuentas dejan de funcionar",
+      "detail": "Permanecen en la base de datos y vuelven a funcionar cuando se cambia de nuevo el modo a varias cuentas."
+    },
+    "confirm": {
+      "title": "¿Guardar el modo de cuentas?",
+      "description": "Officer se reinicia para aplicar el modo: el panel se desconecta y se recarga cuando Officer vuelve a estar disponible."
+    },
+    "saved": "El modo de cuentas se ha guardado. No se necesita reinicio.",
+    "restarting": "Officer se está reiniciando; el panel se recargará cuando vuelva a estar disponible.",
+    "restartNotice": {
+      "title": "Se necesita un reinicio para aplicar el modo de cuentas",
+      "detail": "El modo de cuentas guardado difiere del modo que aplica el servicio en ejecución. Reinicie el servicio para aplicarlo."
+    }
+  },
+  "engine": {
+    "title": "Motor",
+    "version": "Versión",
+    "sdk": "Pit SDK",
+    "profile": "Perfil de compilación",
+    "buildPosture": "Tipo de compilación",
+    "stableRelease": "versión estable",
+    "developmentBuild": "compilación de desarrollo",
+    "modifiedSources": "fuentes modificadas",
+    "profileParams": {
+      "version": "Versión",
+      "profile": "Perfil",
+      "opt_level": "Nivel de optimización",
+      "debug_assertions": "Aserciones de depuración",
+      "target": "Destino",
+      "target_cpu": "CPU de destino",
+      "lto": "LTO"
+    }
+  },
+  "database": {
+    "title": "Base de datos",
+    "reachable": "accesible",
+    "unreachable": "inaccesible",
+    "reachableLabel": "Accesible",
+    "path": "Ruta",
+    "resetTitle": "Zona de peligro",
+    "resetDescription": "Eliminar todas las filas, recrear la base de datos desde cero y reconstruir el motor. Exporte antes una copia de seguridad si puede necesitar los datos actuales.",
+    "resetButton": "Eliminar todos los datos",
+    "resetConfirm": "¿Eliminar todos los datos y recrear la base de datos desde cero? Exporte antes una copia de seguridad si puede necesitar los datos actuales.",
+    "resetDone": "Base de datos restablecida."
+  },
+  "api": {
+    "title": "API",
+    "rest": "REST API",
+    "openApiDocs": "Documentación OpenAPI / Swagger",
+    "mcp": "MCP API",
+    "configureAccess": "Configurar el acceso",
+    "loadingCommands": "Cargando comandos…",
+    "noCommands": "No hay comandos definidos."
+  },
+  "backup": {
+    "plaintextKeys": {
+      "title": "Esta copia de seguridad contendrá claves en texto plano",
+      "trading": "Las claves de API de las conexiones de negociación se incluyen en el archivo sin cifrar.",
+      "marketData": "Las claves de API y los tokens de las fuentes de datos de mercado se incluyen en el archivo sin cifrar.",
+      "advice": "Mantenga el archivo en un lugar privado o configure antes una clave maestra."
+    },
+    "tradingSectionsHint": "Las conexiones de negociación incluyen las cuentas y los grupos, así como las órdenes y las operaciones; las órdenes y las operaciones incluyen las conexiones de negociación.",
+    "tradingAccountsHint": "Los datos de negociación se exportan y se restauran para todas las cuentas.",
+    "tradingCredentialsUnavailable": "No se pudieron restaurar las claves de API de <connections/>. Esas conexiones de negociación se restauraron deshabilitadas: vuelva a introducir sus claves en <tradingLink>Conexiones de negociación</tradingLink>.",
+    "title": "Copia de seguridad de la base de datos",
+    "tabs": {
+      "ariaLabel": "Flujo de copia de seguridad",
+      "export": "Exportar",
+      "restore": "Restaurar"
+    },
+    "all": "Todos los datos",
+    "zip": "Archivar como ZIP",
+    "export": "Exportar",
+    "restore": "Restaurar",
+    "accountsPlaceholder": "cuentas, separadas por comas",
+    "groupsPlaceholder": "grupos, separados por comas",
+    "positionsAccountsPlaceholder": "cuentas de posiciones, separadas por comas",
+    "positionsGroupsPlaceholder": "grupos de posiciones, separados por comas",
+    "restartRequired": "entorno de ejecución reiniciado",
+    "summary": "Aplicados {{applied}}, omitidos {{skipped}} · {{restart}}",
+    "marketDataCredentialsUnavailable": "No se pudieron abrir las credenciales de {{instances}}. Esas fuentes de datos de mercado se restauraron deshabilitadas y es necesario volver a introducir sus credenciales.",
+    "confirmReplaceAll": "¿Eliminar todos los datos seleccionados y restaurar esta copia de seguridad?",
+    "restoreScopeWarningTitle": "Solo se ven afectadas las secciones seleccionadas.",
+    "restoreScopeWarning": "Los modos de restauración se aplican a los datos seleccionados arriba, no a toda la base de datos, salvo que esté marcado Todos los datos.",
+    "sections": {
+      "trading": "Conexiones de negociación",
+      "accounts_groups": "Cuentas y grupos",
+      "positions": "Posiciones",
+      "risk_limits": "Límites de riesgo",
+      "market_data_settings": "Configuración de datos de mercado",
+      "general_settings": "Configuración general",
+      "activity_history": "Órdenes, operaciones, ajustes",
+      "audit_log": "Registro de auditoría"
+    },
+    "accounts": {
+      "title": "Cuentas y grupos",
+      "all": "Todas las cuentas y grupos"
+    },
+    "positions": {
+      "title": "Posiciones",
+      "all": "Todas las cuentas de posiciones"
+    },
+    "modes": {
+      "replace_all": "Eliminar los datos seleccionados y restaurar",
+      "overwrite": "Restaurar y sobrescribir coincidencias",
+      "insert_missing": "Restaurar solo las filas que faltan"
+    },
+    "errors": {
+      "fileRequired": "Elija un archivo de copia de seguridad."
+    }
+  },
+  "logs": {
+    "title": "Registros",
+    "download": "Descargar",
+    "empty": "Todavía no se ha capturado ninguna línea de registro.",
+    "refreshAriaLabel": "Actualizar los registros"
+  },
+  "access": {
+    "boundary": "Un agente, un script o una persona con un terminal en este equipo bajo su usuario controla Officer por completo, más allá del token y la contraseña: con Docker Desktop, mediante <exec/>, una copia del volumen de datos e <inspect/>; sin Docker, mediante la carpeta de datos de Officer. El token y la contraseña dejan fuera las páginas web, otros contenedores y los agentes en un entorno aislado que no pueden acceder a Docker ni a los archivos de Officer.",
+    "isolation": {
+      "title": "Ejecutar un agente que no pueda tocar Officer",
+      "sandbox": "En un entorno aislado sin el socket de Docker y sin acceso a los datos de Officer.",
+      "user": "Con una cuenta de usuario independiente en este equipo.",
+      "computer": "En otro equipo."
+    },
+    "choice": "Quién puede usar Officer",
+    "recommended": "Recomendado",
+    "modes": {
+      "token": {
+        "title": "Token y contraseña",
+        "description": "Los programas y los agentes presentan un token. El panel pide una contraseña una vez por navegador."
+      },
+      "open": {
+        "title": "Sin token",
+        "description": "Cualquier software de este equipo usa Officer sin que se le pida nada."
+      }
+    },
+    "password": {
+      "new": "Nueva contraseña del panel",
+      "repeat": "Repita la nueva contraseña",
+      "generate": "Generar",
+      "hint": "Al menos {{min}} caracteres. Guárdela en su gestor de contraseñas.",
+      "tooShort": "Demasiado corta: {{length}} de {{min}} caracteres.",
+      "tooLong": "Demasiado larga: {{length}} caracteres, como máximo {{max}}."
+    },
+    "facts": {
+      "session": "El panel la pide una vez por navegador y mantiene la sesión iniciada hasta 30 días. Una semana sin visitas, o cerrar la sesión, pone fin a la sesión.",
+      "agent": "Su agente recibe su propio token. Solo funciona mediante MCP, dentro de los comandos que usted permita.",
+      "programs": "Sus propios programas obtienen un token de API en Servicio › Seguridad.",
+      "recovery": "¿Ha olvidado la contraseña? Officer escribe en su registro un código de recuperación de un solo uso."
+    },
+    "warning": {
+      "title": "Sin token, Officer está abierto a todo lo que hay en este equipo",
+      "who": "Quién puede usarlo:",
+      "programs": "cualquier programa de este equipo;",
+      "containers": "cualquier contenedor de la red predeterminada de Docker;",
+      "agents": "cualquier agente de IA con un terminal aquí - llama directamente a la REST API y elude los límites que usted le haya fijado en MCP.",
+      "what": "Qué pueden hacer: leerlo todo, cambiar y quitar límites, desbloquear cuentas, activar comandos de agente, eliminar todos los datos y enviar órdenes a través de sus conexiones de negociación.",
+      "pages": "Las páginas web abiertas en su navegador siguen sin acceso en ambos modos.",
+      "close": "Para cerrarlo, elija Token y contraseña y defina una contraseña del panel. Officer cambia al instante, sin reinicio.",
+      "acknowledge": "Entiendo: cualquier software de este equipo puede controlar Officer."
+    }
+  },
+  "masterKeyGuide": {
+    "where": "Haga esto en un terminal de este equipo",
+    "chooseSystem": "Elija el sistema de este equipo para ver sus comandos.",
+    "deployment": {
+      "label": "Cómo se ejecuta Officer",
+      "docker": "Docker",
+      "binary": "Sin Docker"
+    },
+    "system": {
+      "label": "Sistema",
+      "windows": "Windows PowerShell",
+      "mac": "macOS",
+      "linux": "Linux"
+    },
+    "create": {
+      "title": "Cree el archivo de clave",
+      "detail": "32 bytes aleatorios, en una carpeta que solo usted puede abrir.",
+      "detailDocker": "32 bytes aleatorios, en una carpeta que solo usted puede abrir. El archivo en sí sigue siendo legible para que el contenedor de Officer pueda leerlo."
+    },
+    "keep": {
+      "title": "Guarde una copia de la clave en otro lugar",
+      "detail": "Guárdela en su gestor de contraseñas, o imprímala y consérvela en un lugar seguro. Si pierde la clave, Officer no volverá a abrir nunca su base de datos: no hay recuperación posible."
+    },
+    "start": {
+      "title": "Vuelva a iniciar Officer con la clave",
+      "detailDocker": "Esto sustituye el contenedor. Sus datos permanecen en el volumen <volume/>.",
+      "customDocker": "Si usó otro nombre de contenedor, otro puerto u otra etiqueta de imagen (por ejemplo, <edge/>), añada en su lugar estas dos opciones a su propio comando <run/>.",
+      "detailBinary": "Detenga el <running/> en ejecución con <keys/> y, después, inícielo así, con las opciones que usó antes."
+    }
+  },
+  "security": {
+    "access": {
+      "title": "Acceso",
+      "mode": "Acceso",
+      "token": "Token",
+      "switchToOpen": "Cambiar a sin token…",
+      "switchDialog": {
+        "title": "¿Cambiar a sin token?",
+        "description": "Officer elimina la contraseña del panel, ambos tokens y todas las sesiones de navegador, y después responde a cualquier programa de este equipo sin token.",
+        "confirm": "Cambiar a sin token"
+      },
+      "turnOn": "Activar el acceso con token",
+      "currentPassword": "Contraseña actual",
+      "password": "Contraseña del panel",
+      "passwordSet": "Definida el {{date}}",
+      "change": "Cambiar…",
+      "changeDialog": {
+        "title": "Cambiar la contraseña del panel",
+        "description": "Se cierra la sesión en todos los demás navegadores; este mantiene la sesión iniciada.",
+        "submit": "Cambiar la contraseña"
+      },
+      "passwordChanged": "Se ha cambiado la contraseña del panel. Se ha cerrado la sesión en todos los demás navegadores.",
+      "sessions": "Sesiones de navegador",
+      "sessionCount_one": "Sesión iniciada en {{count}} navegador",
+      "sessionCount_many": "Sesión iniciada en {{count}} navegadores",
+      "sessionCount_other": "Sesión iniciada en {{count}} navegadores",
+      "logOutEverywhere": "Cerrar sesión en todas partes"
+    },
+    "tokens": {
+      "regenerate": "Regenerar",
+      "agent": {
+        "label": "Token del agente · MCP",
+        "note": "El mismo token que en Conecte su agente, en Acceso MCP. Al regenerarlo, el anterior deja de funcionar al instante.",
+        "confirmTitle": "¿Regenerar el token del agente?",
+        "confirmDescription": "El token actual del agente deja de funcionar al instante: un agente que lo use pierde MCP hasta que su configuración reciba el nuevo."
+      },
+      "api": {
+        "label": "Token de API · REST",
+        "note": "Control total sobre REST - el mismo acceso que tiene el panel a través de su sesión. No lo entregue nunca a un agente.",
+        "confirmTitle": "¿Regenerar el token de API?",
+        "confirmDescription": "El token de API actual deja de funcionar al instante: un programa que lo use pierde REST hasta que reciba el nuevo."
+      }
+    },
+    "storage": {
+      "title": "Almacenamiento, firma y cuentas",
+      "encryption": "Cifrado",
+      "masterKey": "Clave maestra",
+      "noMasterKey": "Ninguna",
+      "encryptionOn": "Activado",
+      "sealed": "Activado · cifrado el {{date}}",
+      "plainText": "Desactivado · las claves almacenadas están en texto plano",
+      "signing": "Firma de decisiones",
+      "signingOff": "Desactivada",
+      "signingOn": "Activada · clave {{key}}",
+      "signingWithoutKey": "Activada · sin clave de firma",
+      "accountMode": "Modo de cuentas",
+      "oneAccount": "Una cuenta · {{account}}",
+      "openAccountMode": "Pestaña Modo de cuentas"
+    },
+    "exposed": {
+      "title": "Los secretos almacenados antes de configurar la clave maestra deben considerarse expuestos",
+      "detail_one": "Al cifrar se volvió a cifrar {{count}} secreto almacenado que había permanecido en el archivo de base de datos en texto plano: cualquiera que copiara el archivo o una copia de seguridad antes de ese momento puede leerlo.",
+      "detail_many": "Al cifrar se volvieron a cifrar {{count}} secretos almacenados que habían permanecido en el archivo de base de datos en texto plano: cualquiera que copiara el archivo o una copia de seguridad antes de ese momento puede leerlos.",
+      "detail_other": "Al cifrar se volvieron a cifrar {{count}} secretos almacenados que habían permanecido en el archivo de base de datos en texto plano: cualquiera que copiara el archivo o una copia de seguridad antes de ese momento puede leerlos.",
+      "keys": "Solicite nuevas claves a sus proveedores e introdúzcalas en las páginas de conexión.",
+      "signing": "Si había una clave de firma almacenada, genere una nueva: quien tenga una copia de la clave anterior puede firmar decisiones en nombre de Officer.",
+      "tokens": "Regenere ambos tokens: cada valor anterior deja de funcionar al instante."
+    },
+    "guide": {
+      "title": "Guía",
+      "label": "Guía de inicio",
+      "value": "Todos los pasos, con sus elecciones actuales",
+      "reopen": "Abrir de nuevo"
+    }
+  }
+}

@@ -33,6 +33,8 @@ export const LOCALES: readonly Locale[] = [
   { code: "en", endonym: "English" },
   { code: "ru", endonym: "Русский" },
   { code: "zh-CN", endonym: "中文" },
+  { code: "es", endonym: "Español" },
+  { code: "pt-BR", endonym: "Português (Brasil)" },
 ];
 
 /** The locale codes, derived from {@link LOCALES} for i18next supportedLngs. */

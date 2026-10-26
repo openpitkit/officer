@@ -1,0 +1,53 @@
+{
+  "title": "Claves de firma",
+
+  "currentKey": {
+    "sectionTitle": "Clave activa",
+    "keyId": "ID de clave",
+    "fingerprint": "Huella digital",
+    "createdAt": "Creada",
+    "status": "Estado",
+    "statusActive": "activa",
+    "empty": "No hay ninguna clave de firma configurada. Genere o importe una a continuación.",
+    "export": {
+      "label": "Exportar clave pública",
+      "formatLabel": "Formato",
+      "formats": {
+        "pem-pkcs8": "PEM PKCS#8",
+        "openssh": "OpenSSH (authorized_keys)",
+        "raw-base64": "Semilla base64 sin formato"
+      }
+    }
+  },
+
+  "manageKey": {
+    "sectionTitle": "Generar o importar",
+    "modeGenerate": "Generar clave nueva",
+    "modeImport": "Importar su clave",
+    "generateButton": "Generar",
+    "importButton": "Importar",
+    "importFormat": "Formato de clave",
+    "importKeyLabel": "Clave privada",
+    "importKeyPlaceholder": "Pegue aquí su clave privada…",
+    "importBusy": "Importando…",
+    "generateDialog": {
+      "title": "Generar una clave de firma nueva",
+      "description": "Se creará un par de claves Ed25519 nuevo. La clave activa actual se desactivará. Los conectores podrán seguir obteniendo la clave pública anterior para verificar los sobres firmados con ella.",
+      "confirm": "Generar"
+    },
+    "errors": {
+      "generateFailed": "No se pudo generar la clave.",
+      "importEmpty": "Pegue una clave privada antes de importar.",
+      "importFailed": "No se pudo importar."
+    }
+  },
+
+  "eSign": {
+    "sectionTitle": "Firma electrónica",
+    "label": "Exigir firma en los sobres de aprobación y de atestación",
+    "description": "Si está activada, cada sobre de aprobación y de atestación se firma con la clave Ed25519 activa. Los conectores verifican la firma antes de ejecutar. Si está desactivada, los sobres llevan la carga útil completa y el vínculo, pero sin firma criptográfica; el vínculo se sigue comprobando.",
+    "unsigned": "Los sobres salen sin firma: cualquiera que pueda escribir en el mismo canal puede falsificar una decisión. Active la firma antes de que un programa suyo ejecute órdenes según las decisiones de Officer.",
+    "missingKeyError": "La firma electrónica requiere una clave de firma activa. Configúrela en «Generar o importar», más arriba.",
+    "busy": "Guardando…"
+  }
+}

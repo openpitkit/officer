@@ -92,6 +92,7 @@ import {
   useApiClient,
   useOfficerApi,
 } from "@/framework";
+import { codeLabel } from "@/i18n/codeLabel";
 import { accountScope } from "@/lib/accountScope";
 import { checkSession } from "@/lib/panelSession";
 
@@ -1183,9 +1184,10 @@ function EngineInfoCard({ info }: { info: ServiceInfo }) {
             {parseProfileRows(info.engineBuildProfile).map((row) => (
               <StatRow
                 key={row.param}
-                label={t(`engine.profileParams.${row.param}`, {
-                  defaultValue: row.param,
-                })}
+                label={codeLabel(
+                  `service:engine.profileParams.${row.param}`,
+                  row.param,
+                )}
                 value={row.value || tc("value.none")}
                 mono={false}
               />

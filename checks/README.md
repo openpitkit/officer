@@ -39,8 +39,9 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 
 `testdata/` holds rule fixtures: deliberate violations and non-violations
 annotated for `semgrep --test`, one file per rule, named after it:
-`default-domain-status.go`, `locale-latin-words.txt` and
-`file-header-site-link.txt`. A fixture runs only
+`default-domain-status.go`, `locale-latin-words.txt`,
+`locale-english-words.txt`, `file-header-site-link.txt` and
+`panel-code-label.tsx`. A fixture runs only
 through its own `--test` line in `check-semgrep`, after the tree scan, so a new
 fixture adds its own line there. A rule with a fixture keeps its fixture out of
 its `paths`, so the tree scan does not report the fixture. The directory is
@@ -111,7 +112,25 @@ localization guidelines point to it. Fix a finding by translating the word
 with the term the locale already uses, or, for a term that stays as written in
 every translated catalog, by adding it to the keep list. Placeholders, tags,
 code spans, figures, URL paths and comma-separated identifier lists such as a
-CSV header are not words.
+CSV header are not words. The `es` and `pt-BR` catalogs are Latin-script
+languages and are covered by `locale-english-words` instead.
+
+This rule has no approval marker.
+
+### `locale-english-words`
+
+`checks/semgrep/locale-english-words.yml` forbids an English phrase inside an
+`es` or `pt-BR` panel catalog string. Both languages are written in Latin
+script, so the rule reads the English lowercase function words that are no
+Spanish or Portuguese word (`the`, `and`, `of`, `with`, `your`, …); any
+English sentence or phrase left in a catalog carries one. Fix a finding by
+translating the string fully, with the words the locale already uses. Terms on
+the `locale-latin-words` keep list are not lowercase function words, so this
+rule needs no keep list of its own. Placeholders, tags, code spans and
+comma-separated identifier lists are not read.
+
+Deliberate limit: a lone untranslated word or a short label with no function
+word ("Settings", "Add policy") passes; review catches it.
 
 This rule has no approval marker.
 
@@ -135,6 +154,28 @@ scan `web/src`, excluding only each shared implementation. They catch the
 copied response-and-headers factory, calendar round-trip comparisons,
 new-password fields, and translated Show/Hide labels. Their positive and
 negative fixtures run as part of `check-semgrep`.
+
+### Panel code labels
+
+`checks/semgrep/panel-code-label.yml` keeps every wire code the panel shows -
+a status, a side, a source, a reject code, a verdict - behind its catalog
+label from `web/src/i18n/codeLabel.ts`. `panel-code-label-raw-field` flags a
+code field rendered raw as a JSX child, a `label` or `title`, or a
+`BreakdownRow` value; the field names it reads are the panel's wire-code
+fields. `panel-code-label-raw-text` flags the same codes held in a variable
+whose name ends in one of them (`source`, `sourceFilter`, `providerType`) and
+shown as an option `label`, as a filter chip `value` beside a catalog `label`,
+or as the value of a `Heading: value` string.
+`panel-code-label-silent-fallback` flags a label lookup that falls
+back to the raw code without reporting it: a `t()` call whose `defaultValue`
+is the code it interpolates, and a registry guard that returns the code
+itself. Fix a finding with `codeLabel` or one of its labelers, which show an
+unknown code as itself and report it once with `console.warn`. Free text
+(`reason`, `detail`) and identifiers (an asset or account id) are not codes
+and are not read. The rules scan `web/src` outside tests; their fixture runs
+as part of `check-semgrep`.
+
+This rule has no approval marker.
 
 ### `no-legacy-database-probe`
 

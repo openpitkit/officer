@@ -223,7 +223,7 @@ function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
       accountId: "acc-1",
       verdict: "accept",
       result: {
-        outcome: "filled",
+        outcome: "applied",
         fillQuantity: "10",
         fillPrice: "150.25",
         fillLockPrice: "150.25",
@@ -494,10 +494,10 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
       eventId: "evt-fill-1",
       venue: "XNAS",
       priceCurrency: "USD",
-      timeInForce: "GTC",
+      timeInForce: "gtc",
       accountGroupId: "equity-desks",
       nonce: "nonce-exec-1",
-      rejectCode: "policy_reject",
+      rejectCode: "pnl_kill_switch_triggered",
       rejectScope: "account",
       rejectPolicy: "daily_loss",
       rejectReason: "Daily loss threshold reached",
@@ -518,7 +518,7 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
         force: false,
       },
       result: {
-        outcome: "filled",
+        outcome: "applied",
         fillQuantity: "10",
         fillPrice: "150.25",
         fillLockPrice: "149.75",
@@ -528,7 +528,7 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
         blocks: [
           {
             account: "desk-alpha",
-            code: "daily_loss",
+            code: "pnl_kill_switch_triggered",
             reason: "Daily loss threshold reached",
             details: "limit=-1000",
           },
@@ -562,13 +562,21 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
     expect(screen.getAllByText("ord-repro-1").length).toBeGreaterThan(0);
     expect(screen.getByText("evt-fill-1")).toBeInTheDocument();
     expect(screen.getByText("XNAS")).toBeInTheDocument();
-    expect(screen.getByText("GTC")).toBeInTheDocument();
+    // Code fields show their catalog labels; the engine policy name is an
+    // identifier and stays as recorded.
+    expect(screen.getByText("Execution report")).toBeInTheDocument();
+    expect(screen.getByText("Submit and wait")).toBeInTheDocument();
+    expect(screen.getByText("GTC - Good till cancelled")).toBeInTheDocument();
     expect(screen.getByText("equity-desks")).toBeInTheDocument();
-    expect(screen.getAllByText("limit").length).toBeGreaterThan(0);
+    expect(screen.getByText("Limit")).toBeInTheDocument();
     expect(screen.getByText("nonce-exec-1")).toBeInTheDocument();
-    expect(screen.getByText("policy_reject")).toBeInTheDocument();
+    expect(screen.getByText("PnL kill switch triggered")).toBeInTheDocument();
     expect(screen.getByText("account")).toBeInTheDocument();
     expect(screen.getByText("daily_loss")).toBeInTheDocument();
+    expect(screen.getAllByText("Buy")).toHaveLength(2);
+    expect(screen.getAllByText("Filled")).toHaveLength(2);
+    expect(screen.getByText("no")).toBeInTheDocument();
+    expect(screen.getByText("Applied")).toBeInTheDocument();
     expect(
       screen.getAllByText("Daily loss threshold reached").length,
     ).toBeGreaterThan(0);
@@ -582,7 +590,7 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
     expect(screen.getByText("Block 1")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "desk-alpha · daily_loss · Daily loss threshold reached · limit=-1000",
+        "desk-alpha · PnL kill switch triggered · Daily loss threshold reached · limit=-1000",
       ),
     ).toBeInTheDocument();
   });
@@ -665,7 +673,7 @@ async function renderReproductionNaming(account: string) {
     details: "limit=-1000",
   };
   const result = {
-    outcome: "filled",
+    outcome: "applied",
     fillQuantity: "10",
     fillPrice: "150.25",
     fillLockPrice: "150.25",
@@ -717,7 +725,7 @@ describe("OrderVerificationPanel - accounts", () => {
     expect(screen.getByText("equity-desks")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "desk-alpha · pnl_kill_switch_triggered · Daily loss limit · limit=-1000",
+        "desk-alpha · PnL kill switch triggered · Daily loss limit · limit=-1000",
       ),
     ).toBeInTheDocument();
   });
@@ -733,7 +741,7 @@ describe("OrderVerificationPanel - accounts", () => {
     expect(screen.getByText("Block 1")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "pnl_kill_switch_triggered · Daily loss limit · limit=-1000",
+        "PnL kill switch triggered · Daily loss limit · limit=-1000",
       ),
     ).toBeInTheDocument();
 

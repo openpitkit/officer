@@ -419,7 +419,7 @@ func (a *App) Service() backend.ControlPlane {
 func (a *App) RecordServiceLifecycle(
 	ctx context.Context,
 	action domain.AuditAction,
-	detail string,
+	detail domain.AuditDetail,
 ) error {
 	if a == nil || a.node == nil {
 		return errors.New("app: nil node")

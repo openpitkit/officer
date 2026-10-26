@@ -1,0 +1,226 @@
+{
+  "title": "Posiciones",
+  "missingAccountConfirm": {
+    "title": "La cuenta no existe",
+    "description": "La cuenta {{account}} todavía no existe. ¿Crearla con la configuración predeterminada (sin grupo, sin moneda) y continuar?",
+    "confirm": "Crear cuenta y continuar"
+  },
+  "actions": {
+    "adjust": "Ajuste",
+    "adjustAriaLabel": "Ajustar {{account}} {{asset}}",
+    "refreshHistoryAriaLabel": "Actualizar historial",
+    "exportCsv": "Exportar posiciones en CSV",
+    "exportHistoryCsv": "Exportar historial en CSV",
+    "historyExporting": "Exportando"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Tamaño de página",
+      "rowCount": "{{count}} filas por página"
+    }
+  },
+  "tabs": {
+    "positions": "Posiciones",
+    "history": "Historial"
+  },
+  "filters": {
+    "advancedDescription": "Defina filtros secundarios de posiciones y del historial de ajustes. La lista se actualiza desde el servidor con el conjunto de filtros activo.",
+    "byAccount": "Filtrar por cuenta",
+    "byGroup": "Filtrar por grupo",
+    "byAsset": "Filtrar por activo",
+    "range": {
+      "all": "Todos",
+      "greater_than": "Mayor que",
+      "less_than": "Menor que",
+      "between": "Entre",
+      "min": "Mín.",
+      "max": "Máx."
+    },
+    "currency": {
+      "label": "CCY",
+      "placeholder": "USD",
+      "ariaLabel": "Moneda del umbral de {{field}}",
+      "required": "Seleccione la moneda en la que se indica el umbral. Este valor se lleva en la moneda propia de cada cuenta, por lo que no se puede comparar sin ella."
+    }
+  },
+  "balances": {
+    "sectionLabel": "Saldos",
+    "columns": {
+      "account": "Cuenta",
+      "asset": "Activo",
+      "available": "Disponible",
+      "held": "Retenido",
+      "incoming": "Entrante",
+      "avgEntryPrice": "Precio medio de entrada",
+      "realizedPnl": "PnL realizado",
+      "updated": "Actualizado",
+      "adjust": "Ajuste"
+    },
+    "columnDescriptions": {
+      "account": "Esta columna muestra la cuenta a la que pertenece la fila de saldo.",
+      "asset": "Esta columna muestra el activo que mantiene la cuenta.",
+      "available": "Esta columna muestra el saldo disponible de inmediato.",
+      "held": "Esta columna muestra el saldo reservado actualmente por actividad pendiente.",
+      "incoming": "Esta columna muestra el saldo entrante que todavía no se ha liquidado como disponible.",
+      "avgEntryPrice": "Esta columna muestra el precio medio de entrada guardado para el saldo, en la moneda de la cuenta.",
+      "realizedPnl": "Esta columna muestra las pérdidas y ganancias realizadas registradas para el saldo, en la moneda de la cuenta.",
+      "updated": "Esta columna muestra cuándo se actualizó por última vez la fila de saldo.",
+      "adjust": "Esta columna contiene la acción de fila para abrir un ajuste de posición."
+    },
+    "noAccountCurrencyHint": "La cuenta no define una moneda, por lo que este valor no tiene unidad.",
+    "pnlHalt": {
+      "missingFx": "Cálculo de PnL detenido: no está disponible una cotización FX necesaria.",
+      "missingAccountCurrency": "Cálculo de PnL detenido: la moneda de la cuenta no está disponible.",
+      "missingInitialPnl": "Cálculo de PnL detenido: no está disponible un valor de PnL inicial fidedigno.",
+      "missingCostBasis": "Cálculo de PnL detenido: la base de costo de la posición no está disponible.",
+      "arithmeticOverflow": "Cálculo de PnL detenido: la aritmética exacta superó el rango numérico admitido.",
+      "unknown": "El motor detuvo el cálculo de PnL."
+    },
+    "empty": {
+      "title": "No hay saldos",
+      "hint": "Use «Ajuste» para cargar saldos de fondos al contado de una cuenta y un activo."
+    },
+    "activeOrdersTitle": "Órdenes activas de {{account}}",
+    "activeOrdersTitleUnnamed": "Órdenes activas",
+    "ordersTitle": "Órdenes abiertas de {{account}}"
+  },
+  "inline": {
+    "apply": "Aplicar",
+    "applyWithLimits": "Aplicar con límites",
+    "amountPlaceholder": "importe",
+    "newRowHint": "Fila nueva",
+    "newPosition": "Nueva posición",
+    "amountAriaLabel": "Importe del ajuste para {{account}} {{asset}}",
+    "applyAriaLabel": "Aplicar ajuste a {{account}} {{asset}}",
+    "applyWithLimitsAriaLabel": "Aplicar ajuste con límites a {{account}} {{asset}}",
+    "accountAriaLabel": "Cuenta del nuevo ajuste",
+    "assetAriaLabel": "Activo del nuevo ajuste"
+  },
+  "panel": {
+    "open": "Ajuste",
+    "openAriaLabel": "Abrir el panel de ajuste de {{account}} {{asset}}",
+    "openAriaLabelUnnamed": "Abrir el panel de ajuste de {{asset}}",
+    "openDraftAriaLabel": "Abrir el panel de nuevo ajuste",
+    "title": "Ajuste",
+    "descriptionExisting": "Compare la posición actual con los valores previstos antes de enviar.",
+    "descriptionDraft": "Indique la cuenta, el activo, los valores previstos y los límites opcionales antes de enviar.",
+    "emptyAccount": "Sin cuenta",
+    "emptyAsset": "Sin activo",
+    "boundsOptional": "Límites opcionales para el ajuste enviado.",
+    "keepCurrent": "Mantener el actual",
+    "noChange": "Sin cambios",
+    "invalidDecimal": "Decimal no válido",
+    "noChangesError": "Introduzca al menos un importe, un precio medio o un límite.",
+    "positionAmountRequired": "Introduzca un valor distinto de cero en Disponible, Retenido o Entrante para crear una posición.",
+    "resetAll": "Restablecer todo",
+    "submit": "Enviar ajuste",
+    "saving": "Enviando",
+    "avgPreview": "Actual {{current}} → {{result}}",
+    "modeAriaLabel": "Modo de ajuste de {{field}}",
+    "amountAriaLabel": "Importe del ajuste de {{field}}",
+    "columns": {
+      "current": "Actual",
+      "intent": "Objetivo",
+      "amount": "Importe",
+      "result": "Resultado"
+    }
+  },
+  "history": {
+    "sectionLabel": "Historial de ajustes",
+    "sourceLabel": "Origen",
+    "sourceAll": "Todos",
+    "typeLabel": "Tipo",
+    "unknownType": "El enlace solicita un tipo de ajuste desconocido: {{type}}. Elija un tipo para mostrar el historial.",
+    "columns": {
+      "time": "Hora",
+      "account": "Cuenta",
+      "asset": "Activo",
+      "source": "Origen",
+      "type": "Tipo",
+      "request": "Solicitud",
+      "status": "Estado",
+      "outcome": "Resultado",
+      "externalId": "ID"
+    },
+    "columnDescriptions": {
+      "time": "Esta columna muestra cuándo se registró la solicitud de ajuste.",
+      "account": "Esta columna muestra la cuenta a la que se dirige el ajuste.",
+      "asset": "Esta columna muestra el activo al que se dirige el ajuste.",
+      "source": "Esta columna muestra si el ajuste provino del panel, de REST, de MCP o de otro origen.",
+      "type": "Esta columna muestra qué registra el ajuste: una comisión de la plataforma, un depósito, un retiro o una corrección manual.",
+      "request": "Esta columna muestra el cambio solicitado de saldo, retenido, entrante, precio medio o PnL realizado.",
+      "status": "Esta columna muestra si el ajuste se aceptó o se rechazó.",
+      "outcome": "Esta columna muestra el resultado guardado o el resumen del rechazo.",
+      "externalId": "Esta columna muestra el ID inmutable del ajuste."
+    },
+    "empty": {
+      "title": "No hay ajustes",
+      "hint": "Los registros de ajustes aparecen aquí después de cada envío."
+    },
+    "request": {
+      "balanceDelta": "saldo Δ{{value}}",
+      "balanceAbsolute": "saldo ={{value}}",
+      "heldDelta": "retenido Δ{{value}}",
+      "heldAbsolute": "retenido ={{value}}",
+      "incomingDelta": "entrante Δ{{value}}",
+      "incomingAbsolute": "entrante ={{value}}",
+      "avgPrice": "medio {{value}}",
+      "realizedPnl": "PnL realizado ={{value}}"
+    },
+    "status": {
+      "rejected": "rechazado",
+      "accepted": "aceptado"
+    },
+    "clone": {
+      "ariaLabel": "Clonar el ajuste {{id}}"
+    }
+  },
+  "dialog": {
+    "title": "Ajustar posición",
+    "description": "Cargue o actualice saldos de fondos al contado de una cuenta y un activo. Use el modo absoluto para fijar un valor concreto y el modo delta para sumar o restar.",
+    "fields": {
+      "account": "Cuenta",
+      "asset": "Activo",
+      "type": "Tipo",
+      "avgEntryPrice": "Precio medio de entrada (opcional)",
+      "avgEntryPriceHint": "Decimal positivo. Déjelo vacío para mantener el valor actual.",
+      "realizedPnl": "PnL realizado",
+      "realizedPnlPlaceholder": "p. ej., -12.50"
+    },
+    "amounts": {
+      "sectionLabel": "Importes",
+      "balance": "saldo",
+      "held": "retenido",
+      "incoming": "entrante"
+    },
+    "bounds": {
+      "sectionLabel": "Límites (opcional)",
+      "balanceLabel": "límites del saldo",
+      "heldLabel": "límites de lo retenido",
+      "incomingLabel": "límites de lo entrante",
+      "lower": "Inferior",
+      "upper": "Superior"
+    },
+    "mode": {
+      "absolute": "absoluto",
+      "delta": "delta"
+    },
+    "outcome": {
+      "rejectedTitle": "Rechazado",
+      "acceptedTitle": "Aceptado",
+      "fieldBalance": "saldo",
+      "fieldHeld": "retenido",
+      "fieldIncoming": "entrante",
+      "fieldRealizedPnl": "PnL realizado"
+    },
+    "footer": {
+      "close": "Cerrar",
+      "submit": "Enviar"
+    },
+    "error": {
+      "accountRequired": "La cuenta es obligatoria.",
+      "assetRequired": "El activo es obligatorio.",
+      "typeRequired": "Elija el tipo de ajuste."
+    }
+  }
+}

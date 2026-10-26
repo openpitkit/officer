@@ -255,14 +255,11 @@ export {
   policyCatalogDescription,
   policyCatalogLabel,
   policyFieldHint,
-  policyFieldLabel,
-  policyLabel,
   registerPolicy,
   registerScope,
   resetVocabulary,
   scopeHasAccount,
   scopeHasAsset,
-  scopeLabel,
   unregisterPolicy,
   unregisterScope,
   type KindSpec,
@@ -286,4 +283,5 @@ export {
   resetLocales,
   unregisterLocale,
 } from "../i18n";
+export { policyFieldLabel, policyLabel, scopeLabel } from "../i18n/codeLabel";
 export type * from "../api/types";

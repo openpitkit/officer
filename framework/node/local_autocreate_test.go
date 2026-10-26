@@ -121,7 +121,7 @@ func TestUpsertMarketDataInstrumentCreatesAssets(t *testing.T) {
 		found := false
 		for _, row := range rows {
 			if row.Asset == code && strings.Contains(
-				row.Detail, "by market-data instrument upsert",
+				row.Detail.Text, "by market-data instrument upsert",
 			) {
 				found = true
 			}

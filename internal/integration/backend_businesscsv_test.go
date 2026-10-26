@@ -261,7 +261,7 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 			name:       "explicit empty group exports no-group bucket",
 			filter:     businesscsv.ExportFilter{GroupCodeSet: true},
 			want:       []string{"acc-none"},
-			wantDetail: "filters=group=<none>",
+			wantDetail: "filters group=<none>",
 		},
 		{
 			name: "explicit group exports matching group",
@@ -269,7 +269,7 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 				GroupCode: "desk-a", GroupCodeSet: true,
 			},
 			want:       []string{"acc-desk-a"},
-			wantDetail: "filters=group=desk-a",
+			wantDetail: "filters group=desk-a",
 		},
 	}
 	for _, tc := range cases {
@@ -299,7 +299,7 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 				}
 			}
 			if tc.wantDetail != "" && (len(fn.auditCalls) != 1 ||
-				!strings.Contains(fn.auditCalls[0].Detail, tc.wantDetail)) {
+				!strings.Contains(fn.auditCalls[0].Detail.Text, tc.wantDetail)) {
 				t.Fatalf("auditCalls = %+v, want detail %q", fn.auditCalls, tc.wantDetail)
 			}
 		})

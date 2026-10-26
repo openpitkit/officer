@@ -23,7 +23,9 @@
 # it, a code or an abbreviation, a domain identifier, trading jargon with no
 # established translation, or an example code an operator types. A term on
 # the list is written exactly as listed wherever it appears in a translated
-# catalog; a concept the locale translates is translated everywhere.
+# catalog; a concept the locale translates is translated everywhere. The es
+# and pt-BR catalogs are written in Latin script and are read by
+# locale-english-words instead.
 #
 # The keep list is the `keep` group of the regex, one category per comment.
 # It is the only keep list: localization guidelines point here. An entry is

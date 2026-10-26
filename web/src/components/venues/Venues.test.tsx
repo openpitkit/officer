@@ -273,6 +273,12 @@ describe("venue blocks", () => {
     ["zh-CN", 1, "1 个提供方"],
     ["zh-CN", 2, "2 个提供方"],
     ["zh-CN", 11, "11 个提供方"],
+    ["es", 1, "1 proveedor"],
+    ["es", 2, "2 proveedores"],
+    ["es", 11, "11 proveedores"],
+    ["pt-BR", 1, "Provedores: 1"],
+    ["pt-BR", 2, "Provedores: 2"],
+    ["pt-BR", 11, "Provedores: 11"],
   ] as const)(
     "renders the %s provider count %i as %s",
     async (language, count, text) => {

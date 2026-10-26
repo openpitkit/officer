@@ -1,0 +1,155 @@
+{
+  "providers": {
+    "count_one": "Provedores: {{count}}",
+    "count_many": "Provedores: {{count}}",
+    "count_other": "Provedores: {{count}}",
+    "site": "Site",
+    "docs": "Documentação",
+    "symbols": "Símbolos"
+  },
+  "references": {
+    "site": "Site do provedor",
+    "docs": "Documentação do provedor",
+    "symbols": "Símbolos válidos"
+  },
+  "instrument": {
+    "externalSymbol": "Símbolo externo",
+    "baseAsset": "Base",
+    "quoteAsset": "Cotação"
+  },
+  "settings": {
+    "label": "Rótulo",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "keepStoredSecret": "Manter o segredo armazenado"
+  },
+  "actions": {
+    "addInstrument": "Adicionar instrumento",
+    "enable": "Ativar",
+    "disable": "Desativar",
+    "deleteInstrument": "Excluir instrumento",
+    "setFeeAccount": "Definir conta de taxas",
+    "grantAccess": "Conceder acesso",
+    "revokeAccess": "Revogar acesso",
+    "revokeAccountAccessFor": "Revogar o acesso da conta {{code}}",
+    "revokeGroupAccessFor": "Revogar o acesso do grupo {{code}}"
+  },
+  "state": {
+    "enabled": "Ativado",
+    "disabled": "Desativado"
+  },
+  "table": {
+    "external": "Externo",
+    "instrument": "Instrumento",
+    "state": "Estado",
+    "actions": "Ações"
+  },
+  "verify": {
+    "action": "Verificar símbolo",
+    "exists": "O símbolo existe",
+    "notFound": "Símbolo não encontrado",
+    "didYouMean": "Você quis dizer {{suggestion}}?",
+    "failed": "Falha na verificação",
+    "notTradable": "O símbolo existe, mas não é negociável"
+  },
+  "resolve": {
+    "action": "Resolver",
+    "searching": "Resolvendo…",
+    "filterLabel": "Filtrar símbolos resolvidos",
+    "filterPlaceholder": "Filtrar símbolos resolvidos",
+    "noFilteredResults": "Nenhum resultado corresponde ao filtro"
+  },
+  "deleteInstrument": {
+    "title": "Excluir o instrumento?"
+  },
+  "revokeAccess": {
+    "accountTitle": "Revogar o acesso da conta?",
+    "groupTitle": "Revogar o acesso do grupo?",
+    "accountDescription": "Revogar o acesso da conta {{account}} a {{label}}?",
+    "groupDescription": "Revogar o acesso do grupo {{group}} a {{label}}? As contas do grupo mantêm o acesso somente se ele tiver sido concedido diretamente a elas."
+  },
+  "accessBlocked": {
+    "groupNeedsFeeAccount": "Defina primeiro uma conta de taxas. Um grupo pode conter várias contas, e a {{provider}} cobra taxas que não estão vinculadas a ordens; o Officer precisa de uma conta para lançá-las.",
+    "secondAccountNeedsFeeAccount": "Defina primeiro uma conta de taxas. A {{provider}} cobra taxas que não estão vinculadas a ordens; com várias contas em uma mesma conexão, o Officer precisa de uma conta para lançá-las."
+  },
+  "access": {
+    "tableLabel": "Acessos concedidos",
+    "accountCount_one": "Contas: {{count}}",
+    "accountCount_many": "Contas: {{count}}",
+    "accountCount_other": "Contas: {{count}}",
+    "groupCount_one": "Grupos: {{count}}",
+    "groupCount_many": "Grupos: {{count}}",
+    "groupCount_other": "Grupos: {{count}}",
+    "kindFilter": "Tipo",
+    "kind": {
+      "all": "Todos",
+      "accounts": "Contas",
+      "groups": "Grupos"
+    },
+    "codeFilter": "Código",
+    "codePlaceholder": "Código da conta ou do grupo",
+    "columns": {
+      "subject": "Conta ou grupo",
+      "group": "Grupo de contas"
+    },
+    "groupBadge": "Grupo",
+    "empty": "Nenhuma conta ou grupo tem acesso",
+    "noMatches": "Nenhum acesso corresponde aos filtros"
+  },
+  "accessDialog": {
+    "accountTitle": "Acesso a conexões de negociação - {{code}}",
+    "groupTitle": "Acesso a conexões de negociação - grupo {{code}}",
+    "accountDescription": "Conceder e revogar aqui altera somente o acesso próprio desta conta. O acesso por meio do grupo dela é gerenciado no grupo.",
+    "groupDescription": "As contas deste grupo podem enviar ordens por qualquer conexão concedida ao grupo.",
+    "tableLabel": "Conexões de negociação",
+    "columns": {
+      "connection": "Conexão de negociação",
+      "access": "Acesso"
+    },
+    "state": {
+      "own": "Acesso próprio",
+      "group": "Por meio do grupo {{group}}",
+      "ownAndGroup": "Acesso próprio e também por meio do grupo {{group}}",
+      "granted": "Concedido",
+      "none": "Sem acesso",
+      "noOwn": "Sem acesso próprio"
+    },
+    "venueAccount": "Conta na plataforma: {{venueAccount}}",
+    "venueAccountBound": "Revogar aqui removeria a conta na plataforma. Altere este acesso na página de conexões de negociação.",
+    "groupVenueAccount": "Um acesso próprio substituiria a conta na plataforma do grupo, {{venueAccount}}. Conceda-o na página de conexões de negociação.",
+    "openConnections": "Ir para conexões de negociação",
+    "empty": {
+      "hint": "Configure primeiro uma conexão de negociação e, em seguida, conceda acesso a ela."
+    }
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Tamanho da página",
+      "rowCount": "{{count}} linhas por página"
+    }
+  },
+  "emptyInstruments": "Nenhum instrumento configurado",
+  "emptyConnections": "Nenhuma conexão de negociação",
+  "venueAccount": "Conta na plataforma",
+  "unsealed": {
+    "title": "As chaves serão armazenadas sem criptografia",
+    "description": "O Officer funciona sem chave mestra, portanto estas chaves são gravadas no banco de dados em texto claro. Qualquer pessoa que consiga ler o banco de dados ou uma cópia de segurança pode usá-las, inclusive para negociar onde a chave permitir. Configure uma chave mestra para armazená-las criptografadas.",
+    "caution": "Uma chave mestra perdida torna o banco de dados impossível de abrir - faça uma cópia de segurança da chave antes de configurá-la."
+  },
+  "diagnostics": {
+    "title": "Problemas",
+    "summary": "Ativos: {{count}}",
+    "collapsedSummary": "Problemas: {{count}}",
+    "collapse": "Recolher",
+    "expand": "Abrir",
+    "actions": "Ações sobre problemas",
+    "levelError": "erro",
+    "levelWarn": "aviso",
+    "levelInfo": "informação",
+    "groupActionNeeded": "Ação necessária",
+    "groupProvider": "Conexão / provedor",
+    "howToFix": "Como corrigir:",
+    "actionRemoveTarget": "Remover {{target}}",
+    "actionLogs": "Registros do serviço"
+  }
+}

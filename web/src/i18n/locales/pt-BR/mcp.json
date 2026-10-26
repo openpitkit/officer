@@ -1,0 +1,131 @@
+{
+  "access": {
+    "title": "Acesso MCP",
+    "descriptionPre": "Controla quais comandos MCP o agente de IA pode invocar. Comandos desativados retornam ao agente o aviso “desativado no painel” e não têm efeito no motor. Os comandos marcados como",
+    "descriptionProtected": "protegidos",
+    "descriptionPost": "concedem ao agente acesso de gravação e exigem confirmação explícita para serem ativados. O endpoint MCP é servido em",
+    "descriptionEnd": "."
+  },
+  "table": {
+    "on": "Ativado",
+    "command": "Comando",
+    "description": "Descrição",
+    "flags": "Marcadores",
+    "columnDescriptions": {
+      "on": "Esta coluna mostra se o comando MCP está ativado no momento.",
+      "command": "Esta coluna mostra o nome do comando MCP exposto ao agente.",
+      "description": "Esta coluna explica o que o comando permite que o agente faça.",
+      "flags": "Esta coluna mostra os marcadores de segurança e de implementação do comando."
+    },
+    "enableAriaLabel": "Ativar {{name}}",
+    "disabledNotice": "Desativado - retorna ao agente o aviso “desativado no painel”.",
+    "noDescription": "-"
+  },
+  "flags": {
+    "protected": "protegido",
+    "mutating": "modificador",
+    "notImplemented": "não implementado"
+  },
+  "dialog": {
+    "title": "Ativar o comando protegido?",
+    "body1Pre": "O comando",
+    "body1Mid": "está marcado como",
+    "body1Flag": "protegido",
+    "body1Post": ". Ativá-lo concede ao agente de IA a capacidade de alterar o banco de dados de maneiras que o operador não pode supervisionar nem controlar em tempo real.",
+    "body2": "Esta é uma barreira de proteção contra ações autônomas de IA. Ative-o somente se você pretende conceder esse poder ao agente e aceita o risco associado.",
+    "body3Pre": "Se não tiver certeza, clique em",
+    "body3Post": "- o comando continuará desativado.",
+    "confirm": "Ativar mesmo assim"
+  },
+  "command": {
+    "health": {
+      "description": "Informar a saúde da implantação do Pit Officer (versão/perfil/atividade do motor, acessibilidade do armazenamento)."
+    },
+    "get_account_state": {
+      "description": "Ler uma linha de conta e as barreiras de risco com escopo de conta."
+    },
+    "get_limits": {
+      "description": "Listar as barreiras de risco configuradas, com filtro opcional por conta."
+    },
+    "get_audit": {
+      "description": "Ler as entradas recentes do registro de auditoria do plano de controle."
+    },
+    "list_orders": {
+      "description": "Listar ordens com filtros, incluindo o filtro por conexão de negociação, ordenação e paginação."
+    },
+    "list_trades": {
+      "description": "Listar negócios com filtros, incluindo o filtro por conexão de negociação, ordenação e paginação."
+    },
+    "list_accounts": {
+      "description": "Listar contas com filtros, incluindo o filtro por conexão de negociação, ordenação e paginação."
+    },
+    "list_groups": {
+      "description": "Listar grupos de contas com filtros, incluindo o filtro por conexão de negociação, ordenação e paginação."
+    },
+    "check_order": {
+      "description": "Executar uma simulação pré-negociação sem efeitos para uma ordem (aprovação/rejeição + motivos); não altera nenhum estado."
+    },
+    "set_limit": {
+      "description": "Restringir uma barreira de risco: adicionar uma ou torná-la mais rígida; afrouxar e remover são recusados."
+    },
+    "submit_order": {
+      "description": "Enviar uma intenção de ordem pelo controle pré-negociação e obter um envelope de aprovação."
+    },
+    "submit_drop_copy_order": {
+      "description": "Enviar uma ordem drop-copy sem assinatura. As políticas mantêm suas alterações de estado normais, mas as rejeições de políticas e os bloqueios por interruptor de emergência de conta ou de grupo não impedem a ordem."
+    },
+    "confirm_execution": {
+      "description": "Registrar o histórico de confirmação de uma ordem do fluxo sem atividade de relatórios de execução."
+    },
+    "cancel": {
+      "description": "Cancelar uma ordem do fluxo sem atividade de relatórios de execução."
+    },
+    "report_fill": {
+      "description": "Aplicar um relatório de execução - uma execução, uma comissão ou uma situação do ciclo de vida - a uma ordem; uma situação final encerra a ordem e libera a reserva restante. É atestado em uma ordem comum, assinado a menos que o eSign esteja desativado, e não atestado em uma ordem drop-copy."
+    },
+    "get_credential_storage": {
+      "description": "Ler se as credenciais armazenadas estão criptografadas e quais contêm chaves em texto claro."
+    }
+  },
+  "connect": {
+    "title": "Conectar seu agente",
+    "subtitle": "Conecte um agente de IA a esta instância do Pit Officer via MCP ou baixe um artefato pronto para uso.",
+    "address": "Endereço MCP",
+    "token": "Token do agente",
+    "tokenNote": "Funciona somente para MCP. Ele não pode chamar a API REST nem abrir o painel.",
+    "openNote": "O Officer funciona sem token: este agente não precisa de nenhum - nem qualquer outro programa, contêiner ou agente neste computador.",
+    "openLink": "Serviço › Segurança",
+    "tab": {
+      "claude": "Claude",
+      "codex": "Codex",
+      "cursor": "Cursor",
+      "chatgpt": "ChatGPT",
+      "prompt": "Instruções"
+    },
+    "claude": {
+      "cliLabel": "Adicione o conector com o Claude CLI",
+      "desktopLabel": "Ou adicione esta entrada à configuração do Claude Desktop",
+      "bridgeNote": "O Claude Desktop acessa um servidor local por meio da ponte {{bridge}}, que exige {{runtime}}.",
+      "skillHint": "Prefere uma habilidade empacotada? Baixe uma Claude Agent Skill autônoma.",
+      "skillButton": "Baixar Claude Skill"
+    },
+    "codex": {
+      "label": "Adicione esta entrada a {{path}}"
+    },
+    "cursor": {
+      "label": "Adicione esta entrada a {{path}}"
+    },
+    "chatgpt": {
+      "urlLabel": "URL do conector MCP",
+      "step1": "Abra as configurações do seu GPT personalizado ou do conector do ChatGPT.",
+      "step2": "Adicione um conector MCP que aponte para a URL acima.",
+      "step3": "Ou crie uma ação do ChatGPT a partir da descrição OpenAPI em /docs.",
+      "publicUrlCaveat": "O ChatGPT hospedado é executado fora deste computador e só acessa um endereço HTTPS público. O Officer permanece neste computador e serve HTTP simples, portanto o ChatGPT hospedado não pode se conectar a ele. Em vez disso, conecte um agente executado neste computador.",
+      "instructionsHint": "Baixe o texto de instruções para um GPT personalizado.",
+      "instructionsButton": "Baixar instruções para GPT"
+    },
+    "prompt": {
+      "label": "Cole nas instruções do seu agente"
+    }
+  }
+}

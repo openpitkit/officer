@@ -87,7 +87,9 @@ func (n *localNode) CreateAsset(
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionCreateAsset,
 		Asset:  created.Code,
-		Detail: fmt.Sprintf("create asset %s", created.Code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateAsset, domain.AuditDetailParams{"asset": created.Code},
+		),
 	}); err != nil {
 		return domain.Asset{}, n.fatalPostEngineAuditByCode(
 			"audit create asset", "asset", created.Code,
@@ -122,7 +124,9 @@ func (n *localNode) UpdateAsset(
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionUpdateAsset,
 		Asset:  updated.Code,
-		Detail: updateAssetDetail(oldCode, updated.Code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailUpdateAsset, domain.AuditDetailParams{"asset": updated.Code},
+		),
 	}); err != nil {
 		return domain.Asset{}, fmt.Errorf("audit update asset: %w", err)
 	}
@@ -176,18 +180,26 @@ func (n *localNode) renameAsset(
 			fmt.Errorf("publish asset resolver rename: %w", err),
 		)
 	}
-	detail := updateAssetDetail(oldCode, updated.Code)
+	// A renamed asset is filed under both codes, and each record says which
+	// filing it is; a same-code update has no transition to state.
 	entries := []store.AuditEntry{{
 		Action: domain.AuditActionUpdateAsset,
 		Asset:  updated.Code,
-		Detail: detail,
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailUpdateAsset, domain.AuditDetailParams{"asset": updated.Code},
+		),
 	}}
 	if oldCode != updated.Code {
-		entries[0].Detail += " (record under new code)"
+		rename := domain.AuditDetailParams{"from": oldCode, "to": updated.Code}
+		entries[0].Detail = domain.NewAuditDetail(
+			domain.AuditDetailRenameAssetNewRecord, rename,
+		)
 		entries = append([]store.AuditEntry{{
 			Action: domain.AuditActionUpdateAsset,
 			Asset:  oldCode,
-			Detail: detail + " (record under old code)",
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailRenameAssetOldRecord, rename,
+			),
 		}}, entries...)
 	}
 	if err := n.auditBatch(durableCtx, caller, entries); err != nil {
@@ -199,15 +211,6 @@ func (n *localNode) renameAsset(
 		)
 	}
 	return updated, nil
-}
-
-// updateAssetDetail renders one asset update. Both codes are named only when
-// the update renames the asset; a same-code update has no arrow to render.
-func updateAssetDetail(previous string, next string) string {
-	if previous == next {
-		return fmt.Sprintf("update asset %s", next)
-	}
-	return fmt.Sprintf("update asset %s -> %s", previous, next)
 }
 
 // DeleteAsset removes the asset and audits the action. A forced delete rebuilds
@@ -246,7 +249,8 @@ func (n *localNode) DeleteAsset(
 		if err := n.realm.DeleteAsset(durableCtx, code, false); err != nil {
 			return fmt.Errorf("delete asset: %w", err)
 		}
-		auditDelete := func(detail string) error {
+		auditDelete := func(detailCode domain.AuditDetailCode) error {
+			detail := domain.NewAuditDetail(detailCode, domain.AuditDetailParams{"asset": code})
 			if err := n.audit(durableCtx, caller, store.AuditEntry{
 				Action: domain.AuditActionDeleteAsset,
 				Asset:  code,
@@ -263,12 +267,9 @@ func (n *localNode) DeleteAsset(
 				code,
 				err,
 			)
-			failureDetail := fmt.Sprintf(
-				"delete asset %s "+
-					"(resolver removal failed)",
-				code,
-			)
-			if auditErr := auditDelete(failureDetail); auditErr != nil {
+			if auditErr := auditDelete(
+				domain.AuditDetailDeleteAssetResolverFailed,
+			); auditErr != nil {
 				resultErr := errors.Join(cause, auditErr)
 				if rebuildErr := n.rebuildEngineFromStore(durableCtx); rebuildErr != nil {
 					resultErr = errors.Join(
@@ -298,21 +299,16 @@ func (n *localNode) DeleteAsset(
 			// Failure of the first write is fatal because it would leave the
 			// committed delete unrecorded. This corrective write only records
 			// successful reconciliation, so its failure is returned.
-			reconciledDetail := fmt.Sprintf(
-				"delete asset %s "+
-					"(resolver removal failed, reconciled)",
-				code,
-			)
-			if auditErr := auditDelete(reconciledDetail); auditErr != nil {
+			if auditErr := auditDelete(
+				domain.AuditDetailDeleteAssetResolverReconciled,
+			); auditErr != nil {
 				return internalPostCommitNodeMutationError(
 					errors.Join(reconciliation.err, auditErr),
 				)
 			}
 			return internalPostCommitNodeMutationError(reconciliation.err)
 		}
-		if auditErr := auditDelete(
-			fmt.Sprintf("delete asset %s", code),
-		); auditErr != nil {
+		if auditErr := auditDelete(domain.AuditDetailDeleteAsset); auditErr != nil {
 			return n.fatalPostEngineAuditByCode(
 				"audit delete asset", "asset", code, auditErr,
 			)
@@ -377,7 +373,9 @@ func (n *localNode) DeleteAsset(
 	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action: domain.AuditActionDeleteAsset,
 		Asset:  code,
-		Detail: fmt.Sprintf("delete asset %s", code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailDeleteAsset, domain.AuditDetailParams{"asset": code},
+		),
 	}); err != nil {
 		return n.fatalPostEngineAuditByCode(
 			"audit delete asset", "asset", code,
@@ -544,7 +542,9 @@ func (n *localNode) CreateAssetClass(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionCreateAssetClass,
-		Detail: fmt.Sprintf("create asset class %s", class.Code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateAssetClass, domain.AuditDetailParams{"class": class.Code},
+		),
 	}); err != nil {
 		return domain.AssetClass{}, fmt.Errorf("audit create asset class: %w", err)
 	}
@@ -568,7 +568,10 @@ func (n *localNode) UpdateAssetClass(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionUpdateAssetClass,
-		Detail: fmt.Sprintf("update asset class %s -> %s", oldCode, updated.Code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailUpdateAssetClass,
+			domain.AuditDetailParams{"from": oldCode, "to": updated.Code},
+		),
 	}); err != nil {
 		return domain.AssetClass{}, fmt.Errorf("audit update asset class: %w", err)
 	}
@@ -591,7 +594,9 @@ func (n *localNode) DeleteAssetClass(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionDeleteAssetClass,
-		Detail: fmt.Sprintf("delete asset class %s", code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailDeleteAssetClass, domain.AuditDetailParams{"class": code},
+		),
 	}); err != nil {
 		return fmt.Errorf("audit delete asset class: %w", err)
 	}

@@ -946,16 +946,16 @@ func TestLocalNode_CommittedAssetDeleteResolverFailureReconciles(t *testing.T) {
 		if row.Action != domain.AuditActionDeleteAsset || row.Asset != deleted.Code {
 			continue
 		}
-		switch row.Detail {
+		switch row.Detail.Text {
 		case fmt.Sprintf(
-			"delete asset %s "+
-				"(resolver removal failed)",
+			"Asset %s deleted "+
+				"(removal from the code index failed)",
 			deleted.Code,
 		):
 			failureRecorded = true
 		case fmt.Sprintf(
-			"delete asset %s "+
-				"(resolver removal failed, reconciled)",
+			"Asset %s deleted "+
+				"(removal from the code index failed, reconciled)",
 			deleted.Code,
 		):
 			reconciledRecorded = true
@@ -1042,16 +1042,16 @@ func TestLocalNode_CommittedAssetDeleteResolverFailureRebuildFailureFatals(t *te
 		if row.Action != domain.AuditActionDeleteAsset || row.Asset != deleted.Code {
 			continue
 		}
-		switch row.Detail {
+		switch row.Detail.Text {
 		case fmt.Sprintf(
-			"delete asset %s "+
-				"(resolver removal failed)",
+			"Asset %s deleted "+
+				"(removal from the code index failed)",
 			deleted.Code,
 		):
 			audited = true
 		case fmt.Sprintf(
-			"delete asset %s "+
-				"(resolver removal failed, reconciled)",
+			"Asset %s deleted "+
+				"(removal from the code index failed, reconciled)",
 			deleted.Code,
 		):
 			reconciledRecorded = true
@@ -1298,16 +1298,16 @@ func TestLocalNode_CommittedAssetDeleteResolverFailureReconciledAuditFailureIsRe
 		if row.Action != domain.AuditActionDeleteAsset || row.Asset != deleted.Code {
 			continue
 		}
-		switch row.Detail {
+		switch row.Detail.Text {
 		case fmt.Sprintf(
-			"delete asset %s "+
-				"(resolver removal failed)",
+			"Asset %s deleted "+
+				"(removal from the code index failed)",
 			deleted.Code,
 		):
 			failureRecorded = true
 		case fmt.Sprintf(
-			"delete asset %s "+
-				"(resolver removal failed, reconciled)",
+			"Asset %s deleted "+
+				"(removal from the code index failed, reconciled)",
 			deleted.Code,
 		):
 			reconciledRecorded = true
@@ -1457,7 +1457,7 @@ func TestLocalNode_DeleteAssetAuditSurvivesRequestCancellation(t *testing.T) {
 	for _, row := range rows {
 		if row.Action == domain.AuditActionDeleteAsset &&
 			row.Asset == "GOLD" &&
-			row.Detail == "delete asset GOLD" {
+			row.Detail.Text == "Asset GOLD deleted" {
 			return
 		}
 	}

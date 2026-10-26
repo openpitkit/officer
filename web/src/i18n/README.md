@@ -1,9 +1,9 @@
 # i18n
 
 Internationalization for the Pit Officer SPA, built on
-[react-i18next](https://react.i18next.com/). The bundled SPA ships `en`, `ru`, and
-`zh-CN` catalogs and exposes registration seams for framework consumers that
-add their own locale namespaces.
+[react-i18next](https://react.i18next.com/). The bundled SPA ships `en`, `ru`,
+`zh-CN`, `es`, and `pt-BR` catalogs and exposes registration seams for framework
+consumers that add their own locale namespaces.
 
 ## How it is wired
 

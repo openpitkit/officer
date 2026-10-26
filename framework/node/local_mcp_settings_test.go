@@ -49,7 +49,7 @@ func TestLocalNode_SetSettingStoresAndAudits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Detail != "set setting example_key=example-value" ||
+	if len(rows) != 1 || rows[0].Detail.Text != "Setting example_key changed to example-value" ||
 		rows[0].Actor != testCaller.Principal || rows[0].Source != testCaller.Source {
 		t.Fatalf("set_setting audit = %+v", rows)
 	}

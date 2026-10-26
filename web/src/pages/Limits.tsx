@@ -264,8 +264,8 @@ function DeleteConfirm({
           <AlertDialogDescription>
             <span className="block">
               {t("delete.description", {
-                policy: policyLabel(tc, target?.policy ?? ""),
-                scope: scopeLabel(tc, target?.scope ?? ""),
+                policy: target ? policyLabel(tc, target.policy) : "",
+                scope: target ? scopeLabel(tc, target.scope) : "",
                 account: accountFragment,
                 asset: target?.asset
                   ? t("delete.assetFragment", { asset: target.asset })

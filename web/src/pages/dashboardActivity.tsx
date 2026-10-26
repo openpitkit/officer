@@ -40,6 +40,7 @@ import {
 import type { ComponentType } from "react";
 
 import type { ActivityEntry } from "@/api/types";
+import { codeLabel } from "@/i18n/codeLabel";
 
 // ---------------------------------------------------------------------------
 // Activity grouping
@@ -131,13 +132,58 @@ export function groupActivity(entries: ActivityEntry[]): ActivityGroup[] {
 export type AuditIconMeta = {
   Icon: ComponentType<{ className?: string }>;
   variant: "neutral" | "ok" | "warn" | "danger" | "accent";
-  /** i18n key under the "dashboard" namespace, or a raw fallback string. */
-  titleKey: string;
+  /** i18n key under the "dashboard" namespace, or `null` for an action this
+   *  mapping does not know. */
+  titleKey: string | null;
 };
 
+/** Title keys of the audit actions that have no icon of their own. */
+const AUDIT_ACTION_TITLE_KEYS = new Map<string, string>([
+  ["hydrate", "audit.action.hydrate"],
+  ["create_asset", "audit.action.createAsset"],
+  ["update_asset", "audit.action.updateAsset"],
+  ["delete_asset", "audit.action.deleteAsset"],
+  ["set_notes", "audit.action.setAccountNotes"],
+  ["set_group_notes", "audit.action.setGroupNotes"],
+  ["set_group", "audit.action.setAccountGroup"],
+  ["set_account_currency", "audit.action.setAccountCurrency"],
+  ["set_group_currency", "audit.action.setGroupCurrency"],
+  ["create_asset_class", "audit.action.createAssetClass"],
+  ["update_asset_class", "audit.action.updateAssetClass"],
+  ["delete_asset_class", "audit.action.deleteAssetClass"],
+  ["execution_report", "audit.action.executionReport"],
+  ["set_mcp_access", "audit.action.setMcpAccess"],
+  ["set_setting", "audit.action.setSetting"],
+  ["set_market_data", "audit.action.setMarketData"],
+  ["set_trading", "audit.action.setTrading"],
+  ["venue_fee_skipped", "audit.action.venueFeeSkipped"],
+  ["export_backup", "audit.action.exportBackup"],
+  ["restore_backup", "audit.action.restoreBackup"],
+  ["export_business_csv", "audit.action.exportBusinessCsv"],
+  ["generate_signing_key", "audit.action.generateSigningKey"],
+  ["import_signing_key", "audit.action.importSigningKey"],
+  ["set_signing_config", "audit.action.setSigningConfig"],
+  ["approval_issued", "audit.action.approvalIssued"],
+  ["approval_failed", "audit.action.approvalFailed"],
+  ["approval_confirmed", "audit.action.approvalConfirmed"],
+  ["approval_cancelled", "audit.action.approvalCancelled"],
+  ["set_access_mode", "audit.action.setAccessMode"],
+  ["issue_access_token", "audit.action.issueAccessToken"],
+  ["set_panel_password", "audit.action.setPanelPassword"],
+  ["issue_recovery_code", "audit.action.issueRecoveryCode"],
+  ["use_recovery_code", "audit.action.useRecoveryCode"],
+]);
+
+/** The display label of an `AuditEntry.action` code in the current language;
+ *  an action with no title key renders as the code itself (see `codeLabel`). */
+export function auditActionLabel(action: string): string {
+  const { titleKey } = auditActionMeta(action);
+  return codeLabel(titleKey === null ? null : `dashboard:${titleKey}`, action);
+}
+
 /** Map an `AuditEntry.action` string to an icon + badge variant.
- *  `titleKey` is an i18n key under "dashboard:audit.action.*", or the raw
- *  action string for unrecognised actions (used as i18n defaultValue). */
+ *  `titleKey` is an i18n key under "dashboard:audit.action.*", or `null` for
+ *  an unrecognised action. */
 export function auditActionMeta(action: string): AuditIconMeta {
   const a = action.toLowerCase();
 
@@ -148,13 +194,13 @@ export function auditActionMeta(action: string): AuditIconMeta {
       variant: "ok",
       titleKey: "audit.action.createAccount",
     };
-  if (a === "block_account")
+  if (a === "block_account" || a === "block")
     return {
       Icon: Ban,
       variant: "danger",
       titleKey: "audit.action.blockAccount",
     };
-  if (a === "unblock_account")
+  if (a === "unblock_account" || a === "unblock")
     return {
       Icon: LockOpen,
       variant: "ok",
@@ -274,9 +320,10 @@ export function auditActionMeta(action: string): AuditIconMeta {
       titleKey: "audit.action.stopService",
     };
 
-  // Policy / config and unknown - raw action string as fallback key.
+  // Policy / config and the rest: a title from the table, `null` if unknown.
+  const titleKey = AUDIT_ACTION_TITLE_KEYS.get(a) ?? null;
   if (a.includes("policy") || a.includes("config"))
-    return { Icon: Layers, variant: "accent", titleKey: action };
+    return { Icon: Layers, variant: "accent", titleKey };
 
-  return { Icon: HelpCircle, variant: "neutral", titleKey: action };
+  return { Icon: HelpCircle, variant: "neutral", titleKey };
 }

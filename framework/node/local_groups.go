@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/reject"
@@ -142,7 +143,9 @@ func (n *localNode) CreateGroup(
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionCreateGroup,
 		Group:  created.Code,
-		Detail: fmt.Sprintf("create group %s", group.Code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailCreateGroup, domain.AuditDetailParams{"group": group.Code},
+		),
 	}); err != nil {
 		return domain.AccountGroup{}, n.fatalPostEngineAuditByCode(
 			"audit create group", "group", created.Code,
@@ -217,7 +220,9 @@ func (n *localNode) SetGroupNotes(
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionSetGroupNotes,
 		Group:  code,
-		Detail: fmt.Sprintf("set notes group %s", code),
+		Detail: domain.NewAuditDetail(
+			domain.AuditDetailSetGroupNotes, domain.AuditDetailParams{"group": code},
+		),
 	}); err != nil {
 		if !created {
 			return fmt.Errorf("audit set group notes: %w", err)
@@ -567,9 +572,9 @@ func (n *localNode) DeleteGroup(
 		return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 			Action: domain.AuditActionDeleteGroup,
 			Group:  code,
-			Detail: fmt.Sprintf(
-				"delete group %s %s", code, currencyValue(group.Currency),
-			),
+		}, domain.AuditDetailDeleteGroupCurrencyRefused, domain.AuditDetailParams{
+			"group":    code,
+			"currency": currencyValue(group.Currency),
 		}, domain.NewCurrencyChangeBlockedError(
 			domain.ScopeAccountGroup, code, err,
 		))
@@ -617,12 +622,11 @@ func (n *localNode) DeleteGroup(
 	summary := store.AuditEntry{
 		Action: domain.AuditActionDeleteGroup,
 		Group:  code,
-		Detail: fmt.Sprintf(
-			"delete group %s; detachedAccounts=%d destroyedSpotFundsPnlBounds=%d",
-			code,
-			len(members),
-			destroyedPnlBounds,
-		),
+		Detail: domain.NewAuditDetail(domain.AuditDetailDeleteGroup, domain.AuditDetailParams{
+			"group":                       code,
+			"detachedAccounts":            strconv.Itoa(len(members)),
+			"destroyedSpotFundsPnlBounds": strconv.Itoa(destroyedPnlBounds),
+		}),
 	}
 	if err := n.auditGroupDelete(
 		durableCtx, caller, summary, code, members,
@@ -710,10 +714,9 @@ func (n *localNode) auditGroupDelete(
 			Action:  domain.AuditActionDeleteGroup,
 			Account: member.Code,
 			Group:   code,
-			Detail: fmt.Sprintf(
-				"delete group %s; detach account %s",
-				code,
-				member.Code,
+			Detail: domain.NewAuditDetail(
+				domain.AuditDetailDeleteGroupDetachAccount,
+				domain.AuditDetailParams{"group": code, "account": member.Code.String()},
 			),
 		})
 		if len(entries) < auditGroupDeleteChunk {

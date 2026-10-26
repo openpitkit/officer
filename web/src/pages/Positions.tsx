@@ -64,6 +64,7 @@ import {
   useOfficerApi,
   type MissingAccountPolicy,
 } from "@/framework";
+import { codeLabel, sourceLabel } from "@/i18n/codeLabel";
 import { formatDate, formatTime } from "@/i18n/format";
 import type {
   Adjustment,
@@ -3283,7 +3284,7 @@ function HistoryRow({
       </TableCell>
       <TableCell className="w-[var(--positions-source-column-width)]">
         <Badge variant="neutral" className="text-[0.6875rem]">
-          {adj.source}
+          {sourceLabel(adj.source)}
         </Badge>
       </TableCell>
       <TableCell className="text-xs">
@@ -3300,7 +3301,7 @@ function HistoryRow({
             {t("history.status.accepted")}
           </Badge>
         ) : (
-          <Badge variant="neutral">{adj.status}</Badge>
+          <Badge variant="neutral">{codeLabel(null, adj.status)}</Badge>
         )}
       </TableCell>
       <TableCell className="text-xs">
@@ -4074,7 +4075,7 @@ export function Positions() {
       ? {
           key: "source",
           label: t("history.sourceLabel"),
-          value: sourceFilter,
+          value: sourceLabel(sourceFilter),
           clear: () => {
             setSourceFilter("__all__");
             resetHistoryPage();
@@ -4398,7 +4399,7 @@ export function Positions() {
                   { value: "__all__", label: t("history.sourceAll") },
                   ...SOURCES.map((source) => ({
                     value: source,
-                    label: source,
+                    label: sourceLabel(source),
                   })),
                 ]}
                 onChange={(value) => {

@@ -161,7 +161,11 @@ func TestRecordAccountAdjustmentPersistsEngineBalanceInSameTx(t *testing.T) {
 			Account: "acc-1",
 			Asset:   "AAPL",
 			Source:  domain.SourcePanel,
-			Detail:  "set balance realized_pnl account acc-1 asset=AAPL realized_pnl=-12.50",
+			Detail: domain.NewAuditDetail(domain.AuditDetailAdjustmentAccepted, domain.AuditDetailParams{
+				"account":        "acc-1",
+				"asset":          "AAPL",
+				"adjustmentType": string(domain.AdjustmentTypeCorrection),
+			}),
 		},
 	})
 	if err != nil {
@@ -185,7 +189,7 @@ func TestRecordAccountAdjustmentPersistsEngineBalanceInSameTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "realized_pnl=-12.50") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail.Text, "asset AAPL, type correction: accepted") {
 		t.Fatalf("audit rows = %+v, want realized pnl audit", rows)
 	}
 }
@@ -219,7 +223,11 @@ func TestRecordAccountAdjustmentPreservesUnsetAndZeroRealizedPnl(t *testing.T) {
 				Audit: fwstore.AuditEntry{
 					Action: domain.AuditActionAdjustment, Account: "acc-1",
 					Asset: "AAPL", Source: domain.SourcePanel,
-					Detail: "adjust balance account acc-1 asset=AAPL",
+					Detail: domain.NewAuditDetail(domain.AuditDetailAdjustmentAccepted, domain.AuditDetailParams{
+						"account":        "acc-1",
+						"asset":          "AAPL",
+						"adjustmentType": string(domain.AdjustmentTypeCorrection),
+					}),
 				},
 			})
 			if err != nil {
@@ -279,7 +287,11 @@ func TestRecordAccountAdjustmentPersistsHaltedRealizedPnlWithoutValue(t *testing
 				Audit: fwstore.AuditEntry{
 					Action: domain.AuditActionAdjustment, Account: "acc-1",
 					Asset: "AAPL", Source: domain.SourcePanel,
-					Detail: "halt balance realized_pnl account acc-1 asset=AAPL",
+					Detail: domain.NewAuditDetail(domain.AuditDetailAdjustmentAccepted, domain.AuditDetailParams{
+						"account":        "acc-1",
+						"asset":          "AAPL",
+						"adjustmentType": string(domain.AdjustmentTypeCorrection),
+					}),
 				},
 			})
 			if err != nil {
@@ -336,7 +348,11 @@ func TestRecordAccountAdjustmentDeletesEngineEmptyBalance(t *testing.T) {
 				Audit: fwstore.AuditEntry{
 					Action: domain.AuditActionAdjustment, Account: "acc-1",
 					Asset: "AAPL", Source: domain.SourcePanel,
-					Detail: "clear balance account acc-1 asset=AAPL",
+					Detail: domain.NewAuditDetail(domain.AuditDetailAdjustmentAccepted, domain.AuditDetailParams{
+						"account":        "acc-1",
+						"asset":          "AAPL",
+						"adjustmentType": string(domain.AdjustmentTypeCorrection),
+					}),
 				},
 			})
 			if err != nil {

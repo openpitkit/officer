@@ -254,7 +254,50 @@
     "accountBlocked": "Счёт {{account}} заблокирован",
     "accountBlockedUnnamed": "Счёт заблокирован",
     "rejectReasons": {
-      "account_blocked": "Счёт заблокирован"
+      "account_blocked": "Счёт заблокирован",
+      "missing_required_field": "Не заполнено обязательное поле",
+      "invalid_field_format": "Неверный формат поля",
+      "invalid_field_value": "Недопустимое значение поля",
+      "unsupported_order_type": "Неподдерживаемый тип ордера",
+      "unsupported_time_in_force": "Неподдерживаемый срок действия",
+      "unsupported_order_attribute": "Неподдерживаемый атрибут ордера",
+      "duplicate_client_order_id": "Повторный клиентский идентификатор ордера",
+      "too_late_to_enter": "Слишком поздно для ввода ордера",
+      "exchange_closed": "Биржа закрыта",
+      "unknown_instrument": "Неизвестный инструмент",
+      "unknown_account": "Неизвестный счёт",
+      "unknown_venue": "Неизвестная торговая площадка",
+      "unknown_clearing_account": "Неизвестный клиринговый счёт",
+      "unknown_collateral_asset": "Неизвестный актив обеспечения",
+      "insufficient_funds": "Недостаточно средств",
+      "insufficient_margin": "Недостаточно маржи",
+      "insufficient_position": "Недостаточная позиция",
+      "credit_limit_exceeded": "Превышен кредитный лимит",
+      "risk_limit_exceeded": "Превышен риск-лимит",
+      "order_exceeds_limit": "Ордер превышает лимит",
+      "order_qty_exceeds_limit": "Количество ордера превышает лимит",
+      "order_notional_exceeds_limit": "Номинал ордера превышает лимит",
+      "position_limit_exceeded": "Превышен лимит позиции",
+      "concentration_limit_exceeded": "Превышен лимит концентрации",
+      "leverage_limit_exceeded": "Превышен лимит кредитного плеча",
+      "rate_limit_exceeded": "Превышен лимит частоты ордеров",
+      "pnl_kill_switch_triggered": "Сработал P&L-ограничитель",
+      "account_not_authorized": "Счёт не авторизован",
+      "compliance_restriction": "Ограничение комплаенса",
+      "instrument_restricted": "Инструмент ограничен",
+      "jurisdiction_restriction": "Юрисдикционное ограничение",
+      "wash_trade_prevention": "Предотвращение фиктивной сделки",
+      "self_match_prevention": "Предотвращение самоисполнения",
+      "short_sale_restriction": "Ограничение коротких продаж",
+      "risk_configuration_missing": "Отсутствует конфигурация рисков",
+      "reference_data_unavailable": "Справочные данные недоступны",
+      "order_value_calculation_failed": "Не удалось рассчитать стоимость ордера",
+      "system_unavailable": "Система недоступна",
+      "mark_price_unavailable": "Цена переоценки недоступна",
+      "account_adjustment_bounds_exceeded": "Нарушены границы корректировки счёта",
+      "arithmetic_overflow": "Арифметическое переполнение",
+      "custom": "Пользовательское отклонение",
+      "other": "Прочее отклонение"
     }
   },
 
@@ -352,6 +395,21 @@
         "rejectCode": "код {{code}}",
         "rejectScope": "скоп {{scope}}",
         "rejectPolicy": "политика {{policy}}",
+        "type": {
+          "submitted": "Отправлен",
+          "pre_trade_accepted": "Принят предторговым контролем",
+          "pre_trade_rejected": "Отклонён предторговым контролем",
+          "committed": "Зафиксирован",
+          "rolled_back": "Откатан",
+          "confirmed": "Подтверждён",
+          "fill": "Исполнение",
+          "commission": "Комиссия",
+          "cancelled": "Отменён"
+        },
+        "scopes": {
+          "order": "ордер",
+          "account": "счёт"
+        },
         "verifySigned": "Воспроизвести и проверить подпись этого события",
         "verifyUnsigned": "Воспроизвести неподписанную аттестацию этого события"
       },
@@ -501,7 +559,20 @@
     "nonce": "Уникальное значение",
     "keyId": "Идентификатор ключа",
     "algorithm": "Алгоритм",
-    "issuedAt": "Выпущен"
+    "issuedAt": "Выпущен",
+    "verdicts": {
+      "accept": "Принять",
+      "reject": "Отклонить"
+    },
+    "orderTypes": {
+      "market": "Рыночный",
+      "limit": "Лимитный"
+    },
+    "outcomes": {
+      "applied": "Применён",
+      "confirmed": "Подтверждён",
+      "cancelled": "Отменён"
+    }
   },
 
   "esign": {
