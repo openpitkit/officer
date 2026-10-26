@@ -192,19 +192,19 @@ func handleGetOrderEventReproduction(svc backend.ControlPlane) http.HandlerFunc 
 			httpx.WriteErr(w, err)
 			return
 		}
-		var event *domain.OrderEvent
+		index := -1
 		for i := range detail.Events {
 			if detail.Events[i].ExternalID.String() == eventID {
-				event = &detail.Events[i]
+				index = i
 				break
 			}
 		}
-		if event == nil {
+		if index < 0 {
 			httpx.WriteErrMsg(w, http.StatusNotFound, "not_found",
 				"order event not found")
 			return
 		}
-		bundle, err := buildEventReproduction(r.Context(), svc, *event)
+		bundle, err := buildEventReproduction(r.Context(), svc, detail, index)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -223,8 +223,14 @@ func handleGetOrderEventReproduction(svc backend.ControlPlane) http.HandlerFunc 
 // key is resolved rotation-safe by the attestation's keyId. No re-issue or
 // re-sign occurs.
 func buildEventReproduction(
-	ctx context.Context, svc backend.ControlPlane, event domain.OrderEvent,
+	ctx context.Context, svc backend.ControlPlane, detail domain.OrderDetail,
+	index int,
 ) (eventReproductionDTO, error) {
+	event := detail.Events[index]
+	// The order as it stood once the event was recorded: a later event must not
+	// change the answer the reproduced request received.
+	through := detail
+	through.Events = detail.Events[:index+1]
 	bundle := eventReproductionDTO{
 		Event: toOrderEventDTO(event),
 		ESign: eventReproductionESignDTO{
@@ -262,7 +268,9 @@ func buildEventReproduction(
 		return bundle, nil
 	}
 	bundle.Request = toEventReproductionRequestDTO(env.Approval)
-	bundle.Response = toEventReproductionResponseDTO(event, att, env.Approval)
+	bundle.Response = toEventReproductionResponseDTO(
+		event, through, att, env.Approval,
+	)
 
 	canon, err := fwsigning.CanonicalBytes(env.Approval)
 	if err != nil {
@@ -345,8 +353,10 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 // response the robot received for the attested request. The envelope is carried
 // verbatim in the response's signedApproval or signedAttestation field, matching
 // the live handler. Only the facet matching the request type is populated.
+// detail is the order the event belongs to, its events ending with that one.
 func toEventReproductionResponseDTO(
-	event domain.OrderEvent, att *domain.EventAttestation, p domain.ApprovalPayload,
+	event domain.OrderEvent, detail domain.OrderDetail,
+	att *domain.EventAttestation, p domain.ApprovalPayload,
 ) *eventReproductionResponseDTO {
 	out := &eventReproductionResponseDTO{}
 	switch att.RequestType {
@@ -371,9 +381,9 @@ func toEventReproductionResponseDTO(
 			Signed:            eventAttestationSigned(att),
 		}
 	case domain.AttestationRequestConfirm:
-		out.Confirm = orderMutationResponseFromPayload(event, att, p)
+		out.Confirm = orderMutationResponseFromPayload(detail, att, p)
 	case domain.AttestationRequestCancel:
-		out.Cancel = orderMutationResponseFromPayload(event, att, p)
+		out.Cancel = orderMutationResponseFromPayload(detail, att, p)
 	}
 	return out
 }
@@ -418,29 +428,27 @@ func executionResultFromPayload(p domain.ApprovalPayload) httpx.ExecutionResultD
 	return httpx.ExecutionResultDTO{Blocks: blocks, Outcomes: make([]httpx.ExecutionOutcomeDTO, 0)}
 }
 
-// orderMutationResponseFromPayload reconstructs the confirm/cancel response DTO
-// from persisted state. The order is rebuilt from the payload's bound params and
-// result status; the envelope is carried verbatim.
+// orderMutationResponseFromPayload reconstructs the confirm/cancel response the
+// live handler wrote: the persisted order through the same serializer, with the
+// account, status and open quantity the request attested. The envelope is
+// carried verbatim.
 func orderMutationResponseFromPayload(
-	event domain.OrderEvent, att *domain.EventAttestation, p domain.ApprovalPayload,
+	detail domain.OrderDetail, att *domain.EventAttestation, p domain.ApprovalPayload,
 ) *orderMutationResponseDTO {
-	status := ""
+	order := detail.Order
+	// The account code is the attested one: a later rename changes the persisted
+	// order's code, not the answer the request received.
+	order.Account = domain.AccountID(p.AccountID)
+	order.Status, order.Leaves = "", ""
 	if p.Result != nil {
-		status = p.Result.OrderStatus
+		order.Status = domain.OrderStatus(p.Result.OrderStatus)
+		order.Leaves = p.Result.LeavesQuantity
 	}
+	// A confirm or cancel shortcut is refused once an execution report exists,
+	// so the order it answered carried no commission; later reports add some.
+	order.CommissionSubtotals = nil
 	return &orderMutationResponseDTO{
-		Order: httpx.OrderDTO{
-			ID:                  event.Order.String(),
-			Account:             p.AccountID,
-			Side:                p.Side,
-			AmountKind:          p.AmountKind,
-			AmountValue:         p.Quantity,
-			CommissionSubtotals: httpx.ToCommissionDTOs(nil),
-			Price:               p.LimitPrice,
-			Status:              status,
-			DisplayPrice:        "",
-			Signed:              eventAttestationSigned(att),
-		},
+		Order:             httpx.ToOrderDTO(order, detail.DisplayPrice, detail.Signed()),
 		SignedAttestation: att.SignedEnvelope,
 		AttestationKeyID:  att.KeyID,
 		Signed:            eventAttestationSigned(att),

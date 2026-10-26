@@ -663,7 +663,12 @@ func TestOrderReproduction_SignedResultFields(t *testing.T) {
 	}
 }
 
-func TestOrderReproduction_ConfirmCommissionSubtotalsArray(t *testing.T) {
+// TestOrderReproduction_ConfirmOrderShape verifies the reproduced confirm order
+// is the live response: the persisted order through the live serializer, with
+// the account, status and open quantity attested for the confirm rather than
+// the ones a later rename and fill left, and an empty commission subtotal
+// array, not null.
+func TestOrderReproduction_ConfirmOrderShape(t *testing.T) {
 	ctx := context.Background()
 	st := newReproSigningStore()
 	signer, err := appsigning.New(st)
@@ -683,16 +688,27 @@ func TestOrderReproduction_ConfirmCommissionSubtotalsArray(t *testing.T) {
 	payload := reproPayload(id)
 	payload.RequestType = string(domain.AttestationRequestConfirm)
 	payload.Result = &domain.AttestationResult{
-		Outcome:     "committed",
-		OrderStatus: string(domain.OrderStatusCommitted),
-		Blocks:      []domain.AttestationBlock{},
+		Outcome:        "committed",
+		OrderStatus:    string(domain.OrderStatusCommitted),
+		LeavesQuantity: "10",
+		Blocks:         []domain.AttestationBlock{},
 	}
 	token, err := signer.Sign(payload)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
+	// The order came from the API and the event from the panel; since the confirm
+	// its account was renamed and a later fill moved it on.
+	detail := reproDetail(id, attestationFromToken(t, token))
+	detail.Order.Source = domain.SourceAPI
+	detail.Order.Account = "acc-renamed"
+	detail.Order.Principal = "operator"
+	detail.Order.Status = domain.OrderStatusFilled
+	detail.Order.Leaves = "0"
+	detail.Order.CommissionSubtotals = []domain.Commission{{Amount: "1", Currency: "USD"}}
+	detail.DisplayPrice = "150.25"
 	svc := &fakeService{
-		orderDetail:    reproDetail(id, attestationFromToken(t, token)),
+		orderDetail:    detail,
 		publicKeysByID: map[string]string{key.KeyID: pub},
 	}
 	r, err := newRouter(svc)
@@ -717,6 +733,21 @@ func TestOrderReproduction_ConfirmCommissionSubtotalsArray(t *testing.T) {
 	if !ok {
 		t.Fatalf("want confirm.order object, got %T", confirm["order"])
 	}
+	for field, want := range map[string]string{
+		"at":             detail.Order.At.Format(time.RFC3339Nano),
+		"account":        "acc-1",
+		"principal":      "operator",
+		"baseAsset":      "AAPL",
+		"quoteAsset":     "USD",
+		"source":         string(domain.SourceAPI),
+		"status":         string(domain.OrderStatusCommitted),
+		"leavesQuantity": "10",
+		"displayPrice":   "150.25",
+	} {
+		if order[field] != want {
+			t.Fatalf("confirm.order.%s = %v, want %q", field, order[field], want)
+		}
+	}
 	commissions, ok := order["commissionSubtotals"].([]any)
 	if !ok {
 		t.Fatalf(
@@ -727,6 +758,67 @@ func TestOrderReproduction_ConfirmCommissionSubtotalsArray(t *testing.T) {
 	}
 	if len(commissions) != 0 {
 		t.Fatalf("commissionSubtotals = %v, want empty array", commissions)
+	}
+}
+
+// TestOrderReproduction_ConfirmSignedAsAnswered verifies the reproduced confirm
+// order reports the signed flag the live answer carried: an unsigned confirm
+// stays unsigned when a later event of the order is signed.
+func TestOrderReproduction_ConfirmSignedAsAnswered(t *testing.T) {
+	ctx := context.Background()
+	signer, err := appsigning.New(newReproSigningStore())
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+	if _, err := signer.GenerateKey(ctx); err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	id := extID("repro-unsigned")
+	payload := reproPayload(id)
+	payload.RequestType = string(domain.AttestationRequestConfirm)
+	payload.Result = &domain.AttestationResult{
+		Outcome:     "committed",
+		OrderStatus: string(domain.OrderStatusCommitted),
+		Blocks:      []domain.AttestationBlock{},
+	}
+	unsigned, err := appsigning.SignNone(payload)
+	if err != nil {
+		t.Fatalf("sign none: %v", err)
+	}
+	later, err := signer.Sign(reproPayload(id))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	detail := reproDetail(id, attestationFromToken(t, unsigned))
+	detail.Events = append(detail.Events, domain.OrderEvent{
+		At:          time.Now().UTC(),
+		ExternalID:  extID("repro-later"),
+		Order:       id,
+		Type:        domain.OrderEventPreTradeAccepted,
+		Source:      domain.SourceAPI,
+		Attestation: attestationFromToken(t, later),
+	})
+	if !detail.Signed() {
+		t.Fatal("the later event must sign the order as it stands now")
+	}
+	r, err := newRouter(&fakeService{orderDetail: detail})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, reproURL(id), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	response, _ := bodyMap(t, rec.Result())["response"].(map[string]any)
+	confirm, _ := response["confirm"].(map[string]any)
+	order, ok := confirm["order"].(map[string]any)
+	if !ok {
+		t.Fatalf("want confirm.order object, got %v", response)
+	}
+	if order["signed"] != false {
+		t.Fatalf("confirm.order.signed = %v, want false", order["signed"])
 	}
 }
 
