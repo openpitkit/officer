@@ -11,6 +11,8 @@ connection. You can also use Officer from trading software or AI agents.
 
 ## Run
 
+For a visual walkthrough, see the [video guides](https://officer.openpit.dev/video-guides).
+
 Officer runs on your own computer, and you use it through a web browser.
 Docker lets you run the same ready-made application on Windows, macOS, and
 Linux, without building it or installing programming tools.
