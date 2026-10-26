@@ -114,7 +114,7 @@ func TestParseAlpacaQuoteUpdates(t *testing.T) {
 		{"T":"t","S":"AAPL","p":12345678901234567890.323456789,"t":"2026-06-20T10:11:13Z"}
 	]`)
 
-	updates := parseAlpacaQuoteUpdates(payload, subs)
+	updates := parseAlpacaQuoteUpdates(payload, subs, map[string]fwmarketdata.QuoteUpdate{})
 	if len(updates) != 2 {
 		t.Fatalf("len(updates) = %d, want 2", len(updates))
 	}
@@ -141,7 +141,7 @@ func TestParseAlpacaQuoteUpdatesStringPrices(t *testing.T) {
 		{"T":"t","S":"AAPL","p":"191.02","t":"2026-06-20T10:11:13Z"}
 	]`)
 
-	updates := parseAlpacaQuoteUpdates(payload, subs)
+	updates := parseAlpacaQuoteUpdates(payload, subs, map[string]fwmarketdata.QuoteUpdate{})
 	if len(updates) != 2 {
 		t.Fatalf("len(updates) = %d, want 2", len(updates))
 	}
@@ -150,6 +150,40 @@ func TestParseAlpacaQuoteUpdatesStringPrices(t *testing.T) {
 	}
 	if updates[1].Mark != "191.02" {
 		t.Fatalf("trade update = %+v", updates[1])
+	}
+}
+
+func TestParseAlpacaQuoteUpdatesKeepLastPricesAcrossFrames(t *testing.T) {
+	t.Parallel()
+
+	subs := mustNormalizeAlpacaSubscriptions(t, []fwmarketdata.Subscription{
+		{External: "AAPL", Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD")},
+	})
+	last := map[string]fwmarketdata.QuoteUpdate{}
+	frames := []string{
+		`[{"T":"t","S":"AAPL","p":"191.02","t":"2026-06-20T10:11:12Z"}]`,
+		`[{"T":"q","S":"AAPL","bp":"191.01","ap":"191.03","t":"2026-06-20T10:11:13Z"}]`,
+		`[{"T":"t","S":"AAPL","p":"191.04","t":"2026-06-20T10:11:14Z"}]`,
+	}
+	var got []fwmarketdata.QuoteUpdate
+	for _, frame := range frames {
+		got = append(got, parseAlpacaQuoteUpdates([]byte(frame), subs, last)...)
+	}
+	want := []struct{ mark, bid, ask string }{
+		{"191.02", "", ""},
+		{"191.02", "191.01", "191.03"},
+		{"191.04", "191.01", "191.03"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len(updates) = %d, want %d", len(got), len(want))
+	}
+	for i, update := range got {
+		if update.Mark != want[i].mark || update.Bid != want[i].bid || update.Ask != want[i].ask {
+			t.Fatalf("update %d = %+v, want %+v", i, update, want[i])
+		}
+	}
+	if !got[2].AsOf.Equal(time.Date(2026, 6, 20, 10, 11, 14, 0, time.UTC)) {
+		t.Fatalf("AsOf = %s", got[2].AsOf)
 	}
 }
 

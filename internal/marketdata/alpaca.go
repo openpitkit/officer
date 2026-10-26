@@ -275,6 +275,7 @@ func (c *alpacaConnector) stream(
 	var (
 		unparsable unparsableTracker
 		delivered  bool
+		last       = make(map[string]fwmarketdata.QuoteUpdate, len(subs))
 	)
 	for {
 		payload, err := c.read(ctx, conn)
@@ -288,7 +289,7 @@ func (c *alpacaConnector) stream(
 		if _, ok := alpacaControlFrames(payload); ok {
 			continue
 		}
-		updates := parseAlpacaQuoteUpdates(payload, subs)
+		updates := parseAlpacaQuoteUpdates(payload, subs, last)
 		if len(updates) == 0 {
 			unparsable.recordUnparsed(c.reportDiag)
 			continue
@@ -390,8 +391,10 @@ func alpacaSymbols(subs []alpacaSubscription) []string {
 	return symbols
 }
 
+// parseAlpacaQuoteUpdates turns stream events into quotes. last holds the
+// previous quote per symbol for the life of one stream connection.
 func parseAlpacaQuoteUpdates(
-	payload []byte, subs []alpacaSubscription,
+	payload []byte, subs []alpacaSubscription, last map[string]fwmarketdata.QuoteUpdate,
 ) []fwmarketdata.QuoteUpdate {
 	var rawEvents []map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &rawEvents); err != nil {
@@ -408,7 +411,7 @@ func parseAlpacaQuoteUpdates(
 			Bid:       rawDecimalString(rawEvent["bp"]),
 			Ask:       rawDecimalString(rawEvent["ap"]),
 		}
-		if update, ok := quoteUpdateFromAlpacaEvent(event, subs); ok {
+		if update, ok := quoteUpdateFromAlpacaEvent(event, subs, last); ok {
 			updates = append(updates, update)
 		}
 	}
@@ -472,7 +475,7 @@ func alpacaControlMessage(frame alpacaControlEvent) string {
 }
 
 func quoteUpdateFromAlpacaEvent(
-	event alpacaEvent, subs []alpacaSubscription,
+	event alpacaEvent, subs []alpacaSubscription, last map[string]fwmarketdata.QuoteUpdate,
 ) (fwmarketdata.QuoteUpdate, bool) {
 	if event.Timestamp.IsZero() {
 		return fwmarketdata.QuoteUpdate{}, false
@@ -486,25 +489,23 @@ func quoteUpdateFromAlpacaEvent(
 		if sub.symbol != symbol {
 			continue
 		}
+		// A trade carries the mark and a quote the bid and ask. The engine
+		// replaces a quote whole, so each keeps the other's last prices.
+		update := last[symbol]
+		update.AsOf = event.Timestamp.UTC()
+		update.Base = sub.Base
+		update.Quote = sub.Quote
 		switch event.Type {
 		case "q":
-			return fwmarketdata.QuoteUpdate{
-				AsOf:  event.Timestamp.UTC(),
-				Base:  sub.Base,
-				Quote: sub.Quote,
-				Bid:   event.Bid,
-				Ask:   event.Ask,
-			}, true
+			update.Bid = event.Bid
+			update.Ask = event.Ask
 		case "t":
-			return fwmarketdata.QuoteUpdate{
-				AsOf:  event.Timestamp.UTC(),
-				Base:  sub.Base,
-				Quote: sub.Quote,
-				Mark:  event.Last,
-			}, true
+			update.Mark = event.Last
 		default:
 			return fwmarketdata.QuoteUpdate{}, false
 		}
+		last[symbol] = update
+		return update, true
 	}
 	return fwmarketdata.QuoteUpdate{}, false
 }
