@@ -1866,16 +1866,19 @@ func (m *Manager) refreshManualMarksOnce(ctx context.Context) {
 			identity := manualQuoteIdentity{instanceID: instanceID, pair: key}
 			if instrument.ManualPrice == "" {
 				mayBeLive, mayBeLiveOK := m.manualMayBeLive[identity]
-				pending, pendingOK := m.pendingManualClears[identity]
+				_, pendingOK := m.pendingManualClears[identity]
 				marks[key] = ""
-				if mayBeLiveOK || pendingOK {
+				if pendingOK {
+					continue
+				}
+				if mayBeLiveOK {
 					token := m.nextManualTokenLocked()
 					tokens[key] = token
 					state := manualClearState{
 						generation: generation,
 						token:      token,
 						direct:     true,
-						synthetic: mayBeLive.synthetic || pending.synthetic ||
+						synthetic: mayBeLive.synthetic ||
 							m.manualSynthetic[instanceID][key],
 						external: instrument.ExternalSymbol,
 					}
