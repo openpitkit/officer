@@ -17,9 +17,10 @@
 
 # Publishes the `serve` image to GHCR after CI on `main` (the edge channel),
 # from version tags (the stable channel and pre-releases), and from a dry-run
-# dispatch on the `release-dry-run` branch.
+# dispatch on the `release-dry-run` branch. A version tag then gets its GitHub
+# release, described by the committed RELEASE_NOTES.md.
 
-name: Release image
+name: Release
 
 on:
   workflow_call:
@@ -53,6 +54,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      release_mode: ${{ steps.mode.outputs.release_mode }}
+      dry_run_tag: ${{ steps.mode.outputs.dry_run_tag }}
+      latest: ${{ steps.rank.outputs.latest }}
     env:
       IMAGE: ghcr.io/openpitkit/officer
       PLATFORMS: linux/amd64,linux/arm64
@@ -154,6 +159,12 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.x'
+
+      # Before anything is published: a tag whose commit lacks notes for its
+      # version would otherwise leave an image with no release to describe it.
+      - name: Verify committed release notes
+        if: steps.mode.outputs.release_mode == 'production'
+        run: python scripts/just_helpers.py check-release-notes "${GITHUB_REF_NAME#v}"
 
       - name: Load CI versions
         run: python scripts/just_helpers.py export-ci-env
@@ -273,3 +284,49 @@ jobs:
               echo "deleted $digest"
             done
           done
+
+  github-release:
+    name: Publish GitHub release
+    needs: publish
+    # Main CI publishes only the image.
+    if: needs.publish.outputs.release_mode != 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out officer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+
+      # The description is RELEASE_NOTES.md without its version marker line.
+      # `latest` follows the image: only the highest stable version on main.
+      - name: Create the release
+        if: needs.publish.outputs.release_mode == 'production'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ needs.publish.outputs.latest }}
+        run: |
+          body="$(mktemp)"
+          tail -n +2 RELEASE_NOTES.md > "$body"
+          flags=(--verify-tag --title "$GITHUB_REF_NAME" --notes-file "$body" "--latest=$LATEST")
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}"
+
+      # Proves the token can write releases without publishing one: a draft
+      # creates no git tag, and it is deleted at once.
+      - name: Create and delete a draft release
+        if: needs.publish.outputs.release_mode == 'dry-run'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN_TAG: ${{ needs.publish.outputs.dry_run_tag }}
+        run: |
+          gh release create "$DRY_RUN_TAG" --draft --target "$GITHUB_SHA" \
+            --title "$DRY_RUN_TAG" \
+            --notes "Draft release used only to validate the release pipeline."
+          gh release delete "$DRY_RUN_TAG" --yes

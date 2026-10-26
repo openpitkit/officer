@@ -351,10 +351,18 @@ docker-build tag="pit-officer:local":
 docker-start-check image platform:
     {{ python }} {{ just_helper }} docker-start-check {{ quote(image) }} {{ quote(platform) }}
 
-# Push the current HEAD to the dry-run branch and start the image release dry run.
+# Push the current HEAD to the dry-run branch and start the release dry run.
 release-dry:
     git push --force-with-lease origin HEAD:release-dry-run
     gh workflow run release-image.yml --ref release-dry-run -f dry_run=true
+
+# On main: run the gate, commit the notes as RELEASE_NOTES.md and tag v<version>; pushes nothing.
+release version notes_file: check
+    {{ python }} {{ just_helper }} release {{ quote(version) }} {{ quote(notes_file) }}
+
+# Require RELEASE_NOTES.md committed at HEAD for exactly this version.
+check-release-notes version:
+    {{ python }} {{ just_helper }} check-release-notes {{ quote(version) }}
 
 # Build the native OpenPit runtime library from a local Pit checkout.
 dylib-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)

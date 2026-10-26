@@ -49,6 +49,11 @@ SERVE_CONTAINER_PORT = "8787/tcp"
 # its tarball. A refresh changes both and runs `just vendor-swagger-ui`.
 SWAGGER_UI_VERSION = "5.33.2"
 SWAGGER_UI_INTEGRITY = "sha512-MyrWX06zkJRYPnIau8Qj8F6KfzS+Qj8D9AR36vCWkkC9ts1r1DYF84apgCvZBzO2Wzm7G7loCd5VS+4JLWoyLQ=="
+RELEASE_NOTES = "RELEASE_NOTES.md"
+# A stable X.Y.Z or a release candidate X.Y.Z-rc.N, without the tag's v.
+RELEASE_VERSION = re.compile(
+    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?"
+)
 _WINDOWS_CGO_COMPILER_COMMANDS: dict[tuple[str, ...], str] = {}
 _WINDOWS_CGO_WRAPPER_DIRS: set[Path] = set()
 
@@ -581,6 +586,71 @@ def command_vendor_swagger_ui(_: argparse.Namespace) -> None:
     print(f"swagger-ui-dist {SWAGGER_UI_VERSION} vendored into {target}")
 
 
+def release_version(value: str) -> str:
+    if not RELEASE_VERSION.fullmatch(value):
+        raise SystemExit(
+            f"release version {value!r} is neither X.Y.Z nor X.Y.Z-rc.N "
+            "(no v prefix)"
+        )
+    return value
+
+
+def git_succeeds(*args: str) -> bool:
+    return subprocess.run(["git", *args], cwd=ROOT).returncode == 0
+
+
+def check_release_notes_content(version: str, notes: Path) -> None:
+    if not notes.is_file():
+        raise SystemExit(f"release notes file {notes} is required")
+    lines = notes.read_text(encoding="utf-8").splitlines()
+    marker = f"<!-- release-version: {version} -->"
+    if not lines or lines[0] != marker:
+        raise SystemExit(f"{notes} must start with {marker}")
+    if not any(line.strip() for line in lines[1:]):
+        raise SystemExit(f"{notes} must contain release notes after {marker}")
+
+
+def check_committed_release_notes(version: str) -> None:
+    if not git_succeeds("cat-file", "-e", f"HEAD:{RELEASE_NOTES}"):
+        raise SystemExit(f"{RELEASE_NOTES} is not committed at HEAD")
+    if not git_succeeds("diff", "--quiet", "HEAD", "--", RELEASE_NOTES):
+        raise SystemExit(f"{RELEASE_NOTES} differs from its committed version")
+    check_release_notes_content(version, ROOT / RELEASE_NOTES)
+
+
+def command_check_release_notes(args: argparse.Namespace) -> None:
+    check_committed_release_notes(release_version(args.version))
+
+
+def command_release(args: argparse.Namespace) -> None:
+    version = release_version(args.version)
+    notes = Path(args.notes_file)
+    # Notes kept inside the checkout would be untracked work in the tree the
+    # release commit is cut from.
+    if not notes.is_absolute() or notes.resolve().is_relative_to(ROOT):
+        raise SystemExit(
+            f"release notes file {notes} must be an absolute path outside {ROOT}"
+        )
+    check_release_notes_content(version, notes)
+    branch = run(["git", "branch", "--show-current"], capture=True).stdout.strip()
+    if branch != "main":
+        raise SystemExit(
+            f"a release is cut on main, not on {branch or 'a detached HEAD'}"
+        )
+    if run(["git", "status", "--porcelain"], capture=True).stdout:
+        raise SystemExit("the working tree has local changes")
+    tag = f"v{version}"
+    if git_succeeds("rev-parse", "--quiet", "--verify", f"refs/tags/{tag}"):
+        raise SystemExit(f"tag {tag} already exists")
+
+    shutil.copyfile(notes, ROOT / RELEASE_NOTES)
+    run(["git", "add", "--", RELEASE_NOTES])
+    run(["git", "commit", "--message", f"Release {version}"])
+    run(["git", "tag", "--annotate", tag, "--message", f"Release {version}"])
+    check_committed_release_notes(version)
+    print(f"tagged {tag}; publish with: git push --atomic origin main {tag}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -644,6 +714,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("vendor-swagger-ui").set_defaults(
         func=command_vendor_swagger_ui
     )
+
+    subparser = subparsers.add_parser("check-release-notes")
+    subparser.add_argument("version")
+    subparser.set_defaults(func=command_check_release_notes)
+
+    subparser = subparsers.add_parser("release")
+    subparser.add_argument("version")
+    subparser.add_argument("notes_file")
+    subparser.set_defaults(func=command_release)
 
     return parser
 

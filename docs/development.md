@@ -268,13 +268,36 @@ outside the `release` environment, which admits only `v*` tags, so it waits for
 no approval. The dry run publishes both platforms to the same package under
 its own `dry-run-<sha>-<run>.<attempt>` tag and never moves `X.Y.Z`, `X.Y` or
 `latest`. It then pulls each platform back, starts `serve`, and requires the
-container to become healthy and `/healthz` to answer 200. Last, it deletes the
-older dry-run images, so the package holds only the newest one. The `main`
-check and the ranking of `X.Y` and `latest` run only on a real version tag.
+container to become healthy and `/healthz` to answer 200. Then it deletes the
+older dry-run images, so the package holds only the newest one. Last, it
+creates a draft GitHub release under the dry-run tag name and deletes it at
+once; a draft creates no git tag. The `main` check, the release notes check and
+the ranking of `X.Y` and `latest` run only on a real version tag.
 
 `just docker-start-check <image> <platform>` runs the same start check on a
 local image, for example `just docker-start-check pit-officer:local
 linux/arm64`.
+
+## Releases
+
+A release is cut on `main` from notes kept outside the checkout. The notes file
+starts with `<!-- release-version: X.Y.Z -->`, the exact version without the
+`v`, and the notes follow that line. A version is `X.Y.Z` or a release
+candidate `X.Y.Z-rc.N`.
+
+```bash
+just release 0.1.0-rc.1 /absolute/path/notes.md
+git push --atomic origin main v0.1.0-rc.1
+```
+
+`just release` runs `just check`, copies the notes to `RELEASE_NOTES.md`,
+commits them as `Release X.Y.Z`, tags that commit `vX.Y.Z` and pushes nothing.
+The tag starts the release workflow. Before it publishes anything, it requires
+`RELEASE_NOTES.md` for the tag's version in the tagged commit, the same check
+`just check-release-notes X.Y.Z` runs locally. It then publishes the image as
+described above and creates the GitHub release, with the notes after the marker
+line as its description. A release candidate becomes a pre-release; a stable
+version is marked latest only when the image's `latest` moves to it.
 
 ## Seeding
 
