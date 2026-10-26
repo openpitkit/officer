@@ -19,12 +19,14 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 )
 
@@ -51,6 +53,61 @@ func TestNewRejectsNilNode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "nil node") {
 		t.Fatalf("New(nil node) error = %v, want it to name the node", err)
+	}
+}
+
+type serviceInfoTestNode struct {
+	node.Node
+	health node.Health
+	err    error
+}
+
+func (n *serviceInfoTestNode) Health(context.Context) (node.Health, error) {
+	return n.health, n.err
+}
+
+func TestServiceInfoSeparatesOfficerReleaseFromEngineProfile(t *testing.T) {
+	t.Parallel()
+	for _, profile := range []string{
+		"release",
+		"debug",
+		"version=0.10.0;profile=release;opt_level=3;debug_assertions=false",
+		"version=0.10.0;profile=debug;opt_level=0;debug_assertions=true",
+	} {
+		t.Run(profile, func(t *testing.T) {
+			t.Parallel()
+			n := &serviceInfoTestNode{health: node.Health{
+				Engine: engine.Health{Version: "0.10.0", BuildProfile: profile},
+			}}
+			svc, err := New(n, nil, nil, testLockSettlementPrice)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := svc.ServiceInfo(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Release != (releaseTag != "") {
+				t.Fatalf("Release = %t for Officer tag %q and SDK profile %q",
+					info.Release, releaseTag, profile)
+			}
+			if info.EngineVersion != "0.10.0" || info.EngineBuildProfile != profile {
+				t.Fatalf("SDK metadata changed: %+v", info)
+			}
+		})
+	}
+}
+
+func TestServiceInfoPropagatesHealthFailure(t *testing.T) {
+	t.Parallel()
+	want := errors.New("health unavailable")
+	svc, err := New(&serviceInfoTestNode{err: want}, nil, nil,
+		testLockSettlementPrice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ServiceInfo(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("ServiceInfo error = %v, want %v", err, want)
 	}
 }
 

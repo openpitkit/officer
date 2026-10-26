@@ -26,6 +26,10 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+// releaseTag is set by the official image build through -ldflags -X.
+// An empty tag identifies local, edge, and dry-run builds of Officer.
+var releaseTag string
+
 // Counts is the headline tally on the operator overview: how many accounts,
 // groups, and risk barriers the deployment holds.
 type Counts struct {
@@ -237,17 +241,17 @@ type ServiceInfo struct {
 	Name string
 	// EngineVersion is the engine SDK/runtime version.
 	EngineVersion string
-	// EngineBuildProfile is the engine build profile (for example "release").
+	// EngineBuildProfile is the SDK's build metadata, including its profile.
 	EngineBuildProfile string
 	// Database is where the store lives and whether it is reachable.
 	Database ServiceDatabase
-	// Release reports whether the engine build profile is "release".
+	// Release reports whether Officer was built for an official release tag.
 	Release bool
 }
 
 // ServiceInfo reports the service identity and build posture. The engine
 // version, build profile, and the database path/reachability are sourced from
-// the node health reported by Status.
+// the node health reported by Status. Release identifies the Officer build.
 func (s *Service) ServiceInfo(ctx context.Context) (ServiceInfo, error) {
 	status, err := s.Status(ctx)
 	if err != nil {
@@ -258,7 +262,7 @@ func (s *Service) ServiceInfo(ctx context.Context) (ServiceInfo, error) {
 		Name:               "Pit Officer",
 		EngineVersion:      h.Engine.Version,
 		EngineBuildProfile: h.Engine.BuildProfile,
-		Release:            h.Engine.BuildProfile == "release",
+		Release:            releaseTag != "",
 		Database: ServiceDatabase{
 			Path:      h.Store.Path,
 			Reachable: h.Store.Reachable,

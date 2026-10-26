@@ -40,6 +40,9 @@ FROM golang:${GO_VERSION}-bookworm AS gobuild
 ARG GO_VERSION
 ENV GOTOOLCHAIN=go${GO_VERSION}
 
+# Set only when packaging an official Officer version tag.
+ARG OFFICER_RELEASE_TAG=""
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc6-dev \
@@ -58,7 +61,7 @@ COPY --from=frontend /app/web/dist /workspace/officer/web/dist
 
 # -ldflags "-s -w" strips debug symbols for a smaller binary.
 RUN CGO_ENABLED=1 go build \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X go.openpit.dev/officer/framework/backend.releaseTag=${OFFICER_RELEASE_TAG}" \
     -o /pit-officer \
     ./cmd/pit-officer
 

@@ -108,6 +108,7 @@ interface ProfileRow {
 
 type ServiceTab =
   | "application"
+  | "engine"
   | "account-mode"
   | "api"
   | "database"
@@ -122,6 +123,7 @@ const serviceTabs: {
   icon: LucideIcon;
 }[] = [
   { id: "application", labelKey: "tabs.application", icon: Server },
+  { id: "engine", labelKey: "engine.title", icon: Info },
   { id: "account-mode", labelKey: "tabs.accountMode", icon: Users },
   { id: "api", labelKey: "tabs.api", icon: Plug },
   { id: "database", labelKey: "tabs.database", icon: Database },
@@ -1142,6 +1144,65 @@ function AccountModeCard({
   );
 }
 
+function EngineInfoCard({ info }: { info: ServiceInfo }) {
+  const { t } = useTranslation("service");
+  const { t: tc } = useTranslation();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("engine.title")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <StatRow
+          label={t("engine.version")}
+          mono={false}
+          value={
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="nums font-mono">
+                {info.engineVersion || tc("value.none")}
+              </span>
+              <a
+                href="https://openpit.dev?officer"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
+              >
+                {t("engine.sdk")}
+                <ExternalLink className="h-3 w-3 opacity-70" />
+              </a>
+            </span>
+          }
+        />
+        {info.engineBuildProfile ? (
+          <>
+            <div className="pb-1 pt-3">
+              <p className="text-xs font-medium text-muted">
+                {t("engine.profile")}
+              </p>
+            </div>
+            {parseProfileRows(info.engineBuildProfile).map((row) => (
+              <StatRow
+                key={row.param}
+                label={t(`engine.profileParams.${row.param}`, {
+                  defaultValue: row.param,
+                })}
+                value={row.value || tc("value.none")}
+                mono={false}
+              />
+            ))}
+          </>
+        ) : (
+          <StatRow
+            label={t("engine.profile")}
+            value={tc("value.none")}
+            mono={false}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ServiceCard({
   info,
   activeTab,
@@ -1222,77 +1283,10 @@ export function ServiceCard({
           error={lifecycleError}
           onAction={onLifecycleAction}
         />
+      </TabsContent>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("engine.title")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <StatRow
-              label={t("engine.version")}
-              mono={false}
-              value={
-                <span className="flex flex-wrap items-center gap-2">
-                  <span className="nums font-mono">
-                    {info.engineVersion || tc("value.none")}
-                  </span>
-                  <a
-                    href="https://openpit.dev?officer"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-                  >
-                    {t("engine.sdk")}
-                    <ExternalLink className="h-3 w-3 opacity-70" />
-                  </a>
-                </span>
-              }
-            />
-            <StatRow
-              label={t("engine.buildPosture")}
-              mono={false}
-              value={
-                <span className="flex items-center gap-1.5">
-                  <Badge variant={info.release ? "ok" : "warn"}>
-                    {info.release
-                      ? t("engine.stableRelease")
-                      : t("engine.developmentBuild")}
-                  </Badge>
-                  {/* buildClean is absent until the SDK exposes a precise
-                        dirty-sources flag; when it arrives and is false, surface it. */}
-                  {info.buildClean === false && (
-                    <Badge variant="warn">{t("engine.modifiedSources")}</Badge>
-                  )}
-                </span>
-              }
-            />
-            {info.engineBuildProfile ? (
-              <>
-                <div className="pb-1 pt-3">
-                  <p className="text-xs font-medium text-muted">
-                    {t("engine.profile")}
-                  </p>
-                </div>
-                {parseProfileRows(info.engineBuildProfile).map((row) => (
-                  <StatRow
-                    key={row.param}
-                    label={t(`engine.profileParams.${row.param}`, {
-                      defaultValue: row.param,
-                    })}
-                    value={row.value || tc("value.none")}
-                    mono={false}
-                  />
-                ))}
-              </>
-            ) : (
-              <StatRow
-                label={t("engine.profile")}
-                value={tc("value.none")}
-                mono={false}
-              />
-            )}
-          </CardContent>
-        </Card>
+      <TabsContent value="engine">
+        <EngineInfoCard info={info} />
       </TabsContent>
 
       <TabsContent value="account-mode" className="flex flex-col gap-y-4">

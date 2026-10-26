@@ -75,7 +75,8 @@ const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 const serviceInfo: ServiceInfo = {
   name: "Pit Officer",
   engineVersion: "0.9.0",
-  engineBuildProfile: "",
+  engineBuildProfile:
+    "version=0.10.0;profile=release;opt_level=3;debug_assertions=false",
   release: true,
   database: { path: "/tmp/officer.db", reachable: true },
 };
@@ -229,6 +230,7 @@ describe("ServiceCard", () => {
     function ControlledServiceCard() {
       const [activeTab, setActiveTab] = useState<
         | "application"
+        | "engine"
         | "account-mode"
         | "api"
         | "database"
@@ -273,7 +275,10 @@ describe("ServiceCard", () => {
       },
     );
 
+    expect(screen.queryByText("Pit SDK")).not.toBeInTheDocument();
+
     for (const [id, name] of [
+      ["engine", "Engine"],
       ["api", "API"],
       ["database", "Database"],
       ["logs", "Logs"],
@@ -291,6 +296,15 @@ describe("ServiceCard", () => {
       expect(
         within(panel).getByText(name, { exact: true }),
       ).toBeInTheDocument();
+      if (id === "engine") {
+        expect(within(panel).getByText("Pit SDK")).toBeInTheDocument();
+        expect(within(panel).getByText("release")).toBeInTheDocument();
+        expect(
+          within(panel).queryByText("development build"),
+        ).not.toBeInTheDocument();
+      } else {
+        expect(within(panel).queryByText("Pit SDK")).not.toBeInTheDocument();
+      }
     }
   });
 });

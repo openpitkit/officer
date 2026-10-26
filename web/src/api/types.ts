@@ -1041,10 +1041,11 @@ export interface ServiceInfo {
   name: string;
   engineVersion: string;
   engineBuildProfile: string;
+  /** Whether Officer was built for an official release tag,
+   *  independent of the SDK profile. */
   release: boolean;
   /** Whether the engine was built from a clean source tree. Absent until the
-   *  SDK exposes a precise dirty-sources flag; when present and false the build
-   *  posture badge reflects "modified sources". */
+   *  SDK exposes a precise dirty-sources flag. */
   buildClean?: boolean;
   database: {
     path: string;

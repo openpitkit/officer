@@ -7899,8 +7899,12 @@ components:
           description: Engine library version string.
         engineBuildProfile:
           type: string
+          description: Engine build metadata, including the SDK profile.
         release:
           type: boolean
+          description: >
+            Whether Officer was built for an official release tag,
+            independent of the SDK profile.
         database:
           $ref: "#/components/schemas/ServiceDatabase"
 

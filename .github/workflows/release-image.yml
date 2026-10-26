@@ -209,7 +209,9 @@ jobs:
           context: .
           file: Dockerfile
           platforms: ${{ env.PLATFORMS }}
-          build-args: GO_VERSION=${{ env.CI_GO }}
+          build-args: |
+            GO_VERSION=${{ env.CI_GO }}
+            OFFICER_RELEASE_TAG=${{ steps.mode.outputs.release_mode == 'production' && github.ref_name || '' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

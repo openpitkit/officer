@@ -75,6 +75,29 @@ beforeEach(() => {
 });
 
 describe("SidebarExtras page request ownership", () => {
+  it.each([
+    { release: true, engineBuildProfile: "profile=debug", visible: false },
+    { release: true, engineBuildProfile: "profile=release", visible: false },
+    { release: false, engineBuildProfile: "profile=debug", visible: true },
+    { release: false, engineBuildProfile: "profile=release", visible: true },
+  ])("shows the Officer warning independently of SDK: %j", (build) => {
+    const poll = useServiceMock();
+    if (poll.load.state !== "ready") throw new Error("Expected service data");
+    useServiceMock.mockReturnValue({
+      ...poll,
+      load: {
+        ...poll.load,
+        data: { ...poll.load.data, ...build },
+      },
+    });
+    render(
+      <MemoryRouter initialEntries={["/accounts"]}>
+        <NonReleaseNavEntry />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("link") !== null).toBe(build.visible);
+  });
+
   it("leaves the market-data request to its destination page", () => {
     render(
       <MemoryRouter initialEntries={["/market-data"]}>
