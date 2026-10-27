@@ -252,6 +252,11 @@ overwrites `web/dist` with compiled assets before the Go build.
 The build needs BuildKit, the default builder in current Docker, because the SPA
 stage runs on the build platform via `$BUILDPLATFORM`.
 
+Every push to `main` that passes CI publishes the image for `linux/amd64` and
+`linux/arm64` to `ghcr.io/openpitkit/officer` as `edge` and
+`sha-<short sha>-<run>.<attempt>`, then deletes the main images it supersedes:
+the package keeps one main image, the current `edge`.
+
 A `vX.Y.Z` tag on a commit already on `main` publishes the image for
 `linux/amd64` and `linux/arm64` to `ghcr.io/openpitkit/officer` as `X.Y.Z`.
 `X.Y` moves to it only when it is the highest stable `X.Y.*` version on `main`,
@@ -268,8 +273,8 @@ outside the `release` environment, which admits only `v*` tags, so it waits for
 no approval. The dry run publishes both platforms to the same package under
 its own `dry-run-<sha>-<run>.<attempt>` tag and never moves `X.Y.Z`, `X.Y` or
 `latest`. It then pulls each platform back, starts `serve`, and requires the
-container to become healthy and `/healthz` to answer 200. Then it deletes the
-older dry-run images, so the package holds only the newest one. Last, it
+container to become healthy and `/healthz` to answer 200. Then it deletes every
+dry-run image, its own included, so no dry-run image outlives its run. Last, it
 creates a draft GitHub release under the dry-run tag name and deletes it at
 once; a draft creates no git tag. The `main` check, the release notes check and
 the ranking of `X.Y` and `latest` run only on a real version tag.

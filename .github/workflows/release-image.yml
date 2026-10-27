@@ -184,10 +184,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Main CI publishes edge and sha-<short SHA> of the checked commit.
-      # Version tags publish X.Y.Z (or the exact pre-release version), and X.Y
-      # and latest only as the rank outputs allow; a dry run gets only its own
-      # tag.
+      # Main CI publishes edge and sha-<short SHA>-<run>.<attempt> of the
+      # checked commit, unique per attempt like the dry-run tag: a rerun that
+      # moved a plain sha tag would leave the image it replaced untagged, out
+      # of reach of the cleanup below. Version tags publish X.Y.Z (or the exact
+      # pre-release version), and X.Y and latest only as the rank outputs
+      # allow; a dry run gets only its own tag.
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -199,7 +201,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},enable=${{ steps.rank.outputs.minor == 'true' }}
             type=raw,value=latest,enable=${{ steps.rank.outputs.latest == 'true' }}
             type=edge,branch=main,enable=${{ steps.mode.outputs.release_mode == 'main' }}
-            type=sha,enable=${{ steps.mode.outputs.release_mode == 'main' }}
+            type=sha,suffix=-${{ github.run_number }}.${{ github.run_attempt }},enable=${{ steps.mode.outputs.release_mode == 'main' }}
             type=raw,value=${{ steps.mode.outputs.dry_run_tag }},enable=${{ steps.mode.outputs.release_mode == 'dry-run' }}
 
       - name: Require only the dry-run tag
@@ -242,36 +244,37 @@ jobs:
             python scripts/just_helpers.py docker-start-check "$IMAGE_REF" "$platform"
           done
 
-      # The package keeps one dry-run image: older ones go, each with the
-      # platform and attestation manifests it lists, which GHCR keeps as
-      # untagged versions of their own. This run's image stays until the next
-      # dry run, also because GHCR refuses to delete a package's last tagged
-      # version. Release manifests never appear in a dry-run index: the version
-      # label differs, so every digest differs.
-      - name: Delete older dry-run images
-        if: steps.mode.outputs.release_mode == 'dry-run'
+      # Main keeps only the image it just published, and a dry run keeps none.
+      # An image is superseded once every tag left on it is a build tag of the
+      # run's channel: sha-* on main, dry-run-* in a dry run. edge keeps the
+      # newest main image; version tags and latest keep theirs. A superseded
+      # image goes with the platform and attestation manifests it lists, which
+      # GHCR keeps as untagged versions of their own. Release manifests never
+      # appear in a channel index: the labels differ, so every digest differs.
+      # GHCR refuses to delete a package's last tagged version, which edge
+      # outlives.
+      - name: Delete superseded images
+        if: steps.mode.outputs.release_mode != 'production'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          DRY_RUN_TAG: ${{ steps.mode.outputs.dry_run_tag }}
+          BUILD_TAG_PREFIX: ${{ steps.mode.outputs.release_mode == 'main' && 'sha-' || 'dry-run-' }}
         run: |
           package="${IMAGE#ghcr.io/}"
           versions_api="orgs/${package%%/*}/packages/container/${package#*/}/versions"
           versions="$(gh api --paginate "$versions_api" \
             --jq '.[] | {id, digest: .name, tags: .metadata.container.tags}')"
 
-          # Stale: tagged, every tag a dry-run tag, none of them this run's.
-          stale="$(jq -r --arg current "$DRY_RUN_TAG" '
-            select((.tags | length) > 0
-              and all(.tags[]; startswith("dry-run-") and . != $current))
+          stale="$(jq -r --arg prefix "$BUILD_TAG_PREFIX" '
+            select((.tags | length) > 0 and all(.tags[]; startswith($prefix)))
             | .digest' <<<"$versions")"
           if [[ -z "$stale" ]]; then
-            echo "no older dry-run images"
+            echo "no superseded ${BUILD_TAG_PREFIX}* images"
           fi
 
           for index_digest in $stale; do
             # Children first: a run that stops halfway leaves the tagged index,
-            # and with it the list of what remains, to the next dry run.
+            # and with it the list of what remains, to the next run.
             children="$(docker buildx imagetools inspect --raw "$IMAGE@$index_digest" |
               jq -r '.manifests[]?.digest')"
             for digest in $children "$index_digest"; do
