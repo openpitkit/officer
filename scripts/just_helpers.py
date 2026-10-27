@@ -54,6 +54,8 @@ RELEASE_NOTES = "RELEASE_NOTES.md"
 RELEASE_VERSION = re.compile(
     r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?"
 )
+RELEASE_KINDS = ("major", "minor", "patch")
+STABLE_RELEASE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _WINDOWS_CGO_COMPILER_COMMANDS: dict[tuple[str, ...], str] = {}
 _WINDOWS_CGO_WRAPPER_DIRS: set[Path] = set()
 
@@ -622,8 +624,31 @@ def command_check_release_notes(args: argparse.Namespace) -> None:
     check_committed_release_notes(release_version(args.version))
 
 
+def next_release_version(kind: str) -> str:
+    tags = run(
+        ["git", "tag", "--merged", "HEAD", "--list", "v*"], capture=True
+    ).stdout.split()
+    released = [
+        tuple(int(part) for part in match.groups())
+        for match in map(STABLE_RELEASE_TAG.fullmatch, tags)
+        if match
+    ]
+    # Before the first release the version is 0.0.0, so the first minor
+    # release is 0.1.0.
+    major, minor, patch = max(released, default=(0, 0, 0))
+    if kind == "major":
+        return f"{major + 1}.0.0"
+    if kind == "minor":
+        return f"{major}.{minor + 1}.0"
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def command_release_version(args: argparse.Namespace) -> None:
+    print(next_release_version(args.kind))
+
+
 def command_release(args: argparse.Namespace) -> None:
-    version = release_version(args.version)
+    version = next_release_version(args.kind)
     notes = Path(args.notes_file)
     # Notes kept inside the checkout would be untracked work in the tree the
     # release commit is cut from.
@@ -719,8 +744,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparser.add_argument("version")
     subparser.set_defaults(func=command_check_release_notes)
 
+    subparser = subparsers.add_parser("release-version")
+    subparser.add_argument("kind", choices=RELEASE_KINDS)
+    subparser.set_defaults(func=command_release_version)
+
     subparser = subparsers.add_parser("release")
-    subparser.add_argument("version")
+    subparser.add_argument("kind", choices=RELEASE_KINDS)
     subparser.add_argument("notes_file")
     subparser.set_defaults(func=command_release)
 

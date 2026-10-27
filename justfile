@@ -356,9 +356,13 @@ release-dry:
     git push --force-with-lease origin HEAD:release-dry-run
     gh workflow run release-image.yml --ref release-dry-run -f dry_run=true
 
-# On main: run the gate, commit the notes as RELEASE_NOTES.md and tag v<version>; pushes nothing.
-release version notes_file: check
-    {{ python }} {{ just_helper }} release {{ quote(version) }} {{ quote(notes_file) }}
+# On main: run the gate, commit the notes as RELEASE_NOTES.md and tag the next major, minor or patch version; pushes nothing.
+release kind notes_file: check
+    {{ python }} {{ just_helper }} release {{ quote(kind) }} {{ quote(notes_file) }}
+
+# Print the version `just release <kind>` cuts from HEAD.
+release-version kind:
+    {{ python }} {{ just_helper }} release-version {{ quote(kind) }}
 
 # Require RELEASE_NOTES.md committed at HEAD for exactly this version.
 check-release-notes version:

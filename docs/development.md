@@ -280,14 +280,17 @@ linux/arm64`.
 
 ## Releases
 
-A release is cut on `main` from notes kept outside the checkout. The notes file
-starts with `<!-- release-version: X.Y.Z -->`, the exact version without the
-`v`, and the notes follow that line. A version is `X.Y.Z` or a release
-candidate `X.Y.Z-rc.N`.
+A release is cut on `main` as a `major`, `minor` or `patch` bump of the highest
+stable `vX.Y.Z` tag merged into `HEAD`; before the first release that version is
+`0.0.0`, so the first `minor` release is `0.1.0`. `just release-version <kind>`
+prints the version a bump cuts. The notes are kept outside the checkout; the
+file starts with `<!-- release-version: X.Y.Z -->`, that exact version without
+the `v`, and the notes follow that line.
 
 ```bash
-just release 0.1.0-rc.1 /absolute/path/notes.md
-git push --atomic origin main v0.1.0-rc.1
+just release-version minor        # 0.1.0
+just release minor /absolute/path/notes.md
+git push --atomic origin main v0.1.0
 ```
 
 `just release` runs `just check`, copies the notes to `RELEASE_NOTES.md`,
@@ -296,8 +299,10 @@ The tag starts the release workflow. Before it publishes anything, it requires
 `RELEASE_NOTES.md` for the tag's version in the tagged commit, the same check
 `just check-release-notes X.Y.Z` runs locally. It then publishes the image as
 described above and creates the GitHub release, with the notes after the marker
-line as its description. A release candidate becomes a pre-release; a stable
-version is marked latest only when the image's `latest` moves to it.
+line as its description. A stable version is marked latest only when the
+image's `latest` moves to it. A pre-release tag `vX.Y.Z-rc.N`, which
+`just release` does not cut, still needs its notes committed and becomes a
+GitHub pre-release.
 
 ## Seeding
 
