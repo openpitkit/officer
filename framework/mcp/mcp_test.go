@@ -154,8 +154,8 @@ func TestGuardAuthorizerAndPanelGates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("disabled handler returned transport error: %v", err)
 	}
-	if res.IsError || !contentContains(res.Content, "disabled in the Pit Officer panel") {
-		t.Fatalf("disabled should return non-error panel notice: %+v", res)
+	if !res.IsError || !contentContains(res.Content, "disabled in the Pit Officer panel") {
+		t.Fatalf("disabled should refuse with the panel notice as a tool error: %+v", res)
 	}
 }
 

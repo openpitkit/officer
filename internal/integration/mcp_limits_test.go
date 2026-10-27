@@ -370,8 +370,8 @@ func TestSetLimitRefusesBoundsTheEngineCannotParse(t *testing.T) {
 // TestSetLimitDisabledChangesNothing drives set_limit through the
 // control-plane Source of a service as it ships, with set_limit disabled, and
 // after the operator switches it on, stores a barrier through it and switches
-// it off again: while it is disabled the agent receives the panel's notice,
-// not an error, and the call changes no barrier.
+// it off again: while it is disabled the agent receives the panel's notice as
+// a tool error, and the call changes no barrier.
 func TestSetLimitDisabledChangesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := systemCtx()
@@ -389,12 +389,7 @@ func TestSetLimitDisabledChangesNothing(t *testing.T) {
 	disabled := func(in map[string]any, kept ...domain.LimitRate) {
 		t.Helper()
 		res := callTool[map[string]any](t, src, "set_limit", in)
-		requireNotToolError(t, res.IsError)
-		if text := textContent(res.Content); !strings.Contains(
-			text, `Command "set_limit" is disabled in the Pit Officer panel`,
-		) {
-			t.Fatalf("disabled set_limit = %q, want the panel's notice", text)
-		}
+		requireDisabledNotice(t, res.IsError, res.Content, "set_limit")
 		if got := rate.stored(); !slices.Equal(got, kept) {
 			t.Fatalf("disabled set_limit left %+v stored, want %+v", got, kept)
 		}

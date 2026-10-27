@@ -3462,9 +3462,10 @@ paths:
       summary: Enable or disable one MCP command
       description: >
         Persists the enabled state for one catalogue command. A disabled command
-        stays callable over MCP but returns a non-error "disabled in panel"
-        notice instead of running. Confirmation-on-enable for protective commands
-        is a UI concern; the backend just persists.
+        stays listed over MCP, but a call to it is refused instead of running:
+        the result is a tool error (isError true) carrying the "disabled in
+        panel" notice. Confirmation-on-enable for protective commands is a UI
+        concern; the backend just persists.
       tags: [mcp-access]
       requestBody:
         required: true

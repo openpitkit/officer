@@ -18,9 +18,7 @@
 package integration_test
 
 import (
-	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/backend"
@@ -382,11 +380,7 @@ func TestReportFillCommandSwitchOnControlPlane(t *testing.T) {
 	}
 	before := readReportedState(t, service, order)
 	res := callTool[map[string]any](t, src, "report_fill", fill)
-	requireNotToolError(t, res.IsError)
-	notice := fmt.Sprintf("Command %q is disabled in the Pit Officer panel", "report_fill")
-	if text := textContent(res.Content); !strings.Contains(text, notice) {
-		t.Fatalf("switched-off report_fill = %q, want the disabled notice", text)
-	}
+	requireDisabledNotice(t, res.IsError, res.Content, "report_fill")
 	if after := readReportedState(t, service, order); !reflect.DeepEqual(after, before) {
 		t.Fatalf("state after the switched-off call:\n%+v\nwant:\n%+v", after, before)
 	}

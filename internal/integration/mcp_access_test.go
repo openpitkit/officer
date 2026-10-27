@@ -22,50 +22,51 @@ import (
 	"strings"
 	"testing"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 )
 
-// TestDisabledCommandReturnsNonErrorNotice verifies that a command the operator
-// has disabled in the panel still returns a successful (non-error) result whose
-// text tells the agent the command is off, for every implemented handler.
-func TestDisabledCommandReturnsNonErrorNotice(t *testing.T) {
+// TestDisabledCommandRefusesWithNotice verifies that a command the operator has
+// disabled in the panel refuses the call: a tool error whose text tells the
+// agent the command is off, for every implemented handler.
+func TestDisabledCommandRefusesWithNotice(t *testing.T) {
 	cases := []struct {
 		name string
-		call func(src frameworkmcp.Source) (bool, []contentText)
+		call func(src frameworkmcp.Source) (bool, []sdkmcp.Content)
 	}{
 		{
 			name: healthToolName,
-			call: func(src frameworkmcp.Source) (bool, []contentText) {
+			call: func(src frameworkmcp.Source) (bool, []sdkmcp.Content) {
 				r := callHealth(t, src)
-				return r.IsError, wrap(textContent(r.Content))
+				return r.IsError, r.Content
 			},
 		},
 		{
 			name: getAccountStateToolName,
-			call: func(src frameworkmcp.Source) (bool, []contentText) {
+			call: func(src frameworkmcp.Source) (bool, []sdkmcp.Content) {
 				r := callGetAccountState(t, src, "acc-1")
-				return r.IsError, wrap(textContent(r.Content))
+				return r.IsError, r.Content
 			},
 		},
 		{
 			name: getLimitsToolName,
-			call: func(src frameworkmcp.Source) (bool, []contentText) {
+			call: func(src frameworkmcp.Source) (bool, []sdkmcp.Content) {
 				r := callGetLimits(t, src, "")
-				return r.IsError, wrap(textContent(r.Content))
+				return r.IsError, r.Content
 			},
 		},
 		{
 			name: getAuditToolName,
-			call: func(src frameworkmcp.Source) (bool, []contentText) {
+			call: func(src frameworkmcp.Source) (bool, []sdkmcp.Content) {
 				r := callGetAudit(t, src, 0)
-				return r.IsError, wrap(textContent(r.Content))
+				return r.IsError, r.Content
 			},
 		},
 		{
 			name: checkOrderToolName,
-			call: func(src frameworkmcp.Source) (bool, []contentText) {
+			call: func(src frameworkmcp.Source) (bool, []sdkmcp.Content) {
 				r := callCheckOrder(t, src, checkOrderInput{Account: "acc-1"})
-				return r.IsError, wrap(textContent(r.Content))
+				return r.IsError, r.Content
 			},
 		},
 	}
@@ -74,14 +75,7 @@ func TestDisabledCommandReturnsNonErrorNotice(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			src := &fakeSource{disabledCommands: map[string]bool{tc.name: true}}
 			isErr, content := tc.call(src)
-			requireNotToolError(t, isErr)
-			text := content[0].text
-			if !strings.Contains(text, "disabled in the Pit Officer panel") {
-				t.Fatalf("expected disabled notice, got %q", text)
-			}
-			if !strings.Contains(text, tc.name) {
-				t.Fatalf("disabled notice should name the command %q, got %q", tc.name, text)
-			}
+			requireDisabledNotice(t, isErr, content, tc.name)
 		})
 	}
 }
@@ -134,9 +128,3 @@ func TestMutatingCommandEnabledErrorFailsClosed(t *testing.T) {
 		t.Fatalf("mutating command must not execute when gate check fails: %+v", src.setMDCalls)
 	}
 }
-
-// contentText is a tiny holder so the table cases can return the extracted text
-// uniformly across differently-typed handler results.
-type contentText struct{ text string }
-
-func wrap(text string) []contentText { return []contentText{{text: text}} }

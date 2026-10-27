@@ -20,7 +20,6 @@ package integration_test
 import (
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -103,7 +102,7 @@ func runToolRefusals(
 }
 
 // runToolsDisabled covers each tool in inputs with its command disabled: the
-// agent receives the panel notice and the Source is not called.
+// agent receives the panel notice as a tool error and the Source is not called.
 func runToolsDisabled(t *testing.T, fixture recordedFixture, inputs map[string]map[string]any) {
 	t.Helper()
 	for name, input := range inputs {
@@ -111,11 +110,7 @@ func runToolsDisabled(t *testing.T, fixture recordedFixture, inputs map[string]m
 			src, fake, recorder := fixture()
 			fake.disabledCommands = map[string]bool{name: true}
 			res := callTool[map[string]any](t, src, name, input)
-			requireNotToolError(t, res.IsError)
-			text := textContent(res.Content)
-			if !strings.Contains(text, fmt.Sprintf("Command %q is disabled in the Pit Officer panel", name)) {
-				t.Fatalf("expected the disabled notice, got %q", text)
-			}
+			requireDisabledNotice(t, res.IsError, res.Content, name)
 			if len(recorder.calls) != 0 {
 				t.Fatalf("disabled tool reached Source: %v", recorder.calls)
 			}

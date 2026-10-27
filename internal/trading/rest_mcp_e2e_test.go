@@ -635,11 +635,12 @@ func TestTradingRESTEndToEnd(t *testing.T) {
 
 func TestTradingMCPEndToEnd(t *testing.T) {
 	f := newTradingE2E(t, true)
-	result := f.mcp("create_trading_connection", tradingE2ECreateInput("Paper", "paper"), false)
+	result := f.mcp("create_trading_connection", tradingE2ECreateInput("Paper", "paper"), true)
 	if len(result.Content) != 1 {
 		t.Fatalf("disabled tool content = %v", result.Content)
 	}
-	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok || !strings.Contains(text.Text, "disabled") {
+	if text, ok := result.Content[0].(*sdkmcp.TextContent); !ok ||
+		!strings.Contains(text.Text, `Command "create_trading_connection" is disabled in the Pit Officer panel`) {
 		t.Fatalf("disabled refusal = %v", result.Content)
 	}
 	connections, err := f.realm.ListTradingConnections(f.ctx)
@@ -947,10 +948,10 @@ func TestTradingSendPaperRefusalsEndToEnd(t *testing.T) {
 		t.Run(surface, func(t *testing.T) {
 			f := newTradingE2E(t, true)
 			if surface == "MCP" {
-				result := f.mcp("send_paper_order", tradingE2ESendInput(""), false)
+				result := f.mcp("send_paper_order", tradingE2ESendInput(""), true)
 				text, ok := result.Content[0].(*sdkmcp.TextContent)
-				if !ok || !strings.Contains(text.Text, "disabled") {
-					t.Fatal("paper send must default to disabled")
+				if !ok || !strings.Contains(text.Text, `Command "send_paper_order" is disabled in the Pit Officer panel`) {
+					t.Fatal("paper send must default to disabled and refuse with the panel notice")
 				}
 				f.rest(http.MethodPut, "/mcp-access/send_paper_order", map[string]any{"enabled": true}, http.StatusOK)
 			}

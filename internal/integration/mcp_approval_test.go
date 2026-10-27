@@ -146,8 +146,9 @@ func callCancel(
 
 // gating tests ------------------------------------------------------------
 
-// TestSubmitOrderGateMutating: submit_order returns a non-error disabled
-// notice when the operator has turned the command off, and is not executed.
+// TestSubmitOrderGateMutating: submit_order refuses with the disabled notice
+// as a tool error when the operator has turned the command off, and is not
+// executed.
 func TestSubmitOrderGateMutating(t *testing.T) {
 	src := &approvalFakeSource{}
 	src.disabledCommands = map[string]bool{submitOrderToolName: true}
@@ -159,9 +160,7 @@ func TestSubmitOrderGateMutating(t *testing.T) {
 		MissingAccount: "create",
 	})
 
-	if res.IsError {
-		t.Fatalf("disabled gate must not be an error result, got IsError=true")
-	}
+	requireDisabledNotice(t, res.IsError, res.Content, submitOrderToolName)
 	if len(src.submitCalls) != 0 {
 		t.Fatalf("submit must not be called when gate is closed; got %d calls", len(src.submitCalls))
 	}
@@ -188,17 +187,15 @@ func TestSubmitOrderGateMutatingAccessError(t *testing.T) {
 	}
 }
 
-// TestConfirmExecutionGateMutating: confirm_execution returns disabled notice
-// when operator has disabled the command.
+// TestConfirmExecutionGateMutating: confirm_execution refuses with the
+// disabled notice as a tool error when operator has disabled the command.
 func TestConfirmExecutionGateMutating(t *testing.T) {
 	src := &approvalFakeSource{}
 	src.disabledCommands = map[string]bool{confirmExecutionToolName: true}
 
 	res := callConfirmExecution(t, src, confirmExecutionInput{OrderExternalID: testOrderEID})
 
-	if res.IsError {
-		t.Fatalf("disabled gate must not be an error result")
-	}
+	requireDisabledNotice(t, res.IsError, res.Content, confirmExecutionToolName)
 	if len(src.confirmCalls) != 0 {
 		t.Fatalf("confirm must not be called when gate is closed")
 	}
@@ -217,16 +214,15 @@ func TestConfirmExecutionGateMutatingAccessError(t *testing.T) {
 	}
 }
 
-// TestCancelGateMutating: cancel returns disabled notice when disabled.
+// TestCancelGateMutating: cancel refuses with the disabled notice as a tool
+// error when disabled.
 func TestCancelGateMutating(t *testing.T) {
 	src := &approvalFakeSource{}
 	src.disabledCommands = map[string]bool{cancelToolName: true}
 
 	res := callCancel(t, src, cancelInput{OrderExternalID: testOrderEID})
 
-	if res.IsError {
-		t.Fatalf("disabled gate must not be an error result")
-	}
+	requireDisabledNotice(t, res.IsError, res.Content, cancelToolName)
 	if len(src.cancelCalls) != 0 {
 		t.Fatalf("cancel must not be called when gate is closed")
 	}

@@ -654,19 +654,16 @@ func toolOK[Out any](text string, out Out) *sdkmcp.CallToolResult {
 	}
 }
 
+// toolDisabled refuses a call to a command the operator has switched off: a
+// tool error carrying the panel notice.
 func toolDisabled[Out any](command string) *sdkmcp.CallToolResult {
-	var out Out
-	msg := fmt.Sprintf(
+	return toolErr[Out](fmt.Sprintf(
 		"Command %q is disabled in the Pit Officer panel by the operator. It is "+
 			"currently unavailable. Report this to your orchestrator: either adjust "+
 			"the task to avoid this command, or ask the operator to enable it in the "+
 			"panel.",
 		command,
-	)
-	return &sdkmcp.CallToolResult{
-		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: msg}},
-		StructuredContent: out,
-	}
+	))
 }
 
 // RunStdio serves the registered MCP surface over stdio.

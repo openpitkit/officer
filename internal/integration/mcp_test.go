@@ -277,6 +277,17 @@ func requireToolError(t *testing.T, isErr bool) {
 	}
 }
 
+// requireDisabledNotice fails the test unless the result refuses the call to
+// command as a tool error carrying the panel's disabled notice.
+func requireDisabledNotice(t *testing.T, isErr bool, content []sdkmcp.Content, command string) {
+	t.Helper()
+	requireToolError(t, isErr)
+	notice := fmt.Sprintf("Command %q is disabled in the Pit Officer panel", command)
+	if text := textContent(content); !strings.Contains(text, notice) {
+		t.Fatalf("disabled %s = %q, want the panel notice", command, text)
+	}
+}
+
 // textContent returns the first TextContent text of result content, or "".
 func textContent(content []sdkmcp.Content) string {
 	for _, c := range content {
@@ -1218,10 +1229,7 @@ func TestSetMarketDataInstrumentGatedAndDelegates(t *testing.T) {
 	res := callSetMarketDataInstrument(t, disabled, setMarketDataInstrumentInput{
 		InstanceExternalID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
 	})
-	requireNotToolError(t, res.IsError)
-	if got := textContent(res.Content); got == "" {
-		t.Fatalf("disabled command should return a notice")
-	}
+	requireDisabledNotice(t, res.IsError, res.Content, setMarketDataInstrumentToolName)
 	if len(disabled.setMDCalls) != 0 {
 		t.Fatalf("disabled command must not mutate: %+v", disabled.setMDCalls)
 	}
