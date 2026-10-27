@@ -1,0 +1,94 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+name: MCP Registry
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - .github/workflows/publish-mcp-registry.yml
+      - server.json
+  workflow_dispatch:
+    inputs:
+      manifest_sha256:
+        description: SHA-256 of the owner-reviewed server.json
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-registry
+  cancel-in-progress: false
+
+jobs:
+  registry:
+    name: MCP Registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.6
+      MCP_PUBLISHER_SHA256: 1fbe93fc0783c2394d8012c8d6e50a59e98cb2cc2d216264cc69f405d0e21340
+
+    steps:
+      - name: Check out Officer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify reviewed manifest
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          REVIEWED_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REVIEWED_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::manifest_sha256 must contain 64 lowercase hexadecimal characters"
+            exit 1
+          fi
+          printf '%s  server.json\n' "$REVIEWED_MANIFEST_SHA256" | sha256sum -c
+
+      - name: Download and verify publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          publisher_dir="$(mktemp -d "$RUNNER_TEMP/mcp-publisher.XXXXXX")"
+          archive="$publisher_dir/mcp-publisher_linux_amd64.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$MCP_PUBLISHER_SHA256" "$archive" | sha256sum -c
+          tar -xzf "$archive" -C "$publisher_dir" mcp-publisher
+          printf 'MCP_PUBLISHER=%s/mcp-publisher\n' "$publisher_dir" >> "$GITHUB_ENV"
+
+      - name: Validate manifest
+        run: '"$MCP_PUBLISHER" validate server.json'
+
+      - name: Authenticate to MCP Registry
+        if: github.event_name == 'workflow_dispatch'
+        run: '"$MCP_PUBLISHER" login github-oidc'
+
+      - name: Publish reviewed manifest
+        if: github.event_name == 'workflow_dispatch'
+        run: '"$MCP_PUBLISHER" publish server.json'
