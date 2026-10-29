@@ -390,6 +390,8 @@ type marketDataSymbolVerificationDTO struct {
 type marketDataSymbolMatchDTO struct {
 	Symbol                       string `json:"symbol"`
 	Name                         string `json:"name,omitempty"`
+	BaseAsset                    string `json:"baseAsset,omitempty"`
+	QuoteAsset                   string `json:"quoteAsset,omitempty"`
 	SecType                      string `json:"secType"`
 	Exchange                     string `json:"exchange,omitempty"`
 	PrimaryExchange              string `json:"primaryExchange,omitempty"`
@@ -563,6 +565,8 @@ func toMarketDataSymbolMatchDTOs(
 		out = append(out, marketDataSymbolMatchDTO{
 			Symbol:                       match.Symbol,
 			Name:                         match.Name,
+			BaseAsset:                    match.BaseAsset,
+			QuoteAsset:                   match.QuoteAsset,
 			SecType:                      match.SecType,
 			Exchange:                     match.Exchange,
 			PrimaryExchange:              match.PrimaryExchange,

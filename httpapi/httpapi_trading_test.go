@@ -365,6 +365,8 @@ func TestTradingOptionalFieldsAndEmptyCollections(t *testing.T) {
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/verify-symbol", `{"externalSymbol":"AAPL"}`), 200, `{"verification":{"supported":true,"exists":true,"tradable":true,"details":"listed"}}`)
 	svc.tradingSearch.Matches[0] = trading.SymbolMatch{Symbol: "AAPL", Name: "Apple", Class: "equity", Exchange: "NASDAQ", Tradable: true}
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/search-symbols", `{"query":"apple"}`), 200, `{"supported":true,"matches":[{"symbol":"AAPL","name":"Apple","class":"equity","exchange":"NASDAQ","tradable":true}]}`)
+	svc.tradingSearch.Matches[0] = trading.SymbolMatch{Symbol: "ETHUSDT", BaseAsset: "ETH", QuoteAsset: "USDT", Tradable: true}
+	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/search-symbols", `{"query":"eth"}`), 200, `{"supported":true,"matches":[{"symbol":"ETHUSDT","baseAsset":"ETH","quoteAsset":"USDT","tradable":true}]}`)
 	c.State, c.Error = "running", ""
 	running := strings.Replace(expected, `"state":"unavailable","error":"keys unavailable"`, `"state":"running"`, 1)
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/trading", ""), 200, `{"trading":{"providers":[`+providers+`],"connections":[`+running+`]}}`)

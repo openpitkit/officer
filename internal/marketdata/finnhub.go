@@ -321,6 +321,17 @@ var finnhubMajorQuoteAssets = map[string]struct{}{
 	"USDT": {}, "USD": {}, "USDC": {}, "FDUSD": {}, "BUSD": {}, "EUR": {},
 }
 
+// finnhubCryptoAssets reads the base and quote assets from a catalogue entry's
+// display pair ("ETH/USDT"); a display that is not exactly two non-empty
+// slash-separated codes states no pair.
+func finnhubCryptoAssets(display string) symbolAssets {
+	base, quote, ok := strings.Cut(display, "/")
+	if !ok || strings.Contains(quote, "/") {
+		return symbolAssets{}
+	}
+	return newSymbolAssets(base, quote)
+}
+
 // finnhubCryptoMatchRank reports whether a crypto catalogue entry matches query
 // and how closely (lower is better), so an exact base-asset hit in a major quote
 // (ETH/USDT) ranks above the same base in an exotic quote (ETH/MXN), which in
@@ -336,8 +347,8 @@ func finnhubCryptoMatchRank(sym finnhubCryptoSymbol, query string) (int, bool) {
 	}
 	display := strings.ToUpper(sym.DisplaySymbol) // "ETH/USDT"
 	base, quote := display, ""
-	if i := strings.IndexByte(display, '/'); i >= 0 {
-		base, quote = display[:i], display[i+1:] // "ETH", "USDT"
+	if assets := finnhubCryptoAssets(display); assets.base != "" {
+		base, quote = assets.base, assets.quote // "ETH", "USDT"
 	}
 	pair := finnhubCompactPair(symbolAfterColon(symbol)) // "ETHUSDT"
 	qCompact := finnhubCompactPair(q)
@@ -440,12 +451,15 @@ func (c *finnhubConnector) searchFinnhubCrypto(
 			if symbol == "" {
 				continue
 			}
+			assets := finnhubCryptoAssets(sym.DisplaySymbol)
 			found = append(found, ranked{
 				match: fwmarketdata.SymbolMatch{
-					Symbol:   symbol,
-					Name:     strings.TrimSpace(sym.Description),
-					SecType:  "Crypto",
-					Exchange: finnhubExchangeFromSymbol(symbol),
+					Symbol:     symbol,
+					Name:       strings.TrimSpace(sym.Description),
+					BaseAsset:  assets.base,
+					QuoteAsset: assets.quote,
+					SecType:    "Crypto",
+					Exchange:   finnhubExchangeFromSymbol(symbol),
 				},
 				rank: rank,
 			})

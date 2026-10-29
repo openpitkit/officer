@@ -36,3 +36,4 @@ export * from "./UnsealedKeysWarning";
 export * from "./DiagnosticPanel";
 export * from "./useSymbolSearch";
 export * from "./useRowVerification";
+export * from "./symbolPair";

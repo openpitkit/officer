@@ -54,6 +54,7 @@ import {
   RevokeAccessDialog,
   UnsealedKeysWarning,
   VenueAccessList,
+  venueSymbolPair,
   type AccessGrantBlock,
   type InstrumentDraftFields,
 } from "@/components/venues";
@@ -1069,11 +1070,11 @@ function ConnectionInstrumentsSection({
               void symbolSearch.onSearch();
             }}
             onPick={(match) => {
-              const pair = /^([^/\s]+)\/([^/\s]+)$/.exec(match.symbol);
+              const pair = venueSymbolPair(match);
               setDraft({
                 externalSymbol: match.symbol,
-                baseAsset: pair ? pair[1] : match.symbol,
-                quoteAsset: pair ? pair[2] : "",
+                baseAsset: pair.base,
+                quoteAsset: pair.quote,
               });
               setVerification(null);
               setVerifyError(null);

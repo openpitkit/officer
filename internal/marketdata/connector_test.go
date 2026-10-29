@@ -93,6 +93,31 @@ func TestSearchSymbolsFromSetMatchesBaseOrSubstring(t *testing.T) {
 	}
 }
 
+func TestWithSymbolAssetsCopiesCatalogueParts(t *testing.T) {
+	t.Parallel()
+
+	known := map[string]symbolAssets{
+		"ETHUSDT": newSymbolAssets("ETH", "USDT"),
+		"ETHBTC":  newSymbolAssets("ETH", ""),
+		"ETHFI":   {},
+	}
+	matches := withSymbolAssets(searchSymbolsFromSet(
+		known, fwmarketdata.SymbolSearchQuery{Query: "ETH"}, "SPOT",
+	), known)
+	if len(matches) != 3 {
+		t.Fatalf("matches = %+v, want three", matches)
+	}
+	for _, match := range matches {
+		wantBase, wantQuote := "", ""
+		if match.Symbol == "ETHUSDT" {
+			wantBase, wantQuote = "ETH", "USDT"
+		}
+		if match.BaseAsset != wantBase || match.QuoteAsset != wantQuote {
+			t.Fatalf("match = %+v, want base %q quote %q", match, wantBase, wantQuote)
+		}
+	}
+}
+
 func TestProviderUnknownSymbolDiag(t *testing.T) {
 	t.Parallel()
 

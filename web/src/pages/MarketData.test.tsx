@@ -898,6 +898,8 @@ describe("IB feed resolver", () => {
     const user = userEvent.setup();
     const match: MarketDataSymbolMatch = {
       symbol: "BTCUSDT",
+      baseAsset: "BTC",
+      quoteAsset: "USDT",
       secType: "SPOT",
     };
     const onSearchSymbols = vi.fn().mockResolvedValue([match]);
@@ -985,10 +987,12 @@ describe("IB feed resolver", () => {
     expect(within(list).queryByText(/AAPL/)).not.toBeInTheDocument();
   });
 
-  it("derives base and quote from a compact resolved symbol", async () => {
+  it("takes base and quote from the pair the feed states", async () => {
     const user = userEvent.setup();
     const match: MarketDataSymbolMatch = {
       symbol: "AEETH",
+      baseAsset: "AE",
+      quoteAsset: "ETH",
       secType: "SPOT",
     };
     const onSearchSymbols = vi.fn().mockResolvedValue([match]);
@@ -1028,10 +1032,89 @@ describe("IB feed resolver", () => {
     });
   });
 
+  it("keeps a compact symbol whole when the feed states no pair", async () => {
+    const user = userEvent.setup();
+    const match: MarketDataSymbolMatch = { symbol: "GBTC", secType: "STK" };
+    const onSearchSymbols = vi.fn().mockResolvedValue([match]);
+    renderCard(
+      ibInstance({
+        id: "bn-1",
+        provider: "binance",
+        label: "Binance",
+        searchesSymbols: true,
+      }),
+      { onSearchSymbols },
+    );
+
+    await user.type(
+      screen.getByLabelText("Resolve symbol in this feed"),
+      "BTC",
+    );
+    await user.click(screen.getByRole("button", { name: /^resolve$/i }));
+    await user.click(await screen.findByRole("button", { name: /GBTC/ }));
+
+    expect(screen.getByPlaceholderText("External symbol")).toHaveValue("GBTC");
+    expect(screen.getByPlaceholderText("Base")).toHaveValue("GBTC");
+    expect(screen.getByPlaceholderText("Quote")).toHaveValue("");
+    expect(
+      screen.getByRole("button", { name: /add instrument/i }),
+    ).toBeDisabled();
+  });
+
+  it.each([
+    {
+      name: "a separated query names the quote the match does not state",
+      match: { symbol: "ETHUSDT", secType: "SPOT" },
+      query: "eth / usdt",
+      base: "ETHUSDT",
+      quote: "USDT",
+    },
+    {
+      name: "a contract currency names the quote ahead of the symbol split",
+      match: { symbol: "ABC-DEF", secType: "STK", currency: "USD" },
+      query: "ABC",
+      base: "ABC",
+      quote: "USD",
+    },
+    {
+      name: "the symbol split names the quote ahead of the query",
+      match: { symbol: "ABC-DEF", secType: "SPOT" },
+      query: "ABC/USD",
+      base: "ABC",
+      quote: "DEF",
+    },
+  ])("resolves the quote when $name", async ({ match, query, base, quote }) => {
+    const user = userEvent.setup();
+    const onSearchSymbols = vi.fn().mockResolvedValue([match]);
+    renderCard(
+      ibInstance({
+        id: "bn-1",
+        provider: "binance",
+        label: "Binance",
+        searchesSymbols: true,
+      }),
+      { onSearchSymbols },
+    );
+
+    await user.type(
+      screen.getByLabelText("Resolve symbol in this feed"),
+      query,
+    );
+    await user.click(screen.getByRole("button", { name: /^resolve$/i }));
+    await user.click(
+      await screen.findByRole("button", { name: new RegExp(match.symbol) }),
+    );
+
+    expect(screen.getByPlaceholderText("Base")).toHaveValue(base);
+    expect(screen.getByPlaceholderText("Quote")).toHaveValue(quote);
+  });
+
   it("fills the qualified symbol and venue-free pair from an exchange-prefixed match", async () => {
     const user = userEvent.setup();
     const match: MarketDataSymbolMatch = {
       symbol: "BINANCE:ETHUSDT",
+      baseAsset: "ETH",
+      quoteAsset: "USDT",
       secType: "Crypto",
       exchange: "BINANCE",
     };

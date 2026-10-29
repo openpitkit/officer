@@ -226,8 +226,8 @@ func TestBybitConnector_CloseStopsSubscription(t *testing.T) {
 		dial: func(context.Context, string) (bybitConn, error) {
 			return conn, nil
 		},
-		fetchSymbols: func(context.Context, string) (map[string]struct{}, error) {
-			return map[string]struct{}{"BTCUSDT": {}}, nil
+		fetchSymbols: func(context.Context, string) (map[string]symbolAssets, error) {
+			return map[string]symbolAssets{"BTCUSDT": {}}, nil
 		},
 		pingInterval: time.Hour,
 		readTimeout:  time.Hour,
@@ -268,9 +268,9 @@ func TestBybitVerifySymbolUsesCategoryCatalogue(t *testing.T) {
 		t.Fatalf("NewBybitConnector: %v", err)
 	}
 	var gotCategory string
-	connector.fetchSymbols = func(_ context.Context, category string) (map[string]struct{}, error) {
+	connector.fetchSymbols = func(_ context.Context, category string) (map[string]symbolAssets, error) {
 		gotCategory = category
-		return map[string]struct{}{"BTCUSDT": {}}, nil
+		return map[string]symbolAssets{"BTCUSDT": {}}, nil
 	}
 
 	exact, err := connector.VerifySymbol(context.Background(), "BTCUSDT")
@@ -289,6 +289,28 @@ func TestBybitVerifySymbolUsesCategoryCatalogue(t *testing.T) {
 	}
 	if folded.Exists || folded.Suggestion != "BTCUSDT" {
 		t.Fatalf("folded = %+v, want suggestion BTCUSDT", folded)
+	}
+}
+
+func TestBybitSearchSymbolsCarriesCatalogueAssets(t *testing.T) {
+	t.Parallel()
+
+	connector, err := NewBybitConnector(`{"category":"linear"}`)
+	if err != nil {
+		t.Fatalf("NewBybitConnector: %v", err)
+	}
+	connector.fetchSymbols = func(context.Context, string) (map[string]symbolAssets, error) {
+		return map[string]symbolAssets{"BTCUSDT": newSymbolAssets("BTC", "USDT")}, nil
+	}
+
+	got, err := connector.SearchSymbols(
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "BTCUSDT"},
+	)
+	if err != nil {
+		t.Fatalf("SearchSymbols: %v", err)
+	}
+	if len(got) != 1 || got[0].BaseAsset != "BTC" || got[0].QuoteAsset != "USDT" {
+		t.Fatalf("SearchSymbols = %+v, want BTCUSDT as BTC/USDT", got)
 	}
 }
 
@@ -327,8 +349,8 @@ func TestBybitDiagnoseUnknownSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBybitConnector: %v", err)
 	}
-	connector.fetchSymbols = func(context.Context, string) (map[string]struct{}, error) {
-		return map[string]struct{}{"BTCUSDT": {}}, nil
+	connector.fetchSymbols = func(context.Context, string) (map[string]symbolAssets, error) {
+		return map[string]symbolAssets{"BTCUSDT": {}}, nil
 	}
 	connector.subs = mustNormalizeBybitSubscriptions(t, []fwmarketdata.Subscription{
 		{External: "BTCUSDT", Base: testMarketDataAssetID("BTC"), Quote: testMarketDataAssetID("USDT")},

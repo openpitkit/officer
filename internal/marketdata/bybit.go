@@ -49,7 +49,7 @@ const (
 type bybitConnector struct {
 	dial         func(context.Context, string) (bybitConn, error)
 	sleep        func(context.Context, time.Duration) error
-	fetchSymbols func(context.Context, string) (map[string]struct{}, error)
+	fetchSymbols func(context.Context, string) (map[string]symbolAssets, error)
 	report       health.StatusReporter
 	diagReport   health.DiagnosticReporter
 	reconnectMin time.Duration
@@ -216,7 +216,9 @@ func (c *bybitConnector) SearchSymbols(
 	if err != nil {
 		return nil, err
 	}
-	return searchSymbolsFromSet(known, query, strings.ToUpper(c.category)), nil
+	return withSymbolAssets(
+		searchSymbolsFromSet(known, query, strings.ToUpper(c.category)), known,
+	), nil
 }
 
 // Diagnose returns a diagnostic for each stored Bybit subscription whose symbol
@@ -498,7 +500,9 @@ type bybitInstrumentsResponse struct {
 	RetMsg  string `json:"retMsg"`
 	Result  struct {
 		List []struct {
-			Symbol string `json:"symbol"`
+			Symbol    string `json:"symbol"`
+			BaseCoin  string `json:"baseCoin"`
+			QuoteCoin string `json:"quoteCoin"`
 		} `json:"list"`
 		NextPageCursor string `json:"nextPageCursor"`
 	} `json:"result"`
@@ -506,8 +510,8 @@ type bybitInstrumentsResponse struct {
 
 func fetchBybitSymbols(
 	ctx context.Context, category string,
-) (map[string]struct{}, error) {
-	set := make(map[string]struct{})
+) (map[string]symbolAssets, error) {
+	set := make(map[string]symbolAssets)
 	cursor := ""
 	for {
 		reqURL, err := url.Parse(bybitInstrumentsBaseURL)
@@ -550,7 +554,7 @@ func fetchBybitSymbols(
 		}
 		for _, item := range payload.Result.List {
 			if symbol := strings.TrimSpace(item.Symbol); symbol != "" {
-				set[symbol] = struct{}{}
+				set[symbol] = newSymbolAssets(item.BaseCoin, item.QuoteCoin)
 			}
 		}
 		cursor = strings.TrimSpace(payload.Result.NextPageCursor)

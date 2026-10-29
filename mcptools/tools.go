@@ -1559,11 +1559,13 @@ type searchTradingSymbolsInput struct {
 	Query      string `json:"query" jsonschema:"Venue symbol search query"`
 }
 type tradingSymbolMatchDTO struct {
-	Symbol   string `json:"symbol"`
-	Name     string `json:"name,omitempty"`
-	Class    string `json:"class,omitempty"`
-	Exchange string `json:"exchange,omitempty"`
-	Tradable bool   `json:"tradable"`
+	Symbol     string `json:"symbol"`
+	Name       string `json:"name,omitempty"`
+	Class      string `json:"class,omitempty"`
+	Exchange   string `json:"exchange,omitempty"`
+	BaseAsset  string `json:"baseAsset,omitempty"`
+	QuoteAsset string `json:"quoteAsset,omitempty"`
+	Tradable   bool   `json:"tradable"`
 }
 type searchTradingSymbolsOutput struct {
 	Supported bool                    `json:"supported"`
@@ -1879,7 +1881,7 @@ func searchTradingSymbolsHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[
 		}
 		out := searchTradingSymbolsOutput{Supported: result.Supported, Matches: make([]tradingSymbolMatchDTO, 0, len(result.Matches))}
 		for _, m := range result.Matches {
-			out.Matches = append(out.Matches, tradingSymbolMatchDTO{Symbol: m.Symbol, Name: m.Name, Class: m.Class, Exchange: m.Exchange, Tradable: m.Tradable})
+			out.Matches = append(out.Matches, tradingSymbolMatchDTO{Symbol: m.Symbol, Name: m.Name, Class: m.Class, Exchange: m.Exchange, BaseAsset: m.BaseAsset, QuoteAsset: m.QuoteAsset, Tradable: m.Tradable})
 		}
 		return "trading symbols", out, nil
 	}

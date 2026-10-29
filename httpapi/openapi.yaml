@@ -8375,7 +8375,9 @@ components:
     TradingSymbolMatch:
       type: object
       additionalProperties: false
-      description: Absent name, class and exchange are omitted, never null.
+      description: >-
+        Absent name, class, exchange, baseAsset and quoteAsset are omitted,
+        never null.
       required: [symbol, tradable]
       properties:
         symbol:
@@ -8386,6 +8388,16 @@ components:
           type: string
         exchange:
           type: string
+        baseAsset:
+          type: string
+          description: >-
+            Venue base asset code of a currency pair. Present together with
+            quoteAsset, and only when the venue's catalogue states the pair.
+        quoteAsset:
+          type: string
+          description: >-
+            Venue quote asset code of a currency pair. Present together with
+            baseAsset, and only when the venue's catalogue states the pair.
         tradable:
           type: boolean
 
@@ -8922,6 +8934,16 @@ components:
           type: string
         name:
           type: string
+        baseAsset:
+          type: string
+          description: >-
+            Provider base asset code of a currency pair. Present together with
+            quoteAsset, and only when the provider's catalogue states the pair.
+        quoteAsset:
+          type: string
+          description: >-
+            Provider quote asset code of a currency pair. Present together with
+            baseAsset, and only when the provider's catalogue states the pair.
         secType:
           type: string
         exchange:

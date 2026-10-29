@@ -108,10 +108,10 @@ func TestBinanceConnector_ReconnectsAndResubscribes(t *testing.T) {
 			}
 			return second, nil
 		},
-		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
-			known := make(map[string]struct{}, len(subs))
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
+			known := make(map[string]symbolAssets, len(subs))
 			for _, s := range subs {
-				known[s.symbol] = struct{}{}
+				known[s.symbol] = symbolAssets{}
 			}
 			return known, nil
 		},
@@ -187,8 +187,8 @@ func TestBinanceConnector_ResetsBackoffAfterRead(t *testing.T) {
 			dials++
 			return conn, nil
 		},
-		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
-			return map[string]struct{}{"BTCUSDT": {}}, nil
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
+			return map[string]symbolAssets{"BTCUSDT": {}}, nil
 		},
 		sleep: func(_ context.Context, delay time.Duration) error {
 			mu.Lock()
@@ -235,8 +235,8 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 		diags    []health.Diagnostic
 	)
 	connector := &binanceConnector{
-		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
-			return map[string]struct{}{"BTCUSDT": {}}, nil
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
+			return map[string]symbolAssets{"BTCUSDT": {}}, nil
 		},
 		report: func(ok bool, errMsg string) {
 			statusOK = ok
@@ -270,8 +270,8 @@ func TestBinanceConnector_DiagnoseUnknownSymbolSuggestsExternalPrefix(t *testing
 	}})
 	connector := &binanceConnector{
 		subs: subs,
-		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
-			return map[string]struct{}{
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
+			return map[string]symbolAssets{
 				"BTC":     {},
 				"BTCU":    {},
 				"BTCUS":   {},
@@ -379,8 +379,8 @@ func TestBinanceConnector_VerifySymbolExists(t *testing.T) {
 	t.Parallel()
 
 	connector := &binanceConnector{
-		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
-			return map[string]struct{}{"BTCUSDT": {}, "ETHUSDT": {}}, nil
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
+			return map[string]symbolAssets{"BTCUSDT": {}, "ETHUSDT": {}}, nil
 		},
 	}
 
@@ -397,8 +397,8 @@ func TestBinanceConnector_VerifySymbolNotFound(t *testing.T) {
 	t.Parallel()
 
 	connector := &binanceConnector{
-		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
-			return map[string]struct{}{"BTCUSDT": {}}, nil
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
+			return map[string]symbolAssets{"BTCUSDT": {}}, nil
 		},
 	}
 
@@ -415,8 +415,8 @@ func TestBinanceConnector_VerifySymbolCaseFoldSuggestion(t *testing.T) {
 	t.Parallel()
 
 	connector := &binanceConnector{
-		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
-			return map[string]struct{}{"ETHUSDT": {}}, nil
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
+			return map[string]symbolAssets{"ETHUSDT": {}}, nil
 		},
 	}
 
@@ -432,12 +432,34 @@ func TestBinanceConnector_VerifySymbolCaseFoldSuggestion(t *testing.T) {
 	}
 }
 
+func TestBinanceConnector_SearchSymbolsCarriesCatalogueAssets(t *testing.T) {
+	t.Parallel()
+
+	connector := &binanceConnector{
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
+			return map[string]symbolAssets{
+				"ETHUSDT": newSymbolAssets("ETH", "USDT"),
+			}, nil
+		},
+	}
+
+	got, err := connector.SearchSymbols(
+		context.Background(), fwmarketdata.SymbolSearchQuery{Query: "ETHUSDT"},
+	)
+	if err != nil {
+		t.Fatalf("SearchSymbols: %v", err)
+	}
+	if len(got) != 1 || got[0].BaseAsset != "ETH" || got[0].QuoteAsset != "USDT" {
+		t.Fatalf("SearchSymbols = %+v, want ETHUSDT as ETH/USDT", got)
+	}
+}
+
 func TestBinanceConnector_VerifySymbolFetchError(t *testing.T) {
 	t.Parallel()
 
 	wantErr := errors.New("exchangeInfo down")
 	connector := &binanceConnector{
-		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+		fetchSymbols: func(context.Context) (map[string]symbolAssets, error) {
 			return nil, wantErr
 		},
 	}

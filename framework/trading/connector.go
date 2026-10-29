@@ -158,8 +158,11 @@ type AccountChecker interface {
 }
 
 // SymbolMatch describes a venue symbol offered for instrument mapping.
+// BaseAsset and QuoteAsset are the venue's own base and quote asset codes of a
+// currency pair, set together and only when the venue's catalogue states them.
 type SymbolMatch struct {
 	Symbol, Name, Class, Exchange string
+	BaseAsset, QuoteAsset         string
 	Tradable                      bool
 }
 

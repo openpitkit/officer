@@ -283,6 +283,13 @@ func TestTradingOptionalAndEmptyShapes(t *testing.T) {
 		requireNotToolError(t, res.IsError)
 		assertTradingWire(t, res.Wire, `{"supported":true,"matches":[{"symbol":"AAPL","name":"Apple","class":"equity","exchange":"NASDAQ","tradable":true}]}`)
 	})
+	t.Run("search-assets", func(t *testing.T) {
+		src := tradingFixture()
+		src.search.Matches[0] = trading.SymbolMatch{Symbol: "ETHUSDT", BaseAsset: "ETH", QuoteAsset: "USDT", Tradable: true}
+		res := callTool[map[string]any](t, src, "search_trading_symbols", map[string]any{"connection": "conn", "query": "ETH"})
+		requireNotToolError(t, res.IsError)
+		assertTradingWire(t, res.Wire, `{"supported":true,"matches":[{"symbol":"ETHUSDT","baseAsset":"ETH","quoteAsset":"USDT","tradable":true}]}`)
+	})
 	t.Run("search-empty", func(t *testing.T) {
 		src := tradingFixture()
 		src.search = backend.TradingSymbolSearch{}

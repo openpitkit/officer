@@ -57,11 +57,15 @@ import {
   InstrumentDraftRow,
   InstrumentsTable,
   ProviderGuideDialog,
+  splitSymbolPair,
+  symbolPairSource,
   SymbolSearchPanel,
   useSymbolSearch,
   useRowVerification,
+  venueSymbolPair,
   VerifyResult,
   type FailedVerificationOutcome,
+  type SymbolPair,
   UnsealedKeysWarning,
   VenueCardHeader,
 } from "@/components/venues";
@@ -673,73 +677,17 @@ function ibDerivativeSuffix(match: MarketDataSymbolMatch): string {
   return parts.join(" ");
 }
 
-function splitSymbolQueryPair(
-  value: string,
-): { base: string; quote: string } | null {
-  const parts = value
-    .trim()
-    .split(/[/\\\s_-]+/u)
-    .filter(Boolean);
-  if (parts.length !== 2) {
-    return null;
-  }
-  return {
-    base: parts[0].toUpperCase(),
-    quote: parts[1].toUpperCase(),
-  };
-}
-
-const knownQuoteAssetSuffixes = [
-  "USDT",
-  "USDC",
-  "BUSD",
-  "FDUSD",
-  "TUSD",
-  "USD",
-  "EUR",
-  "GBP",
-  "JPY",
-  "CHF",
-  "AUD",
-  "CAD",
-  "BTC",
-  "ETH",
-  "BNB",
-];
-
-function splitCompactSymbolPair(
-  symbol: string,
-): { base: string; quote: string } | null {
-  const upper = symbol.trim().toUpperCase();
-  for (const quote of knownQuoteAssetSuffixes) {
-    if (upper.length > quote.length && upper.endsWith(quote)) {
-      return {
-        base: upper.slice(0, -quote.length),
-        quote,
-      };
-    }
-  }
-  return null;
-}
-
-// symbolPairSource strips an exchange-qualified prefix ("BINANCE:ETHUSDT" ->
-// "ETHUSDT") so base/quote splitting sees only the trading pair, not the venue.
-function symbolPairSource(symbol: string): string {
-  const colon = symbol.lastIndexOf(":");
-  return colon >= 0 ? symbol.slice(colon + 1) : symbol;
-}
-
+// resolvedInstrumentPair is the shared venue pair. An IB-style contract
+// currency names the quote ahead of it, and a separated search query stands in
+// for a quote neither states.
 function resolvedInstrumentPair(
   match: MarketDataSymbolMatch,
   query: string,
-): { base: string; quote: string } {
-  const pairSource = symbolPairSource(match.symbol);
-  const symbolPair =
-    splitSymbolQueryPair(pairSource) || splitCompactSymbolPair(pairSource);
-  const queryPair = splitSymbolQueryPair(query);
+): SymbolPair {
+  const pair = venueSymbolPair(match);
   return {
-    base: symbolPair?.base || pairSource,
-    quote: match.currency || symbolPair?.quote || queryPair?.quote || "",
+    base: pair.base,
+    quote: match.currency || pair.quote || splitSymbolPair(query)?.quote || "",
   };
 }
 

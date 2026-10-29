@@ -560,6 +560,12 @@ describe("trading client", () => {
           tradable: true,
         },
         { symbol: "AAPL.TEST", tradable: false },
+        {
+          symbol: "ETHUSDT",
+          baseAsset: "ETH",
+          quoteAsset: "USDT",
+          tradable: true,
+        },
       ],
     };
     vi.mocked(fetch).mockResolvedValue(jsonResponse(search));
@@ -3157,6 +3163,37 @@ describe("searchMarketDataSymbols", () => {
         localSymbol: "BTC.USD",
         tradingClass: "BTC",
       },
+    ]);
+  });
+
+  it("keeps the pair a match states and drops empty assets", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        supported: true,
+        matches: [
+          {
+            symbol: "ETHUSDT",
+            secType: "SPOT",
+            baseAsset: "ETH",
+            quoteAsset: "USDT",
+          },
+          { symbol: "GBTC", secType: "SPOT", baseAsset: "", quoteAsset: "" },
+        ],
+      }),
+    );
+
+    const result = await searchMarketDataSymbols("binance-1", {
+      query: "ETH",
+    });
+
+    expect(result.matches).toEqual([
+      {
+        symbol: "ETHUSDT",
+        secType: "SPOT",
+        baseAsset: "ETH",
+        quoteAsset: "USDT",
+      },
+      { symbol: "GBTC", secType: "SPOT" },
     ]);
   });
 

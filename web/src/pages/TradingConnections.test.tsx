@@ -1309,6 +1309,51 @@ describe("Trading connections", () => {
     ).toBeInTheDocument();
   });
 
+  it.each([
+    { match: { symbol: "BTC/USD" }, base: "BTC", quote: "USD", add: true },
+    {
+      match: { symbol: "ETHUSDT", baseAsset: "ETH", quoteAsset: "USDT" },
+      base: "ETH",
+      quote: "USDT",
+      add: true,
+    },
+    { match: { symbol: "GBTC" }, base: "GBTC", quote: "", add: false },
+  ])(
+    "fills the draft pair from a picked $match.symbol",
+    async ({ match, base, quote, add }) => {
+      const user = userEvent.setup();
+      api.searchTradingSymbols.mockResolvedValue({
+        supported: true,
+        matches: [{ ...match, tradable: true }],
+      });
+      renderTrading();
+      const section = within(
+        (await card()).getByRole("region", { name: "Instruments" }),
+      );
+      await user.type(
+        section.getByRole("textbox", { name: "Resolve symbol at this venue" }),
+        match.symbol,
+      );
+      await user.click(section.getByRole("button", { name: "Resolve" }));
+      await user.click(
+        await section.findByRole("button", {
+          name: new RegExp(match.symbol, "u"),
+        }),
+      );
+      expect(section.getByPlaceholderText("External symbol")).toHaveValue(
+        match.symbol,
+      );
+      expect(section.getByPlaceholderText("Base")).toHaveValue(base);
+      expect(section.getByPlaceholderText("Quote")).toHaveValue(quote);
+      const submit = section.getByRole("button", { name: "Add instrument" });
+      if (add) {
+        expect(submit).toBeEnabled();
+      } else {
+        expect(submit).toBeDisabled();
+      }
+    },
+  );
+
   it.each(["AAPL", "Apple", "NASDAQ", "US_EQUITY"])(
     "filters found symbols by %s and resets the filter on a new query",
     async (filter) => {

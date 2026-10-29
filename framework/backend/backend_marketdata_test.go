@@ -315,3 +315,72 @@ func TestListMarketDataHidesClearedEnabledBYOMarkWithSnapshot(t *testing.T) {
 		t.Fatalf("cleared enabled BYO quote = %+v, want none", got.Quote)
 	}
 }
+
+type marketDataSearchTestNode struct {
+	node.Node
+	instance domain.MarketDataInstance
+}
+
+func (n *marketDataSearchTestNode) GetMarketDataInstance(
+	context.Context, domain.ExternalID,
+) (domain.MarketDataInstance, bool, error) {
+	return n.instance, true, nil
+}
+
+type marketDataSearchTestConnector struct {
+	matches []marketdata.SymbolMatch
+}
+
+func (c *marketDataSearchTestConnector) Subscribe(
+	context.Context, []marketdata.Subscription,
+) (<-chan marketdata.QuoteUpdate, error) {
+	return nil, nil
+}
+
+func (c *marketDataSearchTestConnector) Close() {}
+
+func (c *marketDataSearchTestConnector) SearchSymbols(
+	context.Context, marketdata.SymbolSearchQuery,
+) ([]marketdata.SymbolMatch, error) {
+	return c.matches, nil
+}
+
+func TestSearchMarketDataSymbolsCarriesStatedPair(t *testing.T) {
+	t.Parallel()
+	instance := domain.MarketDataInstance{
+		ExternalID: domain.ExternalID("search-1"),
+		Provider:   domain.MarketDataProviderMock,
+	}
+	connector := &marketDataSearchTestConnector{matches: []marketdata.SymbolMatch{{
+		Symbol:     "ETHUSDT",
+		BaseAsset:  "ETH",
+		QuoteAsset: "USDT",
+		SecType:    "SPOT",
+	}}}
+	registry := marketdata.NewRegistry()
+	if err := registry.Register(marketdata.Provider{
+		Type: domain.MarketDataProviderMock,
+		Build: func(domain.MarketDataInstance) (marketdata.Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	service := &Service{
+		node:     &marketDataSearchTestNode{instance: instance},
+		registry: registry,
+		scope:    EveryAccount{},
+	}
+
+	got, err := service.SearchMarketDataSymbols(
+		systemCtx(), "search-1", MarketDataSymbolSearchInput{Query: "ETH"},
+	)
+	if err != nil {
+		t.Fatalf("SearchMarketDataSymbols: %v", err)
+	}
+	if len(got.Matches) != 1 ||
+		got.Matches[0].BaseAsset != "ETH" ||
+		got.Matches[0].QuoteAsset != "USDT" {
+		t.Fatalf("search = %+v, want ETHUSDT stating ETH/USDT", got)
+	}
+}

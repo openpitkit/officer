@@ -99,11 +99,16 @@ type SymbolVerifier interface {
 
 // SymbolMatch is one contract the provider resolved for a symbol search. Name is
 // the human-readable long name when the provider supplies one (empty otherwise).
-// The remaining fields carry the resolved contract specifics; they are empty
-// when the provider reports none.
+// BaseAsset and QuoteAsset are the venue's own base and quote asset codes of a
+// currency pair ("ETH" and "USDT" for "ETHUSDT"), set together and only when
+// the provider's catalogue states them; a caller never derives them from the
+// symbol's spelling. The remaining fields carry the resolved contract
+// specifics; they are empty when the provider reports none.
 type SymbolMatch struct {
 	Symbol                       string
 	Name                         string
+	BaseAsset                    string
+	QuoteAsset                   string
 	SecType                      string
 	Exchange                     string
 	PrimaryExchange              string

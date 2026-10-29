@@ -49,7 +49,7 @@ const (
 type binanceConnector struct {
 	dial         func(context.Context, string) (binanceConn, error)
 	sleep        func(context.Context, time.Duration) error
-	fetchSymbols func(ctx context.Context) (map[string]struct{}, error)
+	fetchSymbols func(ctx context.Context) (map[string]symbolAssets, error)
 	report       health.StatusReporter
 	diagReport   health.DiagnosticReporter
 	reconnectMin time.Duration
@@ -247,7 +247,7 @@ func (c *binanceConnector) SearchSymbols(
 	if err != nil {
 		return nil, err
 	}
-	return searchSymbolsFromSet(known, query, "SPOT"), nil
+	return withSymbolAssets(searchSymbolsFromSet(known, query, "SPOT"), known), nil
 }
 
 func (c *binanceConnector) Subscribe(
@@ -354,7 +354,7 @@ func (c *binanceConnector) validateSymbols(
 // binanceUnknownSymbolDiag builds a structured unknown-symbol diagnostic for a
 // subscription that is not listed on Binance, with close external candidates.
 func binanceUnknownSymbolDiag(
-	sub binanceSubscription, known map[string]struct{},
+	sub binanceSubscription, known map[string]symbolAssets,
 ) health.Diagnostic {
 	remediation := "Remove this instrument and add one with a valid Binance symbol" +
 		" (e.g. ETHUSDT). See the valid symbols list."
@@ -486,16 +486,19 @@ func (c *binanceConnector) clearActiveConn() {
 	c.active = nil
 }
 
-// binanceExchangeInfoResponse carries only the symbol field we need.
+// binanceExchangeInfoResponse carries only the symbol fields we need.
 type binanceExchangeInfoResponse struct {
 	Symbols []struct {
-		Symbol string `json:"symbol"`
+		Symbol     string `json:"symbol"`
+		BaseAsset  string `json:"baseAsset"`
+		QuoteAsset string `json:"quoteAsset"`
 	} `json:"symbols"`
 }
 
-// fetchBinanceSymbols fetches the Binance exchange info and returns a set of
-// uppercased symbols. It is the default implementation of fetchSymbols.
-func fetchBinanceSymbols(ctx context.Context) (map[string]struct{}, error) {
+// fetchBinanceSymbols fetches the Binance exchange info and returns its
+// uppercased symbols with their base and quote assets. It is the default
+// implementation of fetchSymbols.
+func fetchBinanceSymbols(ctx context.Context) (map[string]symbolAssets, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, binanceExchangeInfoURL, nil)
 	if err != nil {
 		return nil, err
@@ -512,9 +515,9 @@ func fetchBinanceSymbols(ctx context.Context) (map[string]struct{}, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		return nil, fmt.Errorf("binance exchangeInfo: decode: %w", err)
 	}
-	set := make(map[string]struct{}, len(info.Symbols))
+	set := make(map[string]symbolAssets, len(info.Symbols))
 	for _, s := range info.Symbols {
-		set[strings.ToUpper(s.Symbol)] = struct{}{}
+		set[strings.ToUpper(s.Symbol)] = newSymbolAssets(s.BaseAsset, s.QuoteAsset)
 	}
 	return set, nil
 }

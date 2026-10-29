@@ -291,6 +291,8 @@ func (s *Service) VerifyMarketDataSymbol(
 type MarketDataSymbolMatch struct {
 	Symbol                       string
 	Name                         string
+	BaseAsset                    string
+	QuoteAsset                   string
 	SecType                      string
 	Exchange                     string
 	PrimaryExchange              string
@@ -369,6 +371,8 @@ func (s *Service) SearchMarketDataSymbols(
 			out.Matches = append(out.Matches, MarketDataSymbolMatch{
 				Symbol:                       match.Symbol,
 				Name:                         match.Name,
+				BaseAsset:                    match.BaseAsset,
+				QuoteAsset:                   match.QuoteAsset,
 				SecType:                      match.SecType,
 				Exchange:                     match.Exchange,
 				PrimaryExchange:              match.PrimaryExchange,

@@ -1459,6 +1459,12 @@ function normalizeTradingSymbolMatch(v: unknown): TradingSymbolMatch {
   if (o.exchange !== undefined) {
     match.exchange = asString(o.exchange);
   }
+  if (o.baseAsset !== undefined) {
+    match.baseAsset = asString(o.baseAsset);
+  }
+  if (o.quoteAsset !== undefined) {
+    match.quoteAsset = asString(o.quoteAsset);
+  }
   return match;
 }
 
@@ -1763,6 +1769,14 @@ function normalizeMarketDataSymbolMatch(v: unknown): MarketDataSymbolMatch {
   const name = pick(o, "name", "Name");
   if (typeof name === "string" && name.length > 0) {
     match.name = name;
+  }
+  const baseAsset = pick(o, "baseAsset", "BaseAsset");
+  if (typeof baseAsset === "string" && baseAsset.length > 0) {
+    match.baseAsset = baseAsset;
+  }
+  const quoteAsset = pick(o, "quoteAsset", "QuoteAsset");
+  if (typeof quoteAsset === "string" && quoteAsset.length > 0) {
+    match.quoteAsset = quoteAsset;
   }
   const exchange = pick(o, "exchange", "Exchange");
   if (typeof exchange === "string" && exchange.length > 0) {

@@ -360,6 +360,9 @@ func TestFinnhubSearchSymbolsSurfacesCryptoCatalogue(t *testing.T) {
 		got[0].Exchange != "BINANCE" || got[0].SecType != "Crypto" {
 		t.Fatalf("first match = %+v, want BINANCE:ETHUSDT crypto", got[0])
 	}
+	if got[0].BaseAsset != "ETH" || got[0].QuoteAsset != "USDT" {
+		t.Fatalf("first match = %+v, want the ETH/USDT display pair", got[0])
+	}
 	// A non-matching crypto pair (BTC/USDT) is filtered out.
 	for _, m := range got {
 		if m.Symbol == "BINANCE:BTCUSDT" {
@@ -389,6 +392,22 @@ func TestFinnhubCryptoMatchRank(t *testing.T) {
 	for _, q := range []string{"BTC", "SOL", "AAPL", ""} {
 		if _, ok := finnhubCryptoMatchRank(sym, q); ok {
 			t.Fatalf("query %q unexpectedly matched ETH/USDT", q)
+		}
+	}
+}
+
+func TestFinnhubCryptoAssets(t *testing.T) {
+	t.Parallel()
+
+	for display, want := range map[string]symbolAssets{
+		"ETH/USDT": {base: "ETH", quote: "USDT"},
+		"ETHUSDT":  {},
+		"ETH/":     {},
+		"/USDT":    {},
+		"A/B/C":    {},
+	} {
+		if got := finnhubCryptoAssets(display); got != want {
+			t.Fatalf("finnhubCryptoAssets(%q) = %+v, want %+v", display, got, want)
 		}
 	}
 }

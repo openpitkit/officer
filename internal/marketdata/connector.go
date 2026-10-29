@@ -38,8 +38,8 @@ import (
 
 const symbolSearchLimit = 50
 
-func verifySymbolFromSet(
-	known map[string]struct{}, external string,
+func verifySymbolFromSet[V any](
+	known map[string]V, external string,
 ) fwmarketdata.SymbolVerification {
 	symbol := strings.TrimSpace(external)
 	if symbol == "" {
@@ -71,8 +71,8 @@ const unknownSymbolSuggestionLimit = 3
 
 // symbolPrefixSuggestionsFromSet returns deterministic candidates ranked by
 // their normalized prefix shared with the configured external symbol.
-func symbolPrefixSuggestionsFromSet(
-	known map[string]struct{}, external string,
+func symbolPrefixSuggestionsFromSet[V any](
+	known map[string]V, external string,
 ) []string {
 	normalizedExternal := normalizedSymbolSearchKey(external)
 	if normalizedExternal == "" {
@@ -124,8 +124,8 @@ func sharedSymbolPrefixLength(left, right string) int {
 	return length
 }
 
-func searchSymbolsFromSet(
-	known map[string]struct{}, query fwmarketdata.SymbolSearchQuery, secType string,
+func searchSymbolsFromSet[V any](
+	known map[string]V, query fwmarketdata.SymbolSearchQuery, secType string,
 ) []fwmarketdata.SymbolMatch {
 	q := strings.TrimSpace(query.Query)
 	if q == "" {
@@ -159,6 +159,37 @@ func searchSymbolsFromSet(
 			Symbol:  item.symbol,
 			SecType: secType,
 		})
+	}
+	return matches
+}
+
+// symbolAssets is a catalogue symbol's base and quote asset codes as the venue
+// states them; both are empty when the venue states no pair for the symbol.
+type symbolAssets struct {
+	base  string
+	quote string
+}
+
+// newSymbolAssets keeps the venue's base and quote codes only when it states
+// both, so a match never carries half a pair.
+func newSymbolAssets(base, quote string) symbolAssets {
+	base = strings.TrimSpace(base)
+	quote = strings.TrimSpace(quote)
+	if base == "" || quote == "" {
+		return symbolAssets{}
+	}
+	return symbolAssets{base: base, quote: quote}
+}
+
+// withSymbolAssets copies each match's base and quote asset codes from the
+// catalogue the matches were searched in.
+func withSymbolAssets(
+	matches []fwmarketdata.SymbolMatch, known map[string]symbolAssets,
+) []fwmarketdata.SymbolMatch {
+	for i := range matches {
+		assets := known[matches[i].Symbol]
+		matches[i].BaseAsset = assets.base
+		matches[i].QuoteAsset = assets.quote
 	}
 	return matches
 }

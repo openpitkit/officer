@@ -336,15 +336,17 @@ func handleSearchTradingSymbols(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		type matchDTO struct {
-			Symbol   string `json:"symbol"`
-			Name     string `json:"name,omitempty"`
-			Class    string `json:"class,omitempty"`
-			Exchange string `json:"exchange,omitempty"`
-			Tradable bool   `json:"tradable"`
+			Symbol     string `json:"symbol"`
+			Name       string `json:"name,omitempty"`
+			Class      string `json:"class,omitempty"`
+			Exchange   string `json:"exchange,omitempty"`
+			BaseAsset  string `json:"baseAsset,omitempty"`
+			QuoteAsset string `json:"quoteAsset,omitempty"`
+			Tradable   bool   `json:"tradable"`
 		}
 		matches := make([]matchDTO, 0, len(out.Matches))
 		for _, m := range out.Matches {
-			matches = append(matches, matchDTO{Symbol: m.Symbol, Name: m.Name, Class: m.Class, Exchange: m.Exchange, Tradable: m.Tradable})
+			matches = append(matches, matchDTO{Symbol: m.Symbol, Name: m.Name, Class: m.Class, Exchange: m.Exchange, BaseAsset: m.BaseAsset, QuoteAsset: m.QuoteAsset, Tradable: m.Tradable})
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"supported": out.Supported, "matches": matches})
 	}

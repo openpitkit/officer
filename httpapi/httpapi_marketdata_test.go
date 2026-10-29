@@ -1107,6 +1107,8 @@ func TestSearchMarketDataSymbols_OK(t *testing.T) {
 			Matches: []backend.MarketDataSymbolMatch{{
 				Symbol:       "BTC",
 				Name:         "Bitcoin",
+				BaseAsset:    "BTC",
+				QuoteAsset:   "USD",
 				SecType:      "CRYPTO",
 				Exchange:     "PAXOS",
 				Currency:     "USD",
@@ -1139,7 +1141,8 @@ func TestSearchMarketDataSymbols_OK(t *testing.T) {
 	match, _ := matches[0].(map[string]any)
 	if match["symbol"] != "BTC" || match["secType"] != "CRYPTO" ||
 		match["exchange"] != "PAXOS" || match["currency"] != "USD" ||
-		match["localSymbol"] != "BTC.USD" {
+		match["localSymbol"] != "BTC.USD" ||
+		match["baseAsset"] != "BTC" || match["quoteAsset"] != "USD" {
 		t.Fatalf("unexpected match: %v", match)
 	}
 	if svc.mdSearchInput.SecType != "CRYPTO" ||

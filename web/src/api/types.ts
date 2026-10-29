@@ -851,6 +851,10 @@ export interface TradingSymbolMatch {
   name?: string;
   class?: string;
   exchange?: string;
+  /** Venue base asset of a currency pair; set with quoteAsset, from the catalogue only. */
+  baseAsset?: string;
+  /** Venue quote asset of a currency pair; set with baseAsset, from the catalogue only. */
+  quoteAsset?: string;
   tradable: boolean;
 }
 
@@ -1009,6 +1013,10 @@ export interface MarketDataSymbolVerification {
 export interface MarketDataSymbolMatch {
   symbol: string;
   name?: string;
+  /** Provider base asset of a currency pair; set with quoteAsset, from the catalogue only. */
+  baseAsset?: string;
+  /** Provider quote asset of a currency pair; set with baseAsset, from the catalogue only. */
+  quoteAsset?: string;
   secType: string;
   exchange?: string;
   primaryExchange?: string;
