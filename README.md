@@ -11,66 +11,27 @@ connection. You can also use Officer from trading software or AI agents.
 
 ## Run
 
-For a visual walkthrough, see the [video guides](https://officer.openpit.dev/video-guides).
+Watch the [video guide](https://officer.openpit.dev/video-guides#guide-quickstart)
+or follow the steps below. The [quickstart](docs/quickstart.md) covers
+stopping, ports and troubleshooting.
 
-Officer runs on your own computer, and you use it through a web browser.
-Docker lets you run the same ready-made application on Windows, macOS, and
-Linux, without building it or installing programming tools.
-
-If you do not have Docker yet, follow the
-[Docker installation guide](https://docs.docker.com/get-started/get-docker/).
-Start Docker Desktop and wait until it says it is running. On Linux, you can
-also use Docker Engine; see the [quickstart](docs/quickstart.md#install-and-start-docker).
-
-Open a terminal, the window where you type commands: **PowerShell** from the
-Start menu on Windows, **Terminal** on macOS, or your terminal application on
-Linux. Copy the command below, paste it there, and press Enter. The command
-is the same on all three systems:
+Install [Docker](https://docs.docker.com/get-started/get-docker/), then run:
 
 ```sh
 docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer:latest
 ```
 
-`latest` is the newest stable release of Officer. The first run downloads
-Officer, which may take a few minutes. It then runs in the background, so you
-can close the terminal. Your settings and records are saved on your computer
-in storage named `pit-officer-data` and kept when you stop or restart Officer.
+Open <http://127.0.0.1:8787>. `latest` is the newest release; your data stays
+in the `pit-officer-data` volume.
 
-To check whether it is ready, run:
-
-```sh
-docker ps --filter name=pit-officer
-```
-
-When the STATUS column shows `(healthy)`, open <http://127.0.0.1:8787> in your
-browser and bookmark it. If it shows `(health: starting)`, wait a few seconds
-and check again. The panel is ready for you to configure your accounts, risk
-limits, and connections.
-
-In that address, `127.0.0.1` means your own computer, and `8787` is the port,
-the number used to reach the panel. To use a different port, choose it before
-running the long command: for example, replace `-p 127.0.0.1:8787:8787` with
-`-p 127.0.0.1:8788:8787`, then open <http://127.0.0.1:8788>. Keep the final
-`8787` unchanged; it is the number Officer uses inside Docker.
-
-To stop Officer, run `docker stop pit-officer`. To start it again, run
-`docker start pit-officer` and open your bookmark. Use these commands after
-the first installation; you do not need to repeat the long command.
-
-To try changes before they are released, run the `edge` build instead: the
-newest version under development that passed its checks. It changes often and
-may not work, so give it its own name, port, and storage, apart from your
-stable installation:
+`edge` is the current development build. It may be unstable, so run it apart
+from the release, with its own name, port and data:
 
 ```sh
 docker run -d --name pit-officer-edge --restart unless-stopped -p 127.0.0.1:8788:8787 -v pit-officer-edge-data:/data ghcr.io/openpitkit/officer:edge
 ```
 
-Then open <http://127.0.0.1:8788>, and use `pit-officer-edge` instead of
-`pit-officer` in the commands above.
-
-For help with installation, changing the port of an existing installation,
-or a panel that will not open, see the [quickstart](docs/quickstart.md).
+Then open <http://127.0.0.1:8788>.
 
 ## Build
 
