@@ -514,10 +514,12 @@ func TestUpdateTradingConnectionUnknownFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		_ = session.Close()
+		// Stop the server before closing the client: see officerSession.
 		cancel()
-		if err := <-serverErr; err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatal(err)
+		runErr := <-serverErr
+		_ = session.Close()
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			t.Fatal(runErr)
 		}
 	}()
 	for _, field := range []string{"credential", "enabled"} {

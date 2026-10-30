@@ -320,19 +320,13 @@ func officerSession(
 	closeSession = func() {
 		t.Helper()
 		closeOnce.Do(func() {
+			// Stop the server before closing the client: the transport is a
+			// synchronous pipe, and a client that hangs up while the server still
+			// writes the tail of its last response fails the server's Run with a
+			// closed pipe.
 			cancel()
-			clientErr := make(chan error, 1)
-			go func() { clientErr <- session.Close() }()
 			shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 			defer stop()
-			select {
-			case err := <-clientErr:
-				if err != nil {
-					t.Errorf("client close: %v", err)
-				}
-			case <-shutdownCtx.Done():
-				t.Errorf("client close: %v", shutdownCtx.Err())
-			}
 			select {
 			case err := <-serverErr:
 				if err != nil && !errors.Is(err, context.Canceled) {
@@ -340,6 +334,16 @@ func officerSession(
 				}
 			case <-shutdownCtx.Done():
 				t.Errorf("server shutdown: %v", shutdownCtx.Err())
+			}
+			clientErr := make(chan error, 1)
+			go func() { clientErr <- session.Close() }()
+			select {
+			case err := <-clientErr:
+				if err != nil {
+					t.Errorf("client close: %v", err)
+				}
+			case <-shutdownCtx.Done():
+				t.Errorf("client close: %v", shutdownCtx.Err())
 			}
 		})
 	}

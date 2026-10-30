@@ -273,10 +273,14 @@ func TestBuildRunsToolAsItsCaller(t *testing.T) {
 		cancel()
 		t.Fatalf("call tool: %v", err)
 	}
-	_ = session.Close()
+	// Stop the server before closing the client: the transport is a synchronous
+	// pipe, and a client that hangs up while the server still writes the tail of
+	// its last response fails the server's Run with a closed pipe.
 	cancel()
-	if err := <-serverErr; err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("server run: %v", err)
+	runErr := <-serverErr
+	_ = session.Close()
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("server run: %v", runErr)
 	}
 
 	want := caller

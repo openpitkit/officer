@@ -398,10 +398,14 @@ func (f *tradingE2E) callMCP(name string, input any) (*sdkmcp.CallToolResult, er
 	session, err := client.Connect(ctx, clientTransport, nil)
 	tradingE2EMust(f.t, err)
 	result, callErr := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: input})
-	_ = session.Close()
+	// Stop the server before closing the client: the transport is a synchronous
+	// pipe, and a client that hangs up while the server still writes the tail of
+	// its last response fails the server's Run with a closed pipe.
 	cancel()
-	if err := <-serverErr; err != nil && !errors.Is(err, context.Canceled) {
-		f.t.Fatal(err)
+	runErr := <-serverErr
+	_ = session.Close()
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		f.t.Fatal(runErr)
 	}
 	return result, callErr
 }
