@@ -180,9 +180,10 @@ just dylib-dev                 # only build the native runtime
 Every recipe that links against the native runtime - the build, vet, lint-go,
 test, check, and run recipes - has a `-dev` twin, and the `-dev` argument is
 always the checkout path. The rest have none, because none of them links against
-the runtime: `tidy` and `fmt-go` on the Go side, and `build-js`, `build-js-lib`,
-`fmt-js`, `lint-js`, `test-js`, `check-js`, `check-js-dry`, and `check-semgrep`
-on the frontend and Semgrep side.
+the runtime: `tidy` and `fmt-go` on the Go side; `ensure-node`, `build-js`,
+`build-js-lib`, `fmt-js`, `lint-js`, `test-js`, `check-js`, and `check-js-dry` on
+the frontend side; and `fmt-python`, `lint-python`, and `check-semgrep` on the
+Python and Semgrep side.
 
 ## Debug and release variants
 
@@ -212,6 +213,10 @@ fails when it builds the SPA handler at startup.
 
 ## Frontend
 
+`just ensure-node` installs the Node.js version `CI_NODE` pins in
+`.github/ci-versions.env` into `.tmp/node`. Every recipe that runs node, npm or
+npx depends on it and runs that runtime, whatever node is on the caller's PATH.
+
 `just frontend-ci-install` installs from the committed lockfile (`npm ci`);
 `just frontend-install` runs `npm install` and is what the binary build recipes
 use. `just build-js` builds the SPA into `web/dist`, and `just build-js-lib`
@@ -224,15 +229,15 @@ Go build runs.
 
 `just check` is the whole gate. Narrower ones exist for a faster loop:
 `just check-go`, `just check-js`, `just lint-go`, `just lint-js`,
-`just check-semgrep`, `just test-go`, `just test-js`. The `-dry` variants lint
+`just lint-python`, `just check-semgrep`, `just test-go`, `just test-js`. The `-dry` variants lint
 and test without rebuilding artifacts.
 
 `just build-go` only compiles the Go packages and produces no binary; use it as
 a compile check.
 
-Semgrep runs from a virtualenv in `.venv`, created and populated by
-`just install-semgrep` from `requirements.txt` on the first run and skipped
-afterwards while the installed version matches the pin.
+Semgrep and ruff run from a virtualenv in `.venv`, created and populated by
+`just install-python-tools` from `requirements.txt` on the first run and skipped
+afterwards while the installed versions match the pins.
 
 CI does not call `just check` directly. It runs the aggregates in
 `pipeline.just` (`ci-go`, `ci-js`), which import this justfile; tool versions

@@ -80,7 +80,8 @@ def _discover_base(explicit: str | None, runtime_file: str | None) -> str:
     print(
         "error: cannot determine the Officer base URL.\n"
         "  Pass --base http://host:port, or start 'pit-officer serve' so that\n"
-        "  officer-runtime.json is written next to this script or in the working directory.",
+        "  officer-runtime.json is written next to this script or in the working "
+        "directory.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -124,8 +125,12 @@ def _request(
         return exc.code, parsed
 
 
-def _post(base: str, path: str, body: dict[str, Any], conflict_ok: bool = True) -> dict[str, Any]:
-    status, data = _request("POST", f"{base}/api/v1{path}", body=body, conflict_ok=conflict_ok)
+def _post(
+    base: str, path: str, body: dict[str, Any], conflict_ok: bool = True
+) -> dict[str, Any]:
+    status, data = _request(
+        "POST", f"{base}/api/v1{path}", body=body, conflict_ok=conflict_ok
+    )
     return data
 
 
@@ -183,7 +188,9 @@ GROUPS = [
     {
         "code": "algos",
         "title": "Algos",
-        "notes": "Automated desks. Fast, tireless, and only as sane as their last deploy.",
+        "notes": (
+            "Automated desks. Fast, tireless, and only as sane as their last deploy."
+        ),
     },
     {
         "code": "blowups",
@@ -206,7 +213,11 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Patriarch of the McMoneyface dynasty. Buys dips; is the dip.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "12500000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "12500000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -216,7 +227,11 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Technically we do rocket surgery. Financially, same thing.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "9800000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "9800000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -226,7 +241,11 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Wealth so old it predates fiat. Tips the sommelier in basis points.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "21000000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "21000000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -236,7 +255,11 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Deep pockets, shallow convictions. Buys conviction by the case.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "7400000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "7400000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -246,7 +269,11 @@ ACCOUNTS = [
         "group": "whales",
         "notes": "Started with a dollar and a dream. The dollar did the heavy lifting.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "15300000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "15300000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -257,7 +284,11 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "We never sell. Not once. Not ever. (We always sell at the bottom.)",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "3200000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "3200000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -267,7 +298,11 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "Late to every trade since inception. Holding the bag professionally.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "750000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "750000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -277,7 +312,11 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "Our research is flawless - six months after the fact.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "1100000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "1100000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -287,7 +326,11 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "Position sizing is for people who plan to be here next quarter.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "640000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "640000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -297,7 +340,11 @@ ACCOUNTS = [
         "group": "degens",
         "notes": "Full-service firm: we supply the leverage, you supply the regret.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "980000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "980000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -305,9 +352,16 @@ ACCOUNTS = [
         "code": "degen-revenge-trade",
         "title": "Revenge Trade Partners",
         "group": "degens",
-        "notes": "The market took something from us. We're getting it back, one fat finger at a time.",
+        "notes": (
+            "The market took something from us. We're getting it back, "
+            "one fat finger at a time."
+        ),
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "430000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "430000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -321,7 +375,11 @@ ACCOUNTS = [
             "theoretical. Kept blocked as a cautionary exhibit for pre-trade risk."
         ),
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "500000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "500000.00"},
+            },
         ],
         "blocked": True,
         "block_reason": "Trading halt - runaway-algorithm kill-switch activated.",
@@ -330,9 +388,16 @@ ACCOUNTS = [
         "code": "algo-null-pointer",
         "title": "Null Pointer Securities",
         "group": "algos",
-        "notes": "Quant shop. Occasionally trades on data that doesn't exist. The P&L agrees.",
+        "notes": (
+            "Quant shop. Occasionally trades on data that doesn't exist. "
+            "The P&L agrees."
+        ),
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "2600000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "2600000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -342,7 +407,11 @@ ACCOUNTS = [
         "group": "algos",
         "notes": "100% win rate in simulation. Reality has filed a formal complaint.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "1750000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "1750000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -351,11 +420,21 @@ ACCOUNTS = [
         "code": "blowup-margin-call",
         "title": "Margin Call Partners",
         "group": "blowups",
-        "notes": "Partners since 2019. Still partners. The margin desk is not a partner.",
+        "notes": (
+            "Partners since 2019. Still partners. The margin desk is not a partner."
+        ),
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "85000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "85000.00"},
+            },
             # Held models outstanding reserve from underwater positions.
-            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-240000.00"}},
+            {
+                "type": "correction",
+                "asset": "USD",
+                "held": {"mode": "absolute", "value": "-240000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -365,8 +444,16 @@ ACCOUNTS = [
         "group": "blowups",
         "notes": "Strategy document available on request. Results as advertised.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "42000.00"}},
-            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-110000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "42000.00"},
+            },
+            {
+                "type": "correction",
+                "asset": "USD",
+                "held": {"mode": "absolute", "value": "-110000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -374,10 +461,21 @@ ACCOUNTS = [
         "code": "blowup-catching-knives",
         "title": "Catching Knives LLC",
         "group": "blowups",
-        "notes": "Specialists in falling assets. The catching is going great; the holding, less so.",
+        "notes": (
+            "Specialists in falling assets. The catching is going great; "
+            "the holding, less so."
+        ),
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "60000.00"}},
-            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-180000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "60000.00"},
+            },
+            {
+                "type": "correction",
+                "asset": "USD",
+                "held": {"mode": "absolute", "value": "-180000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -387,8 +485,16 @@ ACCOUNTS = [
         "group": "blowups",
         "notes": "Every position costs money to hold. They hold many positions.",
         "balances": [
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "33000.00"}},
-            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-90000.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "33000.00"},
+            },
+            {
+                "type": "correction",
+                "asset": "USD",
+                "held": {"mode": "absolute", "value": "-90000.00"},
+            },
         ],
         "blocked": False,
     },
@@ -403,9 +509,17 @@ ACCOUNTS = [
         ),
         "balances": [
             # Nominal balance left from the estate.
-            {"type": "deposit", "asset": "USD", "balance": {"mode": "absolute", "value": "1.00"}},
+            {
+                "type": "deposit",
+                "asset": "USD",
+                "balance": {"mode": "absolute", "value": "1.00"},
+            },
             # Catastrophic negative held: the underwater desk, deep in the red.
-            {"type": "correction", "asset": "USD", "held": {"mode": "absolute", "value": "-47300000.00"}},
+            {
+                "type": "correction",
+                "asset": "USD",
+                "held": {"mode": "absolute", "value": "-47300000.00"},
+            },
         ],
         "blocked": True,
         "block_reason": "Regulatory hold - pending liquidation proceedings.",
@@ -415,7 +529,8 @@ ACCOUNTS = [
 # Typed risk limits. Each entry has a `kind` selecting the endpoint and response
 # shape; the rest are the per-kind body fields:
 #   rate       -> PUT /limits/rate        {scope, account, asset, windowMs, maxOrders}
-#   order_size -> PUT /limits/order-size  {scope, account, asset, maxQuantity, maxNotional}
+#   order_size -> PUT /limits/order-size  {scope, account, asset, maxQuantity,
+#                                          maxNotional}
 # Scope axes: account required for account scopes; asset required for asset
 # scopes. Allowed scopes differ per kind (the engine validates):
 #   rate       broker | asset | account | account_asset
@@ -482,6 +597,7 @@ _LIMIT_RESP_KEYS = {
     "order_size": "orderSizeLimit",
 }
 
+
 def _limit_body(limit: dict[str, Any]) -> dict[str, Any]:
     """Build the wire body for a typed limit from its seed entry."""
     body: dict[str, Any] = {
@@ -517,10 +633,22 @@ def _existing_limit_keys(base: str) -> set[tuple[str, str, str, str]]:
     limits = resp.get("limits", {})
     keys: set[tuple[str, str, str, str]] = set()
     for limit in limits.get("rateLimits", []):
-        keys.add(("rate", limit.get("scope", ""), limit.get("account", ""), limit.get("asset", "")))
+        keys.add(
+            (
+                "rate",
+                limit.get("scope", ""),
+                limit.get("account", ""),
+                limit.get("asset", ""),
+            )
+        )
     for limit in limits.get("orderSizeLimits", []):
         keys.add(
-            ("order_size", limit.get("scope", ""), limit.get("account", ""), limit.get("asset", ""))
+            (
+                "order_size",
+                limit.get("scope", ""),
+                limit.get("account", ""),
+                limit.get("asset", ""),
+            )
         )
     return keys
 
@@ -867,7 +995,11 @@ def seed(base: str) -> None:
     # --- Groups ---------------------------------------------------------------
     print("\n=== Groups ===")
     for g in GROUPS:
-        resp = _post(base, "/groups", {"code": g["code"], "title": g["title"], "notes": g["notes"]})
+        resp = _post(
+            base,
+            "/groups",
+            {"code": g["code"], "title": g["title"], "notes": g["notes"]},
+        )
         if "group" in resp:
             print(f"  [+] group '{g['code']}'")
             groups_created += 1
@@ -1024,7 +1156,10 @@ def seed(base: str) -> None:
         order = resp.get("order", {})
         status = order.get("status", "?")
 
-        print(f"  [+] order {order_id}  {instrument}  {order_def['side']}  status={status}")
+        print(
+            f"  [+] order {order_id}  {instrument}  {order_def['side']}  "
+            f"status={status}"
+        )
         orders_submitted += 1
 
         if status == "rejected":
@@ -1036,9 +1171,7 @@ def seed(base: str) -> None:
         # what a fill settles to.
         display_price = order.get("displayPrice")
         lock_price: str | None = (
-            display_price
-            if isinstance(display_price, str) and display_price
-            else None
+            display_price if isinstance(display_price, str) and display_price else None
         )
 
         fills = order_def.get("execution_reports", [])
@@ -1053,7 +1186,10 @@ def seed(base: str) -> None:
                 er_body["lockPrice"] = lock_price
 
             er_resp = _post(
-                base, f"/orders/{order_url_id}/execution-reports", er_body, conflict_ok=False
+                base,
+                f"/orders/{order_url_id}/execution-reports",
+                er_body,
+                conflict_ok=False,
             )
             result = er_resp.get("result", {})
             blocks = result.get("blocks", [])

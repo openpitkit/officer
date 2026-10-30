@@ -43,6 +43,9 @@ officer-runtime.json
 # Frontend build output - rebuilt inside the image by the frontend stage
 /web/dist/
 
+# Local scratch, including the project-local Node.js runtime
+/.tmp/
+
 # Git metadata
 .git/
 .gitignore

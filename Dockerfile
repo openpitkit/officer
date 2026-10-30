@@ -20,10 +20,11 @@
 # Before the first FROM so the FROM instructions themselves can expand it; a
 # stage that uses the value in its own body redeclares it.
 ARG GO_VERSION
+ARG NODE_VERSION
 
 # Stage 1: build the dashboard SPA. Its output is platform-independent, so a
 # multi-platform build runs it once, natively, instead of under emulation.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS frontend
 
 WORKDIR /app/web
 

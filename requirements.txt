@@ -16,3 +16,4 @@
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
 -r checks/semgrep/requirements.txt
+ruff==0.15.15

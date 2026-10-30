@@ -30,6 +30,7 @@ just_helper := "scripts/just_helpers.py"
 officer_binary := if os_family() == "windows" { "pit-officer.exe" } else { "pit-officer" }
 go_toolchain := "go" + env_var("CI_GO")
 go_version := env_var("CI_GO")
+node_version := env_var("CI_NODE")
 go_cache := env_var_or_default("GOCACHE", justfile_directory() / ".tmp" / "go-build-cache")
 golangci_lint_cache := env_var_or_default("GOLANGCI_LINT_CACHE", justfile_directory() / ".tmp" / "golangci-lint-cache")
 go_packages := ". ./web ./httpapi/... ./mcptools/... ./engine/... ./signing/... ./framework/... ./internal/... ./cmd/... ./examples/..."
@@ -45,6 +46,11 @@ venv_dir := justfile_directory() / ".venv"
 venv_bin := if os_family() == "windows" { venv_dir / "Scripts" } else { venv_dir / "bin" }
 venv_python := if os_family() == "windows" { venv_bin / "python.exe" } else { venv_bin / "python" }
 semgrep := if os_family() == "windows" { venv_bin / "semgrep.exe" } else { venv_bin / "semgrep" }
+# Every node, npm and npx a recipe runs is the runtime ensure-node installs here.
+node_dir := justfile_directory() / ".tmp" / "node"
+node_bin_dir := if os_family() == "windows" { node_dir } else { node_dir / "bin" }
+path_separator := if os_family() == "windows" { ";" } else { ":" }
+export PATH := node_bin_dir + path_separator + env_var("PATH")
 
 # Build the pit-officer binary.
 build: build-release
@@ -73,11 +79,11 @@ build-go-release:
     {{ python }} {{ just_helper }} go build {{ go_packages }}
 
 # Build the SPA using already-installed frontend dependencies.
-build-js:
+build-js: ensure-node
     cd web && npm run build
 
 # Build the published frontend library package.
-build-js-lib:
+build-js-lib: ensure-node
     cd web && npm run build:lib
 
 # Check formatting, lint, build, and test the result.
@@ -175,12 +181,12 @@ tidy:
 vendor-swagger-ui:
     {{ python }} {{ just_helper }} vendor-swagger-ui
 
-# Create the Semgrep venv only when it is not at the pinned version.
-install-semgrep:
-    {{ python }} {{ just_helper }} install-semgrep
+# Create the Python tools venv only when a tool is not at its pinned version.
+install-python-tools:
+    {{ python }} {{ just_helper }} install-python-tools
 
 # Run the Semgrep invariant rule set over the whole tree.
-check-semgrep: install-semgrep
+check-semgrep: install-python-tools
     {{ semgrep }} --config checks/semgrep/ --error --metrics=off --disable-version-check .
     {{ semgrep }} --test --config checks/semgrep/default-domain-status.yml --metrics=off --disable-version-check checks/semgrep/testdata/default-domain-status.go
     {{ semgrep }} --test --config checks/semgrep/locale-latin-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-latin-words.txt
@@ -193,16 +199,16 @@ check-semgrep: install-semgrep
 
 # Lint all.
 [parallel]
-lint-all: lint-go lint-js check-semgrep
+lint-all: lint-go lint-js lint-python check-semgrep
 
 # Lint all against a local Pit checkout.
 lint-all-dev pit_checkout="../pit": (lint-all-release-dev pit_checkout)
 
 # Lint all against a debug local Pit checkout.
-lint-all-debug-dev pit_checkout="../pit": (lint-go-debug-dev pit_checkout) lint-js check-semgrep
+lint-all-debug-dev pit_checkout="../pit": (lint-go-debug-dev pit_checkout) lint-js lint-python check-semgrep
 
 # Lint all against an optimized local Pit checkout.
-lint-all-release-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout) lint-js check-semgrep
+lint-all-release-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout) lint-js lint-python check-semgrep
 
 # Lint Go sources.
 lint-go:
@@ -231,8 +237,13 @@ lint-go-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
     just _go-dev-mode release {{ quote(pit_checkout) }} "vet" "-all" {{ go_packages }}
     just _go-tool-dev-mode release {{ quote(pit_checkout) }} "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
 
+# Check formatting and lint Python sources.
+lint-python: install-python-tools
+    {{ venv_python }} -m ruff check --quiet .
+    {{ venv_python }} -m ruff format --check --quiet .
+
 # Check formatting, lint, and typecheck JS/TypeScript sources.
-lint-js:
+lint-js: ensure-node
     cd web && npm run format:check
     cd web && npm run lint
     cd web && npm run typecheck
@@ -297,7 +308,7 @@ test-go-race-dev pit_checkout="../pit":
     @echo Skipping Go race tests on Windows: Go ThreadSanitizer is not compatible with the CGo toolchain.
 
 # Run JS/TypeScript tests.
-test-js:
+test-js: ensure-node
     cd web && npm run test
 
 # Run all tests.
@@ -305,15 +316,19 @@ test: test-all
 
 # Format all.
 [parallel]
-fmt-all: fmt-go fmt-js
+fmt-all: fmt-go fmt-js fmt-python
 
 # Format Go.
 fmt-go:
     gofmt -w {{ go_dirs }}
 
 # Format JS/TypeScript sources.
-fmt-js:
+fmt-js: ensure-node
     cd web && npm run format
+
+# Format Python sources.
+fmt-python: install-python-tools
+    {{ venv_python }} -m ruff format --quiet .
 
 # Run pit-officer in local stdio MCP mode.
 run-mcp: build-release
@@ -335,17 +350,21 @@ run-serve-debug: build-debug
 dashboard:
     {{ python }} {{ just_helper }} run-officer dashboard
 
+# Install or update the project-local Node.js runtime pinned by CI_NODE.
+ensure-node:
+    {{ python }} {{ just_helper }} ensure-node "{{ node_dir }}"
+
 # Install frontend dependencies only (no build).
-frontend-install:
+frontend-install: ensure-node
     cd web && npm install
 
 # Install frontend dependencies from the committed lockfile.
-frontend-ci-install:
+frontend-ci-install: ensure-node
     cd web && npm ci
 
 # Build the stable Docker image from the published OpenPit module.
 docker-build tag="pit-officer:local":
-    docker build --build-arg GO_VERSION={{ go_version }} -f {{ justfile_directory() }}/Dockerfile -t {{ tag }} {{ justfile_directory() }}
+    docker build --build-arg GO_VERSION={{ go_version }} --build-arg NODE_VERSION={{ node_version }} -f {{ justfile_directory() }}/Dockerfile -t {{ tag }} {{ justfile_directory() }}
 
 # Start a local image for one platform; wait until it is healthy and /healthz answers 200.
 docker-start-check image platform:

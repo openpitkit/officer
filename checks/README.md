@@ -19,7 +19,7 @@ just check-semgrep
 It is also a dependency of `lint-all`, so `just check` / `just check-debug` /
 `just check-release` run it automatically. In CI it runs as part of
 `just --justfile pipeline.just ci-go`. `check-semgrep` depends on
-`install-semgrep`, which creates `.venv` and installs
+`install-python-tools`, which creates `.venv` and installs
 `requirements.txt` on first run - no manual setup step needed.
 
 ### Layout

@@ -37,7 +37,8 @@ Then open <http://127.0.0.1:8788>.
 
 Prerequisites: a C toolchain, which the OpenPit Go binding requires through
 cgo; Go; and Node and npm for the dashboard bundle. Tool versions are pinned in
-`.github/ci-versions.env`.
+`.github/ci-versions.env`; `just ensure-node` installs the pinned Node into
+`.tmp/node`.
 
 From the repository root, build the dashboard before the binary so Go embeds
 the compiled assets:

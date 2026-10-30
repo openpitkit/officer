@@ -27,6 +27,7 @@ import http.client
 import io
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -36,6 +37,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NoReturn
@@ -45,10 +47,19 @@ BUILD_MODES = {"debug", "release"}
 # Covers the image's HEALTHCHECK start period and retries, under emulation too.
 DOCKER_START_TIMEOUT_SECONDS = 180
 SERVE_CONTAINER_PORT = "8787/tcp"
+NODE_DIST_URL = "https://nodejs.org/dist"
+# The Python tools .venv must hold, each with the file that pins its version.
+PYTHON_TOOL_PINS = (
+    ("semgrep", ROOT / "checks" / "semgrep" / "requirements.txt"),
+    ("ruff", ROOT / "requirements.txt"),
+)
 # The swagger-ui-dist release /docs serves and the npm registry integrity of
 # its tarball. A refresh changes both and runs `just vendor-swagger-ui`.
 SWAGGER_UI_VERSION = "5.33.2"
-SWAGGER_UI_INTEGRITY = "sha512-MyrWX06zkJRYPnIau8Qj8F6KfzS+Qj8D9AR36vCWkkC9ts1r1DYF84apgCvZBzO2Wzm7G7loCd5VS+4JLWoyLQ=="
+SWAGGER_UI_INTEGRITY = (
+    "sha512-MyrWX06zkJRYPnIau8Qj8F6KfzS+Qj8D9AR36vCWkkC9ts1r1DYF84apgCvZBzO2Wzm7G7loCd5VS"
+    "+4JLWoyLQ=="
+)
 RELEASE_NOTES = "RELEASE_NOTES.md"
 # A stable X.Y.Z or a release candidate X.Y.Z-rc.N, without the tag's v.
 RELEASE_VERSION = re.compile(
@@ -195,34 +206,213 @@ def command_export_ci_env(_: argparse.Namespace) -> None:
             file.write(f"{line}\n")
 
 
-def required_semgrep_version() -> str:
-    requirements = ROOT / "checks" / "semgrep" / "requirements.txt"
+def ci_version(name: str) -> str:
+    versions = ROOT / ".github" / "ci-versions.env"
+    if not versions.is_file():
+        raise SystemExit(f"{versions} not found; expected CI version pins")
+    for line in versions.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key == name:
+            return value.strip()
+    raise SystemExit(f"{name} not found in {versions}")
+
+
+def node_platform() -> str:
+    platforms = {
+        "Darwin": "darwin",
+        "Linux": "linux",
+        "Windows": "win",
+    }
+    try:
+        return platforms[platform.system()]
+    except KeyError:
+        raise SystemExit(
+            f"unsupported platform for project-local Node.js: {platform.system()}"
+        ) from None
+
+
+def node_arch() -> str:
+    machine = platform.machine().lower()
+    architectures = {
+        "amd64": "x64",
+        "x86_64": "x64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+    }
+    try:
+        return architectures[machine]
+    except KeyError:
+        raise SystemExit(
+            f"unsupported architecture for project-local Node.js: {machine}"
+        ) from None
+
+
+def node_archive_name(version: str) -> str:
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise SystemExit(f"invalid CI_NODE version: {version!r}")
+    platform_name = node_platform()
+    extension = "zip" if platform_name == "win" else "tar.xz"
+    return f"node-v{version}-{platform_name}-{node_arch()}.{extension}"
+
+
+def node_executable(node_dir: Path) -> Path:
+    if is_windows():
+        return node_dir / "node.exe"
+    return node_dir / "bin" / "node"
+
+
+def node_runtime_version(node_dir: Path) -> str | None:
+    executable = node_executable(node_dir)
+    if not executable.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            [str(executable), "--version"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    match = re.fullmatch(r"v?(\d+\.\d+\.\d+)", result.stdout.strip())
+    return match.group(1) if match is not None else None
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download(url: str, destination: Path) -> None:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "pit-officer-project-node-bootstrap"},
+    )
+    try:
+        with (
+            urllib.request.urlopen(request, timeout=60) as response,
+            destination.open("wb") as output,
+        ):
+            shutil.copyfileobj(response, output)
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"could not download {url}: {exc.reason}") from None
+
+
+def node_archive_sha256(checksums: Path, archive_name: str) -> str:
+    for line in checksums.read_text(encoding="utf-8").splitlines():
+        digest, separator, filename = line.partition("  ")
+        if separator and filename == archive_name:
+            if re.fullmatch(r"[0-9a-f]{64}", digest):
+                return digest
+            break
+    raise SystemExit(f"checksum for {archive_name} was not found")
+
+
+def extract_node_archive(archive: Path, destination: Path) -> Path:
+    destination.mkdir()
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as package:
+            package.extractall(destination)
+    else:
+        with tarfile.open(archive, "r:xz") as package:
+            if sys.version_info >= (3, 12):
+                package.extractall(destination, filter="data")
+            else:
+                package.extractall(destination)
+    roots = [path for path in destination.iterdir() if path.is_dir()]
+    if len(roots) != 1:
+        raise SystemExit(f"unexpected Node.js archive layout in {archive.name}")
+    return roots[0]
+
+
+def install_node_runtime(node_dir: Path, version: str) -> None:
+    archive_name = node_archive_name(version)
+    release_url = f"{NODE_DIST_URL}/v{version}"
+    node_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="pit-officer-node-", dir=node_dir.parent
+    ) as temp_dir_string:
+        temp_dir = Path(temp_dir_string)
+        archive = temp_dir / archive_name
+        checksums = temp_dir / "SHASUMS256.txt"
+        download(f"{release_url}/{archive_name}", archive)
+        download(f"{release_url}/SHASUMS256.txt", checksums)
+        expected_sha256 = node_archive_sha256(checksums, archive_name)
+        actual_sha256 = sha256_file(archive)
+        if actual_sha256 != expected_sha256:
+            raise SystemExit(
+                f"checksum mismatch for {archive_name}: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+        extracted = extract_node_archive(archive, temp_dir / "extracted")
+        backup = node_dir.with_name(f"{node_dir.name}.previous")
+        if backup.exists():
+            shutil.rmtree(backup)
+        if node_dir.exists():
+            node_dir.replace(backup)
+        try:
+            extracted.replace(node_dir)
+            installed = node_runtime_version(node_dir)
+            if installed != version:
+                raise SystemExit(
+                    f"project-local Node.js installation expected {version}, got "
+                    f"{installed or 'an unreadable runtime'}"
+                )
+        except BaseException:
+            if node_dir.exists():
+                shutil.rmtree(node_dir)
+            if backup.exists():
+                backup.replace(node_dir)
+            raise
+        else:
+            if backup.exists():
+                shutil.rmtree(backup)
+
+
+def command_ensure_node(args: argparse.Namespace) -> None:
+    expected = ci_version("CI_NODE")
+    node_dir = Path(args.node_dir)
+    installed = node_runtime_version(node_dir)
+    if installed == expected:
+        print(f"Node.js {expected}: project-local runtime is current")
+        return
+    action = "installing" if installed is None else f"upgrading from {installed}"
+    print(f"Node.js {expected}: {action} project-local runtime")
+    install_node_runtime(node_dir, expected)
+    print(f"Node.js {expected}: project-local runtime installed")
+
+
+def pinned_version(requirements: Path, package: str) -> str:
     try:
         lines = requirements.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
         raise SystemExit(
-            f"could not read Semgrep requirements file {requirements}: {exc}"
+            f"could not read requirements file {requirements}: {exc}"
         ) from None
 
+    pattern = re.compile(rf"^\s*{re.escape(package)}\s*==\s*([^\s;#]*)")
     for line in lines:
-        match = re.match(r"^\s*semgrep\s*==\s*([^\s;#]*)", line)
+        match = pattern.match(line)
         if match is None:
             continue
         version = match.group(1)
         if version:
             return version
         raise SystemExit(
-            f"Semgrep requirements file {requirements} has an empty version; "
-            "expected semgrep==<version>"
+            f"requirements file {requirements} has an empty {package} version; "
+            f"expected {package}==<version>"
         )
 
     raise SystemExit(
-        f"Semgrep requirements file {requirements} has no Semgrep pin; "
-        "expected semgrep==<version>"
+        f"requirements file {requirements} has no {package} pin; "
+        f"expected {package}==<version>"
     )
 
 
-def installed_semgrep_version(venv_python: Path) -> str | None:
+def installed_version(venv_python: Path, package: str) -> str | None:
     if not venv_python.is_file():
         return None
     result = run(
@@ -231,7 +421,7 @@ def installed_semgrep_version(venv_python: Path) -> str | None:
             "-c",
             (
                 "from importlib.metadata import PackageNotFoundError, version; "
-                "\ntry:\n print(version('semgrep'))\n"
+                f"\ntry:\n print(version({package!r}))\n"
                 "except PackageNotFoundError:\n pass"
             ),
         ],
@@ -240,17 +430,23 @@ def installed_semgrep_version(venv_python: Path) -> str | None:
     return result.stdout.strip() or None
 
 
-def command_install_semgrep(_: argparse.Namespace) -> None:
-    required_version = required_semgrep_version()
+def command_install_python_tools(_: argparse.Namespace) -> None:
     venv_dir = ROOT / ".venv"
     venv_bin = venv_dir / ("Scripts" if is_windows() else "bin")
     venv_python = venv_bin / ("python.exe" if is_windows() else "python")
-    installed_version = installed_semgrep_version(venv_python)
-    if installed_version == required_version:
-        print(f"Semgrep {required_version} already installed.")
+    pins = [
+        (package, pinned_version(requirements, package))
+        for package, requirements in PYTHON_TOOL_PINS
+    ]
+    if all(
+        installed_version(venv_python, package) == version for package, version in pins
+    ):
+        tools = ", ".join(f"{package} {version}" for package, version in pins)
+        print(f"Python tools already installed: {tools}.")
         return
 
-    run([sys.executable, "-m", "venv", str(venv_dir)])
+    if not venv_python.is_file():
+        run([sys.executable, "-m", "venv", str(venv_dir)])
     run(
         [
             str(venv_python),
@@ -340,9 +536,7 @@ def go_env() -> dict[str, str]:
     if is_windows():
         if "CC" not in env:
             if not shutil.which("clang"):
-                raise SystemExit(
-                    "missing cgo C compiler: install LLVM clang or set CC"
-                )
+                raise SystemExit("missing cgo C compiler: install LLVM clang or set CC")
             env["CC"] = os.environ.get(
                 "PIT_WINDOWS_CGO_CC"
             ) or windows_cgo_compiler_command(["clang", "-fuse-ld=lld"])
@@ -393,9 +587,7 @@ def dev_go_env(
     env = os.environ.copy()
     env.update(go_env())
     env["GOWORK"] = str(workspace_file)
-    env["OPENPIT_RUNTIME_LIBRARY_PATH"] = str(
-        local_runtime_library(pit_checkout, mode)
-    )
+    env["OPENPIT_RUNTIME_LIBRARY_PATH"] = str(local_runtime_library(pit_checkout, mode))
     return env
 
 
@@ -591,8 +783,7 @@ def command_vendor_swagger_ui(_: argparse.Namespace) -> None:
 def release_version(value: str) -> str:
     if not RELEASE_VERSION.fullmatch(value):
         raise SystemExit(
-            f"release version {value!r} is neither X.Y.Z nor X.Y.Z-rc.N "
-            "(no v prefix)"
+            f"release version {value!r} is neither X.Y.Z nor X.Y.Z-rc.N (no v prefix)"
         )
     return value
 
@@ -682,7 +873,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("export-ci-env").set_defaults(func=command_export_ci_env)
 
-    subparsers.add_parser("install-semgrep").set_defaults(func=command_install_semgrep)
+    subparser = subparsers.add_parser("ensure-node")
+    subparser.add_argument("node_dir")
+    subparser.set_defaults(func=command_ensure_node)
+
+    subparsers.add_parser("install-python-tools").set_defaults(
+        func=command_install_python_tools
+    )
 
     subparser = subparsers.add_parser("check-gofmt")
     subparser.add_argument("paths", nargs="+")
